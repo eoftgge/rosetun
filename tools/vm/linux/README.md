@@ -90,7 +90,7 @@ runs, the job goes on in the guest; reconnect with
 | `guest/launch.sh` | The launcher: proves the staged files and hands over to the verified `start.sh` |
 | `guest/start.sh` | Checks the run directory and starts the autonomous job of its stage |
 | `guest/run-l2.sh`, `guest/lib.sh` | The L2 job itself: scenarios, cleanup, report |
-| `guest/run-l3.sh` | The L3 job: installs the service, kill switch and DNS lock scenarios, cleanup, report |
+| `guest/run-l3.sh` | The L3 job: installs the service, kill switch, DNS lock, IPv6, inbound and forwarding scenarios (a peer network namespace), crashes, cleanup, report |
 | `scenarios.tsv`, `scenarios-l3.tsv` | The scenario lists, shared by the guest and the host |
 | `tests/` | Unprivileged self-tests of the stand (not a VM run) |
 
@@ -475,9 +475,10 @@ checking, restore `l2-clean` again.
    ```
 
    A normal stop (`systemctl stop`, a disconnect) removes it; "Error: No such
-   file or directory" then means no table. After a crash the restarted helper
-   keeps it (`rosetun status` says `network: held closed`) until a connect or
-   `rosetun open-network`.
+   file or directory" then means no table. After a crash of a kill-switch
+   session the restarted helper keeps it (`rosetun status` says `network: held
+   closed`) until a connect or `rosetun open-network`; a DNS lock alone it
+   removes at once, and says so in the journal.
 
    The kill switch also closes what the machine forwards (chain `forward`):
    containers, virtual machines and a shared connection get only the tunnel,
@@ -573,13 +574,21 @@ SSH off; the host reads the report afterwards):
 | `killswitch.disconnect` | a disconnect removes the table, the direct path answers |
 | `lan.on` | with "Local network" the host node connects on the physical interface, the probe address does not |
 | `dnslock.*` | without the kill switch: UDP 53 on the physical interface is refused in the guest ("Operation not permitted"), HTTPS to the probe address there answers; `dig` with the guest's resolver is answered through the tunnel |
+| `ipv6.neighbor` | only with an IPv6 default router on the physical interface that answers a ping without Rosetun, else SKIP (not required): with the kill switch and "Local network", `ip -6 neigh flush`, then the router answers a ping on its link-local address (neighbor discovery passed), and a UDP datagram to `2001:db8::1` on the physical interface is refused in the guest |
+| `inbound.reply` | a peer namespace `rosetun-l3-peer` on a veth pair (`198.51.100.1` guest, `198.51.100.2` peer) opens TCP to the guest's sshd and reads its banner; then the kill switch without "Local network" goes up and the peer still gets sshd's key exchange after sending its own banner; a UDP datagram from the guest to the peer is refused in the guest |
+| `forward.blocked` | the guest forwards the peer's traffic (`ip_forward`, a NAT table `ip rosetun-l3-nat`, a routing rule that sends it out of the physical interface past the tunnel): HTTPS from the peer to the probe address answers before the connect, is dropped under the kill switch and answers after the disconnect; the stand then removes the namespace, the table and the rule and restores `ip_forward` |
 | `crash.helper-killed` | `kill -KILL` of the helper: the table stays, the direct path stays refused, systemd restarts the helper (`NRestarts`), `rosetun status` says `network: held closed` |
 | `crash.open-network` | `rosetun open-network` as the first account removes the table, the direct path answers |
+| `crash.dns-lock-killed` | `kill -KILL` of the helper during a DNS-lock session: the table is there right after, the restarted helper removes it and its journal says "removed the DNS lock a crashed helper left", the status is not `held closed`, UDP 53 and HTTPS leave the physical interface |
 | `stop.removes-table` | `systemctl stop` during a kill-switch session removes the table, the direct path answers |
 
 What it does not prove: TCP 53 under the DNS lock (a dropped SYN looks like a
-lost one; the rule matches both by `meta l4proto { tcp, udp }`); IPv6 (the Default
-Switch gives the guest no IPv6 route); Lockdown (not offered on Linux); a
+lost one; the rule matches both by `meta l4proto { tcp, udp }`); IPv6 where the
+Default Switch gives the guest no IPv6 router (`ipv6.neighbor` is then
+skipped); a session from the host itself (the peer namespace stands in for it,
+because the host opens a new SSH connection for each step); an outgoing
+connection opened before the kill switch while conntrack did not yet track it;
+Lockdown (not offered on Linux); a
 reboot or a power cut with the table in place; the GUI. The cleanup stops the
 service, which removes its table; a table still there after the stop is a
 cleanup ERROR and is left for the checkpoint restore, never deleted by the

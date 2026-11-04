@@ -2,7 +2,8 @@
 # Runs the Linux L3 scenarios inside the guest, as root, from a systemd transient
 # unit started by start.sh: the real helper as the systemd service, its nftables
 # kill switch and DNS lock, a crash and a stop. It never depends on the SSH session
-# that started it; the kill switch may cut that session off.
+# that started it. A peer network namespace on a veth pair stands in for another
+# machine: it opens a connection to the guest and has its traffic forwarded.
 #
 #   run-l3.sh run RUN_DIR        install the service, run every scenario, clean up,
 #                                write the report
@@ -39,6 +40,17 @@ CLI=$PREFIX/rosetun
 NFT=/usr/sbin/nft
 FOREIGN_TABLE=rosetun-l3-foreign
 SERVICE_LEAF=/sys/fs/cgroup/system.slice/rosetun-helper.service
+# The peer: documentation addresses on a link of their own, a NAT table of the
+# stand's own and a routing rule that sends the peer's traffic out of the
+# physical interface, past the tunnel's routes.
+PEER_NS=rosetun-l3-peer
+PEER_HOST_IF=rl3-host
+PEER_IF=rl3-peer
+PEER_HOST_ADDRESS=198.51.100.1
+PEER_ADDRESS=198.51.100.2
+PEER_TABLE=7731
+PEER_RULE_PRIORITY=50
+NAT_TABLE=rosetun-l3-nat
 
 RUN_ID='' STAND_ID='' EXPECTED_BOOT_ID='' USER_A='' USER_B='' BIOS_GUID=''
 HOST_ADDRESS='' NODE_PORT='' PROBE_ADDRESS='' DNS_PROBE_ADDRESS=''
@@ -201,6 +213,100 @@ system_dns_answers() {
 
 main_pid() { systemctl show -p MainPID --value rosetun-helper.service 2>/dev/null; }
 
+# kill_helper: SIGKILL to the helper, then until systemd restarted it and its
+# socket answers `rosetun status` (in CLI_OUT).
+kill_helper() {
+    local old restarts_before restarts='' deadline
+    old=$(main_pid)
+    restarts_before=$(systemctl show -p NRestarts --value rosetun-helper.service)
+    kill -KILL "$old" || { fail_reason="could not kill the helper"; return 1; }
+    sleep 0.5
+    KILLED_TABLE_PRESENT=0
+    table_present && KILLED_TABLE_PRESENT=1
+    KILLED_DIRECT_RC=$(direct_https)
+    deadline=$((SECONDS + 60))
+    while [ "$SECONDS" -lt "$deadline" ]; do
+        restarts=$(systemctl show -p NRestarts --value rosetun-helper.service)
+        if [ "$restarts" -gt "$restarts_before" ] && systemctl is-active --quiet rosetun-helper.service; then
+            break
+        fi
+        sleep 1
+    done
+    [ "${restarts:-0}" -gt "$restarts_before" ] || { fail_reason="systemd did not restart the helper"; return 1; }
+    deadline=$((SECONDS + 30))
+    while [ "$SECONDS" -lt "$deadline" ]; do
+        cli 15 status
+        [ "$CLI_RC" -eq 0 ] && return 0
+        sleep 1
+    done
+    fail_reason="the restarted helper does not answer: $CLI_OUT"
+    return 1
+}
+
+# The peer side: a curl or a shell in the peer namespace.
+in_peer() { ip netns exec "$PEER_NS" "$@"; }
+peer_https() { in_peer curl -s -o /dev/null --connect-timeout 3 --max-time 8 "https://$PROBE_ADDRESS/" </dev/null; printf '%s' "$?"; }
+
+# A UDP datagram from the guest to the peer, as udp_dns_out sends one: refused
+# in the guest ("Operation not permitted") when the output hook drops it.
+guest_to_peer_refused() {
+    local out
+    out=$(curl -v -s -o /dev/null --connect-timeout 3 --max-time 4 "tftp://$PEER_ADDRESS:69/rosetun-l3" 2>&1 </dev/null)
+    printf '%s' "$out" | grep -q 'Operation not permitted'
+}
+
+peer_up() {
+    : >"$STATE/peer"
+    ip netns add "$PEER_NS" &&
+        ip link add "$PEER_HOST_IF" type veth peer name "$PEER_IF" netns "$PEER_NS" &&
+        ip addr add "$PEER_HOST_ADDRESS/30" dev "$PEER_HOST_IF" &&
+        ip link set "$PEER_HOST_IF" up &&
+        in_peer ip link set lo up &&
+        in_peer ip addr add "$PEER_ADDRESS/30" dev "$PEER_IF" &&
+        in_peer ip link set "$PEER_IF" up &&
+        in_peer ip route add default via "$PEER_HOST_ADDRESS" ||
+        { fail_reason="could not set up the peer namespace"; return 1; }
+    local gateway
+    gateway=$(ip -o route get "$PROBE_ADDRESS" 2>/dev/null | sed -n 's/.* via \([0-9.]*\) .*/\1/p')
+    cat /proc/sys/net/ipv4/ip_forward >"$STATE/ip-forward-before"
+    ip route add "$PROBE_ADDRESS/32" ${gateway:+via "$gateway"} dev "$PHYS" table "$PEER_TABLE" &&
+        ip rule add iif "$PEER_HOST_IF" lookup "$PEER_TABLE" priority "$PEER_RULE_PRIORITY" &&
+        "$NFT" -f - <<EOF &&
+table ip $NAT_TABLE {
+	chain postrouting {
+		type nat hook postrouting priority srcnat; policy accept;
+		ip saddr $PEER_ADDRESS oif "$PHYS" masquerade
+	}
+}
+EOF
+        sysctl -qw net.ipv4.ip_forward=1 ||
+        { fail_reason="could not set up forwarding for the peer"; return 1; }
+}
+
+peer_down() {
+    [ -f "$STATE/peer" ] || return 0
+    local result=0
+    if [ -f "$STATE/peer-session.pid" ]; then
+        kill "$(cat "$STATE/peer-session.pid")" 2>/dev/null
+        rm -f -- "$STATE/peer-session.pid"
+    fi
+    ip rule del iif "$PEER_HOST_IF" lookup "$PEER_TABLE" priority "$PEER_RULE_PRIORITY" 2>/dev/null
+    ip route flush table "$PEER_TABLE" 2>/dev/null
+    "$NFT" delete table ip "$NAT_TABLE" 2>/dev/null
+    ip link del "$PEER_HOST_IF" 2>/dev/null
+    ip netns del "$PEER_NS" 2>/dev/null
+    if [ -f "$STATE/ip-forward-before" ]; then
+        sysctl -qw "net.ipv4.ip_forward=$(cat "$STATE/ip-forward-before")" || result=1
+        rm -f -- "$STATE/ip-forward-before"
+    fi
+    if ip netns list 2>/dev/null | grep -qw -- "$PEER_NS" || ip link show "$PEER_HOST_IF" >/dev/null 2>&1 ||
+        "$NFT" list table ip "$NAT_TABLE" >/dev/null 2>&1 || ip rule show | grep -q "lookup $PEER_TABLE"; then
+        result=1
+    fi
+    [ "$result" -eq 0 ] && rm -f -- "$STATE/peer"
+    return "$result"
+}
+
 # ---------------------------------------------------------------- preflight
 
 scenario_preflight() {
@@ -245,6 +351,10 @@ scenario_preflight() {
         done
         if [ -x "$NFT" ] && table_present; then
             fail_reason="the table inet rosetun exists already"
+            return 1
+        fi
+        if ip netns list 2>/dev/null | grep -qw -- "$PEER_NS" || ip link show "$PEER_HOST_IF" >/dev/null 2>&1; then
+            fail_reason="the peer namespace $PEER_NS or its link $PEER_HOST_IF exists already"
             return 1
         fi
         : >"$STATE/clean-before-install"
@@ -403,31 +513,97 @@ scenario_dns_lock() {
     check dnslock.tunnel-passes "dig with the guest's resolver was answered through the tunnel" dns_tunnel
 }
 
+# ---------------------------------------------------------------- IPv6, inbound, forwarding
+
+scenario_ipv6() {
+    local id=ipv6.neighbor started router
+    started=$(l2_now_ms)
+    write_status running "$id"
+    router=$(ip -6 route show default dev "$PHYS" 2>/dev/null | sed -n 's/.* via \(fe80:[0-9a-f:]*\) .*/\1/p' | head -n 1)
+    if [ -z "$router" ]; then
+        record "$id" SKIP "no IPv6 default router on $PHYS, so there is no neighbor to resolve" "$started"
+        return
+    fi
+    if ! ping -6 -c 2 -W 2 "$router%$PHYS" >/dev/null 2>&1; then
+        record "$id" SKIP "the IPv6 router $router does not answer a ping without Rosetun" "$started"
+        return
+    fi
+    neighbor() {
+        connect_with request-lan.json || return 1
+        # Without a cache entry the ping needs neighbor discovery first.
+        ip -6 neigh flush dev "$PHYS"
+        ping -6 -c 2 -W 3 "$router%$PHYS" >/dev/null 2>&1 ||
+            { fail_reason="the IPv6 router $router did not answer under the kill switch: $(ip -6 neigh show "$router" dev "$PHYS")"; return 1; }
+        local out
+        out=$(curl -v -s -o /dev/null --connect-timeout 3 --max-time 4 --interface "$PHYS" "tftp://[2001:db8::1]:69/rosetun-l3" 2>&1 </dev/null)
+        printf '%s' "$out" | grep -q 'Operation not permitted' ||
+            { fail_reason="a UDP datagram to 2001:db8::1 on $PHYS was not refused locally"; return 1; }
+        disconnect
+    }
+    if neighbor; then
+        record "$id" PASS "the router answered after the flush, 2001:db8::1 was refused" "$started"
+    else
+        record "$id" FAIL "${fail_reason:-the condition did not hold}" "$started"
+    fi
+    fail_reason=''
+}
+
+scenario_peer() {
+    FORWARD_BEFORE=''
+    inbound() {
+        peer_up || return 1
+        FORWARD_BEFORE=$(peer_https)
+        # The peer opens a TCP session to sshd and reads its banner; once the
+        # kill switch is up it sends its own and must get sshd's key exchange.
+        rm -f -- "$STATE/peer-go" "$STATE/peer-banner" "$STATE/peer-answer"
+        in_peer bash -c '
+            exec 3<>"/dev/tcp/$1/22" || exit 1
+            IFS= read -r -t 5 banner <&3 || exit 1
+            printf "%s\n" "$banner" >"$2/peer-banner"
+            for _ in $(seq 1 600); do [ -f "$2/peer-go" ] && break; sleep 0.2; done
+            printf "SSH-2.0-rosetun-l3\r\n" >&3
+            timeout 10 head -c 64 <&3 >"$2/peer-answer"
+        ' peer-session "$PEER_HOST_ADDRESS" "$STATE" </dev/null >/dev/null 2>&1 &
+        printf '%s\n' "$!" >"$STATE/peer-session.pid"
+        local deadline=$((SECONDS + 10))
+        while [ ! -s "$STATE/peer-banner" ] && [ "$SECONDS" -lt "$deadline" ]; do sleep 0.2; done
+        grep -q '^SSH-' "$STATE/peer-banner" 2>/dev/null ||
+            { fail_reason="the peer got no sshd banner from $PEER_HOST_ADDRESS without Rosetun"; return 1; }
+        connect_with request-kill-switch.json || return 1
+        : >"$STATE/peer-go"
+        deadline=$((SECONDS + 15))
+        while [ ! -s "$STATE/peer-answer" ] && [ "$SECONDS" -lt "$deadline" ]; do sleep 0.2; done
+        [ -s "$STATE/peer-answer" ] ||
+            { fail_reason="sshd's answer did not reach the peer under the kill switch"; return 1; }
+        guest_to_peer_refused ||
+            { fail_reason="the guest could send a new datagram to the peer under the kill switch"; return 1; }
+    }
+    check inbound.reply "the peer's session got sshd's answer, a datagram to the peer was refused" inbound
+
+    forwarded() {
+        [ -f "$STATE/peer" ] || { fail_reason="the peer namespace was not set up"; return 1; }
+        reached_rc "$FORWARD_BEFORE" ||
+            { fail_reason="the peer did not reach $PROBE_ADDRESS through the guest without Rosetun (curl exit $FORWARD_BEFORE); forwarding does not work here"; return 1; }
+        [[ $(state_line) =~ ^Connected ]] || connect_with request-kill-switch.json || return 1
+        local rc
+        rc=$(peer_https)
+        blocked_rc "$rc" || { fail_reason="forwarded HTTPS from the peer was not dropped (curl exit $rc)"; return 1; }
+        disconnect || return 1
+        rc=$(peer_https)
+        reached_rc "$rc" || { fail_reason="forwarded HTTPS from the peer did not answer after the disconnect (curl exit $rc)"; return 1; }
+    }
+    check forward.blocked "forwarded HTTPS answered, was dropped under the kill switch, answered again" forwarded
+    [[ $(state_line) =~ ^Disconnected ]] || cli 60 disconnect
+    # What stays is the cleanup's to remove and report.
+    peer_down
+}
+
 scenario_crash() {
     killed() {
         connect_with request-kill-switch.json || return 1
-        local old restarts_before restarts deadline
-        old=$(main_pid)
-        restarts_before=$(systemctl show -p NRestarts --value rosetun-helper.service)
-        kill -KILL "$old" || { fail_reason="could not kill the helper"; return 1; }
-        sleep 0.5
-        table_present || { fail_reason="the table went away with the helper"; return 1; }
-        expect_blocked "HTTPS to $PROBE_ADDRESS on $PHYS after the crash" direct_https || return 1
-        deadline=$((SECONDS + 60))
-        while [ "$SECONDS" -lt "$deadline" ]; do
-            restarts=$(systemctl show -p NRestarts --value rosetun-helper.service)
-            if [ "$restarts" -gt "$restarts_before" ] && systemctl is-active --quiet rosetun-helper.service; then
-                break
-            fi
-            sleep 1
-        done
-        [ "${restarts:-0}" -gt "$restarts_before" ] || { fail_reason="systemd did not restart the helper"; return 1; }
-        deadline=$((SECONDS + 30))
-        while [ "$SECONDS" -lt "$deadline" ]; do
-            cli 15 status
-            [ "$CLI_RC" -eq 0 ] && break
-            sleep 1
-        done
+        kill_helper || return 1
+        [ "$KILLED_TABLE_PRESENT" = 1 ] || { fail_reason="the table went away with the helper"; return 1; }
+        blocked_rc "$KILLED_DIRECT_RC" || { fail_reason="HTTPS to $PROBE_ADDRESS on $PHYS was not refused after the crash (curl exit $KILLED_DIRECT_RC)"; return 1; }
         printf '%s\n' "$CLI_OUT" | grep -q '^network: held closed' || { fail_reason="status does not report the network held closed: $CLI_OUT"; return 1; }
         table_present || { fail_reason="the restarted helper removed the table"; return 1; }
         expect_blocked "HTTPS to $PROBE_ADDRESS on $PHYS during the hold" direct_https
@@ -442,6 +618,20 @@ scenario_crash() {
         expect_reached "HTTPS to $PROBE_ADDRESS on $PHYS" direct_https
     }
     check crash.open-network "the table went away and the direct path answered" opened
+
+    dns_lock_killed() {
+        connect_with request-dns-lock.json || return 1
+        table_present || { fail_reason="no table: the DNS lock is not installed"; return 1; }
+        kill_helper || return 1
+        [ "$KILLED_TABLE_PRESENT" = 1 ] || { fail_reason="the table went away with the helper, before the restart"; return 1; }
+        ! printf '%s\n' "$CLI_OUT" | grep -q '^network: held closed' || { fail_reason="status reports the network held closed after a DNS-lock crash"; return 1; }
+        ! table_present || { fail_reason="the restarted helper kept the DNS lock's table"; return 1; }
+        journalctl -b -u rosetun-helper.service --no-pager 2>/dev/null | grep -q 'removed the DNS lock a crashed helper left' ||
+            { fail_reason="the journal does not say that the DNS lock was removed"; return 1; }
+        expect_udp_dns_sent || return 1
+        expect_reached "HTTPS to $PROBE_ADDRESS on $PHYS" direct_https
+    }
+    check crash.dns-lock-killed "the restarted helper removed the DNS lock and said so, UDP 53 left" dns_lock_killed
 }
 
 scenario_stop() {
@@ -463,6 +653,9 @@ cleanup() {
     L2_CLEANUP_STATUS=PASS L2_CLEANUP_ACTIONS='' L2_CLEANUP_PROBLEMS=''
     note() { L2_CLEANUP_ACTIONS="$L2_CLEANUP_ACTIONS${L2_CLEANUP_ACTIONS:+; }$1"; }
     problem() { L2_CLEANUP_PROBLEMS="$L2_CLEANUP_PROBLEMS${L2_CLEANUP_PROBLEMS:+; }$1"; L2_CLEANUP_STATUS=ERROR; }
+    if [ -f "$STATE/peer" ]; then
+        peer_down && note "removed the peer namespace" || problem "could not remove the peer namespace $PEER_NS, its NAT table or routing rule"
+    fi
     if [ -f "$STATE/foreign-table" ]; then
         if "$NFT" delete table inet "$FOREIGN_TABLE" 2>/dev/null || ! "$NFT" list table inet "$FOREIGN_TABLE" >/dev/null 2>&1; then
             rm -f -- "$STATE/foreign-table"
@@ -576,6 +769,8 @@ if preflight_ok; then
         scenario_kill_switch
         scenario_lan_on
         scenario_dns_lock
+        scenario_ipv6
+        scenario_peer
         scenario_crash
         scenario_stop
     fi

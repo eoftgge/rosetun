@@ -467,8 +467,9 @@ Assert-That 'any other state is refused too' ($null -ne $odd -and $odd -match "'
 # --- L3: scenarios, requests, the stage's composition
 $l3 = @(Get-RosetunLinuxScenarios -Stage L3)
 Assert-That 'the L3 scenarios load' ($l3.Count -ge 15)
-Assert-That 'every L3 scenario is required' (@($l3 | Where-Object { -not $_.Required }).Count -eq 0)
+Assert-That 'every L3 scenario but the IPv6 neighbor (no IPv6 router on the Default Switch) is required' ((@($l3 | Where-Object { -not $_.Required } | ForEach-Object { $_.Id }) -join ',') -ceq 'ipv6.neighbor')
 Assert-That 'the L3 list covers the crash and the stop' (@($l3 | Where-Object { $_.Id -in @('crash.helper-killed', 'crash.open-network', 'stop.removes-table') }).Count -eq 3)
+Assert-That 'the L3 list covers a DNS-lock crash, inbound answers and forwarding' (@($l3 | Where-Object { $_.Id -in @('crash.dns-lock-killed', 'inbound.reply', 'forward.blocked') }).Count -eq 3)
 Assert-That 'L2 keeps its own list' (@(Get-RosetunLinuxScenarios -Stage L2 | Where-Object { $_.Id -like 'killswitch.*' }).Count -eq 0)
 
 $l3tmp = Join-Path ([IO.Path]::GetTempPath()) "rosetun-l3-selftest-$([guid]::NewGuid().ToString('N'))"
