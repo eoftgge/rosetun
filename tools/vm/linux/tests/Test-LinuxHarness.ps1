@@ -179,6 +179,10 @@ try {
     [IO.File]::WriteAllText((Join-Path $tmp 'script'), "#!/bin/sh`necho hi`n")
     Assert-That 'a script is refused' (-not (Test-RosetunLinuxElf (Join-Path $tmp 'script')).Ok)
     Assert-That 'a missing file is refused' (-not (Test-RosetunLinuxElf (Join-Path $tmp 'nothing')).Ok)
+    # A path relative to PowerShell's location, which is not the process's directory.
+    Push-Location -LiteralPath $tmp
+    try { Assert-That 'a relative path is read from the current location' ((Test-RosetunLinuxElf '.\good').Ok) }
+    finally { Pop-Location }
 
     # --- artifact provenance
     $dir = Join-Path $tmp 'artifacts'

@@ -721,8 +721,11 @@ function Test-RosetunLinuxElf {
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
         return [pscustomobject]@{ Ok = $false; Reason = 'the file does not exist' }
     }
+    # .NET resolves a relative path against the process's directory, not
+    # PowerShell's location, which Test-Path above used.
+    $full = (Resolve-Path -LiteralPath $Path).ProviderPath
     $header = [byte[]]::new(20)
-    $stream = [IO.File]::OpenRead($Path)
+    $stream = [IO.File]::OpenRead($full)
     try { $read = $stream.Read($header, 0, 20) } finally { $stream.Dispose() }
     $reason = if ($read -lt 20) { 'the file is too short to be an executable' }
     elseif ($header[0] -eq 0x4D -and $header[1] -eq 0x5A) { 'this is a Windows PE file, not a Linux build' }
