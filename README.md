@@ -51,6 +51,7 @@ Rosetun is a Windows VPN client powered by sing-box, which runs the tunnel, rule
 
 **Local network** (Settings → Connection) lets programs reach the devices on the network this computer is connected to, past the tunnel, also with the kill switch on: a printer, a NAS, a game console, USB over IP (such as VirtualHere) and game streaming (such as Sunshine and Moonlight). Finding devices works too: mDNS, LLMNR, SSDP and broadcasts stay on the local network. Off by default; turn it off on public networks.
 
+- Finding devices works for programs that send their search on each network adapter, as Windows itself and most discovery libraries do. A program that leaves the choice of adapter to Windows sends it into the tunnel, and it does not reach the local network.
 - Only the networks the computer's own adapters are connected to are opened, each on its own adapter, plus link-local addresses (169.254.x.x). A connected network wider than /16 is not opened. When the computer moves to another network (another Wi-Fi, a new address from the router, waking from sleep), Rosetun follows it within a few seconds with a short reconnect; the kill switch stays on meanwhile.
 - Your router's DNS is not used: names are looked up through the VPN.
 - Local IPv6 addresses stay closed while the tunnel carries IPv4 only. Reach local devices by their IPv4 addresses.
