@@ -377,6 +377,7 @@ fn dispatch(
             }
             *greeted = true;
             tracing::info!("client connected");
+            helper.refresh_lockdown_programs();
             Response::Hello {
                 helper_version: HELPER_VERSION.to_owned(),
                 protocol_version: PROTOCOL_VERSION,

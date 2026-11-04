@@ -1,0 +1,53 @@
+# Rosetun Lockdown at boot. Installed as
+# /usr/lib/systemd/system/rosetun-lockdown.service and enabled with
+# `systemctl enable rosetun-lockdown`; the helper offers Lockdown only while
+# it is enabled.
+#
+# nftables tables live in the kernel and are gone after a reboot. This unit
+# reads Lockdown's record (/var/lib/rosetun/lockdown, root only) and, when
+# there is one, writes Lockdown's table (inet rosetun) before any network
+# comes up, before anyone logs in and whether or not the helper ever
+# starts. Without a record it does nothing. It touches no other table and
+# not /etc/nftables.conf. Its set names no cgroup: the helper's cgroups do
+# not exist yet, and nftables needs them to exist to load such a rule. The
+# helper adds its engines', its own and the programs' permits when it
+# starts.
+
+[Unit]
+Description=Rosetun Lockdown at boot
+# Early boot: none of the default dependencies on basic.target, which come
+# after the network could already be up.
+DefaultDependencies=no
+# The record and the programs must be readable: whatever mounts hold them
+# are mounted first (and required).
+RequiresMountsFor=/var/lib/rosetun /usr/lib/rosetun /usr/sbin/nft
+After=local-fs.target
+# network-pre.target is passive: it orders only when someone pulls it in.
+# Every network manager (NetworkManager, systemd-networkd, ifupdown's
+# networking.service, wpa_supplicant) is ordered after it, so nothing
+# configures an interface before this unit has finished.
+Wants=network-pre.target
+Before=network-pre.target
+Before=rosetun-helper.service
+Before=shutdown.target
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/rosetun/rosetun-helper-privileged --restore-lockdown
+# Stopping the unit removes nothing: the way out is
+# `rosetun reset-firewall` as root.
+
+NoNewPrivileges=yes
+ProtectHostname=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+SystemCallArchitectures=native
+
+[Install]
+# sysinit.target is reached before basic.target and everything that waits
+# for it, so the unit is part of every boot, also one without a graphical
+# session or a login.
+WantedBy=sysinit.target

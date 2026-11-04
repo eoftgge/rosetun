@@ -726,8 +726,12 @@ impl ProtectionSession for NftSession {
 /// network and without the service. A table already there is left alone:
 /// at boot there is none, so it is the service's.
 pub(super) fn restore_at_boot() -> Result<BootRestore, RoutingError> {
-    let nft = SystemNft;
-    let stored = state::read(Path::new(state::STATE_FILE));
+    restore_from(&SystemNft, Path::new(state::STATE_FILE))
+}
+
+/// Without a record nothing runs, not even `nft`: Lockdown is off.
+fn restore_from(nft: &dyn Nft, record: &Path) -> Result<BootRestore, RoutingError> {
+    let stored = state::read(record);
     let Some(saved) = stored.lockdown() else {
         return Ok(BootRestore::Off);
     };
@@ -1378,6 +1382,66 @@ mod tests {
         let count = nft.applied().len();
         drop(backend.permit_in_lockdown(&[]).unwrap());
         assert_eq!(nft.applied().len(), count);
+    }
+
+    #[test]
+    fn at_boot_without_a_record_nothing_is_written() {
+        let mount = Mount::new(false);
+        let nft = FakeNft {
+            unusable: Some("no nft".to_owned()),
+            ..FakeNft::default()
+        };
+        assert_eq!(restore_from(&nft, &mount.record()).unwrap(), BootRestore::Off);
+        assert!(nft.applied().is_empty());
+    }
+
+    #[test]
+    fn at_boot_the_record_closes_the_network_before_the_service_starts() {
+        let mount = Mount::new(false);
+        let saved = Saved {
+            allow_lan: true,
+            private_networks: false,
+        };
+        state::write(&mount.record(), saved).unwrap();
+        let nft = FakeNft::default();
+        assert_eq!(
+            restore_from(&nft, &mount.record()).unwrap(),
+            BootRestore::On { allow_lan: true }
+        );
+        assert_eq!(nft.applied(), [boot_rules(saved)]);
+        // Started again with the service's table in place: it stays.
+        assert_eq!(
+            restore_from(&nft, &mount.record()).unwrap(),
+            BootRestore::AlreadyInPlace
+        );
+        assert_eq!(nft.applied().len(), 1);
+    }
+
+    #[test]
+    fn at_boot_a_corrupt_record_closes_the_network_without_the_local_network() {
+        let mount = Mount::new(false);
+        state::write(&mount.record(), Saved::default()).unwrap();
+        std::fs::write(mount.record(), "allow_lan=yes\n").unwrap();
+        let nft = FakeNft::default();
+        assert!(matches!(
+            restore_from(&nft, &mount.record()),
+            Ok(BootRestore::Corrupt { .. })
+        ));
+        assert_eq!(nft.applied(), [boot_rules(Saved::default())]);
+    }
+
+    #[test]
+    fn at_boot_a_record_without_nft_is_an_error_not_an_open_network_silently() {
+        let mount = Mount::new(false);
+        state::write(&mount.record(), Saved::default()).unwrap();
+        let nft = FakeNft {
+            unusable: Some("no nft".to_owned()),
+            ..FakeNft::default()
+        };
+        assert!(matches!(
+            restore_from(&nft, &mount.record()),
+            Err(RoutingError::Unavailable(_))
+        ));
     }
 
     #[test]

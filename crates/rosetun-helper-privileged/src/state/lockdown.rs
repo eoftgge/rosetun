@@ -77,9 +77,12 @@ pub(super) fn lockdown_apps() -> LockdownApps {
             .then(|| std::fs::canonicalize(&path).ok())
             .flatten()
     };
+    // On Linux only whether they are installed counts: Lockdown permits
+    // the scopes they run in, not the files.
+    let suffix = std::env::consts::EXE_SUFFIX;
     LockdownApps {
-        gui: find("rosetun-gui.exe"),
-        cli: find("rosetun.exe"),
+        gui: find(&format!("rosetun-gui{suffix}")),
+        cli: find(&format!("rosetun{suffix}")),
         service: exe.and_then(|exe| std::fs::canonicalize(exe).ok()),
     }
 }
@@ -228,6 +231,26 @@ impl Helper {
                 sublayer_weight = %format_weight(status.sublayer_weight),
                 "Lockdown is on but could not be repaired"
             ),
+        }
+    }
+
+    /// A client connected (Linux): the GUI or the CLI may have just made
+    /// the scope Lockdown permits it by, so Lockdown's permits follow the
+    /// scopes before the client's first request outside. Never waits: a
+    /// busy session runs a change of its own, and a session withdraws
+    /// those permits anyway.
+    pub(crate) fn refresh_lockdown_programs(&self) {
+        if !read(&self.lockdown).enabled {
+            return;
+        }
+        let Some(Acquired::Locked(session)) = self.try_session(SessionHolder::Lockdown) else {
+            return;
+        };
+        if session.programs_withdrawn {
+            return;
+        }
+        if let Err(error) = session.routing.refresh_lockdown_programs() {
+            tracing::warn!(%error, "could not update Lockdown's permits for Rosetun's programs");
         }
     }
 

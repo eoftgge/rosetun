@@ -12,6 +12,8 @@ mod engine_copy;
 #[cfg(windows)]
 mod install_dir;
 mod list_store;
+#[cfg(target_os = "linux")]
+mod lockdown_linux;
 #[cfg(windows)]
 mod log_file;
 mod log_gate;
@@ -42,7 +44,7 @@ use tracing_subscriber::prelude::*;
 use crate::log_gate::VerboseGate;
 use crate::server::{Helper, Server};
 
-const USAGE: &str = "usage: rosetun-helper-privileged [--service | --install-service | --uninstall-service | --reset-firewall | --verify-install-dir <path> | --secure-install-dir <path> | --finalize-install-dir <path> | --hold-for-upgrade <path>]";
+const USAGE: &str = "usage: rosetun-helper-privileged [--service | --install-service | --uninstall-service | --reset-firewall | --verify-install-dir <path> | --secure-install-dir <path> | --finalize-install-dir <path> | --hold-for-upgrade <path> | --restore-lockdown]";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Mode {
@@ -58,6 +60,8 @@ enum Mode {
     /// Holds the network closed for an upgrade (administrator): exit codes
     /// in `upgrade_hold::hold_exit`.
     HoldForUpgrade(std::path::PathBuf),
+    /// Linux, at boot: Lockdown's set from its record, before any network.
+    RestoreLockdown,
 }
 
 fn parse_mode(args: impl IntoIterator<Item = OsString>) -> Result<Mode, String> {
@@ -68,6 +72,7 @@ fn parse_mode(args: impl IntoIterator<Item = OsString>) -> Result<Mode, String> 
         [arg] if arg == "--install-service" => Ok(Mode::InstallService),
         [arg] if arg == "--uninstall-service" => Ok(Mode::UninstallService),
         [arg] if arg == "--reset-firewall" => Ok(Mode::ResetFirewall),
+        [arg] if arg == "--restore-lockdown" => Ok(Mode::RestoreLockdown),
         [arg, path] if arg == "--verify-install-dir" => Ok(Mode::VerifyInstallDir(path.into())),
         [arg, path] if arg == "--secure-install-dir" => Ok(Mode::SecureInstallDir(path.into())),
         [arg, path] if arg == "--finalize-install-dir" => Ok(Mode::FinalizeInstallDir(path.into())),
@@ -76,11 +81,14 @@ fn parse_mode(args: impl IntoIterator<Item = OsString>) -> Result<Mode, String> 
     }
 }
 
-/// The console helper and the systemd service; the rest manage the Windows
-/// service, firewall and install directory.
+/// The console helper, the systemd service and Lockdown's commands; the rest
+/// manage the Windows service and install directory.
 #[cfg(target_os = "linux")]
 fn runs_on_linux(mode: &Mode) -> bool {
-    matches!(mode, Mode::Console | Mode::Service)
+    matches!(
+        mode,
+        Mode::Console | Mode::Service | Mode::ResetFirewall | Mode::RestoreLockdown
+    )
 }
 
 fn log_filter() -> tracing_subscriber::EnvFilter {
@@ -131,7 +139,7 @@ fn main() -> std::process::ExitCode {
     #[cfg(target_os = "linux")]
     if !runs_on_linux(&mode) {
         eprintln!(
-            "this command is Windows only; on Linux run the helper without arguments or with --service"
+            "this command is Windows only; on Linux run the helper without arguments, with --service, --reset-firewall or --restore-lockdown"
         );
         return std::process::ExitCode::from(2);
     }
@@ -146,6 +154,24 @@ fn main() -> std::process::ExitCode {
         Mode::Console => run_linux(signals, false),
         #[cfg(target_os = "linux")]
         Mode::Service => run_linux(signals, true),
+        #[cfg(target_os = "linux")]
+        Mode::ResetFirewall => lockdown_linux::reset_firewall(),
+        #[cfg(target_os = "linux")]
+        Mode::RestoreLockdown => {
+            // To the journal through stderr; the routing crate's warnings too.
+            tracing_subscriber::fmt()
+                .with_env_filter(tracing_subscriber::EnvFilter::new("warn"))
+                .with_writer(std::io::stderr)
+                .with_ansi(false)
+                .without_time()
+                .init();
+            lockdown_linux::restore_at_boot()
+        }
+        #[cfg(windows)]
+        Mode::RestoreLockdown => {
+            eprintln!("--restore-lockdown is Linux only");
+            std::process::ExitCode::from(2)
+        }
         #[cfg(not(target_os = "linux"))]
         Mode::Console => run_console(),
         #[cfg(windows)]
@@ -619,14 +645,15 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn linux_runs_only_the_console_and_the_service() {
+    fn linux_runs_the_console_the_service_and_lockdowns_commands() {
         let mode = |args: &[&str]| parse_mode(args.iter().map(OsString::from)).unwrap();
         assert!(runs_on_linux(&mode(&[])));
         assert!(runs_on_linux(&mode(&["--service"])));
+        assert!(runs_on_linux(&mode(&["--reset-firewall"])));
+        assert!(runs_on_linux(&mode(&["--restore-lockdown"])));
         for args in [
             &["--install-service"][..],
             &["--uninstall-service"],
-            &["--reset-firewall"],
             &["--verify-install-dir", "/opt/example"],
             &["--secure-install-dir", "/opt/example"],
             &["--finalize-install-dir", "/opt/example"],
@@ -660,6 +687,7 @@ mod tests {
         assert_eq!(mode(&["--install-service"]), Ok(Mode::InstallService));
         assert_eq!(mode(&["--uninstall-service"]), Ok(Mode::UninstallService));
         assert_eq!(mode(&["--reset-firewall"]), Ok(Mode::ResetFirewall));
+        assert_eq!(mode(&["--restore-lockdown"]), Ok(Mode::RestoreLockdown));
         assert_eq!(
             mode(&["--reset-firewall", "--service"]),
             Err(USAGE.to_owned())
