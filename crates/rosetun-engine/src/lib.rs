@@ -337,6 +337,9 @@ pub struct RenderRequest<'a> {
     pub rules: &'a RuleSet,
     pub lists: &'a [rosetun_config::ListRef],
     pub settings: &'a Settings,
+    /// The connected networks of the physical adapters, which "Local network"
+    /// sends around the tunnel. Empty when it is off or none qualifies.
+    pub lan_segment: &'a [rosetun_config::IpPrefix],
     pub control: Option<&'a ControlEndpoint>,
     pub verbose_log: bool,
 }
@@ -352,6 +355,7 @@ impl std::fmt::Debug for RenderRequest<'_> {
             .field("rule_set_id", &self.rules.id)
             .field("rule_count", &self.rules.rules.len())
             .field("list_count", &self.lists.len())
+            .field("lan_prefixes", &self.lan_segment.len())
             .field("control", &self.control)
             .field("verbose_log", &self.verbose_log)
             .finish_non_exhaustive()

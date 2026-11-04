@@ -5213,6 +5213,7 @@ fn invalid_extra_nodes_are_rejected_before_connect_and_apply() {
         rules: safe,
         lists: &[],
         settings: &missing.settings,
+        lan_segment: &[],
         control: None,
         verbose_log: false,
     })

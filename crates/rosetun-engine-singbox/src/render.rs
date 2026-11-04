@@ -1,7 +1,7 @@
 use rosetun_config::{
-    DnsSettings, DomainMatch, EXIT_TRACE_IP, EXIT_TRACE_PORT, ExitId, ListRef, LogLevel, Node,
-    Outbound, ProcessMatch, Rule, RuleId, RuleMatcher, RuleSet, RuleTarget, Settings, TlsMode,
-    Transport, UploadedListFormat, list_tag,
+    DnsSettings, DomainMatch, EXIT_TRACE_IP, EXIT_TRACE_PORT, ExitId, IpPrefix, LINK_LOCAL_V4,
+    LINK_LOCAL_V6, ListRef, LogLevel, Node, Outbound, ProcessMatch, Rule, RuleId, RuleMatcher,
+    RuleSet, RuleTarget, Settings, TlsMode, Transport, UploadedListFormat, list_tag,
 };
 use rosetun_engine::errors::EngineError;
 use rosetun_engine::{
@@ -50,10 +50,11 @@ pub(crate) const RULE_CAPABILITIES: RuleCapabilities = RuleCapabilities {
 };
 
 pub fn render(request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError> {
+    let lan = request.settings.allow_lan.then_some(request.lan_segment);
     let (route, unsupported) = route_section_with_lists(
         request.rules,
         RULE_CAPABILITIES,
-        request.settings.allow_lan,
+        lan,
         request.lists,
         request.extra,
     );
@@ -406,13 +407,14 @@ pub(crate) fn route_section(
     capabilities: RuleCapabilities,
     allow_lan: bool,
 ) -> (Value, Vec<RuleId>) {
-    route_section_with_lists(rules, capabilities, allow_lan, &[], &[])
+    route_section_with_lists(rules, capabilities, allow_lan.then_some(&[]), &[], &[])
 }
 
+/// `lan` is the connected networks when "Local network" is on.
 fn route_section_with_lists(
     rules: &RuleSet,
     capabilities: RuleCapabilities,
-    allow_lan: bool,
+    lan: Option<&[IpPrefix]>,
     lists: &[ListRef],
     extra: &[ExtraOutbound<'_>],
 ) -> (Value, Vec<RuleId>) {
@@ -433,6 +435,22 @@ fn route_section_with_lists(
             "outbound": TAG_PROXY,
         }),
     ];
+    // Before the user's rules: a rule that sends a site or a program through
+    // the VPN must not take the devices next to this computer with it.
+    if let Some(segment) = lan {
+        let mut networks: Vec<String> = segment.iter().map(ToString::to_string).collect();
+        networks.extend(
+            LINK_LOCAL_V4
+                .iter()
+                .chain(&LINK_LOCAL_V6)
+                .map(ToString::to_string),
+        );
+        route_rules.push(json!({
+            "ip_cidr": networks,
+            "action": "route",
+            "outbound": TAG_DIRECT,
+        }));
+    }
     let mut unsupported = Vec::new();
     let mut used_lists = Vec::<&ListRef>::new();
 
@@ -471,7 +489,7 @@ fn route_section_with_lists(
         }
     }
 
-    if allow_lan {
+    if lan.is_some() {
         route_rules.push(json!({
             "ip_is_private": true,
             "action": "route",
@@ -749,6 +767,7 @@ mod tests {
             rules: &rules,
             lists: &lists,
             settings: &settings,
+            lan_segment: &[IpPrefix::new("203.0.113.0".parse().unwrap(), 24).unwrap()],
             control: Some(&control),
             verbose_log: false,
         };
@@ -859,6 +878,7 @@ mod tests {
             rules: &rules,
             lists: &[],
             settings: &settings,
+            lan_segment: &[],
             control: None,
             verbose_log: false,
         })
@@ -904,6 +924,7 @@ mod tests {
             rules: &rules,
             lists: &[],
             settings: &Settings::default(),
+            lan_segment: &[],
             control: None,
             verbose_log: false,
         })
@@ -943,6 +964,7 @@ mod tests {
                 rules: &rules,
                 lists: &[],
                 settings: &Settings::default(),
+                lan_segment: &[],
                 control: None,
                 verbose_log: false,
             }
@@ -1104,7 +1126,7 @@ mod tests {
             });
         }
         let (route, unsupported) =
-            route_section_with_lists(&set, RULE_CAPABILITIES, false, &[reference], &[]);
+            route_section_with_lists(&set, RULE_CAPABILITIES, None, &[reference], &[]);
         assert!(unsupported.is_empty());
         assert_eq!(
             route["rule_set"],
@@ -1123,7 +1145,7 @@ mod tests {
             json!({"rule_set": [tag], "action": "reject"})
         );
         assert!(
-            route_section_with_lists(&set, RuleCapabilities::NONE, false, &[], &[])
+            route_section_with_lists(&set, RuleCapabilities::NONE, None, &[], &[])
                 .1
                 .len()
                 == 2
@@ -1183,7 +1205,7 @@ mod tests {
             format: UploadedListFormat::Source,
         };
         let (route, unsupported) =
-            route_section_with_lists(&set, RULE_CAPABILITIES, false, &[reference], &[]);
+            route_section_with_lists(&set, RULE_CAPABILITIES, None, &[reference], &[]);
         assert_eq!(unsupported, [vanished]);
         assert_eq!(route["rules"].as_array().unwrap().len(), 4);
         assert_eq!(

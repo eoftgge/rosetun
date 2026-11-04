@@ -63,6 +63,11 @@ fn request(allow_lan: bool) -> ConnectRequest {
             RuleTarget::Direct,
         ),
         rule(
+            "link-local-through-vpn",
+            RuleMatcher::IpCidr("169.254.0.0/16".into()),
+            RuleTarget::Proxy,
+        ),
+        rule(
             "name",
             RuleMatcher::Process(ProcessMatch::Name("Example.exe".into())),
             RuleTarget::Direct,
@@ -190,6 +195,16 @@ const INPUTS: &[Input] = &[
     },
     site("nothing.invalid", "192.0.2.1"),
     site("NOTHING.INVALID", "192.0.2.1"),
+    Input {
+        domain: None,
+        ip: Some("169.254.10.20"),
+        process: None,
+    },
+    Input {
+        domain: None,
+        ip: Some("224.0.0.251"),
+        process: None,
+    },
 ];
 
 /// What the evaluator found: the matching route rule's index (`None` for
@@ -338,6 +353,7 @@ fn the_explainer_agrees_with_the_rendered_route() {
             rules: &effective,
             lists: &request.lists,
             settings: &request.settings,
+            lan_segment: &[],
             control: None,
             verbose_log: false,
         })
@@ -385,7 +401,11 @@ fn the_explainer_agrees_with_the_rendered_route() {
                 }
                 (Reason::LocalNetwork, Some(index)) => {
                     assert!(allow_lan, "{label}");
-                    assert_eq!(route_rules[index]["ip_is_private"], true, "{label}");
+                    assert!(
+                        route_rules[index]["ip_is_private"] == true
+                            || route_rules[index]["ip_cidr"][0] == "169.254.0.0/16",
+                        "{label}"
+                    );
                 }
                 (Reason::Default, None) => {}
                 (Reason::Default, Some(index)) => {

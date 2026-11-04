@@ -6,6 +6,7 @@ mod ids;
 mod list;
 mod list_validation;
 mod node;
+mod prefix;
 mod report;
 mod rule;
 mod runtime;
@@ -26,6 +27,7 @@ pub use node::{
     StreamSettings, TlsMode, TlsParams, Transport, TrojanParams, VlessParams, VmessParams,
     XhttpExtra, XhttpMode, XhttpRange, XhttpXmux, fragments_tls, node_country, uses_xray,
 };
+pub use prefix::{IpPrefix, LINK_LOCAL_V4, LINK_LOCAL_V6};
 pub use report::{
     hide_public_addresses, ip_literals, is_public_ip, redact_log_credentials, redact_report_text,
 };

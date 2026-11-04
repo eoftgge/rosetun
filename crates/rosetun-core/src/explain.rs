@@ -13,8 +13,8 @@ use std::net::IpAddr;
 
 use regex_automata::meta::Regex;
 use rosetun_config::{
-    ConnectionRoute, DomainMatch, ExitId, ListId, LiveConnection, ProcessMatch, RuleId,
-    RuleMatcher, RuleTarget, RuleTemplate, list_tag,
+    ConnectionRoute, DomainMatch, ExitId, LINK_LOCAL_V4, LINK_LOCAL_V6, ListId, LiveConnection,
+    ProcessMatch, RuleId, RuleMatcher, RuleTarget, RuleTemplate, list_tag,
 };
 use rosetun_ipc::ConnectRequest;
 use serde_json::Value;
@@ -212,6 +212,15 @@ pub fn explain(
         ip: destination.ip,
         process: destination.process,
     };
+    // The engine sends the computer's own segment direct before the user's
+    // rules. Its connected networks are known to the service only, but their
+    // traffic never enters the tunnel, so it never shows up here.
+    if request.settings.allow_lan && destination.ip.is_some_and(is_link_local) {
+        return Explanation::Routed {
+            reason: Reason::LocalNetwork,
+            route: ExplainedRoute::Direct,
+        };
+    }
     let rules = request.effective_rule_set();
     let temporary_count = request.temporary_rules.len();
     for (index, rule) in rules.rules.iter().enumerate() {
@@ -351,6 +360,15 @@ fn ends_with_program(path: &str, name: &str) -> bool {
     let (path, name) = (path.to_lowercase(), name.to_lowercase());
     path.strip_suffix(&name)
         .is_some_and(|rest| rest.is_empty() || rest.ends_with(['\\', '/']))
+}
+
+/// The link-local networks the engine sends direct with "Local network" on.
+fn is_link_local(ip: IpAddr) -> bool {
+    let ip = ip.to_canonical();
+    LINK_LOCAL_V4
+        .iter()
+        .chain(&LINK_LOCAL_V6)
+        .any(|network| network.contains(ip))
 }
 
 /// sing-box `ip_is_private`: not a public address in sing's

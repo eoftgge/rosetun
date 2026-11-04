@@ -99,6 +99,7 @@ impl Helper {
                 rules: extra.rules(&effective),
                 lists: &request.lists,
                 settings: &request.settings,
+                lan_segment: &[],
                 control: None,
                 verbose_log: false,
             },

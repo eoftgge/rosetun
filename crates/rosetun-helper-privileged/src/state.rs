@@ -2065,6 +2065,7 @@ impl Session {
                 rules,
                 lists,
                 settings,
+                lan_segment: &[],
                 control: control.as_ref(),
                 verbose_log: verbose_until.is_some(),
             },
