@@ -39,6 +39,13 @@ const LAN_V6: [(Ipv6Addr, u8); 2] = [
     (Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 0), 10),
     (Ipv6Addr::new(0xfc00, 0, 0, 0, 0, 0, 0, 0), 7),
 ];
+/// IPv6 neighbor discovery the kernel sends without a socket, so with no
+/// cgroup: without it the engine cannot reach a server over IPv6 and the
+/// host loses its neighbors. Hop limit 255 is what RFC 4861 requires: a
+/// copy that crossed a router arrives with less and is discarded, so the
+/// permit reaches the link only, and forging one takes `CAP_NET_RAW`. Not
+/// all of ICMPv6, which would be a way out past the kill switch.
+const NEIGHBOR_DISCOVERY: &str = "icmpv6 type { nd-router-solicit, nd-neighbor-solicit, nd-neighbor-advert } ip6 hoplimit 255 accept";
 
 /// A network interface name the kernel could hold: 1 to 15 bytes of
 /// `[A-Za-z0-9_.-]`, not `.` or `..`.
@@ -140,6 +147,7 @@ pub(crate) fn replace(rules: &Rules<'_>) -> String {
     match rules.scope {
         ProtectionScope::AllTraffic => {
             text.push_str("\t\tmeta nfproto ipv4 udp sport 68 udp dport 67 accept\n");
+            let _ = writeln!(text, "\t\t{NEIGHBOR_DISCOVERY}");
             if lan {
                 let _ = writeln!(text, "\t\tip daddr {{ {} }} accept", v4_list());
                 let _ = writeln!(text, "\t\tip6 daddr {{ {} }} accept", v6_list());
@@ -282,6 +290,7 @@ mod tests {
 \t\toif \"lo\" accept
 \t\tsocket cgroupv2 level 3 \"system.slice/rosetun-helper.service/engines\" accept
 \t\tmeta nfproto ipv4 udp sport 68 udp dport 67 accept
+\t\ticmpv6 type {{ nd-router-solicit, nd-neighbor-solicit, nd-neighbor-advert }} ip6 hoplimit 255 accept
 \t}}
 }}
 "
@@ -309,6 +318,7 @@ mod tests {
 \t\toif \"lo\" accept
 \t\tsocket cgroupv2 level 3 \"system.slice/rosetun-helper.service/engines\" accept
 \t\tmeta nfproto ipv4 udp sport 68 udp dport 67 accept
+\t\ticmpv6 type {{ nd-router-solicit, nd-neighbor-solicit, nd-neighbor-advert }} ip6 hoplimit 255 accept
 \t}}
 }}
 "
@@ -338,6 +348,7 @@ mod tests {
 \t\toif \"lo\" accept
 \t\tsocket cgroupv2 level 3 \"system.slice/rosetun-helper.service/engines\" accept
 \t\tmeta nfproto ipv4 udp sport 68 udp dport 67 accept
+\t\ticmpv6 type {{ nd-router-solicit, nd-neighbor-solicit, nd-neighbor-advert }} ip6 hoplimit 255 accept
 \t\tip daddr {{ 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16 }} accept
 \t\tip6 daddr {{ fe80::/10, fc00::/7 }} accept
 \t}}
@@ -393,6 +404,25 @@ mod tests {
             "\t\tsocket cgroupv2 level 3 \"system.slice/rosetun-helper.service/helper\" meta l4proto { tcp, udp } th dport 53 accept\n"
         ));
         assert!(text.contains("policy drop;"));
+        assert!(text.contains(&format!("\t\t{NEIGHBOR_DISCOVERY}\n")));
+    }
+
+    #[test]
+    fn neighbor_discovery_alone_passes_and_only_on_the_link() {
+        assert_eq!(
+            NEIGHBOR_DISCOVERY,
+            "icmpv6 type { nd-router-solicit, nd-neighbor-solicit, nd-neighbor-advert } ip6 hoplimit 255 accept"
+        );
+        let engines = engines();
+        let text = replace(&Rules {
+            scope: ProtectionScope::DnsOnly,
+            allow_lan: false,
+            engines: &engines,
+            helper_dns: None,
+            tunnel: None,
+        });
+        // The DNS lock accepts by default; it needs no permit of its own.
+        assert!(!text.contains("icmpv6"));
     }
 
     #[test]
