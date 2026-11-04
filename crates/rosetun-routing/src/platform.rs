@@ -73,6 +73,21 @@ pub(super) fn lan_segment(
     }
 }
 
+pub(super) fn release_discovery_routes(
+    tunnel: &crate::TunnelInterface,
+    ipv6: bool,
+) -> crate::DiscoveryRoutes {
+    #[cfg(windows)]
+    {
+        windows::release_discovery_routes(tunnel, ipv6)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (tunnel, ipv6);
+        crate::DiscoveryRoutes::default()
+    }
+}
+
 pub(super) fn physical_default_interface(exclude_alias: &str) -> Option<String> {
     #[cfg(windows)]
     {

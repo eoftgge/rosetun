@@ -7704,6 +7704,70 @@ fn a_new_local_network_is_followed_by_a_protected_reconnect() {
 }
 
 #[test]
+fn local_network_keeps_discovery_routes_off_the_tunnel_at_connect_and_on_every_tick() {
+    static RELEASES: AtomicUsize = AtomicUsize::new(0);
+    let (helper, _, _, _) = supervised_helper(true);
+    let helper = helper.with_discovery_route_release(|tunnel, ipv6| {
+        assert_eq!(tunnel.alias, rosetun_config::TunSettings::default().name);
+        assert!(!ipv6, "the default tunnel carries IPv4 only");
+        RELEASES.fetch_add(1, Ordering::AcqRel);
+        rosetun_routing::DiscoveryRoutes::default()
+    });
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    request.settings.allow_lan = true;
+    helper.connect(&request).expect("connect");
+    assert_eq!(RELEASES.load(Ordering::Acquire), 1);
+    helper.supervise(Instant::now());
+    helper.supervise(Instant::now());
+    assert_eq!(RELEASES.load(Ordering::Acquire), 3);
+}
+
+#[test]
+fn a_tunnel_that_carries_ipv6_gives_up_its_ipv6_discovery_route_too() {
+    static IPV6: AtomicBool = AtomicBool::new(false);
+    let (helper, _, _, _) = supervised_helper(true);
+    let helper = helper.with_discovery_route_release(|_, ipv6| {
+        IPV6.store(ipv6, Ordering::Release);
+        rosetun_routing::DiscoveryRoutes::default()
+    });
+    let mut request = connect_request();
+    request.settings.allow_lan = true;
+    request.settings.tun.ipv6 = Some("fdfe:dcba:9876::1/126".to_owned());
+    helper.connect(&request).expect("connect");
+    assert!(IPV6.load(Ordering::Acquire));
+}
+
+#[test]
+fn a_failure_to_release_discovery_routes_does_not_fail_the_connect() {
+    let (helper, controls, _, _) = supervised_helper(true);
+    let helper = helper.with_discovery_route_release(|_, _| rosetun_routing::DiscoveryRoutes {
+        removed: 0,
+        failure: Some(5),
+    });
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    request.settings.allow_lan = true;
+    helper.connect(&request).expect("connect");
+    helper.supervise(Instant::now());
+    assert!(matches!(helper.status().state, ConnectionState::Connected));
+    assert_eq!(controls.spawns(), 1);
+}
+
+#[test]
+fn without_local_network_the_discovery_routes_stay() {
+    let (helper, _, _, _) = supervised_helper(true);
+    let helper = helper
+        .with_discovery_route_release(|_, _| panic!("the routes stay without Local network"));
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    helper.connect(&request).expect("connect");
+    for _ in 0..4 {
+        helper.supervise(Instant::now());
+    }
+}
+
+#[test]
 fn without_local_network_the_segment_is_not_watched() {
     let (helper, controls, prepared, _) = supervised_helper(true);
     let helper = helper.with_lan_scan(|_| panic!("the segment is read only with Local network on"));

@@ -1,3 +1,4 @@
+mod discovery_routes;
 mod filters;
 pub(super) mod lockdown;
 mod physical;
@@ -12,6 +13,13 @@ pub(super) fn adapters() -> std::io::Result<Vec<crate::lan::Adapter>> {
 
 pub(super) fn tunnel_adapter_present(alias: &str) -> std::io::Result<bool> {
     tunnel::adapter_present(alias)
+}
+
+pub(super) fn release_discovery_routes(
+    tunnel: &crate::TunnelInterface,
+    ipv6: bool,
+) -> crate::DiscoveryRoutes {
+    discovery_routes::release(tunnel, ipv6)
 }
 
 use session::Engine;

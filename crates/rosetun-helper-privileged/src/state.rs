@@ -313,6 +313,9 @@ struct Session {
     /// The session's VPN servers, which the segment must not hold.
     lan_servers: Vec<IpAddr>,
     lan_watch: lan::LanWatch,
+    discovery_route_release: lan::DiscoveryRouteRelease,
+    /// The last sweep's failure, which is logged once.
+    discovery_route_failure: Option<u32>,
     /// The segment Lockdown's set was last written for without a session.
     lockdown_segment: rosetun_routing::lan::LanSegment,
 }
@@ -416,6 +419,11 @@ impl Helper {
                 lan: rosetun_routing::lan::LanAccess::default(),
                 lan_servers: Vec::new(),
                 lan_watch: lan::LanWatch::default(),
+                #[cfg(not(test))]
+                discovery_route_release: rosetun_routing::release_discovery_routes,
+                #[cfg(test)]
+                discovery_route_release: lan::test_release,
+                discovery_route_failure: None,
                 lockdown_segment: rosetun_routing::lan::LanSegment::default(),
                 #[cfg(not(test))]
                 adapter_lookup: rosetun_routing::tunnel_adapter_present,
@@ -453,6 +461,15 @@ impl Helper {
             .get_mut()
             .expect("new session is not poisoned")
             .lan_scan = scan;
+        self
+    }
+
+    #[cfg(test)]
+    fn with_discovery_route_release(mut self, release: lan::DiscoveryRouteRelease) -> Self {
+        self.session
+            .get_mut()
+            .expect("new session is not poisoned")
+            .discovery_route_release = release;
         self
     }
 
@@ -2222,6 +2239,7 @@ impl Session {
         self.lan = lan;
         self.lan_servers = servers;
         self.lan_watch = lan::LanWatch::default();
+        self.discovery_route_failure = None;
         let cold_start = self.cold_start;
 
         if chain {
@@ -2394,6 +2412,12 @@ impl Session {
                     "engine exited during tunnel readiness",
                 ));
             }
+        }
+
+        // Without a guard the tunnel has not been validated yet; the first
+        // supervisor tick after the connect does this if it is too early here.
+        if settings.allow_lan {
+            self.release_discovery_routes(&settings.tun);
         }
 
         if let Some(server) = dns_server {

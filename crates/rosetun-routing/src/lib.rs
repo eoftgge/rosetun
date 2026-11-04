@@ -55,6 +55,14 @@ pub mod lockdown {
     }
 }
 
+/// What one `release_discovery_routes` did.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DiscoveryRoutes {
+    pub removed: usize,
+    /// The first Windows error code of the sweep.
+    pub failure: Option<u32>,
+}
+
 /// What the boot unit did (Linux).
 #[cfg(target_os = "linux")]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -86,6 +94,14 @@ pub struct FirewallReset {
 /// segment support.
 pub fn lan_segment(query: &lan::SegmentQuery<'_>) -> std::io::Result<lan::SegmentScan> {
     platform::lan_segment(query)
+}
+
+/// Sends multicast and limited broadcast that no program chose an adapter for
+/// to the local network: takes the system's routes for them off the validated
+/// tunnel (Windows; nothing elsewhere). `ipv6`: the tunnel carries IPv6. Safe
+/// to call repeatedly. The routes come back with the next adapter.
+pub fn release_discovery_routes(tunnel: &TunnelInterface, ipv6: bool) -> DiscoveryRoutes {
+    platform::release_discovery_routes(tunnel, ipv6)
 }
 
 /// Choose the physical default route: a probe engine without its own TUN would

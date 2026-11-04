@@ -4,12 +4,18 @@
 use std::net::IpAddr;
 
 use rosetun_config::{IpPrefix, Settings, TunSettings};
-use rosetun_routing::lan::{LanAccess, LanSegment, SegmentQuery, SegmentScan, SkipReason};
+use rosetun_routing::{
+    DiscoveryRoutes, TunnelInterface,
+    lan::{LanAccess, LanSegment, SegmentQuery, SegmentScan, SkipReason},
+};
 
 use super::{Session, lockdown};
 
 /// Reads the adapters; a hook for tests.
 pub(super) type LanScan = fn(&SegmentQuery<'_>) -> std::io::Result<SegmentScan>;
+
+/// Takes the system's discovery routes off the tunnel; a hook for tests.
+pub(super) type DiscoveryRouteRelease = fn(&TunnelInterface, bool) -> DiscoveryRoutes;
 
 /// Equal reads in a row, one supervisor tick (500 ms) apart, before a new
 /// segment counts. Joining Wi-Fi, a DHCP lease and waking from sleep change
@@ -57,6 +63,17 @@ impl<T: PartialEq> LanWatch<T> {
 #[cfg(test)]
 pub(super) fn test_scan(_: &SegmentQuery<'_>) -> std::io::Result<SegmentScan> {
     Ok(SegmentScan::default())
+}
+
+#[cfg(test)]
+pub(super) fn test_release(_: &TunnelInterface, _: bool) -> DiscoveryRoutes {
+    DiscoveryRoutes::default()
+}
+
+/// The failure to log: a tick repeats the sweep, and the same error twice a
+/// second would bury the log.
+fn new_failure(previous: Option<u32>, current: Option<u32>) -> Option<u32> {
+    current.filter(|_| current != previous)
 }
 
 /// The tunnel's own networks, from its configured addresses.
@@ -161,9 +178,34 @@ impl Session {
         })
     }
 
+    /// With "Local network" on, discovery without a chosen adapter leaves the
+    /// tunnel. A failure only logs: the session works, and such discovery
+    /// stays in the tunnel as it would without this.
+    pub(super) fn release_discovery_routes(&mut self, tun: &TunSettings) {
+        let Ok(tunnel) = TunnelInterface::try_from(tun) else {
+            return;
+        };
+        let sweep = (self.discovery_route_release)(&tunnel, tun.ipv6.is_some());
+        if sweep.removed > 0 {
+            tracing::info!(
+                removed = sweep.removed,
+                "local network: discovery without a chosen adapter stays out of the tunnel"
+            );
+        }
+        if let Some(code) = new_failure(self.discovery_route_failure, sweep.failure) {
+            tracing::warn!(
+                code,
+                "local network: could not take the discovery routes off the tunnel"
+            );
+        }
+        self.discovery_route_failure = sweep.failure;
+    }
+
     /// A supervisor tick of a running session: whether the computer is on
     /// another segment for good, which the session follows with a protected
-    /// reconnect. Lockdown's persistent set follows at once.
+    /// reconnect. Lockdown's persistent set follows at once. The discovery
+    /// routes are checked here too: Windows puts them back when the adapter's
+    /// address or state changes.
     pub(super) fn local_network_changed(&mut self) -> bool {
         let Some(settings) = self
             .request
@@ -175,6 +217,7 @@ impl Session {
         if !settings.allow_lan {
             return false;
         }
+        self.release_discovery_routes(&settings.tun);
         let read = self.scan_lan(&settings.tun, &self.lan_servers, false);
         let Some(segment) = self.lan_watch.observe(&self.lan.segment, read) else {
             return false;
@@ -241,6 +284,15 @@ mod tests {
         assert_eq!(watch.observe(&2, 4), None);
         assert_eq!(watch.observe(&2, 4), None);
         assert_eq!(watch.observe(&2, 4), Some(4));
+    }
+
+    #[test]
+    fn a_repeated_route_failure_is_logged_once() {
+        assert_eq!(new_failure(None, None), None);
+        assert_eq!(new_failure(None, Some(5)), Some(5));
+        assert_eq!(new_failure(Some(5), Some(5)), None);
+        assert_eq!(new_failure(Some(5), Some(87)), Some(87));
+        assert_eq!(new_failure(Some(5), None), None);
     }
 
     #[test]
