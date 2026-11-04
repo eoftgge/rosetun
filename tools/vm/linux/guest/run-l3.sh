@@ -41,7 +41,7 @@ FOREIGN_TABLE=rosetun-l3-foreign
 SERVICE_LEAF=/sys/fs/cgroup/system.slice/rosetun-helper.service
 
 RUN_ID='' STAND_ID='' EXPECTED_BOOT_ID='' USER_A='' USER_B='' BIOS_GUID=''
-HOST_ADDRESS='' NODE_PORT='' PROBE_ADDRESS=''
+HOST_ADDRESS='' NODE_PORT='' PROBE_ADDRESS='' DNS_PROBE_ADDRESS=''
 SCENARIO_TIMEOUT_SECONDS=30 UNIT_TIMEOUT_SECONDS=180 JOB_TIMEOUT_SECONDS=1800
 EXPECTED_ARCH=x86_64
 PHYS=''
@@ -142,7 +142,7 @@ blocked_rc() { [ "$1" = 7 ] || [ "$1" = 28 ]; }
 reached_rc() { ! blocked_rc "$1" && [ "$1" != 45 ] && [ "$1" != 2 ]; }
 
 direct_https() { curl_rc --interface "$PHYS" "https://$PROBE_ADDRESS/"; }
-direct_dns_tcp() { curl_rc --interface "$PHYS" "http://$PROBE_ADDRESS:53/"; }
+direct_dns_tcp() { curl_rc --interface "$PHYS" "http://$DNS_PROBE_ADDRESS:53/"; }
 direct_node() { curl_rc --interface "$PHYS" "http://$HOST_ADDRESS:$NODE_PORT/"; }
 tunnel_https() { curl_rc --max-time 15 "https://$PROBE_ADDRESS/"; }
 
@@ -223,7 +223,9 @@ scenario_preflight() {
         [[ $PHYS =~ ^[A-Za-z0-9_.-]{1,15}$ ]] || { fail_reason="no route to $PROBE_ADDRESS"; return 1; }
         printf 'PHYS=%s\n' "$PHYS" >"$STATE/phys.env"
         expect_reached "HTTPS to $PROBE_ADDRESS on $PHYS" direct_https || return 1
-        expect_reached "TCP 53 to $PROBE_ADDRESS on $PHYS" direct_dns_tcp || return 1
+        # Some networks drop DNS to foreign resolvers; the DNS probe must answer here.
+        expect_reached "TCP 53 to $DNS_PROBE_ADDRESS on $PHYS" direct_dns_tcp ||
+            { fail_reason="$fail_reason; pick a resolver this network lets through with -DnsProbeAddress"; return 1; }
         expect_reached "the host node $HOST_ADDRESS:$NODE_PORT on $PHYS" direct_node || return 1
     }
     check preflight.baseline "the probe and the host node answer on the physical interface" pre_baseline
@@ -347,13 +349,13 @@ scenario_dns_lock() {
     dns_lock() {
         connect_with request-dns-lock.json || return 1
         table_present || { fail_reason="no table: the DNS lock is not installed"; return 1; }
-        expect_blocked "TCP 53 to $PROBE_ADDRESS on $PHYS" direct_dns_tcp || return 1
+        expect_blocked "TCP 53 to $DNS_PROBE_ADDRESS on $PHYS" direct_dns_tcp || return 1
         expect_reached "HTTPS to $PROBE_ADDRESS on $PHYS" direct_https
     }
     check dnslock.direct-blocked "TCP 53 was refused, HTTPS answered" dns_lock
     dns_tunnel() {
         local answer
-        answer=$(dig +time=3 +tries=2 "@$PROBE_ADDRESS" example.com A 2>&1)
+        answer=$(dig +time=3 +tries=2 "@$DNS_PROBE_ADDRESS" example.com A 2>&1)
         printf '%s' "$answer" | grep -q 'status: NOERROR' || { fail_reason="dig through the tunnel got no answer"; return 1; }
         disconnect
     }
@@ -498,11 +500,12 @@ finalize() {
 
 load_job() {
     l2_read_env_file "$RUN/job.env" RUN_ID STAND_ID EXPECTED_BOOT_ID USER_A USER_B BIOS_GUID \
-        SCENARIO_TIMEOUT_SECONDS UNIT_TIMEOUT_SECONDS JOB_TIMEOUT_SECONDS HOST_ADDRESS NODE_PORT PROBE_ADDRESS || return 1
+        SCENARIO_TIMEOUT_SECONDS UNIT_TIMEOUT_SECONDS JOB_TIMEOUT_SECONDS HOST_ADDRESS NODE_PORT PROBE_ADDRESS DNS_PROBE_ADDRESS || return 1
     l2_valid_run_id "$RUN_ID" || { echo "invalid run id" >&2; return 1; }
     [ "$(basename -- "$RUN")" = "$RUN_ID" ] || { echo "run directory does not match the run id" >&2; return 1; }
     [[ $HOST_ADDRESS =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || { echo "invalid host address" >&2; return 1; }
     [[ $PROBE_ADDRESS =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || { echo "invalid probe address" >&2; return 1; }
+    [[ $DNS_PROBE_ADDRESS =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || { echo "invalid DNS probe address" >&2; return 1; }
     [[ $NODE_PORT =~ ^[0-9]{1,5}$ ]] || { echo "invalid node port" >&2; return 1; }
 }
 

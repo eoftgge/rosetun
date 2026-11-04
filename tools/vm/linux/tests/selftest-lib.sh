@@ -230,7 +230,7 @@ expect_not "an L2 stage refuses the L3 job" start_allows guest/run-l3.sh
 expect_not "an L3 stage refuses another request" l3_allows artifacts/request-other.json
 expect "start.sh picks the job by the stage" grep -q 'job="$run/guest/run-$stage.sh"' "$start"
 expect "run-l3.sh reads the host node values through the strict reader" \
-    grep -q 'JOB_TIMEOUT_SECONDS HOST_ADDRESS NODE_PORT PROBE_ADDRESS' "$here/../guest/run-l3.sh"
+    grep -q 'JOB_TIMEOUT_SECONDS HOST_ADDRESS NODE_PORT PROBE_ADDRESS DNS_PROBE_ADDRESS' "$here/../guest/run-l3.sh"
 expect_not "run-l3.sh never deletes the service's own table" \
     grep -Eq 'delete table inet rosetun([^-]|$)' "$here/../guest/run-l3.sh"
 

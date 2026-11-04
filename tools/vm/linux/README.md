@@ -515,8 +515,13 @@ reused and left running; one the run started is stopped at the end.
 `../windows/request-local.json`) gives the node's credentials and settings;
 the run makes three requests from it with the node pointed at the host:
 kill switch without and with "Local network", and without the kill switch
-(the DNS lock). `-ProbeAddress` (default `1.1.1.1`) must answer HTTPS and DNS
-from the guest without a tunnel and through the node.
+(the DNS lock). `-ProbeAddress` (default `1.1.1.1`) must answer HTTPS from the
+guest without a tunnel and through the node. The DNS checks use
+`-DnsProbeAddress`: a resolver that answers TCP 53 from the guest without a
+tunnel. By default it is the request's DNS server when that is an IPv4
+address (`77.88.8.8` in `request-local.json`), else `-ProbeAddress`. Some
+networks drop DNS to foreign resolvers: `preflight.baseline` then fails with
+"TCP 53 to <address> … did not answer" and names the parameter.
 
 `-SingBoxLinuxPath` is the Linux engine the helper runs, the version in
 `SUPPORTED_SING_BOX_VERSION` (1.14.3 at the time of writing). Download it on
@@ -557,7 +562,7 @@ SSH off; the host reads the report afterwards):
 | `killswitch.engine-killed` | `pkill -KILL sing-box`, then a direct probe every 0.3 s until `Connected` again: every probe refused, the table always there |
 | `killswitch.disconnect` | a disconnect removes the table, the direct path answers |
 | `lan.on` | with "Local network" the host node connects on the physical interface, the probe address does not |
-| `dnslock.*` | without the kill switch: TCP 53 to the probe address on the physical interface is refused, HTTPS there answers; `dig @<probe>` through the tunnel is answered |
+| `dnslock.*` | without the kill switch: TCP 53 to the DNS probe address on the physical interface is refused, HTTPS to the probe address there answers; `dig @<DNS probe>` through the tunnel is answered |
 | `crash.helper-killed` | `kill -KILL` of the helper: the table stays, the direct path stays refused, systemd restarts the helper (`NRestarts`), `rosetun status` says `network: held closed` |
 | `crash.open-network` | `rosetun open-network` as the first account removes the table, the direct path answers |
 | `stop.removes-table` | `systemctl stop` during a kill-switch session removes the table, the direct path answers |

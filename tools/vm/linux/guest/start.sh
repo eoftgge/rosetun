@@ -94,7 +94,7 @@ l2_start_main() {
     RUN_ID='' JOB_TIMEOUT_SECONDS=900
     local keys=(RUN_ID STAND_ID EXPECTED_BOOT_ID USER_A USER_B BIOS_GUID
         SCENARIO_TIMEOUT_SECONDS UNIT_TIMEOUT_SECONDS JOB_TIMEOUT_SECONDS)
-    [ "$stage" = l2 ] || keys+=(HOST_ADDRESS NODE_PORT PROBE_ADDRESS)
+    [ "$stage" = l2 ] || keys+=(HOST_ADDRESS NODE_PORT PROBE_ADDRESS DNS_PROBE_ADDRESS)
     l2_read_env_file "$run/job.env" "${keys[@]}" || die "job.env is not valid"
     [ "$RUN_ID" = "$run_id" ] || die "job.env belongs to another run"
     [[ $JOB_TIMEOUT_SECONDS =~ ^[0-9]{2,5}$ ]] || die "invalid job time limit"

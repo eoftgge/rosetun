@@ -53,6 +53,10 @@ param(
     # L3 only: a public address that answers HTTPS and DNS, probed directly and
     # through the tunnel.
     [Parameter(ParameterSetName = 'Run')][string]$ProbeAddress = '1.1.1.1',
+    # L3 only: a resolver that answers TCP 53 from the guest without a tunnel.
+    # By default the request's DNS server when it is an IPv4 address, else
+    # -ProbeAddress: some networks drop DNS to foreign resolvers.
+    [Parameter(ParameterSetName = 'Run')][string]$DnsProbeAddress,
 
     [Parameter(ParameterSetName = 'Stage')][Parameter(ParameterSetName = 'Run')][string]$ArtifactDir,
     [Parameter(ParameterSetName = 'Stage')][Parameter(ParameterSetName = 'Run')][string]$WslDistro,
@@ -426,7 +430,9 @@ if ($mode -eq 'Run') {
         # The test node of the Windows matrices, on the host's Default Switch address.
         Import-Module (Join-Path $PSScriptRoot '..\windows\RosetunVm.psm1') -Force
         $nodePort = Get-RosetunTestNodePort
-        $extraJob = [ordered]@{ HOST_ADDRESS = $hostAddress; NODE_PORT = "$nodePort"; PROBE_ADDRESS = $probe.ToString() }
+        $dnsProbe = Select-RosetunLinuxDnsProbe -Explicit $DnsProbeAddress -RequestPath $RequestPath -ProbeAddress $probe.ToString()
+        Write-Step "Probes: HTTPS $($probe), DNS $dnsProbe"
+        $extraJob = [ordered]@{ HOST_ADDRESS = $hostAddress; NODE_PORT = "$nodePort"; PROBE_ADDRESS = $probe.ToString(); DNS_PROBE_ADDRESS = $dnsProbe }
     }
     $null = New-Item -ItemType Directory -Path $runLog
     Write-Step "Run $newRunId ($Stage) on '$($stand.VmName)'"

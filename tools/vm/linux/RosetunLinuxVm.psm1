@@ -935,6 +935,28 @@ function New-RosetunLinuxL3Requests {
     $paths
 }
 
+# The resolver the L3 DNS checks use: the one given, else the request's DNS
+# server when it is an IPv4 address (that one is known to work where the
+# request is used), else the HTTPS probe address.
+function Select-RosetunLinuxDnsProbe {
+    param([string]$Explicit, [Parameter(Mandatory)][string]$RequestPath, [Parameter(Mandatory)][string]$ProbeAddress)
+    $isIpv4 = {
+        param($text)
+        $address = $null
+        [Net.IPAddress]::TryParse([string]$text, [ref]$address) -and $address.AddressFamily -eq [Net.Sockets.AddressFamily]::InterNetwork
+    }
+    if ($Explicit) {
+        if (-not (& $isIpv4 $Explicit)) { throw "-DnsProbeAddress '$Explicit' is not an IPv4 address." }
+        return ([Net.IPAddress]::Parse($Explicit)).ToString()
+    }
+    $request = Get-Content -LiteralPath $RequestPath -Raw | ConvertFrom-Json
+    $settings = Get-RosetunLinuxMember -Object $request -Name 'settings'
+    $dns = if ($null -ne $settings) { Get-RosetunLinuxMember -Object $settings -Name 'dns' } else { $null }
+    $server = if ($null -ne $dns) { [string](Get-RosetunLinuxMember -Object $dns -Name 'server') } else { '' }
+    if (& $isIpv4 $server) { return ([Net.IPAddress]::Parse($server)).ToString() }
+    $ProbeAddress
+}
+
 # ------------------------------------------------------------------ starting the job
 
 function Get-RosetunLinuxLauncherPath { $script:LauncherPath }

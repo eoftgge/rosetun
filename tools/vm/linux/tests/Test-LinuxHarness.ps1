@@ -492,6 +492,19 @@ try {
     Assert-That 'the LAN request has both' ($lan.settings.kill_switch -and $lan.settings.allow_lan)
     Assert-That 'the DNS-lock request has no kill switch' (-not $dns.settings.kill_switch)
     Assert-That 'every request reconnects by itself' ($ks.settings.auto_reconnect -and $lan.settings.auto_reconnect -and $dns.settings.auto_reconnect)
+    $withDns = [ordered]@{ node = $template.node; settings = [ordered]@{ kill_switch = $true; dns = [ordered]@{ server = '203.0.113.53'; server_name = 'dns.example.com' } } }
+    $withDnsPath = Join-Path $l3tmp 'with-dns.json'
+    [IO.File]::WriteAllText($withDnsPath, ($withDns | ConvertTo-Json -Depth 5))
+    Assert-That "the DNS probe is the request's resolver" ((Select-RosetunLinuxDnsProbe -RequestPath $withDnsPath -ProbeAddress '198.51.100.1') -eq '203.0.113.53')
+    Assert-That 'the DNS probe given wins' ((Select-RosetunLinuxDnsProbe -Explicit '192.0.2.53' -RequestPath $withDnsPath -ProbeAddress '198.51.100.1') -eq '192.0.2.53')
+    Assert-That 'without a resolver address the DNS probe is the HTTPS probe' ((Select-RosetunLinuxDnsProbe -RequestPath $templatePath -ProbeAddress '198.51.100.1') -eq '198.51.100.1')
+    $namedDns = [ordered]@{ node = $template.node; settings = [ordered]@{ dns = [ordered]@{ server = 'dns.example.com' } } }
+    $namedPath = Join-Path $l3tmp 'named-dns.json'
+    [IO.File]::WriteAllText($namedPath, ($namedDns | ConvertTo-Json -Depth 5))
+    Assert-That 'a resolver by name is not a DNS probe' ((Select-RosetunLinuxDnsProbe -RequestPath $namedPath -ProbeAddress '198.51.100.1') -eq '198.51.100.1')
+    $badDns = $false
+    try { $null = Select-RosetunLinuxDnsProbe -Explicit 'x;y' -RequestPath $templatePath -ProbeAddress '198.51.100.1' } catch { $badDns = $true }
+    Assert-That 'an invalid DNS probe is refused' $badDns
     $badHost = $false
     try { $null = New-RosetunLinuxL3Requests -RequestPath $templatePath -HostAddress '2001:db8::1' -NodePort 8388 -OutDir $requestDir } catch { $badHost = $true }
     Assert-That 'an IPv6 host address is refused' $badHost
@@ -520,7 +533,7 @@ try {
     foreach ($name in $requests.Keys) { $extra[$name] = $requests[$name] }
     $extra['sing-box'] = $engine
     $extra['rosetun-helper.service'] = Join-Path $PSScriptRoot '..\..\..\..\packaging\linux\rosetun-helper.service'
-    $jobExtra = [ordered]@{ HOST_ADDRESS = '192.0.2.1'; NODE_PORT = '8388'; PROBE_ADDRESS = '198.51.100.1' }
+    $jobExtra = [ordered]@{ HOST_ADDRESS = '192.0.2.1'; NODE_PORT = '8388'; PROBE_ADDRESS = '198.51.100.1'; DNS_PROBE_ADDRESS = '203.0.113.53' }
     $l3env = New-RosetunLinuxJobEnv -RunId $runId -StandId 'stand-1' -BootId $bootId -UserA 'ipc_owner' -UserB 'ipc_other' `
         -BiosGuid '00112233-4455-6677-8899-aabbccddeeff' -Extra $jobExtra
     Assert-That 'the L3 job carries the host node' ($l3env -match '(?m)^HOST_ADDRESS=192\.0\.2\.1$' -and $l3env -match '(?m)^NODE_PORT=8388$')
