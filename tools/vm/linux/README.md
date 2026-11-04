@@ -516,12 +516,15 @@ reused and left running; one the run started is stopped at the end.
 the run makes three requests from it with the node pointed at the host:
 kill switch without and with "Local network", and without the kill switch
 (the DNS lock). `-ProbeAddress` (default `1.1.1.1`) must answer HTTPS from the
-guest without a tunnel and through the node. The DNS checks use
-`-DnsProbeAddress`: a resolver that answers TCP 53 from the guest without a
-tunnel. By default it is the request's DNS server when that is an IPv4
-address (`77.88.8.8` in `request-local.json`), else `-ProbeAddress`. Some
-networks drop DNS to foreign resolvers: `preflight.baseline` then fails with
-"TCP 53 to <address> … did not answer" and names the parameter.
+guest without a tunnel and through the node. The DNS lock is checked with one
+UDP datagram to port 53 of `-DnsProbeAddress` (by default the request's DNS
+server when that is an IPv4 address, else `-ProbeAddress`), sent by curl as a
+TFTP request bound to the physical interface. Nobody has to answer it: a drop
+in the output hook fails `sendto()` in the guest at once ("Operation not
+permitted"), while a datagram that left is just unanswered. So the check does
+not depend on whether the network lets DNS to that resolver through (the
+first runs showed TCP 53 to `1.1.1.1` and `77.88.8.8` dropped outside the
+guest, which a TCP check cannot tell from the lock).
 
 `-SingBoxLinuxPath` is the Linux engine the helper runs, the version in
 `SUPPORTED_SING_BOX_VERSION` (1.14.3 at the time of writing). Download it on
@@ -553,7 +556,7 @@ SSH off; the host reads the report afterwards):
 
 | Scenario | Proof |
 |---|---|
-| `preflight.*` | stand id, boot id, BIOS GUID; nothing of Rosetun installed and no table `inet rosetun`; `nft`, `curl`, `dig`, cgroup v2; HTTPS and TCP 53 to the probe address and TCP to the host node answer on the physical interface |
+| `preflight.*` | stand id, boot id, BIOS GUID; nothing of Rosetun installed and no table `inet rosetun`; `nft`, `curl` with tftp, `dig`, cgroup v2; on the physical interface HTTPS to the probe address and TCP to the host node answer and UDP 53 leaves; `dig` with the guest's resolver answers |
 | `install.service` | the unit starts, `/proc/<MainPID>/cgroup` is `…/rosetun-helper.service/helper`, the `engines` leaf exists, the journal has no "kill switch is not available" |
 | `killswitch.direct-blocked` | with the kill switch, `curl --interface <physical>` to the probe address is refused (curl exit 7 or 28) and the table exists |
 | `killswitch.tunnel-passes` | the same HTTPS request without `--interface` (through the tunnel) answers |
@@ -562,14 +565,13 @@ SSH off; the host reads the report afterwards):
 | `killswitch.engine-killed` | `pkill -KILL sing-box`, then a direct probe every 0.3 s until `Connected` again: every probe refused, the table always there |
 | `killswitch.disconnect` | a disconnect removes the table, the direct path answers |
 | `lan.on` | with "Local network" the host node connects on the physical interface, the probe address does not |
-| `dnslock.*` | without the kill switch: TCP 53 to the DNS probe address on the physical interface is refused, HTTPS to the probe address there answers; `dig @<DNS probe>` through the tunnel is answered |
+| `dnslock.*` | without the kill switch: UDP 53 on the physical interface is refused in the guest ("Operation not permitted"), HTTPS to the probe address there answers; `dig` with the guest's resolver is answered through the tunnel |
 | `crash.helper-killed` | `kill -KILL` of the helper: the table stays, the direct path stays refused, systemd restarts the helper (`NRestarts`), `rosetun status` says `network: held closed` |
 | `crash.open-network` | `rosetun open-network` as the first account removes the table, the direct path answers |
 | `stop.removes-table` | `systemctl stop` during a kill-switch session removes the table, the direct path answers |
 
-What it does not prove: UDP 53 straight to an outside resolver on the physical
-interface (`dig` cannot bind an interface; the DNS lock is shown with TCP 53,
-and the rule matches both by `meta l4proto { tcp, udp }`); IPv6 (the Default
+What it does not prove: TCP 53 under the DNS lock (a dropped SYN looks like a
+lost one; the rule matches both by `meta l4proto { tcp, udp }`); IPv6 (the Default
 Switch gives the guest no IPv6 route); Lockdown (not offered on Linux); a
 reboot or a power cut with the table in place; the GUI. The cleanup stops the
 service, which removes its table; a table still there after the stop is a

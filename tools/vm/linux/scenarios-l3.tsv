@@ -2,8 +2,8 @@ id	required	evidence	group	detail	title
 preflight.identity	yes	infrastructure	preflight	-	the guest is the designated test machine on the expected boot, x86_64, with systemd
 preflight.accounts	yes	infrastructure	preflight	-	group rosetun and two distinct ordinary accounts exist, both in the group, neither an administrator
 preflight.no-foreign-service	yes	infrastructure	preflight	-	no Rosetun unit, helper process, installed files or nftables table rosetun exist
-preflight.tools	yes	infrastructure	preflight	-	/usr/sbin/nft, curl, dig and cgroup v2 are present
-preflight.baseline	yes	infrastructure	preflight	-	without Rosetun the probe address answers HTTPS and the DNS probe address TCP 53 through the physical interface, and the host node accepts TCP
+preflight.tools	yes	infrastructure	preflight	-	/usr/sbin/nft, curl with tftp, dig and cgroup v2 are present
+preflight.baseline	yes	infrastructure	preflight	-	without Rosetun the probe address answers HTTPS on the physical interface, UDP 53 leaves it, the guest's resolver answers, and the host node accepts TCP
 install.service	yes	real-service	install	-	the helper runs as the systemd unit in its own cgroup leaf and offers the kill switch
 killswitch.direct-blocked	yes	real-service	killswitch	-	connected with the kill switch: HTTPS to the probe address bound to the physical interface is refused
 killswitch.tunnel-passes	yes	real-service	killswitch	-	connected with the kill switch: HTTPS to the probe address through the tunnel answers
@@ -12,8 +12,8 @@ killswitch.foreign-table	yes	real-service	killswitch	-	a foreign nftables table 
 killswitch.engine-killed	yes	real-service	killswitch	-	sing-box killed with SIGKILL: the direct path stays refused on every probe until the session is Connected again
 killswitch.disconnect	yes	real-service	killswitch	-	a disconnect removes the table and the direct path answers again
 lan.on	yes	real-service	lan	-	"Local network" on: TCP to the host node bound to the physical interface connects, the probe address does not
-dnslock.direct-blocked	yes	real-service	dnslock	-	the DNS lock without the kill switch: TCP 53 to the DNS probe address bound to the physical interface is refused, HTTPS to the probe address there answers
-dnslock.tunnel-passes	yes	real-service	dnslock	-	the DNS lock: a query with dig to the DNS probe address through the tunnel is answered
+dnslock.direct-blocked	yes	real-service	dnslock	-	the DNS lock without the kill switch: UDP 53 to the DNS probe address bound to the physical interface is refused locally, HTTPS to the probe address there answers
+dnslock.tunnel-passes	yes	real-service	dnslock	-	the DNS lock: dig with the guest's own resolver is answered through the tunnel
 crash.helper-killed	yes	real-service	crash	-	the helper killed with SIGKILL: the table stays, the direct path stays refused, systemd restarts the helper and it reports the network held closed
 crash.open-network	yes	real-service	crash	-	rosetun open-network from the first account removes the table and the direct path answers
 stop.removes-table	yes	real-service	stop	-	systemctl stop during a kill-switch session removes the table and the direct path answers

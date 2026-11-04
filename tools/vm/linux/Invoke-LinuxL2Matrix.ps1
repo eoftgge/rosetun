@@ -53,9 +53,9 @@ param(
     # L3 only: a public address that answers HTTPS and DNS, probed directly and
     # through the tunnel.
     [Parameter(ParameterSetName = 'Run')][string]$ProbeAddress = '1.1.1.1',
-    # L3 only: a resolver that answers TCP 53 from the guest without a tunnel.
-    # By default the request's DNS server when it is an IPv4 address, else
-    # -ProbeAddress: some networks drop DNS to foreign resolvers.
+    # L3 only: where the DNS-lock check sends its UDP 53 datagram; it need not
+    # answer. By default the request's DNS server when it is an IPv4 address,
+    # else -ProbeAddress.
     [Parameter(ParameterSetName = 'Run')][string]$DnsProbeAddress,
 
     [Parameter(ParameterSetName = 'Stage')][Parameter(ParameterSetName = 'Run')][string]$ArtifactDir,

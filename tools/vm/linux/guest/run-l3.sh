@@ -142,7 +142,6 @@ blocked_rc() { [ "$1" = 7 ] || [ "$1" = 28 ]; }
 reached_rc() { ! blocked_rc "$1" && [ "$1" != 45 ] && [ "$1" != 2 ]; }
 
 direct_https() { curl_rc --interface "$PHYS" "https://$PROBE_ADDRESS/"; }
-direct_dns_tcp() { curl_rc --interface "$PHYS" "http://$DNS_PROBE_ADDRESS:53/"; }
 direct_node() { curl_rc --interface "$PHYS" "http://$HOST_ADDRESS:$NODE_PORT/"; }
 tunnel_https() { curl_rc --max-time 15 "https://$PROBE_ADDRESS/"; }
 
@@ -156,6 +155,39 @@ expect_reached() {
     local what=$1 rc
     rc=$("$2")
     reached_rc "$rc" || { fail_reason="$what did not answer (curl exit $rc)"; return 1; }
+}
+
+# DNS straight out of the physical interface, without needing anyone to answer:
+# curl sends one UDP datagram to port 53 (a TFTP request) bound to the
+# interface. A drop in the output hook fails sendto() at once with EPERM, which
+# curl's trace prints as "Operation not permitted"; a datagram that left the
+# guest just goes unanswered. TCP cannot tell the two apart: a dropped SYN is
+# retried until the same timeout as a SYN lost in the network.
+udp_dns_out() {
+    UDP_OUT=$(curl -v -s -o /dev/null --connect-timeout 3 --max-time 4 --interface "$PHYS"         "tftp://$DNS_PROBE_ADDRESS:53/rosetun-l3" 2>&1 </dev/null)
+    UDP_RC=$?
+}
+
+expect_udp_dns_refused() {
+    udp_dns_out
+    printf '%s' "$UDP_OUT" | grep -q 'Operation not permitted' ||
+        { fail_reason="UDP 53 to $DNS_PROBE_ADDRESS on $PHYS was sent, not refused (curl exit $UDP_RC)"; return 1; }
+}
+
+expect_udp_dns_sent() {
+    udp_dns_out
+    if printf '%s' "$UDP_OUT" | grep -q 'Operation not permitted'; then
+        fail_reason="UDP 53 to $DNS_PROBE_ADDRESS on $PHYS was refused locally without Rosetun; another firewall drops it"
+        return 1
+    fi
+    case $UDP_RC in
+        1 | 2 | 45) fail_reason="curl could not send UDP 53 on $PHYS (curl exit $UDP_RC)"; return 1 ;;
+    esac
+}
+
+# The resolver the guest is configured with, as a user's program asks it.
+system_dns_answers() {
+    dig +time=3 +tries=2 example.com A 2>&1 | grep -q 'status: NOERROR'
 }
 
 main_pid() { systemctl show -p MainPID --value rosetun-helper.service 2>/dev/null; }
@@ -213,6 +245,7 @@ scenario_preflight() {
     pre_tools() {
         [ -x "$NFT" ] || { fail_reason="$NFT is missing (apt-get install nftables)"; return 1; }
         command -v curl >/dev/null || { fail_reason="curl is missing"; return 1; }
+        curl -V 2>/dev/null | grep -qw tftp || { fail_reason="curl was built without tftp, which the UDP 53 check uses"; return 1; }
         command -v dig >/dev/null || { fail_reason="dig is missing (apt-get install bind9-dnsutils)"; return 1; }
         [ -f /sys/fs/cgroup/cgroup.controllers ] || { fail_reason="cgroup v2 is not mounted"; return 1; }
     }
@@ -223,12 +256,11 @@ scenario_preflight() {
         [[ $PHYS =~ ^[A-Za-z0-9_.-]{1,15}$ ]] || { fail_reason="no route to $PROBE_ADDRESS"; return 1; }
         printf 'PHYS=%s\n' "$PHYS" >"$STATE/phys.env"
         expect_reached "HTTPS to $PROBE_ADDRESS on $PHYS" direct_https || return 1
-        # Some networks drop DNS to foreign resolvers; the DNS probe must answer here.
-        expect_reached "TCP 53 to $DNS_PROBE_ADDRESS on $PHYS" direct_dns_tcp ||
-            { fail_reason="$fail_reason; pick a resolver this network lets through with -DnsProbeAddress"; return 1; }
+        expect_udp_dns_sent || return 1
+        system_dns_answers || { fail_reason="the guest's own resolver does not answer dig"; return 1; }
         expect_reached "the host node $HOST_ADDRESS:$NODE_PORT on $PHYS" direct_node || return 1
     }
-    check preflight.baseline "the probe and the host node answer on the physical interface" pre_baseline
+    check preflight.baseline "the probe and the host node answer, UDP 53 leaves, the resolver answers" pre_baseline
 }
 
 preflight_ok() {
@@ -349,17 +381,15 @@ scenario_dns_lock() {
     dns_lock() {
         connect_with request-dns-lock.json || return 1
         table_present || { fail_reason="no table: the DNS lock is not installed"; return 1; }
-        expect_blocked "TCP 53 to $DNS_PROBE_ADDRESS on $PHYS" direct_dns_tcp || return 1
+        expect_udp_dns_refused || return 1
         expect_reached "HTTPS to $PROBE_ADDRESS on $PHYS" direct_https
     }
-    check dnslock.direct-blocked "TCP 53 was refused, HTTPS answered" dns_lock
+    check dnslock.direct-blocked "UDP 53 was refused locally, HTTPS answered" dns_lock
     dns_tunnel() {
-        local answer
-        answer=$(dig +time=3 +tries=2 "@$DNS_PROBE_ADDRESS" example.com A 2>&1)
-        printf '%s' "$answer" | grep -q 'status: NOERROR' || { fail_reason="dig through the tunnel got no answer"; return 1; }
+        system_dns_answers || { fail_reason="dig with the guest's resolver got no answer through the tunnel"; return 1; }
         disconnect
     }
-    check dnslock.tunnel-passes "dig through the tunnel was answered" dns_tunnel
+    check dnslock.tunnel-passes "dig with the guest's resolver was answered through the tunnel" dns_tunnel
 }
 
 scenario_crash() {
