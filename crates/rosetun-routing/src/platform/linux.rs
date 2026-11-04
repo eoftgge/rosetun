@@ -14,6 +14,7 @@
 //! not offered on Linux.
 
 mod nft;
+mod physical;
 mod tunnel;
 
 use std::path::{Path, PathBuf};
@@ -27,6 +28,8 @@ use crate::{
 };
 
 use self::nft::{Nft, SystemNft};
+
+pub(super) use self::physical::physical_default_interface;
 
 /// Why there is no protection when the helper does not run as the unit.
 pub(super) const NOT_THE_SERVICE: &str =

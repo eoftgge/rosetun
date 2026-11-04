@@ -54,7 +54,11 @@ pub(super) fn physical_default_interface(exclude_alias: &str) -> Option<String> 
     {
         windows::physical_default_interface(exclude_alias)
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    {
+        linux::physical_default_interface(exclude_alias)
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
     {
         let _ = exclude_alias;
         None
