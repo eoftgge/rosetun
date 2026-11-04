@@ -143,6 +143,7 @@ impl SessionRules {
                 .position(|number| *number == id)
                 .map_or_else(|| "rule".to_owned(), |index| format!("rule {}", index + 1)),
             Reason::LocalNetwork => "lan".to_owned(),
+            Reason::PrivateNetwork => "private network".to_owned(),
             Reason::Default => "default".to_owned(),
         }
     }

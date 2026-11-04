@@ -98,8 +98,11 @@ pub enum Reason {
         temporary: bool,
         source: RuleSource,
     },
-    /// Local addresses go direct because the settings allow the local network.
+    /// The computer's own network goes direct: "Local network" is on.
     LocalNetwork,
+    /// A private network behind the router goes direct: "Private networks
+    /// behind the router" is on.
+    PrivateNetwork,
     /// No rule matched.
     Default,
 }
@@ -291,7 +294,7 @@ pub fn explain(
         && destination.ip.is_some_and(is_private)
     {
         return Explanation::Routed {
-            reason: Reason::LocalNetwork,
+            reason: Reason::PrivateNetwork,
             route: ExplainedRoute::Direct,
         };
     }

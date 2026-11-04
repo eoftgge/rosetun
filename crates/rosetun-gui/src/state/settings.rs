@@ -119,6 +119,7 @@ fn waits_for_save(action: &Action) -> bool {
         | Action::SetConnectOnStart(_)
         | Action::SetAutoReconnect(_)
         | Action::SetAllowLan(_)
+        | Action::SetPrivateNetworks(_)
         | Action::SetXray(_)
         | Action::SetTlsFragment(_)
         | Action::SaveTlsFragment
@@ -168,7 +169,12 @@ impl State {
                 .session
                 .session_request
                 .as_ref()
-                .is_some_and(|request| request.settings.allow_lan != self.config.settings.allow_lan)
+                .is_some_and(|request| {
+                    request.settings.allow_lan != self.config.settings.allow_lan
+                        || (self.config.settings.allow_lan
+                            && request.settings.private_networks
+                                != self.config.settings.private_networks)
+                })
     }
 
     pub(crate) fn running_session_protected(&self) -> bool {
@@ -373,7 +379,11 @@ impl State {
                     self.settings.screen.xray_connect_ready = result.is_ok();
                     self.settings.screen.connect_after_xray_change = false;
                 }
-                if matches!(change, SettingChange::AllowLan(_)) && result.is_ok() {
+                if matches!(
+                    change,
+                    SettingChange::AllowLan(_) | SettingChange::PrivateNetworks(_)
+                ) && result.is_ok()
+                {
                     self.queue_lockdown_lan();
                 }
                 if matches!(change, SettingChange::TlsFragment(_)) {
@@ -550,6 +560,15 @@ impl State {
             Action::SetAllowLan(enabled) => {
                 if self.can_edit_settings() && self.config.settings.allow_lan != enabled {
                     return self.start_settings(Job::Setting(SettingChange::AllowLan(enabled)));
+                }
+            }
+            Action::SetPrivateNetworks(enabled) => {
+                if self.can_edit_settings()
+                    && self.config.settings.allow_lan
+                    && self.config.settings.private_networks != enabled
+                {
+                    return self
+                        .start_settings(Job::Setting(SettingChange::PrivateNetworks(enabled)));
                 }
             }
             Action::SetXray(setting) => {

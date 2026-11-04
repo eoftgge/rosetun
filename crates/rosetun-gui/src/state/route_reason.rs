@@ -194,6 +194,10 @@ impl State {
                 ..
             }) => reason.text = tr!("connections-why-lan"),
             Some(Explanation::Routed {
+                reason: Reason::PrivateNetwork,
+                ..
+            }) => reason.text = tr!("connections-why-private"),
+            Some(Explanation::Routed {
                 reason: Reason::Default,
                 route,
             }) => match route {

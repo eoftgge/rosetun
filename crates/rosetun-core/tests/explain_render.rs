@@ -402,11 +402,14 @@ fn the_explainer_agrees_with_the_rendered_route() {
                 }
                 (Reason::LocalNetwork, Some(index)) => {
                     assert!(allow_lan, "{label}");
-                    assert!(
-                        route_rules[index]["ip_is_private"] == true
-                            || route_rules[index]["ip_cidr"][0] == "169.254.0.0/16",
+                    assert_eq!(
+                        route_rules[index]["ip_cidr"][0], "169.254.0.0/16",
                         "{label}"
                     );
+                }
+                (Reason::PrivateNetwork, Some(index)) => {
+                    assert!(allow_lan, "{label}");
+                    assert_eq!(route_rules[index]["ip_is_private"], true, "{label}");
                 }
                 (Reason::Default, None) => {}
                 (Reason::Default, Some(index)) => {

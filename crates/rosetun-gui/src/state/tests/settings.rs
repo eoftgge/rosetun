@@ -437,6 +437,23 @@ fn local_network_setting_applies_on_the_next_connection() {
 }
 
 #[test]
+fn private_networks_change_only_with_the_local_network_on() {
+    let mut state = state_for_auto_connect();
+    assert!(state.act(Action::SetPrivateNetworks(true)).is_none());
+    state.config.settings.allow_lan = true;
+    assert!(matches!(
+        state.act(Action::SetPrivateNetworks(true)),
+        Some(Job::Setting(SettingChange::PrivateNetworks(true)))
+    ));
+    state.reduce(WorkerEvent::Setting(
+        SettingChange::PrivateNetworks(true),
+        Ok(()),
+    ));
+    state.config.settings.private_networks = true;
+    assert!(state.act(Action::SetPrivateNetworks(true)).is_none());
+}
+
+#[test]
 fn local_network_hint_requires_a_known_active_request_with_a_different_value() {
     let mut state = connected_state_for_apply();
     assert!(!state.allow_lan_next_connect());

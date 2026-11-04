@@ -285,7 +285,7 @@ fn rules_by_site_need_a_name_and_local_addresses_need_allow_lan() {
     assert_eq!(
         explain(&request, &SessionLists::default(), &local),
         Explanation::Routed {
-            reason: Reason::LocalNetwork,
+            reason: Reason::PrivateNetwork,
             route: ExplainedRoute::Direct,
         }
     );

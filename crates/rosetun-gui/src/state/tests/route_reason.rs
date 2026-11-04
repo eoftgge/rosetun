@@ -164,6 +164,13 @@ fn every_kind_of_answer_has_its_line() {
         reason("127.0.0.1", None, ConnectionRoute::Direct),
         RouteReason {
             nameless: true,
+            ..known(tr!("connections-why-private"), None)
+        }
+    );
+    assert_eq!(
+        reason("224.0.0.251", None, ConnectionRoute::Direct),
+        RouteReason {
+            nameless: true,
             ..known(tr!("connections-why-lan"), None)
         }
     );

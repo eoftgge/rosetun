@@ -294,9 +294,26 @@ fn connection(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                 &mut allow_lan,
                 editable,
             )
+            .on_hover_text(tr!("allow-lan-hint"))
             .changed()
         {
             actions.push(Action::SetAllowLan(allow_lan));
+        }
+        if state.config.settings.allow_lan {
+            let mut private_networks = state.config.settings.private_networks;
+            if card
+                .toggle(
+                    tr!("private-networks"),
+                    None,
+                    tr!("private-networks-detail"),
+                    &mut private_networks,
+                    editable,
+                )
+                .on_hover_text(tr!("private-networks-hint"))
+                .changed()
+            {
+                actions.push(Action::SetPrivateNetworks(private_networks));
+            }
         }
         if state.allow_lan_next_connect() {
             card.body(|ui| {

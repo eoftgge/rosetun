@@ -275,6 +275,7 @@ pub(crate) enum Action {
     SetConnectOnStart(bool),
     SetAutoReconnect(bool),
     SetAllowLan(bool),
+    SetPrivateNetworks(bool),
     SetXray(XrayUse),
     SetTlsFragment(bool),
     SaveTlsFragment,
@@ -751,6 +752,7 @@ impl State {
             | Action::SetConnectOnStart(_)
             | Action::SetAutoReconnect(_)
             | Action::SetAllowLan(_)
+            | Action::SetPrivateNetworks(_)
             | Action::SetXray(_)
             | Action::SetTlsFragment(_)
             | Action::SaveTlsFragment
