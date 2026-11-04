@@ -36,6 +36,16 @@ pub fn backend_with_cgroups(
     Box::new(linux::NftBackend::new(leaves))
 }
 
+#[cfg(target_os = "linux")]
+pub(super) fn restore_at_boot() -> Result<crate::BootRestore, crate::RoutingError> {
+    linux::restore_at_boot()
+}
+
+#[cfg(target_os = "linux")]
+pub(super) fn reset_firewall() -> Result<crate::FirewallReset, crate::RoutingError> {
+    linux::reset_firewall()
+}
+
 /// Whether Windows still has the adapter with this alias.
 pub fn tunnel_adapter_present(alias: &str) -> std::io::Result<bool> {
     #[cfg(windows)]

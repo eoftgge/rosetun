@@ -41,6 +41,44 @@ pub mod lockdown {
     pub fn disable() -> Result<bool, RoutingError> {
         crate::platform::lockdown_disable()
     }
+
+    /// Linux, at boot: Lockdown's set from its record, before any network.
+    #[cfg(target_os = "linux")]
+    pub fn restore_at_boot() -> Result<crate::BootRestore, RoutingError> {
+        crate::platform::restore_at_boot()
+    }
+
+    /// Linux, `reset-firewall`: removes the table and Lockdown's record.
+    #[cfg(target_os = "linux")]
+    pub fn reset_firewall() -> Result<crate::FirewallReset, RoutingError> {
+        crate::platform::reset_firewall()
+    }
+}
+
+/// What the boot unit did (Linux).
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BootRestore {
+    /// No record: Lockdown is off.
+    Off,
+    On {
+        allow_lan: bool,
+    },
+    /// The record could not be trusted: Lockdown's set went up without the
+    /// local network.
+    Corrupt {
+        reason: String,
+    },
+    /// Rosetun's table was there already; it is the service's and stays.
+    AlreadyInPlace,
+}
+
+/// What `reset-firewall` removed (Linux).
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FirewallReset {
+    pub table: bool,
+    pub record: bool,
 }
 
 /// The computer's own segment: the connected networks of its physical
@@ -171,6 +209,13 @@ pub trait RoutingBackend: std::fmt::Debug + Send {
         _binaries: &[&std::path::Path],
     ) -> Result<RoutingGuard, RoutingError> {
         Err(RoutingError::Unsupported)
+    }
+
+    /// A client connected: programs Lockdown permits by where they run, not
+    /// by their file (Linux scopes), may have appeared or been made again.
+    /// Nothing elsewhere.
+    fn refresh_lockdown_programs(&self) -> Result<(), RoutingError> {
+        Ok(())
     }
 
     /// The service stops normally, after the session's teardown: removes
