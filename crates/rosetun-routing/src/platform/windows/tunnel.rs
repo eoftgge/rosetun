@@ -27,7 +27,7 @@ pub(super) fn adapter_present(alias: &str) -> std::io::Result<bool> {
     let status = unsafe { ConvertInterfaceAliasToLuid(alias.as_ptr(), &mut luid) };
     match status {
         // SAFETY: Value is the plain 64-bit view of the LUID union.
-        0 => Ok(find_adapter(AF_UNSPEC as u32, |adapter| unsafe {
+        0 => Ok(find_adapter(AF_UNSPEC as u32, 0, |adapter| unsafe {
             (adapter.Luid.Value == luid.Value).then_some(())
         })?
         .is_some()),
@@ -83,8 +83,9 @@ pub(super) fn resolve_luid(tunnel: &TunnelInterface) -> Result<TunnelLuid, Routi
 /// Visits the adapters Windows reports as present, until `visit` returns `Some`.
 /// The alias of a removed adapter still resolves to a LUID, but such an
 /// adapter is not in this list.
-fn find_adapter<T>(
+pub(super) fn find_adapter<T>(
     family: u32,
+    flags: u32,
     mut visit: impl FnMut(&IP_ADAPTER_ADDRESSES_LH) -> Option<T>,
 ) -> std::io::Result<Option<T>> {
     let mut buffer_size = 16 * 1024_u32;
@@ -100,7 +101,7 @@ fn find_adapter<T>(
         let status = unsafe {
             GetAdaptersAddresses(
                 family,
-                0,
+                flags,
                 ptr::null(),
                 buffer.as_mut_ptr().cast(),
                 &mut buffer_size,

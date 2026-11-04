@@ -2,8 +2,13 @@ mod filters;
 pub(super) mod lockdown;
 mod physical;
 mod policy;
+mod segment;
 mod session;
 mod tunnel;
+
+pub(super) fn adapters() -> std::io::Result<Vec<crate::lan::Adapter>> {
+    segment::adapters()
+}
 
 pub(super) fn tunnel_adapter_present(alias: &str) -> std::io::Result<bool> {
     tunnel::adapter_present(alias)

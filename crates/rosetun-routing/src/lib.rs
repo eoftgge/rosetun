@@ -1,6 +1,7 @@
 #[cfg(target_os = "linux")]
 pub mod cgroup;
 pub mod errors;
+pub mod lan;
 #[cfg(target_os = "linux")]
 mod nftables;
 pub mod platform;
@@ -37,6 +38,13 @@ pub mod lockdown {
     pub fn disable() -> Result<bool, RoutingError> {
         crate::platform::lockdown_disable()
     }
+}
+
+/// The computer's own segment: the connected networks of its physical
+/// adapters, minus what `query` excludes. Empty where the platform has no
+/// segment support.
+pub fn lan_segment(query: &lan::SegmentQuery<'_>) -> std::io::Result<lan::SegmentScan> {
+    platform::lan_segment(query)
 }
 
 /// Choose the physical default route: a probe engine without its own TUN would

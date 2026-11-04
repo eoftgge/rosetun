@@ -1,0 +1,386 @@
+//! "Local network": the networks the computer's physical adapters are
+//! connected to, which stay outside the tunnel and are the only ones the
+//! kill switch opens, each on its own adapter.
+
+use std::net::IpAddr;
+
+use rosetun_config::IpPrefix;
+
+/// The shortest IPv4 network taken as a whole. A /16 is the largest private
+/// block a home or office uses; a shorter connected network is a provider's
+/// or a flat corporate one, where "the devices next to me" would be
+/// thousands of strangers.
+pub const MIN_IPV4_LENGTH: u8 = 16;
+/// The IPv6 counterpart: a link is a /64; anything shorter than a site's
+/// /48 is not one segment.
+pub const MIN_IPV6_LENGTH: u8 = 48;
+
+/// An adapter as the routing layer identifies it, opaque outside the crate.
+/// On Windows the value is the interface LUID.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct InterfaceId(pub(crate) u64);
+
+/// One connected network and the adapter it is connected through.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SegmentNetwork {
+    pub prefix: IpPrefix,
+    pub(crate) interface: InterfaceId,
+}
+
+/// The computer's own segment: connected networks of the physical adapters
+/// and the adapters themselves, which carry link-local traffic.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LanSegment {
+    networks: Vec<SegmentNetwork>,
+    interfaces: Vec<InterfaceId>,
+}
+
+impl LanSegment {
+    pub fn networks(&self) -> &[SegmentNetwork] {
+        &self.networks
+    }
+
+    pub fn prefixes(&self) -> Vec<IpPrefix> {
+        self.networks.iter().map(|network| network.prefix).collect()
+    }
+
+    /// The physical adapters that are up, in a stable order.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the kill switch's LAN permits come next")
+    )]
+    pub(crate) fn interfaces(&self) -> &[InterfaceId] {
+        &self.interfaces
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.networks.is_empty() && self.interfaces.is_empty()
+    }
+}
+
+/// What "Local network" opens.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LanAccess {
+    pub segment: LanSegment,
+    /// "Private networks behind the router": every private range, on any
+    /// adapter, as before the segment existed.
+    pub private_networks: bool,
+    /// The tunnel carries IPv6, so IPv6 link-local multicast can work at all.
+    pub ipv6_multicast: bool,
+}
+
+/// Why a connected network is not part of the segment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SkipReason {
+    /// Shorter than `MIN_IPV4_LENGTH` or `MIN_IPV6_LENGTH`.
+    TooWide,
+    /// It holds the tunnel's own addresses.
+    OverlapsTunnel,
+    /// A VPN server is inside it.
+    OverlapsServer,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SegmentScan {
+    pub segment: LanSegment,
+    pub skipped: Vec<(IpPrefix, SkipReason)>,
+}
+
+/// What the segment must stay clear of.
+#[derive(Debug, Clone, Copy)]
+pub struct SegmentQuery<'a> {
+    /// The tunnel adapter's alias, never part of the segment.
+    pub tunnel_alias: &'a str,
+    /// The tunnel's own networks, such as 172.19.0.0/30.
+    pub tunnel_networks: &'a [IpPrefix],
+    /// Addresses of the VPN servers of the session.
+    pub servers: &'a [IpAddr],
+}
+
+/// An adapter as the platform reports it.
+#[cfg(any(windows, test))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Adapter {
+    pub(crate) interface: InterfaceId,
+    pub(crate) alias: String,
+    pub(crate) description: String,
+    /// IANA ifType: 6 Ethernet, 71 Wi-Fi, 24 loopback, 53 and 131 tunnels.
+    pub(crate) if_type: u32,
+    pub(crate) up: bool,
+    /// Windows' `HardwareInterface` flag: a NIC, not a driver's software
+    /// adapter.
+    pub(crate) hardware: bool,
+    pub(crate) has_gateway: bool,
+    /// Usable unicast addresses with their on-link prefix lengths.
+    pub(crate) addresses: Vec<(IpAddr, u8)>,
+}
+
+#[cfg(any(windows, test))]
+const ETHERNET: u32 = 6;
+#[cfg(any(windows, test))]
+const WIFI: u32 = 71;
+/// Software adapters of other VPNs that present themselves as Ethernet.
+#[cfg(any(windows, test))]
+const TUNNEL_MARKERS: [&str; 6] = ["tap", "vpn", "wintun", "wireguard", "tunnel", "openvpn"];
+
+/// Whether the adapter leads to a real network next to the computer.
+///
+/// A NIC (Ethernet or Wi-Fi with the hardware flag) does. A software
+/// Ethernet adapter does only when it holds a default gateway and is not a
+/// VPN's: that is the host side of a Hyper-V external switch, which carries
+/// the real network once the NIC is bound to the switch. Hyper-V's Default
+/// Switch and WSL's vEthernet have no gateway, so they stay out; so do
+/// host-only VM adapters. Tunnels (53, 131) and loopback (24) are not
+/// Ethernet or Wi-Fi at all.
+#[cfg(any(windows, test))]
+pub(crate) fn is_physical(adapter: &Adapter, tunnel_alias: &str) -> bool {
+    if !adapter.up
+        || adapter.alias.eq_ignore_ascii_case(tunnel_alias)
+        || !matches!(adapter.if_type, ETHERNET | WIFI)
+    {
+        return false;
+    }
+    if adapter.hardware {
+        return true;
+    }
+    let name = format!("{} {}", adapter.alias, adapter.description).to_ascii_lowercase();
+    adapter.has_gateway && !TUNNEL_MARKERS.iter().any(|marker| name.contains(marker))
+}
+
+/// The segment of these adapters.
+#[cfg(any(windows, test))]
+pub(crate) fn select(adapters: &[Adapter], query: &SegmentQuery<'_>) -> SegmentScan {
+    let mut scan = SegmentScan::default();
+    let mut interfaces = Vec::new();
+    for adapter in adapters
+        .iter()
+        .filter(|adapter| is_physical(adapter, query.tunnel_alias))
+    {
+        interfaces.push(adapter.interface);
+        for &(address, length) in &adapter.addresses {
+            let Some(prefix) = IpPrefix::new(address, length) else {
+                continue;
+            };
+            if !counts(address, length) {
+                continue;
+            }
+            let wide = match address {
+                IpAddr::V4(_) => length < MIN_IPV4_LENGTH,
+                IpAddr::V6(_) => length < MIN_IPV6_LENGTH,
+            };
+            let reason = if wide {
+                Some(SkipReason::TooWide)
+            } else if query
+                .tunnel_networks
+                .iter()
+                .any(|tunnel| tunnel.overlaps(prefix))
+            {
+                Some(SkipReason::OverlapsTunnel)
+            } else if query
+                .servers
+                .iter()
+                .any(|server| prefix.contains(server.to_canonical()))
+            {
+                Some(SkipReason::OverlapsServer)
+            } else {
+                None
+            };
+            match reason {
+                Some(reason) => {
+                    if !scan.skipped.contains(&(prefix, reason)) {
+                        scan.skipped.push((prefix, reason));
+                    }
+                }
+                None => {
+                    let network = SegmentNetwork {
+                        prefix,
+                        interface: adapter.interface,
+                    };
+                    if !scan.segment.networks.contains(&network) {
+                        scan.segment.networks.push(network);
+                    }
+                }
+            }
+        }
+    }
+    interfaces.sort_unstable();
+    interfaces.dedup();
+    scan.segment.interfaces = interfaces;
+    scan.segment
+        .networks
+        .sort_by_key(|network| (network.prefix, network.interface));
+    scan
+}
+
+/// Host routes and link-local addresses add nothing: a /32 has no
+/// neighbours, and link-local networks are opened on every physical adapter
+/// anyway.
+#[cfg(any(windows, test))]
+fn counts(address: IpAddr, length: u8) -> bool {
+    match address {
+        IpAddr::V4(address) => length < 32 && !address.is_link_local() && !address.is_loopback(),
+        IpAddr::V6(address) => {
+            length < 128 && !address.is_unicast_link_local() && !address.is_loopback()
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn adapter(id: u64, alias: &str, if_type: u32, hardware: bool) -> Adapter {
+        Adapter {
+            interface: InterfaceId(id),
+            alias: alias.to_owned(),
+            description: String::new(),
+            if_type,
+            up: true,
+            hardware,
+            has_gateway: false,
+            addresses: Vec::new(),
+        }
+    }
+
+    fn with(mut adapter: Adapter, addresses: &[(&str, u8)]) -> Adapter {
+        adapter.addresses = addresses
+            .iter()
+            .map(|(address, length)| (address.parse().unwrap(), *length))
+            .collect();
+        adapter
+    }
+
+    fn prefix(text: &str, length: u8) -> IpPrefix {
+        IpPrefix::new(text.parse().unwrap(), length).unwrap()
+    }
+
+    const QUERY: SegmentQuery<'static> = SegmentQuery {
+        tunnel_alias: "rosetun0",
+        tunnel_networks: &[],
+        servers: &[],
+    };
+
+    #[test]
+    fn nics_count_and_tunnels_loopback_and_down_adapters_do_not() {
+        assert!(is_physical(&adapter(1, "Ethernet", 6, true), "rosetun0"));
+        assert!(is_physical(&adapter(2, "Wi-Fi", 71, true), "rosetun0"));
+        assert!(!is_physical(&adapter(3, "rosetun0", 53, false), "rosetun0"));
+        assert!(!is_physical(&adapter(4, "ROSETUN0", 6, true), "rosetun0"));
+        assert!(!is_physical(
+            &adapter(5, "WireGuard", 53, false),
+            "rosetun0"
+        ));
+        assert!(!is_physical(&adapter(6, "Teredo", 131, false), "rosetun0"));
+        assert!(!is_physical(&adapter(7, "Loopback", 24, false), "rosetun0"));
+        let mut down = adapter(8, "Ethernet 2", 6, true);
+        down.up = false;
+        assert!(!is_physical(&down, "rosetun0"));
+    }
+
+    #[test]
+    fn a_software_ethernet_adapter_counts_only_with_a_gateway_and_not_as_a_vpn() {
+        let mut default_switch = adapter(1, "vEthernet (Default Switch)", 6, false);
+        default_switch.description = "Hyper-V Virtual Ethernet Adapter".into();
+        assert!(!is_physical(&default_switch, "rosetun0"));
+
+        let mut external = default_switch.clone();
+        external.alias = "vEthernet (External)".into();
+        external.has_gateway = true;
+        assert!(is_physical(&external, "rosetun0"));
+
+        let mut tap = adapter(2, "Ethernet 3", 6, false);
+        tap.description = "TAP-Windows Adapter V9".into();
+        tap.has_gateway = true;
+        assert!(!is_physical(&tap, "rosetun0"));
+    }
+
+    #[test]
+    fn the_segment_is_each_connected_network_with_its_adapter() {
+        let adapters = [
+            with(
+                adapter(10, "Ethernet", 6, true),
+                &[
+                    ("192.0.2.15", 24),
+                    ("2001:db8:1::15", 64),
+                    ("fe80::1", 64),
+                    ("169.254.3.4", 16),
+                ],
+            ),
+            with(adapter(20, "Wi-Fi", 71, true), &[("198.51.100.20", 24)]),
+            with(adapter(30, "rosetun0", 53, false), &[("172.19.0.1", 30)]),
+            with(
+                adapter(40, "vEthernet (WSL)", 6, false),
+                &[("203.0.113.1", 28)],
+            ),
+        ];
+        let scan = select(&adapters, &QUERY);
+        assert!(scan.skipped.is_empty());
+        assert_eq!(
+            scan.segment.networks(),
+            [
+                SegmentNetwork {
+                    prefix: prefix("192.0.2.0", 24),
+                    interface: InterfaceId(10),
+                },
+                SegmentNetwork {
+                    prefix: prefix("198.51.100.0", 24),
+                    interface: InterfaceId(20),
+                },
+                SegmentNetwork {
+                    prefix: prefix("2001:db8:1::", 64),
+                    interface: InterfaceId(10),
+                },
+            ]
+        );
+        assert_eq!(
+            scan.segment.interfaces(),
+            [InterfaceId(10), InterfaceId(20)]
+        );
+    }
+
+    #[test]
+    fn wide_networks_and_ones_holding_the_tunnel_or_a_server_are_left_out() {
+        let adapters = [with(
+            adapter(1, "Ethernet", 6, true),
+            &[
+                ("10.1.2.3", 8),
+                ("2001:db8::5", 32),
+                ("172.19.0.9", 24),
+                ("198.51.100.9", 24),
+                ("192.0.2.9", 16),
+            ],
+        )];
+        let servers = ["198.51.100.200".parse().unwrap()];
+        let tunnel = [prefix("172.19.0.0", 30)];
+        let scan = select(
+            &adapters,
+            &SegmentQuery {
+                tunnel_alias: "rosetun0",
+                tunnel_networks: &tunnel,
+                servers: &servers,
+            },
+        );
+        assert_eq!(scan.segment.prefixes(), [prefix("192.0.0.0", 16)]);
+        assert_eq!(
+            scan.skipped,
+            [
+                (prefix("10.0.0.0", 8), SkipReason::TooWide),
+                (prefix("2001:db8::", 32), SkipReason::TooWide),
+                (prefix("172.19.0.0", 24), SkipReason::OverlapsTunnel),
+                (prefix("198.51.100.0", 24), SkipReason::OverlapsServer),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_adapter_with_only_link_local_addresses_still_carries_link_local_traffic() {
+        let adapters = [with(
+            adapter(7, "Ethernet", 6, true),
+            &[("169.254.9.9", 16), ("fe80::9", 64)],
+        )];
+        let scan = select(&adapters, &QUERY);
+        assert!(scan.segment.networks().is_empty());
+        assert_eq!(scan.segment.interfaces(), [InterfaceId(7)]);
+        assert!(!scan.segment.is_empty());
+    }
+}

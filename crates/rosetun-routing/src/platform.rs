@@ -49,6 +49,20 @@ pub fn tunnel_adapter_present(alias: &str) -> std::io::Result<bool> {
     }
 }
 
+pub(super) fn lan_segment(
+    query: &crate::lan::SegmentQuery<'_>,
+) -> std::io::Result<crate::lan::SegmentScan> {
+    #[cfg(windows)]
+    {
+        Ok(crate::lan::select(&windows::adapters()?, query))
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = query;
+        Ok(crate::lan::SegmentScan::default())
+    }
+}
+
 pub(super) fn physical_default_interface(exclude_alias: &str) -> Option<String> {
     #[cfg(windows)]
     {
