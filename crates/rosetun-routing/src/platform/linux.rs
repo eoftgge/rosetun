@@ -527,10 +527,12 @@ mod tests {
             Err(NOT_THE_SERVICE.to_owned()),
             mount.0.clone(),
         );
-        assert!(matches!(
-            outside.begin_protection(&plan(ProtectionScope::AllTraffic), &[]),
-            Err(RoutingError::Unavailable(_))
-        ));
+        for scope in [ProtectionScope::AllTraffic, ProtectionScope::DnsOnly] {
+            assert!(matches!(
+                outside.begin_protection(&plan(scope), &[]),
+                Err(RoutingError::Unavailable(_))
+            ));
+        }
         assert!(nft.applied().is_empty());
     }
 

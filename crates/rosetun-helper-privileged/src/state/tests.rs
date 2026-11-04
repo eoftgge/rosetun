@@ -7247,6 +7247,50 @@ fn a_connect_without_the_kill_switch_still_works_where_none_exists() {
     assert_eq!(helper.session().unwrap().request.as_ref(), Some(&request));
 }
 
+/// The real Linux backend when the service has no cgroup leaves: engines
+/// run, the kill switch is refused with the reason, nothing is installed.
+#[cfg(target_os = "linux")]
+#[test]
+fn without_cgroup_leaves_engines_run_and_only_the_kill_switch_is_refused() {
+    let reason = "the cgroup of rosetun-helper.service is not delegated to it (Delegate=yes)";
+    let controls = Arc::new(EngineControls::default());
+    let mut engines = EngineRegistry::new();
+    engines.register(Box::new(ControlledEngine {
+        controls: Arc::clone(&controls),
+        dns_server: None,
+    }));
+    let helper = Helper::new(
+        engines,
+        rosetun_routing::backend_with_cgroups(Err(reason.to_owned())),
+        VerboseGate::default(),
+    );
+    assert_eq!(
+        helper.protection_capabilities(),
+        ProtectionCapabilities::default()
+    );
+    assert!(
+        helper
+            .protection_unavailable
+            .as_deref()
+            .is_some_and(|said| said.contains(reason))
+    );
+
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    let error = helper.connect(&request).expect_err("no kill switch here");
+    assert_eq!(error.code, ErrorCode::ProtectionUnavailable);
+    assert!(error.message.contains(reason), "{}", error.message);
+    assert_eq!(controls.spawns(), 0);
+
+    request.settings.kill_switch = false;
+    helper
+        .connect(&request)
+        .expect("connect without protection");
+    assert!(matches!(helper.status().state, ConnectionState::Connected));
+    assert_eq!(controls.spawns(), 1);
+    assert!(helper.session().unwrap().guard.is_none());
+}
+
 #[test]
 fn a_connect_with_the_kill_switch_still_works_where_it_exists() {
     let (helper, controls, prepared, _) = supervised_helper(true);

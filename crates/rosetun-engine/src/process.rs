@@ -9,7 +9,9 @@
 //!
 //! Under the systemd unit every engine also starts in the `engines` cgroup
 //! leaf, which the kill switch permits: the child moves itself there before
-//! `exec`, so no socket of the engine is ever made outside it.
+//! `exec`, so no socket of the engine is ever made outside it. Without the
+//! leaf engines start in the helper's own cgroup and there is no protection
+//! to permit them.
 
 use std::fs::File;
 use std::io;
@@ -30,15 +32,13 @@ static PLACEMENT: Mutex<Placement> = Mutex::new(Placement::Inherit);
 /// Which cgroup engines start in.
 #[derive(Debug)]
 pub enum Placement {
-    /// The helper's own, outside the systemd unit, where there is no kill
-    /// switch to tell engines apart.
+    /// The helper's own: outside the systemd unit, or under it when the
+    /// leaves could not be made. The routing backend then installs no rules
+    /// at all, so nothing in this cgroup is ever permitted.
     Inherit,
     /// The leaf whose `cgroup.procs` this is, opened for writing. Writing
     /// `0` there moves the writing process.
     Leaf(File),
-    /// Under the unit the leaf could not be made: engines do not start at
-    /// all rather than in the helper's cgroup.
-    Refused(String),
 }
 
 /// Sets where every later engine starts. The helper calls it once, before
@@ -70,11 +70,6 @@ fn launch(command: &mut Command, placement: &Placement) -> io::Result<Child> {
     let leaf = match placement {
         Placement::Inherit => None,
         Placement::Leaf(procs) => Some(procs.as_raw_fd()),
-        Placement::Refused(reason) => {
-            return Err(io::Error::other(format!(
-                "engines cannot start in their own cgroup: {reason}"
-            )));
-        }
     };
     command.process_group(0);
     // SAFETY: The hook runs in the forked child before exec and calls only
@@ -260,12 +255,15 @@ mod tests {
     }
 
     #[test]
-    fn without_its_leaf_an_engine_does_not_start() {
+    fn without_a_leaf_an_engine_starts_in_the_helpers_cgroup() {
         let dir = TempDir::new();
-        let refused = Placement::Refused("the unit's cgroup is not delegated".to_owned());
-        let error = launch(&mut fake_engine(&dir.0), &refused).unwrap_err();
-        assert!(error.to_string().contains("not delegated"), "{error}");
-        assert!(!wait_for(&dir.0.join("ready"), Duration::from_millis(300)));
+        let mut child = launch(&mut fake_engine(&dir.0), &Placement::Inherit).unwrap();
+        assert!(wait_for(&dir.0.join("ready"), Duration::from_secs(5)));
+        let own = std::fs::read_to_string("/proc/self/cgroup").unwrap();
+        let engine = std::fs::read_to_string(format!("/proc/{}/cgroup", child.id())).unwrap();
+        assert_eq!(engine, own);
+        kill_group(libc::pid_t::try_from(child.id()).unwrap());
+        child.wait().unwrap();
     }
 
     #[test]

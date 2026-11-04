@@ -39,9 +39,9 @@ RestartSec=2
 
 # The kill switch permits the engines by cgroup. The helper gets this unit's
 # cgroup subtree, makes the leaves "helper" (itself) and "engines" (every
-# engine, moved there before it runs) and refuses to start engines and
-# offers no kill switch without them. It enables no controller: "yes" is
-# just how systemd spells handing over the subtree.
+# engine, moved there before it runs). Without them engines start in the
+# helper's own cgroup and there is no kill switch or DNS lock. It enables no
+# controller: "yes" is just how systemd spells handing over the subtree.
 Delegate=yes
 # The nftables table (inet rosetun) is removed by the helper on a normal
 # stop. On purpose there is no ExecStopPost that removes it: after a crash
