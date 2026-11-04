@@ -36,6 +36,37 @@ pub struct LanSegment {
 }
 
 impl LanSegment {
+    #[cfg(windows)]
+    pub(crate) fn from_parts(
+        mut networks: Vec<SegmentNetwork>,
+        mut interfaces: Vec<InterfaceId>,
+    ) -> Self {
+        networks.sort_by_key(|network| (network.prefix, network.interface));
+        networks.dedup();
+        interfaces.sort_unstable();
+        interfaces.dedup();
+        Self {
+            networks,
+            interfaces,
+        }
+    }
+
+    /// A segment of these networks on one adapter, for tests of code that
+    /// only passes segments along.
+    #[doc(hidden)]
+    pub fn for_tests(prefixes: &[IpPrefix]) -> Self {
+        Self {
+            networks: prefixes
+                .iter()
+                .map(|&prefix| SegmentNetwork {
+                    prefix,
+                    interface: InterfaceId(1),
+                })
+                .collect(),
+            interfaces: vec![InterfaceId(1)],
+        }
+    }
+
     pub fn networks(&self) -> &[SegmentNetwork] {
         &self.networks
     }
@@ -46,8 +77,8 @@ impl LanSegment {
 
     /// The physical adapters that are up, in a stable order.
     #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the kill switch's LAN permits come next")
+        all(not(windows), not(test)),
+        expect(dead_code, reason = "only WFP uses it")
     )]
     pub(crate) fn interfaces(&self) -> &[InterfaceId] {
         &self.interfaces

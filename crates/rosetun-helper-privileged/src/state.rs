@@ -3,6 +3,7 @@ mod connections;
 mod dns;
 mod dns_cache;
 mod exits;
+mod lan;
 mod lockdown;
 mod path;
 mod probe;
@@ -305,6 +306,15 @@ struct Session {
     /// start gets the slow-start deadline. Cleared by the first start,
     /// whether it succeeds or not.
     cold_start: bool,
+    /// Reads the computer's segment; a hook for tests.
+    lan_scan: lan::LanScan,
+    /// What "Local network" opens for the running session.
+    lan: rosetun_routing::lan::LanAccess,
+    /// The session's VPN servers, which the segment must not hold.
+    lan_servers: Vec<IpAddr>,
+    lan_watch: lan::LanWatch,
+    /// The segment Lockdown's set was last written for without a session.
+    lockdown_segment: rosetun_routing::lan::LanSegment,
 }
 
 impl std::fmt::Debug for Helper {
@@ -400,6 +410,14 @@ impl Helper {
                 protected_binaries: Vec::new(),
                 cold_start: true,
                 #[cfg(not(test))]
+                lan_scan: rosetun_routing::lan_segment,
+                #[cfg(test)]
+                lan_scan: lan::test_scan,
+                lan: rosetun_routing::lan::LanAccess::default(),
+                lan_servers: Vec::new(),
+                lan_watch: lan::LanWatch::default(),
+                lockdown_segment: rosetun_routing::lan::LanSegment::default(),
+                #[cfg(not(test))]
                 adapter_lookup: rosetun_routing::tunnel_adapter_present,
                 #[cfg(test)]
                 adapter_lookup: |_| Ok(false),
@@ -426,6 +444,15 @@ impl Helper {
             .expect("new session is not poisoned")
             .xray = Some(Arc::clone(&xray));
         self.xray = Some(xray);
+        self
+    }
+
+    #[cfg(test)]
+    fn with_lan_scan(mut self, scan: lan::LanScan) -> Self {
+        self.session
+            .get_mut()
+            .expect("new session is not poisoned")
+            .lan_scan = scan;
         self
     }
 
@@ -711,6 +738,7 @@ impl Helper {
             session.missing_route_ticks = 0;
             session.missing_route_since = None;
             self.resumed.store(false, Ordering::Release);
+            session.follow_lan_in_lockdown();
             return;
         };
 
@@ -935,6 +963,21 @@ impl Helper {
                     next_at: now,
                     cause: "dns stalled",
                 });
+            } else if session.local_network_changed() {
+                if !auto_reconnect {
+                    tracing::warn!(
+                        "the new local network stays closed until the next connect: auto-reconnect is off"
+                    );
+                    return;
+                }
+                // The new segment's filters and the engine's routes come
+                // with the restart; the protection stays up meanwhile.
+                self.begin_attempt(ConnectionState::Reconnecting);
+                session.reconnect = Some(Reconnect {
+                    failures: 0,
+                    next_at: now,
+                    cause: "local network changed",
+                });
             } else {
                 return;
             }
@@ -1102,12 +1145,13 @@ impl Helper {
             "starting tunnel connection"
         );
 
+        let lockdown_lan = session.lockdown_lan(request.settings.allow_lan, false);
         lockdown::sync_lan(
             session.routing.as_ref(),
             &session.lockdown,
             &session.lockdown_programs(),
             caller,
-            request.settings.allow_lan,
+            lockdown_lan.as_ref(),
         )?;
         let previous_owner = self.begin_connect(caller)?;
         session.request = None;
@@ -2011,6 +2055,13 @@ impl Session {
             )
         });
         let extra = exits::ExtraNodes::new(&request.extra_nodes, &extra_endpoints, rules);
+        let servers = endpoint
+            .iter()
+            .chain(extra_endpoints.iter().flatten())
+            .copied()
+            .collect::<Vec<_>>();
+        let lan = self.lan_access(settings, &servers);
+        let lan_prefixes = lan.segment.prefixes();
         if extra.blocked_rules() > 0 {
             tracing::warn!(
                 count = extra.blocked_rules(),
@@ -2065,7 +2116,7 @@ impl Session {
                 rules,
                 lists,
                 settings,
-                lan_segment: &[],
+                lan_segment: &lan_prefixes,
                 control: control.as_ref(),
                 verbose_log: verbose_until.is_some(),
             },
@@ -2112,6 +2163,7 @@ impl Session {
             let plan = RoutingPlan {
                 scope,
                 allow_lan: settings.allow_lan,
+                lan: lan.clone(),
                 lockdown,
             };
 
@@ -2164,6 +2216,9 @@ impl Session {
         }
         // Without a guard there is no filter to authorize on the tunnel.
         let tunnel = tunnel.filter(|_| self.guard.is_some());
+        self.lan = lan;
+        self.lan_servers = servers;
+        self.lan_watch = lan::LanWatch::default();
         let cold_start = self.cold_start;
 
         if chain {

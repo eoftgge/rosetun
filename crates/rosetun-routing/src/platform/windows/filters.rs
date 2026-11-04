@@ -237,14 +237,22 @@ pub(super) struct FilterConditions {
     // They live until `FwpmFilterAdd0` returns, which copies the values.
     _app_id: Option<AppIdBlob>,
     _account: Option<AccountDescriptor>,
-    _luid: Box<NET_LUID_LH>,
+    _luids: Vec<NET_LUID_LH>,
     _v4: Box<FWP_V4_ADDR_AND_MASK>,
     _v6: Box<FWP_V6_ADDR_AND_MASK>,
 }
 
 impl FilterConditions {
     pub(super) fn build(rule: &Rule) -> Result<Self, RoutingError> {
-        let mut luid = Box::new(NET_LUID_LH::default());
+        // Filled before any condition points into it and never grown after.
+        let mut luids: Vec<NET_LUID_LH> = rule
+            .conditions
+            .iter()
+            .filter_map(|condition| match condition {
+                Condition::LocalInterface(value) => Some(NET_LUID_LH { Value: *value }),
+                _ => None,
+            })
+            .collect();
         let mut app_id = None;
         let mut account = None;
         let mut v4 = Box::new(FWP_V4_ADDR_AND_MASK::default());
@@ -263,9 +271,18 @@ impl FilterConditions {
                 let descriptor = account.insert(AccountDescriptor::current()?);
                 conditions.extend([application_condition(blob), account_condition(descriptor)]);
             }
-            [Condition::LocalInterface(value)] => {
-                luid.Value = *value;
-                conditions.push(interface_condition(&mut luid));
+            [Condition::LocalInterface(_)] => {
+                conditions.push(interface_condition(&mut luids[0]));
+            }
+            // "Local network": a network on the adapters it belongs to.
+            [Condition::RemoteSubnet(subnet), interfaces @ ..]
+                if !interfaces.is_empty()
+                    && interfaces
+                        .iter()
+                        .all(|condition| matches!(condition, Condition::LocalInterface(_))) =>
+            {
+                conditions.push(subnet_condition(rule.family, *subnet, &mut v4, &mut v6)?);
+                conditions.extend(luids.iter_mut().map(interface_condition));
             }
             [Condition::Loopback] => {
                 conditions.push(loopback_condition());
@@ -344,7 +361,7 @@ impl FilterConditions {
             conditions,
             _app_id: app_id,
             _account: account,
-            _luid: luid,
+            _luids: luids,
             _v4: v4,
             _v6: v6,
         })
@@ -648,6 +665,24 @@ mod tests {
 
     /// Every rule a policy can hand to `add_rule`, with program paths that
     /// exist, since a WFP application ID needs the file.
+    /// Networks of both families, link-local on two adapters, IPv6
+    /// multicast and the private ranges: every shape a LAN rule takes.
+    fn every_lan_shape() -> crate::lan::LanAccess {
+        use crate::lan::{InterfaceId, LanAccess, LanSegment, SegmentNetwork};
+        let network = |address: &str, length, interface| SegmentNetwork {
+            prefix: rosetun_config::IpPrefix::new(address.parse().unwrap(), length).unwrap(),
+            interface: InterfaceId(interface),
+        };
+        LanAccess {
+            segment: LanSegment::from_parts(
+                vec![network("192.0.2.0", 24, 7), network("2001:db8:1::", 64, 8)],
+                vec![InterfaceId(7), InterfaceId(8)],
+            ),
+            private_networks: true,
+            ipv6_multicast: true,
+        }
+    }
+
     fn every_policy_rule() -> Vec<Rule> {
         let program = std::env::current_exe().expect("the test binary has a path");
         let mut rules = lockdown::every_filter()
@@ -660,6 +695,7 @@ mod tests {
                     let plan = RoutingPlan {
                         scope,
                         allow_lan,
+                        lan: every_lan_shape(),
                         lockdown,
                     };
                     rules.extend(BootstrapPolicy::from_plan(&plan, &[&program, &program]).rules);

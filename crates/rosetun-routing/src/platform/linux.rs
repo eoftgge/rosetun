@@ -82,6 +82,7 @@ impl NftBackend {
             enabled: hold,
             complete: hold,
             allow_lan: false,
+            private_networks: false,
             sublayer_weight: None,
             upgrade_hold: hold,
         }
@@ -221,7 +222,7 @@ impl RoutingBackend for NftBackend {
     /// the cgroups of this start. Lockdown cannot be turned on here.
     fn enable_lockdown(
         &self,
-        _allow_lan: bool,
+        _lan: Option<&crate::lan::LanAccess>,
         _apps: &LockdownApps,
     ) -> Result<LockdownStatus, RoutingError> {
         let shared = self.shared();
@@ -467,6 +468,7 @@ mod tests {
         RoutingPlan {
             scope,
             allow_lan: false,
+            lan: Default::default(),
             lockdown: false,
         }
     }
@@ -658,7 +660,7 @@ mod tests {
         assert!(status.enabled && status.upgrade_hold);
         // The service "repairs" it: the hold's own rules replace the leftovers.
         backend
-            .enable_lockdown(false, &LockdownApps::default())
+            .enable_lockdown(None, &LockdownApps::default())
             .unwrap();
         let script = nft.applied().last().unwrap().clone();
         assert_eq!(script, hold_rules(&leaves()));
@@ -701,7 +703,7 @@ mod tests {
         let mut backend = backend(&nft, &mount);
         assert!(!backend.lockdown_status().unwrap().enabled);
         assert!(matches!(
-            backend.enable_lockdown(false, &LockdownApps::default()),
+            backend.enable_lockdown(None, &LockdownApps::default()),
             Err(RoutingError::Unsupported)
         ));
         assert!(!backend.disable_lockdown().unwrap());

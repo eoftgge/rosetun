@@ -74,7 +74,7 @@ pub fn render(request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError
     let mut config = json!({
         "log": log_section(request),
         "dns": dns_section(&request.settings.dns)?,
-        "inbounds": [tun_inbound(request.settings)],
+        "inbounds": [tun_inbound(request.settings, lan)],
         "outbounds": outbounds,
         "route": route,
     });
@@ -185,13 +185,14 @@ fn log_section(request: &RenderRequest<'_>) -> Value {
     json!({ "level": level, "timestamp": true })
 }
 
-fn tun_inbound(settings: &Settings) -> Value {
+/// `lan` is the connected networks when "Local network" is on.
+fn tun_inbound(settings: &Settings, lan: Option<&[IpPrefix]>) -> Value {
     let tun = &settings.tun;
     let mut address = vec![Value::String(tun.ipv4.clone())];
     if let Some(ipv6) = &tun.ipv6 {
         address.push(Value::String(ipv6.clone()));
     }
-    json!({
+    let mut inbound = json!({
         "type": "tun",
         "tag": "tun-in",
         "interface_name": tun.name,
@@ -203,7 +204,25 @@ fn tun_inbound(settings: &Settings) -> Value {
         "stack": "gvisor",
         "auto_route": tun.auto_route,
         "strict_route": tun.auto_route,
-    })
+    });
+    // sing-tun takes these out of the tunnel's routes, so Windows sends them
+    // by its own routes, on the adapter. IPv6 only when the tunnel has it:
+    // without an IPv6 address sing-tun installs no IPv6 routes at all.
+    // Multicast is not listed: Windows routes 224.0.0.0/4 on every adapter
+    // by itself, the tunnel's included, and excluding it here changes none
+    // of that.
+    if let Some(segment) = lan.filter(|_| tun.auto_route) {
+        let ipv6 = tun.ipv6.is_some();
+        let exclude: Vec<String> = segment
+            .iter()
+            .copied()
+            .chain([LINK_LOCAL_V4[0], LINK_LOCAL_V6[0]])
+            .filter(|prefix| prefix.is_ipv4() || ipv6)
+            .map(|prefix| prefix.to_string())
+            .collect();
+        inbound["route_exclude_address"] = json!(exclude);
+    }
+    inbound
 }
 
 fn socks_outbound(socks: SocksProxy<'_>, tag: &str) -> Value {

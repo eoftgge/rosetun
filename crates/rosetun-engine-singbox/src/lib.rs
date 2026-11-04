@@ -616,8 +616,8 @@ mod tests {
     }
     use super::*;
     use rosetun_config::{
-        DomainMatch, IpPrefix, LogLevel, Node, NodeId, Outbound, ProcessMatch, RealityParams, Rule, RuleId,
-        RuleMatcher, RuleSet, RuleSetId, RuleTarget, Settings, StreamSettings, TlsMode,
+        DomainMatch, IpPrefix, LogLevel, Node, NodeId, Outbound, ProcessMatch, RealityParams, Rule,
+        RuleId, RuleMatcher, RuleSet, RuleSetId, RuleTarget, Settings, StreamSettings, TlsMode,
         VlessParams,
     };
     use rosetun_engine::{PROBE_TIMEOUT, PROBE_URLS, RuleCapabilities, TrafficTotals};
@@ -1969,6 +1969,51 @@ mod tests {
                 assert_eq!(route[private]["outbound"], "direct");
             }
         }
+    }
+
+    #[test]
+    fn the_segment_leaves_the_tunnels_routes_and_ipv6_only_with_an_ipv6_tunnel() {
+        let segment = [
+            IpPrefix::new("192.0.2.0".parse().unwrap(), 24).unwrap(),
+            IpPrefix::new("2001:db8:1::".parse().unwrap(), 64).unwrap(),
+        ];
+        let node = node();
+        let rules = rules();
+        let exclude = |allow_lan, ipv6: Option<&str>| {
+            let mut settings = Settings {
+                allow_lan,
+                ..Settings::default()
+            };
+            settings.tun.ipv6 = ipv6.map(str::to_owned);
+            let rendered = render::render(&RenderRequest {
+                extra: &[],
+                node: &node,
+                socks: None,
+                rules: &rules,
+                lists: &[],
+                settings: &settings,
+                lan_segment: &segment,
+                control: None,
+                verbose_log: false,
+            })
+            .expect("rendered");
+            let config: Value = serde_json::from_slice(&rendered.body).expect("JSON");
+            config["inbounds"][0]["route_exclude_address"].clone()
+        };
+        assert_eq!(exclude(false, None), Value::Null);
+        assert_eq!(
+            exclude(true, None),
+            serde_json::json!(["192.0.2.0/24", "169.254.0.0/16"])
+        );
+        assert_eq!(
+            exclude(true, Some("fdfe:dcba:9876::1/126")),
+            serde_json::json!([
+                "192.0.2.0/24",
+                "2001:db8:1::/64",
+                "169.254.0.0/16",
+                "fe80::/10"
+            ])
+        );
     }
 
     #[test]

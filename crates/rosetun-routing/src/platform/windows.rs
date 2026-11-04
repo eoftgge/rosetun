@@ -71,10 +71,10 @@ impl RoutingBackend for WfpBackend {
 
     fn enable_lockdown(
         &self,
-        allow_lan: bool,
+        lan: Option<&crate::lan::LanAccess>,
         apps: &LockdownApps,
     ) -> Result<LockdownStatus, RoutingError> {
-        lockdown::enable(allow_lan, apps)
+        lockdown::enable(lan, apps)
     }
 
     fn disable_lockdown(&self) -> Result<bool, RoutingError> {

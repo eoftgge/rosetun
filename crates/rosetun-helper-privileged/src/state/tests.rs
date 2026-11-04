@@ -6908,6 +6908,7 @@ impl RoutingBackend for LockdownSessionRouting {
             enabled: true,
             complete: true,
             allow_lan: false,
+            private_networks: false,
             sublayer_weight: Some(0xD000),
             upgrade_hold: false,
         })
@@ -6915,12 +6916,14 @@ impl RoutingBackend for LockdownSessionRouting {
 
     fn enable_lockdown(
         &self,
-        allow_lan: bool,
+        lan: Option<&rosetun_routing::lan::LanAccess>,
         apps: &LockdownApps,
     ) -> Result<rosetun_routing::LockdownStatus, RoutingError> {
+        let allow_lan = lan.is_some();
         self.enabled.lock().unwrap().push(apps.clone());
         Ok(rosetun_routing::LockdownStatus {
             allow_lan,
+            private_networks: false,
             ..self.lockdown_status()?
         })
     }
@@ -6995,6 +6998,7 @@ impl HoldRouting {
             enabled: held,
             complete: held,
             allow_lan: false,
+            private_networks: false,
             sublayer_weight: held.then_some(0xD000),
             upgrade_hold: held,
         }
@@ -7039,12 +7043,14 @@ impl RoutingBackend for HoldRouting {
 
     fn enable_lockdown(
         &self,
-        allow_lan: bool,
+        lan: Option<&rosetun_routing::lan::LanAccess>,
         _apps: &LockdownApps,
     ) -> Result<rosetun_routing::LockdownStatus, RoutingError> {
+        let allow_lan = lan.is_some();
         self.events.lock().unwrap().push("block written".to_owned());
         Ok(rosetun_routing::LockdownStatus {
             allow_lan,
+            private_networks: false,
             ..self.status()
         })
     }
@@ -7562,4 +7568,150 @@ fn the_supervisor_does_not_wait_for_a_busy_session() {
 
     assert!(started.elapsed() < SESSION_WAIT / 5);
     worker.join().expect("holder thread");
+}
+
+/// Which segment `switching_scan` reports: 0 for 192.0.2.0/24, else
+/// 198.51.100.0/24. Only `a_new_local_network_is_followed_by_a_protected_reconnect` uses it.
+static LAN_VARIANT: AtomicUsize = AtomicUsize::new(0);
+
+fn switching_scan(
+    _: &rosetun_routing::lan::SegmentQuery<'_>,
+) -> std::io::Result<rosetun_routing::lan::SegmentScan> {
+    let network = if LAN_VARIANT.load(Ordering::Acquire) == 0 {
+        "192.0.2.0"
+    } else {
+        "198.51.100.0"
+    };
+    let prefix = rosetun_config::IpPrefix::new(network.parse().unwrap(), 24).unwrap();
+    Ok(rosetun_routing::lan::SegmentScan {
+        segment: rosetun_routing::lan::LanSegment::for_tests(&[prefix]),
+        skipped: Vec::new(),
+    })
+}
+
+/// Records what reaches the routing layer, in order.
+#[derive(Debug)]
+struct LanRouting {
+    events: Arc<Mutex<Vec<String>>>,
+}
+
+impl RoutingBackend for LanRouting {
+    fn name(&self) -> &'static str {
+        "test-lan"
+    }
+
+    fn capabilities(&self) -> ProtectionCapabilities {
+        FULL_PROTECTION
+    }
+
+    fn preflight(&self) -> Result<(), RoutingError> {
+        Ok(())
+    }
+
+    fn begin_protection(
+        &mut self,
+        plan: &RoutingPlan,
+        _engine_binaries: &[&Path],
+    ) -> Result<RoutingGuard, RoutingError> {
+        let segment = |plan: &RoutingPlan| {
+            plan.lan
+                .segment
+                .prefixes()
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(",")
+        };
+        self.events
+            .lock()
+            .unwrap()
+            .push(format!("begin {}", segment(plan)));
+        let (prepare, authorize, revert) = (
+            Arc::clone(&self.events),
+            Arc::clone(&self.events),
+            Arc::clone(&self.events),
+        );
+        Ok(RoutingGuard::new_with_reconnector(
+            move |plan, _| {
+                prepare
+                    .lock()
+                    .unwrap()
+                    .push(format!("prepare {}", segment(plan)));
+                Ok(())
+            },
+            move |_| {
+                authorize.lock().unwrap().push("authorize".to_owned());
+                Ok(())
+            },
+            move || {
+                revert.lock().unwrap().push("revert".to_owned());
+                Ok(())
+            },
+        ))
+    }
+}
+
+#[test]
+fn a_new_local_network_is_followed_by_a_protected_reconnect() {
+    let controls = Arc::new(EngineControls::default());
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let mut engines = EngineRegistry::new();
+    engines.register(Box::new(ControlledEngine {
+        controls: Arc::clone(&controls),
+        dns_server: None,
+    }));
+    let helper = Helper::new(
+        engines,
+        Box::new(LanRouting {
+            events: Arc::clone(&events),
+        }),
+        VerboseGate::default(),
+    )
+    .with_lan_scan(switching_scan);
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    request.settings.allow_lan = true;
+    LAN_VARIANT.store(0, Ordering::Release);
+    helper.connect(&request).expect("connect");
+    assert_eq!(*events.lock().unwrap(), ["begin 192.0.2.0/24", "authorize"]);
+
+    let now = Instant::now();
+    helper.supervise(now);
+    assert_eq!(controls.spawns(), 1, "the same network changes nothing");
+
+    LAN_VARIANT.store(1, Ordering::Release);
+    helper.supervise(now);
+    helper.supervise(now);
+    assert_eq!(controls.spawns(), 1, "a new network has to hold first");
+    helper.supervise(now);
+    assert_eq!(controls.spawns(), 2);
+    assert!(matches!(helper.status().state, ConnectionState::Connected));
+    // The new segment's filters replace the old ones inside the protection
+    // session; nothing is reverted, so the machine is never open.
+    assert_eq!(
+        *events.lock().unwrap(),
+        [
+            "begin 192.0.2.0/24",
+            "authorize",
+            "prepare 198.51.100.0/24",
+            "authorize"
+        ]
+    );
+    helper.supervise(now);
+    assert_eq!(controls.spawns(), 2);
+    LAN_VARIANT.store(0, Ordering::Release);
+}
+
+#[test]
+fn without_local_network_the_segment_is_not_watched() {
+    let (helper, controls, prepared, _) = supervised_helper(true);
+    let helper = helper.with_lan_scan(|_| panic!("the segment is read only with Local network on"));
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    helper.connect(&request).expect("connect");
+    for _ in 0..4 {
+        helper.supervise(Instant::now());
+    }
+    assert_eq!(controls.spawns(), 1);
+    assert_eq!(prepared.load(Ordering::Acquire), 0);
 }

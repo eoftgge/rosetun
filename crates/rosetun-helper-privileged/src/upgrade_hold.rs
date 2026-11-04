@@ -43,10 +43,43 @@ fn decide() -> Result<HoldDecision, RoutingError> {
     Ok(upgrade_hold::decide(&lockdown, kill_switch))
 }
 
+/// The segment the hold keeps open: the computer's own, as a session with
+/// the default tunnel would see it. Private networks behind the router stay
+/// closed; the hold lasts an upgrade.
+fn hold_lan() -> rosetun_routing::lan::LanAccess {
+    let tun = rosetun_config::TunSettings::default();
+    let tunnel = tun
+        .ipv4
+        .split_once('/')
+        .and_then(|(address, length)| {
+            rosetun_config::IpPrefix::new(address.parse().ok()?, length.parse().ok()?)
+        })
+        .into_iter()
+        .collect::<Vec<_>>();
+    let query = rosetun_routing::lan::SegmentQuery {
+        tunnel_alias: &tun.name,
+        tunnel_networks: &tunnel,
+        servers: &[],
+    };
+    let segment = match rosetun_routing::lan_segment(&query) {
+        Ok(scan) => scan.segment,
+        Err(error) => {
+            eprintln!("could not read the local networks, they stay closed: {error}");
+            rosetun_routing::lan::LanSegment::default()
+        }
+    };
+    rosetun_routing::lan::LanAccess {
+        segment,
+        private_networks: false,
+        ipv6_multicast: false,
+    }
+}
+
 fn act(decision: HoldDecision, install_dir: &Path) -> Result<u8, RoutingError> {
     Ok(match decision {
         HoldDecision::Place { allow_lan } => {
-            let status = upgrade_hold::place(allow_lan, &installed_apps(install_dir))?;
+            let lan = allow_lan.then(hold_lan);
+            let status = upgrade_hold::place(lan.as_ref(), &installed_apps(install_dir))?;
             println!(
                 "upgrade hold placed: local network {}, complete {}",
                 if allow_lan { "on" } else { "off" },

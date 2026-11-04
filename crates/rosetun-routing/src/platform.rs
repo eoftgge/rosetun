@@ -91,16 +91,16 @@ pub(super) fn lockdown_status() -> Result<crate::LockdownStatus, crate::RoutingE
 }
 
 pub(super) fn lockdown_enable(
-    allow_lan: bool,
+    lan: Option<&crate::lan::LanAccess>,
     apps: &crate::LockdownApps,
 ) -> Result<crate::LockdownStatus, crate::RoutingError> {
     #[cfg(windows)]
     {
-        windows::lockdown::enable(allow_lan, apps)
+        windows::lockdown::enable(lan, apps)
     }
     #[cfg(not(windows))]
     {
-        let _ = (allow_lan, apps);
+        let _ = (lan, apps);
         Err(crate::RoutingError::Unsupported)
     }
 }
@@ -129,16 +129,16 @@ pub(super) fn session_filters()
 }
 
 pub(super) fn hold_place(
-    allow_lan: bool,
+    lan: Option<&crate::lan::LanAccess>,
     apps: &crate::LockdownApps,
 ) -> Result<crate::LockdownStatus, crate::RoutingError> {
     #[cfg(windows)]
     {
-        windows::lockdown::hold(allow_lan, apps)
+        windows::lockdown::hold(lan, apps)
     }
     #[cfg(not(windows))]
     {
-        let _ = (allow_lan, apps);
+        let _ = (lan, apps);
         Err(crate::RoutingError::Unsupported)
     }
 }

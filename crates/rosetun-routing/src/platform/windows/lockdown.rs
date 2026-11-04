@@ -29,12 +29,13 @@ use windows_sys::core::GUID;
 
 use super::filters::{self, FilterConditions, Placement};
 use super::policy::{
-    AddressFamily, BOOTSTRAP_ALLOW_WEIGHT, Condition, DNS_PROTOCOLS, LAN_SUBNETS, Rule, lan_permit,
-    private_dns_blocks, probe_authorization,
+    AddressFamily, BOOTSTRAP_ALLOW_WEIGHT, Condition, DNS_PROTOCOLS, LanRule, Rule, lan_rules,
+    probe_authorization,
 };
 use super::session::{
     Engine, SUBLAYER_KEY as SESSION_SUBLAYER_KEY, display_data, empty_blob, wfp_error, wide,
 };
+use crate::lan::{InterfaceId, LanAccess, LanSegment, SegmentNetwork};
 use crate::upgrade_hold::SessionFilter;
 use crate::{
     LockdownApps, LockdownStatus, ProtectionSession, RoutingError, RoutingGuard, RoutingPlan,
@@ -211,6 +212,47 @@ mod keys {
     ];
     pub(super) const BOOT_OUTBOUND_DHCP: u128 = 0x50a0a8df_637a_47c8_9977_016e672f3b31;
     pub(super) const BOOT_INBOUND_DHCP: u128 = 0xa51f4fec_b63a_4ec4_8ba5_d369e8689711;
+
+    // Bases of derived keys: the slot goes into the low 16 bits, which are
+    // zero here (see `slot`). Never change a base or how a slot is chosen.
+    /// The connected networks, `[IPv4, IPv6]`, by slot.
+    pub(super) const OUTBOUND_SEGMENT: [u128; 2] = [
+        0xf6a5849d_943f_4d77_917c_8811e9a70000,
+        0x83ae30b4_7152_48eb_bfc1_af4eaf920000,
+    ];
+    pub(super) const INBOUND_SEGMENT: [u128; 2] = [
+        0x173432a9_7cd0_46be_866a_00d876b30000,
+        0x8f2a324b_da1c_46ea_9ea1_d53d39c60000,
+    ];
+    /// `[IPv4, IPv6]`, each `[UDP, TCP]`, by slot.
+    pub(super) const SEGMENT_DNS: [[u128; 2]; 2] = [
+        [
+            0xe0c60783_f6c3_40b8_81da_4c40e66e0000,
+            0xb0b2fb9c_01f3_464b_966b_431df2900000,
+        ],
+        [
+            0x5b0ac452_d13c_4acc_85b5_1bddbf980000,
+            0x29fb7dea_0a3f_4671_8483_8249bf430000,
+        ],
+    ];
+    /// The link-local networks, by their index in `LINK_LOCAL_V4` followed
+    /// by `LINK_LOCAL_V6`.
+    pub(super) const OUTBOUND_LINK_LOCAL: u128 = 0x727f1248_9d3d_4f79_bc82_3647dcea0000;
+    pub(super) const INBOUND_LINK_LOCAL: u128 = 0x458e56e4_6f9d_4ce7_8ee4_c935932b0000;
+    /// `[UDP, TCP]`, by the same index.
+    pub(super) const LINK_LOCAL_DNS: [u128; 2] = [
+        0x1d5a9791_d76b_49be_9cd3_c770a0490000,
+        0xb39669ef_d99a_4a89_b6ed_aa9e84210000,
+    ];
+}
+
+/// How many connected networks of one family Lockdown keeps keys for. A
+/// computer is rarely on more than two or three; past this many the rest
+/// stay closed under Lockdown.
+pub(super) const SEGMENT_SLOTS: usize = 8;
+
+const fn slot(base: u128, index: usize) -> u128 {
+    base | index as u128
 }
 
 /// Free on a clean Windows 11, whose nearest built-in sublayer below sits at
@@ -232,7 +274,11 @@ const FAMILIES: [AddressFamily; 2] = [AddressFamily::Ipv4, AddressFamily::Ipv6];
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Part {
     Base,
+    /// Present whenever "Local network" is on, whatever the network: the DNS
+    /// blocks of the link-local networks.
     Lan,
+    /// "Local network" filters that follow the network the computer is on.
+    LanNetwork,
     /// The service's DNS permit.
     App,
     /// The GUI's and the CLI's permits, which exist only while no session
@@ -267,8 +313,9 @@ impl LockdownFilter {
     }
 }
 
-/// The filters Lockdown keeps for these settings.
-pub(super) fn filter_set(allow_lan: bool, apps: &LockdownApps) -> Vec<LockdownFilter> {
+/// The filters Lockdown keeps for these settings; `lan` with "Local
+/// network" on.
+pub(super) fn filter_set(lan: Option<&LanAccess>, apps: &LockdownApps) -> Vec<LockdownFilter> {
     let filter = |key, name, rule, boottime, part| LockdownFilter {
         key,
         name,
@@ -447,45 +494,161 @@ pub(super) fn filter_set(allow_lan: bool, apps: &LockdownApps) -> Vec<LockdownFi
         ),
     ]);
 
-    if allow_lan {
-        for (index, subnet) in LAN_SUBNETS.into_iter().enumerate() {
-            set.push(filter(
-                keys::OUTBOUND_LAN[index],
-                "Rosetun Lockdown: permit the local network",
-                lan_permit(subnet),
-                false,
-                Part::Lan,
-            ));
-            // The session's own LAN set has the same block; without it the
-            // router's DNS would answer outside the tunnel while disconnected.
-            for (key, rule) in keys::OUTBOUND_LAN_DNS[index]
-                .into_iter()
-                .zip(private_dns_blocks(subnet))
-            {
-                set.push(filter(
-                    key,
-                    "Rosetun Lockdown: block DNS to the local network",
-                    rule,
-                    false,
-                    Part::Lan,
-                ));
-            }
-            set.push(filter(
-                keys::INBOUND_LAN[index],
-                "Rosetun Lockdown: permit the local network inbound",
-                lan_permit(subnet).inbound(),
-                false,
-                Part::Lan,
-            ));
-        }
+    if let Some(lan) = lan {
+        set.extend(lan_filters(lan));
     }
     set
+}
+
+/// Lockdown's form of `lan_rules`: each rule under its fixed key, permits
+/// also inbound. IPv6 link-local multicast is left out: it depends on the
+/// tunnel of a session, and Lockdown outlives sessions.
+fn lan_filters(lan: &LanAccess) -> Vec<LockdownFilter> {
+    let lan = LanAccess {
+        ipv6_multicast: false,
+        ..lan.clone()
+    };
+    let link_local = |prefix| {
+        rosetun_config::LINK_LOCAL_V4
+            .into_iter()
+            .chain(rosetun_config::LINK_LOCAL_V6)
+            .position(|candidate| candidate == prefix)
+            .expect("link-local rules come from the link-local lists")
+    };
+    let family_of = |prefix: rosetun_config::IpPrefix| usize::from(!prefix.is_ipv4());
+    let mut filters = Vec::new();
+    let mut push = |key, name, rule, part| {
+        filters.push(LockdownFilter {
+            key,
+            name,
+            rule,
+            boottime: false,
+            part,
+        });
+    };
+    // Each connected network takes the next slot of its family in the
+    // segment's order; its DNS blocks follow its permit and share the slot.
+    let mut used = [0_usize; 2];
+    let mut current = None;
+    for (what, rule) in lan_rules(&lan) {
+        match what {
+            LanRule::Segment(prefix) => {
+                let family = family_of(prefix);
+                let index = used[family];
+                used[family] += 1;
+                current = (index < SEGMENT_SLOTS).then_some(index);
+                let Some(index) = current else {
+                    continue;
+                };
+                push(
+                    slot(keys::INBOUND_SEGMENT[family], index),
+                    "Rosetun Lockdown: permit the local network inbound",
+                    rule.clone().inbound(),
+                    Part::LanNetwork,
+                );
+                push(
+                    slot(keys::OUTBOUND_SEGMENT[family], index),
+                    "Rosetun Lockdown: permit the local network",
+                    rule,
+                    Part::LanNetwork,
+                );
+            }
+            LanRule::SegmentDns(prefix, protocol) => {
+                if let Some(index) = current {
+                    push(
+                        slot(keys::SEGMENT_DNS[family_of(prefix)][protocol], index),
+                        "Rosetun Lockdown: block DNS to the local network",
+                        rule,
+                        Part::LanNetwork,
+                    );
+                }
+            }
+            LanRule::LinkLocal(prefix) => {
+                let index = link_local(prefix);
+                push(
+                    slot(keys::INBOUND_LINK_LOCAL, index),
+                    "Rosetun Lockdown: permit link-local traffic inbound",
+                    rule.clone().inbound(),
+                    Part::LanNetwork,
+                );
+                push(
+                    slot(keys::OUTBOUND_LINK_LOCAL, index),
+                    "Rosetun Lockdown: permit link-local traffic",
+                    rule,
+                    Part::LanNetwork,
+                );
+            }
+            LanRule::LinkLocalDns(prefix, protocol) => push(
+                slot(keys::LINK_LOCAL_DNS[protocol], link_local(prefix)),
+                "Rosetun Lockdown: block DNS to link-local networks",
+                rule,
+                Part::Lan,
+            ),
+            LanRule::Private(index) => {
+                push(
+                    keys::INBOUND_LAN[index],
+                    "Rosetun Lockdown: permit private networks inbound",
+                    rule.clone().inbound(),
+                    Part::LanNetwork,
+                );
+                push(
+                    keys::OUTBOUND_LAN[index],
+                    "Rosetun Lockdown: permit private networks",
+                    rule,
+                    Part::LanNetwork,
+                );
+            }
+            // The session's own LAN set has the same block; without it the
+            // router's DNS would answer outside the tunnel while disconnected.
+            LanRule::PrivateDns(index, protocol) => push(
+                keys::OUTBOUND_LAN_DNS[index][protocol],
+                "Rosetun Lockdown: block DNS to private networks",
+                rule,
+                Part::LanNetwork,
+            ),
+        }
+    }
+    if used.iter().any(|&count| count > SEGMENT_SLOTS) {
+        tracing::warn!(
+            ipv4 = used[0],
+            ipv6 = used[1],
+            slots = SEGMENT_SLOTS,
+            "more connected networks than Lockdown keeps; the rest stay closed"
+        );
+    }
+    filters
+}
+
+/// A "Local network" that takes every slot, so `every_filter` holds every
+/// key a set can use.
+fn every_lan() -> LanAccess {
+    let mut networks = Vec::new();
+    for index in 0..SEGMENT_SLOTS {
+        let index = u8::try_from(index).expect("few slots");
+        for (address, length) in [
+            (std::net::IpAddr::from([10, index, 0, 0]), 24),
+            (
+                std::net::IpAddr::from([0xfd00, u16::from(index), 0, 0, 0, 0, 0, 0]),
+                64,
+            ),
+        ] {
+            networks.push(SegmentNetwork {
+                prefix: rosetun_config::IpPrefix::new(address, length).expect("valid prefix"),
+                interface: InterfaceId(1),
+            });
+        }
+    }
+    LanAccess {
+        segment: LanSegment::from_parts(networks, vec![InterfaceId(1)]),
+        private_networks: true,
+        ipv6_multicast: true,
+    }
 }
 
 /// Every filter any version of the set can hold, for removal.
 pub(super) fn every_filter() -> Vec<LockdownFilter> {
     let mut all = filter_set(
-        true,
+        Some(&every_lan()),
         &LockdownApps {
             gui: Some(PathBuf::new()),
             cli: Some(PathBuf::new()),
@@ -556,8 +719,14 @@ fn read_status(engine: &Engine) -> Result<LockdownStatus, RoutingError> {
                 lan_total += 1;
                 lan_present += usize::from(filter_exists(engine, filter.key)?);
             }
-            Part::App | Part::Program => {}
+            Part::LanNetwork | Part::App | Part::Program => {}
         }
+    }
+    // The private ranges' permits are older than the segment: alone they are
+    // the "Local network" of an earlier version, which now means the segment.
+    let mut private = false;
+    for key in keys::OUTBOUND_LAN {
+        private |= filter_exists(engine, key)?;
     }
     Ok(LockdownStatus {
         enabled,
@@ -565,25 +734,26 @@ fn read_status(engine: &Engine) -> Result<LockdownStatus, RoutingError> {
             && sublayer_weight.is_some()
             && base_complete
             && (lan_present == 0 || lan_present == lan_total),
-        allow_lan: lan_present > 0,
+        allow_lan: lan_present > 0 || private,
+        private_networks: lan_present > 0 && private,
         sublayer_weight,
         upgrade_hold,
     })
 }
 
 pub(in crate::platform) fn enable(
-    allow_lan: bool,
+    lan: Option<&LanAccess>,
     apps: &LockdownApps,
 ) -> Result<LockdownStatus, RoutingError> {
-    write_set(allow_lan, apps, false)
+    write_set(lan, apps, false)
 }
 
 /// The same set as `enable`, marked as an upgrade's hold.
 pub(in crate::platform) fn hold(
-    allow_lan: bool,
+    lan: Option<&LanAccess>,
     apps: &LockdownApps,
 ) -> Result<LockdownStatus, RoutingError> {
-    write_set(allow_lan, apps, true)
+    write_set(lan, apps, true)
 }
 
 /// Removes the hold's marker only; Lockdown's objects stay.
@@ -605,11 +775,11 @@ pub(in crate::platform) fn end_hold() -> Result<(), RoutingError> {
 /// Writes the set; `hold` adds the hold's marker, otherwise an existing
 /// marker is left as it is.
 fn write_set(
-    allow_lan: bool,
+    lan: Option<&LanAccess>,
     apps: &LockdownApps,
     hold: bool,
 ) -> Result<LockdownStatus, RoutingError> {
-    let wanted = filter_set(allow_lan, apps);
+    let wanted = filter_set(lan, apps);
     let wanted_keys = wanted
         .iter()
         .map(|filter| filter.key)
@@ -1087,7 +1257,11 @@ mod tests {
 
     use windows_sys::core::GUID;
 
-    use super::{BLOCK_WEIGHT, LockdownFilter, Part, RESOLVER_WEIGHT, every_filter, filter_set};
+    use super::{
+        BLOCK_WEIGHT, LockdownFilter, Part, RESOLVER_WEIGHT, SEGMENT_SLOTS, every_filter,
+        filter_set, slot,
+    };
+    use crate::lan::{InterfaceId, LanAccess, LanSegment, SegmentNetwork};
     use crate::platform::windows::policy::{
         self, Action, AddressFamily, BOOTSTRAP_ALLOW_WEIGHT, BootstrapPolicy, Condition, Layer,
         PRIVATE_DNS_BLOCK_WEIGHT, Rule, TUNNEL_WEIGHT,
@@ -1117,7 +1291,7 @@ mod tests {
         let all = every_filter();
         let keys = all.iter().map(|filter| filter.key).collect::<HashSet<_>>();
         assert_eq!(keys.len(), all.len());
-        assert_eq!(all.len(), 72);
+        assert_eq!(all.len(), 156);
         for object in [
             super::PROVIDER_KEY,
             super::SUBLAYER_KEY,
@@ -1130,14 +1304,14 @@ mod tests {
             }));
         }
         // Keys depend on the role only, never on the settings.
-        for filter in filter_set(false, &LockdownApps::default()) {
+        for filter in filter_set(None, &LockdownApps::default()) {
             assert!(all.contains(&filter));
         }
     }
 
     #[test]
     fn base_set_blocks_both_directions_and_permits_only_loopback_and_dhcp() {
-        let set = filter_set(false, &LockdownApps::default());
+        let set = filter_set(None, &LockdownApps::default());
         assert!(set.iter().all(|filter| filter.part == Part::Base));
         assert_eq!(set.len(), 20);
         for boottime in [false, true] {
@@ -1171,7 +1345,7 @@ mod tests {
 
     #[test]
     fn programs_are_permitted_outbound_only_and_never_at_boot() {
-        let set = filter_set(false, &apps());
+        let set = filter_set(None, &apps());
         let programs = set
             .iter()
             .filter(|filter| matches!(filter.part, Part::App | Part::Program))
@@ -1187,7 +1361,7 @@ mod tests {
             ));
         }
         let only_cli = filter_set(
-            false,
+            None,
             &LockdownApps {
                 gui: None,
                 ..apps()
@@ -1205,7 +1379,7 @@ mod tests {
 
     #[test]
     fn the_gui_and_the_cli_reach_tcp_on_any_port_under_new_keys() {
-        let set = filter_set(false, &apps());
+        let set = filter_set(None, &apps());
         let tcp = set
             .iter()
             .filter(|filter| filter.part == Part::Program && filter.rule.weight != RESOLVER_WEIGHT)
@@ -1300,6 +1474,7 @@ mod tests {
         let plan = RoutingPlan {
             scope: ProtectionScope::AllTraffic,
             allow_lan: true,
+            lan: Default::default(),
             lockdown: true,
         };
         let session =
@@ -1314,7 +1489,7 @@ mod tests {
             path: apps.service.as_deref().expect("installed"),
             service_account: true,
         });
-        let set = filter_set(true, &apps);
+        let set = filter_set(Some(&lan(false)), &apps);
         let withdrawn = set
             .iter()
             .filter(|filter| !super::program_keys().contains(&filter.key))
@@ -1370,7 +1545,7 @@ mod tests {
             service_account: true,
         });
         for allow_lan in [false, true] {
-            let set = filter_set(allow_lan, &apps);
+            let set = filter_set(allow_lan.then(|| lan(false)).as_ref(), &apps);
             let rules = persistent(&set);
             let decide = |application, destination, protocol, port| {
                 decide_for(
@@ -1400,7 +1575,7 @@ mod tests {
             assert_eq!(decide(gui, [203, 0, 113, 7], 17, 443), Action::Block);
         }
         assert!(
-            filter_set(true, &apps)
+            filter_set(Some(&lan(true)), &apps)
                 .iter()
                 .filter(|filter| filter.rule.weight == RESOLVER_WEIGHT)
                 .all(|filter| matches!(filter.part, Part::App | Part::Program)
@@ -1410,49 +1585,122 @@ mod tests {
         );
     }
 
+    /// The segment 192.0.2.0/24 on adapter 7.
+    fn lan(private_networks: bool) -> LanAccess {
+        LanAccess {
+            segment: LanSegment::from_parts(
+                vec![SegmentNetwork {
+                    prefix: rosetun_config::IpPrefix::new("192.0.2.0".parse().unwrap(), 24)
+                        .unwrap(),
+                    interface: InterfaceId(7),
+                }],
+                vec![InterfaceId(7)],
+            ),
+            private_networks,
+            ipv6_multicast: true,
+        }
+    }
+
     #[test]
-    fn lan_set_permits_private_ranges_both_ways_but_blocks_their_dns() {
-        let set = filter_set(true, &LockdownApps::default());
-        let lan = set
-            .iter()
-            .filter(|filter| filter.part == Part::Lan)
-            .collect::<Vec<_>>();
-        assert_eq!(lan.len(), 24);
-        assert!(lan.iter().all(|filter| !filter.boottime));
+    fn lan_set_permits_the_segment_both_ways_on_its_adapter_but_blocks_its_dns() {
+        let set = filter_set(Some(&lan(false)), &LockdownApps::default());
+        assert!(
+            set.iter()
+                .filter(|filter| matches!(filter.part, Part::Lan | Part::LanNetwork))
+                .all(|filter| !filter.boottime)
+        );
+        // The link-local DNS blocks: four IPv4 networks and fe80::/10.
+        assert_eq!(
+            set.iter().filter(|filter| filter.part == Part::Lan).count(),
+            10
+        );
         let rules = persistent(&set);
+        for layer in [Layer::Connect, Layer::RecvAccept] {
+            for (destination, protocol, port, luid, action) in [
+                ([192, 0, 2, 10], 6, 8080, 7, Action::Allow),
+                ([192, 0, 2, 10], 6, 8080, 8, Action::Block),
+                ([224, 0, 0, 251], 17, 5353, 7, Action::Allow),
+                ([239, 255, 255, 250], 17, 1900, 7, Action::Allow),
+                ([255, 255, 255, 255], 17, 9, 7, Action::Allow),
+                ([239, 1, 2, 3], 17, 1900, 7, Action::Block),
+                ([192, 168, 3, 1], 6, 80, 7, Action::Block),
+                ([203, 0, 113, 7], 6, 443, 7, Action::Block),
+            ] {
+                assert_eq!(
+                    decide_at(layer, &rules, destination, protocol, port, luid),
+                    action,
+                    "{destination:?} on {luid}"
+                );
+            }
+        }
         for protocol in [17, 6] {
             assert_eq!(
-                decide_at(Layer::Connect, &rules, [192, 168, 3, 1], protocol, 53, 0),
+                decide_at(Layer::Connect, &rules, [192, 0, 2, 1], protocol, 53, 7),
                 Action::Block
             );
         }
-        assert_eq!(
-            decide_at(Layer::Connect, &rules, [192, 168, 3, 1], 6, 80, 0),
-            Action::Allow
+        let multicast_v6 = rosetun_config::LINK_LOCAL_V6[1];
+        assert!(
+            set.iter().all(|filter| !filter
+                .rule
+                .conditions
+                .contains(&Condition::RemoteSubnet(multicast_v6.into()))),
+            "IPv6 link-local multicast depends on a session's tunnel"
         );
+
+        let private = filter_set(Some(&lan(true)), &LockdownApps::default());
+        let private = persistent(&private);
+        for layer in [Layer::Connect, Layer::RecvAccept] {
+            assert_eq!(
+                decide_at(layer, &private, [192, 168, 3, 1], 6, 80, 8),
+                Action::Allow
+            );
+        }
         assert_eq!(
-            decide_at(Layer::RecvAccept, &rules, [192, 168, 3, 1], 6, 8080, 0),
-            Action::Allow
-        );
-        assert_eq!(
-            decide_at(Layer::Connect, &rules, [203, 0, 113, 7], 6, 443, 0),
-            Action::Block
-        );
-        assert_eq!(
-            decide_at(Layer::RecvAccept, &rules, [203, 0, 113, 7], 6, 8080, 0),
+            decide_at(Layer::Connect, &private, [192, 168, 3, 1], 17, 53, 8),
             Action::Block
         );
 
-        let closed = filter_set(false, &LockdownApps::default());
+        let closed = filter_set(None, &LockdownApps::default());
         let rules = persistent(&closed);
-        assert_eq!(
-            decide_at(Layer::Connect, &rules, [192, 168, 3, 1], 6, 80, 0),
-            Action::Block
-        );
-        assert_eq!(
-            decide_at(Layer::RecvAccept, &rules, [192, 168, 3, 1], 6, 8080, 0),
-            Action::Block
-        );
+        for layer in [Layer::Connect, Layer::RecvAccept] {
+            assert_eq!(
+                decide_at(layer, &rules, [192, 0, 2, 10], 6, 80, 7),
+                Action::Block
+            );
+        }
+    }
+
+    #[test]
+    fn the_segment_takes_slots_in_order_and_keys_never_collide() {
+        let networks = (0..SEGMENT_SLOTS + 2)
+            .map(|index| SegmentNetwork {
+                prefix: rosetun_config::IpPrefix::new(
+                    std::net::IpAddr::from([198, 51, 100, u8::try_from(index * 16).unwrap()]),
+                    28,
+                )
+                .unwrap(),
+                interface: InterfaceId(7),
+            })
+            .collect();
+        let lan = LanAccess {
+            segment: LanSegment::from_parts(networks, vec![InterfaceId(7)]),
+            private_networks: false,
+            ipv6_multicast: false,
+        };
+        let set = filter_set(Some(&lan), &LockdownApps::default());
+        let keys = set.iter().map(|filter| filter.key).collect::<HashSet<_>>();
+        assert_eq!(keys.len(), set.len());
+        let every = every_filter()
+            .into_iter()
+            .map(|filter| filter.key)
+            .collect::<HashSet<_>>();
+        assert!(keys.is_subset(&every));
+        for index in 0..SEGMENT_SLOTS {
+            assert!(keys.contains(&slot(super::keys::OUTBOUND_SEGMENT[0], index)));
+            assert!(keys.contains(&slot(super::keys::SEGMENT_DNS[0][1], index)));
+        }
+        assert!(!keys.contains(&slot(super::keys::OUTBOUND_SEGMENT[0], SEGMENT_SLOTS)));
     }
 
     #[test]
@@ -1460,12 +1708,13 @@ mod tests {
         let plan = RoutingPlan {
             scope: ProtectionScope::AllTraffic,
             allow_lan: true,
+            lan: Default::default(),
             lockdown: true,
         };
         let session =
             BootstrapPolicy::from_plan(&plan, &[std::path::Path::new(r"C:\sing-box.exe")]);
         let tunnel = policy::tunnel_authorization(123, true);
-        let set = filter_set(true, &LockdownApps::default());
+        let set = filter_set(Some(&lan(false)), &LockdownApps::default());
         let rules = persistent(&set)
             .into_iter()
             .chain(&session.rules)
@@ -1507,7 +1756,7 @@ mod tests {
         // Rosetun's resolver permits outrank the private DNS block for its
         // own programs only: anything else still cannot reach the tunnel's
         // DNS address outside the tunnel.
-        let with_apps = filter_set(true, &apps());
+        let with_apps = filter_set(Some(&lan(false)), &apps());
         let rules = persistent(&with_apps)
             .into_iter()
             .chain(&session.rules)

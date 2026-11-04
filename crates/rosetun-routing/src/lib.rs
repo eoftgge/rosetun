@@ -27,8 +27,11 @@ pub mod lockdown {
 
     /// Adds what is missing and removes what no longer applies, in one
     /// transaction, then flushes the change to disk.
-    pub fn enable(allow_lan: bool, apps: &LockdownApps) -> Result<LockdownStatus, RoutingError> {
-        crate::platform::lockdown_enable(allow_lan, apps)
+    pub fn enable(
+        lan: Option<&crate::lan::LanAccess>,
+        apps: &LockdownApps,
+    ) -> Result<LockdownStatus, RoutingError> {
+        crate::platform::lockdown_enable(lan, apps)
     }
 
     /// Removes every Lockdown object by its fixed key, in one transaction,
@@ -68,8 +71,11 @@ pub enum ProtectionScope {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RoutingPlan {
     pub scope: ProtectionScope,
-    /// Allows non-engine applications to reach private destinations; ignored for DNS-only protection.
+    /// "Local network": other programs may reach what `lan` holds. Ignored
+    /// for DNS-only protection.
     pub allow_lan: bool,
+    /// The segment and options "Local network" opens; only with `allow_lan`.
+    pub lan: lan::LanAccess,
     /// Puts the session's filters into the Lockdown sublayer instead of the
     /// Rosetun one, above Lockdown's own block.
     pub lockdown: bool,
@@ -85,6 +91,8 @@ pub struct LockdownStatus {
     /// counted: a missing program has none.
     pub complete: bool,
     pub allow_lan: bool,
+    /// "Private networks behind the router" is part of the LAN set.
+    pub private_networks: bool,
     /// The weight BFE stored for the sublayer, which may differ from the one
     /// requested.
     pub sublayer_weight: Option<u16>,
@@ -137,9 +145,10 @@ pub trait RoutingBackend: std::fmt::Debug + Send {
         Ok(LockdownStatus::default())
     }
 
+    /// `lan` with "Local network" on.
     fn enable_lockdown(
         &self,
-        _allow_lan: bool,
+        _lan: Option<&lan::LanAccess>,
         _apps: &LockdownApps,
     ) -> Result<LockdownStatus, RoutingError> {
         Err(RoutingError::Unsupported)

@@ -206,9 +206,10 @@ impl Helper {
             tracing::info!("the upgrade hold keeps the network closed until a connect");
         }
         // No session yet: the GUI and the CLI get their permits back too.
+        let lan = session.lockdown_lan(status.allow_lan, false);
         match session
             .routing
-            .enable_lockdown(status.allow_lan, &(session.lockdown_apps)())
+            .enable_lockdown(lan.as_ref(), &(session.lockdown_apps)())
         {
             Ok(repaired) => tracing::info!(
                 allow_lan = status.allow_lan,
@@ -273,9 +274,10 @@ impl Session {
         if self.guard.is_some() || self.request.is_some() {
             self.programs_withdrawn = true;
         }
+        let lan = self.lockdown_lan(allow_lan, false);
         let status = self
             .routing
-            .enable_lockdown(allow_lan, &self.lockdown_programs())
+            .enable_lockdown(lan.as_ref(), &self.lockdown_programs())
             .map_err(routing_failed)?;
         write(
             &self.lockdown,
@@ -301,7 +303,7 @@ impl Session {
                 return Ok(());
             };
             // A session without protection gets the kill switch it now needs.
-            let (plan, tunnel) = all_traffic(&request)?;
+            let (plan, tunnel) = all_traffic(&request, &self.lan)?;
             let binaries = self
                 .protected_binaries
                 .iter()
@@ -325,7 +327,7 @@ impl Session {
             .map_err(|_| HelperError::new(ErrorCode::RoutingFailed, "routing guard is poisoned"))?;
         match (guard.scope, request) {
             (ProtectionScope::DnsOnly, Some(request)) => {
-                let (plan, tunnel) = all_traffic(&request)?;
+                let (plan, tunnel) = all_traffic(&request, &self.lan)?;
                 let binaries = self
                     .protected_binaries
                     .iter()
@@ -442,9 +444,10 @@ impl Session {
             self.programs_withdrawn = false;
             return;
         }
+        let lan = self.lockdown_lan(state.allow_lan, false);
         match self
             .routing
-            .enable_lockdown(state.allow_lan, &(self.lockdown_apps)())
+            .enable_lockdown(lan.as_ref(), &(self.lockdown_apps)())
         {
             Ok(_) => {
                 self.programs_withdrawn = false;
@@ -493,6 +496,7 @@ impl Session {
         let plan = RoutingPlan {
             scope: ProtectionScope::DnsOnly,
             allow_lan: settings.allow_lan,
+            lan: Default::default(),
             lockdown: false,
         };
         let tunnel = match TunnelInterface::try_from(&settings.tun) {
@@ -536,8 +540,9 @@ pub(super) fn sync_lan(
     shared: &SharedLockdown,
     apps: &LockdownApps,
     caller: &Caller,
-    allow_lan: bool,
+    lan: Option<&rosetun_routing::lan::LanAccess>,
 ) -> Result<(), HelperError> {
+    let allow_lan = lan.is_some();
     let state = read(shared);
     if !state.enabled || state.allow_lan == allow_lan {
         return Ok(());
@@ -549,9 +554,7 @@ pub(super) fn sync_lan(
         );
         return Ok(());
     }
-    routing
-        .enable_lockdown(allow_lan, apps)
-        .map_err(routing_failed)?;
+    routing.enable_lockdown(lan, apps).map_err(routing_failed)?;
     write(
         shared,
         LockdownState {
@@ -566,12 +569,14 @@ pub(super) fn sync_lan(
 
 fn all_traffic(
     request: &rosetun_ipc::ConnectRequest,
+    lan: &rosetun_routing::lan::LanAccess,
 ) -> Result<(RoutingPlan, TunnelInterface), HelperError> {
     let tunnel = TunnelInterface::try_from(&request.settings.tun).map_err(routing_failed)?;
     Ok((
         RoutingPlan {
             scope: ProtectionScope::AllTraffic,
             allow_lan: request.settings.allow_lan,
+            lan: lan.clone(),
             lockdown: true,
         },
         tunnel,
@@ -646,6 +651,7 @@ mod tests {
                 enabled: true,
                 complete: true,
                 allow_lan: false,
+                private_networks: false,
                 sublayer_weight: Some(0xD000),
                 upgrade_hold: true,
             });
@@ -703,9 +709,10 @@ mod tests {
 
         fn enable_lockdown(
             &self,
-            allow_lan: bool,
+            lan: Option<&rosetun_routing::lan::LanAccess>,
             apps: &LockdownApps,
         ) -> Result<LockdownStatus, RoutingError> {
+            let allow_lan = lan.is_some();
             self.0.enabled.lock().unwrap().push(allow_lan);
             self.0.apps.lock().unwrap().push(apps.clone());
             let held = self
@@ -718,6 +725,7 @@ mod tests {
                 enabled: true,
                 complete: true,
                 allow_lan,
+                private_networks: false,
                 sublayer_weight: Some(0xD000),
                 upgrade_hold: held,
             };
@@ -818,6 +826,7 @@ mod tests {
             enabled: true,
             complete: false,
             allow_lan: true,
+            private_networks: false,
             sublayer_weight: None,
             upgrade_hold: false,
         });
@@ -968,7 +977,7 @@ mod tests {
             &shared,
             &apps,
             &Caller::fake(b"user", false),
-            true,
+            Some(&rosetun_routing::lan::LanAccess::default()),
         )
         .unwrap();
         assert!(calls.enabled.lock().unwrap().is_empty());
@@ -979,7 +988,7 @@ mod tests {
             &shared,
             &apps,
             &Caller::fake(b"admin", true),
-            true,
+            Some(&rosetun_routing::lan::LanAccess::default()),
         )
         .unwrap();
         assert_eq!(*calls.enabled.lock().unwrap(), [true]);

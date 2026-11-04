@@ -1,5 +1,9 @@
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 
+use rosetun_config::{IpPrefix, LINK_LOCAL_V4, LINK_LOCAL_V6};
+
+use crate::lan::LanAccess;
 use crate::{ProtectionScope, RoutingPlan};
 
 pub(super) const TUNNEL_WEIGHT: u8 = 4;
@@ -45,6 +49,23 @@ impl Subnet {
     }
 }
 
+impl From<IpPrefix> for Subnet {
+    fn from(prefix: IpPrefix) -> Self {
+        match prefix.address() {
+            IpAddr::V4(address) => Self::V4 {
+                address: address.octets(),
+                prefix: prefix.length(),
+            },
+            IpAddr::V6(address) => Self::V6 {
+                address: address.octets(),
+                prefix: prefix.length(),
+            },
+        }
+    }
+}
+
+/// "Private networks behind the router": every private range, on any
+/// adapter.
 pub(super) const LAN_SUBNETS: [Subnet; 6] = [
     Subnet::V4 {
         address: [10, 0, 0, 0],
@@ -92,7 +113,9 @@ pub(super) enum Condition {
     /// Matches the client side of DHCPv4: UDP port 68 to UDP port 67. At the
     /// receive layer the ports are the same, so it matches the server's replies.
     DhcpV4,
-    /// Matches the validated engine-created TUN local-interface LUID.
+    /// Matches the validated engine-created TUN local-interface LUID, or a
+    /// physical adapter's. WFP joins conditions on the same field with OR,
+    /// so several of them match any of these adapters.
     LocalInterface(u64),
     RemoteSubnet(Subnet),
     Protocol(u8),
@@ -146,12 +169,14 @@ impl BootstrapPolicy {
     /// WFP identifies the exemption by executable path, not by process ID.
     pub(super) fn from_plan(plan: &RoutingPlan, engine_binaries: &[&Path]) -> Self {
         match plan.scope {
-            ProtectionScope::AllTraffic => Self::all_traffic(plan.allow_lan, engine_binaries),
+            ProtectionScope::AllTraffic => {
+                Self::all_traffic(plan.allow_lan.then_some(&plan.lan), engine_binaries)
+            }
             ProtectionScope::DnsOnly => Self::dns_only(engine_binaries),
         }
     }
 
-    fn all_traffic(allow_lan: bool, engine_binaries: &[&Path]) -> Self {
+    fn all_traffic(lan: Option<&LanAccess>, engine_binaries: &[&Path]) -> Self {
         let mut rules = common_rules(engine_binaries);
         rules.push(Rule::allow(
             AddressFamily::Ipv4,
@@ -159,11 +184,8 @@ impl BootstrapPolicy {
             BOOTSTRAP_ALLOW_WEIGHT,
         ));
 
-        if allow_lan {
-            for subnet in LAN_SUBNETS {
-                rules.push(lan_permit(subnet));
-                rules.extend(private_dns_blocks(subnet));
-            }
+        if let Some(lan) = lan {
+            rules.extend(lan_rules(lan).into_iter().map(|(_, rule)| rule));
         }
 
         rules.extend([
@@ -187,6 +209,85 @@ impl BootstrapPolicy {
         }
         Self { rules }
     }
+}
+
+/// What a LAN rule stands for, so Lockdown can give each its own key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum LanRule {
+    /// The permit for one connected network, on its adapter.
+    Segment(IpPrefix),
+    /// The DNS block of one connected network, `[UDP, TCP]` by index.
+    SegmentDns(IpPrefix, usize),
+    /// A link-local network, on every physical adapter.
+    LinkLocal(IpPrefix),
+    LinkLocalDns(IpPrefix, usize),
+    /// One of `LAN_SUBNETS`, on any adapter.
+    Private(usize),
+    PrivateDns(usize, usize),
+}
+
+/// The connect-layer rules of "Local network": the computer's own segment,
+/// each network only on its adapter; link-local networks on the physical
+/// adapters; with "Private networks behind the router" also every private
+/// range on any adapter. DNS to each of them is blocked above the permits.
+pub(super) fn lan_rules(lan: &LanAccess) -> Vec<(LanRule, Rule)> {
+    let mut rules = Vec::new();
+    for network in lan.segment.networks() {
+        rules.push((
+            LanRule::Segment(network.prefix),
+            interface_permit(network.prefix.into(), &[network.interface.0]),
+        ));
+        for (index, block) in private_dns_blocks(network.prefix.into())
+            .into_iter()
+            .enumerate()
+        {
+            rules.push((LanRule::SegmentDns(network.prefix, index), block));
+        }
+    }
+    let interfaces: Vec<u64> = lan.segment.interfaces().iter().map(|id| id.0).collect();
+    for prefix in link_local(lan.ipv6_multicast) {
+        // Without a physical adapter there is nothing to permit on, and a
+        // permit without the interface condition would open every adapter.
+        if !interfaces.is_empty() {
+            rules.push((
+                LanRule::LinkLocal(prefix),
+                interface_permit(prefix.into(), &interfaces),
+            ));
+        }
+        for (index, block) in private_dns_blocks(prefix.into()).into_iter().enumerate() {
+            rules.push((LanRule::LinkLocalDns(prefix, index), block));
+        }
+    }
+    if lan.private_networks {
+        for (index, subnet) in LAN_SUBNETS.into_iter().enumerate() {
+            rules.push((LanRule::Private(index), lan_permit(subnet)));
+            for (protocol, block) in private_dns_blocks(subnet).into_iter().enumerate() {
+                rules.push((LanRule::PrivateDns(index, protocol), block));
+            }
+        }
+    }
+    rules
+}
+
+/// The link-local networks "Local network" opens. IPv6 link-local
+/// multicast only when the tunnel carries IPv6: otherwise sing-box blocks
+/// all IPv6 while it runs, and mDNS and SSDP work over IPv4 anyway.
+pub(super) fn link_local(ipv6_multicast: bool) -> impl Iterator<Item = IpPrefix> {
+    let multicast_v6 = LINK_LOCAL_V6[1];
+    LINK_LOCAL_V4
+        .into_iter()
+        .chain(LINK_LOCAL_V6)
+        .filter(move |prefix| ipv6_multicast || *prefix != multicast_v6)
+}
+
+fn interface_permit(subnet: Subnet, interfaces: &[u64]) -> Rule {
+    let mut conditions = vec![Condition::RemoteSubnet(subnet)];
+    conditions.extend(
+        interfaces
+            .iter()
+            .map(|&luid| Condition::LocalInterface(luid)),
+    );
+    Rule::allow(subnet.family(), conditions, BOOTSTRAP_ALLOW_WEIGHT)
 }
 
 pub(super) fn lan_permit(subnet: Subnet) -> Rule {
@@ -271,12 +372,16 @@ pub(super) mod tests {
         Action, AddressFamily, BootstrapPolicy, Condition, Layer, Rule, Subnet,
         tunnel_authorization,
     };
+    use rosetun_config::IpPrefix;
+
+    use crate::lan::{InterfaceId, LanAccess, LanSegment, SegmentNetwork};
     use crate::{ProtectionScope, RoutingPlan};
 
     fn plan() -> RoutingPlan {
         RoutingPlan {
             scope: ProtectionScope::AllTraffic,
             allow_lan: false,
+            lan: Default::default(),
             lockdown: false,
         }
     }
@@ -320,8 +425,22 @@ pub(super) mod tests {
         rules
             .iter()
             .filter(|rule| {
+                // Conditions on the interface are joined with OR.
+                let mut interfaces =
+                    rule.conditions
+                        .iter()
+                        .filter_map(|condition| match condition {
+                            Condition::LocalInterface(value) => Some(*value),
+                            _ => None,
+                        });
+                let interface_matches = rule
+                    .conditions
+                    .iter()
+                    .all(|condition| !matches!(condition, Condition::LocalInterface(_)))
+                    || interfaces.any(|value| value == luid);
                 rule.family == AddressFamily::Ipv4
                     && rule.layer == layer
+                    && interface_matches
                     && rule.conditions.iter().all(|condition| match condition {
                         Condition::RemoteSubnet(Subnet::V4 { address, prefix }) => {
                             let mask = u32::MAX << (32 - *prefix);
@@ -330,7 +449,7 @@ pub(super) mod tests {
                         }
                         Condition::Protocol(value) => *value == protocol,
                         Condition::RemotePort(value) => *value == port,
-                        Condition::LocalInterface(value) => *value == luid,
+                        Condition::LocalInterface(_) => true,
                         Condition::Application(path) => {
                             process.is_some_and(|process| process.path == path)
                         }
@@ -458,16 +577,34 @@ pub(super) mod tests {
         assert!(authorization[1].weight > bootstrap.rules[1].weight);
     }
 
+    /// The segment 192.0.2.0/24 on adapter 7, adapters 7 and 8 physical.
+    fn lan(private_networks: bool) -> LanAccess {
+        LanAccess {
+            segment: LanSegment::from_parts(
+                vec![SegmentNetwork {
+                    prefix: IpPrefix::new("192.0.2.0".parse().unwrap(), 24).unwrap(),
+                    interface: InterfaceId(7),
+                }],
+                vec![InterfaceId(7), InterfaceId(8)],
+            ),
+            private_networks,
+            ipv6_multicast: false,
+        }
+    }
+
+    fn lan_plan(private_networks: bool) -> RoutingPlan {
+        RoutingPlan {
+            scope: ProtectionScope::AllTraffic,
+            allow_lan: true,
+            lan: lan(private_networks),
+            lockdown: false,
+        }
+    }
+
     #[test]
     fn lan_dns_and_tunnel_have_the_required_priority() {
-        let bootstrap = BootstrapPolicy::from_plan(
-            &RoutingPlan {
-                scope: ProtectionScope::AllTraffic,
-                allow_lan: true,
-                lockdown: false,
-            },
-            &[Path::new(r"C:\sing-box.exe")],
-        );
+        let bootstrap =
+            BootstrapPolicy::from_plan(&lan_plan(true), &[Path::new(r"C:\sing-box.exe")]);
         let authorization = tunnel_authorization(123, false);
         let rules: Vec<_> = bootstrap.rules.iter().chain(&authorization).collect();
 
@@ -476,14 +613,9 @@ pub(super) mod tests {
                 decide(&rules, [172, 19, 0, 2], protocol, 53, 123),
                 Action::Allow
             );
-            assert_eq!(
-                decide(&rules, [172, 19, 0, 2], protocol, 53, 999),
-                Action::Block
-            );
-            assert_eq!(
-                decide(&rules, [192, 168, 3, 1], protocol, 53, 999),
-                Action::Block
-            );
+            for destination in [[172, 19, 0, 2], [192, 168, 3, 1], [192, 0, 2, 1]] {
+                assert_eq!(decide(&rules, destination, protocol, 53, 7), Action::Block);
+            }
         }
         assert_eq!(decide(&rules, [192, 168, 3, 1], 6, 80, 999), Action::Allow);
         assert_eq!(decide(&rules, [100, 64, 0, 1], 6, 80, 999), Action::Block);
@@ -498,7 +630,8 @@ pub(super) mod tests {
                     .any(|condition| matches!(condition, Condition::RemotePort(53)))
             })
             .collect();
-        assert_eq!(dns_blocks.len(), 12);
+        // The segment, five link-local networks and six private ranges.
+        assert_eq!(dns_blocks.len(), 2 * (1 + 5 + 6));
 
         for dns in dns_blocks {
             assert_eq!(dns.action, Action::Block);
@@ -514,7 +647,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn lan_subnets_are_exact_and_opt_in() {
+    fn the_segment_is_open_only_on_its_adapter_and_link_local_only_on_physical_ones() {
         let engine = Path::new(r"C:\sing-box.exe");
         let disabled = BootstrapPolicy::from_plan(&plan(), &[engine]);
         assert!(disabled.rules.iter().all(|rule| {
@@ -522,16 +655,51 @@ pub(super) mod tests {
                 .iter()
                 .all(|condition| !matches!(condition, Condition::RemoteSubnet(_)))
         }));
-
-        let enabled = BootstrapPolicy::from_plan(
+        let without_lan = BootstrapPolicy::from_plan(
             &RoutingPlan {
-                scope: ProtectionScope::AllTraffic,
-                allow_lan: true,
-                lockdown: false,
+                lan: lan(true),
+                ..plan()
             },
             &[engine],
         );
-        let permits: Vec<_> = enabled
+        assert_eq!(without_lan, disabled);
+
+        let enabled = BootstrapPolicy::from_plan(&lan_plan(false), &[engine]);
+        let rules: Vec<_> = enabled.rules.iter().collect();
+        for (destination, protocol, port, luid, action) in [
+            ([192, 0, 2, 10], 6, 7575, 7, Action::Allow),
+            ([192, 0, 2, 10], 6, 7575, 8, Action::Block),
+            ([192, 0, 2, 10], 6, 7575, 999, Action::Block),
+            ([169, 254, 1, 1], 6, 80, 8, Action::Allow),
+            ([224, 0, 0, 251], 17, 5353, 7, Action::Allow),
+            ([224, 0, 0, 251], 17, 5353, 999, Action::Block),
+            ([239, 255, 255, 250], 17, 1900, 8, Action::Allow),
+            ([255, 255, 255, 255], 17, 9, 7, Action::Allow),
+            ([239, 1, 2, 3], 17, 5000, 7, Action::Block),
+            ([192, 168, 3, 101], 6, 7575, 7, Action::Block),
+            ([10, 1, 2, 3], 6, 445, 7, Action::Block),
+        ] {
+            assert_eq!(
+                decide(&rules, destination, protocol, port, luid),
+                action,
+                "{destination:?} on {luid}"
+            );
+        }
+        // No LAN permit leaves the interface out.
+        assert!(enabled.rules.iter().all(|rule| {
+            rule.action == Action::Block
+                || !rule
+                    .conditions
+                    .iter()
+                    .any(|condition| matches!(condition, Condition::RemoteSubnet(_)))
+                || rule
+                    .conditions
+                    .iter()
+                    .any(|condition| matches!(condition, Condition::LocalInterface(_)))
+        }));
+
+        let private = BootstrapPolicy::from_plan(&lan_plan(true), &[engine]);
+        let permits: Vec<_> = private
             .rules
             .iter()
             .filter_map(|rule| match (rule.action, rule.conditions.as_slice()) {
@@ -539,9 +707,43 @@ pub(super) mod tests {
                 _ => None,
             })
             .collect();
-
         assert_eq!(permits, super::LAN_SUBNETS);
-        assert_eq!(enabled.rules.len(), 25);
+        let rules: Vec<_> = private.rules.iter().collect();
+        assert_eq!(
+            decide(&rules, [192, 168, 3, 101], 6, 7575, 999),
+            Action::Allow
+        );
+    }
+
+    #[test]
+    fn without_a_physical_adapter_link_local_stays_closed() {
+        let plan = RoutingPlan {
+            lan: LanAccess::default(),
+            ..lan_plan(false)
+        };
+        let policy = BootstrapPolicy::from_plan(&plan, &[Path::new(r"C:\sing-box.exe")]);
+        assert!(policy.rules.iter().all(|rule| {
+            rule.action == Action::Block
+                || !rule
+                    .conditions
+                    .iter()
+                    .any(|condition| matches!(condition, Condition::RemoteSubnet(_)))
+        }));
+    }
+
+    #[test]
+    fn ipv6_link_local_multicast_needs_an_ipv6_tunnel() {
+        let multicast = Condition::RemoteSubnet(rosetun_config::LINK_LOCAL_V6[1].into());
+        let has = |ipv6_multicast| {
+            let mut plan = lan_plan(false);
+            plan.lan.ipv6_multicast = ipv6_multicast;
+            BootstrapPolicy::from_plan(&plan, &[Path::new(r"C:\sing-box.exe")])
+                .rules
+                .iter()
+                .any(|rule| rule.action == Action::Allow && rule.conditions.contains(&multicast))
+        };
+        assert!(!has(false));
+        assert!(has(true));
     }
 
     #[test]
@@ -551,6 +753,7 @@ pub(super) mod tests {
             &RoutingPlan {
                 scope: ProtectionScope::DnsOnly,
                 allow_lan: false,
+                lan: Default::default(),
                 lockdown: false,
             },
             &[engine],
@@ -625,6 +828,7 @@ pub(super) mod tests {
         let plan = RoutingPlan {
             scope: ProtectionScope::DnsOnly,
             allow_lan: false,
+            lan: Default::default(),
             lockdown: false,
         };
         let engine = Path::new(r"C:\sing-box.exe");
@@ -632,6 +836,7 @@ pub(super) mod tests {
         let enabled = BootstrapPolicy::from_plan(
             &RoutingPlan {
                 allow_lan: true,
+                lan: Default::default(),
                 ..plan
             },
             &[engine],

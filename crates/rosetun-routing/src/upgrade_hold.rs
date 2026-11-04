@@ -82,9 +82,13 @@ pub fn running_kill_switch() -> Result<Option<KillSwitch>, RoutingError> {
     crate::platform::session_filters().map(|filters| kill_switch_of(&filters))
 }
 
-/// Writes Lockdown's set with the hold's marker, in one transaction.
-pub fn place(allow_lan: bool, apps: &LockdownApps) -> Result<LockdownStatus, RoutingError> {
-    crate::platform::hold_place(allow_lan, apps)
+/// Writes Lockdown's set with the hold's marker, in one transaction; `lan`
+/// when the running kill switch had "Local network" on.
+pub fn place(
+    lan: Option<&crate::lan::LanAccess>,
+    apps: &LockdownApps,
+) -> Result<LockdownStatus, RoutingError> {
+    crate::platform::hold_place(lan, apps)
 }
 
 /// Removes only the marker: Lockdown stays and is the user's from now on.
