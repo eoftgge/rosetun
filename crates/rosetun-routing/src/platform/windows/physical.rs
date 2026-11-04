@@ -26,7 +26,9 @@ impl ForwardTable {
         if status == 0 { Ok(table) } else { Err(status) }
     }
 
-    pub(super) fn routes(&self) -> &[windows_sys::Win32::NetworkManagement::IpHelper::MIB_IPFORWARD_ROW2] {
+    pub(super) fn routes(
+        &self,
+    ) -> &[windows_sys::Win32::NetworkManagement::IpHelper::MIB_IPFORWARD_ROW2] {
         // The allocation holds NumEntries consecutive rows starting at Table.
         unsafe { slice::from_raw_parts((*self.0).Table.as_ptr(), (*self.0).NumEntries as usize) }
     }

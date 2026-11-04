@@ -224,8 +224,7 @@ mod tests {
     fn a_row_gives_its_address_in_network_order() {
         let mut row = MIB_IPFORWARD_ROW2::default();
         row.DestinationPrefix.Prefix.si_family = AF_INET;
-        row.DestinationPrefix.Prefix.Ipv4.sin_addr.S_un.S_addr =
-            u32::from_ne_bytes([224, 0, 0, 0]);
+        row.DestinationPrefix.Prefix.Ipv4.sin_addr.S_un.S_addr = u32::from_ne_bytes([224, 0, 0, 0]);
         row.DestinationPrefix.PrefixLength = 4;
         row.Protocol = MIB_IPPROTO_LOCAL;
         row.InterfaceLuid.Value = TUNNEL;

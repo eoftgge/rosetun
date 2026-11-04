@@ -7757,8 +7757,8 @@ fn a_failure_to_release_discovery_routes_does_not_fail_the_connect() {
 #[test]
 fn without_local_network_the_discovery_routes_stay() {
     let (helper, _, _, _) = supervised_helper(true);
-    let helper = helper
-        .with_discovery_route_release(|_, _| panic!("the routes stay without Local network"));
+    let helper =
+        helper.with_discovery_route_release(|_, _| panic!("the routes stay without Local network"));
     let mut request = connect_request();
     request.settings.kill_switch = true;
     helper.connect(&request).expect("connect");
