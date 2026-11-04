@@ -33,7 +33,7 @@ Rosetun is a Windows VPN client powered by sing-box, which runs the tunnel, rule
 - **Connection through Xray** (Settings → Advanced): **Automatically** (default) uses Xray for VLESS servers with REALITY and sing-box for the rest; **Without Xray** connects to every server with sing-box alone; **Xray for all servers** sends every supported server except Hysteria2 through Xray. The server list marks servers that go through Xray.
 - **TLS fragmentation** (Settings → Advanced): splits the first packets to the server, which helps when a provider cuts the connection by its first packet. Servers that Xray carries go through Xray while it is on; the connection screen says whether it applies to the current server.
 - **DNS through the tunnel** via a configurable DNS-over-HTTPS resolver.
-- **Local network** (Settings → Connection): your router, printer and other devices on your network are reached directly, past the tunnel. Off by default; turn it off on public networks.
+- **Local network** (Settings → Connection): devices on your network and finding them, past the tunnel; see [Local network](#local-network). Off by default.
 - Change the server, rules or DNS while connected: Rosetun restarts the tunnel in a second or two without disconnecting, and the kill switch keeps traffic blocked meanwhile.
 - **Temporary rules:** add a rule only until disconnect; it applies at once and is never saved.
 - **Connections** on the Traffic tab: while connected, what your programs connect to right now, grouped by program with its icon, with the route each connection took and why (which rule, list or the default). Create a rule or close a connection from there. The list is kept only in memory for the Windows account that connected and is cleared on disconnect; it is never written to disk or to the log. Icons are read only from programs on local disks.
@@ -46,6 +46,23 @@ Rosetun is a Windows VPN client powered by sing-box, which runs the tunnel, rule
 - **New versions** are offered on the connection screen, in the tray menu and by one notification per version, until you update or skip that version. Nothing is downloaded or installed by itself.
 - Command line: `rosetun status`, `temporary`, `connect`, `apply`, `probe`, `delay`, `exits`, `select`, `sub add|update|list|remove`, `nodes`, `config`, `connections`, `connections close`, `xray auto|off|always`, `lan on|off`, `lockdown on|off`, `reset-firewall`, `disconnect`, `shutdown`.
 - **Start with Windows**, English and Russian interfaces, six colour themes and **Reduce motion**.
+
+## Local network
+
+**Local network** (Settings → Connection) lets programs reach the devices on the network this computer is connected to, past the tunnel, also with the kill switch on: a printer, a NAS, a game console, USB over IP (such as VirtualHere) and game streaming (such as Sunshine and Moonlight). Finding devices works too: mDNS, LLMNR, SSDP and broadcasts stay on the local network. Off by default; turn it off on public networks.
+
+- Only the networks the computer's own adapters are connected to are opened, each on its own adapter, plus link-local addresses (169.254.x.x). A connected network wider than /16 is not opened. When the computer moves to another network (another Wi-Fi, a new address from the router, waking from sleep), Rosetun follows it within a few seconds with a short reconnect; the kill switch stays on meanwhile.
+- Your router's DNS is not used: names are looked up through the VPN.
+- Local IPv6 addresses stay closed while the tunnel carries IPv4 only. Reach local devices by their IPv4 addresses.
+- **Private networks behind the router** (under Local network, off by default) also opens every private range (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 and IPv6 fc00::/7) on any adapter, as Local network did before: traffic to private addresses outside your network then goes around the VPN. A rule that sends such an address through the VPN still wins.
+- A device in another subnet than this computer (a laptop on the router's Wi-Fi while the computer sits in a different wired subnet, for example) is not on your network: put both in one subnet or turn on Private networks behind the router. To see which way Windows sends traffic to a device, run in PowerShell (with the device's address):
+
+  ```powershell
+  Find-NetRoute -RemoteIPAddress 192.0.2.10
+  ```
+
+  `InterfaceAlias` must be your Ethernet or Wi-Fi adapter, not `rosetun0`, and `IPAddress` this computer's address on that network.
+- With **Lockdown** on, the same networks are open while disconnected too, and devices on them can connect to this computer. `rosetun lockdown on --lan private` turns Lockdown on with private networks behind the router.
 
 ## Install
 
