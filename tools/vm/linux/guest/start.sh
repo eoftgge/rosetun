@@ -34,6 +34,13 @@ L3_START_REQUIRED=(guest/launch.sh guest/lib.sh guest/run-l3.sh guest/start.sh s
     artifacts/rosetun-helper-privileged artifacts/rosetun artifacts/sing-box artifacts/rosetun-helper.service
     artifacts/request-kill-switch.json artifacts/request-lan.json artifacts/request-dns-lock.json
     artifacts/provenance.json)
+l4_start_path_allowed() {
+    [[ $1 =~ ^(guest/(launch|lib|run-l4|start)\.sh|scenarios-l4\.tsv|job\.env|artifacts/(rosetun-helper-privileged|rosetun|sing-box|rosetun-(helper|lockdown)\.service|request-(kill-switch|lan|dns-lock)\.json|provenance\.json))$ ]]
+}
+L4_START_REQUIRED=(guest/launch.sh guest/lib.sh guest/run-l4.sh guest/start.sh scenarios-l4.tsv job.env
+    artifacts/rosetun-helper-privileged artifacts/rosetun artifacts/sing-box artifacts/rosetun-helper.service
+    artifacts/rosetun-lockdown.service artifacts/request-kill-switch.json artifacts/request-lan.json
+    artifacts/request-dns-lock.json artifacts/provenance.json)
 
 l2_start_root_only() {
     [ ! -L "$1" ] && [ "$(stat -c %u -- "$1")" -eq 0 ] && [ $((0$(stat -c %a -- "$1") & 022)) -eq 0 ]
@@ -56,10 +63,12 @@ l2_start_main() {
     [ -f "$run/manifest.sha256" ] && l2_start_root_only "$run/manifest.sha256" || die "the run's manifest is missing or not root-owned"
     [ "$(sha256sum -- "$run/manifest.sha256" | cut -d' ' -f1)" = "$manifest_hash" ] || die "the run's manifest is not the one the host computed"
 
-    # A stage that carries the L3 job is an L3 stage and must hold only its files.
+    # A stage that carries the L3 or L4 job is that stage and must hold only its files.
     local stage=l2 allowed=l2_start_path_allowed required=("${L2_START_REQUIRED[@]}")
     if grep -q '  guest/run-l3\.sh$' "$run/manifest.sha256"; then
         stage=l3 allowed=l3_start_path_allowed required=("${L3_START_REQUIRED[@]}")
+    elif grep -q '  guest/run-l4\.sh$' "$run/manifest.sha256"; then
+        stage=l4 allowed=l4_start_path_allowed required=("${L4_START_REQUIRED[@]}")
     fi
     local line path paths=()
     while IFS= read -r line; do
@@ -99,7 +108,7 @@ l2_start_main() {
     [ "$RUN_ID" = "$run_id" ] || die "job.env belongs to another run"
     [[ $JOB_TIMEOUT_SECONDS =~ ^[0-9]{2,5}$ ]] || die "invalid job time limit"
 
-    # The L3 cleanup stops the real service, which may take its own 45 s.
+    # The L3 and L4 cleanups stop the real service, which may take its own 45 s.
     local unit="rosetun-l2-$run_id" job="$run/guest/run-$stage.sh"
     systemd-run --quiet --collect --unit="$unit" \
         --description="Rosetun Linux ${stage^^} stand run $run_id (test infrastructure)" \

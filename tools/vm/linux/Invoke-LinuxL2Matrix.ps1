@@ -40,7 +40,9 @@ param(
     [Parameter(ParameterSetName = 'Run', Mandatory)][switch]$Run,
     [Parameter(ParameterSetName = 'Run')][string]$Checkpoint,
     # L3: the real service with its nftables kill switch, against the host's test node.
-    [Parameter(ParameterSetName = 'Run')][ValidateSet('L2', 'L3')][string]$Stage = 'L2',
+    # L4: Lockdown on the real service, with two reboots of the guest. The
+    # parameters marked "L3 only" apply to L4 as well.
+    [Parameter(ParameterSetName = 'Run')][ValidateSet('L2', 'L3', 'L4')][string]$Stage = 'L2',
     # L3 only: the Windows sing-box.exe that runs the test node on the host.
     [Parameter(ParameterSetName = 'Run')][string]$SingBoxPath,
     # L3 only: the Linux sing-box binary installed in the guest (the version the
@@ -315,7 +317,7 @@ function Invoke-StandCollect {
 
     $recordedStage = [string](Get-RosetunLinuxMember -Object $record -Name 'stage')
     if ([string]::IsNullOrEmpty($recordedStage)) { $recordedStage = 'L2' }
-    if ($recordedStage -notin @('L2', 'L3')) { throw "The stage record names an unknown stage '$recordedStage'." }
+    if ($recordedStage -notin @('L2', 'L3', 'L4')) { throw "The stage record names an unknown stage '$recordedStage'." }
     $scenarios = @(Get-RosetunLinuxScenarios -Stage $recordedStage)
     $waitClock = [Diagnostics.Stopwatch]::StartNew()
     $lastLine = ''
@@ -344,7 +346,9 @@ function Invoke-StandCollect {
         Start-Sleep -Seconds 10
     } while ($true)
 
-    $judgement = Test-RosetunLinuxReport -Report $report -Status $status -Stage $stageInfo -Scenarios $scenarios
+    $planned = (Get-RosetunLinuxStageProfile $recordedStage)['Reboots']
+    $judgement = Test-RosetunLinuxReport -Report $report -Status $status -Stage $stageInfo -Scenarios $scenarios `
+        -PlannedReboots ([int]$(if ($null -eq $planned) { 0 } else { $planned }))
     $text = Format-RosetunLinuxReport -Judgement $judgement -Stage $stageInfo
     $reportPath = Join-Path $runLog 'report.txt'
     [IO.File]::WriteAllText($reportPath, $text, [Text.UTF8Encoding]::new($false))
@@ -410,7 +414,7 @@ if ($mode -eq 'Run') {
     $extraFiles = [ordered]@{}
     $extraJob = [ordered]@{}
     $nodeStarted = $false
-    if ($Stage -eq 'L3') {
+    if ($Stage -in @('L3', 'L4')) {
         # Everything that can fail fast, before the build.
         if (-not $SingBoxLinuxPath) { throw '-Stage L3 needs -SingBoxLinuxPath: the Linux sing-box binary for the guest (see the stand guide, L3).' }
         $elf = Test-RosetunLinuxElf $SingBoxLinuxPath
@@ -426,7 +430,8 @@ if ($mode -eq 'Run') {
         $hostAddress = @(Get-RosetunLinuxHostSwitchSubnets | Select-Object -First 1)
         if ($hostAddress.Count -eq 0) { throw "The host has no IPv4 address on 'vEthernet (Default Switch)'." }
         $hostAddress = $hostAddress[0].Address
-        if (-not $PSBoundParameters.ContainsKey('JobTimeoutSeconds')) { $JobTimeoutSeconds = 1800 }
+        # L4: two reboots, and the phases after them under the same limit each.
+        if (-not $PSBoundParameters.ContainsKey('JobTimeoutSeconds')) { $JobTimeoutSeconds = if ($Stage -eq 'L4') { 3000 } else { 1800 } }
         # The test node of the Windows matrices, on the host's Default Switch address.
         Import-Module (Join-Path $PSScriptRoot '..\windows\RosetunVm.psm1') -Force
         $nodePort = Get-RosetunTestNodePort
@@ -439,7 +444,7 @@ if ($mode -eq 'Run') {
 
     try {
         $build = Invoke-StandBuild -RunId $newRunId -BuildStage $Stage
-        if ($Stage -eq 'L3') {
+        if ($Stage -in @('L3', 'L4')) {
             if (-not (Get-NetTCPConnection -LocalPort $nodePort -State Listen -ErrorAction SilentlyContinue)) {
                 Write-Step "Starting the test node on $($hostAddress):$nodePort"
                 $nodeArguments = @{ SingBoxPath = (Resolve-Path -LiteralPath $SingBoxPath).ProviderPath }
@@ -455,6 +460,9 @@ if ($mode -eq 'Run') {
             $extraFiles = New-RosetunLinuxL3Requests -RequestPath $RequestPath -HostAddress $hostAddress -NodePort $nodePort -OutDir $requestDir
             $extraFiles['sing-box'] = (Resolve-Path -LiteralPath $SingBoxLinuxPath).ProviderPath
             $extraFiles['rosetun-helper.service'] = Join-Path $RepoRoot 'packaging\linux\rosetun-helper.service'
+            if ($Stage -eq 'L4') {
+                $extraFiles['rosetun-lockdown.service'] = Join-Path $RepoRoot 'packaging\linux\rosetun-lockdown.service'
+            }
         }
         Write-Step "Restoring checkpoint '$($stand.Checkpoint)'"
         Restore-RosetunLinuxCheckpoint -VmName $stand.VmName -CheckpointName $stand.Checkpoint
@@ -466,7 +474,7 @@ if ($mode -eq 'Run') {
         Write-Step "Waiting for the job (at most $(Format-RosetunLinuxElapsed ([TimeSpan]::FromSeconds($wait))))"
         $verdict = Invoke-StandCollect -RunId $newRunId -WaitSeconds $wait -Progress
         Write-Step "Result: $verdict"
-        if ($Stage -eq 'L3') {
+        if ($Stage -in @('L3', 'L4')) {
             # The restore below removes the guest's copy; the journal explains a failure.
             try {
                 $journal = Read-RosetunLinuxGuestFile -Target (Wait-StandTarget -TimeoutSeconds 60) -Path "$guestBase/$newRunId/report/helper-journal.txt"
@@ -480,7 +488,7 @@ if ($mode -eq 'Run') {
         }
     }
     finally {
-        if ($Stage -eq 'L3') {
+        if ($Stage -in @('L3', 'L4')) {
             # The service must never stay in a checkpoint or a running guest.
             if (Test-Path -LiteralPath (Join-Path $runLog 'stage.json')) {
                 Write-Step "Restoring checkpoint '$($stand.Checkpoint)' after the run"

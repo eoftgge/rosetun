@@ -1,0 +1,25 @@
+id	required	evidence	group	detail	title
+preflight.identity	yes	infrastructure	preflight	-	the guest is the designated test machine on the expected boot, x86_64, with systemd
+preflight.accounts	yes	infrastructure	preflight	-	group rosetun and two distinct ordinary accounts exist, both in the group, neither an administrator
+preflight.no-foreign-service	yes	infrastructure	preflight	-	no Rosetun unit, helper process, installed files, nftables table rosetun, lingering account or peer namespace exist
+preflight.tools	yes	infrastructure	preflight	-	/usr/sbin/nft, curl with tftp, systemd-run, the user bus (dbus-user-session), sshd and cgroup v2 are present
+preflight.baseline	yes	infrastructure	preflight	-	without Rosetun the probe address answers HTTPS on the physical interface
+install.service	yes	real-service	install	-	the helper runs as the systemd unit, rosetun-lockdown.service is enabled and the helper offers Lockdown
+lockdown.denied	yes	real-service	lockdown	-	an ordinary account's rosetun lockdown on is refused with the sudo command and changes nothing
+lockdown.direct-blocked	yes	real-service	lockdown	-	sudo rosetun lockdown on: status on, a root-only record, an input chain, HTTPS to the probe refused on the physical interface and by the route
+lockdown.gui-scope	yes	real-service	lockdown	-	without a session a program in the first account's rosetun-gui.scope gets HTTPS and UDP 53 out of the physical interface
+lockdown.cli-scope	yes	real-service	lockdown	-	without a session a program in the first account's rosetun-cli.scope gets HTTPS and UDP 53 out of the physical interface
+lockdown.other-process	yes	real-service	lockdown	-	the same account outside a scope, and in a scope of another name, is refused HTTPS and UDP 53
+inbound.closed	yes	real-service	inbound	-	without the local network a peer on a link-local veth does not reach the guest's sshd
+inbound.lan-open	yes	real-service	inbound	-	with the local network the peer reaches sshd while HTTPS to the probe stays refused
+lockdown.session	yes	real-service	session	-	a connect without the kill switch under Lockdown gets the kill switch: the tunnel answers, the physical interface is refused
+lockdown.session-scope-closed	yes	real-service	session	-	during the session the GUI's scope is refused HTTPS on the physical interface
+lockdown.after-session	yes	real-service	session	-	after the disconnect the network stays closed and the GUI's scope gets out again
+crash.stopped	yes	real-service	crash	-	systemctl stop leaves the table and the network closed; the service starts again
+crash.killed	yes	real-service	crash	-	kill -KILL of the helper leaves the table and the network closed; the restarted helper reports Lockdown, not the crash hold, and permits the CLI's scope
+exit.denied-without-root	yes	real-service	exit	-	an ordinary account's rosetun lockdown off is refused and Lockdown stays
+reboot.table-before-network	yes	real-service	reboot	-	after a reboot the table existed before network-pre.target, and rosetun-lockdown.service finished before every network manager started
+reboot.closed-before-service	yes	real-service	reboot	-	after the reboot, with the helper not started, the boot set names no cgroup and HTTPS is refused on the physical interface and by the route
+reboot.service-completes	yes	real-service	reboot	-	the started helper reports Lockdown, adds the engines' permit, and a kill-switch connect answers through the tunnel
+exit.reset-firewall	yes	real-service	exit	-	sudo rosetun reset-firewall removes the table and the record, the helper reports Lockdown off, the direct path answers
+reboot.without-record	yes	real-service	reboot	-	after a second reboot without the record the boot unit says Lockdown is off, no table appears and the direct path answers

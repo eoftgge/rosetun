@@ -81,7 +81,7 @@ runs, the job goes on in the guest; reconnect with
 
 | File | Purpose |
 |---|---|
-| `Invoke-LinuxL2Matrix.ps1` | Host entry point: `-Run` (L2), `-Run -Stage L3`, and the single steps `-InitKnownHosts`, `-PrepareLauncher`, stage (default), `-Collect` |
+| `Invoke-LinuxL2Matrix.ps1` | Host entry point: `-Run` (L2), `-Run -Stage L3`, `-Run -Stage L4`, and the single steps `-InitKnownHosts`, `-PrepareLauncher`, stage (default), `-Collect` |
 | `RosetunLinuxVm.psm1` | Host module: settings, SSH/SCP with a pinned host key, VM identity, the WSL build, artifact checks, report verdict |
 | `stand.example.psd1` | The settings with documentation values; copy it to `stand.local.psd1` (git-ignored) |
 | `build-in-wsl.sh` | Runs in WSL for the host: updates the stand's clone to `HEAD` and calls `build-artifacts.sh` |
@@ -91,7 +91,8 @@ runs, the job goes on in the guest; reconnect with
 | `guest/start.sh` | Checks the run directory and starts the autonomous job of its stage |
 | `guest/run-l2.sh`, `guest/lib.sh` | The L2 job itself: scenarios, cleanup, report |
 | `guest/run-l3.sh` | The L3 job: installs the service, kill switch, DNS lock, IPv6, inbound and forwarding scenarios (a peer network namespace), crashes, cleanup, report |
-| `scenarios.tsv`, `scenarios-l3.tsv` | The scenario lists, shared by the guest and the host |
+| `guest/run-l4.sh` | The L4 job: Lockdown on the service, the scopes, inbound, crashes, two reboots (with its own early and resume units), reset-firewall, cleanup, report |
+| `scenarios.tsv`, `scenarios-l3.tsv`, `scenarios-l4.tsv` | The scenario lists, shared by the guest and the host |
 | `tests/` | Unprivileged self-tests of the stand (not a VM run) |
 
 Reports go to `tools/vm/linux/logs/<run id>/` (git-ignored): `stage.json`,
@@ -625,16 +626,81 @@ Default Switch gives the guest no IPv6 router (`ipv6.neighbor` is then
 skipped); a session from the host itself (the peer namespace stands in for it,
 because the host opens a new SSH connection for each step); an outgoing
 connection opened before the kill switch while conntrack did not yet track it;
-Lockdown (not offered on Linux); a
-reboot or a power cut with the table in place; the GUI. The cleanup stops the
-service, which removes its table; a table still there after the stop is a
-cleanup ERROR and is left for the checkpoint restore, never deleted by the
+Lockdown (L4 below); a power cut with the table in place; the GUI. The cleanup
+stops the service, which removes its table; a table still there after the stop
+is a cleanup ERROR and is left for the checkpoint restore, never deleted by the
 stand.
+
+## L4: Lockdown on the real service
+
+The same command as L3 with `-Stage L4`, and the same parameters:
+
+```powershell
+.\tools\vm\linux\Invoke-LinuxL2Matrix.ps1 -Run -Stage L4 -SingBoxPath .\tools\sing-box.exe -SingBoxLinuxPath .\target\sing-box-linux\sing-box
+```
+
+**Before the first L4 run** the clean checkpoint also needs the user bus, which
+`systemd-run --user --scope` uses: restore `l2-clean`, start the VM, run
+`sudo apt-get install --no-install-recommends dbus-user-session`, then make the
+checkpoint again from the powered-off VM. `openssh-server` is there already.
+
+The run restores `l2-clean` before it starts and after it has read the report,
+as L3. The job's limit is 50 minutes (`-JobTimeoutSeconds`, default 3000 for
+L4): each phase gets it, and the host waits that long in all.
+
+**The guest reboots twice.** Phase one runs from the transient unit like L3 and
+ends with `systemctl reboot`. Two stand units carry on, both named
+`rosetun-l2-*` (so no second run starts meanwhile) and removed by the cleanup:
+`rosetun-l2-early.service` runs in early boot after `rosetun-lockdown.service`
+and before `network-pre.target` and notes whether the table is there;
+`rosetun-l2-resume.service` runs the phase after each reboot. The report lists
+every boot in `guest.boot_ids`; the host accepts at most the two planned
+reboots, the staged boot first. Status `rebooting` while the guest is down is
+not a failure: the host keeps polling.
+
+**SSH.** The host's SSH reaches the guest from the Default Switch, a private
+network: Lockdown without "Local network" cuts it off. The job never needs it,
+the host only polls and keeps polling through a failed connection. The window
+without the local network is short (`lockdown.direct-blocked` to
+`inbound.closed`); from `inbound.lan-open` on Lockdown keeps the local network,
+also across the first reboot. The cleanup runs `rosetun-helper-privileged
+--reset-firewall` before it closes the report, so the host can always read it
+in the end. If the guest stays out of reach, the host's wait runs out and its
+checkpoint restore removes everything.
+
+| Scenario | Proof |
+|---|---|
+| `preflight.*` | as L3, plus `systemd-run`, `dbus-user-session`, `sshd`; no lingering first account, no stand unit, no peer |
+| `install.service` | helper, CLI (also as `/usr/lib/rosetun/rosetun-gui`, so the GUI's permit exists), `rosetun-lockdown.service` enabled, the first account lingers (its user manager and bus run), the helper offers Lockdown and it is off |
+| `lockdown.denied` | the first account's `rosetun lockdown on` fails with "only root", nothing changes |
+| `lockdown.direct-blocked` | `rosetun lockdown on --lan off` as root: status `lockdown: on`, `/var/lib/rosetun/lockdown` root's with mode 600, an input chain; HTTPS to the probe refused on the physical interface and by the route |
+| `lockdown.gui-scope`, `lockdown.cli-scope` | in the first account's `rosetun-gui.scope` / `rosetun-cli.scope` (`systemd-run --user --scope`), `rosetun status` (the hello makes the service look for the scope), then HTTPS to the probe and a UDP 53 datagram leave the physical interface |
+| `lockdown.other-process` | the same account outside a scope, and in `rosetun-other.scope`, is refused both |
+| `inbound.closed` | a peer namespace on a veth pair with link-local addresses (169.254.77.1 guest, .2 peer; link-local is part of "Local network") does not get sshd's banner |
+| `inbound.lan-open` | after `rosetun lockdown on --lan on` it does; HTTPS to the probe stays refused |
+| `lockdown.session` | a connect without the kill switch (the DNS-lock request) gets it from Lockdown: the tunnel answers, the physical interface is refused |
+| `lockdown.session-scope-closed` | during the session the GUI's scope is refused on the physical interface |
+| `lockdown.after-session` | after the disconnect the network stays closed and the GUI's scope gets out again |
+| `crash.stopped` | `systemctl stop`: the table stays, the direct path refused; started again |
+| `crash.killed` | `kill -KILL` of the helper: the table stays, the direct path refused; the restarted helper says `lockdown: on`, not `held closed`, and the CLI's scope gets out |
+| `exit.denied-without-root` | the first account's `rosetun lockdown off` is refused, Lockdown stays |
+| `reboot.table-before-network` | after the first reboot (helper disabled beforehand): the early unit saw the table; `rosetun-lockdown.service` finished (`ExecMainExitTimestampMonotonic`) before NetworkManager, systemd-networkd or networking started, whichever ran |
+| `reboot.closed-before-service` | the helper does not run, the table names no cgroup, HTTPS refused on the physical interface and by the route |
+| `reboot.service-completes` | the helper started: `lockdown: on`, the engines' permit in the table, a kill-switch connect answers through the tunnel |
+| `exit.reset-firewall` | `sudo rosetun reset-firewall`: no table, no record, `lockdown: off`, the direct path answers |
+| `reboot.without-record` | after the second reboot: the boot unit said "Lockdown is off", the early unit saw no table, none is there, the direct path answers |
+
+What it does not prove: the GUI itself and the CLI's own way into its scope
+(the scopes are made by `systemd-run` directly, the programs' re-run is not
+exercised); the polkit prompt (`pkexec` needs a desktop session's agent); a
+power cut; a desktop login before the network (the guest has no display
+manager); Lockdown over IPv6 beyond what the kill switch's scenarios show.
 
 ## Next stages (not implemented here)
 
 Each needs its own stand extension and a decision by the owner first:
 
-- Lockdown on Linux; reboot and power-cut scenarios with the table in place.
+- Power-cut scenarios with the table in place; the GUI and polkit on a
+  desktop guest.
 - The missing-group case on a clean VM.
 - The `.deb` installer and desktop integration.

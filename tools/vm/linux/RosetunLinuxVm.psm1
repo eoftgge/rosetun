@@ -12,13 +12,14 @@ $script:RunIdPattern = '^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$'
 $script:SafeValuePattern = '^[A-Za-z0-9._:@/+=-]+$'
 $script:AccountPattern = '^[a-z_][a-z0-9_-]{0,31}$'
 $script:ArtifactNames = @('l2_transport_fixture', 'rosetun_helper_privileged_tests', 'rosetun_ipc_tests')
-# What each stage builds, stages and judges. L3 installs the real service and
-# runs only through -Run -Stage L3.
+# What each stage builds, stages and judges. L3 and L4 install the real service
+# and run only through -Run -Stage L3 or L4. L4 (Lockdown) reboots the guest twice.
 $script:StageProfiles = @{
     L2 = @{ Artifacts = $script:ArtifactNames; Scripts = @('launch.sh', 'lib.sh', 'run-l2.sh', 'start.sh'); Scenarios = 'scenarios.tsv' }
     L3 = @{ Artifacts = @('rosetun-helper-privileged', 'rosetun'); Scripts = @('launch.sh', 'lib.sh', 'run-l3.sh', 'start.sh'); Scenarios = 'scenarios-l3.tsv' }
+    L4 = @{ Artifacts = @('rosetun-helper-privileged', 'rosetun'); Scripts = @('launch.sh', 'lib.sh', 'run-l4.sh', 'start.sh'); Scenarios = 'scenarios-l4.tsv'; Reboots = 2 }
 }
-# The L3 stage's requests, made from the owner's request on the host.
+# The L3 and L4 stages' requests, made from the owner's request on the host.
 $script:L3Requests = @('request-kill-switch.json', 'request-lan.json', 'request-dns-lock.json')
 $script:ResultNames = @('PASS', 'FAIL', 'SKIP', 'ERROR')
 # The Windows test VM and its credential file are never a Linux stand.
@@ -37,7 +38,7 @@ function Get-RosetunLinuxRoot {
 }
 
 function Get-RosetunLinuxStageProfile {
-    param([ValidateSet('L2', 'L3')][string]$Stage = 'L2')
+    param([ValidateSet('L2', 'L3', 'L4')][string]$Stage = 'L2')
     $script:StageProfiles[$Stage]
 }
 
@@ -688,7 +689,7 @@ function Invoke-RosetunLinuxBuild {
         [scriptblock]$Heartbeat,
         [int]$HeartbeatSeconds = 30,
         [int]$TimeoutSeconds = 3600,
-        [ValidateSet('L2', 'L3')][string]$Stage = 'L2'
+        [ValidateSet('L2', 'L3', 'L4')][string]$Stage = 'L2'
     )
     Assert-RosetunLinuxCleanSource -Source $Source
     if ($WslDistro -notmatch '^[A-Za-z0-9._-]+$') { throw "Unsafe WSL distribution name '$WslDistro'." }
@@ -701,7 +702,7 @@ function Invoke-RosetunLinuxBuild {
     $repoWsl = ConvertTo-RosetunLinuxWslPath -WslDistro $WslDistro -Path $RepoRoot
     $outWsl = ConvertTo-RosetunLinuxWslPath -WslDistro $WslDistro -Path $outRoot
     $arguments = @('-d', $WslDistro, '--cd', '~', '--exec', 'bash', "$repoWsl/tools/vm/linux/build-in-wsl.sh", $repoWsl, $Source.Sha, "$outWsl/$name")
-    if ($Stage -eq 'L3') { $arguments += '--l3' }
+    if ($Stage -in @('L3', 'L4')) { $arguments += '--l3' }
     $result = Invoke-RosetunLinuxProcess -FilePath (Find-RosetunLinuxWsl) -ArgumentList $arguments -TimeoutSeconds $TimeoutSeconds `
         -Heartbeat $Heartbeat -HeartbeatSeconds $HeartbeatSeconds -Environment $script:WslEnvironment
     if ($result.ExitCode -ne 0) {
@@ -745,7 +746,7 @@ function Get-RosetunLinuxArtifacts {
     param(
         [Parameter(Mandatory)][string]$ArtifactDir,
         [Parameter(Mandatory)]$Source,
-        [ValidateSet('L2', 'L3')][string]$Stage = 'L2'
+        [ValidateSet('L2', 'L3', 'L4')][string]$Stage = 'L2'
     )
     if (-not (Test-Path -LiteralPath $ArtifactDir -PathType Container)) { throw "Artifact directory '$ArtifactDir' does not exist." }
     $provenancePath = Join-Path $ArtifactDir 'provenance.json'
@@ -791,7 +792,7 @@ function Get-RosetunLinuxArtifacts {
 # ------------------------------------------------------------------ scenarios and staging
 
 function Get-RosetunLinuxScenarios {
-    param([ValidateSet('L2', 'L3')][string]$Stage = 'L2', [string]$Path)
+    param([ValidateSet('L2', 'L3', 'L4')][string]$Stage = 'L2', [string]$Path)
     if (-not $Path) { $Path = Join-Path (Get-RosetunLinuxRoot) (Get-RosetunLinuxStageProfile $Stage).Scenarios }
     $lines = @(Get-Content -LiteralPath $Path | Where-Object { $_.Trim() -ne '' })
     if ($lines.Count -lt 2 -or $lines[0] -ne "id`trequired`tevidence`tgroup`tdetail`ttitle") {
@@ -862,7 +863,7 @@ function New-RosetunLinuxStage {
         [Parameter(Mandatory)][string]$RunId,
         [Parameter(Mandatory)][string]$ArtifactDir,
         [Parameter(Mandatory)][string]$JobEnv,
-        [ValidateSet('L2', 'L3')][string]$Stage = 'L2',
+        [ValidateSet('L2', 'L3', 'L4')][string]$Stage = 'L2',
         # Files staged under artifacts/ besides the build, by published name.
         [Collections.IDictionary]$Extra = [ordered]@{}
     )
@@ -1120,7 +1121,10 @@ function Test-RosetunLinuxReport {
         $Report,
         $Status,
         [Parameter(Mandatory)]$Stage,
-        [Parameter(Mandatory)][object[]]$Scenarios
+        [Parameter(Mandatory)][object[]]$Scenarios,
+        # L4 reboots the guest on purpose: at most this many times, each boot
+        # listed in the report's guest.boot_ids, the first the staged one.
+        [ValidateRange(0, 8)][int]$PlannedReboots = 0
     )
     $member = { param($object, $name) Get-RosetunLinuxMember -Object $object -Name $name }
     $problems = [System.Collections.Generic.List[string]]::new()
@@ -1143,8 +1147,21 @@ function Test-RosetunLinuxReport {
     if ($null -eq $guest -or (& $member $guest 'boot_id') -ne $Stage.BootId) {
         $problems.Add('the guest boot id differs from the one recorded at staging; the guest restarted')
     }
-    elseif ((& $member $guest 'boot_id_at_end') -ne $Stage.BootId) {
-        $problems.Add('the guest rebooted during the run')
+    elseif ($PlannedReboots -eq 0) {
+        if ((& $member $guest 'boot_id_at_end') -ne $Stage.BootId) { $problems.Add('the guest rebooted during the run') }
+    }
+    else {
+        $boots = @(& $member $guest 'boot_ids' | Where-Object { $null -ne $_ } | ForEach-Object { [string]$_ })
+        $distinct = @($boots | Select-Object -Unique)
+        if ($boots.Count -eq 0 -or $boots[0] -ne $Stage.BootId) {
+            $problems.Add('the report does not list the staged boot first')
+        }
+        elseif ($boots.Count -gt $PlannedReboots + 1 -or $distinct.Count -ne $boots.Count) {
+            $problems.Add("the guest booted $($boots.Count - 1) times during the run; the stage plans $PlannedReboots reboots")
+        }
+        elseif ((& $member $guest 'boot_id_at_end') -ne $boots[-1]) {
+            $problems.Add('the guest rebooted outside the planned reboots')
+        }
     }
 
     $byId = @{}

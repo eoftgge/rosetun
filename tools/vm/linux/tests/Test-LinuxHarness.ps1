@@ -70,6 +70,37 @@ $rebootedEnd.guest.boot_id_at_end = '99999999-2222-3333-4444-555555555555'
 $judgement = Test-RosetunLinuxReport -Report $rebootedEnd -Status $finished -Stage $stage -Scenarios $scenarios
 Assert-That 'a reboot during the run is an error' ($judgement.Verdict -eq 'ERROR')
 
+# --- L4 reboots on purpose: listed boots, the staged one first, no more than planned
+$second = '22222222-2222-3333-4444-555555555555'
+$third = '33333333-2222-3333-4444-555555555555'
+function New-RebootedReport([string[]]$Boots, [string]$AtEnd) {
+    $report = New-GoodReport
+    $report.guest = [pscustomobject]@{ boot_id = $bootId; boot_id_at_end = $AtEnd; boot_ids = @($Boots) }
+    $report
+}
+$judgement = Test-RosetunLinuxReport -Report (New-RebootedReport @($bootId, $second, $third) $third) -Status $finished -Stage $stage -Scenarios $scenarios -PlannedReboots 2
+Assert-That 'planned reboots listed in order pass' ($judgement.Verdict -eq 'PASS') ($judgement.Problems -join '; ')
+$judgement = Test-RosetunLinuxReport -Report (New-RebootedReport @($bootId, $second) $second) -Status $finished -Stage $stage -Scenarios $scenarios -PlannedReboots 2
+Assert-That 'a run that ended before its last reboot is judged by its scenarios' ($judgement.Verdict -eq 'PASS') ($judgement.Problems -join '; ')
+$judgement = Test-RosetunLinuxReport -Report (New-RebootedReport @($bootId, $second, $third, '44444444-2222-3333-4444-555555555555') '44444444-2222-3333-4444-555555555555') -Status $finished -Stage $stage -Scenarios $scenarios -PlannedReboots 2
+Assert-That 'more boots than planned are an error' ($judgement.Verdict -eq 'ERROR')
+$judgement = Test-RosetunLinuxReport -Report (New-RebootedReport @($second, $third) $third) -Status $finished -Stage $stage -Scenarios $scenarios -PlannedReboots 2
+Assert-That 'a boot list without the staged boot first is an error' ($judgement.Verdict -eq 'ERROR')
+$judgement = Test-RosetunLinuxReport -Report (New-RebootedReport @($bootId, $second) $third) -Status $finished -Stage $stage -Scenarios $scenarios -PlannedReboots 2
+Assert-That 'a boot outside the list is an error' ($judgement.Verdict -eq 'ERROR')
+$judgement = Test-RosetunLinuxReport -Report (New-RebootedReport @($bootId, $second, $second) $second) -Status $finished -Stage $stage -Scenarios $scenarios -PlannedReboots 2
+Assert-That 'a boot listed twice is an error' ($judgement.Verdict -eq 'ERROR')
+$judgement = Test-RosetunLinuxReport -Report (New-RebootedReport @($bootId, $second) $second) -Status $finished -Stage $stage -Scenarios $scenarios
+Assert-That 'without planned reboots any reboot is an error' ($judgement.Verdict -eq 'ERROR')
+
+# --- the L4 stage: its own scenarios, two reboots, the L3 build
+$l4 = Get-RosetunLinuxStageProfile 'L4'
+Assert-That 'L4 plans two reboots' ($l4['Reboots'] -eq 2)
+Assert-That 'L4 runs its own job' ($l4.Scripts -contains 'run-l4.sh' -and $l4.Scripts -notcontains 'run-l3.sh')
+$l4Scenarios = @(Get-RosetunLinuxScenarios -Stage 'L4')
+Assert-That 'L4 scenarios load' ($l4Scenarios.Count -ge 20) "$($l4Scenarios.Count)"
+Assert-That 'every L4 scenario is required' (@($l4Scenarios | Where-Object { -not $_.Required }).Count -eq 0)
+
 # --- required scenarios cannot be dropped, skipped or invented
 $dropped = New-GoodReport
 $dropped.scenarios = @($dropped.scenarios | Where-Object id -NE 'stale.restart-refused')
