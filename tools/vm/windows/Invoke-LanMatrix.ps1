@@ -218,10 +218,21 @@ function Get-RosetunGuestDiscoverySource {
     })
 }
 
+function Write-RosetunGuestPathCache {
+    # Prints what Windows remembers of $Address per adapter, for sending back.
+    param([Parameter(Mandatory)][string]$Address)
+    $lines = @(Invoke-RosetunGuest -ScriptBlock {
+        param($address)
+        @(netsh.exe interface ipv4 show destinationcache "address=$address" |
+            Where-Object { $_ -match '\S' })
+    } -ArgumentList $Address)
+    foreach ($line in $lines) { Write-Host "PATH $Address $line" }
+}
+
 function Test-RosetunGuestDiscoveryRoute {
     # One check that the routes are there or gone, and where the guest's stack
-    # now sends discovery. With the routes on the tunnel only the routes are
-    # checked: what the stack picks then is recorded for reading.
+    # now sends discovery: to the tunnel with the routes on it, to the physical
+    # adapter without them. A wrong answer prints the cached paths behind it.
     param(
         [Parameter(Mandatory)][string]$Scenario,
         [Parameter(Mandatory)][bool]$OnTunnel
@@ -235,7 +246,10 @@ function Test-RosetunGuestDiscoveryRoute {
         }
         Write-RosetunLanNote $Scenario "Find-NetRoute for the limited broadcast: $($chosen.InterfaceAlias)"
         foreach ($entry in $sources) {
-            Write-RosetunLanNote $Scenario "source for $($entry.Address): $($entry.Source)"
+            Test-Step $Scenario "a socket for $($entry.Address) takes the tunnel's address" -Note $entry.Source {
+                $entry.Source -eq $TunAddress
+            }
+            if ($entry.Source -ne $TunAddress) { Write-RosetunGuestPathCache -Address $entry.Address }
         }
         return
     }
@@ -249,6 +263,7 @@ function Test-RosetunGuestDiscoveryRoute {
         Test-Step $Scenario "a socket for $($entry.Address) takes the physical adapter's address" -Note $entry.Source {
             $entry.Source -eq $physical.Address
         }
+        if ($entry.Source -ne $physical.Address) { Write-RosetunGuestPathCache -Address $entry.Address }
     }
 }
 
