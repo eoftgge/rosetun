@@ -800,6 +800,19 @@ pub(crate) fn client(language: Language, error: &ClientError) -> String {
     display::safe_multiline(&message)
 }
 
+/// What to do when the Lockdown command failed: on Linux the command is
+/// `sudo rosetun lockdown`, elsewhere a terminal opened as administrator.
+fn lockdown_command_failed(language: Language) -> String {
+    #[cfg(target_os = "linux")]
+    {
+        tr_in(language, "lockdown-command-failed-linux", &FluentArgs::new())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        tr_in(language, "lockdown-command-failed", &FluentArgs::new())
+    }
+}
+
 pub(crate) fn helper_command(language: Language, error: &HelperCommandError) -> String {
     match error {
         HelperCommandError::Store(error) => store(language, error),
@@ -817,12 +830,16 @@ pub(crate) fn helper_command(language: Language, error: &HelperCommandError) -> 
         {
             tr_in(language, "lockdown-unavailable", &FluentArgs::new())
         }
-        HelperCommandError::LockdownLaunch(_) => {
-            tr_in(language, "lockdown-command-failed", &FluentArgs::new())
+        #[cfg(target_os = "linux")]
+        HelperCommandError::LockdownLaunch(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            tr_in(language, "lockdown-no-polkit", &FluentArgs::new())
         }
-        #[cfg(any(windows, test))]
+        HelperCommandError::LockdownLaunch(_) => {
+            lockdown_command_failed(language)
+        }
+        #[cfg(any(windows, target_os = "linux", test))]
         HelperCommandError::LockdownCommand(_) => {
-            tr_in(language, "lockdown-command-failed", &FluentArgs::new())
+            lockdown_command_failed(language)
         }
     }
 }

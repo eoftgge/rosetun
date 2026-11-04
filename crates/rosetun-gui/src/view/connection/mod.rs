@@ -19,6 +19,13 @@ use controls::control_cards;
 use exits::exits_card;
 use hero::hero_card;
 
+#[derive(Debug, Clone, Copy)]
+enum LockdownText {
+    Experimental,
+    VirtualMachines,
+    WayOut,
+}
+
 pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     if !state.config_ready {
         ui.colored_label(theme::palette().text_dim, tr!("loading"));
@@ -350,7 +357,7 @@ pub(crate) fn lockdown_dialog(ctx: &egui::Context, state: &State, actions: &mut 
             if enabling {
                 ui.add(
                     egui::Label::new(
-                        RichText::new(tr!("lockdown-experimental"))
+                        RichText::new(lockdown_text(LockdownText::Experimental))
                             .color(theme::palette().text_muted),
                     )
                     .wrap(),
@@ -360,11 +367,11 @@ pub(crate) fn lockdown_dialog(ctx: &egui::Context, state: &State, actions: &mut 
             ui.add(egui::Label::new(body).wrap());
             if enabling {
                 ui.add_space(theme::space::S);
-                ui.add(egui::Label::new(tr!("lockdown-virtual-machines")).wrap());
+                ui.add(egui::Label::new(lockdown_text(LockdownText::VirtualMachines)).wrap());
                 ui.add_space(theme::space::S);
                 ui.add(
                     egui::Label::new(
-                        RichText::new(tr!("lockdown-way-out"))
+                        RichText::new(lockdown_text(LockdownText::WayOut))
                             .small()
                             .color(theme::palette().text_dim),
                     )
@@ -403,6 +410,27 @@ fn conflict_names(state: &State, names: &[String]) -> String {
         visible.push("…".to_owned());
     }
     visible.join(", ")
+}
+
+/// The confirmation's platform-specific lines: how far it is tested, what
+/// loses the network, and the way out, which on Linux is `sudo`.
+fn lockdown_text(text: LockdownText) -> String {
+    #[cfg(target_os = "linux")]
+    {
+        match text {
+            LockdownText::Experimental => tr!("lockdown-experimental-linux"),
+            LockdownText::VirtualMachines => tr!("lockdown-virtual-machines-linux"),
+            LockdownText::WayOut => tr!("lockdown-way-out-linux"),
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        match text {
+            LockdownText::Experimental => tr!("lockdown-experimental"),
+            LockdownText::VirtualMachines => tr!("lockdown-virtual-machines"),
+            LockdownText::WayOut => tr!("lockdown-way-out"),
+        }
+    }
 }
 
 #[cfg(test)]

@@ -69,6 +69,10 @@ const AFTER_UPGRADE_ARG: &str = "--after-upgrade";
 const OPEN_URL_ARG: &str = "--open-url";
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // First, before anything opens a socket: a socket keeps the cgroup it was
+    // made in, and Lockdown permits the GUI by its scope.
+    #[cfg(target_os = "linux")]
+    let scope = rosetun_core::enter_scope(rosetun_core::ScopeProgram::Gui);
     #[cfg(windows)]
     let open_link = open_url_arg(std::env::args_os());
     #[cfg(windows)]
@@ -127,6 +131,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .init();
 
+    #[cfg(target_os = "linux")]
+    if let rosetun_core::Scope::Outside(reason) = &scope {
+        tracing::warn!(reason, "the GUI runs outside its scope; under Lockdown it has no network without a session");
+    }
+
     #[cfg(windows)]
     let activation = activation
         .inspect_err(|error| tracing::warn!(%error, "single-instance check failed"))
@@ -157,6 +166,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         viewport,
         Box::new(move |cc| {
             let app = app::App::new(cc, store);
+            #[cfg(target_os = "linux")]
+            let app = app.outside_scope(scope != rosetun_core::Scope::Inside);
             #[cfg(windows)]
             let app = app.with_shell(
                 &cc.egui_ctx,

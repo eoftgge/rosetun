@@ -324,6 +324,15 @@ fn connection(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                 );
             });
         }
+        if state.outside_scope && state.lockdown_active() {
+            card.body(|ui| {
+                ui.label(
+                    RichText::new(tr!("lockdown-outside-scope"))
+                        .small()
+                        .color(theme::palette().accent_light),
+                );
+            });
+        }
         if state.lockdown_lan_kept && state.lockdown_active() {
             card.body(|ui| {
                 ui.label(

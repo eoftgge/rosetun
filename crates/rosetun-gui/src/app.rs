@@ -179,6 +179,13 @@ impl App {
         }
     }
 
+    /// Linux: the GUI could not start in the scope Lockdown permits.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn outside_scope(mut self, outside: bool) -> Self {
+        self.state.outside_scope = outside;
+        self
+    }
+
     /// Started by the installer after an upgrade that held the network.
     #[cfg(windows)]
     pub(crate) fn after_upgrade(mut self, after_upgrade: bool) -> Self {

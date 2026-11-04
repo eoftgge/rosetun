@@ -8,6 +8,8 @@ mod lists;
 mod ping;
 mod resolve;
 mod rules;
+#[cfg(target_os = "linux")]
+mod scope;
 mod selection;
 mod settings;
 pub(crate) mod store;
@@ -40,6 +42,8 @@ pub use resolve::follow_service_status;
 pub use rosetun_subscription::{
     ParseError, SkipReason, Skipped, UnsupportedTransport, parse_proxy_uri,
 };
+#[cfg(target_os = "linux")]
+pub use scope::{Scope, ScopeProgram, enter_scope};
 pub use rules::{
     AddedRules, AppliedSnapshot, DomainLineError, DomainLines, IpCidrError, IpLineError, IpLines,
     RestoredRuleSets, RuleDestination, RuleInputError, RuleSetError, RuleSetsSnapshot, SetSnapshot,

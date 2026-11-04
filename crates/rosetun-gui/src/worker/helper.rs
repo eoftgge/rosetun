@@ -166,7 +166,7 @@ impl WorkerDispatcher {
                 });
             match &result {
                 Ok(LockdownChange::Done) => tracing::info!(enabled, "Lockdown command succeeded"),
-                #[cfg(any(windows, test))]
+                #[cfg(any(windows, target_os = "linux", test))]
                 Ok(LockdownChange::Declined) => {
                     tracing::info!("Lockdown command cancelled at the administrator prompt");
                 }
@@ -261,7 +261,44 @@ fn run_lockdown_command(
     }
 }
 
-#[cfg(not(windows))]
+/// The installed CLI through `pkexec`, so polkit asks for an administrator
+/// as UAC does on Windows. Only the fixed program and fixed arguments:
+/// `pkexec` runs it with a clean environment, and the policy's action
+/// names this very path.
+#[cfg(target_os = "linux")]
+fn run_lockdown_command(
+    enabled: bool,
+    allow_lan: bool,
+    private_networks: bool,
+) -> Result<LockdownChange, HelperCommandError> {
+    const PKEXEC: &str = "/usr/bin/pkexec";
+    const INSTALLED_CLI: &str = "/usr/lib/rosetun/rosetun";
+    /// The prompt was dismissed or the account is not allowed.
+    const NOT_AUTHORIZED: i32 = 126;
+    if !std::path::Path::new(PKEXEC).is_file() {
+        return Err(HelperCommandError::LockdownLaunch(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "pkexec is missing",
+        )));
+    }
+    let arguments = lockdown_arguments(enabled, allow_lan, private_networks);
+    let status = std::process::Command::new(PKEXEC)
+        .arg(INSTALLED_CLI)
+        .args(arguments.split(' '))
+        .stdin(std::process::Stdio::null())
+        .status()
+        .map_err(HelperCommandError::LockdownLaunch)?;
+    match status.code() {
+        Some(0) => Ok(LockdownChange::Done),
+        Some(NOT_AUTHORIZED) => Ok(LockdownChange::Declined),
+        Some(code) => Err(HelperCommandError::LockdownCommand(
+            u32::try_from(code).unwrap_or(u32::MAX),
+        )),
+        None => Err(HelperCommandError::LockdownCommand(u32::MAX)),
+    }
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
 fn run_lockdown_command(
     _enabled: bool,
     _allow_lan: bool,
@@ -273,7 +310,7 @@ fn run_lockdown_command(
     )))
 }
 
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "linux", test))]
 fn lockdown_arguments(enabled: bool, allow_lan: bool, private_networks: bool) -> String {
     if enabled {
         let lan = match (allow_lan, private_networks) {
@@ -361,7 +398,7 @@ mod lockdown_command_tests {
         assert_eq!(lockdown_arguments(false, true, false), "lockdown off");
     }
 
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "linux")))]
     #[test]
     fn lockdown_is_unsupported_for_every_lan_and_enabled_value() {
         for enabled in [false, true] {

@@ -682,7 +682,10 @@ fn lockdown(
     }
 }
 
+#[cfg(not(target_os = "linux"))]
 const LOCKDOWN_DENIED: &str = "only an administrator can change Lockdown; run this command in a terminal opened as administrator";
+#[cfg(target_os = "linux")]
+const LOCKDOWN_DENIED: &str = "only root can change Lockdown; run it with sudo, as `sudo rosetun lockdown on`";
 
 /// The service refuses a Lockdown change from anyone but an administrator.
 fn lockdown_denied(error: &ClientError) -> bool {
@@ -716,17 +719,52 @@ fn update_lockdown_lan(enabled: bool, private_networks: bool) -> ExitCode {
     }
 }
 
+#[cfg(not(target_os = "linux"))]
 const LAN_KEPT_BY_LOCKDOWN: &str = "the setting is saved, but Lockdown keeps its local network access; run `rosetun lockdown on` in a terminal opened as administrator to apply it";
+#[cfg(target_os = "linux")]
+const LAN_KEPT_BY_LOCKDOWN: &str = "the setting is saved, but Lockdown keeps its local network access; run `sudo rosetun lockdown on` to apply it";
 
 /// Under Lockdown the CLI resolves names itself (`rosetun_core::follow_service_status`).
+/// On Linux it also runs again in its own scope, which Lockdown permits
+/// while no session runs, and connects again from there: the service
+/// looks for the scope when a client says hello.
 fn follow_service_status() {
     let endpoint = rosetun_ipc::default_endpoint();
     let client_name = concat!("rosetun/", env!("CARGO_PKG_VERSION"));
     let status = HelperClient::connect(&endpoint, client_name)
         .and_then(|mut client| client.status())
         .ok();
+    #[cfg(target_os = "linux")]
+    let status = match status {
+        Some(found) if found.lockdown && found.state != rosetun_config::ConnectionState::Connected => {
+            if let rosetun_core::Scope::Outside(reason) =
+                rosetun_core::enter_scope(rosetun_core::ScopeProgram::Cli)
+            {
+                eprintln!("warning: under Lockdown this command has no network without a connection: {reason}");
+            }
+            HelperClient::connect(&endpoint, client_name)
+                .and_then(|mut client| client.status())
+                .ok()
+        }
+        other => other,
+    };
     rosetun_core::follow_service_status(status.as_ref());
 }
+
+#[cfg(not(target_os = "linux"))]
+const RESET_AS_ADMINISTRATOR: &str =
+    "run `rosetun reset-firewall` from a terminal opened as administrator";
+#[cfg(target_os = "linux")]
+const RESET_AS_ADMINISTRATOR: &str = "run it as root: `sudo rosetun reset-firewall`";
+
+#[cfg(not(target_os = "linux"))]
+const LOCKDOWN_HELP: &str = "Only an administrator changes it.
+reset-firewall removes it without the service; run it as administrator.";
+#[cfg(target_os = "linux")]
+const LOCKDOWN_HELP: &str = "Only root changes it (sudo rosetun lockdown on|off);
+the desktop asks for an administrator password through polkit.
+reset-firewall removes it without the service, also for the next boot:
+sudo rosetun reset-firewall.";
 
 /// `rosetun-helper-privileged --reset-firewall` from this program's folder.
 fn reset_firewall() -> ExitCode {
@@ -746,9 +784,9 @@ fn reset_firewall() -> ExitCode {
     {
         Ok(status) => match status.code() {
             Some(0) => ExitCode::SUCCESS,
-            // The helper's `reset_exit::NOT_ADMINISTRATOR`.
+            // The helper's `reset_exit::NOT_ADMINISTRATOR` (`NOT_ROOT` on Linux).
             Some(3) => {
-                eprintln!("run `rosetun reset-firewall` from a terminal opened as administrator");
+                eprintln!("{RESET_AS_ADMINISTRATOR}");
                 ExitCode::from(3)
             }
             Some(code) => ExitCode::from(u8::try_from(code).unwrap_or(1)),
@@ -886,8 +924,7 @@ Subscription and node commands are local and do not require the helper.
 connections lists the tunnel's connections for the account that connected it;
 close ends one of them by its ID (the 8 characters shown, or the full ID).
 Lockdown (experimental) blocks all traffic outside the tunnel, also when
-disconnected and after a reboot. Only an administrator changes it.
-reset-firewall removes it without the service; run it as administrator.
+disconnected and after a reboot. {LOCKDOWN_HELP}
 open-network lifts the hold that keeps the network closed after an update
 (Windows) or after the service failed (Linux).
 Options for sub add may appear in any order after the URL."
@@ -1071,7 +1108,10 @@ mod tests {
             ErrorCode::Busy,
             "a server check is in progress",
         ))));
+        #[cfg(not(target_os = "linux"))]
         assert!(LOCKDOWN_DENIED.contains("administrator"));
+        #[cfg(target_os = "linux")]
+        assert!(LOCKDOWN_DENIED.contains("sudo rosetun lockdown on"));
         assert!(LAN_KEPT_BY_LOCKDOWN.contains("rosetun lockdown on"));
     }
 

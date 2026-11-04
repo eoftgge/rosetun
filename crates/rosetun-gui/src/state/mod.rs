@@ -170,6 +170,9 @@ pub(crate) struct State {
     /// The administrator prompt for a "Local network" change was declined:
     /// the setting is saved, but Lockdown keeps its previous LAN access.
     pub(crate) lockdown_lan_kept: bool,
+    /// The GUI runs outside the scope Lockdown permits (Linux): under Lockdown
+    /// it has no network without a session.
+    pub(crate) outside_scope: bool,
     #[cfg(windows)]
     pub(crate) quit: QuitState,
 }
@@ -223,6 +226,7 @@ impl Default for State {
             lockdown_lan_pending: false,
             lockdown_lan_sync: false,
             lockdown_lan_kept: false,
+            outside_scope: false,
             #[cfg(windows)]
             quit: QuitState::default(),
         }

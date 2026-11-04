@@ -11,10 +11,31 @@ pub(crate) fn system() -> Vec<SocketAddr> {
     order(crate::windows::adapter_servers())
 }
 
+/// `/etc/resolv.conf`; when it names only a local stub, as with
+/// systemd-resolved (127.0.0.53), the servers behind the stub: under
+/// Lockdown the stub's own queries cannot get out, while this process's
+/// may.
 #[cfg(not(windows))]
 pub(crate) fn system() -> Vec<SocketAddr> {
-    let text = std::fs::read_to_string("/etc/resolv.conf").unwrap_or_default();
-    order(vec![(0, resolv_conf(&text))])
+    let read = |path| std::fs::read_to_string(path).unwrap_or_default();
+    let configured = resolv_conf(&read("/etc/resolv.conf"));
+    let servers = if configured.iter().all(|server| server.ip().is_loopback()) {
+        let upstream = resolv_conf(&read("/run/systemd/resolve/resolv.conf"));
+        behind_stub(configured, upstream)
+    } else {
+        configured
+    };
+    order(vec![(0, servers)])
+}
+
+/// The stub's upstream servers, unless they are local too or missing.
+#[cfg(not(windows))]
+fn behind_stub(configured: Vec<SocketAddr>, upstream: Vec<SocketAddr>) -> Vec<SocketAddr> {
+    if upstream.is_empty() || upstream.iter().all(|server| server.ip().is_loopback()) {
+        configured
+    } else {
+        upstream
+    }
 }
 
 #[cfg(not(windows))]
@@ -99,6 +120,19 @@ mod tests {
                 "[fe80::1%7]:53",
                 "[2001:db8::53]:53",
             ])
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn a_local_stub_gives_way_to_the_servers_behind_it() {
+        let stub = servers(&["127.0.0.53:53"]);
+        let upstream = servers(&["192.0.2.53:53"]);
+        assert_eq!(super::behind_stub(stub.clone(), upstream.clone()), upstream);
+        assert_eq!(super::behind_stub(stub.clone(), Vec::new()), stub);
+        assert_eq!(
+            super::behind_stub(stub.clone(), servers(&["127.0.0.1:53"])),
+            stub
         );
     }
 
