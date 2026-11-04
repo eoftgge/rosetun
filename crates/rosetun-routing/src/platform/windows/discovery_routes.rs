@@ -7,12 +7,17 @@
 //! Windows picks a real adapter, where the WFP filters decide as for any other
 //! traffic. The rows belong to the adapter: they go with it, and the next
 //! adapter gets them again, so nothing here has to put them back.
+//!
+//! Windows also keeps a path per multicast destination, and a deleted route
+//! does not end it: a socket follows the old adapter until the path ages out,
+//! for as long as discovery keeps using it. So a change of these routes
+//! flushes the paths.
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use windows_sys::Win32::{
     Foundation::ERROR_NOT_FOUND,
-    NetworkManagement::IpHelper::{DeleteIpForwardEntry2, MIB_IPFORWARD_ROW2},
+    NetworkManagement::IpHelper::{DeleteIpForwardEntry2, FlushIpPathTable, MIB_IPFORWARD_ROW2},
     Networking::WinSock::{
         AF_INET, AF_INET6, AF_UNSPEC, MIB_IPPROTO_LOCAL, NL_ROUTE_PROTOCOL, SOCKADDR_INET,
     },
@@ -79,6 +84,18 @@ fn route(row: &MIB_IPFORWARD_ROW2) -> Option<Route> {
     })
 }
 
+/// The first Windows error code. Cached paths only save a lookup, so flushing
+/// them costs each destination one fresh route lookup.
+pub(super) fn flush_paths() -> Option<u32> {
+    [AF_INET, AF_INET6]
+        .into_iter()
+        // SAFETY: the call takes a family by value and touches no memory of ours.
+        .map(|family| unsafe { FlushIpPathTable(family) })
+        .fold(None, |first, status| {
+            first.or((status != 0).then_some(status))
+        })
+}
+
 /// Removes what is there; a repeat finds nothing and does nothing. A tunnel
 /// that does not pass validation, such as a stale adapter with the same
 /// alias, is left alone: the next read may find it ready.
@@ -100,6 +117,11 @@ pub(super) fn release(tunnel: &TunnelInterface, ipv6: bool) -> DiscoveryRoutes {
             // synchronous call. The call copies what it needs from the row.
             record(&mut sweep, unsafe { DeleteIpForwardEntry2(row) });
         }
+    }
+    if sweep.removed > 0
+        && let Some(code) = flush_paths()
+    {
+        sweep.failure.get_or_insert(code);
     }
     sweep
 }

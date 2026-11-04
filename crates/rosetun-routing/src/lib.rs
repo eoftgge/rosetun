@@ -104,6 +104,13 @@ pub fn release_discovery_routes(tunnel: &TunnelInterface, ipv6: bool) -> Discove
     platform::release_discovery_routes(tunnel, ipv6)
 }
 
+/// Makes sockets look discovery destinations up again, once the tunnel has its
+/// routes back: Windows would otherwise keep the adapter
+/// `release_discovery_routes` sent them to. The Windows error code on failure.
+pub fn flush_discovery_paths() -> Option<u32> {
+    platform::flush_discovery_paths()
+}
+
 /// Choose the physical default route: a probe engine without its own TUN would
 /// otherwise follow the connected session's default route back into that tunnel.
 pub fn physical_default_interface(exclude_alias: &str) -> Option<String> {

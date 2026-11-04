@@ -7755,6 +7755,45 @@ fn a_failure_to_release_discovery_routes_does_not_fail_the_connect() {
 }
 
 #[test]
+fn a_connect_without_local_network_flushes_the_paths_of_a_session_with_it_once() {
+    static FLUSHES: AtomicUsize = AtomicUsize::new(0);
+    let (helper, _, _, _) = supervised_helper(true);
+    let helper = helper
+        .with_discovery_route_release(|_, _| rosetun_routing::DiscoveryRoutes {
+            removed: 2,
+            failure: None,
+        })
+        .with_discovery_path_flush(|| {
+            FLUSHES.fetch_add(1, Ordering::AcqRel);
+            None
+        });
+    let mut request = connect_request();
+    request.settings.allow_lan = true;
+    helper.connect(&request).expect("connect");
+    helper.disconnect().expect("disconnect");
+    assert_eq!(FLUSHES.load(Ordering::Acquire), 0);
+
+    request.settings.allow_lan = false;
+    helper.connect(&request).expect("connect");
+    assert_eq!(FLUSHES.load(Ordering::Acquire), 1);
+    helper.disconnect().expect("disconnect");
+    helper.connect(&request).expect("connect");
+    assert_eq!(FLUSHES.load(Ordering::Acquire), 1);
+}
+
+#[test]
+fn a_session_that_never_released_routes_flushes_nothing() {
+    let (helper, _, _, _) = supervised_helper(true);
+    let helper = helper.with_discovery_path_flush(|| panic!("nothing was released"));
+    let mut request = connect_request();
+    request.settings.allow_lan = true;
+    helper.connect(&request).expect("connect");
+    helper.disconnect().expect("disconnect");
+    request.settings.allow_lan = false;
+    helper.connect(&request).expect("connect");
+}
+
+#[test]
 fn without_local_network_the_discovery_routes_stay() {
     let (helper, _, _, _) = supervised_helper(true);
     let helper =

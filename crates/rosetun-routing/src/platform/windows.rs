@@ -22,6 +22,10 @@ pub(super) fn release_discovery_routes(
     discovery_routes::release(tunnel, ipv6)
 }
 
+pub(super) fn flush_discovery_paths() -> Option<u32> {
+    discovery_routes::flush_paths()
+}
+
 use session::Engine;
 
 pub(super) fn physical_default_interface(exclude_alias: &str) -> Option<String> {

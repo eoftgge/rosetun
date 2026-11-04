@@ -17,6 +17,9 @@ pub(super) type LanScan = fn(&SegmentQuery<'_>) -> std::io::Result<SegmentScan>;
 /// Takes the system's discovery routes off the tunnel; a hook for tests.
 pub(super) type DiscoveryRouteRelease = fn(&TunnelInterface, bool) -> DiscoveryRoutes;
 
+/// Ends what Windows remembers of a released route; a hook for tests.
+pub(super) type DiscoveryPathFlush = fn() -> Option<u32>;
+
 /// Equal reads in a row, one supervisor tick (500 ms) apart, before a new
 /// segment counts. Joining Wi-Fi, a DHCP lease and waking from sleep change
 /// addresses in bursts over about a second, and every change the session
@@ -68,6 +71,11 @@ pub(super) fn test_scan(_: &SegmentQuery<'_>) -> std::io::Result<SegmentScan> {
 #[cfg(test)]
 pub(super) fn test_release(_: &TunnelInterface, _: bool) -> DiscoveryRoutes {
     DiscoveryRoutes::default()
+}
+
+#[cfg(test)]
+pub(super) fn test_flush() -> Option<u32> {
+    None
 }
 
 /// The failure to log: a tick repeats the sweep, and the same error twice a
@@ -187,6 +195,7 @@ impl Session {
         };
         let sweep = (self.discovery_route_release)(&tunnel, tun.ipv6.is_some());
         if sweep.removed > 0 {
+            self.discovery_routes_released = true;
             tracing::info!(
                 removed = sweep.removed,
                 "local network: discovery without a chosen adapter stays out of the tunnel"
@@ -199,6 +208,21 @@ impl Session {
             );
         }
         self.discovery_route_failure = sweep.failure;
+    }
+
+    /// A connect without "Local network" after one with it: the tunnel has its
+    /// routes again, but Windows would keep sending discovery where the last
+    /// session sent it, outside the tunnel, until its cached paths age out.
+    pub(super) fn forget_released_discovery_routes(&mut self) {
+        if !std::mem::take(&mut self.discovery_routes_released) {
+            return;
+        }
+        if let Some(code) = (self.discovery_path_flush)() {
+            tracing::warn!(
+                code,
+                "local network: could not flush the discovery paths of the last session"
+            );
+        }
     }
 
     /// A supervisor tick of a running session: whether the computer is on
