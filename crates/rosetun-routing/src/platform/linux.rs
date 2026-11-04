@@ -6,12 +6,14 @@
 //! any other cgroup (a terminal session's) would open the network to
 //! everything in it.
 //!
-//! Unlike a dynamic WFP session the table outlives the helper. A crash
-//! therefore leaves the network closed, and the next start finds the table
-//! with no session: the hold after a crash. The service reports it as the
+//! Unlike a dynamic WFP session the table outlives the helper, and the next
+//! start finds it with no session. A kill switch's table becomes the hold
+//! after a crash: the network stays closed, the service reports it as the
 //! upgrade hold (`LockdownStatus::upgrade_hold`) and lifts it the same way,
-//! on a connect, on `OpenNetwork` or on a normal stop. Lockdown itself is
-//! not offered on Linux.
+//! on a connect, on `OpenNetwork` or on a normal stop. A DNS lock's table
+//! is removed: the user never asked for a closed network. A table that is
+//! neither is held, as closed is the safe guess. Lockdown itself is not
+//! offered on Linux.
 
 mod nft;
 mod physical;
@@ -21,7 +23,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use crate::cgroup::{self, Leaves};
-use crate::nftables::{self, InterfaceName, Rules};
+use crate::nftables::{self, InterfaceName, LeftBehind, Rules};
 use crate::{
     LockdownApps, LockdownStatus, ProtectionCapabilities, ProtectionScope, ProtectionSession,
     RoutingBackend, RoutingError, RoutingGuard, RoutingPlan, TunnelInterface,
@@ -180,16 +182,34 @@ impl RoutingBackend for NftBackend {
         }))
     }
 
-    /// Finds a table no session of this process made: a crash left it.
+    /// Finds a table no session of this process made: a crash (or a kill)
+    /// skipped its teardown, as a normal stop removes it before the process
+    /// exits. A DNS lock's table goes; any other becomes the hold.
     fn lockdown_status(&self) -> Result<LockdownStatus, RoutingError> {
         let mut shared = self.shared();
         if !shared.session && !shared.hold {
             if self.nft.check().is_err() {
                 return Ok(LockdownStatus::default());
             }
-            if previous_exit(self.nft.table_exists()?) == PreviousExit::Crashed {
-                tracing::warn!("a table left by a crashed helper keeps the network closed");
-                shared.hold = true;
+            if let Some(listing) = self.nft.list_table()? {
+                match nftables::left_behind(&listing) {
+                    LeftBehind::DnsLock => {
+                        self.nft.apply(&nftables::remove())?;
+                        tracing::warn!(
+                            "removed the DNS lock a crashed helper left; the network is open"
+                        );
+                    }
+                    LeftBehind::KillSwitch => {
+                        tracing::warn!("a table left by a crashed helper keeps the network closed");
+                        shared.hold = true;
+                    }
+                    LeftBehind::Unknown => {
+                        tracing::warn!(
+                            "a table left by a crashed helper is not recognised; it keeps the network closed"
+                        );
+                        shared.hold = true;
+                    }
+                }
             }
         }
         Ok(Self::hold_status(shared.hold))
@@ -340,23 +360,6 @@ impl ProtectionSession for NftSession {
     }
 }
 
-/// What a start found: a table with no session in this process means the
-/// previous one did not tear down, which only a crash (or a kill) skips.
-/// A normal stop removes the table before the process exits.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum PreviousExit {
-    Clean,
-    Crashed,
-}
-
-pub(super) fn previous_exit(table_present: bool) -> PreviousExit {
-    if table_present {
-        PreviousExit::Crashed
-    } else {
-        PreviousExit::Clean
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::net::Ipv4Addr;
@@ -368,14 +371,33 @@ mod tests {
     #[derive(Debug, Default)]
     struct FakeNft {
         unusable: Option<String>,
-        table: Mutex<bool>,
+        /// The table as `nft list table` prints it.
+        table: Mutex<Option<String>>,
         applied: Mutex<Vec<String>>,
         fail_next: Mutex<bool>,
     }
 
     impl FakeNft {
+        /// What a crashed session of `scope` left.
+        fn left(scope: ProtectionScope) -> Arc<Self> {
+            let nft = Arc::new(Self::default());
+            let script = nftables::replace(&Rules {
+                scope,
+                allow_lan: false,
+                engines: &leaves().engines,
+                helper_dns: None,
+                tunnel: None,
+            });
+            *nft.table.lock().unwrap() = Some(script[nftables::remove().len()..].to_owned());
+            nft
+        }
+
         fn applied(&self) -> Vec<String> {
             self.applied.lock().unwrap().clone()
+        }
+
+        fn has_table(&self) -> bool {
+            self.table.lock().unwrap().is_some()
         }
     }
 
@@ -389,12 +411,14 @@ mod tests {
                 return Err(RoutingError::Route("nft failed".to_owned()));
             }
             self.applied.lock().unwrap().push(script.to_owned());
-            *self.table.lock().unwrap() = script.contains("table inet rosetun {");
+            *self.table.lock().unwrap() = script
+                .find("table inet rosetun {")
+                .map(|start| script[start..].to_owned());
             Ok(())
         }
 
-        fn table_exists(&self) -> Result<bool, RoutingError> {
-            Ok(*self.table.lock().unwrap())
+        fn list_table(&self) -> Result<Option<String>, RoutingError> {
+            Ok(self.table.lock().unwrap().clone())
         }
     }
 
@@ -525,7 +549,7 @@ mod tests {
         );
         guard.revert().unwrap();
         assert_eq!(nft.applied().last().unwrap(), &nftables::remove());
-        assert!(!*nft.table.lock().unwrap());
+        assert!(!nft.has_table());
     }
 
     #[test]
@@ -547,7 +571,7 @@ mod tests {
         assert!(script.starts_with(&nftables::remove()));
         assert!(script.contains("policy drop;"));
         assert!(!script.contains("oif \"rosetun"));
-        assert!(*nft.table.lock().unwrap());
+        assert!(nft.has_table());
     }
 
     #[test]
@@ -623,13 +647,10 @@ mod tests {
     }
 
     #[test]
-    fn a_table_found_at_start_is_the_hold_after_a_crash() {
-        let nft = Arc::new(FakeNft::default());
-        *nft.table.lock().unwrap() = true;
+    fn a_kill_switch_table_found_at_start_is_the_hold_after_a_crash() {
+        let nft = FakeNft::left(ProtectionScope::AllTraffic);
         let mount = Mount::new(true);
         let backend = backend(&nft, &mount);
-        assert_eq!(previous_exit(true), PreviousExit::Crashed);
-        assert_eq!(previous_exit(false), PreviousExit::Clean);
         let status = backend.lockdown_status().unwrap();
         assert!(status.enabled && status.upgrade_hold);
         // The service "repairs" it: the hold's own rules replace the leftovers.
@@ -639,6 +660,35 @@ mod tests {
         let script = nft.applied().last().unwrap().clone();
         assert_eq!(script, hold_rules(&leaves()));
         assert!(script.contains("/helper\" meta l4proto { tcp, udp } th dport 53 accept"));
+    }
+
+    #[test]
+    fn a_dns_lock_found_at_start_is_removed_and_the_network_stays_open() {
+        let nft = FakeNft::left(ProtectionScope::DnsOnly);
+        let mount = Mount::new(true);
+        let backend = backend(&nft, &mount);
+        let status = backend.lockdown_status().unwrap();
+        assert!(!status.enabled && !status.upgrade_hold);
+        assert_eq!(nft.applied(), [nftables::remove()]);
+        assert!(!nft.has_table());
+        // Asked again, there is nothing left to find.
+        assert!(!backend.lockdown_status().unwrap().enabled);
+        assert_eq!(nft.applied().len(), 1);
+    }
+
+    #[test]
+    fn an_unrecognised_table_found_at_start_is_held() {
+        let nft = Arc::new(FakeNft::default());
+        *nft.table.lock().unwrap() = Some(
+            "table inet rosetun {\n\tchain output {\n\t\ttype filter hook output priority 0; policy accept;\n\t}\n}\n"
+                .to_owned(),
+        );
+        let mount = Mount::new(true);
+        let backend = backend(&nft, &mount);
+        let status = backend.lockdown_status().unwrap();
+        assert!(status.enabled && status.upgrade_hold);
+        assert!(nft.applied().is_empty());
+        assert!(nft.has_table());
     }
 
     #[test]
@@ -659,8 +709,7 @@ mod tests {
 
     #[test]
     fn opening_the_network_removes_the_hold() {
-        let nft = Arc::new(FakeNft::default());
-        *nft.table.lock().unwrap() = true;
+        let nft = FakeNft::left(ProtectionScope::AllTraffic);
         let mount = Mount::new(true);
         let backend = backend(&nft, &mount);
         backend.lockdown_status().unwrap();
@@ -671,19 +720,17 @@ mod tests {
 
     #[test]
     fn a_normal_stop_removes_the_hold() {
-        let nft = Arc::new(FakeNft::default());
-        *nft.table.lock().unwrap() = true;
+        let nft = FakeNft::left(ProtectionScope::AllTraffic);
         let mount = Mount::new(true);
         let backend = backend(&nft, &mount);
         backend.lockdown_status().unwrap();
         backend.release_on_stop().unwrap();
-        assert!(!*nft.table.lock().unwrap());
+        assert!(!nft.has_table());
     }
 
     #[test]
     fn a_failed_connect_during_the_hold_puts_the_hold_back() {
-        let nft = Arc::new(FakeNft::default());
-        *nft.table.lock().unwrap() = true;
+        let nft = FakeNft::left(ProtectionScope::AllTraffic);
         let mount = Mount::new(true);
         let mut backend = backend(&nft, &mount);
         backend.lockdown_status().unwrap();
@@ -692,13 +739,12 @@ mod tests {
             .unwrap();
         guard.revert().unwrap();
         assert_eq!(nft.applied().last().unwrap(), &hold_rules(&leaves()));
-        assert!(*nft.table.lock().unwrap());
+        assert!(nft.has_table());
     }
 
     #[test]
     fn a_connect_lifts_the_hold_without_removing_its_own_table() {
-        let nft = Arc::new(FakeNft::default());
-        *nft.table.lock().unwrap() = true;
+        let nft = FakeNft::left(ProtectionScope::AllTraffic);
         let mount = Mount::new(true);
         let mut backend = backend(&nft, &mount);
         backend.lockdown_status().unwrap();

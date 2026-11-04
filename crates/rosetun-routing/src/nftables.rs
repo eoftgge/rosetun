@@ -69,6 +69,19 @@ impl InterfaceName {
     }
 }
 
+/// What a table found at start, with no session of this process, does to
+/// the network.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LeftBehind {
+    /// A base chain drops by default: the kill switch or its hold.
+    KillSwitch,
+    /// Every base chain accepts by default and drops nothing but DNS: the
+    /// DNS lock alone.
+    DnsLock,
+    /// Anything this version did not write, or `nft` printed differently.
+    Unknown,
+}
+
 /// What one version of the table permits.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Rules<'a> {
@@ -149,6 +162,68 @@ pub(crate) fn remove() -> String {
 pub(crate) fn lists_table(listing: &str) -> bool {
     let wanted = format!("table inet {TABLE}");
     listing.lines().any(|line| line.trim() == wanted)
+}
+
+/// Reads `nft list table inet rosetun`. Decided by the chains' policies,
+/// which are what closes the network, and read strictly: every line must
+/// have the shape Rosetun writes, or the table is `Unknown`.
+pub(crate) fn left_behind(listing: &str) -> LeftBehind {
+    read_left_behind(listing).unwrap_or(LeftBehind::Unknown)
+}
+
+fn read_left_behind(listing: &str) -> Option<LeftBehind> {
+    let mut lines = listing
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty());
+    if lines.next()? != format!("table inet {TABLE} {{") {
+        return None;
+    }
+    let mut hooks: Vec<&str> = Vec::new();
+    let mut drops_by_default = false;
+    let mut drops_beyond_dns = false;
+    loop {
+        let line = lines.next()?;
+        if line == "}" {
+            break;
+        }
+        let name = line.strip_prefix("chain ")?.strip_suffix(" {")?;
+        let (hook, policy) = lines
+            .next()?
+            .strip_prefix("type filter hook ")?
+            .split_once(" priority filter; policy ")?;
+        if hook != name || !matches!(hook, "output" | "forward") || hooks.contains(&hook) {
+            return None;
+        }
+        hooks.push(hook);
+        match policy {
+            "drop;" => drops_by_default = true,
+            "accept;" => {}
+            _ => return None,
+        }
+        loop {
+            let rule = lines.next()?;
+            if rule == "}" {
+                break;
+            }
+            if rule.ends_with(" th dport 53 drop") {
+                continue;
+            }
+            if !rule.ends_with(" accept") {
+                drops_beyond_dns = true;
+            }
+        }
+    }
+    if lines.next().is_some() || !hooks.contains(&"output") {
+        return None;
+    }
+    if drops_by_default {
+        Some(LeftBehind::KillSwitch)
+    } else if drops_beyond_dns {
+        None
+    } else {
+        Some(LeftBehind::DnsLock)
+    }
 }
 
 fn cgroup_match(path: &CgroupPath) -> String {
@@ -333,6 +408,91 @@ mod tests {
         assert!(lists_table("table inet filter\ntable inet rosetun\n"));
         assert!(!lists_table("table inet rosetun-old\ntable ip rosetun\n"));
         assert!(!lists_table(""));
+    }
+
+    /// The table as `nft list table` prints it: the script without the
+    /// removal in front.
+    fn listing(rules: &Rules<'_>) -> String {
+        replace(rules)[remove().len()..].to_owned()
+    }
+
+    #[test]
+    fn a_left_table_is_told_apart_by_its_policies() {
+        let engines = engines();
+        let helper = helper();
+        let tunnel = InterfaceName::new("rosetun0").unwrap();
+        for allow_lan in [false, true] {
+            for tunnel in [None, Some(&tunnel)] {
+                for (scope, helper_dns, expected) in [
+                    (ProtectionScope::AllTraffic, None, LeftBehind::KillSwitch),
+                    (ProtectionScope::AllTraffic, Some(&helper), LeftBehind::KillSwitch),
+                    (ProtectionScope::DnsOnly, None, LeftBehind::DnsLock),
+                ] {
+                    let text = listing(&Rules {
+                        scope,
+                        allow_lan,
+                        engines: &engines,
+                        helper_dns,
+                        tunnel,
+                    });
+                    assert_eq!(left_behind(&text), expected, "{text}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_dns_lock_as_nft_prints_it_is_recognised() {
+        let printed = "table inet rosetun {
+\tchain output {
+\t\ttype filter hook output priority filter; policy accept;
+\t\toif \"rosetun0\" accept
+\t\toif \"lo\" accept
+\t\tsocket cgroupv2 level 3 \"system.slice/rosetun-helper.service/engines\" accept
+\t\tmeta l4proto { tcp, udp } th dport 53 drop
+\t}
+}
+";
+        assert_eq!(left_behind(printed), LeftBehind::DnsLock);
+    }
+
+    #[test]
+    fn a_left_table_of_any_other_shape_is_unknown() {
+        let lock = "table inet rosetun {\n\tchain output {\n\t\ttype filter hook output priority filter; policy accept;\n\t\tmeta l4proto { tcp, udp } th dport 53 drop\n\t}\n}\n";
+        assert_eq!(left_behind(lock), LeftBehind::DnsLock);
+        for (what, text) in [
+            ("nothing", String::new()),
+            ("another table", lock.replace("inet rosetun", "inet rosetun-old")),
+            ("another family", lock.replace("inet rosetun", "ip rosetun")),
+            (
+                "a drop beyond DNS",
+                lock.replace("th dport 53 drop", "th dport 443 drop"),
+            ),
+            ("a bare drop", lock.replace("meta l4proto { tcp, udp } th dport 53 drop", "drop")),
+            ("a reject", lock.replace("th dport 53 drop", "th dport 53 reject")),
+            ("a numeric priority", lock.replace("priority filter", "priority 0")),
+            ("another hook", lock.replace("hook output", "hook input")),
+            ("a chain named apart from its hook", lock.replace("chain output", "chain out")),
+            ("no policy", lock.replace(" policy accept;", "")),
+            ("an unknown policy", lock.replace("policy accept", "policy queue")),
+            ("a table-level line", lock.replace("\tchain output {", "\tflags dormant\n\tchain output {")),
+            ("no end", lock.trim_end().trim_end_matches('}').to_owned()),
+            ("something after the end", format!("{lock}table inet rosetun {{\n}}\n")),
+            (
+                "only a forward chain",
+                lock.replace("chain output", "chain forward")
+                    .replace("hook output", "hook forward"),
+            ),
+            (
+                "two output chains",
+                lock.replace(
+                    "\t}\n}",
+                    "\t}\n\tchain output {\n\t\ttype filter hook output priority filter; policy accept;\n\t}\n}",
+                ),
+            ),
+        ] {
+            assert_eq!(left_behind(&text), LeftBehind::Unknown, "{what}");
+        }
     }
 
     #[test]

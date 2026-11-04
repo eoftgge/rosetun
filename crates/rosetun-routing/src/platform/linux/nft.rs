@@ -23,7 +23,8 @@ pub(super) trait Nft: Debug + Send + Sync {
     fn check(&self) -> Result<(), String>;
     /// Runs one script as one transaction.
     fn apply(&self, script: &str) -> Result<(), RoutingError>;
-    fn table_exists(&self) -> Result<bool, RoutingError>;
+    /// Rosetun's table as `nft list table` prints it, if there is one.
+    fn list_table(&self) -> Result<Option<String>, RoutingError>;
 }
 
 #[derive(Debug)]
@@ -38,8 +39,12 @@ impl Nft for SystemNft {
         run(&["-f", "-"], script).map(drop)
     }
 
-    fn table_exists(&self) -> Result<bool, RoutingError> {
-        run(&["list", "tables", "inet"], "").map(|listing| nftables::lists_table(&listing))
+    fn list_table(&self) -> Result<Option<String>, RoutingError> {
+        // Listing a missing table fails like any other error, so look first.
+        if !nftables::lists_table(&run(&["list", "tables", "inet"], "")?) {
+            return Ok(None);
+        }
+        run(&["list", "table", "inet", nftables::TABLE], "").map(Some)
     }
 }
 
