@@ -55,6 +55,7 @@ pub fn render(request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError
         request.rules,
         RULE_CAPABILITIES,
         lan,
+        request.settings.private_networks,
         request.lists,
         request.extra,
     );
@@ -426,14 +427,23 @@ pub(crate) fn route_section(
     capabilities: RuleCapabilities,
     allow_lan: bool,
 ) -> (Value, Vec<RuleId>) {
-    route_section_with_lists(rules, capabilities, allow_lan.then_some(&[]), &[], &[])
+    route_section_with_lists(
+        rules,
+        capabilities,
+        allow_lan.then_some(&[]),
+        allow_lan,
+        &[],
+        &[],
+    )
 }
 
-/// `lan` is the connected networks when "Local network" is on.
+/// `lan` is the connected networks when "Local network" is on;
+/// `private_networks` adds every private range after the user's rules.
 fn route_section_with_lists(
     rules: &RuleSet,
     capabilities: RuleCapabilities,
     lan: Option<&[IpPrefix]>,
+    private_networks: bool,
     lists: &[ListRef],
     extra: &[ExtraOutbound<'_>],
 ) -> (Value, Vec<RuleId>) {
@@ -508,7 +518,9 @@ fn route_section_with_lists(
         }
     }
 
-    if lan.is_some() {
+    // After the user's rules: a rule that sends one of these networks
+    // through the VPN (an office network on the server's side) still wins.
+    if lan.is_some() && private_networks {
         route_rules.push(json!({
             "ip_is_private": true,
             "action": "route",
@@ -761,6 +773,7 @@ mod tests {
         let mut settings = Settings {
             kill_switch: true,
             allow_lan: true,
+            private_networks: true,
             dns: DnsSettings {
                 server: "192.0.2.53".parse().unwrap(),
                 server_name: "dns.example.com".into(),
@@ -1145,7 +1158,7 @@ mod tests {
             });
         }
         let (route, unsupported) =
-            route_section_with_lists(&set, RULE_CAPABILITIES, None, &[reference], &[]);
+            route_section_with_lists(&set, RULE_CAPABILITIES, None, false, &[reference], &[]);
         assert!(unsupported.is_empty());
         assert_eq!(
             route["rule_set"],
@@ -1164,7 +1177,7 @@ mod tests {
             json!({"rule_set": [tag], "action": "reject"})
         );
         assert!(
-            route_section_with_lists(&set, RuleCapabilities::NONE, None, &[], &[])
+            route_section_with_lists(&set, RuleCapabilities::NONE, None, false, &[], &[])
                 .1
                 .len()
                 == 2
@@ -1224,7 +1237,7 @@ mod tests {
             format: UploadedListFormat::Source,
         };
         let (route, unsupported) =
-            route_section_with_lists(&set, RULE_CAPABILITIES, None, &[reference], &[]);
+            route_section_with_lists(&set, RULE_CAPABILITIES, None, false, &[reference], &[]);
         assert_eq!(unsupported, [vanished]);
         assert_eq!(route["rules"].as_array().unwrap().len(), 4);
         assert_eq!(

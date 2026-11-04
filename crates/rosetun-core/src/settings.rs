@@ -60,6 +60,8 @@ pub enum SettingChange {
     Notifications(bool),
     AutoReconnect(bool),
     AllowLan(bool),
+    /// "Private networks behind the router"; counts only with `AllowLan`.
+    PrivateNetworks(bool),
     AutoUpdateSubscriptions(bool),
     CheckUpdates(bool),
     QuitAction(QuitAction),
@@ -76,6 +78,7 @@ pub fn change_setting(store: &Store, change: SettingChange) -> Result<(), Settin
             SettingChange::Notifications(enabled) => config.interface.notifications = enabled,
             SettingChange::AutoReconnect(enabled) => config.settings.auto_reconnect = enabled,
             SettingChange::AllowLan(enabled) => config.settings.allow_lan = enabled,
+            SettingChange::PrivateNetworks(enabled) => config.settings.private_networks = enabled,
             SettingChange::AutoUpdateSubscriptions(enabled) => {
                 config.interface.auto_update_subscriptions = enabled;
             }
@@ -512,6 +515,10 @@ mod tests {
 
         change_setting(&store, SettingChange::AllowLan(true)).unwrap();
         expected.settings.allow_lan = true;
+        assert_eq!(store.load().unwrap(), expected);
+
+        change_setting(&store, SettingChange::PrivateNetworks(true)).unwrap();
+        expected.settings.private_networks = true;
         assert_eq!(store.load().unwrap(), expected);
 
         set_language(&store, LanguageSetting::Russian).unwrap();

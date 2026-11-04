@@ -124,6 +124,7 @@ pub(crate) fn legacy_config() -> AppConfig {
             kill_switch: true,
             auto_reconnect: false,
             allow_lan: true,
+            private_networks: false,
             autostart: true,
             tun: TunSettings {
                 name: "rosetun-test".to_owned(),

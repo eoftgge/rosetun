@@ -272,8 +272,31 @@ fn rules_by_site_need_a_name_and_local_addresses_need_allow_lan() {
         }
     );
     request.settings.allow_lan = true;
+    // A private address outside the link-local networks needs "Private
+    // networks behind the router".
     assert_eq!(
         explain(&request, &SessionLists::default(), &local),
+        Explanation::Routed {
+            reason: Reason::Default,
+            route: ExplainedRoute::Block,
+        }
+    );
+    request.settings.private_networks = true;
+    assert_eq!(
+        explain(&request, &SessionLists::default(), &local),
+        Explanation::Routed {
+            reason: Reason::LocalNetwork,
+            route: ExplainedRoute::Direct,
+        }
+    );
+    let link_local = Destination {
+        domain: None,
+        ip: Some("224.0.0.251".parse().unwrap()),
+        process: None,
+    };
+    request.settings.private_networks = false;
+    assert_eq!(
+        explain(&request, &SessionLists::default(), &link_local),
         Explanation::Routed {
             reason: Reason::LocalNetwork,
             route: ExplainedRoute::Direct,

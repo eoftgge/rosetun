@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt::Formatter;
 use std::time::Duration;
 
-pub const PROTOCOL_VERSION: u32 = 16;
+pub const PROTOCOL_VERSION: u32 = 17;
 pub const MAX_PROBE_NODES: usize = 256;
 pub const MAX_TEMPORARY_RULES: usize = 256;
 pub const MAX_EXTRA_NODES: usize = 16;
@@ -60,6 +60,9 @@ pub enum Request {
     SetLockdown {
         enabled: bool,
         allow_lan: bool,
+        /// Private networks behind the router too (protocol 17).
+        #[serde(default)]
+        private_networks: bool,
     },
     /// Lifts the hold an upgrade left, opening the network (protocol 16).
     OpenNetwork,
@@ -105,10 +108,15 @@ impl std::fmt::Debug for Request {
             Self::CloseConnection { .. } => f.write_str("CloseConnection"),
             Self::TunnelDelay => f.write_str("TunnelDelay"),
             Self::Disconnect => f.write_str("Disconnect"),
-            Self::SetLockdown { enabled, allow_lan } => f
+            Self::SetLockdown {
+                enabled,
+                allow_lan,
+                private_networks,
+            } => f
                 .debug_struct("SetLockdown")
                 .field("enabled", enabled)
                 .field("allow_lan", allow_lan)
+                .field("private_networks", private_networks)
                 .finish(),
             Self::OpenNetwork => f.write_str("OpenNetwork"),
             Self::Subscribe => f.write_str("Subscribe"),
@@ -310,6 +318,7 @@ impl ConnectRequest {
             request.settings.tun = running.tun.clone();
             request.settings.kill_switch = running.kill_switch;
             request.settings.allow_lan = running.allow_lan;
+            request.settings.private_networks = running.private_networks;
         }
         warn_blocked_exits(blocked);
         Ok(request)
@@ -546,7 +555,7 @@ mod tests {
             serde_json::to_string(&super::ErrorCode::AccessDenied).unwrap(),
             "\"access_denied\""
         );
-        assert_eq!(super::PROTOCOL_VERSION, 16);
+        assert_eq!(super::PROTOCOL_VERSION, 17);
         assert_eq!(
             serde_json::to_string(&super::Request::OpenNetwork).unwrap(),
             "\"open_network\""
@@ -558,11 +567,20 @@ mod tests {
         let lockdown = super::Request::SetLockdown {
             enabled: true,
             allow_lan: false,
+            private_networks: false,
         };
         let encoded = serde_json::to_string(&lockdown).unwrap();
         assert_eq!(
             encoded,
-            r#"{"set_lockdown":{"enabled":true,"allow_lan":false}}"#
+            r#"{"set_lockdown":{"enabled":true,"allow_lan":false,"private_networks":false}}"#
+        );
+        // An older client's request still reads.
+        assert_eq!(
+            serde_json::from_str::<super::Request>(
+                r#"{"set_lockdown":{"enabled":true,"allow_lan":false}}"#
+            )
+            .unwrap(),
+            lockdown
         );
         assert_eq!(
             serde_json::from_str::<super::Request>(&encoded).unwrap(),

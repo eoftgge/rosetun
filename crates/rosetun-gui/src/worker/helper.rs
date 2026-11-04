@@ -157,7 +157,13 @@ impl WorkerDispatcher {
                 .store
                 .load()
                 .map_err(HelperCommandError::Store)
-                .and_then(|config| run_lockdown_command(enabled, config.settings.allow_lan));
+                .and_then(|config| {
+                    run_lockdown_command(
+                        enabled,
+                        config.settings.allow_lan,
+                        config.settings.private_networks,
+                    )
+                });
             match &result {
                 Ok(LockdownChange::Done) => tracing::info!(enabled, "Lockdown command succeeded"),
                 #[cfg(any(windows, test))]
@@ -241,11 +247,13 @@ impl WorkerDispatcher {
 fn run_lockdown_command(
     enabled: bool,
     allow_lan: bool,
+    private_networks: bool,
 ) -> Result<LockdownChange, HelperCommandError> {
     let cli = std::env::current_exe()
         .map_err(HelperCommandError::LockdownLaunch)?
         .with_file_name(format!("rosetun{}", std::env::consts::EXE_SUFFIX));
-    match rosetun_shell::run_elevated(&cli, &lockdown_arguments(enabled, allow_lan)) {
+    let arguments = lockdown_arguments(enabled, allow_lan, private_networks);
+    match rosetun_shell::run_elevated(&cli, &arguments) {
         Ok(None) => Ok(LockdownChange::Declined),
         Ok(Some(0)) => Ok(LockdownChange::Done),
         Ok(Some(code)) => Err(HelperCommandError::LockdownCommand(code)),
@@ -257,6 +265,7 @@ fn run_lockdown_command(
 fn run_lockdown_command(
     _enabled: bool,
     _allow_lan: bool,
+    _private_networks: bool,
 ) -> Result<LockdownChange, HelperCommandError> {
     Err(HelperCommandError::LockdownLaunch(std::io::Error::new(
         std::io::ErrorKind::Unsupported,
@@ -265,9 +274,14 @@ fn run_lockdown_command(
 }
 
 #[cfg(any(windows, test))]
-fn lockdown_arguments(enabled: bool, allow_lan: bool) -> String {
+fn lockdown_arguments(enabled: bool, allow_lan: bool, private_networks: bool) -> String {
     if enabled {
-        format!("lockdown on --lan {}", if allow_lan { "on" } else { "off" })
+        let lan = match (allow_lan, private_networks) {
+            (false, _) => "off",
+            (true, false) => "on",
+            (true, true) => "private",
+        };
+        format!("lockdown on --lan {lan}")
     } else {
         "lockdown off".to_owned()
     }
@@ -332,9 +346,19 @@ mod lockdown_command_tests {
 
     #[test]
     fn the_elevated_command_carries_the_lan_value_only_when_turning_on() {
-        assert_eq!(lockdown_arguments(true, true), "lockdown on --lan on");
-        assert_eq!(lockdown_arguments(true, false), "lockdown on --lan off");
-        assert_eq!(lockdown_arguments(false, true), "lockdown off");
+        assert_eq!(
+            lockdown_arguments(true, true, false),
+            "lockdown on --lan on"
+        );
+        assert_eq!(
+            lockdown_arguments(true, true, true),
+            "lockdown on --lan private"
+        );
+        assert_eq!(
+            lockdown_arguments(true, false, true),
+            "lockdown on --lan off"
+        );
+        assert_eq!(lockdown_arguments(false, true, false), "lockdown off");
     }
 
     #[cfg(not(windows))]
@@ -342,7 +366,7 @@ mod lockdown_command_tests {
     fn lockdown_is_unsupported_for_every_lan_and_enabled_value() {
         for enabled in [false, true] {
             for allow_lan in [false, true] {
-                let error = super::run_lockdown_command(enabled, allow_lan).unwrap_err();
+                let error = super::run_lockdown_command(enabled, allow_lan, allow_lan).unwrap_err();
                 assert!(matches!(
                     error,
                     super::HelperCommandError::LockdownLaunch(error)

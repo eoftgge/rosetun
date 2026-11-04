@@ -52,7 +52,10 @@ enum Command {
     /// Lockdown on with this LAN access instead of the saved one: the GUI
     /// runs the command elevated, possibly as another account with other
     /// settings.
-    LockdownWithLan(bool),
+    LockdownWithLan {
+        allow_lan: bool,
+        private_networks: bool,
+    },
     ResetFirewall,
     OpenNetwork,
     Disconnect,
@@ -103,17 +106,20 @@ fn main() -> ExitCode {
         }
         Command::Config => local_result(print_config()),
         Command::Xray(setting) => local_result(set_xray(setting)),
-        Command::Lan(enabled) => match set_lan(enabled) {
-            Ok(()) => update_lockdown_lan(enabled),
+        Command::Lan(enabled) => match set_lan(enabled).and_then(|()| saved_lan()) {
+            Ok((_, private_networks)) => update_lockdown_lan(enabled, private_networks),
             Err(message) => local_result(Err(message)),
         },
-        Command::Lockdown(enabled) => match saved_allow_lan() {
-            Ok(allow_lan) => with_helper(|client| lockdown(client, enabled, allow_lan)),
+        Command::Lockdown(enabled) => match saved_lan() {
+            Ok((allow_lan, private_networks)) => {
+                with_helper(|client| lockdown(client, enabled, allow_lan, private_networks))
+            }
             Err(message) => local_result(Err(message)),
         },
-        Command::LockdownWithLan(allow_lan) => {
-            with_helper(|client| lockdown(client, true, allow_lan))
-        }
+        Command::LockdownWithLan {
+            allow_lan,
+            private_networks,
+        } => with_helper(|client| lockdown(client, true, allow_lan, private_networks)),
         Command::ResetFirewall => reset_firewall(),
         Command::Connect { request_path } => match prepare_list_request(request_path.as_deref()) {
             Ok(request) => with_helper(|client| connect(client, request)),
@@ -643,18 +649,24 @@ fn set_lan(enabled: bool) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
-fn saved_allow_lan() -> Result<bool, String> {
+/// The saved "Local network" and "Private networks behind the router".
+fn saved_lan() -> Result<(bool, bool), String> {
     let store = rosetun_core::Store::open_default().map_err(|error| error.to_string())?;
     let config = store.load().map_err(|error| error.to_string())?;
-    Ok(config.settings.allow_lan)
+    Ok((config.settings.allow_lan, config.settings.private_networks))
 }
 
-fn lockdown(client: &mut HelperClient, enabled: bool, allow_lan: bool) -> ExitCode {
+fn lockdown(
+    client: &mut HelperClient,
+    enabled: bool,
+    allow_lan: bool,
+    private_networks: bool,
+) -> ExitCode {
     if let Some(message) = lockdown_refusal(client.protection()) {
         eprintln!("{message}");
         return ExitCode::FAILURE;
     }
-    match client.set_lockdown(enabled, allow_lan) {
+    match client.set_lockdown(enabled, allow_lan, private_networks) {
         Ok(()) => {
             println!("lockdown {}", if enabled { "on" } else { "off" });
             ExitCode::SUCCESS
@@ -681,14 +693,15 @@ fn lockdown_denied(error: &ClientError) -> bool {
 /// an administrator runs the command. Otherwise the setting is saved and
 /// Lockdown keeps its permits. Without a running service there is nothing
 /// to update: the next connect by an administrator brings Lockdown in line.
-fn update_lockdown_lan(enabled: bool) -> ExitCode {
+fn update_lockdown_lan(enabled: bool, private_networks: bool) -> ExitCode {
     let endpoint = rosetun_ipc::default_endpoint();
     let client_name = concat!("rosetun/", env!("CARGO_PKG_VERSION"));
     let Ok(mut client) = HelperClient::connect(&endpoint, client_name) else {
         return ExitCode::SUCCESS;
     };
     match client.status() {
-        Ok(status) if status.lockdown => match client.set_lockdown(true, enabled) {
+        Ok(status) if status.lockdown => match client.set_lockdown(true, enabled, private_networks)
+        {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) if lockdown_denied(&error) => {
                 eprintln!("{LAN_KEPT_BY_LOCKDOWN}");
@@ -792,8 +805,18 @@ fn parse_command_arguments(arguments: &[String]) -> Result<Command, String> {
         ["lan", "off"] => Ok(Command::Lan(false)),
         ["lockdown", "on"] => Ok(Command::Lockdown(true)),
         ["lockdown", "off"] => Ok(Command::Lockdown(false)),
-        ["lockdown", "on", "--lan", "on"] => Ok(Command::LockdownWithLan(true)),
-        ["lockdown", "on", "--lan", "off"] => Ok(Command::LockdownWithLan(false)),
+        ["lockdown", "on", "--lan", value] => {
+            let (allow_lan, private_networks) = match *value {
+                "off" => (false, false),
+                "on" => (true, false),
+                "private" => (true, true),
+                _ => return Err("--lan takes on, off or private".to_owned()),
+            };
+            Ok(Command::LockdownWithLan {
+                allow_lan,
+                private_networks,
+            })
+        }
         ["reset-firewall"] => Ok(Command::ResetFirewall),
         ["open-network"] => Ok(Command::OpenNetwork),
         ["disconnect"] => Ok(Command::Disconnect),
@@ -853,7 +876,7 @@ Usage:
   rosetun xray <auto|off|always>
   rosetun lan <on|off>
   rosetun lockdown <on|off>    (experimental)
-  rosetun lockdown on --lan <on|off>
+  rosetun lockdown on --lan <on|off|private>
   rosetun reset-firewall
   rosetun open-network
   rosetun disconnect
@@ -975,11 +998,24 @@ mod tests {
         assert_eq!(parse(&["lockdown", "off"]), Ok(Command::Lockdown(false)));
         assert_eq!(
             parse(&["lockdown", "on", "--lan", "off"]),
-            Ok(Command::LockdownWithLan(false))
+            Ok(Command::LockdownWithLan {
+                allow_lan: false,
+                private_networks: false
+            })
         );
         assert_eq!(
             parse(&["lockdown", "on", "--lan", "on"]),
-            Ok(Command::LockdownWithLan(true))
+            Ok(Command::LockdownWithLan {
+                allow_lan: true,
+                private_networks: false
+            })
+        );
+        assert_eq!(
+            parse(&["lockdown", "on", "--lan", "private"]),
+            Ok(Command::LockdownWithLan {
+                allow_lan: true,
+                private_networks: true
+            })
         );
         assert!(parse(&["lockdown", "off", "--lan", "on"]).is_err());
         assert!(parse(&["lockdown"]).is_err());

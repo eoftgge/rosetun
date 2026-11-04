@@ -134,7 +134,7 @@ impl Session {
         }
         LanAccess {
             segment: self.scan_lan(&settings.tun, servers, true),
-            private_networks: false,
+            private_networks: settings.private_networks,
             ipv6_multicast: settings.tun.ipv6.is_some(),
         }
     }
@@ -204,7 +204,7 @@ impl Session {
         if !state.enabled || !state.allow_lan || state.upgrade_hold {
             return;
         }
-        let Some(lan) = self.lockdown_lan(true, false) else {
+        let Some(lan) = self.lockdown_lan(true, state.private_networks) else {
             return;
         };
         match self

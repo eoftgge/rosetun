@@ -447,12 +447,19 @@ fn dispatch(
             Ok(()) => Response::Ok,
             Err(error) => Response::Error(error),
         },
-        Request::SetLockdown { enabled, allow_lan } => {
-            match helper.set_lockdown_as(caller.expect("caller checked"), *enabled, *allow_lan) {
-                Ok(()) => Response::Ok,
-                Err(error) => Response::Error(error),
-            }
-        }
+        Request::SetLockdown {
+            enabled,
+            allow_lan,
+            private_networks,
+        } => match helper.set_lockdown_as(
+            caller.expect("caller checked"),
+            *enabled,
+            *allow_lan,
+            *allow_lan && *private_networks,
+        ) {
+            Ok(()) => Response::Ok,
+            Err(error) => Response::Error(error),
+        },
         Request::OpenNetwork => match helper.open_network_as(caller.expect("caller checked")) {
             Ok(()) => Response::Ok,
             Err(error) => Response::Error(error),
@@ -619,6 +626,7 @@ mod tests {
             Request::SetLockdown {
                 enabled: true,
                 allow_lan: false,
+                private_networks: false,
             },
             Request::Shutdown,
             Request::ListStatus { hashes: Vec::new() },

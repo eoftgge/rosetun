@@ -132,6 +132,7 @@ fn request(allow_lan: bool) -> ConnectRequest {
         }],
         settings: Settings {
             allow_lan,
+            private_networks: allow_lan,
             ..Settings::default()
         },
         rule_templates,

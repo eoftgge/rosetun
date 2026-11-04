@@ -170,8 +170,18 @@ impl HelperClient {
         self.expect_ok(Request::Disconnect)
     }
 
-    pub fn set_lockdown(&mut self, enabled: bool, allow_lan: bool) -> Result<(), ClientError> {
-        self.expect_ok(Request::SetLockdown { enabled, allow_lan })
+    /// `private_networks` counts only with `allow_lan`.
+    pub fn set_lockdown(
+        &mut self,
+        enabled: bool,
+        allow_lan: bool,
+        private_networks: bool,
+    ) -> Result<(), ClientError> {
+        self.expect_ok(Request::SetLockdown {
+            enabled,
+            allow_lan,
+            private_networks: allow_lan && private_networks,
+        })
     }
 
     /// Lifts the hold an upgrade left; `Ok` when there was none.

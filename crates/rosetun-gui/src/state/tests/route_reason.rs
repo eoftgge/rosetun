@@ -29,6 +29,7 @@ fn connected(rules: Vec<Rule>, temporary: Vec<Rule>) -> State {
     state.config.rule_sets.push(set);
     state.config.active_rule_set = Some(RuleSetId::new("set"));
     state.config.settings.allow_lan = true;
+    state.config.settings.private_networks = true;
     let mut request = ConnectRequest::from_config(&state.config).unwrap();
     request.temporary_rules = temporary;
     state.reduce(WorkerEvent::Connect(Ok(request)));

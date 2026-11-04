@@ -314,6 +314,10 @@ pub struct Settings {
     pub auto_reconnect: bool,
     #[serde(default)]
     pub allow_lan: bool,
+    /// With `allow_lan`, private networks beyond the computer's own segment
+    /// (behind the router) go around the tunnel too (format 8).
+    #[serde(default)]
+    pub private_networks: bool,
     #[serde(default)]
     pub autostart: bool,
     #[serde(default)]
@@ -337,6 +341,7 @@ impl Default for Settings {
             kill_switch: false,
             auto_reconnect: true,
             allow_lan: false,
+            private_networks: false,
             autostart: false,
             tun: TunSettings::default(),
             dns: DnsSettings::default(),

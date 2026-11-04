@@ -23,6 +23,8 @@ use super::{Acquired, Caller, Guard, Helper, SESSION_WAIT, Session, SessionHolde
 pub(super) struct LockdownState {
     pub(super) enabled: bool,
     pub(super) allow_lan: bool,
+    /// Private networks behind the router are open too; only with `allow_lan`.
+    pub(super) private_networks: bool,
     /// The objects are an upgrade's hold, not the user's Lockdown.
     pub(super) upgrade_hold: bool,
 }
@@ -103,6 +105,7 @@ impl Helper {
         caller: &Caller,
         enabled: bool,
         allow_lan: bool,
+        private_networks: bool,
     ) -> Result<(), HelperError> {
         // Lockdown is machine-wide and outlives the session, so the session
         // owner alone may not turn it off. An administrator passes any
@@ -140,7 +143,7 @@ impl Helper {
             Err(TryLockError::Poisoned(error)) => error.into_inner(),
         };
         if enabled {
-            session.enable_lockdown(allow_lan)?;
+            session.enable_lockdown(allow_lan, private_networks)?;
             session.adopt_upgrade_hold()
         } else {
             session.disable_lockdown()
@@ -199,6 +202,7 @@ impl Helper {
             LockdownState {
                 enabled: true,
                 allow_lan: status.allow_lan,
+                private_networks: status.private_networks,
                 upgrade_hold: status.upgrade_hold,
             },
         );
@@ -206,7 +210,7 @@ impl Helper {
             tracing::info!("the upgrade hold keeps the network closed until a connect");
         }
         // No session yet: the GUI and the CLI get their permits back too.
-        let lan = session.lockdown_lan(status.allow_lan, false);
+        let lan = session.lockdown_lan(status.allow_lan, status.private_networks);
         match session
             .routing
             .enable_lockdown(lan.as_ref(), &(session.lockdown_apps)())
@@ -267,14 +271,18 @@ fn format_weight(weight: Option<u16>) -> String {
 impl Session {
     /// Persistent objects first, then the session's filters move above
     /// Lockdown's block. In between the tunnel is blocked, never open.
-    fn enable_lockdown(&mut self, allow_lan: bool) -> Result<(), HelperError> {
+    fn enable_lockdown(
+        &mut self,
+        allow_lan: bool,
+        private_networks: bool,
+    ) -> Result<(), HelperError> {
         // During a session the GUI and the CLI get no permits: the session's
         // filters land in the Lockdown sublayer, above its block but below
         // them.
         if self.guard.is_some() || self.request.is_some() {
             self.programs_withdrawn = true;
         }
-        let lan = self.lockdown_lan(allow_lan, false);
+        let lan = self.lockdown_lan(allow_lan, private_networks);
         let status = self
             .routing
             .enable_lockdown(lan.as_ref(), &self.lockdown_programs())
@@ -284,11 +292,13 @@ impl Session {
             LockdownState {
                 enabled: true,
                 allow_lan,
+                private_networks,
                 ..read(&self.lockdown)
             },
         );
         tracing::info!(
             allow_lan,
+            private_networks,
             complete = status.complete,
             sublayer_weight = %format_weight(status.sublayer_weight),
             "Lockdown turned on"
@@ -444,7 +454,7 @@ impl Session {
             self.programs_withdrawn = false;
             return;
         }
-        let lan = self.lockdown_lan(state.allow_lan, false);
+        let lan = self.lockdown_lan(state.allow_lan, state.private_networks);
         match self
             .routing
             .enable_lockdown(lan.as_ref(), &(self.lockdown_apps)())
@@ -543,8 +553,11 @@ pub(super) fn sync_lan(
     lan: Option<&rosetun_routing::lan::LanAccess>,
 ) -> Result<(), HelperError> {
     let allow_lan = lan.is_some();
+    let private_networks = lan.is_some_and(|lan| lan.private_networks);
     let state = read(shared);
-    if !state.enabled || state.allow_lan == allow_lan {
+    if !state.enabled
+        || (state.allow_lan == allow_lan && state.private_networks == private_networks)
+    {
         return Ok(());
     }
     if !caller.administrator {
@@ -560,10 +573,15 @@ pub(super) fn sync_lan(
         LockdownState {
             enabled: true,
             allow_lan,
+            private_networks,
             ..state
         },
     );
-    tracing::info!(allow_lan, "Lockdown LAN access follows the connect request");
+    tracing::info!(
+        allow_lan,
+        private_networks,
+        "Lockdown LAN access follows the connect request"
+    );
     Ok(())
 }
 
@@ -774,12 +792,14 @@ mod tests {
         let caller = Caller::fake(b"admin", true);
         assert!(!helper.status().lockdown);
 
-        helper.set_lockdown_as(&caller, true, true).unwrap();
+        helper.set_lockdown_as(&caller, true, true, false).unwrap();
         assert!(helper.status().lockdown);
-        helper.set_lockdown_as(&caller, true, false).unwrap();
+        helper.set_lockdown_as(&caller, true, false, false).unwrap();
         assert_eq!(*calls.enabled.lock().unwrap(), [true, false]);
 
-        helper.set_lockdown_as(&caller, false, false).unwrap();
+        helper
+            .set_lockdown_as(&caller, false, false, false)
+            .unwrap();
         assert!(!helper.status().lockdown);
         assert_eq!(calls.disabled.load(Ordering::Acquire), 1);
     }
@@ -790,10 +810,14 @@ mod tests {
         calls.unprotected.store(true, Ordering::Release);
         let helper = lockdown_helper(&calls);
         let caller = Caller::fake(b"admin", true);
-        let error = helper.set_lockdown_as(&caller, true, false).unwrap_err();
+        let error = helper
+            .set_lockdown_as(&caller, true, false, false)
+            .unwrap_err();
         assert_eq!(error.code, ErrorCode::ProtectionUnavailable);
         assert!(calls.enabled.lock().unwrap().is_empty());
-        helper.set_lockdown_as(&caller, false, false).unwrap();
+        helper
+            .set_lockdown_as(&caller, false, false, false)
+            .unwrap();
         assert_eq!(calls.disabled(), 1);
     }
 
@@ -847,7 +871,7 @@ mod tests {
         let calls = Arc::new(Calls::default());
         let helper = lockdown_helper(&calls);
         let caller = Caller::fake(b"admin", true);
-        helper.set_lockdown_as(&caller, true, false).unwrap();
+        helper.set_lockdown_as(&caller, true, false, false).unwrap();
         let moves = Arc::new(Mutex::new(Vec::new()));
         let recorded = Arc::clone(&moves);
         helper.session.lock().unwrap().guard = Some(Guard {
@@ -861,7 +885,9 @@ mod tests {
         });
         calls.fail_disable.store(true, Ordering::Release);
 
-        let error = helper.set_lockdown_as(&caller, false, false).unwrap_err();
+        let error = helper
+            .set_lockdown_as(&caller, false, false, false)
+            .unwrap_err();
         assert_eq!(error.code, ErrorCode::RoutingFailed);
         assert_eq!(*moves.lock().unwrap(), [false, true]);
         assert!(helper.status().lockdown);
@@ -877,7 +903,7 @@ mod tests {
             scope: ProtectionScope::AllTraffic,
         });
 
-        helper.set_lockdown_as(&caller, true, false).unwrap();
+        helper.set_lockdown_as(&caller, true, false, false).unwrap();
         let during = calls.apps.lock().unwrap()[0].clone();
         assert_eq!((during.gui, during.cli), (None, None));
         assert!(during.service.is_some());
@@ -889,7 +915,9 @@ mod tests {
 
         // Without Lockdown nothing comes back.
         helper.session.lock().unwrap().programs_withdrawn = true;
-        helper.set_lockdown_as(&caller, false, false).unwrap();
+        helper
+            .set_lockdown_as(&caller, false, false, false)
+            .unwrap();
         helper.session.lock().unwrap().teardown();
         assert_eq!(calls.apps.lock().unwrap().len(), 2);
     }
@@ -900,7 +928,7 @@ mod tests {
         let helper = lockdown_helper(&calls);
         let _session = helper.session.lock().unwrap();
         let error = helper
-            .set_lockdown_as(&Caller::fake(b"admin", true), true, false)
+            .set_lockdown_as(&Caller::fake(b"admin", true), true, false, false)
             .unwrap_err();
         assert_eq!(error.code, ErrorCode::Busy);
         assert!(calls.enabled.lock().unwrap().is_empty());
@@ -945,13 +973,17 @@ mod tests {
         let user = Caller::fake(b"user", false);
         let admin = Caller::fake(b"admin", true);
 
-        let error = helper.set_lockdown_as(&user, true, false).unwrap_err();
+        let error = helper
+            .set_lockdown_as(&user, true, false, false)
+            .unwrap_err();
         assert_eq!(error.code, ErrorCode::AccessDenied);
         assert!(!helper.status().lockdown);
         assert!(calls.enabled.lock().unwrap().is_empty());
 
-        helper.set_lockdown_as(&admin, true, false).unwrap();
-        let error = helper.set_lockdown_as(&user, false, false).unwrap_err();
+        helper.set_lockdown_as(&admin, true, false, false).unwrap();
+        let error = helper
+            .set_lockdown_as(&user, false, false, false)
+            .unwrap_err();
         assert_eq!(error.code, ErrorCode::AccessDenied);
         assert!(helper.status().lockdown);
         assert_eq!(calls.disabled.load(Ordering::Acquire), 0);
@@ -967,6 +999,7 @@ mod tests {
             super::LockdownState {
                 enabled: true,
                 allow_lan: false,
+                private_networks: false,
                 upgrade_hold: false,
             },
         );
@@ -1059,7 +1092,7 @@ mod tests {
         let calls = Arc::new(Calls::default());
         let helper = lockdown_helper(&calls);
         let admin = Caller::fake(b"admin", true);
-        helper.set_lockdown_as(&admin, true, false).unwrap();
+        helper.set_lockdown_as(&admin, true, false, false).unwrap();
 
         helper.open_network_as(&admin).unwrap();
         helper.disconnect_as(&admin).unwrap();
@@ -1077,7 +1110,7 @@ mod tests {
         let helper = held_helper(&calls);
         let admin = Caller::fake(b"admin", true);
 
-        helper.set_lockdown_as(&admin, true, true).unwrap();
+        helper.set_lockdown_as(&admin, true, true, false).unwrap();
         assert_eq!(calls.hold_ended.load(Ordering::Acquire), 1);
         let status = helper.status();
         assert!(status.lockdown);
@@ -1095,7 +1128,7 @@ mod tests {
         let helper = held_helper(&calls);
 
         helper
-            .set_lockdown_as(&Caller::fake(b"admin", true), false, false)
+            .set_lockdown_as(&Caller::fake(b"admin", true), false, false, false)
             .unwrap();
 
         assert_eq!(calls.disabled(), 1);

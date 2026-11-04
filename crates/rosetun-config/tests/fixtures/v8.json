@@ -12,6 +12,7 @@
     "kill_switch": true,
     "auto_reconnect": false,
     "allow_lan": true,
+    "private_networks": false,
     "autostart": true,
     "tun": {
       "name": "rosetun-test",

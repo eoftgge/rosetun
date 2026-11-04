@@ -294,8 +294,10 @@ fn current_configuration_fixture_guards_the_serialized_format() {
 }
 
 /// Settings saved by an older release have no fragmentation; loading adds it switched off.
+/// The format 8 fields an older file gets when it is loaded.
 fn with_default_fragmentation(mut config: Value) -> Value {
     config["settings"]["tls_fragment"] = serde_json::to_value(TlsFragment::default()).unwrap();
+    config["settings"]["private_networks"] = json!(false);
     config
 }
 

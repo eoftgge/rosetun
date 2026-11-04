@@ -1145,7 +1145,10 @@ impl Helper {
             "starting tunnel connection"
         );
 
-        let lockdown_lan = session.lockdown_lan(request.settings.allow_lan, false);
+        let lockdown_lan = session.lockdown_lan(
+            request.settings.allow_lan,
+            request.settings.private_networks,
+        );
         lockdown::sync_lan(
             session.routing.as_ref(),
             &session.lockdown,

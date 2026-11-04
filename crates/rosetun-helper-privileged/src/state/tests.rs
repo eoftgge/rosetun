@@ -7228,6 +7228,7 @@ fn lockdown_without_the_capability_refuses_a_connect_even_without_the_kill_switc
     *helper.lockdown.lock().unwrap() = lockdown::LockdownState {
         enabled: true,
         allow_lan: false,
+        private_networks: false,
         upgrade_hold: false,
     };
     let mut request = connect_request();

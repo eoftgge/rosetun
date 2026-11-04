@@ -286,7 +286,10 @@ pub fn explain(
             route: ExplainedRoute::of(rule.target, rule.exit.as_ref()),
         };
     }
-    if request.settings.allow_lan && destination.ip.is_some_and(is_private) {
+    if request.settings.allow_lan
+        && request.settings.private_networks
+        && destination.ip.is_some_and(is_private)
+    {
         return Explanation::Routed {
             reason: Reason::LocalNetwork,
             route: ExplainedRoute::Direct,

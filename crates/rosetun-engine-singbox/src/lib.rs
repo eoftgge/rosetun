@@ -783,6 +783,7 @@ mod tests {
         let rules = rules();
         let settings = Settings {
             allow_lan: true,
+            private_networks: true,
             ..Settings::default()
         };
         let request = RenderRequest {
@@ -1585,6 +1586,7 @@ mod tests {
         let node = node();
         let settings = Settings {
             allow_lan: true,
+            private_networks: true,
             ..Settings::default()
         };
         let config = render::render(&RenderRequest {
@@ -1751,6 +1753,7 @@ mod tests {
         let node = node();
         let settings = Settings {
             allow_lan: true,
+            private_networks: true,
             ..Settings::default()
         };
         let rendered = render::render(&RenderRequest {
@@ -1859,6 +1862,7 @@ mod tests {
         let node = node();
         let settings = Settings {
             allow_lan: true,
+            private_networks: true,
             ..Settings::default()
         };
         let mut rule_set = rules();
@@ -1938,6 +1942,7 @@ mod tests {
         for allow_lan in [false, true] {
             let settings = Settings {
                 allow_lan,
+                private_networks: true,
                 ..Settings::default()
             };
             let node = node();
@@ -1972,6 +1977,42 @@ mod tests {
     }
 
     #[test]
+    fn private_networks_behind_the_router_are_a_separate_choice() {
+        let node = node();
+        let rules = rules();
+        for (allow_lan, private_networks, expected) in [
+            (true, false, false),
+            (true, true, true),
+            (false, true, false),
+        ] {
+            let settings = Settings {
+                allow_lan,
+                private_networks,
+                ..Settings::default()
+            };
+            let rendered = render::render(&RenderRequest {
+                extra: &[],
+                node: &node,
+                socks: None,
+                rules: &rules,
+                lists: &[],
+                settings: &settings,
+                lan_segment: &[],
+                control: None,
+                verbose_log: false,
+            })
+            .expect("rendered");
+            let config: Value = serde_json::from_slice(&rendered.body).expect("JSON");
+            let route = config["route"]["rules"].as_array().expect("rules");
+            assert_eq!(
+                route.iter().any(|rule| rule["ip_is_private"] == true),
+                expected,
+                "local network {allow_lan}, private networks {private_networks}"
+            );
+        }
+    }
+
+    #[test]
     fn the_segment_leaves_the_tunnels_routes_and_ipv6_only_with_an_ipv6_tunnel() {
         let segment = [
             IpPrefix::new("192.0.2.0".parse().unwrap(), 24).unwrap(),
@@ -1982,6 +2023,7 @@ mod tests {
         let exclude = |allow_lan, ipv6: Option<&str>| {
             let mut settings = Settings {
                 allow_lan,
+                private_networks: true,
                 ..Settings::default()
             };
             settings.tun.ipv6 = ipv6.map(str::to_owned);
@@ -2037,6 +2079,7 @@ mod tests {
         for allow_lan in [false, true] {
             let settings = Settings {
                 allow_lan,
+                private_networks: true,
                 ..Settings::default()
             };
             let rendered = render::render(&RenderRequest {
