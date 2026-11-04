@@ -219,14 +219,32 @@ function Get-RosetunGuestDiscoverySource {
 }
 
 function Write-RosetunGuestPathCache {
-    # Prints what Windows remembers of $Address per adapter, for sending back.
+    # Prints what Windows remembers of $Address per adapter, for sending back:
+    # the values only, since the labels are localized. Each entry has 13 lines,
+    # and the first four are the destination, next hop, source and adapter.
     param([Parameter(Mandatory)][string]$Address)
-    $lines = @(Invoke-RosetunGuest -ScriptBlock {
+    $values = @(Invoke-RosetunGuest -ScriptBlock {
         param($address)
         @(netsh.exe interface ipv4 show destinationcache "address=$address" |
-            Where-Object { $_ -match '\S' })
+            Where-Object { $_ -match ':' } |
+            ForEach-Object { $_ -replace '^[^:]*:\s*', '' })
     } -ArgumentList $Address)
-    foreach ($line in $lines) { Write-Host "PATH $Address $line" }
+    for ($index = 0; $index + 3 -lt $values.Count; $index += 13) {
+        Write-Host "PATH $Address source $($values[$index + 2]) on $($values[$index + 3])"
+    }
+}
+
+function Get-RosetunGuestSettledSource {
+    # The sources once all of them are $Expected, or as they are after a few
+    # seconds: the service repeats its flush on ticks 500 ms apart.
+    param([Parameter(Mandatory)][string]$Expected, [int]$TimeoutSeconds = 5)
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    do {
+        $sources = @(Get-RosetunGuestSettledSource -Expected $(if ($OnTunnel) { $TunAddress } else { $physical.Address }))
+        if (-not @($sources | Where-Object { $_.Source -ne $Expected })) { break }
+        Start-Sleep -Milliseconds 500
+    } while ([DateTime]::UtcNow -lt $deadline)
+    $sources
 }
 
 function Test-RosetunGuestDiscoveryRoute {
