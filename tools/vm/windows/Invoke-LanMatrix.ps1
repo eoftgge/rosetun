@@ -23,7 +23,9 @@ param(
     # own Default Switch address, which is the device under test.
     [string]$NodeAddress = '203.0.113.1',
     # The port of the limited-broadcast check; nothing else listens on it.
-    [int]$BroadcastPort = 47901
+    [int]$BroadcastPort = 47901,
+    # Only prints where unbound discovery goes over time, and stops. About 4 minutes.
+    [switch]$DiscoveryTimelineOnly
 )
 
 Set-StrictMode -Version Latest
@@ -283,6 +285,44 @@ function Test-RosetunGuestDiscoveryRoute {
         }
         if ($entry.Source -ne $physical.Address) { Write-RosetunGuestPathCache -Address $entry.Address }
     }
+}
+
+function Write-RosetunGuestDiscoveryTimeline {
+    # Prints the sockets' source addresses at these moments after the last
+    # connect, then the cached paths and the routes they could take.
+    param([Parameter(Mandatory)][string]$Label, [int[]]$AtSeconds = @(0, 2, 5, 15, 30, 60))
+    $started = [DateTime]::UtcNow
+    foreach ($second in $AtSeconds) {
+        $wait = $started.AddSeconds($second) - [DateTime]::UtcNow
+        if ($wait -gt [TimeSpan]::Zero) { Start-Sleep -Milliseconds ([int]$wait.TotalMilliseconds) }
+        $line = (@(Get-RosetunGuestDiscoverySource) | ForEach-Object { "$($_.Address)=$($_.Source)" }) -join '  '
+        Write-Host "TIMELINE $Label +$($second)s  $line"
+    }
+    foreach ($group in @('224.0.0.251', '239.255.255.250')) { Write-RosetunGuestPathCache -Address $group }
+    $routes = @(Invoke-RosetunGuest -ScriptBlock {
+        @(Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '224.0.0.0/4' -ErrorAction Stop | ForEach-Object {
+            $metric = (Get-NetIPInterface -AddressFamily IPv4 -InterfaceIndex $_.InterfaceIndex).InterfaceMetric
+            "$($_.InterfaceAlias) route $($_.RouteMetric) interface $metric"
+        })
+    })
+    foreach ($route in $routes) { Write-Host "TIMELINE $Label 224.0.0.0/4 on $route" }
+}
+
+function Invoke-RosetunDiscoveryTimeline {
+    # A service that has released no route yet, so it flushes nothing: what
+    # Windows does by itself. Then the same after a session with "Local
+    # network", and after a flush by hand with everything in place.
+    Write-Host "TIMELINE connect lan-off, first of this service: $(Connect-RosetunLan 'lan-off.json')"
+    Write-RosetunGuestDiscoveryTimeline -Label 'first lan-off'
+    Write-Host "TIMELINE connect lan-on: $(Connect-RosetunLan 'lan-on.json')"
+    Write-RosetunGuestDiscoveryTimeline -Label 'lan-on' -AtSeconds @(0, 5)
+    $mark = Get-RosetunHelperLogLength
+    Write-Host "TIMELINE connect lan-off after lan-on: $(Connect-RosetunLan 'lan-off.json')"
+    Write-RosetunGuestDiscoveryTimeline -Label 'lan-off after lan-on'
+    @((Get-RosetunHelperLogSince -Offset $mark) -split '\r?\n' | Where-Object { $_ -match 'discovery' }) |
+        ForEach-Object { Write-Host "TIMELINE log $_" }
+    Invoke-RosetunGuest -ScriptBlock { netsh.exe interface ipv4 delete destinationcache | Out-Null }
+    Write-RosetunGuestDiscoveryTimeline -Label 'after a flush by hand' -AtSeconds @(0, 2, 5, 15)
 }
 
 function Set-RosetunGuestFilterAudit {
@@ -590,6 +630,11 @@ try {
     $broadcast = @(Start-RosetunBroadcastWatch)
 
     try {
+        if ($DiscoveryTimelineOnly) {
+            Invoke-RosetunDiscoveryTimeline
+            return
+        }
+
         # Route: with "Local network" the host is on-link through the adapter.
         $mark = Get-RosetunHelperLogLength
         Test-Step 'route' 'lan-on connects' { Connect-RosetunLan 'lan-on.json' }
