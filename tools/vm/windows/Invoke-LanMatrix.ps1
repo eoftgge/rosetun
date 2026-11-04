@@ -16,7 +16,12 @@ param(
     [string]$PrivateBehindRouter = '10.255.255.1',
     # A documentation network the guest is given for the address change.
     [string]$ExtraAddress = '198.51.100.10',
-    [string]$ExtraPeer = '198.51.100.20'
+    [string]$ExtraPeer = '198.51.100.20',
+    # Where the guest reaches the test node: a second host address on the
+    # Default Switch, outside the guest's network. A VPN server inside the
+    # network closes the whole network, so the node cannot sit on the host's
+    # own Default Switch address, which is the device under test.
+    [string]$NodeAddress = '203.0.113.1'
 )
 
 Set-StrictMode -Version Latest
@@ -327,6 +332,46 @@ function Get-RosetunGuestConnectionsTo {
     @(Get-RosetunConnectionRows -Output $output | Where-Object { $_.Destination -like "$Address*" })
 }
 
+function Set-RosetunGuestStatic {
+    # Turns the guest's DHCP lease into the same static configuration: an
+    # address added to a DHCP interface switches DHCP off and takes the lease
+    # and the gateway with it. Returns what `Restore-RosetunGuestDhcp` undoes.
+    param([Parameter(Mandatory)][string]$Alias)
+    Invoke-RosetunGuest -ScriptBlock {
+        param($alias)
+        $address = Get-NetIPAddress -InterfaceAlias $alias -AddressFamily IPv4 -PrefixOrigin Dhcp |
+            Select-Object -First 1
+        $gateway = (Get-NetRoute -InterfaceAlias $alias -DestinationPrefix '0.0.0.0/0' |
+                Select-Object -First 1).NextHop
+        $dns = @((Get-DnsClientServerAddress -InterfaceAlias $alias -AddressFamily IPv4).ServerAddresses)
+        Set-NetIPInterface -InterfaceAlias $alias -AddressFamily IPv4 -Dhcp Disabled
+        Get-NetIPAddress -InterfaceAlias $alias -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+            Where-Object { $_.IPAddress -eq $address.IPAddress } |
+            Remove-NetIPAddress -Confirm:$false -ErrorAction SilentlyContinue
+        Remove-NetRoute -InterfaceAlias $alias -DestinationPrefix '0.0.0.0/0' -Confirm:$false -ErrorAction SilentlyContinue
+        New-NetIPAddress -InterfaceAlias $alias -IPAddress $address.IPAddress -PrefixLength $address.PrefixLength `
+            -DefaultGateway $gateway | Out-Null
+        if ($dns.Count -gt 0) {
+            Set-DnsClientServerAddress -InterfaceAlias $alias -ServerAddresses $dns
+        }
+        "$($address.IPAddress)/$($address.PrefixLength) via $gateway"
+    } -ArgumentList $Alias
+}
+
+function Restore-RosetunGuestDhcp {
+    param([Parameter(Mandatory)][string]$Alias)
+    Invoke-RosetunGuest -ScriptBlock {
+        param($alias)
+        Get-NetIPAddress -InterfaceAlias $alias -AddressFamily IPv4 -PrefixOrigin Manual -ErrorAction SilentlyContinue |
+            Remove-NetIPAddress -Confirm:$false -ErrorAction SilentlyContinue
+        Remove-NetRoute -InterfaceAlias $alias -DestinationPrefix '0.0.0.0/0' -Confirm:$false -ErrorAction SilentlyContinue
+        Set-NetIPInterface -InterfaceAlias $alias -AddressFamily IPv4 -Dhcp Enabled -ErrorAction SilentlyContinue
+        Set-DnsClientServerAddress -InterfaceAlias $alias -ResetServerAddresses -ErrorAction SilentlyContinue
+        & ipconfig.exe /renew $alias *> $null
+        $global:LASTEXITCODE = 0
+    } -ArgumentList $Alias
+}
+
 function Get-RosetunGuestPhysical {
     # Alias and IPv4 address of the guest's adapter on the Default Switch.
     Invoke-RosetunGuest -ScriptBlock {
@@ -342,8 +387,9 @@ function Get-RosetunGuestPhysical {
 $nodeStartedByMatrix = $false
 $multicast = @()
 $echo = $null
-$extraAdded = $false
+$static = $false
 $physical = $null
+$nodeAddressAdded = $false
 try {
     if ($Build) {
         & cargo build -q --release --manifest-path (Join-Path $RepoRoot 'Cargo.toml')
@@ -367,13 +413,34 @@ try {
 
     $hostAddress = (Get-RosetunHostSwitchSubnet).Address
     $physical = Get-RosetunGuestPhysical
+    # The guest reaches the node's second address through its gateway, the
+    # host, where it arrives on the same Default Switch adapter.
+    if (-not (Get-NetIPAddress -IPAddress $NodeAddress -ErrorAction SilentlyContinue)) {
+        New-NetIPAddress -InterfaceAlias $SwitchAlias -IPAddress $NodeAddress -PrefixLength 24 -SkipAsSource $true | Out-Null
+        $nodeAddressAdded = $true
+    }
+    Invoke-RosetunGuest -ScriptBlock {
+        param($dir, $address)
+        $path = Join-Path $dir 'request.json'
+        $request = Get-Content -Path $path -Raw | ConvertFrom-Json
+        $request.node.server = $address
+        [IO.File]::WriteAllText($path, ($request | ConvertTo-Json -Depth 30))
+    } -ArgumentList (Get-RosetunGuestDir), $NodeAddress
     New-RosetunLanRequests -HostAddress $hostAddress
     $lan = Start-RosetunLanListener
     $multicast = @(Start-RosetunMulticastWatch -HostAddress $hostAddress)
 
     try {
         # Route: with "Local network" the host is on-link through the adapter.
+        $mark = Get-RosetunHelperLogLength
         Test-Step 'route' 'lan-on connects' { Connect-RosetunLan 'lan-on.json' }
+        $segmentLog = Get-RosetunHelperLogSince -Offset $mark
+        $guestSubnet = (Get-RosetunHostSwitchSubnet)
+        Test-Step 'route' "the service opens the guest's network" `
+            -Note (@($segmentLog -split '\r?\n' | Where-Object { $_ -match 'local network' }) -join ' | ') {
+            $segmentLog -match 'connected networks stay outside the tunnel' -and
+                $segmentLog -notmatch 'holds a VPN server' -and $guestSubnet.PrefixLength -ge 16
+        }
         $route = Get-RosetunGuestRoute -Address $hostAddress
         Test-Step 'route' 'the host goes through the physical adapter, not rosetun0' `
             -Note "$($route.InterfaceAlias) $($route.SourceAddress)" {
@@ -415,12 +482,19 @@ try {
         $echo = $null
 
         # The address change: a second network on the adapter is followed.
+        # The lease becomes the same static address first, or the extra one
+        # would switch DHCP off and leave the guest without a gateway.
+        $static = $true
+        $staticNote = Set-RosetunGuestStatic -Alias $physical.Alias
+        Test-Step 'address change' 'Connected on the static copy of the lease' -Note $staticNote {
+            Wait-RosetunState 'Connected'
+        }
+        Start-Sleep -Seconds 5
         $mark = Get-RosetunHelperLogLength
         Invoke-RosetunGuest -ScriptBlock {
             param($alias, $address)
             New-NetIPAddress -InterfaceAlias $alias -IPAddress $address -PrefixLength 24 -SkipAsSource $true | Out-Null
         } -ArgumentList $physical.Alias, $ExtraAddress
-        $extraAdded = $true
         Test-Step 'address change' 'the service follows the new network' {
             Wait-RosetunCondition {
                 (Get-RosetunHelperLogSince -Offset $mark) -match 'local network changed'
@@ -439,7 +513,6 @@ try {
             param($address)
             Remove-NetIPAddress -IPAddress $address -Confirm:$false
         } -ArgumentList $ExtraAddress
-        $extraAdded = $false
         Test-Step 'address change' 'the service follows the removal' {
             Wait-RosetunCondition {
                 (Get-RosetunHelperLogSince -Offset $mark) -match 'local network changed'
@@ -485,18 +558,11 @@ try {
     }
     finally {
         Disconnect-RosetunTunnel | Out-Null
-        if ($physical) {
-            # A static address on the adapter can switch it off DHCP; give it
-            # back its lease either way.
-            Invoke-RosetunGuest -ScriptBlock {
-                param($alias, $address, $added)
-                if ($added) {
-                    Remove-NetIPAddress -IPAddress $address -Confirm:$false -ErrorAction SilentlyContinue
-                }
-                Set-NetIPInterface -InterfaceAlias $alias -AddressFamily IPv4 -Dhcp Enabled -ErrorAction SilentlyContinue
-                & ipconfig.exe /renew $alias *> $null
-                $global:LASTEXITCODE = 0
-            } -ArgumentList $physical.Alias, $ExtraAddress, $extraAdded
+        if ($static -and $physical) {
+            Restore-RosetunGuestDhcp -Alias $physical.Alias
+        }
+        if ($nodeAddressAdded) {
+            Remove-NetIPAddress -IPAddress $NodeAddress -Confirm:$false -ErrorAction SilentlyContinue
         }
         if ($echo) { Stop-RosetunEchoServer $echo }
         if ($multicast.Count -gt 0) { Stop-RosetunMulticastWatch -Watch $multicast }
