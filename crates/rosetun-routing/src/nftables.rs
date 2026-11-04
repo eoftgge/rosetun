@@ -136,6 +136,15 @@ pub(crate) fn replace(rules: &Rules<'_>) -> String {
         );
     }
     text.push_str("\t\toif \"lo\" accept\n");
+    if rules.scope == ProtectionScope::AllTraffic {
+        // Answers to connections opened from outside, as under the Windows
+        // kill switch, which authorizes only connects: the other side knows
+        // the address already. A connection this host opened sends in the
+        // original direction and is not let out by this, provided conntrack
+        // saw it begin; one it picks up halfway takes its direction from the
+        // first packet it sees.
+        text.push_str("\t\tct direction reply accept\n");
+    }
     let _ = writeln!(text, "\t\t{} accept", cgroup_match(rules.engines));
     if let Some(helper) = rules.helper_dns {
         let _ = writeln!(
@@ -288,6 +297,7 @@ mod tests {
                 "{HEAD}\
 \t\ttype filter hook output priority filter; policy drop;
 \t\toif \"lo\" accept
+\t\tct direction reply accept
 \t\tsocket cgroupv2 level 3 \"system.slice/rosetun-helper.service/engines\" accept
 \t\tmeta nfproto ipv4 udp sport 68 udp dport 67 accept
 \t\ticmpv6 type {{ nd-router-solicit, nd-neighbor-solicit, nd-neighbor-advert }} ip6 hoplimit 255 accept
@@ -316,6 +326,7 @@ mod tests {
 \t\ttype filter hook output priority filter; policy drop;
 \t\toif \"rosetun0\" accept
 \t\toif \"lo\" accept
+\t\tct direction reply accept
 \t\tsocket cgroupv2 level 3 \"system.slice/rosetun-helper.service/engines\" accept
 \t\tmeta nfproto ipv4 udp sport 68 udp dport 67 accept
 \t\ticmpv6 type {{ nd-router-solicit, nd-neighbor-solicit, nd-neighbor-advert }} ip6 hoplimit 255 accept
@@ -346,6 +357,7 @@ mod tests {
 \t\tip daddr {{ 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16 }} meta l4proto {{ tcp, udp }} th dport 53 drop
 \t\tip6 daddr {{ fe80::/10, fc00::/7 }} meta l4proto {{ tcp, udp }} th dport 53 drop
 \t\toif \"lo\" accept
+\t\tct direction reply accept
 \t\tsocket cgroupv2 level 3 \"system.slice/rosetun-helper.service/engines\" accept
 \t\tmeta nfproto ipv4 udp sport 68 udp dport 67 accept
 \t\ticmpv6 type {{ nd-router-solicit, nd-neighbor-solicit, nd-neighbor-advert }} ip6 hoplimit 255 accept
@@ -405,6 +417,7 @@ mod tests {
         ));
         assert!(text.contains("policy drop;"));
         assert!(text.contains(&format!("\t\t{NEIGHBOR_DISCOVERY}\n")));
+        assert!(text.contains("\t\tct direction reply accept\n"));
     }
 
     #[test]
@@ -423,6 +436,7 @@ mod tests {
         });
         // The DNS lock accepts by default; it needs no permit of its own.
         assert!(!text.contains("icmpv6"));
+        assert!(!text.contains("ct direction"));
     }
 
     #[test]
