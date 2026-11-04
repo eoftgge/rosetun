@@ -42,8 +42,6 @@ pub use resolve::follow_service_status;
 pub use rosetun_subscription::{
     ParseError, SkipReason, Skipped, UnsupportedTransport, parse_proxy_uri,
 };
-#[cfg(target_os = "linux")]
-pub use scope::{Scope, ScopeProgram, enter_scope};
 pub use rules::{
     AddedRules, AppliedSnapshot, DomainLineError, DomainLines, IpCidrError, IpLineError, IpLines,
     RestoredRuleSets, RuleDestination, RuleInputError, RuleSetError, RuleSetsSnapshot, SetSnapshot,
@@ -53,6 +51,8 @@ pub use rules::{
     restore_rules_and_dns, rule_value_ascii, rule_value_text, set_default_target, set_rule_enabled,
     set_rule_target, temporary_rules, update_rule, validate_list_matcher, with_subdomains,
 };
+#[cfg(target_os = "linux")]
+pub use scope::{Scope, ScopeProgram, enter_scope};
 pub use selection::{
     MAX_RECENT_SERVERS, SelectNodeError, SelectRuleSetError, select_node, select_rule_set,
     set_kill_switch,

@@ -685,7 +685,8 @@ fn lockdown(
 #[cfg(not(target_os = "linux"))]
 const LOCKDOWN_DENIED: &str = "only an administrator can change Lockdown; run this command in a terminal opened as administrator";
 #[cfg(target_os = "linux")]
-const LOCKDOWN_DENIED: &str = "only root can change Lockdown; run it with sudo, as `sudo rosetun lockdown on`";
+const LOCKDOWN_DENIED: &str =
+    "only root can change Lockdown; run it with sudo, as `sudo rosetun lockdown on`";
 
 /// The service refuses a Lockdown change from anyone but an administrator.
 fn lockdown_denied(error: &ClientError) -> bool {
@@ -736,11 +737,15 @@ fn follow_service_status() {
         .ok();
     #[cfg(target_os = "linux")]
     let status = match status {
-        Some(found) if found.lockdown && found.state != rosetun_config::ConnectionState::Connected => {
+        Some(found)
+            if found.lockdown && found.state != rosetun_config::ConnectionState::Connected =>
+        {
             if let rosetun_core::Scope::Outside(reason) =
                 rosetun_core::enter_scope(rosetun_core::ScopeProgram::Cli)
             {
-                eprintln!("warning: under Lockdown this command has no network without a connection: {reason}");
+                eprintln!(
+                    "warning: under Lockdown this command has no network without a connection: {reason}"
+                );
             }
             HelperClient::connect(&endpoint, client_name)
                 .and_then(|mut client| client.status())

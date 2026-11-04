@@ -137,9 +137,8 @@ fn prerequisites(unit: &str) -> Result<PathBuf, String> {
         .map(PathBuf::from)
         .filter(|path| path.is_absolute() && path.is_dir())
         .ok_or_else(|| "the session has no runtime folder (XDG_RUNTIME_DIR)".to_owned())?;
-    let manager = Path::new(CGROUP_MOUNT).join(format!(
-        "user.slice/user-{uid}.slice/user@{uid}.service"
-    ));
+    let manager =
+        Path::new(CGROUP_MOUNT).join(format!("user.slice/user-{uid}.slice/user@{uid}.service"));
     if !manager.is_dir() {
         return Err("the user's systemd service manager is not running".to_owned());
     }

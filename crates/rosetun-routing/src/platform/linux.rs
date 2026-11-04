@@ -383,7 +383,9 @@ impl NftBackend {
             match nftables::left_behind(&listing) {
                 LeftBehind::DnsLock => {
                     nft.apply(&nftables::remove())?;
-                    tracing::warn!("removed the DNS lock a crashed helper left; the network is open");
+                    tracing::warn!(
+                        "removed the DNS lock a crashed helper left; the network is open"
+                    );
                 }
                 LeftBehind::KillSwitch => {
                     tracing::warn!("a table left by a crashed helper keeps the network closed");
@@ -483,7 +485,10 @@ impl RoutingBackend for NftBackend {
             }
         })?;
         drop(shared);
-        Ok(RoutingGuard::from_session(NftSession { table, armed: true }))
+        Ok(RoutingGuard::from_session(NftSession {
+            table,
+            armed: true,
+        }))
     }
 
     /// Lockdown when its record says so; otherwise a table left by a crash
@@ -1304,9 +1309,7 @@ mod tests {
         // Not in group rosetun.
         mount.scope(1001, GUI_SCOPE);
         let mut backend = backend(&nft, &mount);
-        backend
-            .enable_lockdown(None, &apps(true, false))
-            .unwrap();
+        backend.enable_lockdown(None, &apps(true, false)).unwrap();
         let script = nft.applied().last().unwrap().clone();
         assert!(script.contains(GUI_PERMIT), "{script}");
         assert!(!script.contains("user-1001"));
@@ -1321,9 +1324,7 @@ mod tests {
         guard.revert().unwrap();
         assert!(!nft.applied().last().unwrap().contains("rosetun-gui.scope"));
         assert!(nft.applied().last().unwrap().contains("hook input"));
-        backend
-            .enable_lockdown(None, &apps(true, false))
-            .unwrap();
+        backend.enable_lockdown(None, &apps(true, false)).unwrap();
         assert!(nft.applied().last().unwrap().contains(GUI_PERMIT));
     }
 
@@ -1332,9 +1333,7 @@ mod tests {
         let nft = Arc::new(FakeNft::default());
         let mount = Mount::new(true);
         let backend = backend(&nft, &mount);
-        backend
-            .enable_lockdown(None, &apps(true, true))
-            .unwrap();
+        backend.enable_lockdown(None, &apps(true, true)).unwrap();
         assert!(!nft.applied().last().unwrap().contains("scope"));
         let count = nft.applied().len();
         backend.refresh_lockdown_programs().unwrap();
@@ -1391,7 +1390,10 @@ mod tests {
             unusable: Some("no nft".to_owned()),
             ..FakeNft::default()
         };
-        assert_eq!(restore_from(&nft, &mount.record()).unwrap(), BootRestore::Off);
+        assert_eq!(
+            restore_from(&nft, &mount.record()).unwrap(),
+            BootRestore::Off
+        );
         assert!(nft.applied().is_empty());
     }
 

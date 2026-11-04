@@ -210,7 +210,11 @@ fn output_chain(text: &mut String, rules: &Rules<'_>) {
             );
         }
         for program in lockdown.programs {
-            let _ = writeln!(text, "\t\t{} meta l4proto tcp accept", cgroup_match(program));
+            let _ = writeln!(
+                text,
+                "\t\t{} meta l4proto tcp accept",
+                cgroup_match(program)
+            );
             let _ = writeln!(text, "\t\t{} udp dport 53 accept", cgroup_match(program));
         }
     }
@@ -1006,15 +1010,20 @@ mod tests {
         let text = locked_session(false, true, Some(&tunnel));
         let input = &text[..text.find("\tchain output").unwrap()];
         assert!(!input.contains("saddr"), "{input}");
-        let output = &text[text.find("\tchain output").unwrap()..text.find("\tchain forward").unwrap()];
-        assert!(output.contains("\t\tip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16 } accept\n"));
+        let output =
+            &text[text.find("\tchain output").unwrap()..text.find("\tchain forward").unwrap()];
+        assert!(output.contains(
+            "\t\tip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16 } accept\n"
+        ));
         let forward = &text[text.find("\tchain forward").unwrap()..];
         assert!(forward.contains("\t\tip6 daddr { fe80::/10, fc00::/7 } accept\n"));
         assert!(forward.contains("th dport 53 drop"));
         // Lockdown's own "Local network" lets the private ranges in too.
         let with_lockdown_lan = locked_session(true, false, Some(&tunnel));
         assert!(with_lockdown_lan.contains("\t\tip saddr { 10.0.0.0/8"));
-        assert!(with_lockdown_lan.contains("\t\tip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16 } accept\n"));
+        assert!(with_lockdown_lan.contains(
+            "\t\tip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16 } accept\n"
+        ));
     }
 
     #[test]

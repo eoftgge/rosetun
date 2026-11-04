@@ -133,7 +133,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     #[cfg(target_os = "linux")]
     if let rosetun_core::Scope::Outside(reason) = &scope {
-        tracing::warn!(reason, "the GUI runs outside its scope; under Lockdown it has no network without a session");
+        tracing::warn!(
+            reason,
+            "the GUI runs outside its scope; under Lockdown it has no network without a session"
+        );
     }
 
     #[cfg(windows)]

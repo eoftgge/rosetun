@@ -48,7 +48,10 @@ pub(crate) fn scan(mount: &Path, scopes: &[&str], member: &Membership) -> Vec<Pr
         .filter_map(Result::ok)
         .filter_map(|entry| {
             let name = entry.file_name();
-            let digits = name.to_str()?.strip_prefix("user-")?.strip_suffix(".slice")?;
+            let digits = name
+                .to_str()?
+                .strip_prefix("user-")?
+                .strip_suffix(".slice")?;
             // Only the canonical spelling: no sign, no leading zero.
             let uid: u32 = digits.parse().ok()?;
             (uid.to_string() == digits).then_some(uid)
@@ -217,7 +220,10 @@ mod tests {
     }
 
     fn paths(found: &[Program]) -> Vec<String> {
-        found.iter().map(|program| program.path.to_string()).collect()
+        found
+            .iter()
+            .map(|program| program.path.to_string())
+            .collect()
     }
 
     #[test]

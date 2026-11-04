@@ -805,7 +805,11 @@ pub(crate) fn client(language: Language, error: &ClientError) -> String {
 fn lockdown_command_failed(language: Language) -> String {
     #[cfg(target_os = "linux")]
     {
-        tr_in(language, "lockdown-command-failed-linux", &FluentArgs::new())
+        tr_in(
+            language,
+            "lockdown-command-failed-linux",
+            &FluentArgs::new(),
+        )
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -831,16 +835,14 @@ pub(crate) fn helper_command(language: Language, error: &HelperCommandError) -> 
             tr_in(language, "lockdown-unavailable", &FluentArgs::new())
         }
         #[cfg(target_os = "linux")]
-        HelperCommandError::LockdownLaunch(error) if error.kind() == std::io::ErrorKind::NotFound => {
+        HelperCommandError::LockdownLaunch(error)
+            if error.kind() == std::io::ErrorKind::NotFound =>
+        {
             tr_in(language, "lockdown-no-polkit", &FluentArgs::new())
         }
-        HelperCommandError::LockdownLaunch(_) => {
-            lockdown_command_failed(language)
-        }
+        HelperCommandError::LockdownLaunch(_) => lockdown_command_failed(language),
         #[cfg(any(windows, target_os = "linux", test))]
-        HelperCommandError::LockdownCommand(_) => {
-            lockdown_command_failed(language)
-        }
+        HelperCommandError::LockdownCommand(_) => lockdown_command_failed(language),
     }
 }
 

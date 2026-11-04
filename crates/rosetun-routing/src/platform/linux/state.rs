@@ -75,7 +75,10 @@ pub(crate) fn parse(text: &str) -> Result<Saved, String> {
         return Err("the record has an unknown header or version".to_owned());
     }
     let value = |line: &str, key: &str| -> Result<bool, String> {
-        match line.strip_prefix(key).and_then(|rest| rest.strip_prefix('=')) {
+        match line
+            .strip_prefix(key)
+            .and_then(|rest| rest.strip_prefix('='))
+        {
             Some("yes") => Ok(true),
             Some("no") => Ok(false),
             _ => Err(format!("the record has no valid {key} line")),
@@ -240,8 +243,15 @@ mod tests {
             ("a space", good.replace("allow_lan=", "allow_lan =")),
             ("a missing line", good.replace("private_networks=no\n", "")),
             ("an extra line", format!("{good}extra=no\n")),
-            ("swapped lines", "rosetun lockdown 1\nprivate_networks=no\nallow_lan=yes\n".to_owned()),
-            ("private networks alone", good.replace("allow_lan=yes", "allow_lan=no").replace("private_networks=no", "private_networks=yes")),
+            (
+                "swapped lines",
+                "rosetun lockdown 1\nprivate_networks=no\nallow_lan=yes\n".to_owned(),
+            ),
+            (
+                "private networks alone",
+                good.replace("allow_lan=yes", "allow_lan=no")
+                    .replace("private_networks=no", "private_networks=yes"),
+            ),
             ("a blank line", good.replace("\nallow", "\n\nallow")),
         ] {
             assert!(parse(&text).is_err(), "{what}");
