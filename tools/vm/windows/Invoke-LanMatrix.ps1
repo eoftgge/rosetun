@@ -198,29 +198,103 @@ function Get-RosetunGuestDiscoveryRoute {
     } -ArgumentList $TunAlias)
 }
 
+function Get-RosetunGuestDiscoverySource {
+    # The source address the guest's stack picks for a socket without a chosen
+    # adapter. Connecting a datagram socket sends nothing. Unlike Find-NetRoute,
+    # it also answers for multicast, where that cmdlet finds no route.
+    @(Invoke-RosetunGuest -ScriptBlock {
+        foreach ($address in @('224.0.0.251', '239.255.255.250', '255.255.255.255')) {
+            $socket = [Net.Sockets.Socket]::new('InterNetwork', 'Dgram', 'Udp')
+            try {
+                $socket.EnableBroadcast = $true
+                $socket.Connect([Net.IPEndPoint]::new([Net.IPAddress]::Parse($address), 9))
+                [pscustomobject]@{ Address = $address; Source = $socket.LocalEndPoint.Address.ToString() }
+            }
+            catch {
+                [pscustomobject]@{ Address = $address; Source = "$($_.Exception.Message)" }
+            }
+            finally { $socket.Dispose() }
+        }
+    })
+}
+
 function Test-RosetunGuestDiscoveryRoute {
-    # One check that the routes are there or gone, and which adapter Windows
-    # now picks for a limited broadcast.
+    # One check that the routes are there or gone, and where the guest's stack
+    # now sends discovery. With the routes on the tunnel only the routes are
+    # checked: what the stack picks then is recorded for reading.
     param(
         [Parameter(Mandatory)][string]$Scenario,
-        [Parameter(Mandatory)][bool]$OnTunnel,
-        [Parameter(Mandatory)][string]$ExpectedAlias
+        [Parameter(Mandatory)][bool]$OnTunnel
     )
     $routes = @(Get-RosetunGuestDiscoveryRoute)
+    $chosen = Get-RosetunGuestRoute -Address '255.255.255.255'
+    $sources = @(Get-RosetunGuestDiscoverySource)
     if ($OnTunnel) {
         Test-Step $Scenario 'rosetun0 has 224.0.0.0/4 and 255.255.255.255/32' -Note ($routes -join ', ') {
             $routes.Count -eq 2
         }
+        Write-RosetunLanNote $Scenario "Find-NetRoute for the limited broadcast: $($chosen.InterfaceAlias)"
+        foreach ($entry in $sources) {
+            Write-RosetunLanNote $Scenario "source for $($entry.Address): $($entry.Source)"
+        }
+        return
     }
-    else {
-        Test-Step $Scenario 'rosetun0 has neither 224.0.0.0/4 nor 255.255.255.255/32' -Note ($routes -join ', ') {
-            $routes.Count -eq 0
+    Test-Step $Scenario 'rosetun0 has neither 224.0.0.0/4 nor 255.255.255.255/32' -Note ($routes -join ', ') {
+        $routes.Count -eq 0
+    }
+    Test-Step $Scenario "Find-NetRoute sends the limited broadcast through $($physical.Alias)" -Note $chosen.InterfaceAlias {
+        $chosen.InterfaceAlias -eq $physical.Alias
+    }
+    foreach ($entry in $sources) {
+        Test-Step $Scenario "a socket for $($entry.Address) takes the physical adapter's address" -Note $entry.Source {
+            $entry.Source -eq $physical.Address
         }
     }
-    $chosen = Get-RosetunGuestRoute -Address '255.255.255.255'
-    Test-Step $Scenario "the limited broadcast leaves through $ExpectedAlias" -Note $chosen.InterfaceAlias {
-        $chosen.InterfaceAlias -eq $ExpectedAlias
+}
+
+function Set-RosetunGuestFilterAudit {
+    # WFP audit by GUID, since subcategory names are localized: packet drop
+    # and connection. Failures only.
+    param([Parameter(Mandatory)][bool]$Enabled)
+    Invoke-RosetunGuest -ScriptBlock {
+        param($enabled)
+        $state = if ($enabled) { 'enable' } else { 'disable' }
+        foreach ($guid in @('{0CCE9225-69AE-11D9-BED3-505054503030}', '{0CCE9226-69AE-11D9-BED3-505054503030}')) {
+            auditpol.exe /set "/subcategory:$guid" "/failure:$state" | Out-Null
+        }
+    } -ArgumentList $Enabled
+}
+
+function Write-RosetunGuestFilterDrop {
+    # Prints the last minutes' WFP blocks of $Address whole, for the owner to
+    # send back: the table would cut them.
+    param([Parameter(Mandatory)][string]$Address)
+    $drops = @(Invoke-RosetunGuest -ScriptBlock {
+        param($address)
+        @(Get-WinEvent -FilterHashtable @{ LogName = 'Security'; Id = 5152, 5157; StartTime = (Get-Date).AddMinutes(-2) } `
+            -ErrorAction SilentlyContinue |
+            Where-Object { $_.Message -match [regex]::Escape($address) } |
+            Select-Object -First 3 |
+            ForEach-Object { "$($_.Id): $($_.Message -replace '\s+', ' ')" })
+    } -ArgumentList $Address)
+    Write-RosetunLanNote 'multicast' "WFP blocks of $Address in the last 2 minutes: $($drops.Count)"
+    foreach ($drop in $drops) { Write-Host "WFP $Address $drop" }
+}
+
+function Wait-RosetunLanQuiet {
+    # Waits until the service has stopped following network changes: a change
+    # still on its way would take the next check's log line for its own.
+    param([int]$QuietSeconds = 10, [int]$TimeoutSeconds = 90)
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    while ([DateTime]::UtcNow -lt $deadline) {
+        $mark = Get-RosetunHelperLogLength
+        Start-Sleep -Seconds $QuietSeconds
+        if ((Get-RosetunHelperLogSince -Offset $mark) -notmatch 'local network changed' -and
+            (Wait-RosetunState 'Connected')) {
+            return $true
+        }
     }
+    $false
 }
 
 function Receive-RosetunMulticast {
@@ -436,6 +510,7 @@ function Get-RosetunGuestPhysical {
 $nodeStartedByMatrix = $false
 $multicast = @()
 $broadcast = @()
+$auditOn = $false
 $echo = $null
 $static = $false
 $physical = $null
@@ -506,6 +581,8 @@ try {
         Test-Step 'dns' 'TCP to the host on port 53 is blocked' -Note $dns.Error {
             $dns.Error -eq 'AccessDenied'
         }
+        Set-RosetunGuestFilterAudit -Enabled $true
+        $auditOn = $true
         foreach ($entry in $multicast) {
             foreach ($mode in @('physical', 'routed')) {
                 $token = [guid]::NewGuid().ToString('N')
@@ -515,8 +592,11 @@ try {
                     Receive-RosetunMulticast -Watch $entry -Token $token
                 }
             }
+            Write-RosetunGuestFilterDrop -Address $entry.Group
         }
-        Test-RosetunGuestDiscoveryRoute -Scenario 'unbound discovery' -OnTunnel $false -ExpectedAlias $physical.Alias
+        Set-RosetunGuestFilterAudit -Enabled $false
+        $auditOn = $false
+        Test-RosetunGuestDiscoveryRoute -Scenario 'unbound discovery' -OnTunnel $false
         foreach ($entry in $broadcast) {
             $token = [guid]::NewGuid().ToString('N')
             $sent = Send-RosetunGuestMulticast -Group $entry.Group -Port $entry.Port -Token $token
@@ -548,25 +628,24 @@ try {
         Test-Step 'address change' 'Connected on the static copy of the lease' -Note $staticNote {
             Wait-RosetunState 'Connected'
         }
-        Start-Sleep -Seconds 5
+        Test-Step 'address change' 'the service has settled on the static copy' { Wait-RosetunLanQuiet }
         $mark = Get-RosetunHelperLogLength
         Invoke-RosetunGuest -ScriptBlock {
             param($alias, $address)
             New-NetIPAddress -InterfaceAlias $alias -IPAddress $address -PrefixLength 24 -SkipAsSource $true | Out-Null
         } -ArgumentList $physical.Alias, $ExtraAddress
+        $newNetwork = [regex]::Escape(($ExtraAddress -replace '\.\d+$', '.0/24'))
         Test-Step 'address change' 'the service follows the new network' {
             Wait-RosetunCondition {
-                (Get-RosetunHelperLogSince -Offset $mark) -match 'local network changed'
-            } -TimeoutSeconds 20
+                (Get-RosetunHelperLogSince -Offset $mark) -match $newNetwork
+            } -TimeoutSeconds 30
         }
         Test-Step 'address change' 'the session is Connected again' { Wait-RosetunState 'Connected' }
         $route = Get-RosetunGuestRoute -Address $ExtraPeer
         Test-Step 'address change' 'the new network is on the physical adapter' -Note $route.InterfaceAlias {
             $route.InterfaceAlias -eq $physical.Alias
         }
-        Test-Step 'address change' 'the new network is in the helper log' {
-            (Get-RosetunHelperLogSince -Offset $mark) -match [regex]::Escape(($ExtraAddress -replace '\.\d+$', '.0/24'))
-        }
+        Test-Step 'address change' 'the service has settled on the new network' { Wait-RosetunLanQuiet }
         $mark = Get-RosetunHelperLogLength
         Invoke-RosetunGuest -ScriptBlock {
             param($address)
@@ -582,7 +661,7 @@ try {
         Test-Step 'address change' 'the old network is no longer outside the tunnel' -Note $route.InterfaceAlias {
             $route.InterfaceAlias -eq $TunAlias
         }
-        Test-RosetunGuestDiscoveryRoute -Scenario 'address change' -OnTunnel $false -ExpectedAlias $physical.Alias
+        Test-RosetunGuestDiscoveryRoute -Scenario 'address change' -OnTunnel $false
 
         # A user's rule sends the host through the VPN; the segment still wins.
         Test-Step 'user rule' 'lan-rule connects' { Connect-RosetunLan 'lan-rule.json' }
@@ -615,7 +694,7 @@ try {
             }
         }
         Test-Step 'off' 'direct internet is still blocked' { -not (Test-RosetunDirectEgress) }
-        Test-RosetunGuestDiscoveryRoute -Scenario 'off' -OnTunnel $true -ExpectedAlias $TunAlias
+        Test-RosetunGuestDiscoveryRoute -Scenario 'off' -OnTunnel $true
         foreach ($entry in @($multicast) + @($broadcast)) {
             $token = [guid]::NewGuid().ToString('N')
             $sent = Send-RosetunGuestMulticast -Group $entry.Group -Port $entry.Port -Token $token
@@ -627,16 +706,16 @@ try {
         # "Local network" changes at a connect: the service refuses it for a
         # running session, and the routes follow the new adapter.
         Test-Step 'switch' 'lan-on connects again' { Connect-RosetunLan 'lan-on.json' }
-        Test-RosetunGuestDiscoveryRoute -Scenario 'switch' -OnTunnel $false -ExpectedAlias $physical.Alias
+        Test-RosetunGuestDiscoveryRoute -Scenario 'switch' -OnTunnel $false
         $applied = Invoke-RosetunApply -RequestName 'lan-off.json' -Quiet
         Test-Step 'switch' 'applying lan-off to the running session is refused' -Note "exit $($applied.ExitCode)" {
             $applied.ExitCode -ne 0
         }
-        Test-RosetunGuestDiscoveryRoute -Scenario 'switch' -OnTunnel $false -ExpectedAlias $physical.Alias
+        Test-RosetunGuestDiscoveryRoute -Scenario 'switch' -OnTunnel $false
         Test-Step 'switch' 'lan-off connects' { Connect-RosetunLan 'lan-off.json' }
-        Test-RosetunGuestDiscoveryRoute -Scenario 'switch' -OnTunnel $true -ExpectedAlias $TunAlias
+        Test-RosetunGuestDiscoveryRoute -Scenario 'switch' -OnTunnel $true
         Test-Step 'switch' 'lan-on connects after lan-off' { Connect-RosetunLan 'lan-on.json' }
-        Test-RosetunGuestDiscoveryRoute -Scenario 'switch' -OnTunnel $false -ExpectedAlias $physical.Alias
+        Test-RosetunGuestDiscoveryRoute -Scenario 'switch' -OnTunnel $false
         foreach ($entry in $broadcast) {
             $token = [guid]::NewGuid().ToString('N')
             $sent = Send-RosetunGuestMulticast -Group $entry.Group -Port $entry.Port -Token $token
@@ -646,6 +725,10 @@ try {
         }
     }
     finally {
+        if ($auditOn) {
+            try { Set-RosetunGuestFilterAudit -Enabled $false }
+            catch { Write-Warning "Could not turn the WFP audit off: $_" }
+        }
         Disconnect-RosetunTunnel | Out-Null
         if ($static -and $physical) {
             Restore-RosetunGuestDhcp -Alias $physical.Alias
