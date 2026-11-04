@@ -223,7 +223,8 @@ scope_line() { [[ $1 =~ ^[0-9]+\ [0-9]+$ ]]; }
 # again is a new cgroup, with a new ID the table does not name until the next
 # hello. So `rosetun status` first (its hello makes the service look for the
 # scope), then HTTPS on the physical interface, and one UDP datagram to port 53
-# there, counted as 1 when the output hook refuses it. Fails when the scope did
+# there, with the lines of curl's trace that say the output hook refused it: curl
+# retries, so a refusal prints more than once. Fails when the scope did
 # not run; a scope of the same name must be gone before the next can be made.
 scope_probe() {
     local unit=$1 uid line deadline=$((SECONDS + 15))
@@ -479,14 +480,14 @@ scenario_enable() {
     gui_scope() {
         scope_probe rosetun-gui || return 1
         reached_rc "$SCOPE_HTTPS" || { fail_reason="HTTPS from rosetun-gui.scope did not answer (curl exit '$SCOPE_HTTPS')"; return 1; }
-        [ "$SCOPE_DNS" = 0 ] || { fail_reason="UDP 53 from rosetun-gui.scope was refused"; return 1; }
+        [ "$SCOPE_DNS" = 0 ] || { fail_reason="UDP 53 from rosetun-gui.scope was refused ($SCOPE_DNS refusals in curl's trace)"; return 1; }
     }
     check lockdown.gui-scope "the GUI's scope gets HTTPS and DNS out of the physical interface" gui_scope
 
     cli_scope() {
         scope_probe rosetun-cli || return 1
         reached_rc "$SCOPE_HTTPS" || { fail_reason="HTTPS from rosetun-cli.scope did not answer (curl exit '$SCOPE_HTTPS')"; return 1; }
-        [ "$SCOPE_DNS" = 0 ] || { fail_reason="UDP 53 from rosetun-cli.scope was refused"; return 1; }
+        [ "$SCOPE_DNS" = 0 ] || { fail_reason="UDP 53 from rosetun-cli.scope was refused ($SCOPE_DNS refusals in curl's trace)"; return 1; }
     }
     check lockdown.cli-scope "the CLI's scope gets HTTPS and DNS out of the physical interface" cli_scope
 
@@ -494,7 +495,7 @@ scenario_enable() {
         expect_blocked "HTTPS from $USER_A outside a scope" user_direct_https || return 1
         scope_probe rosetun-other || return 1
         blocked_rc "$SCOPE_HTTPS" || { fail_reason="HTTPS from rosetun-other.scope was not refused (curl exit '$SCOPE_HTTPS')"; return 1; }
-        [ "$SCOPE_DNS" = 1 ] || { fail_reason="UDP 53 from rosetun-other.scope was not refused"; return 1; }
+        [ "$SCOPE_DNS" -ge 1 ] || { fail_reason="UDP 53 from rosetun-other.scope was not refused ($SCOPE_DNS refusals in curl's trace)"; return 1; }
     }
     check lockdown.other-process "the same account outside the two scopes is refused" others
 
