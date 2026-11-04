@@ -479,6 +479,13 @@ checking, restore `l2-clean` again.
    keeps it (`rosetun status` says `network: held closed`) until a connect or
    `rosetun open-network`.
 
+   The kill switch also closes what the machine forwards (chain `forward`):
+   containers, virtual machines and a shared connection get only the tunnel,
+   the local network with "Local network", and answers to connections opened
+   towards them. Those whose traffic does not take the tunnel lose the
+   network while the kill switch is on. The DNS lock drops only their DNS
+   beside the tunnel.
+
 7. **Removal**, if you do not simply restore `l2-clean`:
 
    ```sh

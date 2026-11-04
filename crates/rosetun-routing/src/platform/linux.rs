@@ -88,14 +88,15 @@ impl NftBackend {
     }
 }
 
-/// The hold: the kill switch's first phase without "Local network", plus
-/// DNS for the helper so a connect can resolve its server.
+/// The hold: the kill switch's first phase without "Local network" and with
+/// nothing forwarded, plus DNS for the helper so a connect can resolve its
+/// server.
 fn hold_rules(leaves: &Leaves) -> String {
     nftables::replace(&Rules {
         scope: ProtectionScope::AllTraffic,
         allow_lan: false,
         engines: &leaves.engines,
-        helper_dns: Some(&leaves.helper),
+        hold: Some(&leaves.helper),
         tunnel: None,
     })
 }
@@ -166,7 +167,7 @@ impl RoutingBackend for NftBackend {
             scope: plan.scope,
             allow_lan: plan.allow_lan,
             engines: &leaves.engines,
-            helper_dns: None,
+            hold: None,
             tunnel: None,
         }))?;
         shared.session = true;
@@ -283,7 +284,7 @@ impl NftSession {
             scope,
             allow_lan,
             engines: &self.leaves.engines,
-            helper_dns: None,
+            hold: None,
             tunnel,
         })
     }
@@ -385,7 +386,7 @@ mod tests {
                 scope,
                 allow_lan: false,
                 engines: &leaves().engines,
-                helper_dns: None,
+                hold: None,
                 tunnel: None,
             });
             *nft.table.lock().unwrap() = Some(script[nftables::remove().len()..].to_owned());

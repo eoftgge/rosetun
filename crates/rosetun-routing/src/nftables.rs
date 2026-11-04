@@ -1,7 +1,9 @@
 //! The text of Rosetun's nftables table (Linux).
 //!
-//! Everything lives in one table of its own, `inet rosetun`, with one base
-//! chain on the output hook; other tables and chains are never touched. A
+//! Everything lives in one table of its own, `inet rosetun`, with a base
+//! chain on the output hook for what this host sends and one on the
+//! forward hook for what it passes on; other tables and chains are never
+//! touched. A
 //! change is always one `nft -f -` transaction that creates the table if
 //! it is missing, deletes it and defines it anew, so the kernel switches
 //! from the old rules to the new ones with no moment in between.
@@ -11,7 +13,7 @@
 //! chain that says it. A `drop` is final wherever it happens. So another
 //! table's `accept`, at whatever priority, never lets a packet past this
 //! chain, and this chain's `accept` never overrides another table's drop.
-//! The chain sits at `priority filter`, after any `type route` chain at
+//! The chains sit at `priority filter`, after any `type route` chain at
 //! `mangle` that may reroute a packet, so `oif` is the final interface.
 //!
 //! Only checked values reach the text: interface names as `InterfaceName`,
@@ -97,44 +99,37 @@ pub(crate) struct Rules<'a> {
     pub(crate) allow_lan: bool,
     /// The engines' leaf: everything an engine sends passes.
     pub(crate) engines: &'a CgroupPath,
-    /// The helper's own leaf may send DNS. Only in the hold after a crash,
-    /// where the helper resolves a server name for the connect that lifts it.
-    pub(crate) helper_dns: Option<&'a CgroupPath>,
+    /// The hold after a crash, with the helper's own leaf: the helper may
+    /// send DNS, to resolve a server name for the connect that lifts the
+    /// hold, and nothing is forwarded.
+    pub(crate) hold: Option<&'a CgroupPath>,
     /// Phase 2: the engine's TUN, once it exists.
     pub(crate) tunnel: Option<&'a InterfaceName>,
+}
+
+impl Rules<'_> {
+    fn lan(&self) -> bool {
+        self.allow_lan && self.scope == ProtectionScope::AllTraffic
+    }
 }
 
 /// Replaces the table with `rules` in one transaction.
 pub(crate) fn replace(rules: &Rules<'_>) -> String {
     let mut text = remove();
-    let policy = match rules.scope {
-        ProtectionScope::AllTraffic => "drop",
-        ProtectionScope::DnsOnly => "accept",
-    };
     let _ = writeln!(text, "table inet {TABLE} {{");
-    text.push_str("\tchain output {\n");
-    let _ = writeln!(
-        text,
-        "\t\ttype filter hook output priority filter; policy {policy};"
-    );
+    output_chain(&mut text, rules);
+    forward_chain(&mut text, rules);
+    text.push_str("}\n");
+    text
+}
+
+/// What this host sends.
+fn output_chain(text: &mut String, rules: &Rules<'_>) {
+    chain_head(text, "output", rules.scope);
     // The tunnel first: its own DNS address lies in 172.16/12, which the
     // private DNS drop below would catch.
-    if let Some(tunnel) = rules.tunnel {
-        let _ = writeln!(text, "\t\toif \"{}\" accept", tunnel.as_str());
-    }
-    let lan = rules.allow_lan && rules.scope == ProtectionScope::AllTraffic;
-    if lan {
-        let _ = writeln!(
-            text,
-            "\t\tip daddr {{ {} }} meta l4proto {{ tcp, udp }} th dport 53 drop",
-            v4_list()
-        );
-        let _ = writeln!(
-            text,
-            "\t\tip6 daddr {{ {} }} meta l4proto {{ tcp, udp }} th dport 53 drop",
-            v6_list()
-        );
-    }
+    tunnel_permit(text, rules);
+    lan_dns_drop(text, rules);
     text.push_str("\t\toif \"lo\" accept\n");
     if rules.scope == ProtectionScope::AllTraffic {
         // Answers to connections opened from outside, as under the Windows
@@ -146,7 +141,7 @@ pub(crate) fn replace(rules: &Rules<'_>) -> String {
         text.push_str("\t\tct direction reply accept\n");
     }
     let _ = writeln!(text, "\t\t{} accept", cgroup_match(rules.engines));
-    if let Some(helper) = rules.helper_dns {
+    if let Some(helper) = rules.hold {
         let _ = writeln!(
             text,
             "\t\t{} meta l4proto {{ tcp, udp }} th dport 53 accept",
@@ -157,17 +152,78 @@ pub(crate) fn replace(rules: &Rules<'_>) -> String {
         ProtectionScope::AllTraffic => {
             text.push_str("\t\tmeta nfproto ipv4 udp sport 68 udp dport 67 accept\n");
             let _ = writeln!(text, "\t\t{NEIGHBOR_DISCOVERY}");
-            if lan {
-                let _ = writeln!(text, "\t\tip daddr {{ {} }} accept", v4_list());
-                let _ = writeln!(text, "\t\tip6 daddr {{ {} }} accept", v6_list());
-            }
+            lan_permit(text, rules);
         }
         ProtectionScope::DnsOnly => {
             text.push_str("\t\tmeta l4proto { tcp, udp } th dport 53 drop\n");
         }
     }
-    text.push_str("\t}\n}\n");
-    text
+    text.push_str("\t}\n");
+}
+
+/// What this host passes on for others: containers, virtual machines,
+/// a shared connection. Under the kill switch they get the tunnel, the
+/// local network if it is on, and answers to what was opened towards them
+/// (the tunnel's answers come back on the tunnel and leave towards them,
+/// so without this the tunnel would carry nothing back); under the DNS
+/// lock only their DNS beside the tunnel is dropped. Nothing has a cgroup
+/// here, so there is no engine permit.
+fn forward_chain(text: &mut String, rules: &Rules<'_>) {
+    chain_head(text, "forward", rules.scope);
+    if rules.hold.is_none() {
+        tunnel_permit(text, rules);
+        lan_dns_drop(text, rules);
+        match rules.scope {
+            ProtectionScope::AllTraffic => {
+                text.push_str("\t\tct direction reply accept\n");
+                lan_permit(text, rules);
+            }
+            ProtectionScope::DnsOnly => {
+                text.push_str("\t\tmeta l4proto { tcp, udp } th dport 53 drop\n");
+            }
+        }
+    }
+    text.push_str("\t}\n");
+}
+
+fn chain_head(text: &mut String, hook: &str, scope: ProtectionScope) {
+    let policy = match scope {
+        ProtectionScope::AllTraffic => "drop",
+        ProtectionScope::DnsOnly => "accept",
+    };
+    let _ = writeln!(text, "\tchain {hook} {{");
+    let _ = writeln!(
+        text,
+        "\t\ttype filter hook {hook} priority filter; policy {policy};"
+    );
+}
+
+fn tunnel_permit(text: &mut String, rules: &Rules<'_>) {
+    if let Some(tunnel) = rules.tunnel {
+        let _ = writeln!(text, "\t\toif \"{}\" accept", tunnel.as_str());
+    }
+}
+
+fn lan_dns_drop(text: &mut String, rules: &Rules<'_>) {
+    if rules.lan() {
+        let _ = writeln!(
+            text,
+            "\t\tip daddr {{ {} }} meta l4proto {{ tcp, udp }} th dport 53 drop",
+            v4_list()
+        );
+        let _ = writeln!(
+            text,
+            "\t\tip6 daddr {{ {} }} meta l4proto {{ tcp, udp }} th dport 53 drop",
+            v6_list()
+        );
+    }
+}
+
+fn lan_permit(text: &mut String, rules: &Rules<'_>) {
+    if rules.lan() {
+        let _ = writeln!(text, "\t\tip daddr {{ {} }} accept", v4_list());
+        let _ = writeln!(text, "\t\tip6 daddr {{ {} }} accept", v6_list());
+    }
 }
 
 /// Removes the table; harmless when there is none.
@@ -288,7 +344,7 @@ mod tests {
             scope: ProtectionScope::AllTraffic,
             allow_lan: false,
             engines: &engines,
-            helper_dns: None,
+            hold: None,
             tunnel: None,
         });
         assert_eq!(
@@ -301,6 +357,10 @@ mod tests {
 \t\tsocket cgroupv2 level 3 \"system.slice/rosetun-helper.service/engines\" accept
 \t\tmeta nfproto ipv4 udp sport 68 udp dport 67 accept
 \t\ticmpv6 type {{ nd-router-solicit, nd-neighbor-solicit, nd-neighbor-advert }} ip6 hoplimit 255 accept
+\t}}
+\tchain forward {{
+\t\ttype filter hook forward priority filter; policy drop;
+\t\tct direction reply accept
 \t}}
 }}
 "
@@ -316,7 +376,7 @@ mod tests {
             scope: ProtectionScope::AllTraffic,
             allow_lan: false,
             engines: &engines,
-            helper_dns: None,
+            hold: None,
             tunnel: Some(&tunnel),
         });
         assert_eq!(
@@ -330,6 +390,11 @@ mod tests {
 \t\tsocket cgroupv2 level 3 \"system.slice/rosetun-helper.service/engines\" accept
 \t\tmeta nfproto ipv4 udp sport 68 udp dport 67 accept
 \t\ticmpv6 type {{ nd-router-solicit, nd-neighbor-solicit, nd-neighbor-advert }} ip6 hoplimit 255 accept
+\t}}
+\tchain forward {{
+\t\ttype filter hook forward priority filter; policy drop;
+\t\toif \"rosetun0\" accept
+\t\tct direction reply accept
 \t}}
 }}
 "
@@ -345,7 +410,7 @@ mod tests {
             scope: ProtectionScope::AllTraffic,
             allow_lan: true,
             engines: &engines,
-            helper_dns: None,
+            hold: None,
             tunnel: Some(&tunnel),
         });
         assert_eq!(
@@ -361,6 +426,15 @@ mod tests {
 \t\tsocket cgroupv2 level 3 \"system.slice/rosetun-helper.service/engines\" accept
 \t\tmeta nfproto ipv4 udp sport 68 udp dport 67 accept
 \t\ticmpv6 type {{ nd-router-solicit, nd-neighbor-solicit, nd-neighbor-advert }} ip6 hoplimit 255 accept
+\t\tip daddr {{ 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16 }} accept
+\t\tip6 daddr {{ fe80::/10, fc00::/7 }} accept
+\t}}
+\tchain forward {{
+\t\ttype filter hook forward priority filter; policy drop;
+\t\toif \"rosetun0\" accept
+\t\tip daddr {{ 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16 }} meta l4proto {{ tcp, udp }} th dport 53 drop
+\t\tip6 daddr {{ fe80::/10, fc00::/7 }} meta l4proto {{ tcp, udp }} th dport 53 drop
+\t\tct direction reply accept
 \t\tip daddr {{ 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16 }} accept
 \t\tip6 daddr {{ fe80::/10, fc00::/7 }} accept
 \t}}
@@ -381,7 +455,7 @@ mod tests {
                 scope: ProtectionScope::DnsOnly,
                 allow_lan: true,
                 engines: &engines,
-                helper_dns: None,
+                hold: None,
                 tunnel,
             });
             assert_eq!(
@@ -392,6 +466,11 @@ mod tests {
 {tunnel_line}\
 \t\toif \"lo\" accept
 \t\tsocket cgroupv2 level 3 \"system.slice/rosetun-helper.service/engines\" accept
+\t\tmeta l4proto {{ tcp, udp }} th dport 53 drop
+\t}}
+\tchain forward {{
+\t\ttype filter hook forward priority filter; policy accept;
+{tunnel_line}\
 \t\tmeta l4proto {{ tcp, udp }} th dport 53 drop
 \t}}
 }}
@@ -409,7 +488,7 @@ mod tests {
             scope: ProtectionScope::AllTraffic,
             allow_lan: false,
             engines: &engines,
-            helper_dns: Some(&helper),
+            hold: Some(&helper),
             tunnel: None,
         });
         assert!(text.contains(
@@ -418,6 +497,9 @@ mod tests {
         assert!(text.contains("policy drop;"));
         assert!(text.contains(&format!("\t\t{NEIGHBOR_DISCOVERY}\n")));
         assert!(text.contains("\t\tct direction reply accept\n"));
+        assert!(text.ends_with(
+            "\tchain forward {\n\t\ttype filter hook forward priority filter; policy drop;\n\t}\n}\n"
+        ));
     }
 
     #[test]
@@ -431,7 +513,7 @@ mod tests {
             scope: ProtectionScope::DnsOnly,
             allow_lan: false,
             engines: &engines,
-            helper_dns: None,
+            hold: None,
             tunnel: None,
         });
         // The DNS lock accepts by default; it needs no permit of its own.
@@ -467,7 +549,7 @@ mod tests {
         let tunnel = InterfaceName::new("rosetun0").unwrap();
         for allow_lan in [false, true] {
             for tunnel in [None, Some(&tunnel)] {
-                for (scope, helper_dns, expected) in [
+                for (scope, hold, expected) in [
                     (ProtectionScope::AllTraffic, None, LeftBehind::KillSwitch),
                     (ProtectionScope::AllTraffic, Some(&helper), LeftBehind::KillSwitch),
                     (ProtectionScope::DnsOnly, None, LeftBehind::DnsLock),
@@ -476,7 +558,7 @@ mod tests {
                         scope,
                         allow_lan,
                         engines: &engines,
-                        helper_dns,
+                        hold,
                         tunnel,
                     });
                     assert_eq!(left_behind(&text), expected, "{text}");
@@ -577,7 +659,7 @@ mod tests {
                     scope,
                     allow_lan,
                     engines: &engines,
-                    helper_dns: Some(&helper),
+                    hold: Some(&helper),
                     tunnel: Some(&tunnel),
                 });
                 for line in text.lines() {
