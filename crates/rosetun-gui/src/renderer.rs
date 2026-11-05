@@ -23,18 +23,6 @@ fn select(windows: bool, value: Option<&str>) -> (Renderer, bool) {
     }
 }
 
-/// `ROSETUN_FRAME_LATENCY` overrides how many frames the swap chain may queue,
-/// so that two response times can be compared on one build.
-#[cfg(any(windows, test))]
-fn frame_latency(value: Option<&str>) -> (Option<u32>, bool) {
-    match value {
-        None => (None, false),
-        Some("1") => (Some(1), false),
-        Some("2") => (Some(2), false),
-        Some(_) => (None, true),
-    }
-}
-
 fn should_fallback(renderer: Renderer, failed: bool, creator_available: bool) -> bool {
     renderer == Renderer::Wgpu && failed && creator_available
 }
@@ -74,15 +62,6 @@ fn options(viewport: eframe::egui::ViewportBuilder, renderer: Renderer) -> efram
             setup.power_preference = wgpu::PowerPreference::LowPower;
             options.wgpu_options.wgpu_setup = WgpuSetup::CreateNew(setup);
             options.wgpu_options.surface.present_mode = wgpu::PresentMode::AutoVsync;
-            let value = std::env::var_os("ROSETUN_FRAME_LATENCY");
-            let (latency, invalid) =
-                frame_latency(value.as_ref().map(|v| v.to_str().unwrap_or("")));
-            if invalid {
-                tracing::warn!("unknown ROSETUN_FRAME_LATENCY value; using the default");
-            }
-            if latency.is_some() {
-                options.wgpu_options.surface.desired_maximum_frame_latency = latency;
-            }
             tracing::info!(
                 frame_latency = ?options.wgpu_options.surface.desired_maximum_frame_latency,
                 "graphics surface configuration"
@@ -237,16 +216,6 @@ mod tests {
         };
         assert_eq!(transparent(Renderer::Wgpu), Some(true));
         assert_eq!(transparent(Renderer::Glow), Some(false));
-    }
-
-    #[test]
-    fn a_frame_latency_override_accepts_only_one_or_two() {
-        assert_eq!(frame_latency(None), (None, false));
-        assert_eq!(frame_latency(Some("1")), (Some(1), false));
-        assert_eq!(frame_latency(Some("2")), (Some(2), false));
-        for value in ["", "0", "3", " 1", "one"] {
-            assert_eq!(frame_latency(Some(value)), (None, true));
-        }
     }
 
     #[test]

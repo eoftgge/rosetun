@@ -40,9 +40,8 @@ most every 10 s while something happens: swap chain configures, size, DPI and
 monitor changes, surface errors by kind, skipped frames, and how long a size
 change or an input took to the end of its present.
 
-`$env:ROSETUN_FRAME_LATENCY` set to `1` or `2` before starting Rosetun overrides
-how many frames the swap chain may queue, to compare the two on one build. The
-log's `graphics surface configuration` line names the value in use.
+The log's `graphics surface configuration` line names how many frames the swap
+chain may queue.
 
 To print the summary of a CSV again, for example to compare two builds:
 
