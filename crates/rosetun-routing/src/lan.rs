@@ -157,6 +157,18 @@ pub struct LanAccess {
     pub private_networks: bool,
     /// The tunnel carries IPv6, so IPv6 link-local multicast can work at all.
     pub ipv6_multicast: bool,
+    /// The session's VPN servers, in the form `canonical_servers` gives, left
+    /// out of the private ranges and the link-local networks as `LanSegment`
+    /// leaves them out of the connected ones.
+    pub servers: Vec<IpAddr>,
+}
+
+/// Servers as WFP and the networks compare them: IPv4 given as IPv4.
+pub fn canonical_servers(servers: &[IpAddr]) -> Vec<IpAddr> {
+    let mut servers: Vec<IpAddr> = servers.iter().map(IpAddr::to_canonical).collect();
+    servers.sort_unstable();
+    servers.dedup();
+    servers
 }
 
 /// Why a connected network is not part of the segment.

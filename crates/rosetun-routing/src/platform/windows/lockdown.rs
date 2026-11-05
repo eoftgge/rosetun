@@ -642,6 +642,7 @@ fn every_lan() -> LanAccess {
         segment: LanSegment::from_parts(networks, vec![InterfaceId(1)]),
         private_networks: true,
         ipv6_multicast: true,
+        servers: Vec::new(),
     }
 }
 
@@ -1598,6 +1599,7 @@ mod tests {
             ),
             private_networks,
             ipv6_multicast: true,
+            servers: Vec::new(),
         }
     }
 
@@ -1687,6 +1689,7 @@ mod tests {
             segment: LanSegment::from_parts(networks, vec![InterfaceId(7)]),
             private_networks: false,
             ipv6_multicast: false,
+            servers: Vec::new(),
         };
         let set = filter_set(Some(&lan), &LockdownApps::default());
         let keys = set.iter().map(|filter| filter.key).collect::<HashSet<_>>();

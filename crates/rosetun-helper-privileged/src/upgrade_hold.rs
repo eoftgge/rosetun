@@ -72,6 +72,7 @@ fn hold_lan() -> rosetun_routing::lan::LanAccess {
         segment,
         private_networks: false,
         ipv6_multicast: false,
+        servers: Vec::new(),
     }
 }
 

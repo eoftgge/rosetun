@@ -55,7 +55,10 @@ pub fn render(request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError
         request.rules,
         RULE_CAPABILITIES,
         lan,
-        request.settings.private_networks,
+        PrivateNetworks {
+            on: request.settings.private_networks,
+            servers: request.lan_servers,
+        },
         request.lists,
         request.extra,
     );
@@ -431,19 +434,29 @@ pub(crate) fn route_section(
         rules,
         capabilities,
         allow_lan.then_some(&[]),
-        allow_lan,
+        PrivateNetworks {
+            on: allow_lan,
+            servers: &[],
+        },
         &[],
         &[],
     )
 }
 
+/// "Private networks behind the router", and the VPN servers it leaves out.
+#[derive(Clone, Copy)]
+struct PrivateNetworks<'a> {
+    on: bool,
+    servers: &'a [std::net::IpAddr],
+}
+
 /// `lan` is the connected networks when "Local network" is on;
-/// `private_networks` adds every private range after the user's rules.
+/// `private` adds every private range after the user's rules.
 fn route_section_with_lists(
     rules: &RuleSet,
     capabilities: RuleCapabilities,
     lan: Option<&[IpPrefix]>,
-    private_networks: bool,
+    private: PrivateNetworks<'_>,
     lists: &[ListRef],
     extra: &[ExtraOutbound<'_>],
 ) -> (Value, Vec<RuleId>) {
@@ -520,12 +533,36 @@ fn route_section_with_lists(
 
     // After the user's rules: a rule that sends one of these networks
     // through the VPN (an office network on the server's side) still wins.
-    if lan.is_some() && private_networks {
-        route_rules.push(json!({
-            "ip_is_private": true,
-            "action": "route",
-            "outbound": TAG_DIRECT,
-        }));
+    if lan.is_some() && private.on {
+        route_rules.push(if private.servers.is_empty() {
+            json!({
+                "ip_is_private": true,
+                "action": "route",
+                "outbound": TAG_DIRECT,
+            })
+        } else {
+            // In one plain rule sing-box joins these two with OR. Past this
+            // rule a server's address goes on to the default route, as any
+            // address outside does.
+            let servers: Vec<String> = private
+                .servers
+                .iter()
+                .map(|server| match server {
+                    std::net::IpAddr::V4(_) => format!("{server}/32"),
+                    std::net::IpAddr::V6(_) => format!("{server}/128"),
+                })
+                .collect();
+            json!({
+                "type": "logical",
+                "mode": "and",
+                "rules": [
+                    { "ip_is_private": true },
+                    { "ip_cidr": servers, "invert": true },
+                ],
+                "action": "route",
+                "outbound": TAG_DIRECT,
+            })
+        });
     }
 
     let final_outbound = match rules.default_target {
@@ -642,6 +679,11 @@ mod tests {
     };
 
     use super::*;
+
+    const NO_PRIVATE: PrivateNetworks<'static> = PrivateNetworks {
+        on: false,
+        servers: &[],
+    };
 
     #[test]
     fn process_names_match_complete_paths_without_case_sensitivity() {
@@ -800,6 +842,7 @@ mod tests {
             lists: &lists,
             settings: &settings,
             lan_segment: &[IpPrefix::new("203.0.113.0".parse().unwrap(), 24).unwrap()],
+            lan_servers: &[],
             control: Some(&control),
             verbose_log: false,
         };
@@ -911,6 +954,7 @@ mod tests {
             lists: &[],
             settings: &settings,
             lan_segment: &[],
+            lan_servers: &[],
             control: None,
             verbose_log: false,
         })
@@ -957,6 +1001,7 @@ mod tests {
             lists: &[],
             settings: &Settings::default(),
             lan_segment: &[],
+            lan_servers: &[],
             control: None,
             verbose_log: false,
         })
@@ -997,6 +1042,7 @@ mod tests {
                 lists: &[],
                 settings: &Settings::default(),
                 lan_segment: &[],
+                lan_servers: &[],
                 control: None,
                 verbose_log: false,
             }
@@ -1158,7 +1204,7 @@ mod tests {
             });
         }
         let (route, unsupported) =
-            route_section_with_lists(&set, RULE_CAPABILITIES, None, false, &[reference], &[]);
+            route_section_with_lists(&set, RULE_CAPABILITIES, None, NO_PRIVATE, &[reference], &[]);
         assert!(unsupported.is_empty());
         assert_eq!(
             route["rule_set"],
@@ -1177,7 +1223,7 @@ mod tests {
             json!({"rule_set": [tag], "action": "reject"})
         );
         assert!(
-            route_section_with_lists(&set, RuleCapabilities::NONE, None, false, &[], &[])
+            route_section_with_lists(&set, RuleCapabilities::NONE, None, NO_PRIVATE, &[], &[])
                 .1
                 .len()
                 == 2
@@ -1237,7 +1283,7 @@ mod tests {
             format: UploadedListFormat::Source,
         };
         let (route, unsupported) =
-            route_section_with_lists(&set, RULE_CAPABILITIES, None, false, &[reference], &[]);
+            route_section_with_lists(&set, RULE_CAPABILITIES, None, NO_PRIVATE, &[reference], &[]);
         assert_eq!(unsupported, [vanished]);
         assert_eq!(route["rules"].as_array().unwrap().len(), 4);
         assert_eq!(

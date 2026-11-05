@@ -2083,6 +2083,9 @@ impl Session {
         let lan = self.lan_access(settings, &servers);
         let lan_prefixes = lan.segment.route_networks();
         self.follow_servers_in_lockdown(&servers)?;
+        // On Linux the kill switch still opens every private range to every
+        // program, so sending a server's address elsewhere would change nothing there.
+        let private_exceptions: &[IpAddr] = if cfg!(windows) { &lan.servers } else { &[] };
         if extra.blocked_rules() > 0 {
             tracing::warn!(
                 count = extra.blocked_rules(),
@@ -2138,6 +2141,7 @@ impl Session {
                 lists,
                 settings,
                 lan_segment: &lan_prefixes,
+                lan_servers: private_exceptions,
                 control: control.as_ref(),
                 verbose_log: verbose_until.is_some(),
             },

@@ -340,6 +340,10 @@ pub struct RenderRequest<'a> {
     /// The connected networks of the physical adapters, which "Local network"
     /// sends around the tunnel. Empty when it is off or none qualifies.
     pub lan_segment: &'a [rosetun_config::IpPrefix],
+    /// VPN servers that "Private networks behind the router" does not send
+    /// direct: traffic of other programs to them follows the rules, as to any
+    /// address outside.
+    pub lan_servers: &'a [std::net::IpAddr],
     pub control: Option<&'a ControlEndpoint>,
     pub verbose_log: bool,
 }

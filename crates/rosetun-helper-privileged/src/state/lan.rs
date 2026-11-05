@@ -7,7 +7,7 @@ use rosetun_config::{IpPrefix, Settings, TunSettings};
 use rosetun_ipc::{ErrorCode, HelperError};
 use rosetun_routing::{
     RouteRelease, TunnelInterface,
-    lan::{LanAccess, LanSegment, SegmentQuery, SegmentScan, SkipReason},
+    lan::{LanAccess, LanSegment, SegmentQuery, SegmentScan, SkipReason, canonical_servers},
 };
 
 use super::{Session, lockdown};
@@ -89,6 +89,13 @@ fn tunnel_networks(tun: &TunSettings) -> Vec<IpPrefix> {
         .collect()
 }
 
+/// The servers that private ranges and link-local networks leave out.
+fn private_servers(servers: &[IpAddr]) -> Vec<IpAddr> {
+    let mut private = canonical_servers(servers);
+    private.retain(|server| rosetun_config::is_private_address(*server));
+    private
+}
+
 fn log_scan(scan: &SegmentScan) {
     let networks = scan
         .segment
@@ -159,6 +166,7 @@ impl Session {
             segment: self.scan_lan(&settings.tun, servers, true),
             private_networks: settings.private_networks,
             ipv6_multicast: settings.tun.ipv6.is_some(),
+            servers: canonical_servers(servers),
         }
     }
 
@@ -174,6 +182,7 @@ impl Session {
             segment: self.lockdown_segment_around(&self.lan_servers),
             private_networks,
             ipv6_multicast: false,
+            servers: canonical_servers(&self.lan_servers),
         })
     }
 
@@ -190,7 +199,8 @@ impl Session {
     /// permit of the segment follows before the session's filters go in: it
     /// sits beside them in one sublayer, so a server's address left open there
     /// would be open whatever the session's own permit says. An error fails the
-    /// connect, and teardown puts the segment back as it was.
+    /// connect, and teardown puts the segment back as it was. A public server
+    /// outside the segment touches nothing, so the usual connect writes nothing.
     pub(super) fn follow_servers_in_lockdown(
         &mut self,
         servers: &[IpAddr],
@@ -203,7 +213,9 @@ impl Session {
         let Some(lan) = self.lockdown_lan(true, state.private_networks) else {
             return Ok(());
         };
-        if lan.segment == self.lockdown_segment_around(&previous) {
+        if lan.segment == self.lockdown_segment_around(&previous)
+            && private_servers(&previous) == private_servers(servers)
+        {
             return Ok(());
         }
         self.routing

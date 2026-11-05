@@ -343,6 +343,8 @@ impl FilterConditions {
             .count();
 
         match &rule.conditions[range_count..] {
+            // A private range around the VPN servers in it, on any adapter.
+            [] if range_count > 0 => conditions.extend(ranges.conditions()),
             // A connected network around the VPN servers in it, on its
             // adapter, and the DNS block of the same addresses.
             interfaces
@@ -817,6 +819,7 @@ mod tests {
             ),
             private_networks: true,
             ipv6_multicast: true,
+            servers: Vec::new(),
         }
     }
 
@@ -922,12 +925,13 @@ mod tests {
         };
         let interface = [Condition::LocalInterface(7)];
         assert!(FilterConditions::build(&rule(v4, later, &interface)).is_ok());
+        assert!(FilterConditions::build(&rule(v4, later, &[])).is_ok());
         for wrong in [
             rule(later, v4, &interface),
             rule(v4, v6, &interface),
             rule(v6, v6, &interface),
-            // A range with nothing to tie it to an adapter or a port.
-            rule(v4, later, &[]),
+            // A protocol alone is not a shape any rule has.
+            rule(v4, later, &[Condition::Protocol(6)]),
         ] {
             assert!(matches!(
                 FilterConditions::build(&wrong),
@@ -955,6 +959,12 @@ mod tests {
                     let mut around_servers = plan.clone();
                     around_servers.lan.segment =
                         around_servers.lan.segment.leaving_out(&server_addresses());
+                    around_servers.lan.servers = vec![
+                        "192.168.3.1".parse().unwrap(),
+                        "fd00::5".parse().unwrap(),
+                        "169.254.3.4".parse().unwrap(),
+                        "fe80::5".parse().unwrap(),
+                    ];
                     rules.extend(
                         BootstrapPolicy::from_plan(&around_servers, &[&program, &program]).rules,
                     );

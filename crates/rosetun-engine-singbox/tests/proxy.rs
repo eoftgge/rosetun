@@ -53,6 +53,7 @@ fn proxy_rendering_keeps_credentials_structured_and_dns_on_tcp() {
                 lists: &[],
                 settings: &Settings::default(),
                 lan_segment: &[],
+                lan_servers: &[],
                 control: None,
                 verbose_log: false,
             })
@@ -111,6 +112,7 @@ fn proxy_routes_preserve_direct_rules_and_never_skip_udp_to_a_fallback() {
             lists: &[],
             settings: &Settings::default(),
             lan_segment: &[],
+            lan_servers: &[],
             control: None,
             verbose_log: false,
         })
@@ -158,6 +160,7 @@ fn probes_render_all_proxy_protocols_and_reject_unsupported_tls() {
                 lists: &[],
                 settings: &Settings::default(),
                 lan_segment: &[],
+                lan_servers: &[],
                 control: None,
                 verbose_log: false
             })
@@ -177,6 +180,7 @@ fn probes_render_all_proxy_protocols_and_reject_unsupported_tls() {
                 lists: &[],
                 settings: &Settings::default(),
                 lan_segment: &[],
+                lan_servers: &[],
                 control: None,
                 verbose_log: false
             })

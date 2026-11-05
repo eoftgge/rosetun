@@ -27,7 +27,32 @@ pub const LINK_LOCAL_V6: [IpPrefix; 2] = [
     IpPrefix::v6([0xff02, 0, 0, 0, 0, 0, 0, 0], 16),
 ];
 
+/// Networks that say nothing about where a computer is on the internet:
+/// private, carrier-grade NAT and link-local ones, of both families.
+const PRIVATE: [IpPrefix; 7] = [
+    IpPrefix::v4([10, 0, 0, 0], 8),
+    IpPrefix::v4([100, 64, 0, 0], 10),
+    IpPrefix::v4([169, 254, 0, 0], 16),
+    IpPrefix::v4([172, 16, 0, 0], 12),
+    IpPrefix::v4([192, 168, 0, 0], 16),
+    IpPrefix::v6([0xfc00, 0, 0, 0, 0, 0, 0, 0], 7),
+    IpPrefix::v6([0xfe80, 0, 0, 0, 0, 0, 0, 0], 10),
+];
+
+/// Whether the address is in one of the private networks.
+pub fn is_private_address(address: IpAddr) -> bool {
+    let address = address.to_canonical();
+    PRIVATE.iter().any(|network| network.contains(address))
+}
+
 impl IpPrefix {
+    /// Whether the whole network lies inside the private ones.
+    pub fn is_private(self) -> bool {
+        PRIVATE
+            .iter()
+            .any(|network| network.length <= self.length && network.contains(self.address))
+    }
+
     /// The network of `address` with `length` bits; `None` when the length
     /// is longer than the family allows.
     pub const fn new(address: IpAddr, length: u8) -> Option<Self> {
@@ -230,6 +255,40 @@ mod tests {
         assert!(v4("198.51.0.0", 16).overlaps(net));
         assert!(net.overlaps(v4("198.51.100.4", 30)));
         assert!(!net.overlaps(v4("192.0.2.0", 24)));
+    }
+
+    #[test]
+    fn only_a_network_wholly_inside_the_private_ones_is_private() {
+        for private in [
+            v4("10.1.0.0", 16),
+            v4("172.16.0.0", 12),
+            v4("192.168.1.0", 24),
+            v4("100.64.0.0", 24),
+            v4("169.254.0.0", 16),
+            IpPrefix::new("fd00:1::".parse().unwrap(), 64).unwrap(),
+            IpPrefix::new("fe80::".parse().unwrap(), 64).unwrap(),
+        ] {
+            assert!(private.is_private(), "{private}");
+        }
+        for public in [
+            v4("192.0.2.0", 24),
+            v4("172.0.0.0", 8),
+            v4("8.0.0.0", 8),
+            v4("0.0.0.0", 0),
+            IpPrefix::new("2001:db8::".parse().unwrap(), 64).unwrap(),
+        ] {
+            assert!(!public.is_private(), "{public}");
+        }
+    }
+
+    #[test]
+    fn a_mapped_address_is_private_as_its_ipv4_address_is() {
+        assert!(is_private_address("192.168.1.1".parse().unwrap()));
+        assert!(is_private_address("::ffff:192.168.1.1".parse().unwrap()));
+        assert!(is_private_address("fd00::1".parse().unwrap()));
+        assert!(!is_private_address("203.0.113.5".parse().unwrap()));
+        assert!(!is_private_address("::ffff:203.0.113.5".parse().unwrap()));
+        assert!(!is_private_address("2001:db8::1".parse().unwrap()));
     }
 
     fn addresses(list: &[&str]) -> Vec<IpAddr> {

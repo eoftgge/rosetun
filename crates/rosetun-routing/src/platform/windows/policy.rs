@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use rosetun_config::{IpPrefix, LINK_LOCAL_V4, LINK_LOCAL_V6};
 
-use crate::lan::LanAccess;
+use crate::lan::{LanAccess, MAX_SERVERS_PER_NETWORK};
 use crate::{ProtectionScope, RoutingPlan};
 
 pub(super) const TUNNEL_WEIGHT: u8 = 4;
@@ -46,6 +46,14 @@ impl Subnet {
             Self::V4 { .. } => AddressFamily::Ipv4,
             Self::V6 { .. } => AddressFamily::Ipv6,
         }
+    }
+
+    fn prefix(self) -> IpPrefix {
+        let (address, length) = match self {
+            Self::V4 { address, prefix } => (IpAddr::from(address), prefix),
+            Self::V6 { address, prefix } => (IpAddr::from(address), prefix),
+        };
+        IpPrefix::new(address, length).expect("a subnet's length fits its family")
     }
 }
 
@@ -261,41 +269,84 @@ pub(super) fn lan_rules(lan: &LanAccess) -> Vec<(LanRule, Rule)> {
             LanRule::Segment(network.prefix),
             Rule::allow(family, permit, BOOTSTRAP_ALLOW_WEIGHT),
         ));
-        // The block outranks the engine's permit, so with a server's address
-        // in it an engine could not reach a server on port 53. Without it,
-        // other programs still hit the block of everything else.
-        for (index, protocol) in DNS_PROTOCOLS.into_iter().enumerate() {
-            let mut block = destination.clone();
-            block.extend([Condition::Protocol(protocol), Condition::RemotePort(53)]);
-            rules.push((
-                LanRule::SegmentDns(network.prefix, index),
-                Rule::block(family, block, PRIVATE_DNS_BLOCK_WEIGHT),
-            ));
+        for (index, block) in dns_blocks(family, &destination).into_iter().enumerate() {
+            rules.push((LanRule::SegmentDns(network.prefix, index), block));
         }
     }
     let interfaces: Vec<u64> = lan.segment.interfaces().iter().map(|id| id.0).collect();
     for prefix in link_local(lan.ipv6_multicast) {
+        let family = Subnet::from(prefix).family();
+        let destination = bounded_destination(prefix, &lan.servers);
         // Without a physical adapter there is nothing to permit on, and a
         // permit without the interface condition would open every adapter.
-        if !interfaces.is_empty() {
+        if !interfaces.is_empty() && !destination.is_empty() {
+            let mut permit = destination.clone();
+            permit.extend(interfaces.iter().map(|&luid| Condition::LocalInterface(luid)));
             rules.push((
                 LanRule::LinkLocal(prefix),
-                interface_permit(prefix.into(), &interfaces),
+                Rule::allow(family, permit, BOOTSTRAP_ALLOW_WEIGHT),
             ));
         }
-        for (index, block) in private_dns_blocks(prefix.into()).into_iter().enumerate() {
+        for (index, block) in dns_blocks(family, &whole_if_empty(destination, prefix))
+            .into_iter()
+            .enumerate()
+        {
             rules.push((LanRule::LinkLocalDns(prefix, index), block));
         }
     }
     if lan.private_networks {
         for (index, subnet) in LAN_SUBNETS.into_iter().enumerate() {
-            rules.push((LanRule::Private(index), lan_permit(subnet)));
-            for (protocol, block) in private_dns_blocks(subnet).into_iter().enumerate() {
+            let prefix = subnet.prefix();
+            let destination = bounded_destination(prefix, &lan.servers);
+            if !destination.is_empty() {
+                rules.push((
+                    LanRule::Private(index),
+                    Rule::allow(subnet.family(), destination.clone(), BOOTSTRAP_ALLOW_WEIGHT),
+                ));
+            }
+            for (protocol, block) in dns_blocks(subnet.family(), &whole_if_empty(destination, prefix))
+                .into_iter()
+                .enumerate()
+            {
                 rules.push((LanRule::PrivateDns(index, protocol), block));
             }
         }
     }
     rules
+}
+
+/// `segment_destination` for a range that no scan looked at: past the limit of
+/// servers it has no destination, and so no permit.
+fn bounded_destination(prefix: IpPrefix, servers: &[IpAddr]) -> Vec<Condition> {
+    let inside = servers.iter().filter(|server| prefix.contains(**server)).count();
+    if inside > MAX_SERVERS_PER_NETWORK {
+        tracing::warn!("local network: a private range holds too many VPN servers and stays closed");
+        return Vec::new();
+    }
+    segment_destination(prefix, servers)
+}
+
+/// A range without a permit keeps its DNS block whole: nothing else is open
+/// there, and an empty condition list would block all DNS everywhere.
+fn whole_if_empty(destination: Vec<Condition>, prefix: IpPrefix) -> Vec<Condition> {
+    if destination.is_empty() {
+        vec![Condition::RemoteSubnet(prefix.into())]
+    } else {
+        destination
+    }
+}
+
+/// A LAN resolver must not become a DNS leak, so DNS there is blocked above
+/// the permit; the tunnel permit still outranks it. The block also outranks
+/// the engine's permit, so with a server's address in it an engine could not
+/// reach a server on port 53. Without it, other programs still hit the block
+/// of everything else.
+fn dns_blocks(family: AddressFamily, destination: &[Condition]) -> [Rule; 2] {
+    DNS_PROTOCOLS.map(|protocol| {
+        let mut block = destination.to_vec();
+        block.extend([Condition::Protocol(protocol), Condition::RemotePort(53)]);
+        Rule::block(family, block, PRIVATE_DNS_BLOCK_WEIGHT)
+    })
 }
 
 /// The remote-address conditions of a connected network: the whole network,
@@ -328,40 +379,6 @@ pub(super) fn link_local(ipv6_multicast: bool) -> impl Iterator<Item = IpPrefix>
         .into_iter()
         .chain(LINK_LOCAL_V6)
         .filter(move |prefix| ipv6_multicast || *prefix != multicast_v6)
-}
-
-fn interface_permit(subnet: Subnet, interfaces: &[u64]) -> Rule {
-    let mut conditions = vec![Condition::RemoteSubnet(subnet)];
-    conditions.extend(
-        interfaces
-            .iter()
-            .map(|&luid| Condition::LocalInterface(luid)),
-    );
-    Rule::allow(subnet.family(), conditions, BOOTSTRAP_ALLOW_WEIGHT)
-}
-
-pub(super) fn lan_permit(subnet: Subnet) -> Rule {
-    Rule::allow(
-        subnet.family(),
-        vec![Condition::RemoteSubnet(subnet)],
-        BOOTSTRAP_ALLOW_WEIGHT,
-    )
-}
-
-/// A LAN resolver must not become a DNS leak, so DNS to private ranges is
-/// blocked above the LAN permit. The tunnel permit still outranks it.
-pub(super) fn private_dns_blocks(subnet: Subnet) -> [Rule; 2] {
-    DNS_PROTOCOLS.map(|protocol| {
-        Rule::block(
-            subnet.family(),
-            vec![
-                Condition::RemoteSubnet(subnet),
-                Condition::Protocol(protocol),
-                Condition::RemotePort(53),
-            ],
-            PRIVATE_DNS_BLOCK_WEIGHT,
-        )
-    })
 }
 
 /// The conditions of an engine permit: the program, run by the service.
@@ -659,6 +676,7 @@ pub(super) mod tests {
             ),
             private_networks,
             ipv6_multicast: false,
+            servers: Vec::new(),
         }
     }
 
@@ -879,6 +897,100 @@ pub(super) mod tests {
             .segment
             .leaving_out(&["203.0.113.5".parse().unwrap()]);
         assert_eq!(BootstrapPolicy::from_plan(&elsewhere, &[engine]), plain);
+    }
+
+    /// Private networks on, with a VPN server at 192.168.3.1 behind the router.
+    fn private_plan_with(servers: &[&str]) -> RoutingPlan {
+        let mut plan = lan_plan(true);
+        plan.lan.servers = crate::lan::canonical_servers(
+            &servers
+                .iter()
+                .map(|server| server.parse().unwrap())
+                .collect::<Vec<IpAddr>>(),
+        );
+        plan
+    }
+
+    #[test]
+    fn private_networks_open_without_the_server_and_the_engine_still_reaches_it() {
+        let engine = Path::new(r"C:\sing-box.exe");
+        let policy = BootstrapPolicy::from_plan(&private_plan_with(&["192.168.3.1"]), &[engine]);
+        let rules: Vec<_> = policy.rules.iter().collect();
+        for (destination, port, action) in [
+            ([192, 168, 3, 0], 7575, Action::Allow),
+            ([192, 168, 3, 1], 7575, Action::Block),
+            ([192, 168, 3, 2], 7575, Action::Allow),
+            ([10, 1, 2, 3], 7575, Action::Allow),
+            // DNS to the neighbours stays blocked, to the server by the rest.
+            ([192, 168, 3, 2], 53, Action::Block),
+            ([192, 168, 3, 1], 53, Action::Block),
+        ] {
+            assert_eq!(
+                decide(&rules, destination, 6, port, 999),
+                action,
+                "{destination:?}:{port}"
+            );
+        }
+        for port in [443, 53] {
+            let reach = decide_for(
+                Some(Process {
+                    path: engine,
+                    service_account: true,
+                }),
+                Layer::Connect,
+                &rules,
+                [192, 168, 3, 1],
+                6,
+                port,
+                999,
+            );
+            assert_eq!(reach, Action::Allow, "port {port}");
+        }
+    }
+
+    #[test]
+    fn a_public_server_leaves_private_networks_as_they_were() {
+        let engine = Path::new(r"C:\sing-box.exe");
+        assert_eq!(
+            BootstrapPolicy::from_plan(&private_plan_with(&["203.0.113.5"]), &[engine]),
+            BootstrapPolicy::from_plan(&lan_plan(true), &[engine])
+        );
+    }
+
+    #[test]
+    fn a_link_local_server_is_left_out_on_the_physical_adapters() {
+        let engine = Path::new(r"C:\sing-box.exe");
+        let mut plan = lan_plan(false);
+        plan.lan.servers = vec!["169.254.3.4".parse().unwrap()];
+        let policy = BootstrapPolicy::from_plan(&plan, &[engine]);
+        let rules: Vec<_> = policy.rules.iter().collect();
+        assert_eq!(decide(&rules, [169, 254, 3, 4], 6, 80, 7), Action::Block);
+        assert_eq!(decide(&rules, [169, 254, 3, 5], 6, 80, 7), Action::Allow);
+        assert_eq!(decide(&rules, [169, 254, 3, 5], 6, 80, 999), Action::Block);
+    }
+
+    #[test]
+    fn a_private_range_with_too_many_servers_stays_closed_with_its_dns_block() {
+        let engine = Path::new(r"C:\sing-box.exe");
+        let servers: Vec<String> = (1..=crate::lan::MAX_SERVERS_PER_NETWORK + 1)
+            .map(|host| format!("192.168.3.{host}"))
+            .collect();
+        let servers: Vec<&str> = servers.iter().map(String::as_str).collect();
+        let policy = BootstrapPolicy::from_plan(&private_plan_with(&servers), &[engine]);
+        let rules: Vec<_> = policy.rules.iter().collect();
+        assert_eq!(decide(&rules, [192, 168, 3, 100], 6, 80, 999), Action::Block);
+        assert_eq!(decide(&rules, [10, 1, 2, 3], 6, 80, 999), Action::Allow);
+        // The block has an address: without one it would close all DNS.
+        assert!(policy.rules.iter().all(|rule| {
+            !rule.conditions.starts_with(&[Condition::Protocol(17)])
+                && !rule.conditions.starts_with(&[Condition::Protocol(6)])
+        }));
+        assert_eq!(decide(&rules, [203, 0, 113, 7], 17, 53, 999), Action::Block);
+        assert_eq!(decide(&rules, [192, 168, 3, 100], 17, 53, 999), Action::Block);
+        let at_limit = &servers[..crate::lan::MAX_SERVERS_PER_NETWORK];
+        let open = BootstrapPolicy::from_plan(&private_plan_with(at_limit), &[engine]);
+        let rules: Vec<_> = open.rules.iter().collect();
+        assert_eq!(decide(&rules, [192, 168, 3, 100], 6, 80, 999), Action::Allow);
     }
 
     #[test]

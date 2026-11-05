@@ -5399,6 +5399,7 @@ fn invalid_extra_nodes_are_rejected_before_connect_and_apply() {
         lists: &[],
         settings: &missing.settings,
         lan_segment: &[],
+        lan_servers: &[],
         control: None,
         verbose_log: false,
     })

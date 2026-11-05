@@ -355,6 +355,7 @@ fn the_explainer_agrees_with_the_rendered_route() {
             lists: &request.lists,
             settings: &request.settings,
             lan_segment: &[],
+            lan_servers: &[],
             control: None,
             verbose_log: false,
         })

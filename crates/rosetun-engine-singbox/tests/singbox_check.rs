@@ -108,6 +108,7 @@ fn sing_box_check_validates_local_rule_set_config() {
             lists: &lists,
             settings: &settings,
             lan_segment: &[],
+            lan_servers: &[],
             control: None,
             verbose_log: false,
         })
@@ -141,6 +142,7 @@ fn sing_box_check_validates_local_rule_set_config() {
                 lists: &lists,
                 settings: &settings,
                 lan_segment: &[],
+                lan_servers: &[],
                 control: None,
                 verbose_log: false,
             })
@@ -180,6 +182,7 @@ fn sing_box_check_validates_local_rule_set_config() {
                     lists: &lists,
                     settings: &settings,
                     lan_segment: &[],
+                    lan_servers: &[],
                     control: None,
                     verbose_log: false,
                 })

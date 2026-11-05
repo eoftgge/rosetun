@@ -715,6 +715,7 @@ mod tests {
             lists: &[],
             settings: &settings,
             lan_segment: &[],
+            lan_servers: &[],
             control: Some(&control),
             verbose_log: false,
         };
@@ -794,6 +795,7 @@ mod tests {
             lists: &[],
             settings: &settings,
             lan_segment: &[],
+            lan_servers: &[],
             control: None,
             verbose_log: false,
         };
@@ -816,6 +818,7 @@ mod tests {
             lists: &[],
             settings: &settings,
             lan_segment: &[],
+            lan_servers: &[],
             control: None,
             verbose_log: false,
         })?;
@@ -844,6 +847,7 @@ mod tests {
                 lists: &[],
                 settings: &settings,
                 lan_segment: &[],
+                lan_servers: &[],
                 control: None,
                 verbose_log,
             })
@@ -872,6 +876,7 @@ mod tests {
             lists: &[],
             settings: &settings,
             lan_segment: &[],
+            lan_servers: &[],
             control: Some(&control),
             verbose_log: false,
         })
@@ -1597,6 +1602,7 @@ mod tests {
             lists: &[],
             settings: &settings,
             lan_segment: &[],
+            lan_servers: &[],
             control: None,
             verbose_log: false,
         })
@@ -1764,6 +1770,7 @@ mod tests {
             lists: &[],
             settings: &settings,
             lan_segment: &[],
+            lan_servers: &[],
             control: None,
             verbose_log: false,
         })
@@ -1848,6 +1855,7 @@ mod tests {
             lists: &[],
             settings: &settings,
             lan_segment: &[],
+            lan_servers: &[],
             control: None,
             verbose_log: false,
         };
@@ -1876,6 +1884,7 @@ mod tests {
             lists: &[],
             settings: &settings,
             lan_segment: &[],
+            lan_servers: &[],
             control: None,
             verbose_log: false,
         })
@@ -1955,6 +1964,7 @@ mod tests {
                 lists: &[],
                 settings: &settings,
                 lan_segment: &[],
+                lan_servers: &[],
                 control: None,
                 verbose_log: false,
             })
@@ -1998,6 +2008,7 @@ mod tests {
                 lists: &[],
                 settings: &settings,
                 lan_segment: &[],
+                lan_servers: &[],
                 control: None,
                 verbose_log: false,
             })
@@ -2035,6 +2046,7 @@ mod tests {
                 lists: &[],
                 settings: &settings,
                 lan_segment: &segment,
+                lan_servers: &[],
                 control: None,
                 verbose_log: false,
             })
@@ -2078,6 +2090,7 @@ mod tests {
             lists: &[],
             settings: &settings,
             lan_segment: &segment,
+            lan_servers: &[],
             control: None,
             verbose_log: false,
         })
@@ -2104,6 +2117,59 @@ mod tests {
             assert!(listed.contains(&IpPrefix::new("192.0.2.11".parse().unwrap(), 32).unwrap()));
             assert!(listed.contains(&IpPrefix::new("192.0.2.128".parse().unwrap(), 25).unwrap()));
         }
+    }
+
+    #[test]
+    fn private_networks_go_direct_except_the_vpn_servers() {
+        let node = node();
+        let rules = rules();
+        let settings = Settings {
+            allow_lan: true,
+            private_networks: true,
+            ..Settings::default()
+        };
+        let route = |lan_servers: &[std::net::IpAddr]| {
+            let rendered = render::render(&RenderRequest {
+                extra: &[],
+                node: &node,
+                socks: None,
+                rules: &rules,
+                lists: &[],
+                settings: &settings,
+                lan_segment: &[],
+                lan_servers,
+                control: None,
+                verbose_log: false,
+            })
+            .expect("rendered");
+            let config: Value = serde_json::from_slice(&rendered.body).expect("JSON");
+            config["route"]["rules"].as_array().expect("rules").clone()
+        };
+
+        assert!(route(&[]).iter().any(|rule| {
+            rule["ip_is_private"] == true && rule["outbound"] == "direct"
+        }));
+
+        let servers = [
+            "192.168.3.1".parse().unwrap(),
+            "fd00::5".parse().unwrap(),
+        ];
+        let rendered = route(&servers);
+        assert!(rendered.iter().all(|rule| rule["ip_is_private"].is_null()));
+        let private = rendered
+            .iter()
+            .find(|rule| rule["type"] == "logical")
+            .expect("the private networks' rule");
+        assert_eq!(private["mode"], "and");
+        assert_eq!(private["outbound"], "direct");
+        assert_eq!(private["action"], "route");
+        assert_eq!(
+            private["rules"],
+            serde_json::json!([
+                { "ip_is_private": true },
+                { "ip_cidr": ["192.168.3.1/32", "fd00::5/128"], "invert": true },
+            ])
+        );
     }
 
     #[test]
@@ -2138,6 +2204,7 @@ mod tests {
                 lists: &[],
                 settings: &settings,
                 lan_segment: &segment,
+                lan_servers: &[],
                 control: None,
                 verbose_log: false,
             })

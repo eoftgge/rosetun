@@ -997,6 +997,32 @@ mod tests {
     }
 
     #[test]
+    fn a_server_behind_the_router_rewrites_lockdown_and_a_public_one_does_not() {
+        let calls = Arc::new(Calls::default());
+        let helper = lockdown_helper(&calls).with_lan_scan(segment_around_servers);
+        helper
+            .set_lockdown_as(&Caller::fake(b"admin", true), true, true, true)
+            .unwrap();
+        let writes = || calls.enabled.lock().unwrap().len();
+        assert_eq!(writes(), 1);
+
+        let mut session = helper.session.lock().unwrap();
+        session
+            .follow_servers_in_lockdown(&["203.0.113.5".parse().unwrap()])
+            .unwrap();
+        assert_eq!(writes(), 1);
+        // Outside the segment, inside "Private networks behind the router".
+        session
+            .follow_servers_in_lockdown(&["10.1.2.3".parse().unwrap()])
+            .unwrap();
+        assert_eq!(writes(), 2);
+        session
+            .follow_servers_in_lockdown(&["10.1.2.3".parse().unwrap()])
+            .unwrap();
+        assert_eq!(writes(), 2);
+    }
+
+    #[test]
     fn without_lockdown_a_sessions_servers_write_nothing() {
         let calls = Arc::new(Calls::default());
         let helper = lockdown_helper(&calls).with_lan_scan(segment_around_servers);
