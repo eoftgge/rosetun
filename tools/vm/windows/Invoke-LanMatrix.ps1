@@ -29,7 +29,10 @@ param(
     # Only records unbound multicast once a second and every route change for
     # $TraceSeconds after a connect with "Local network", and stops.
     [switch]$MulticastTraceOnly,
-    [int]$TraceSeconds = 180
+    [int]$TraceSeconds = 180,
+    # With the trace: 20 s after the connect, gives the physical adapter
+    # 224.0.0.0/24 and 239.255.255.250/32 with route metric 0 until the trace ends.
+    [switch]$TraceLongerRoutes
 )
 
 Set-StrictMode -Version Latest
@@ -320,6 +323,23 @@ function Invoke-RosetunDiscoveryTimeline {
     Write-RosetunGuestDiscoveryTimeline -Label 'second lan-on' -AtSeconds @(0, 5, 15, 30, 60, 120)
 }
 
+function Set-RosetunGuestLongerRoute {
+    # Active store only: the routes cannot outlive a guest restart.
+    param([Parameter(Mandatory)][bool]$Present)
+    Invoke-RosetunGuest -ScriptBlock {
+        param($alias, $present)
+        foreach ($prefix in @('224.0.0.0/24', '239.255.255.250/32')) {
+            if ($present) {
+                New-NetRoute -DestinationPrefix $prefix -InterfaceAlias $alias -NextHop '0.0.0.0' -RouteMetric 0 `
+                    -PolicyStore ActiveStore -ErrorAction Stop | Out-Null
+            }
+            else {
+                Remove-NetRoute -DestinationPrefix $prefix -InterfaceAlias $alias -Confirm:$false -ErrorAction SilentlyContinue
+            }
+        }
+    } -ArgumentList $physical.Alias, $Present
+}
+
 function Invoke-RosetunMulticastTrace {
     # The trace starts before the connect, so the route changes of the connect
     # itself are in it. The host counts what arrives while the guest sends.
@@ -327,6 +347,7 @@ function Invoke-RosetunMulticastTrace {
     Disconnect-RosetunTunnel | Out-Null
     Wait-RosetunState 'Disconnected' | Out-Null
     $seconds = $TraceSeconds + 30
+    if ($TraceLongerRoutes) { $seconds += 20 }
     $source = Get-Content -Path (Join-Path $PSScriptRoot 'Trace-RosetunGuestMulticast.ps1') -Raw
     $commandLine = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$dir\trace-multicast.ps1`" " +
         "-OutDir `"$dir`" -Seconds $seconds -BroadcastPort $BroadcastPort " +
@@ -351,10 +372,18 @@ function Invoke-RosetunMulticastTrace {
     $connectedAt = Invoke-RosetunGuest -ScriptBlock { [DateTime]::UtcNow.ToString('o') }
     Write-Host "TRACE connect lan-on: $connected at $connectedAt"
     $done = $false
+    $addRoutesAt = if ($TraceLongerRoutes) { [DateTime]::UtcNow.AddSeconds(20) } else { [DateTime]::MaxValue }
     $deadline = [DateTime]::UtcNow.AddSeconds($seconds + 60)
     $remote = [Net.IPEndPoint]::new([Net.IPAddress]::Any, 0)
     $nextCheck = [DateTime]::UtcNow
+    try {
     while (-not $done -and [DateTime]::UtcNow -lt $deadline) {
+        if ([DateTime]::UtcNow -ge $addRoutesAt) {
+            $addRoutesAt = [DateTime]::MaxValue
+            Set-RosetunGuestLongerRoute -Present $true
+            $addedAt = Invoke-RosetunGuest -ScriptBlock { [DateTime]::UtcNow.ToString('o') }
+            Write-Host "TRACE longer routes added on $($physical.Alias) at $addedAt"
+        }
         foreach ($entry in $watches) {
             while ($entry.Socket.Available -gt 0) {
                 try {
@@ -369,6 +398,10 @@ function Invoke-RosetunMulticastTrace {
             $done = Invoke-RosetunGuest -ScriptBlock { param($dir) Test-Path (Join-Path $dir 'multicast-done.txt') } -ArgumentList $dir
         }
         Start-Sleep -Milliseconds 100
+    }
+    }
+    finally {
+        if ($TraceLongerRoutes) { Set-RosetunGuestLongerRoute -Present $false }
     }
     $files = Invoke-RosetunGuest -ScriptBlock {
         param($dir)
@@ -398,12 +431,14 @@ function Invoke-RosetunMulticastTrace {
     [IO.File]::WriteAllText((Join-Path $out 'interfaces.csv'), "$($files.Interfaces)")
     [IO.File]::WriteAllText((Join-Path $out 'discovery-log.txt'),
         ((@((Get-RosetunHelperLogSince -Offset $mark) -split '\r?\n' | Where-Object { $_ -match 'discovery' })) -join "`n"))
-    # One line each time the state changes: the moment multicast is lost.
+    # One line each time the state changes: the moment multicast is lost. The
+    # cached paths are sorted, since Windows lists them in no stable order.
     $last = ''
     foreach ($row in $rows) {
+        $paths = (@($row.path_adapters_239 -split ' \| ') | Sort-Object) -join ','
         $state = "best=$($row.best_route_239) socket239=$($row.socket_239) socket224=$($row.socket_224) " +
             "tunnel224/4=$($row.tunnel_has_224_4) physical224/4=$($row.physical_has_224_4) " +
-            "default=$($row.tunnel_has_default) paths=$($row.path_adapters_239) find=$($row.find_route_239) " +
+            "paths=$paths " +
             "arrived239=$($row.arrived_239) arrived224=$($row.arrived_224) arrived255=$($row.arrived_255)"
         if ($state -ne $last) { Write-Host "TRACE $($row.utc) #$($row.sequence) $state" }
         $last = $state
