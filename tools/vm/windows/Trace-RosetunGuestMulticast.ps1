@@ -109,6 +109,14 @@ public static class RosetunRouteTrace
 }
 '@
 
+function Get-TraceRouteList {
+    # Every route of the adapter, in a stable order, so a change is a real one.
+    param([Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Routes)
+    @($Routes | Sort-Object AddressFamily, DestinationPrefix | ForEach-Object {
+        "$($_.DestinationPrefix) via $($_.NextHop) metric $($_.RouteMetric) $($_.Protocol)"
+    }) -join ' | '
+}
+
 function Get-TraceSource {
     # Connecting a datagram socket looks the route up and sends nothing.
     param([Parameter(Mandatory)][string]$Address)
@@ -166,7 +174,8 @@ try {
     $started = [DateTime]::UtcNow
     for ($sequence = 0; $sequence -lt $Seconds; $sequence++) {
         $found = Get-TraceFoundRoute -Address '239.255.255.250'
-        $routes = @(Get-NetRoute -AddressFamily IPv4 -ErrorAction Stop)
+        $found224 = Get-TraceFoundRoute -Address '224.0.0.251'
+        $routes = @(Get-NetRoute -ErrorAction Stop)
         $onTunnel = @($routes | Where-Object { $_.InterfaceAlias -eq $TunAlias })
         $onPhysical = @($routes | Where-Object { $_.InterfaceAlias -eq $PhysicalAlias })
         $row = [pscustomobject]@{
@@ -175,6 +184,9 @@ try {
             find_route_239      = $found.Route
             find_source_239     = $found.Source
             find_error_239      = $found.Error
+            find_route_224      = $found224.Route
+            find_source_224     = $found224.Source
+            find_error_224      = $found224.Error
             best_route_239      = [RosetunRouteTrace]::BestRoute('239.255.255.250')
             best_route_224      = [RosetunRouteTrace]::BestRoute('224.0.0.251')
             socket_239          = Get-TraceSource -Address '239.255.255.250'
@@ -183,6 +195,7 @@ try {
             tunnel_has_224_4    = @($onTunnel | Where-Object { $_.DestinationPrefix -eq '224.0.0.0/4' }).Count -gt 0
             physical_has_224_4  = @($onPhysical | Where-Object { $_.DestinationPrefix -eq '224.0.0.0/4' }).Count -gt 0
             tunnel_has_default  = @($onTunnel | Where-Object { $_.DestinationPrefix -eq '0.0.0.0/0' }).Count -gt 0
+            tunnel_routes       = Get-TraceRouteList -Routes $onTunnel
             path_adapters_239   = Get-TracePathAdapter -Address '239.255.255.250'
             path_adapters_224   = Get-TracePathAdapter -Address '224.0.0.251'
             send_239            = Send-TraceDatagram -Address '239.255.255.250' -Port 1900 -Sequence $sequence

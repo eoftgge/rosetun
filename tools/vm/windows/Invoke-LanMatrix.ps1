@@ -223,10 +223,10 @@ function Get-RosetunGuestDiscoverySource {
 }
 
 function Test-RosetunGuestBroadcastRoute {
-    # One check that the broadcast route is there or gone and where a socket for
-    # the limited broadcast goes, which can take a moment after a connect, and
-    # that multicast's route stays. Where a socket for multicast goes is recorded:
-    # Windows does not settle it by these routes.
+    # One check that the system's routes for multicast and the limited broadcast
+    # are there or gone and where a socket for the limited broadcast goes, which
+    # can take a moment after a connect. Where a socket for multicast goes is
+    # recorded.
     param(
         [Parameter(Mandatory)][string]$Scenario,
         [Parameter(Mandatory)][bool]$OnTunnel
@@ -240,15 +240,14 @@ function Test-RosetunGuestBroadcastRoute {
         if ($source -eq $expected) { break }
         Start-Sleep -Milliseconds 500
     } while ([DateTime]::UtcNow -lt $deadline)
-    Test-Step $Scenario 'rosetun0 keeps 224.0.0.0/4' -Note ($routes -join ', ') { $routes -contains '224.0.0.0/4' }
     if ($OnTunnel) {
-        Test-Step $Scenario 'rosetun0 has 255.255.255.255/32' -Note ($routes -join ', ') {
-            $routes -contains '255.255.255.255/32'
+        foreach ($prefix in @('224.0.0.0/4', '255.255.255.255/32')) {
+            Test-Step $Scenario "rosetun0 has $prefix" -Note ($routes -join ', ') { $routes -contains $prefix }
         }
     }
     else {
-        Test-Step $Scenario 'rosetun0 does not have 255.255.255.255/32' -Note ($routes -join ', ') {
-            $routes -notcontains '255.255.255.255/32'
+        foreach ($prefix in @('224.0.0.0/4', '255.255.255.255/32')) {
+            Test-Step $Scenario "rosetun0 does not have $prefix" -Note ($routes -join ', ') { $routes -notcontains $prefix }
         }
         $chosen = Get-RosetunGuestRoute -Address '255.255.255.255'
         Test-Step $Scenario "Find-NetRoute sends the limited broadcast through $($physical.Alias)" -Note $chosen.InterfaceAlias {
@@ -259,6 +258,14 @@ function Test-RosetunGuestBroadcastRoute {
     foreach ($entry in @($sources | Where-Object { $_.Address -ne '255.255.255.255' })) {
         Write-RosetunLanNote $Scenario "a socket for $($entry.Address) takes $($entry.Source)"
     }
+}
+
+function Hide-RosetunNodeAddress {
+    # A host route on the tunnel that is not the tunnel's own, multicast or the
+    # broadcast can only name a VPN server.
+    param([string]$Text)
+    $Text -replace '\b(?!172\.19\.0\.|224\.|239\.|255\.)\d{1,3}(\.\d{1,3}){3}/32\b', 'x.x.x.x/32' `
+        -replace '(?<![\w:])(?!fdfe:|ff)[0-9a-f]*:[0-9a-f:]*/128\b', 'x::x/128'
 }
 
 function Invoke-RosetunMulticastTrace {
@@ -335,7 +342,7 @@ function Invoke-RosetunMulticastTrace {
             Add-Member -NotePropertyName arrived_255 -NotePropertyValue ($arrived.ContainsKey("255.255.255.255 $sequence")) -PassThru
     })
     $rows | Export-Csv -Path (Join-Path $out 'samples.csv') -NoTypeInformation -Encoding UTF8
-    [IO.File]::WriteAllText((Join-Path $out 'routes.csv'), "$($files.Routes)")
+    [IO.File]::WriteAllText((Join-Path $out 'routes.csv'), (Hide-RosetunNodeAddress -Text "$($files.Routes)"))
     [IO.File]::WriteAllText((Join-Path $out 'interfaces.csv'), "$($files.Interfaces)")
     [IO.File]::WriteAllText((Join-Path $out 'discovery-log.txt'),
         ((@((Get-RosetunHelperLogSince -Offset $mark) -split '\r?\n' | Where-Object { $_ -match 'discovery' })) -join "`n"))
@@ -344,12 +351,33 @@ function Invoke-RosetunMulticastTrace {
     $last = ''
     foreach ($row in $rows) {
         $paths = (@($row.path_adapters_239 -split ' \| ') | Sort-Object) -join ','
-        $state = "best=$($row.best_route_239) socket239=$($row.socket_239) socket224=$($row.socket_224) " +
+        $state = "best239=$($row.best_route_239) best224=$($row.best_route_224) " +
+            "find239=$($row.find_route_239) find224=$($row.find_route_224) " +
+            "socket239=$($row.socket_239) socket224=$($row.socket_224) " +
             "tunnel224/4=$($row.tunnel_has_224_4) physical224/4=$($row.physical_has_224_4) " +
             "paths=$paths " +
             "arrived239=$($row.arrived_239) arrived224=$($row.arrived_224) arrived255=$($row.arrived_255)"
         if ($state -ne $last) { Write-Host "TRACE $($row.utc) #$($row.sequence) $state" }
         $last = $state
+    }
+    # The tunnel's whole route list, each time it changes. A connect's first
+    # changes between two samples are in routes.csv.
+    $lists = [Collections.Generic.List[string]]::new()
+    $last = ''
+    foreach ($row in $rows) {
+        if ($row.tunnel_routes -ne $last) {
+            $lists.Add("$($row.utc) #$($row.sequence)")
+            foreach ($route in @($row.tunnel_routes -split ' \| ')) { $lists.Add("  $(Hide-RosetunNodeAddress -Text $route)") }
+        }
+        $last = $row.tunnel_routes
+    }
+    [IO.File]::WriteAllLines((Join-Path $out 'tunnel-routes.txt'), [string[]]$lists)
+    foreach ($line in $lists) { Write-Host "TRACE routes $line" }
+    # What arrived once the connect had begun.
+    $since = @($rows | Where-Object { $_.utc -gt $connectedAt })
+    foreach ($name in @('239', '224', '255')) {
+        $count = @($since | Where-Object { $_."arrived_$name" }).Count
+        Write-Host "TRACE arrived $name after the connect: $count of $($since.Count)"
     }
     Write-Host "TRACE files in $out"
 }
