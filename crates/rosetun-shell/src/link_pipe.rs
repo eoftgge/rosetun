@@ -4,7 +4,7 @@
 
 use std::ffi::c_void;
 use std::fs::{File, OpenOptions};
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
 use std::os::windows::fs::OpenOptionsExt;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
 use std::path::{Path, PathBuf};
@@ -34,8 +34,8 @@ use windows_sys::Win32::System::Threading::{
     PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
 };
 
-/// The longest link accepted over the pipe, the same bound as the link parser.
-pub const MAX_LINK_BYTES: usize = 8 * 1024;
+use crate::link_frame::{MAX_LINK_BYTES, encode_link, read_link};
+
 const PIPE_PREFIX: &str = r"\\.\pipe\Rosetun.Gui.Link";
 const BUFFER_BYTES: u32 = MAX_LINK_BYTES as u32 + 4;
 const SEND_TIMEOUT: Duration = Duration::from_secs(5);
@@ -105,7 +105,7 @@ impl LinkListener {
                     return Err(io::Error::from_raw_os_error(error as i32));
                 }
             }
-            let link = read_message(&mut &self.pipe);
+            let link = read_link(&mut &self.pipe);
             // SAFETY: The pipe handle stays live; disconnecting drops whatever
             // the client left unread and frees the instance for the next one.
             if unsafe { DisconnectNamedPipe(handle) } == 0 {
@@ -125,12 +125,7 @@ pub fn send_link(link: &str) -> io::Result<()> {
 }
 
 fn send_named(name: &str, link: &str) -> io::Result<()> {
-    if link.len() > MAX_LINK_BYTES {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "the link is too long",
-        ));
-    }
+    let message = encode_link(link)?;
     let mut pipe = open_pipe(name)?;
     let server = server_image(&pipe)?;
     if !same_executable(&server, &std::env::current_exe()?) {
@@ -139,9 +134,6 @@ fn send_named(name: &str, link: &str) -> io::Result<()> {
             "the link pipe belongs to another program",
         ));
     }
-    let mut message = Vec::with_capacity(4 + link.len());
-    message.extend_from_slice(&(link.len() as u32).to_le_bytes());
-    message.extend_from_slice(link.as_bytes());
     pipe.write_all(&message)
 }
 
@@ -164,18 +156,6 @@ fn open_pipe(name: &str) -> io::Result<File> {
             Err(error) => return Err(error),
         }
     }
-}
-
-fn read_message(pipe: &mut impl Read) -> Option<String> {
-    let mut length = [0; 4];
-    pipe.read_exact(&mut length).ok()?;
-    let length = u32::from_le_bytes(length) as usize;
-    if length > MAX_LINK_BYTES {
-        return None;
-    }
-    let mut link = vec![0; length];
-    pipe.read_exact(&mut link).ok()?;
-    String::from_utf8(link).ok()
 }
 
 /// Whether two executable paths name the same file, compared canonically

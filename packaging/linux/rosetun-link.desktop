@@ -1,0 +1,12 @@
+# Opens rosetun:// links; not a menu entry, since a run without a link would
+# open an empty add dialog. Installed as
+# /usr/share/applications/rosetun-link.desktop; register it with
+# `update-desktop-database` and `xdg-mime default rosetun-link.desktop x-scheme-handler/rosetun`.
+[Desktop Entry]
+Type=Application
+Name=Rosetun
+Exec=/usr/lib/rosetun/rosetun-gui --open-url %u
+Icon=rosetun
+Terminal=false
+NoDisplay=true
+MimeType=x-scheme-handler/rosetun;

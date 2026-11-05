@@ -57,7 +57,7 @@ use session::SessionState;
 pub(crate) use session::{RequestInputs, SessionPart};
 use settings::SettingsState;
 pub(crate) use settings::{AboutFolder, SettingsSection};
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "linux", test))]
 pub(crate) use subscriptions::OpenedLink;
 use subscriptions::SubscriptionsState;
 pub(crate) use subscriptions::{
@@ -415,7 +415,7 @@ pub(crate) enum Action {
     ToggleExpanded(SubscriptionId),
     DropSubscription(SubscriptionId, usize),
     OpenAdd,
-    #[cfg(any(windows, test))]
+    #[cfg(any(windows, target_os = "linux", test))]
     OpenLink(OpenedLink),
     CancelAdd,
     SubmitAdd,
@@ -872,7 +872,7 @@ impl State {
             action @ (Action::ReadQr(_) | Action::CancelQr | Action::ChooseQrLink(_)) => {
                 return self.act_qr(action);
             }
-            #[cfg(any(windows, test))]
+            #[cfg(any(windows, target_os = "linux", test))]
             action @ Action::OpenLink(_) => return self.act_subscriptions(action),
             action @ (Action::RevealServer | Action::RevealDone) => {
                 return self.act_subscriptions(action);

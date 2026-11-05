@@ -170,10 +170,12 @@ impl State {
         self.upgrade_hold_shown() && !self.operations.helper
     }
 
-    /// Started by the installer after an upgrade that held the network.
-    #[cfg(any(windows, test))]
+    /// Started by the installer after an upgrade that held the network, or
+    /// a later run was. A running GUI has made its start-up connection, so it is due again.
+    #[cfg(any(windows, target_os = "linux", test))]
     pub(crate) fn start_after_upgrade(&mut self) {
         self.after_upgrade = true;
+        self.auto_connect_pending = true;
     }
 
     /// Whether the window should come up to explain the closed network.

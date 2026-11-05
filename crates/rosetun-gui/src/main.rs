@@ -59,14 +59,14 @@ use tracing_subscriber::filter::filter_fn;
 use tracing_subscriber::fmt::writer::BoxMakeWriter;
 use tracing_subscriber::prelude::*;
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 /// Passed by autostart: start in the tray without showing the window.
 pub(crate) const HIDDEN_ARG: &str = "--hidden";
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 /// Passed by the installer after an upgrade that held the network closed:
 /// start in the tray and connect, whatever "Connect at startup" says.
 const AFTER_UPGRADE_ARG: &str = "--after-upgrade";
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 /// Passed by the `rosetun://` scheme handler with the link that was opened.
 const OPEN_URL_ARG: &str = "--open-url";
 
@@ -75,12 +75,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // made in, and Lockdown permits the GUI by its scope.
     #[cfg(target_os = "linux")]
     let scope = rosetun_core::enter_scope(rosetun_core::ScopeProgram::Gui);
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     let open_link = open_url_arg(std::env::args_os());
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     let after_upgrade =
         open_link.is_none() && std::env::args_os().any(|arg| arg == AFTER_UPGRADE_ARG);
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     let start_hidden =
         after_upgrade || open_link.is_none() && std::env::args_os().any(|arg| arg == HIDDEN_ARG);
     #[cfg(windows)]
@@ -99,6 +99,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             return Ok(());
         }
         Err(error) => (Err(error), None),
+    };
+    #[cfg(target_os = "linux")]
+    let activation = match rosetun_shell::acquire() {
+        Ok(rosetun_shell::Instance::First(activation)) => Ok(activation),
+        Ok(rosetun_shell::Instance::Other) => {
+            if let Some(message) = message_to_first(open_link, after_upgrade, start_hidden)
+                && let Err(error) = rosetun_shell::send_to_first(&message)
+            {
+                tracing::warn!(%error, "could not reach the running GUI");
+            }
+            return Ok(());
+        }
+        Err(error) => Err(error),
     };
     let store = rosetun_core::Store::open_default()?;
     #[cfg(windows)]
@@ -141,7 +154,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     let activation = activation
         .inspect_err(|error| tracing::warn!(%error, "single-instance check failed"))
         .ok();
@@ -173,6 +186,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let app = app::App::new(cc, store);
             #[cfg(target_os = "linux")]
             let app = app.outside_scope(scope != rosetun_core::Scope::Inside);
+            #[cfg(target_os = "linux")]
+            let app = app.with_instance(&cc.egui_ctx, activation, open_link);
             #[cfg(windows)]
             let app = app.with_shell(
                 &cc.egui_ctx,
@@ -182,7 +197,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 start_hidden,
                 window_memory::WindowMemory::new(cc, window_file),
             );
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "linux"))]
             let app = app.after_upgrade(after_upgrade);
             Ok(Box::new(app))
         }),
@@ -192,7 +207,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 /// The link after `--open-url`. A missing or unreadable value is an empty
 /// link, so the add dialog still opens and says it holds no subscription.
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 fn open_url_arg(args: impl Iterator<Item = std::ffi::OsString>) -> Option<String> {
     let mut args = args.skip_while(|arg| arg != OPEN_URL_ARG);
     args.next()?;
@@ -201,4 +216,66 @@ fn open_url_arg(args: impl Iterator<Item = std::ffi::OsString>) -> Option<String
             .and_then(|link| link.into_string().ok())
             .unwrap_or_default(),
     )
+}
+
+/// What a run that found another one asks of it. Autostart while the GUI
+/// already runs asks nothing.
+#[cfg(target_os = "linux")]
+fn message_to_first(
+    open_link: Option<String>,
+    after_upgrade: bool,
+    start_hidden: bool,
+) -> Option<rosetun_shell::InstanceMessage> {
+    use rosetun_shell::InstanceMessage;
+
+    match (open_link, after_upgrade, start_hidden) {
+        (Some(link), ..) => Some(InstanceMessage::OpenLink(link)),
+        (None, true, _) => Some(InstanceMessage::AfterUpgrade),
+        (None, false, true) => None,
+        (None, false, false) => Some(InstanceMessage::Show),
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use rosetun_shell::InstanceMessage;
+
+    use super::{message_to_first, open_url_arg};
+
+    #[test]
+    fn a_later_run_asks_for_what_it_was_started_for() {
+        let link = || Some("rosetun://add/https://example.com/token".to_owned());
+        assert_eq!(
+            message_to_first(link(), false, false),
+            link().map(InstanceMessage::OpenLink)
+        );
+        assert_eq!(
+            message_to_first(None, true, true),
+            Some(InstanceMessage::AfterUpgrade)
+        );
+        assert_eq!(message_to_first(None, false, true), None);
+        assert_eq!(
+            message_to_first(None, false, false),
+            Some(InstanceMessage::Show)
+        );
+    }
+
+    #[test]
+    fn the_link_is_the_argument_after_open_url() {
+        let args = |list: &[&str]| {
+            list.iter()
+                .map(std::ffi::OsString::from)
+                .collect::<Vec<_>>()
+                .into_iter()
+        };
+        assert_eq!(open_url_arg(args(&["rosetun-gui"])), None);
+        assert_eq!(
+            open_url_arg(args(&["rosetun-gui", "--open-url", "rosetun://add/x"])).as_deref(),
+            Some("rosetun://add/x")
+        );
+        assert_eq!(
+            open_url_arg(args(&["rosetun-gui", "--open-url"])).as_deref(),
+            Some("")
+        );
+    }
 }

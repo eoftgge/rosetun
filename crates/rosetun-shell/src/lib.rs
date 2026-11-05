@@ -20,6 +20,14 @@ mod first_start;
     reason = "Win32 FFI; every unsafe block carries a SAFETY comment"
 )]
 mod instance;
+#[cfg(target_os = "linux")]
+#[expect(
+    unsafe_code,
+    reason = "socket credentials over libc; every unsafe block carries a SAFETY comment"
+)]
+mod instance_linux;
+#[cfg(any(windows, target_os = "linux"))]
+mod link_frame;
 #[cfg(windows)]
 #[expect(
     unsafe_code,
@@ -93,10 +101,14 @@ pub use elevated::run_elevated;
 pub use fonts::fonts_dir;
 #[cfg(windows)]
 pub use instance::{Activation, Instance, acquire};
+#[cfg(target_os = "linux")]
+pub use instance_linux::{Activation, Instance, InstanceMessage, acquire, send_to_first};
 #[cfg(windows)]
 pub use language::user_language;
+#[cfg(any(windows, target_os = "linux"))]
+pub use link_frame::MAX_LINK_BYTES;
 #[cfg(windows)]
-pub use link_pipe::{LinkListener, MAX_LINK_BYTES, send_link};
+pub use link_pipe::{LinkListener, send_link};
 pub use mapped_file::{MappedFile, map_protected_file};
 #[cfg(windows)]
 pub use program_icon::ComApartment;

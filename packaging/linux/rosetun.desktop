@@ -1,0 +1,11 @@
+# The menu entry. Installed as /usr/share/applications/rosetun.desktop.
+[Desktop Entry]
+Type=Application
+Name=Rosetun
+Comment=VPN client
+Exec=/usr/lib/rosetun/rosetun-gui
+Icon=rosetun
+Terminal=false
+Categories=Network;
+StartupNotify=true
+StartupWMClass=rosetun

@@ -9,6 +9,8 @@ use rosetun_core::Store;
 #[cfg(windows)]
 use crate::notices::{Notice, Notices};
 use crate::repaint_trace::RepaintTrace;
+#[cfg(target_os = "linux")]
+use crate::state::{Action, OpenedLink};
 #[cfg(windows)]
 use crate::state::{Action, OpenedLink, QuitDecision};
 use crate::state::{Job, State};
@@ -75,6 +77,9 @@ pub(crate) struct App {
     system_language: Option<i18n::Language>,
     /// Set only with `ROSETUN_REPAINT_TRACE`.
     repaint_trace: Option<RepaintTrace>,
+    /// What later runs asked for, from the instance socket's thread.
+    #[cfg(target_os = "linux")]
+    instance_messages: Option<Receiver<rosetun_shell::InstanceMessage>>,
     #[cfg(windows)]
     frame_stats: crate::frame_stats::FrameStats,
     /// Frames reach the screen through DirectComposition, above the window's own surface.
@@ -156,6 +161,8 @@ impl App {
             applied_scale: Some(applied_scale),
             system_language,
             repaint_trace,
+            #[cfg(target_os = "linux")]
+            instance_messages: None,
             #[cfg(windows)]
             frame_stats: crate::frame_stats::FrameStats::default(),
             #[cfg(windows)]
@@ -197,12 +204,74 @@ impl App {
     }
 
     /// Started by the installer after an upgrade that held the network.
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     pub(crate) fn after_upgrade(mut self, after_upgrade: bool) -> Self {
         if after_upgrade {
             self.state.start_after_upgrade();
         }
         self
+    }
+
+    /// Serves later runs of the GUI; `open_link` is what this run was started for.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn with_instance(
+        mut self,
+        ctx: &egui::Context,
+        activation: Option<rosetun_shell::Activation>,
+        open_link: Option<String>,
+    ) -> Self {
+        let (sender, messages) = mpsc::channel();
+        self.instance_messages = Some(messages);
+        if let Some(link) = open_link {
+            let _ = sender.send(rosetun_shell::InstanceMessage::OpenLink(link));
+        }
+        if let Some(activation) = activation {
+            let ctx = ctx.clone();
+            std::thread::spawn(move || {
+                let served = activation.serve(|message| {
+                    let _ = sender.send(message);
+                    ctx.request_repaint();
+                });
+                if let Err(error) = served {
+                    tracing::warn!(%error, "the instance socket stopped");
+                }
+            });
+        }
+        self
+    }
+
+    #[cfg(target_os = "linux")]
+    fn receive_instance_messages(&mut self, ctx: &egui::Context) {
+        use rosetun_shell::InstanceMessage;
+
+        while let Some(message) = self
+            .instance_messages
+            .as_ref()
+            .and_then(|messages| messages.try_recv().ok())
+        {
+            ctx.request_repaint();
+            match message {
+                InstanceMessage::Show => self.show_window(ctx),
+                InstanceMessage::AfterUpgrade => self.state.start_after_upgrade(),
+                InstanceMessage::OpenLink(link) => {
+                    if let Some(job) = self.state.act(Action::OpenLink(OpenedLink(link))) {
+                        self.dispatch(job);
+                    }
+                    self.show_window(ctx);
+                }
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn show_window(&self, ctx: &egui::Context) {
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        // Wayland lets no program raise itself; this marks the window for the user.
+        ctx.send_viewport_cmd(egui::ViewportCommand::RequestUserAttention(
+            egui::UserAttentionType::Informational,
+        ));
     }
 
     #[cfg(windows)]
@@ -658,6 +727,8 @@ impl eframe::App for App {
         if let Some(job) = self.state.take_screen_clip_poll(display::now_unix()) {
             self.dispatch(job);
         }
+        #[cfg(target_os = "linux")]
+        self.receive_instance_messages(ctx);
         // A hidden window runs `logic` only, so the schedule must be requested here, not in `ui`.
         if let Some(delay) = repaint_delay(false, self.state.next_wake(display::now_unix())) {
             ctx.request_repaint_after(delay);
