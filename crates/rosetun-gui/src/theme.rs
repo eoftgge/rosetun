@@ -194,6 +194,13 @@ pub(crate) fn palette() -> &'static Palette {
         .unwrap_or(&PALETTES[0])
 }
 
+/// The colour of the window's own surface, under the frames: the same as the
+/// frames' clear colour, so that a moment without a frame does not stand out.
+#[cfg(any(windows, test))]
+pub(crate) fn surface_color(palette: &Palette) -> [u8; 3] {
+    [palette.bg.r(), palette.bg.g(), palette.bg.b()]
+}
+
 pub(crate) fn palette_of(accent: AccentPreset) -> &'static Palette {
     &PALETTES[usize::from(palette_index(accent))]
 }
@@ -462,6 +469,17 @@ pub(crate) fn apply_style(ctx: &egui::Context) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_window_surface_takes_the_background_of_each_palette() {
+        let distinct: std::collections::HashSet<[u8; 3]> =
+            PALETTES.iter().map(surface_color).collect();
+        assert_eq!(distinct.len(), PALETTES.len());
+        for palette in &PALETTES {
+            let [red, green, blue] = surface_color(palette);
+            assert_eq!(Color32::from_rgb(red, green, blue), palette.bg);
+        }
+    }
 
     fn luminance(color: Color32) -> f64 {
         let channel = |value: u8| {

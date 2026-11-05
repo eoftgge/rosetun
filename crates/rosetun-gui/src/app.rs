@@ -77,6 +77,9 @@ pub(crate) struct App {
     repaint_trace: Option<RepaintTrace>,
     #[cfg(windows)]
     frame_stats: crate::frame_stats::FrameStats,
+    /// Frames reach the screen through DirectComposition, above the window's own surface.
+    #[cfg(windows)]
+    composited: bool,
     #[cfg(windows)]
     shell_events: Option<Receiver<ShellEvent>>,
     #[cfg(windows)]
@@ -155,6 +158,8 @@ impl App {
             repaint_trace,
             #[cfg(windows)]
             frame_stats: crate::frame_stats::FrameStats::default(),
+            #[cfg(windows)]
+            composited: cc.wgpu_render_state.is_some(),
             #[cfg(windows)]
             shell_events: None,
             #[cfg(windows)]
@@ -236,6 +241,7 @@ impl App {
             tracing::warn!(%error, "could not stop raw mouse input");
         }
         self.window = window;
+        self.paint_window_surface();
         if !start_hidden
             && let Some(window) = &mut self.window
             && window.place()
@@ -363,6 +369,17 @@ impl App {
             ctx.request_repaint_after(Duration::from_millis(100));
         } else {
             self.leave_window(ctx, Leave::Close);
+        }
+    }
+
+    #[cfg(windows)]
+    fn paint_window_surface(&self) {
+        let Some(window) = self.window.as_ref().filter(|_| self.composited) else {
+            return;
+        };
+        let color = theme::surface_color(theme::palette());
+        if let Err(error) = rosetun_shell::paint_window_surface(window.hwnd(), color) {
+            tracing::warn!(%error, "could not paint the window's surface");
         }
     }
 
@@ -660,6 +677,8 @@ impl eframe::App for App {
             ctx.send_viewport_cmd(egui::ViewportCommand::Icon(Some(std::sync::Arc::new(
                 brand::window_icon(theme::palette()),
             ))));
+            #[cfg(windows)]
+            self.paint_window_surface();
             #[cfg(windows)]
             if let Some(tray) = &mut self.tray {
                 tray.forget_icons();

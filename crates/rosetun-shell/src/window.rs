@@ -6,11 +6,12 @@ use std::time::Instant;
 use windows_sys::Win32::Devices::HumanInterfaceDevice::{
     HID_USAGE_GENERIC_MOUSE, HID_USAGE_PAGE_GENERIC,
 };
-use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
+use windows_sys::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Dwm::{DWMWA_CLOAK, DwmSetWindowAttribute};
 use windows_sys::Win32::Graphics::Gdi::{
-    GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTONULL, MONITOR_DEFAULTTOPRIMARY,
-    MONITORINFO, MonitorFromPoint, MonitorFromWindow,
+    CreateSolidBrush, DeleteObject, FillRect, GetDC, GetMonitorInfoW, HBRUSH, HDC,
+    MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTONULL, MONITOR_DEFAULTTOPRIMARY, MONITORINFO,
+    MonitorFromPoint, MonitorFromWindow, ReleaseDC,
 };
 use windows_sys::Win32::UI::HiDpi::{
     GetDpiForMonitor, GetDpiForSystem, GetDpiForWindow, GetSystemMetricsForDpi, MDT_EFFECTIVE_DPI,
@@ -18,18 +19,19 @@ use windows_sys::Win32::UI::HiDpi::{
 use windows_sys::Win32::UI::Input::{RAWINPUTDEVICE, RIDEV_REMOVE, RegisterRawInputDevices};
 use windows_sys::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    DefWindowProcW, FindWindowW, GetSystemMetrics, GetWindowPlacement, IsIconic, IsWindowVisible,
-    IsZoomed, KillTimer, SIZE_MINIMIZED, SM_CXSMICON, SM_SHUTTINGDOWN, SW_HIDE, SW_SHOWNOACTIVATE,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER, SetTimer, SetWindowPlacement, SetWindowPos,
-    WINDOWPLACEMENT, WINDOWPOS, WM_DPICHANGED, WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_KEYFIRST,
-    WM_KEYLAST, WM_MOUSEFIRST, WM_MOUSELAST, WM_NCDESTROY, WM_QUERYOPEN, WM_SHOWWINDOW, WM_SIZE,
-    WM_TIMER, WM_WINDOWPOSCHANGED, WPF_RESTORETOMAXIMIZED,
+    DefWindowProcW, FindWindowW, GetClientRect, GetSystemMetrics, GetWindowPlacement, IsIconic,
+    IsWindowVisible, IsZoomed, KillTimer, SIZE_MINIMIZED, SM_CXSMICON, SM_SHUTTINGDOWN, SW_HIDE,
+    SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER, SetTimer, SetWindowPlacement,
+    SetWindowPos, WINDOWPLACEMENT, WINDOWPOS, WM_DPICHANGED, WM_ENTERSIZEMOVE, WM_ERASEBKGND,
+    WM_EXITSIZEMOVE, WM_KEYFIRST, WM_KEYLAST, WM_MOUSEFIRST, WM_MOUSELAST, WM_NCDESTROY,
+    WM_QUERYOPEN, WM_SHOWWINDOW, WM_SIZE, WM_TIMER, WM_WINDOWPOSCHANGED, WPF_RESTORETOMAXIMIZED,
 };
 
 use crate::first_start::{ScreenRect, first_start_rect};
 
 const CLOAK_SUBCLASS_ID: usize = 1;
 const MOVE_SUBCLASS_ID: usize = 2;
+const SURFACE_SUBCLASS_ID: usize = 3;
 const UNCLOAK_TIMER_ID: usize = 0x5254_434C;
 /// A window that never appears is worse than a white frame.
 const CLOAK_LIMIT_MS: u32 = 500;
@@ -40,6 +42,9 @@ static CLOAKED: AtomicBool = AtomicBool::new(false);
 thread_local! {
     /// What [`quiet_moves`] saw on this thread, which owns the window.
     static ACTIVITY: Cell<WindowActivity> = Cell::default();
+    /// The brush of [`paint_window_surface`], owned here and deleted when it is
+    /// replaced or the window goes away. This thread owns the window.
+    static SURFACE_BRUSH: Cell<HBRUSH> = const { Cell::new(std::ptr::null_mut()) };
 }
 
 /// What [`quiet_moves`] remembers between messages. It lives in the subclass's
@@ -444,6 +449,107 @@ unsafe extern "system" fn move_proc(
     unsafe { DefSubclassProc(hwnd, message, wparam, lparam) }
 }
 
+/// Paints the window's own surface in `color`, now and whenever Windows gives it
+/// a new or blank surface, so that a moment with no frame on top shows this
+/// colour and not white: a swap chain being resized, or a window larger than the
+/// last frame. The window class has no background brush and is winit's to share,
+/// so the window answers `WM_ERASEBKGND` itself.
+///
+/// Only for a window drawn through DirectComposition, whose content is always
+/// composed above what is drawn through a device context (documented for
+/// `IDCompositionDevice::CreateTargetForHwnd`), so this never covers a frame.
+/// OpenGL may present into this same surface, where it would.
+///
+/// Call again to change the colour, on the thread that owns the window.
+pub fn paint_window_surface(hwnd: isize, color: [u8; 3]) -> io::Result<()> {
+    let hwnd = hwnd as HWND;
+    // SAFETY: plain value argument; the brush is owned by SURFACE_BRUSH from below on.
+    let brush = unsafe { CreateSolidBrush(color_ref(color)) };
+    if brush.is_null() {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: hwnd is the caller's live top-level window, on this thread. The procedure is a
+    // static function and removes itself on WM_NCDESTROY, so it never outlives the window.
+    // Setting it again with the same procedure and id replaces it, so the chain does not grow.
+    if unsafe { SetWindowSubclass(hwnd, Some(surface_proc), SURFACE_SUBCLASS_ID, 0) } == 0 {
+        // SAFETY: the brush was created above and nothing else holds it.
+        unsafe { DeleteObject(brush) };
+        return Err(io::Error::other("could not subclass the main window"));
+    }
+    replace_surface_brush(brush);
+    fill_window_surface(hwnd);
+    Ok(())
+}
+
+fn color_ref([red, green, blue]: [u8; 3]) -> COLORREF {
+    COLORREF::from(red) | COLORREF::from(green) << 8 | COLORREF::from(blue) << 16
+}
+
+fn replace_surface_brush(brush: HBRUSH) {
+    let old = SURFACE_BRUSH.replace(brush);
+    if !old.is_null() {
+        // SAFETY: created by `paint_window_surface` and no longer selected or stored anywhere:
+        // the brush is only passed to FillRect, which does not keep it.
+        unsafe { DeleteObject(old) };
+    }
+}
+
+fn fill_client(hwnd: HWND, dc: HDC) {
+    let mut client = RECT {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    };
+    // SAFETY: hwnd and dc are borrowed for these calls and client is writable; the brush is
+    // alive in SURFACE_BRUSH and FillRect does not keep it. A failure leaves the surface as is.
+    unsafe {
+        if GetClientRect(hwnd, &raw mut client) != 0 {
+            FillRect(dc, &raw const client, SURFACE_BRUSH.get());
+        }
+    }
+}
+
+fn fill_window_surface(hwnd: HWND) {
+    // SAFETY: hwnd is borrowed; the device context is released on this thread below.
+    let dc = unsafe { GetDC(hwnd) };
+    if dc.is_null() {
+        return;
+    }
+    fill_client(hwnd, dc);
+    // SAFETY: the device context from GetDC above, for the same window.
+    unsafe { ReleaseDC(hwnd, dc) };
+}
+
+unsafe extern "system" fn surface_proc(
+    hwnd: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    id: usize,
+    _data: usize,
+) -> LRESULT {
+    match message {
+        WM_ERASEBKGND => {
+            // For this message wparam is a device context valid during the call.
+            fill_client(hwnd, wparam as HDC);
+            return 1;
+        }
+        // The surface has its new size now. The erase that comes with it waits for
+        // WM_PAINT, which winit may not get to before DWM composes.
+        WM_SIZE => fill_window_surface(hwnd),
+        WM_NCDESTROY => {
+            // SAFETY: removes the subclass installed by `paint_window_surface` with the same
+            // procedure and id, on the window's own thread.
+            unsafe { RemoveWindowSubclass(hwnd, Some(surface_proc), id) };
+            replace_surface_brush(std::ptr::null_mut());
+        }
+        _ => {}
+    }
+    // SAFETY: forwards the message unchanged to the next procedure in the chain.
+    unsafe { DefSubclassProc(hwnd, message, wparam, lparam) }
+}
+
 /// Stops raw mouse input (`WM_INPUT`) for the whole process. winit registers it
 /// when its event loop starts and passes every raw movement on as a device
 /// event; eframe answers each one with a frame while the pointer is over the
@@ -511,6 +617,10 @@ mod tests {
         HID_USAGE_GENERIC_MOUSE, HID_USAGE_PAGE_GENERIC,
     };
     use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+    use windows_sys::Win32::Graphics::Gdi::{
+        CreateBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetObjectType, GetPixel, HDC,
+        SelectObject,
+    };
     use windows_sys::Win32::UI::Input::{
         GetRegisteredRawInputDevices, RAWINPUTDEVICE, RegisterRawInputDevices,
     };
@@ -518,13 +628,14 @@ mod tests {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, DestroyWindow, KillTimer, SIZE_MINIMIZED, SIZE_RESTORED, SWP_NOACTIVATE,
         SWP_NOSIZE, SWP_NOZORDER, SendMessageW, SetWindowPos, WM_DPICHANGED, WM_ENTERSIZEMOVE,
-        WM_EXITSIZEMOVE, WM_KEYDOWN, WM_MOUSEMOVE, WM_MOVE, WM_SIZE, WM_WINDOWPOSCHANGED, WS_POPUP,
+        WM_ERASEBKGND, WM_EXITSIZEMOVE, WM_KEYDOWN, WM_MOUSEMOVE, WM_MOVE, WM_SIZE,
+        WM_WINDOWPOSCHANGED, WS_POPUP,
     };
 
     use super::{
-        SavedWindow, UNCLOAK_TIMER_ID, WindowActivity, cloak_window, forwards_position_change,
-        quiet_moves, set_cloak, size_has_area, stop_raw_mouse_input, take_window_activity,
-        window_cloaked,
+        SURFACE_BRUSH, SavedWindow, UNCLOAK_TIMER_ID, WindowActivity, cloak_window, color_ref,
+        forwards_position_change, paint_window_surface, quiet_moves, set_cloak, size_has_area,
+        stop_raw_mouse_input, take_window_activity, window_cloaked,
     };
 
     /// A window that is never shown, owned by the test's thread.
@@ -687,6 +798,66 @@ mod tests {
         assert!(!size_has_area(SIZE_RESTORED as usize, 0x0020_0000));
         assert!(!size_has_area(SIZE_RESTORED as usize, 0x0000_0040));
         assert!(!size_has_area(SIZE_MINIMIZED as usize, 0x0020_0040));
+    }
+
+    /// A 10x10 picture to erase into, standing for the window's surface.
+    fn erased_pixel(window: &Hidden) -> u32 {
+        // SAFETY: a memory device context and a bitmap owned by this function, selected out and
+        // deleted before it returns; the window is this thread's and uses the context only
+        // during the call.
+        unsafe {
+            let dc: HDC = CreateCompatibleDC(std::ptr::null_mut());
+            assert!(!dc.is_null());
+            let bitmap = CreateBitmap(10, 10, 1, 32, std::ptr::null());
+            assert!(!bitmap.is_null());
+            let previous = SelectObject(dc, bitmap);
+            let erased = SendMessageW(window.0, WM_ERASEBKGND, dc as usize, 0);
+            let pixel = GetPixel(dc, 5, 5);
+            SelectObject(dc, previous);
+            DeleteObject(bitmap);
+            DeleteDC(dc);
+            assert_ne!(erased, 0, "the window left the erase to the default handler");
+            pixel
+        }
+    }
+
+    #[test]
+    fn a_color_is_red_green_blue_from_the_low_byte_up() {
+        assert_eq!(color_ref([0x17, 0x10, 0x14]), 0x0014_1017);
+    }
+
+    #[test]
+    fn the_surface_is_erased_in_the_latest_color() {
+        let window = Hidden::new();
+        let hwnd = window.0 as isize;
+
+        paint_window_surface(hwnd, [0x17, 0x10, 0x14]).expect("paint the test window");
+        assert_eq!(erased_pixel(&window), color_ref([0x17, 0x10, 0x14]));
+
+        paint_window_surface(hwnd, [0x0D, 0x14, 0x14]).expect("paint the test window");
+        assert_eq!(erased_pixel(&window), color_ref([0x0D, 0x14, 0x14]));
+    }
+
+    #[test]
+    fn a_new_color_and_a_destroyed_window_leave_no_brush_behind() {
+        let window = Hidden::new();
+        let hwnd = window.0 as isize;
+
+        paint_window_surface(hwnd, [1, 2, 3]).expect("paint the test window");
+        let first = SURFACE_BRUSH.get();
+        // SAFETY: only asks what kind of object the handle is; 0 for a deleted one.
+        assert_ne!(unsafe { GetObjectType(first) }, 0);
+
+        paint_window_surface(hwnd, [4, 5, 6]).expect("paint the test window");
+        let second = SURFACE_BRUSH.get();
+        assert_ne!(first, second, "the brush was not created anew");
+        // SAFETY: as above.
+        assert_eq!(unsafe { GetObjectType(first) }, 0, "the old brush leaked");
+
+        drop(window);
+        assert!(SURFACE_BRUSH.get().is_null());
+        // SAFETY: as above.
+        assert_eq!(unsafe { GetObjectType(second) }, 0, "the last brush leaked");
     }
 
     fn registered_mouse_input() -> bool {
