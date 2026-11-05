@@ -9,7 +9,9 @@ use super::address::{
     split_addresses,
 };
 use crate::errors;
-use crate::rules::{ProcessGroup, ProcessMatchMode, ProgramKey, group_processes};
+use crate::rules::{
+    ProcessGroup, ProcessMatchMode, ProgramKey, group_processes, same_program_name,
+};
 use crate::worker::WorkerEvent;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -530,7 +532,7 @@ impl AddRuleDialog {
                 ProgramKey::Name(_) => self
                     .processes
                     .iter()
-                    .find(|group| group.name.eq_ignore_ascii_case(&program.name)),
+                    .find(|group| same_program_name(&group.name, &program.name)),
                 key => self.processes.iter().find(|group| &group.key() == key),
             };
             if let Some(group) = listed {
@@ -555,14 +557,14 @@ impl AddRuleDialog {
     }
 }
 
-/// Whether two program conditions are one rule: the same name or the same path, whatever
-/// the letter case.
+/// Whether two program conditions are one rule: the same name or the same path, in the
+/// letter case that matters on this system.
 fn same_program(a: &RuleMatcher, b: &RuleMatcher) -> bool {
     match (a, b) {
         (
             RuleMatcher::Process(ProcessMatch::Name(a)),
             RuleMatcher::Process(ProcessMatch::Name(b)),
-        ) => a.eq_ignore_ascii_case(b),
+        ) => same_program_name(a, b),
         (
             RuleMatcher::Process(ProcessMatch::Path(a)),
             RuleMatcher::Process(ProcessMatch::Path(b)),

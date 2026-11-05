@@ -335,7 +335,14 @@ mod tests {
     fn the_gui_exit_lookup_is_hidden() {
         let trace = entry("trace", "", "proxy")
             .replace("192.0.2.10", rosetun_config::EXIT_TRACE_IP)
-            .replace(r"Example\\app.exe", r"Rosetun\\ROSETUN-GUI.EXE");
+            .replace(
+                r"Example\\app.exe",
+                if cfg!(windows) {
+                    r"Rosetun\\ROSETUN-GUI.EXE"
+                } else {
+                    "Rosetun/rosetun-gui"
+                },
+            );
         let other_port = trace
             .replace(r#""443""#, r#""80""#)
             .replace("trace", "port");

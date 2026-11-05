@@ -1080,6 +1080,7 @@ fn process_rule(name: &str) -> RuleMatcher {
     RuleMatcher::Process(ProcessMatch::Name(name.into()))
 }
 
+#[cfg(windows)]
 #[test]
 fn a_program_given_by_name_or_path_is_found_in_the_list_once_it_loads() {
     let (path, other, _) = tool_paths();
@@ -1532,4 +1533,28 @@ fn a_keyword_rule_does_not_open_the_dialog() {
             .with_matcher(&RuleMatcher::Domain(DomainMatch::Keyword("example".into())))
             .is_none()
     );
+}
+
+#[cfg(not(windows))]
+#[test]
+fn a_program_given_by_name_is_found_in_its_own_letter_case_only() {
+    for (name, found) in [("Tool", true), ("tool", false)] {
+        let mut state = state_with_rules();
+        let Some(Job::LoadProcesses(request)) = state.act(Action::OpenAddRuleFor(
+            RuleMatcher::Process(ProcessMatch::Name(name.into())),
+        )) else {
+            panic!("a program rule loads the program list");
+        };
+        state.reduce(WorkerEvent::Processes {
+            request,
+            result: Ok(vec![running("Tool", "/opt/apps/Tool", true)]),
+        });
+        let dialog = state.rules.screen.add.as_ref().unwrap();
+        assert_eq!(dialog.chosen[0].path.is_some(), found, "{name}");
+        assert_eq!(
+            dialog.process_rules(),
+            Some(vec![RuleMatcher::Process(ProcessMatch::Name(name.into()))]),
+            "the rule stays as it was given"
+        );
+    }
 }

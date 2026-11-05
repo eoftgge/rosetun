@@ -148,14 +148,23 @@ fn every_kind_of_answer_has_its_line() {
     assert_eq!(
         reason(
             "nothing.invalid",
-            Some(r"C:\Program Files\Example\qbittorrent.exe"),
+            Some(if cfg!(windows) {
+                r"C:\Program Files\Example\qbittorrent.exe"
+            } else {
+                "/usr/bin/qbittorrent"
+            }),
             ConnectionRoute::Direct
         ),
         known(
             tr!(
                 "connections-why-template",
                 template = crate::i18n::template_name(RuleTemplate::Torrents),
-                condition = "qbittorrent.exe".to_owned()
+                condition = if cfg!(windows) {
+                    "qbittorrent.exe"
+                } else {
+                    "qbittorrent"
+                }
+                .to_owned()
             ),
             None
         )

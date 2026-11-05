@@ -15,7 +15,10 @@ const TAG_DIRECT: &str = "direct";
 const TAG_DNS_PROXY: &str = "dns-proxy";
 const DEFAULT_FINGERPRINT: &str = "chrome";
 /// The GUI's exit-country lookup is pinned to the main node by this program name.
-const GUI_PROCESS: &str = "rosetun-gui.exe";
+#[cfg(windows)]
+pub(crate) const GUI_PROCESS: &str = "rosetun-gui.exe";
+#[cfg(not(windows))]
+pub(crate) const GUI_PROCESS: &str = "rosetun-gui";
 
 /// The route of a connection whose outbound chain ends with `tag`.
 pub(crate) fn route_of(tag: &str) -> EngineRoute {
@@ -35,7 +38,13 @@ pub(crate) fn is_exit_trace(process: Option<&str>, ip: &str, port: u16) -> bool 
         && ip == EXIT_TRACE_IP
         && process
             .and_then(|path| path.rsplit(['\\', '/']).next())
-            .is_some_and(|name| name.eq_ignore_ascii_case(GUI_PROCESS))
+            .is_some_and(|name| {
+                if cfg!(windows) {
+                    name.eq_ignore_ascii_case(GUI_PROCESS)
+                } else {
+                    name == GUI_PROCESS
+                }
+            })
 }
 
 pub(crate) const RULE_CAPABILITIES: RuleCapabilities = RuleCapabilities {
@@ -631,8 +640,10 @@ fn route_rule(rule: &Rule) -> Option<Map<String, Value>> {
     Some(value)
 }
 
-fn process_name_regex(name: &str) -> String {
-    format!(r"(?i)(?:^|[\\/]){}$", quote_process_name(name))
+/// A name matched against the whole path: Windows ignores letter case, Linux does not.
+pub(crate) fn process_name_regex(name: &str) -> String {
+    let flags = if cfg!(windows) { "(?i)" } else { "" };
+    format!(r"{flags}(?:^|[\\/]){}$", quote_process_name(name))
 }
 
 fn quote_process_name(name: &str) -> String {
@@ -685,6 +696,23 @@ mod tests {
         servers: &[],
     };
 
+    // A rule by program renders differently per system, and so do the rule templates.
+    #[cfg(windows)]
+    const GOLDEN_FULL: &[u8] = include_bytes!("../tests/fixtures/full-config.json");
+    #[cfg(not(windows))]
+    const GOLDEN_FULL: &[u8] = include_bytes!("../tests/fixtures/full-config-unix.json");
+    #[cfg(windows)]
+    const GOLDEN_XRAY_CHAIN: &[u8] = include_bytes!("../tests/fixtures/xray-chain-config.json");
+    #[cfg(not(windows))]
+    const GOLDEN_XRAY_CHAIN: &[u8] =
+        include_bytes!("../tests/fixtures/xray-chain-config-unix.json");
+    #[cfg(windows)]
+    const GOLDEN_EXTRA_EXITS: &[u8] = include_bytes!("../tests/fixtures/extra-exits-config.json");
+    #[cfg(not(windows))]
+    const GOLDEN_EXTRA_EXITS: &[u8] =
+        include_bytes!("../tests/fixtures/extra-exits-config-unix.json");
+
+    #[cfg(windows)]
     #[test]
     fn process_names_match_complete_paths_without_case_sensitivity() {
         let mut rule = Rule {
@@ -707,6 +735,47 @@ mod tests {
         assert_eq!(
             quote_process_name(r"a\.+*?()|[]{}^$"),
             r"a\\\.\+\*\?\(\)\|\[\]\{\}\^\$"
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn process_names_match_complete_paths_in_their_own_case() {
+        let mut rule = Rule {
+            id: rosetun_config::RuleId::new("process"),
+            enabled: true,
+            matcher: RuleMatcher::Process(ProcessMatch::Name("Telegram".into())),
+            target: RuleTarget::Direct,
+            exit: None,
+        };
+        assert_eq!(
+            route_rule(&rule).unwrap()["process_path_regex"],
+            json!([r"(?:^|[\\/])Telegram$"])
+        );
+        rule.matcher = RuleMatcher::Process(ProcessMatch::Path("/opt/App/app".into()));
+        assert_eq!(
+            route_rule(&rule).unwrap()["process_path"],
+            json!(["/opt/App/app"])
+        );
+    }
+
+    #[test]
+    fn the_exit_lookup_is_told_by_this_systems_program_name() {
+        let path = format!("/opt/rosetun/{GUI_PROCESS}");
+        assert!(is_exit_trace(Some(&path), EXIT_TRACE_IP, EXIT_TRACE_PORT));
+        assert!(!is_exit_trace(
+            Some("/opt/other"),
+            EXIT_TRACE_IP,
+            EXIT_TRACE_PORT
+        ));
+        assert!(!is_exit_trace(None, EXIT_TRACE_IP, EXIT_TRACE_PORT));
+        assert_eq!(
+            is_exit_trace(
+                Some(&GUI_PROCESS.to_uppercase()),
+                EXIT_TRACE_IP,
+                EXIT_TRACE_PORT
+            ),
+            cfg!(windows)
         );
     }
 
@@ -848,10 +917,7 @@ mod tests {
         };
         let rendered = render(&request).unwrap();
         assert!(rendered.unsupported.is_empty());
-        assert_eq!(
-            rendered.body,
-            include_bytes!("../tests/fixtures/full-config.json")
-        );
+        assert_eq!(rendered.body, GOLDEN_FULL);
 
         let chained = render(&RenderRequest {
             extra: &[],
@@ -864,10 +930,7 @@ mod tests {
         })
         .unwrap();
         assert!(chained.unsupported.is_empty());
-        assert_eq!(
-            chained.body,
-            include_bytes!("../tests/fixtures/xray-chain-config.json")
-        );
+        assert_eq!(chained.body, GOLDEN_XRAY_CHAIN);
     }
 
     fn shadowsocks_node(id: &str, server: &str) -> Node {
@@ -960,10 +1023,7 @@ mod tests {
         })
         .unwrap();
         assert!(rendered.unsupported.is_empty());
-        assert_eq!(
-            rendered.body,
-            include_bytes!("../tests/fixtures/extra-exits-config.json")
-        );
+        assert_eq!(rendered.body, GOLDEN_EXTRA_EXITS);
 
         let value: Value = serde_json::from_slice(&rendered.body).unwrap();
         let tags = value["outbounds"]

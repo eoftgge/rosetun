@@ -85,6 +85,7 @@ impl RuleTemplate {
                 ],
             ),
             Self::Messengers => (
+                #[cfg(windows)]
                 &[
                     "Telegram.exe",
                     "Discord.exe",
@@ -96,6 +97,14 @@ impl RuleTemplate {
                     // below catch the traffic those processes carry instead.
                     "WhatsApp.exe",
                     "WhatsApp.Root.exe",
+                ],
+                #[cfg(not(windows))]
+                &[
+                    "Telegram",
+                    "telegram-desktop",
+                    "Discord",
+                    "DiscordPTB",
+                    "DiscordCanary",
                 ],
                 &[
                     "telegram.org",
@@ -127,6 +136,7 @@ impl RuleTemplate {
                 ],
             ),
             Self::Torrents => (
+                #[cfg(windows)]
                 &[
                     "qbittorrent.exe",
                     "utorrent.exe",
@@ -135,6 +145,18 @@ impl RuleTemplate {
                     "tixati.exe",
                     "deluge.exe",
                     "biglybt.exe",
+                ],
+                #[cfg(not(windows))]
+                &[
+                    "qbittorrent",
+                    "qbittorrent-nox",
+                    "transmission-gtk",
+                    "transmission-qt",
+                    "transmission-daemon",
+                    "deluge",
+                    "deluged",
+                    "ktorrent",
+                    "rtorrent",
                 ],
                 &[],
             ),
@@ -267,10 +289,11 @@ mod tests {
         assert_eq!(expanded.id, set.id);
         assert_eq!(expanded.name, set.name);
         assert_eq!(expanded.default_target, set.default_target);
-        assert_eq!(expanded.rules.len(), 9);
+        let conditions = RuleTemplate::Torrents.matchers().len();
+        assert_eq!(expanded.rules.len(), conditions + 2);
         assert_eq!(expanded.rules.first(), Some(&before));
         assert_eq!(expanded.rules.last(), Some(&after));
-        for (rule, matcher) in expanded.rules[1..8]
+        for (rule, matcher) in expanded.rules[1..=conditions]
             .iter()
             .zip(RuleTemplate::Torrents.matchers())
         {

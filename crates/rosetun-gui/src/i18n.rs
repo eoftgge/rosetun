@@ -61,6 +61,14 @@ pub(crate) struct LanguageInfo {
 }
 
 impl Language {
+    /// The BCP 47 language subtag.
+    pub(crate) fn code(self) -> &'static str {
+        LANGUAGES
+            .iter()
+            .find(|info| info.language == self)
+            .map_or("en", |info| info.code)
+    }
+
     pub(crate) fn info(self) -> &'static LanguageInfo {
         &LANGUAGES[self as usize]
     }

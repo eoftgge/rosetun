@@ -1530,7 +1530,7 @@ mod tests {
         assert_eq!(rules[4]["outbound"], "proxy");
         assert_eq!(
             rules[5]["process_path_regex"][0],
-            r"(?i)(?:^|[\\/])steam\.exe$"
+            render::process_name_regex("steam.exe")
         );
         assert_eq!(rules[5]["outbound"], "direct");
         assert_eq!(rules[6]["ip_is_private"], true);
@@ -1539,6 +1539,7 @@ mod tests {
 
     #[test]
     fn every_advertised_matcher_is_rendered_after_sniff() {
+        let app_regex = render::process_name_regex("app.exe");
         let cases = [
             (
                 RuleMatcher::Domain(DomainMatch::Exact("exact.test".into())),
@@ -1558,7 +1559,7 @@ mod tests {
             (
                 RuleMatcher::Process(ProcessMatch::Name("app.exe".into())),
                 "process_path_regex",
-                r"(?i)(?:^|[\\/])app\.exe$",
+                app_regex.as_str(),
             ),
             (
                 RuleMatcher::Process(ProcessMatch::Path(std::path::PathBuf::from("app.exe"))),
@@ -1654,7 +1655,7 @@ mod tests {
 
         assert_eq!(
             rules[5]["process_path_regex"][0],
-            r"(?i)(?:^|[\\/])steam\.exe$"
+            render::process_name_regex("steam.exe")
         );
         assert_eq!(rules[5]["outbound"], "direct");
 
@@ -1672,7 +1673,7 @@ mod tests {
         rule_set.rules.push(Rule {
             id: RuleId::new("gui-direct"),
             enabled: true,
-            matcher: RuleMatcher::Process(ProcessMatch::Name("rosetun-gui.exe".into())),
+            matcher: RuleMatcher::Process(ProcessMatch::Name(render::GUI_PROCESS.into())),
             target: RuleTarget::Direct,
             exit: None,
         });
@@ -1688,7 +1689,7 @@ mod tests {
             assert_eq!(
                 rules[2],
                 serde_json::json!({
-                    "process_path_regex": [r"(?i)(?:^|[\\/])rosetun-gui\.exe$"],
+                    "process_path_regex": [render::process_name_regex(render::GUI_PROCESS)],
                     "ip_cidr": ["1.1.1.1/32"],
                     "port": [443],
                     "action": "route",
@@ -1906,7 +1907,7 @@ mod tests {
                     "action": "hijack-dns",
                 }),
                 serde_json::json!({
-                    "process_path_regex": [r"(?i)(?:^|[\\/])rosetun-gui\.exe$"],
+                    "process_path_regex": [render::process_name_regex(render::GUI_PROCESS)],
                     "ip_cidr": ["1.1.1.1/32"],
                     "port": [443],
                     "action": "route",
@@ -1930,7 +1931,7 @@ mod tests {
                     "outbound": "proxy",
                 }),
                 serde_json::json!({
-                    "process_path_regex": [r"(?i)(?:^|[\\/])steam\.exe$"],
+                    "process_path_regex": [render::process_name_regex("steam.exe")],
                     "action": "route",
                     "outbound": "direct",
                 }),

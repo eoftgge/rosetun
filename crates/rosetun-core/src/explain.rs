@@ -361,9 +361,14 @@ fn has_suffix(domain: &str, suffix: &str) -> bool {
     }
 }
 
-/// The renderer's `(?i)(?:^|[\\/])<name>$` for a rule by program name.
+/// The renderer's `(?:^|[\\/])<name>$` for a rule by program name, without regard to letter
+/// case on Windows only, as there.
 fn ends_with_program(path: &str, name: &str) -> bool {
-    let (path, name) = (path.to_lowercase(), name.to_lowercase());
+    let (path, name) = if cfg!(windows) {
+        (path.to_lowercase(), name.to_lowercase())
+    } else {
+        (path.to_owned(), name.to_owned())
+    };
     path.strip_suffix(&name)
         .is_some_and(|rest| rest.is_empty() || rest.ends_with(['\\', '/']))
 }

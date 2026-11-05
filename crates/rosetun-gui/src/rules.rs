@@ -15,8 +15,9 @@ pub(crate) struct ProcessGroup {
     pub(crate) windowed: bool,
 }
 
-/// What tells one listed program from another, in lower case: its path, else its name. A
-/// choice keeps it, so the list can be read again without losing the choice.
+/// What tells one listed program from another: its path, else its name, in the letter
+/// case that matters on this system. A choice keeps it, so the list can be read again
+/// without losing the choice.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum ProgramKey {
     Path(String),
@@ -25,11 +26,29 @@ pub(crate) enum ProgramKey {
 
 impl ProgramKey {
     pub(crate) fn of_path(path: &Path) -> Self {
-        Self::Path(path.to_string_lossy().to_lowercase())
+        Self::Path(program_case(&path.to_string_lossy()))
     }
 
     pub(crate) fn of_name(name: &str) -> Self {
-        Self::Name(name.to_lowercase())
+        Self::Name(program_case(name))
+    }
+}
+
+/// A program's name or path as compared: Windows ignores letter case, Linux does not.
+fn program_case(text: &str) -> String {
+    if cfg!(windows) {
+        text.to_lowercase()
+    } else {
+        text.to_owned()
+    }
+}
+
+/// Whether two program names are one program on this system.
+pub(crate) fn same_program_name(a: &str, b: &str) -> bool {
+    if cfg!(windows) {
+        a.eq_ignore_ascii_case(b)
+    } else {
+        a == b
     }
 }
 
@@ -46,8 +65,8 @@ pub(crate) fn group_processes(processes: Vec<RunningProcess>) -> Vec<ProcessGrou
     for process in processes {
         let windowed = process.has_window && process.pid != std::process::id();
         let key = match &process.path {
-            Some(path) => (true, path.to_string_lossy().to_lowercase()),
-            None => (false, process.name.to_lowercase()),
+            Some(path) => (true, program_case(&path.to_string_lossy())),
+            None => (false, program_case(&process.name)),
         };
         groups
             .entry(key)
@@ -336,6 +355,35 @@ mod tests {
         }
     }
 
+    #[cfg(not(windows))]
+    #[test]
+    fn two_programs_in_different_case_stay_two_and_sort_together() {
+        let groups = group_processes(vec![
+            process(10, "zeta", Some("/opt/zeta")),
+            process(11, "Tool", Some("/opt/Tool")),
+            process(12, "tool", Some("/opt/tool")),
+            process(13, "tool", Some("/opt/tool")),
+            process(14, "Tool", None),
+            process(15, "tool", None),
+        ]);
+        assert_eq!(groups.len(), 5);
+        assert_eq!(groups[4].name, "zeta");
+        assert_eq!(
+            groups
+                .iter()
+                .find(|group| group.path.as_deref() == Some(Path::new("/opt/tool")))
+                .unwrap()
+                .count,
+            2
+        );
+        assert_ne!(
+            ProgramKey::of_name("Tool"),
+            ProgramKey::of_name("tool"),
+            "a rule by name matches in its own case"
+        );
+    }
+
+    #[cfg(windows)]
     #[test]
     fn processes_group_by_path_or_name_and_sort_case_insensitively() {
         let groups = group_processes(vec![

@@ -130,7 +130,10 @@ impl Loader {
                                 &icon.rgba,
                             )
                         });
-                    #[cfg(not(windows))]
+                    #[cfg(target_os = "linux")]
+                    let image = rosetun_processes::program_icon_file(&path, key.size_px)
+                        .and_then(|file| read_png_icon(&file, key.size_px));
+                    #[cfg(not(any(windows, target_os = "linux")))]
                     let image = {
                         let _ = path;
                         None
@@ -224,6 +227,24 @@ pub(crate) fn paint(ui: &egui::Ui, rect: egui::Rect, side: f32, path: &Path) -> 
         egui::Color32::WHITE,
     );
     true
+}
+
+/// An icon file from the desktop's folders, drawn at the asked size. Anything
+/// odd about the file only leaves the program with its tile.
+#[cfg(target_os = "linux")]
+fn read_png_icon(file: &Path, size_px: u32) -> Option<egui::ColorImage> {
+    const MAX_ICON_FILE_BYTES: u64 = 4 * 1024 * 1024;
+
+    if std::fs::metadata(file).ok()?.len() > MAX_ICON_FILE_BYTES {
+        return None;
+    }
+    let bytes = std::fs::read(file).ok()?;
+    let image = image::load_from_memory_with_format(&bytes, image::ImageFormat::Png).ok()?;
+    let image = image.thumbnail(size_px, size_px).to_rgba8();
+    Some(egui::ColorImage::from_rgba_unmultiplied(
+        [image.width() as usize, image.height() as usize],
+        image.as_raw(),
+    ))
 }
 
 #[cfg(test)]

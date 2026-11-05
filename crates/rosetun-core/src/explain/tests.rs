@@ -126,7 +126,11 @@ fn a_template_rule_names_its_template_and_the_matched_condition() {
         &Destination {
             domain: None,
             ip: None,
-            process: Some(r"C:\Program Files\Example\QBITTORRENT.EXE"),
+            process: Some(if cfg!(windows) {
+                r"C:\Program Files\Example\QBITTORRENT.EXE"
+            } else {
+                "/usr/bin/qbittorrent"
+            }),
         },
     );
 
@@ -138,7 +142,14 @@ fn a_template_rule_names_its_template_and_the_matched_condition() {
                 temporary: false,
                 source: RuleSource::Template {
                     template: RuleTemplate::Torrents,
-                    matcher: RuleMatcher::Process(ProcessMatch::Name("qbittorrent.exe".into())),
+                    matcher: RuleMatcher::Process(ProcessMatch::Name(
+                        if cfg!(windows) {
+                            "qbittorrent.exe"
+                        } else {
+                            "qbittorrent"
+                        }
+                        .into(),
+                    )),
                 },
             },
             route: ExplainedRoute::Direct,

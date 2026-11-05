@@ -8,7 +8,10 @@ impl WorkerDispatcher {
             let names = paths
                 .into_iter()
                 .map(|path| {
-                    let description = rosetun_processes::file_description(Path::new(&path));
+                    let description = rosetun_processes::file_description(
+                        Path::new(&path),
+                        crate::i18n::language().code(),
+                    );
                     let name = crate::programs::display_name(&path, description.as_deref());
                     (path, name)
                 })
