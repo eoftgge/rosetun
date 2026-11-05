@@ -1931,7 +1931,10 @@ mod pending_notice_tests {
                     };
                     let private = row(tr!("private-networks"), tr!("auto-reconnect"));
                     let reconnect = row(tr!("auto-reconnect"), tr!("auto-update-subscriptions"));
-                    assert!(private <= limit, "{language:?} {size:?}: {private} > {limit}");
+                    assert!(
+                        private <= limit,
+                        "{language:?} {size:?}: {private} > {limit}"
+                    );
                     assert!(
                         reconnect <= limit,
                         "{language:?} {size:?}: {reconnect} > {limit}"
@@ -2056,7 +2059,10 @@ mod pending_notice_tests {
             pressed,
             modifiers: egui::Modifiers::NONE,
         };
-        screen.run(vec![egui::Event::PointerMoved(pos), button(true)], &mut show);
+        screen.run(
+            vec![egui::Event::PointerMoved(pos), button(true)],
+            &mut show,
+        );
         screen.run(vec![button(false)], &mut show);
         actions
     }
