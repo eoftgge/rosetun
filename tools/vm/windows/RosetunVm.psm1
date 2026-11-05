@@ -2091,8 +2091,12 @@ function Set-RosetunEngineAvailable {
 }
 
 function Test-RosetunEngineRunning {
+    # A tunnel or a server check's engine, not the service's short `sing-box
+    # version` at its start, which a scan of the new file can stretch to a minute.
+    # A process whose command line cannot be read counts as running.
     Invoke-RosetunGuest -ScriptBlock {
-        [bool](Get-Process -Name 'sing-box' -ErrorAction SilentlyContinue)
+        @(Get-CimInstance -ClassName Win32_Process -Filter "Name = 'sing-box.exe'" -ErrorAction SilentlyContinue |
+            Where-Object { -not $_.CommandLine -or $_.CommandLine -match '\srun(\s|$)' }).Count -gt 0
     }
 }
 
