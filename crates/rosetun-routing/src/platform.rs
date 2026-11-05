@@ -73,18 +73,15 @@ pub(super) fn lan_segment(
     }
 }
 
-pub(super) fn release_discovery_routes(
-    tunnel: &crate::TunnelInterface,
-    ipv6: bool,
-) -> crate::DiscoveryRoutes {
+pub(super) fn release_broadcast_route(tunnel: &crate::TunnelInterface) -> crate::RouteRelease {
     #[cfg(windows)]
     {
-        windows::release_discovery_routes(tunnel, ipv6)
+        windows::release_broadcast_route(tunnel)
     }
     #[cfg(not(windows))]
     {
-        let _ = (tunnel, ipv6);
-        crate::DiscoveryRoutes::default()
+        let _ = tunnel;
+        crate::RouteRelease::default()
     }
 }
 
