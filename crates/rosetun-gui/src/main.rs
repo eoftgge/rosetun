@@ -16,6 +16,8 @@ mod constants;
 mod destinations;
 mod display;
 mod errors;
+#[cfg(windows)]
+mod frame_stats;
 mod icons;
 #[cfg(test)]
 mod layout_fence;

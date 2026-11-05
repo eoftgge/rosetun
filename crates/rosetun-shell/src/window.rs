@@ -1,6 +1,7 @@
 use std::cell::Cell;
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
 
 use windows_sys::Win32::Devices::HumanInterfaceDevice::{
     HID_USAGE_GENERIC_MOUSE, HID_USAGE_PAGE_GENERIC,
@@ -18,9 +19,10 @@ use windows_sys::Win32::UI::Input::{RAWINPUTDEVICE, RIDEV_REMOVE, RegisterRawInp
 use windows_sys::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     DefWindowProcW, FindWindowW, GetSystemMetrics, GetWindowPlacement, IsIconic, IsWindowVisible,
-    IsZoomed, KillTimer, SM_CXSMICON, SM_SHUTTINGDOWN, SW_HIDE, SW_SHOWNOACTIVATE, SWP_NOACTIVATE,
-    SWP_NOMOVE, SWP_NOZORDER, SetTimer, SetWindowPlacement, SetWindowPos, WINDOWPLACEMENT,
-    WINDOWPOS, WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_NCDESTROY, WM_QUERYOPEN, WM_SHOWWINDOW,
+    IsZoomed, KillTimer, SIZE_MINIMIZED, SM_CXSMICON, SM_SHUTTINGDOWN, SW_HIDE, SW_SHOWNOACTIVATE,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER, SetTimer, SetWindowPlacement, SetWindowPos,
+    WINDOWPLACEMENT, WINDOWPOS, WM_DPICHANGED, WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_KEYFIRST,
+    WM_KEYLAST, WM_MOUSEFIRST, WM_MOUSELAST, WM_NCDESTROY, WM_QUERYOPEN, WM_SHOWWINDOW, WM_SIZE,
     WM_TIMER, WM_WINDOWPOSCHANGED, WPF_RESTORETOMAXIMIZED,
 };
 
@@ -35,6 +37,11 @@ const CLOAK_LIMIT_MS: u32 = 500;
 /// Only the main window is subclassed, and only on its own thread.
 static CLOAKED: AtomicBool = AtomicBool::new(false);
 
+thread_local! {
+    /// What [`quiet_moves`] saw on this thread, which owns the window.
+    static ACTIVITY: Cell<WindowActivity> = Cell::default();
+}
+
 /// What [`quiet_moves`] remembers between messages. It lives in the subclass's
 /// reference data and is touched only on the window's thread.
 #[derive(Debug)]
@@ -43,6 +50,19 @@ struct MoveWatch {
     in_move_loop: Cell<bool>,
     /// The monitor that held most of the window after its last position change.
     monitor: Cell<usize>,
+}
+
+/// What happened to the window since the last [`take_window_activity`].
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct WindowActivity {
+    /// `WM_SIZE` with an area: eframe configures the swap chain again for each one.
+    pub size_changes: u32,
+    pub dpi_changes: u32,
+    pub monitor_changes: u32,
+    /// The earliest size or DPI change.
+    pub surface_changed_at: Option<Instant>,
+    /// The earliest mouse or keyboard message.
+    pub input_at: Option<Instant>,
 }
 
 /// Where the window was. The rect is the normal (not maximized) one, in the
@@ -328,11 +348,44 @@ pub fn quiet_moves(hwnd: isize) -> io::Result<()> {
     Ok(())
 }
 
+/// What [`quiet_moves`] saw since the last call, which starts the count again.
+/// Call on the thread that owns the window.
+pub fn take_window_activity() -> WindowActivity {
+    ACTIVITY.take()
+}
+
 /// Whether a position change goes on to winit, which reports a move as
 /// `WindowEvent::Moved`. A frame on another monitor picks up its scale and
 /// refresh; inside a drag on the same monitor there is nothing to draw.
 fn forwards_position_change(in_move_loop: bool, moved: bool, monitor_changed: bool) -> bool {
     !in_move_loop || !moved || monitor_changed
+}
+
+/// Counts what the message says about the window. Runs for every message, so
+/// it reads the clock only for the first of a kind since the last look.
+fn note_activity(message: u32, wparam: WPARAM, lparam: LPARAM) {
+    let mut activity = ACTIVITY.get();
+    match message {
+        WM_SIZE if size_has_area(wparam, lparam) => {
+            activity.size_changes = activity.size_changes.saturating_add(1);
+            activity.surface_changed_at.get_or_insert_with(Instant::now);
+        }
+        WM_DPICHANGED => {
+            activity.dpi_changes = activity.dpi_changes.saturating_add(1);
+            activity.surface_changed_at.get_or_insert_with(Instant::now);
+        }
+        WM_MOUSEFIRST..=WM_MOUSELAST | WM_KEYFIRST..=WM_KEYLAST => {
+            activity.input_at.get_or_insert_with(Instant::now);
+        }
+        _ => return,
+    }
+    ACTIVITY.set(activity);
+}
+
+/// eframe ignores a size with no area, which is how minimizing arrives.
+fn size_has_area(wparam: WPARAM, lparam: LPARAM) -> bool {
+    let size = lparam as usize;
+    wparam != SIZE_MINIMIZED as usize && size & 0xFFFF != 0 && (size >> 16) & 0xFFFF != 0
 }
 
 unsafe extern "system" fn move_proc(
@@ -344,6 +397,7 @@ unsafe extern "system" fn move_proc(
     data: usize,
 ) -> LRESULT {
     let watch = data as *mut MoveWatch;
+    note_activity(message, wparam, lparam);
     match message {
         WM_ENTERSIZEMOVE | WM_EXITSIZEMOVE => {
             // SAFETY: data is the box `quiet_moves` installed; it is freed only on
@@ -360,6 +414,11 @@ unsafe extern "system" fn move_proc(
             // SAFETY: hwnd is borrowed; the monitor handle is owned by Windows and only compared.
             let monitor = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) } as usize;
             let monitor_changed = watch.monitor.replace(monitor) != monitor;
+            if monitor_changed {
+                let mut activity = ACTIVITY.get();
+                activity.monitor_changes = activity.monitor_changes.saturating_add(1);
+                ACTIVITY.set(activity);
+            }
             if !forwards_position_change(
                 watch.in_move_loop.get(),
                 flags & SWP_NOMOVE == 0,
@@ -457,14 +516,15 @@ mod tests {
     };
     use windows_sys::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        CreateWindowExW, DestroyWindow, KillTimer, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER,
-        SendMessageW, SetWindowPos, WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_MOVE, WM_SIZE,
-        WM_WINDOWPOSCHANGED, WS_POPUP,
+        CreateWindowExW, DestroyWindow, KillTimer, SIZE_MINIMIZED, SIZE_RESTORED, SWP_NOACTIVATE,
+        SWP_NOSIZE, SWP_NOZORDER, SendMessageW, SetWindowPos, WM_DPICHANGED, WM_ENTERSIZEMOVE,
+        WM_EXITSIZEMOVE, WM_KEYDOWN, WM_MOUSEMOVE, WM_MOVE, WM_SIZE, WM_WINDOWPOSCHANGED, WS_POPUP,
     };
 
     use super::{
-        SavedWindow, UNCLOAK_TIMER_ID, cloak_window, forwards_position_change, quiet_moves,
-        set_cloak, stop_raw_mouse_input, window_cloaked,
+        SavedWindow, UNCLOAK_TIMER_ID, WindowActivity, cloak_window, forwards_position_change,
+        quiet_moves, set_cloak, size_has_area, stop_raw_mouse_input, take_window_activity,
+        window_cloaked,
     };
 
     /// A window that is never shown, owned by the test's thread.
@@ -588,6 +648,45 @@ mod tests {
         unsafe { SendMessageW(window.0, WM_EXITSIZEMOVE, 0, 0) };
         move_to(&window, 35);
         assert_eq!(seen.position_changes.get(), 2);
+    }
+
+    #[test]
+    fn the_window_activity_counts_size_and_dpi_changes_and_starts_again() {
+        let window = Hidden::new();
+        assert_eq!(take_window_activity(), WindowActivity::default());
+        quiet_moves(window.0 as isize).expect("subclass the test window");
+
+        // SAFETY: the window is this thread's; the messages carry only values. The
+        // WM_DPICHANGED has no rect, which `quiet_moves` does not read and STATIC ignores.
+        unsafe {
+            SendMessageW(window.0, WM_SIZE, SIZE_RESTORED as usize, 0x0020_0040);
+            SendMessageW(window.0, WM_SIZE, SIZE_RESTORED as usize, 0x0030_0040);
+            SendMessageW(window.0, WM_SIZE, SIZE_MINIMIZED as usize, 0);
+            SendMessageW(window.0, WM_DPICHANGED, 0x0060_0060, 0);
+        }
+        let activity = take_window_activity();
+        assert_eq!(activity.size_changes, 2, "minimizing is not a size change");
+        assert_eq!(activity.dpi_changes, 1);
+        assert!(activity.surface_changed_at.is_some());
+        assert!(activity.input_at.is_none());
+
+        // SAFETY: as above.
+        unsafe {
+            SendMessageW(window.0, WM_MOUSEMOVE, 0, 0);
+            SendMessageW(window.0, WM_KEYDOWN, 0, 0);
+        }
+        let activity = take_window_activity();
+        assert_eq!(activity.size_changes, 0, "the count started again");
+        assert!(activity.surface_changed_at.is_none());
+        assert!(activity.input_at.is_some());
+    }
+
+    #[test]
+    fn a_size_without_an_area_is_no_change_of_the_surface() {
+        assert!(size_has_area(SIZE_RESTORED as usize, 0x0020_0040));
+        assert!(!size_has_area(SIZE_RESTORED as usize, 0x0020_0000));
+        assert!(!size_has_area(SIZE_RESTORED as usize, 0x0000_0040));
+        assert!(!size_has_area(SIZE_MINIMIZED as usize, 0x0020_0040));
     }
 
     fn registered_mouse_input() -> bool {

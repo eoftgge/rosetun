@@ -76,6 +76,8 @@ pub(crate) struct App {
     /// Set only with `ROSETUN_REPAINT_TRACE`.
     repaint_trace: Option<RepaintTrace>,
     #[cfg(windows)]
+    frame_stats: crate::frame_stats::FrameStats,
+    #[cfg(windows)]
     shell_events: Option<Receiver<ShellEvent>>,
     #[cfg(windows)]
     tray: Option<tray::Tray>,
@@ -151,6 +153,8 @@ impl App {
             applied_scale: Some(applied_scale),
             system_language,
             repaint_trace,
+            #[cfg(windows)]
+            frame_stats: crate::frame_stats::FrameStats::default(),
             #[cfg(windows)]
             shell_events: None,
             #[cfg(windows)]
@@ -833,6 +837,9 @@ impl eframe::App for App {
         if let Some(trace) = &mut self.repaint_trace {
             trace.observe(ui.ctx());
         }
+        #[cfg(windows)]
+        self.frame_stats
+            .observe(rosetun_shell::take_window_activity());
         #[cfg(windows)]
         self.uncloak_when_painted(ui.ctx());
         // The root `Ui` copies the style before `logic` runs, so a new accent applied there
