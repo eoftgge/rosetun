@@ -761,6 +761,75 @@ try {
     Test-Step '4 kill switch off' 'Lockdown forces the kill switch: direct egress closed' { -not (Test-RosetunDirectEgress) }
     Disconnect-RosetunTunnel | Out-Null
 
+    # 4b. "Local network" with the VPN server on the host, in the guest's network.
+    # Lockdown's own set, which outlives the session, must leave the server's
+    # address out while the session runs and open it again after.
+    if ($UseHostNode) {
+        $scenario = '4b server in the network'
+        $lanRequest = 'request-lan-server.json'
+        Invoke-RosetunGuest -ScriptBlock {
+            param($dir, $file)
+            $request = Get-Content -Raw -LiteralPath "$dir\request.json" | ConvertFrom-Json
+            $request.settings | Add-Member -NotePropertyName allow_lan -NotePropertyValue $true -Force
+            [IO.File]::WriteAllText("$dir\$file", ($request | ConvertTo-Json -Depth 20))
+        } -ArgumentList $guestDir, $lanRequest
+        $lanOn = Invoke-RosetunCli -Quiet 'lan' 'on'
+        Test-Step $scenario 'rosetun lan on updates Lockdown' { $lanOn.ExitCode -eq 0 } -Note $lanOn.Output
+        Test-Step $scenario 'without a session the host is a device like any other' {
+            Wait-RosetunCondition { Test-RosetunLanListener $hostLan } -TimeoutSeconds 10
+        }
+        Test-Step $scenario 'without a session the host reaches a guest listener' { Test-InboundFromHost $guestListenerPort }
+
+        $mark = Get-RosetunHelperLogLength
+        $connect = Connect-RosetunTunnel -RequestName $lanRequest -Quiet
+        Test-Step $scenario 'connect succeeds' { $connect.ExitCode -eq 0 } -Note $connect.Output
+        $tunnel = Wait-RosetunTunnelEgress -SkipRevocationCheck
+        Test-Step $scenario 'the engine connects to the server' { $tunnel.Ok } -Note "$($tunnel.Seconds) s; $($tunnel.Error)"
+        Test-Step $scenario 'the service says the address is left out' {
+            (Get-RosetunHelperLogSince $mark) -match 'open without the address of a VPN server'
+        }
+        $lanDevice = $null
+        try {
+            $lanDevice = Start-RosetunLanDevice
+            Test-Step $scenario 'another device on the network answers' {
+                Wait-RosetunCondition { Test-RosetunLanListener $lanDevice } -TimeoutSeconds 10
+            }
+        }
+        catch {
+            # Stopping here would lose the rest of the matrix and its results.
+            Test-Step $scenario 'the checks of a device on the network ran' { $false } -Note "$_"
+        }
+        finally {
+            if ($lanDevice) {
+                try { Stop-RosetunLanDevice $lanDevice }
+                catch { Write-Warning "Could not remove the temporary LAN device: $_" }
+            }
+        }
+        Test-Step $scenario "past the tunnel, the server's address stays closed" { -not (Test-RosetunLanListener $hostLan) }
+        Test-Step $scenario "the server's address cannot reach a guest listener" { -not (Test-InboundFromHost $guestListenerPort) }
+        $route = Get-RosetunGuestRoute -Address $hostLan.Address
+        Test-Step $scenario "the server's address is routed into the tunnel" {
+            $route.InterfaceAlias -eq 'rosetun0' -and $route.SourceAddress -eq '172.19.0.1'
+        } -Note "$($route.InterfaceAlias) $($route.SourceAddress)"
+        $throughTunnel = Test-RosetunGuestConnectThroughTunnel -Lan $hostLan -TunAddress '172.19.0.1'
+        Test-Step $scenario "the listener on the server's host answers through the tunnel" { $throughTunnel.Ok } -Note $throughTunnel.Note
+        Test-Step $scenario 'direct egress closed' { -not (Test-RosetunDirectEgress) }
+
+        Disconnect-RosetunTunnel | Out-Null
+        Test-Step $scenario 'objects still present, with LAN' { Test-LockdownInstalled -Lan } -Note (Format-Objects (Get-LockdownObjects))
+        Test-Step $scenario 'after the session the host is reached directly again' {
+            Wait-RosetunCondition { Test-RosetunLanListener $hostLan } -TimeoutSeconds 10
+        }
+        Test-Step $scenario 'after the session the host reaches a guest listener' { Test-InboundFromHost $guestListenerPort }
+        Test-Step $scenario 'direct egress still closed' { -not (Test-RosetunDirectEgress) }
+        $lanOff = Invoke-RosetunCli -Quiet 'lan' 'off'
+        Test-Step $scenario 'rosetun lan off updates Lockdown' { $lanOff.ExitCode -eq 0 } -Note $lanOff.Output
+        Test-Step $scenario 'LAN filters gone' { Test-LockdownInstalled } -Note (Format-Objects (Get-LockdownObjects))
+    }
+    else {
+        Add-Info '4b server in the network' 'not checked' 'it needs the node on the host (-UseHostNode)'
+    }
+
     # 5. A killed service: Lockdown holds; without it, fail-open as today.
     Connect-RosetunTunnel | Out-Null
     Stop-RosetunHelper

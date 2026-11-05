@@ -86,6 +86,7 @@ function New-RosetunLanRequests {
             'lan-private.json' = @{ allow = $true; private = $true; rule = $false; server = $false }
             'lan-rule.json'    = @{ allow = $true; private = $false; rule = $true; server = $false }
             'lan-server.json'  = @{ allow = $true; private = $false; rule = $false; server = $true }
+            'lan-server-private.json' = @{ allow = $true; private = $true; rule = $false; server = $true }
         }
         foreach ($name in $variants.Keys) {
             $variant = $variants[$name]
@@ -712,10 +713,13 @@ try {
         $newNetwork = [regex]::Escape(($ExtraAddress -replace '\.\d+$', '.0/24'))
         Test-Step 'address change' 'the service follows the new network' {
             Wait-RosetunCondition {
-                (Get-RosetunHelperLogSince -Offset $mark) -match $newNetwork
+                (Get-RosetunHelperLogSince -Offset $mark) -match 'connected networks stay outside the tunnel[^\r\n]*public'
             } -TimeoutSeconds 30
         }
         Test-Step 'address change' 'the session is Connected again' { Wait-RosetunState 'Connected' }
+        Test-Step 'address change' 'the log hides the new public network' {
+            (Get-RosetunHelperLogSince -Offset $mark) -notmatch $newNetwork
+        }
         $route = Get-RosetunGuestRoute -Address $ExtraPeer
         Test-Step 'address change' 'the new network is on the physical adapter' -Note $route.InterfaceAlias {
             $route.InterfaceAlias -eq $physical.Alias
@@ -851,6 +855,32 @@ try {
             $egress = Wait-RosetunTunnelEgress -TimeoutSeconds 15
             Test-Step 'server in the network' 'the engine connects to the server' { $egress.Ok }
 
+            # Private networks open every private range; the server's address stays out.
+            Test-Step 'server, private networks' 'lan-server-private connects' { Connect-RosetunLan 'lan-server-private.json' }
+            Test-Step 'server, private networks' "past the tunnel, the server's address stays closed" {
+                -not (Test-RosetunLanListener $lan)
+            }
+            $route = Get-RosetunGuestRoute -Address $hostAddress
+            Test-Step 'server, private networks' "the server's address is routed into the tunnel" `
+                -Note "$($route.InterfaceAlias) $($route.SourceAddress)" {
+                $route.InterfaceAlias -eq $TunAlias -and $route.SourceAddress -eq $TunAddress
+            }
+            $throughTunnel = Test-RosetunGuestConnectThroughTunnel -Lan $lan -TunAddress $TunAddress
+            Test-Step 'server, private networks' "the listener on the server's host answers through the tunnel" `
+                -Note $throughTunnel.Note { $throughTunnel.Ok }
+            $serverConnections = @(Get-RosetunGuestConnectionsTo -Address $hostAddress)
+            Test-Step 'server, private networks' "the server's address does not go direct" `
+                -Note (($serverConnections | ForEach-Object { $_.Route }) -join ',') {
+                $serverConnections.Count -gt 0 -and -not ($serverConnections | Where-Object { $_.Route -eq 'direct' })
+            }
+            $behind = @(Get-RosetunGuestConnectionsTo -Address $PrivateBehindRouter)
+            Test-Step 'server, private networks' "$PrivateBehindRouter still goes direct" `
+                -Note (($behind | ForEach-Object { $_.Route }) -join ',') {
+                $behind.Count -gt 0 -and -not ($behind | Where-Object { $_.Route -ne 'direct' })
+            }
+            $egress = Wait-RosetunTunnelEgress -TimeoutSeconds 15
+            Test-Step 'server, private networks' 'the engine connects to the server' { $egress.Ok }
+
             # The node moves out of the network: the host's address opens again.
             Test-Step 'server in the network' 'lan-on connects after lan-server' { Connect-RosetunLan 'lan-on.json' }
             $connect = Invoke-RosetunGuestConnect -Address $hostAddress -Port $lan.Port
@@ -878,7 +908,7 @@ try {
         catch { Write-Warning "Could not stop the LAN listener: $_" }
         Invoke-RosetunGuest -ScriptBlock {
             param($dir)
-            foreach ($name in @('lan-off.json', 'lan-on.json', 'lan-private.json', 'lan-rule.json', 'lan-server.json')) {
+            foreach ($name in @('lan-off.json', 'lan-on.json', 'lan-private.json', 'lan-rule.json', 'lan-server.json', 'lan-server-private.json')) {
                 Remove-Item -Path (Join-Path $dir $name) -Force -ErrorAction SilentlyContinue
             }
         } -ArgumentList (Get-RosetunGuestDir)
