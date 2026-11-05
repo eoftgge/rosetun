@@ -118,7 +118,9 @@ fn log_scan(scan: &SegmentScan) {
         }
     }
     if !scan.segment.left_out().is_empty() {
-        tracing::info!("local network: a connected network is open without the address of a VPN server");
+        tracing::info!(
+            "local network: a connected network is open without the address of a VPN server"
+        );
     }
 }
 

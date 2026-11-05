@@ -14,10 +14,9 @@ use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::{
     FWP_ACTION_BLOCK, FWP_ACTRL_MATCH_FILTER, FWP_BYTE_ARRAY16, FWP_BYTE_ARRAY16_TYPE,
     FWP_MATCH_RANGE, FWP_RANGE_TYPE, FWP_RANGE0, FWP_SECURITY_DESCRIPTOR_TYPE,
     FWP_V4_ADDR_AND_MASK, FWP_V4_ADDR_MASK, FWP_V6_ADDR_AND_MASK, FWP_V6_ADDR_MASK,
-    FWPM_CONDITION_ALE_APP_ID,
-    FWPM_CONDITION_ALE_USER_ID, FWPM_CONDITION_FLAGS, FWPM_CONDITION_IP_REMOTE_ADDRESS,
-    FWPM_DISPLAY_DATA0, FwpmFilterAdd0, FwpmFilterDeleteById0, FwpmFreeMemory0,
-    FwpmGetAppIdFromFileName0,
+    FWPM_CONDITION_ALE_APP_ID, FWPM_CONDITION_ALE_USER_ID, FWPM_CONDITION_FLAGS,
+    FWPM_CONDITION_IP_REMOTE_ADDRESS, FWPM_DISPLAY_DATA0, FwpmFilterAdd0, FwpmFilterDeleteById0,
+    FwpmFreeMemory0, FwpmGetAppIdFromFileName0,
 };
 use windows_sys::Win32::Security::Authorization::{
     ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
@@ -823,7 +822,10 @@ mod tests {
 
     /// One address in each network of `every_lan_shape`.
     fn server_addresses() -> [IpAddr; 2] {
-        ["192.0.2.10".parse().unwrap(), "2001:db8:1::5".parse().unwrap()]
+        [
+            "192.0.2.10".parse().unwrap(),
+            "2001:db8:1::5".parse().unwrap(),
+        ]
     }
 
     fn range_rules(servers: &[IpAddr]) -> Vec<Rule> {
@@ -866,8 +868,12 @@ mod tests {
                     AddressFamily::Ipv4 => {
                         assert_eq!(range.valueLow.r#type, FWP_UINT32);
                         // SAFETY: the type tag above says this field is set.
-                        let (low, high) =
-                            unsafe { (range.valueLow.Anonymous.uint32, range.valueHigh.Anonymous.uint32) };
+                        let (low, high) = unsafe {
+                            (
+                                range.valueLow.Anonymous.uint32,
+                                range.valueHigh.Anonymous.uint32,
+                            )
+                        };
                         assert!(low <= high);
                         // Host order: 192.0.2.x, not x.2.0.192.
                         assert_eq!(low >> 24, 192);
@@ -885,7 +891,10 @@ mod tests {
 
     #[test]
     fn a_stored_filter_around_another_server_is_stale() {
-        let other: [IpAddr; 2] = ["192.0.2.11".parse().unwrap(), "2001:db8:1::6".parse().unwrap()];
+        let other: [IpAddr; 2] = [
+            "192.0.2.11".parse().unwrap(),
+            "2001:db8:1::6".parse().unwrap(),
+        ];
         let wanted = range_rules(&server_addresses());
         let moved = range_rules(&other);
         assert_eq!(wanted.len(), moved.len());

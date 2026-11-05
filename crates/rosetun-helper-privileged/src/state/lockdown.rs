@@ -971,10 +971,7 @@ mod tests {
             .unwrap();
         let writes = || calls.left_out.lock().unwrap().clone();
         assert_eq!(writes(), [Vec::<std::net::IpAddr>::new()]);
-        let (one, other) = (
-            "192.0.2.10".parse().unwrap(),
-            "192.0.2.20".parse().unwrap(),
-        );
+        let (one, other) = ("192.0.2.10".parse().unwrap(), "192.0.2.20".parse().unwrap());
 
         let mut session = helper.session.lock().unwrap();
         session.follow_servers_in_lockdown(&[one]).unwrap();

@@ -1261,9 +1261,7 @@ mod tests {
         BLOCK_WEIGHT, LockdownFilter, Part, RESOLVER_WEIGHT, SEGMENT_SLOTS, every_filter,
         filter_set, slot,
     };
-    use crate::lan::{
-        InterfaceId, LanAccess, LanSegment, MAX_SERVERS_PER_NETWORK, SegmentNetwork,
-    };
+    use crate::lan::{InterfaceId, LanAccess, LanSegment, MAX_SERVERS_PER_NETWORK, SegmentNetwork};
     use crate::platform::windows::policy::{
         self, Action, AddressFamily, BOOTSTRAP_ALLOW_WEIGHT, BootstrapPolicy, Condition, Layer,
         PRIVATE_DNS_BLOCK_WEIGHT, Rule, TUNNEL_WEIGHT,

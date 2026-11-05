@@ -492,7 +492,11 @@ mod tests {
     fn a_network_holding_a_server_stays_open_without_that_address() {
         let servers = ips(&["198.51.100.200", "203.0.113.5", "2001:db8:1::7"]);
         let scan = scan_with_servers(
-            &[("198.51.100.9", 24), ("2001:db8:1::9", 64), ("192.0.2.9", 24)],
+            &[
+                ("198.51.100.9", 24),
+                ("2001:db8:1::9", 64),
+                ("192.0.2.9", 24),
+            ],
             &servers,
         );
         assert!(scan.skipped.is_empty());
