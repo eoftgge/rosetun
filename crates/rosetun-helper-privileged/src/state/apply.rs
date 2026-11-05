@@ -7,8 +7,8 @@ use rosetun_engine::RenderRequest;
 use rosetun_ipc::{ConnectRequest, ErrorCode, HelperError};
 
 use super::{
-    Caller, Helper, NameLookup, RECONNECT_BACKOFF, Reconnect, SessionHolder, StartMode, exits,
-    node_with_endpoint, normalize_server, probe::resolve_for_apply, render_config,
+    Caller, Helper, NameLookup, RECONNECT_BACKOFF, Reconnect, Session, SessionHolder, StartMode,
+    exits, node_with_endpoint, normalize_server, probe::resolve_for_apply, render_config,
     validate_request,
 };
 
@@ -220,46 +220,13 @@ impl Helper {
                             self.finish_cancelled(&mut session);
                             return Err(rollback_error);
                         }
-                        self.with_status(|status| {
-                            status.connect_stage = None;
-                            status.stage_since_unix = None;
-                        });
                         tracing::warn!(code = ?rollback_error.code, "session changes rollback failed");
-                        if current.settings.auto_reconnect {
-                            if let Err(cleanup_error) = session.stop_engine() {
-                                tracing::error!(code = ?cleanup_error.code, "failed to stop engine after apply failure");
-                            }
-                            session.reconnect = Some(Reconnect {
-                                failures: 1,
-                                next_at: Instant::now() + RECONNECT_BACKOFF[0],
-                                cause: "apply failed",
-                            });
-                        } else {
-                            let protected = session.keeps_protection();
-                            if protected {
-                                if let Err(cleanup_error) = session.stop_engine() {
-                                    tracing::error!(code = ?cleanup_error.code, "failed to stop engine after protected apply failure");
-                                }
-                            } else {
-                                session.teardown();
-                            }
-                            session.request = None;
-                            session.pin_lists(&[]);
-                            self.with_status(|status| {
-                                status.state = if protected {
-                                    ConnectionState::FailedProtected {
-                                        failure_kind: super::failure_kind(rollback_error.code),
-                                        reason: rollback_error.message,
-                                    }
-                                } else {
-                                    ConnectionState::Failed {
-                                        failure_kind: super::failure_kind(rollback_error.code),
-                                        reason: rollback_error.message,
-                                    }
-                                };
-                                status.since_unix = None;
-                            });
-                        }
+                        self.restart_failed(
+                            &mut session,
+                            current.settings.auto_reconnect,
+                            "apply failed",
+                            rollback_error,
+                        );
                         Err(error)
                     }
                 }
@@ -267,9 +234,119 @@ impl Helper {
         }
     }
 
+    /// Restarts the running session as it is: same server, rules and settings. Same path as the
+    /// automatic reconnect, so the guard stays up between the old engine and the new one.
+    pub(crate) fn reconnect_as(&self, caller: &Caller) -> Result<(), HelperError> {
+        self.check_owner(caller)?;
+        let mut session = self.session_for(SessionHolder::Reconnect)?;
+        self.check_owner(caller)?;
+        if !matches!(
+            self.with_status(|status| status.state.clone()),
+            ConnectionState::Connected
+        ) {
+            return Err(HelperError::new(
+                ErrorCode::InvalidState,
+                "the tunnel is not connected",
+            ));
+        }
+        let request = session.request.clone().ok_or_else(|| {
+            HelperError::new(ErrorCode::InvalidState, "the tunnel is not connected")
+        })?;
+        let mode = if session.guard.is_some() {
+            StartMode::ProtectedReconnect
+        } else {
+            StartMode::Fresh
+        };
+        tracing::info!(?mode, "reconnecting at the client's request");
+        self.begin_attempt(ConnectionState::Reconnecting);
+        match session.start(&request, mode, None, None).and_then(|()| {
+            self.publish_terminal(|status| {
+                status.state = ConnectionState::Connected;
+                status.record_chain(&request.node, &request.settings);
+            })
+        }) {
+            Ok(()) => {
+                self.resumed.store(false, Ordering::Release);
+                session.start_monitor(request.settings.engine);
+                session.start_watchdog();
+                tracing::info!("tunnel reconnected at the client's request");
+                Ok(())
+            }
+            Err(error) => {
+                if error.code == ErrorCode::Cancelled {
+                    self.finish_cancelled(&mut session);
+                    return Err(error);
+                }
+                tracing::warn!(code = ?error.code, "reconnect at the client's request failed");
+                self.restart_failed(
+                    &mut session,
+                    request.settings.auto_reconnect,
+                    "reconnect failed",
+                    error.clone(),
+                );
+                Err(error)
+            }
+        }
+    }
+
+    /// The engine did not come back: retry later if the session asks for that, otherwise end it.
+    /// Protection that must outlive the session stays either way.
+    fn restart_failed(
+        &self,
+        session: &mut Session,
+        auto_reconnect: bool,
+        cause: &'static str,
+        error: HelperError,
+    ) {
+        self.with_status(|status| {
+            status.connect_stage = None;
+            status.stage_since_unix = None;
+        });
+        if auto_reconnect {
+            if let Err(cleanup_error) = session.stop_engine() {
+                tracing::error!(code = ?cleanup_error.code, cause, "failed to stop engine after a failed restart");
+            }
+            session.reconnect = Some(Reconnect {
+                failures: 1,
+                next_at: Instant::now() + RECONNECT_BACKOFF[0],
+                cause,
+            });
+            return;
+        }
+        let protected = session.keeps_protection();
+        if protected {
+            if let Err(cleanup_error) = session.stop_engine() {
+                tracing::error!(code = ?cleanup_error.code, cause, "failed to stop engine after a failed protected restart");
+            }
+        } else {
+            session.teardown();
+        }
+        session.request = None;
+        session.pin_lists(&[]);
+        self.with_status(|status| {
+            status.state = if protected {
+                ConnectionState::FailedProtected {
+                    failure_kind: super::failure_kind(error.code),
+                    reason: error.message,
+                }
+            } else {
+                ConnectionState::Failed {
+                    failure_kind: super::failure_kind(error.code),
+                    reason: error.message,
+                }
+            };
+            status.since_unix = None;
+        });
+    }
+
     #[cfg(test)]
     pub fn apply(&self, request: &ConnectRequest) -> Result<(), HelperError> {
         self.apply_as(&super::test_caller(), request)
+    }
+
+    #[cfg(test)]
+    pub fn reconnect(&self) -> Result<(), HelperError> {
+        self.reconnect_as(&super::test_caller())
     }
 }
 

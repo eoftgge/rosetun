@@ -396,6 +396,9 @@ pub(crate) enum Action {
     KeepBlocked,
     ConfirmProtectionOff,
     SelectNode(SubscriptionId, NodeId),
+    /// The tray's item: the same session again, without dropping its protection.
+    #[cfg(any(windows, test))]
+    Reconnect,
     /// The tray's server list: as `SelectNode`, and a disconnected tunnel connects.
     #[cfg(any(windows, test))]
     SelectNodeFromTray(SubscriptionId, NodeId),
@@ -454,6 +457,8 @@ pub(crate) enum Job {
     RestoreEdits(AppliedSnapshot),
     LoadTemporaryRules(u64),
     Disconnect,
+    #[cfg(any(windows, test))]
+    Reconnect,
     OpenNetwork,
     SetInterfaceScale(u16),
     SetLanguage(LanguageSetting),
@@ -623,6 +628,8 @@ impl State {
             | WorkerEvent::SetKillSwitch(_)
             | WorkerEvent::SetLockdown { .. }
             | WorkerEvent::TunnelDelay(_)) => self.reduce_connection(event),
+            #[cfg(any(windows, test))]
+            event @ WorkerEvent::Reconnect(_) => self.reduce_connection(event),
             event @ WorkerEvent::TemporaryRules { .. } => self.reduce_session(event),
             WorkerEvent::Connections {
                 result,
@@ -727,7 +734,9 @@ impl State {
             | Action::CancelLockdown
             | Action::ConfirmLockdown) => return self.act_connection(action),
             #[cfg(any(windows, test))]
-            action @ Action::SelectNodeFromTray(_, _) => return self.act_connection(action),
+            action @ (Action::Reconnect | Action::SelectNodeFromTray(_, _)) => {
+                return self.act_connection(action);
+            }
             action @ (Action::OpenTraffic
             | Action::SetTrafficRange(_)
             | Action::SetConnectionsTab(_)

@@ -657,6 +657,15 @@ impl State {
                     Err(error) => self.helper_result(Err(error)),
                 }
             }
+            #[cfg(any(windows, test))]
+            WorkerEvent::Reconnect(result) => {
+                self.operations.helper = self.cancel_in_flight;
+                match result {
+                    Ok(()) => self.operation_error = None,
+                    Err(error) if reported_by_status(&error) => self.operation_error = None,
+                    Err(error) => self.helper_result(Err(error)),
+                }
+            }
             WorkerEvent::OpenNetwork(result) => {
                 self.operations.helper = false;
                 match result {
@@ -763,6 +772,15 @@ impl State {
                     self.operations.selection = true;
                     self.operation_error = None;
                     return Some(Job::SelectNode(subscription, node));
+                }
+            }
+            #[cfg(any(windows, test))]
+            #[cfg(any(windows, test))]
+            Action::Reconnect => {
+                if self.can_reconnect() {
+                    self.operations.helper = true;
+                    self.operation_error = None;
+                    return Some(Job::Reconnect);
                 }
             }
             #[cfg(any(windows, test))]

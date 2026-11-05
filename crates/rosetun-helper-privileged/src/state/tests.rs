@@ -4593,6 +4593,191 @@ fn temporary_rules_are_empty_without_a_session() {
     assert!(helper.temporary_rules().unwrap().is_empty());
 }
 
+/// Writes every call the guard gets next to the engine's starts, in one list.
+#[derive(Debug)]
+struct OrderedRouting {
+    controls: Arc<EngineControls>,
+}
+
+impl RoutingBackend for OrderedRouting {
+    fn name(&self) -> &'static str {
+        "test-ordered"
+    }
+
+    fn capabilities(&self) -> ProtectionCapabilities {
+        FULL_PROTECTION
+    }
+
+    fn preflight(&self) -> Result<(), RoutingError> {
+        Ok(())
+    }
+
+    fn begin_protection(
+        &mut self,
+        _plan: &RoutingPlan,
+        _engine_binaries: &[&Path],
+    ) -> Result<RoutingGuard, RoutingError> {
+        self.controls.events.lock().unwrap().push("protect");
+        let prepare = Arc::clone(&self.controls);
+        let tunnel = Arc::clone(&self.controls);
+        let revert = Arc::clone(&self.controls);
+        Ok(RoutingGuard::new_with_reconnector(
+            move |_, _| {
+                prepare.events.lock().unwrap().push("prepare");
+                Ok(())
+            },
+            move |_| {
+                tunnel.events.lock().unwrap().push("tunnel");
+                Ok(())
+            },
+            move || {
+                revert.events.lock().unwrap().push("revert");
+                Ok(())
+            },
+        ))
+    }
+}
+
+fn ordered_helper() -> (Helper, Arc<EngineControls>) {
+    let controls = Arc::new(EngineControls::default());
+    let mut engines = EngineRegistry::new();
+    engines.register(Box::new(ControlledEngine {
+        controls: Arc::clone(&controls),
+        dns_server: None,
+    }));
+    let routing = Box::new(OrderedRouting {
+        controls: Arc::clone(&controls),
+    });
+    (
+        Helper::new(engines, routing, VerboseGate::default()),
+        controls,
+    )
+}
+
+fn killswitch_request(auto_reconnect: bool) -> ConnectRequest {
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    request.settings.auto_reconnect = auto_reconnect;
+    request
+}
+
+#[test]
+fn reconnect_replaces_the_engine_under_the_guard_without_teardown() {
+    let (helper, controls) = ordered_helper();
+    let request = killswitch_request(false);
+    helper.connect(&request).unwrap();
+    let since = helper.status().since_unix;
+    controls.events.lock().unwrap().clear();
+
+    helper.reconnect().unwrap();
+
+    assert_eq!(
+        *controls.events.lock().unwrap(),
+        ["prepare", "sing-box", "tunnel"],
+        "no revert and no new protection between the old engine and the new one"
+    );
+    let status = helper.status();
+    assert!(matches!(status.state, ConnectionState::Connected));
+    assert_eq!(status.since_unix, since);
+    assert_eq!(
+        helper.session().unwrap().request.as_ref(),
+        Some(&request),
+        "the same session goes on"
+    );
+
+    controls.events.lock().unwrap().clear();
+    helper.disconnect().unwrap();
+    assert_eq!(*controls.events.lock().unwrap(), ["revert"]);
+}
+
+#[test]
+fn reconnect_is_refused_unless_connected() {
+    let (helper, controls) = ordered_helper();
+    assert_eq!(
+        helper.reconnect().unwrap_err().code,
+        ErrorCode::InvalidState
+    );
+    assert!(controls.events.lock().unwrap().is_empty());
+
+    helper.connect(&killswitch_request(false)).unwrap();
+    controls.events.lock().unwrap().clear();
+    helper.with_status(|status| status.state = ConnectionState::Reconnecting);
+    assert_eq!(
+        helper.reconnect().unwrap_err().code,
+        ErrorCode::InvalidState
+    );
+    assert!(controls.events.lock().unwrap().is_empty());
+}
+
+#[test]
+fn reconnect_answers_busy_while_the_session_is_held() {
+    let (helper, controls) = ordered_helper();
+    helper.connect(&killswitch_request(false)).unwrap();
+    controls.events.lock().unwrap().clear();
+    let session = helper.session().expect("session");
+    assert_eq!(helper.reconnect().unwrap_err().code, ErrorCode::Busy);
+    drop(session);
+    assert!(controls.events.lock().unwrap().is_empty());
+}
+
+#[test]
+fn reconnect_follows_the_rights_of_disconnect() {
+    let (helper, controls) = ordered_helper();
+    helper.connect(&killswitch_request(false)).unwrap();
+    controls.events.lock().unwrap().clear();
+
+    let other = Caller::fake(b"another-account", false);
+    assert_eq!(
+        helper.reconnect_as(&other).unwrap_err().code,
+        ErrorCode::AccessDenied
+    );
+    assert!(controls.events.lock().unwrap().is_empty());
+
+    let administrator = Caller::fake(b"an-administrator", true);
+    helper.reconnect_as(&administrator).unwrap();
+    assert_eq!(controls.spawns(), 2);
+}
+
+#[test]
+fn a_failed_reconnect_without_retries_keeps_the_guard_and_blocks() {
+    let (helper, controls) = ordered_helper();
+    helper.connect(&killswitch_request(false)).unwrap();
+    controls.events.lock().unwrap().clear();
+    controls.fail_next(1);
+
+    assert!(helper.reconnect().is_err());
+
+    assert!(matches!(
+        helper.status().state,
+        ConnectionState::FailedProtected { .. }
+    ));
+    let events = controls.events.lock().unwrap();
+    assert!(!events.contains(&"revert"), "{events:?}");
+    assert!(helper.session().unwrap().guard.is_some());
+}
+
+#[test]
+fn a_failed_reconnect_with_retries_stays_reconnecting_under_the_guard() {
+    let (helper, controls) = ordered_helper();
+    helper.connect(&killswitch_request(true)).unwrap();
+    controls.events.lock().unwrap().clear();
+    controls.fail_next(1);
+
+    assert!(helper.reconnect().is_err());
+
+    assert!(matches!(
+        helper.status().state,
+        ConnectionState::Reconnecting
+    ));
+    assert!(!controls.events.lock().unwrap().contains(&"revert"));
+    let session = helper.session().unwrap();
+    assert!(session.guard.is_some());
+    assert_eq!(
+        session.reconnect.as_ref().map(|retry| retry.cause),
+        Some("reconnect failed")
+    );
+}
+
 #[test]
 fn apply_requires_a_connected_and_unlocked_session() {
     let (helper, controls, _, _) = supervised_helper(false);

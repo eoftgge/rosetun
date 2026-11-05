@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt::Formatter;
 use std::time::Duration;
 
-pub const PROTOCOL_VERSION: u32 = 17;
+pub const PROTOCOL_VERSION: u32 = 18;
 pub const MAX_PROBE_NODES: usize = 256;
 pub const MAX_TEMPORARY_RULES: usize = 256;
 pub const MAX_EXTRA_NODES: usize = 16;
@@ -55,6 +55,8 @@ pub enum Request {
     ProbeNodes(Box<ProbeRequest>),
     TunnelDelay,
     Disconnect,
+    /// Restarts the running session as it is, under its protection (protocol 18).
+    Reconnect,
     Apply(Box<ConnectRequest>),
     /// Turns Lockdown on (or updates its LAN permits) or off (protocol 12).
     SetLockdown {
@@ -108,6 +110,7 @@ impl std::fmt::Debug for Request {
             Self::CloseConnection { .. } => f.write_str("CloseConnection"),
             Self::TunnelDelay => f.write_str("TunnelDelay"),
             Self::Disconnect => f.write_str("Disconnect"),
+            Self::Reconnect => f.write_str("Reconnect"),
             Self::SetLockdown {
                 enabled,
                 allow_lan,
@@ -555,7 +558,7 @@ mod tests {
             serde_json::to_string(&super::ErrorCode::AccessDenied).unwrap(),
             "\"access_denied\""
         );
-        assert_eq!(super::PROTOCOL_VERSION, 17);
+        assert_eq!(super::PROTOCOL_VERSION, 18);
         assert_eq!(
             serde_json::to_string(&super::Request::OpenNetwork).unwrap(),
             "\"open_network\""

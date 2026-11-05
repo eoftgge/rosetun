@@ -21,13 +21,14 @@ use crate::{constants, i18n, theme, view};
 const STATUS_ID: &str = "rosetun.tray.status";
 const WINDOW_ID: &str = "rosetun.tray.window";
 const PRIMARY_ID: &str = "rosetun.tray.primary";
+const RECONNECT_ID: &str = "rosetun.tray.reconnect";
+/// The reconnect item's place in the menu: right after the primary item.
+const RECONNECT_PLACE: usize = 3;
 const SERVERS_ID: &str = "rosetun.tray.servers";
 /// Followed by the server's place in `Tray::choices`.
 const SERVER_ID_PREFIX: &str = "rosetun.tray.server.";
 const ALL_SERVERS_ID: &str = "rosetun.tray.all-servers";
 const UPDATE_ID: &str = "rosetun.tray.update";
-/// The update item's place in the menu: right before the quit item.
-const UPDATE_PLACE: usize = 6;
 /// The `uID` the icon was added with: tray-icon numbers its icons from 1 in
 /// the order they are made (its `COUNTER`, 0.26) and hides the number, and
 /// Rosetun makes one. Were it wrong, a notice fails with a warning only.
@@ -44,6 +45,9 @@ pub(crate) struct TrayView {
     pub(crate) status_label: String,
     pub(crate) primary_label: String,
     pub(crate) primary_enabled: bool,
+    /// While a tunnel is up or coming back.
+    pub(crate) reconnect_label: Option<String>,
+    pub(crate) reconnect_enabled: bool,
     /// The window is on screen, so the window item hides it.
     pub(crate) window_shown: bool,
     pub(crate) window_label: String,
@@ -123,6 +127,16 @@ pub(crate) fn tray_view(state: &State, window_shown: bool) -> TrayView {
         status_label,
         primary_label,
         primary_enabled: primary_action != PrimaryAction::Disabled,
+        reconnect_label: state
+            .visible_status()
+            .filter(|status| {
+                matches!(
+                    status.state,
+                    ConnectionState::Connected | ConnectionState::Reconnecting
+                )
+            })
+            .map(|_| tr!("reconnect")),
+        reconnect_enabled: state.can_reconnect(),
         window_shown,
         window_label: if window_shown {
             tr!("tray-hide")
@@ -259,6 +273,8 @@ pub(crate) struct Tray {
     icon: tray_icon::TrayIcon,
     status: MenuItem,
     primary: MenuItem,
+    /// In the menu only while `TrayView::reconnect_label` is set.
+    reconnect: MenuItem,
     window: MenuItem,
     /// Read by the menu handler, so the window item does what its text said.
     window_shown: Arc<AtomicBool>,
@@ -281,11 +297,13 @@ impl Tray {
         let status = MenuItem::with_id(STATUS_ID, constants::TITLE, false, None);
         let window = MenuItem::with_id(WINDOW_ID, tr!("tray-open"), true, None);
         let primary = MenuItem::with_id(PRIMARY_ID, tr!("connect"), false, None);
+        let reconnect = MenuItem::with_id(RECONNECT_ID, tr!("reconnect"), false, None);
         let servers = Submenu::with_id(SERVERS_ID, tr!("tray-servers"), true);
         let update = MenuItem::with_id(UPDATE_ID, "", true, None);
         let quit = MenuItem::with_id(QUIT_ID, tr!("tray-quit"), true, None);
         // The connection under its state, the window and the app at the bottom;
-        // the update item goes in before quit (`UPDATE_PLACE`).
+        // the reconnect item goes in after primary (`RECONNECT_PLACE`), the update item before
+        // quit.
         let menu = Menu::with_items(&[
             &status,
             &PredefinedMenuItem::separator(),
@@ -333,6 +351,7 @@ impl Tray {
                 WINDOW_ID if menu_window_shown.load(Ordering::Relaxed) => Some(ShellEvent::Hide),
                 WINDOW_ID => Some(ShellEvent::Show),
                 PRIMARY_ID => Some(ShellEvent::Primary),
+                RECONNECT_ID => Some(ShellEvent::Reconnect),
                 ALL_SERVERS_ID => Some(ShellEvent::ShowServers),
                 UPDATE_ID => Some(ShellEvent::OpenUpdate),
                 QUIT_ID => Some(ShellEvent::Quit),
@@ -358,6 +377,7 @@ impl Tray {
             icon,
             status,
             primary,
+            reconnect,
             window,
             window_shown,
             servers,
@@ -430,6 +450,22 @@ impl Tray {
         {
             self.primary.set_enabled(view.primary_enabled);
         }
+        let shown_reconnect = self
+            .shown
+            .as_ref()
+            .and_then(|shown| shown.reconnect_label.as_deref());
+        if shown_reconnect != view.reconnect_label.as_deref()
+            && let Err(error) = self.show_reconnect(shown_reconnect.is_some(), view)
+        {
+            tracing::warn!(%error, "could not update the tray reconnect item");
+        }
+        if self
+            .shown
+            .as_ref()
+            .is_none_or(|shown| shown.reconnect_enabled != view.reconnect_enabled)
+        {
+            self.reconnect.set_enabled(view.reconnect_enabled);
+        }
         if self
             .shown
             .as_ref()
@@ -487,12 +523,28 @@ impl Tray {
         }
     }
 
+    fn show_reconnect(&self, in_menu: bool, view: &TrayView) -> Result<(), tray_icon::menu::Error> {
+        match (&view.reconnect_label, in_menu) {
+            (Some(label), in_menu) => {
+                self.reconnect.set_text(label.as_str());
+                if !in_menu {
+                    self.menu.insert(&self.reconnect, RECONNECT_PLACE)?;
+                }
+            }
+            (None, true) => self.menu.remove(&self.reconnect)?,
+            (None, false) => {}
+        }
+        Ok(())
+    }
+
     fn show_update(&self, in_menu: bool, view: &TrayView) -> Result<(), tray_icon::menu::Error> {
         match (&view.update_label, in_menu) {
             (Some(label), in_menu) => {
                 self.update.set_text(label.as_str());
                 if !in_menu {
-                    self.menu.insert(&self.update, UPDATE_PLACE)?;
+                    // Right before quit, wherever the reconnect item left that.
+                    let place = self.menu.items().len().saturating_sub(1);
+                    self.menu.insert(&self.update, place)?;
                 }
             }
             (None, true) => self.menu.remove(&self.update)?,
@@ -914,6 +966,46 @@ mod tests {
         assert_eq!(tray.servers[0].label, "A&&B");
         assert_eq!(tray.primary_label, tr!("tray-connect-to", server = "A&&B"));
         assert!(tray.tooltip.contains("A&B") && !tray.tooltip.contains("A&&B"));
+    }
+
+    #[test]
+    fn the_reconnect_item_is_there_only_with_a_tunnel_and_works_only_when_connected() {
+        let mut state = State::default();
+        state.helper_available = true;
+        let failed = || ConnectionState::Failed {
+            reason: String::new(),
+            failure_kind: None,
+        };
+        let blocked = || ConnectionState::FailedProtected {
+            reason: String::new(),
+            failure_kind: None,
+        };
+        for (connection, in_menu, enabled) in [
+            (ConnectionState::Connected, true, true),
+            (ConnectionState::Reconnecting, true, false),
+            (ConnectionState::Connecting, false, false),
+            (ConnectionState::Disconnected, false, false),
+            (failed(), false, false),
+            (blocked(), false, false),
+        ] {
+            state.status.state = connection.clone();
+            let tray = tray_view(&state, true);
+            assert_eq!(
+                tray.reconnect_label,
+                in_menu.then(|| tr!("reconnect")),
+                "{connection:?}"
+            );
+            assert_eq!(tray.reconnect_enabled, enabled, "{connection:?}");
+        }
+
+        state.status.state = ConnectionState::Connected;
+        state.operations.helper = true;
+        assert!(!tray_view(&state, true).reconnect_enabled, "a command runs");
+        state.operations.helper = false;
+        state.helper_available = false;
+        let tray = tray_view(&state, true);
+        assert_eq!(tray.reconnect_label, None, "no service, no tunnel to show");
+        assert!(!tray.reconnect_enabled);
     }
 
     #[test]

@@ -448,6 +448,10 @@ fn dispatch(
             Ok(()) => Response::Ok,
             Err(error) => Response::Error(error),
         },
+        Request::Reconnect => match helper.reconnect_as(caller.expect("caller checked")) {
+            Ok(()) => Response::Ok,
+            Err(error) => Response::Error(error),
+        },
         Request::SetLockdown {
             enabled,
             allow_lan,
@@ -623,6 +627,7 @@ mod tests {
             Request::CloseConnection { id: "a".to_owned() },
             Request::TunnelDelay,
             Request::Disconnect,
+            Request::Reconnect,
             Request::OpenNetwork,
             Request::SetLockdown {
                 enabled: true,

@@ -170,6 +170,10 @@ impl HelperClient {
         self.expect_ok(Request::Disconnect)
     }
 
+    pub fn reconnect_tunnel(&mut self) -> Result<(), ClientError> {
+        self.expect_ok(Request::Reconnect)
+    }
+
     /// `private_networks` counts only with `allow_lan`.
     pub fn set_lockdown(
         &mut self,

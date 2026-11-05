@@ -59,6 +59,7 @@ enum Command {
     ResetFirewall,
     OpenNetwork,
     Disconnect,
+    Reconnect,
     Shutdown,
 }
 
@@ -147,6 +148,7 @@ fn main() -> ExitCode {
         Command::Temporary => with_helper(temporary),
         Command::OpenNetwork => with_helper(open_network),
         Command::Disconnect => with_helper(disconnect),
+        Command::Reconnect => with_helper(reconnect),
         Command::Shutdown => with_helper(shutdown),
     }
 }
@@ -423,6 +425,19 @@ fn temporary_rule_line(rule: &Rule) -> String {
         RuleMatcher::Template(_) => "template".to_owned(),
     };
     format!("{target}: {}", terminal_text(&value))
+}
+
+fn reconnect(client: &mut HelperClient) -> ExitCode {
+    match client.reconnect_tunnel() {
+        Ok(()) => {
+            println!("tunnel reconnected");
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            report_helper_error(&error, "failed to reconnect tunnel");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 fn disconnect(client: &mut HelperClient) -> ExitCode {
@@ -863,6 +878,7 @@ fn parse_command_arguments(arguments: &[String]) -> Result<Command, String> {
         ["reset-firewall"] => Ok(Command::ResetFirewall),
         ["open-network"] => Ok(Command::OpenNetwork),
         ["disconnect"] => Ok(Command::Disconnect),
+        ["reconnect"] => Ok(Command::Reconnect),
         ["shutdown"] => Ok(Command::Shutdown),
         ["connect", ..] => Err("connect accepts zero or one request JSON path".to_owned()),
         ["apply", ..] => Err("apply accepts zero or one request JSON path".to_owned()),
@@ -883,6 +899,7 @@ fn parse_command_arguments(arguments: &[String]) -> Result<Command, String> {
         ["temporary", ..] => Err("temporary does not accept arguments".to_owned()),
         ["open-network", ..] => Err("open-network does not accept arguments".to_owned()),
         ["disconnect", ..] => Err("disconnect does not accept arguments".to_owned()),
+        ["reconnect", ..] => Err("reconnect does not accept arguments".to_owned()),
         ["shutdown", ..] => Err("shutdown does not accept arguments".to_owned()),
         [_, ..] => Err("unknown command".to_owned()),
     }
@@ -923,6 +940,7 @@ Usage:
   rosetun reset-firewall
   rosetun open-network
   rosetun disconnect
+  rosetun reconnect
   rosetun shutdown
 
 Subscription and node commands are local and do not require the helper.
@@ -1065,6 +1083,7 @@ mod tests {
         assert_eq!(parse(&["reset-firewall"]), Ok(Command::ResetFirewall));
         assert!(parse(&["reset-firewall", "now"]).is_err());
         assert_eq!(parse(&["disconnect"]), Ok(Command::Disconnect));
+        assert_eq!(parse(&["reconnect"]), Ok(Command::Reconnect));
         assert_eq!(parse(&["open-network"]), Ok(Command::OpenNetwork));
         assert_eq!(parse(&["shutdown"]), Ok(Command::Shutdown));
     }
@@ -1328,6 +1347,7 @@ mod tests {
             "config",
             "open-network",
             "disconnect",
+            "reconnect",
             "shutdown",
         ] {
             for arguments in [vec![command, "extra"], vec![command, "extra", "another"]] {

@@ -1039,3 +1039,57 @@ fn a_failure_to_open_the_network_keeps_the_banner_and_says_why() {
     assert!(state.upgrade_hold_shown());
     assert!(state.operation_error.is_some());
 }
+
+#[test]
+fn reconnect_runs_once_and_only_while_connected() {
+    let mut state = connected_state_for_apply();
+    assert!(state.can_reconnect());
+    assert!(matches!(state.act(Action::Reconnect), Some(Job::Reconnect)));
+    assert!(state.operations.helper);
+    assert!(!state.can_reconnect());
+    assert!(state.act(Action::Reconnect).is_none());
+
+    state.reduce(WorkerEvent::Reconnect(Ok(())));
+    assert!(!state.operations.helper);
+    assert!(state.can_reconnect());
+
+    for connection in [
+        ConnectionState::Reconnecting,
+        ConnectionState::Connecting,
+        ConnectionState::Disconnected,
+    ] {
+        state.status.state = connection;
+        assert!(state.act(Action::Reconnect).is_none());
+        assert!(!state.operations.helper);
+    }
+
+    state.status.state = ConnectionState::Connected;
+    state.helper_available = false;
+    assert!(state.act(Action::Reconnect).is_none());
+}
+
+#[test]
+fn a_refused_reconnect_shows_why_and_a_failed_engine_leaves_it_to_the_status() {
+    let refused = |code, message: &str| {
+        crate::worker::HelperCommandError::Client(rosetun_ipc::ClientError::Helper(
+            rosetun_ipc::HelperError::new(code, message),
+        ))
+    };
+    let mut state = connected_state_for_apply();
+    assert!(state.act(Action::Reconnect).is_some());
+    state.reduce(WorkerEvent::Reconnect(Err(refused(
+        rosetun_ipc::ErrorCode::AccessDenied,
+        "denied",
+    ))));
+    assert!(!state.operations.helper);
+    assert!(state.operation_error.is_some());
+
+    assert!(state.act(Action::Reconnect).is_some());
+    assert!(state.operation_error.is_none());
+    state.reduce(WorkerEvent::Reconnect(Err(refused(
+        rosetun_ipc::ErrorCode::EngineFailed,
+        "stopped",
+    ))));
+    assert!(!state.operations.helper);
+    assert!(state.operation_error.is_none());
+}

@@ -37,6 +37,7 @@ pub(super) enum SessionHolder {
     Supervisor,
     Connect,
     Apply,
+    Reconnect,
     Disconnect,
     Probe,
     Lockdown,
@@ -46,11 +47,12 @@ pub(super) enum SessionHolder {
 }
 
 impl SessionHolder {
-    const ALL: [Self; 9] = [
+    const ALL: [Self; 10] = [
         Self::Nobody,
         Self::Supervisor,
         Self::Connect,
         Self::Apply,
+        Self::Reconnect,
         Self::Disconnect,
         Self::Probe,
         Self::Lockdown,
@@ -71,6 +73,7 @@ impl SessionHolder {
             Self::Supervisor => "supervisor",
             Self::Connect => "connect",
             Self::Apply => "apply",
+            Self::Reconnect => "reconnect",
             Self::Disconnect => "disconnect",
             Self::Probe => "probe",
             Self::Lockdown => "lockdown",

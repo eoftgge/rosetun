@@ -34,6 +34,7 @@ Rosetun is a Windows VPN client powered by sing-box, which runs the tunnel, rule
 - **TLS fragmentation** (Settings → Advanced): splits the first packets to the server, which helps when a provider cuts the connection by its first packet. Servers that Xray carries go through Xray while it is on; the connection screen says whether it applies to the current server.
 - **DNS through the tunnel** via a configurable DNS-over-HTTPS resolver.
 - **Local network** (Settings → Connection): devices on your network and finding them, past the tunnel; see [Local network](#local-network). Off by default.
+- **Reconnect** in the tray menu or `rosetun reconnect` restarts the tunnel to the same server; the kill switch, Lockdown and the DNS lock stay on throughout.
 - Change the server, rules or DNS while connected: Rosetun restarts the tunnel in a second or two without disconnecting, and the kill switch keeps traffic blocked meanwhile.
 - **Temporary rules:** add a rule only until disconnect; it applies at once and is never saved.
 - **Connections** on the Traffic tab: while connected, what your programs connect to right now, grouped by program with its icon, with the route each connection took and why (which rule, list or the default). Create a rule or close a connection from there. The list is kept only in memory for the Windows account that connected and is cleared on disconnect; it is never written to disk or to the log. Icons are read only from programs on local disks.
@@ -44,7 +45,7 @@ Rosetun is a Windows VPN client powered by sing-box, which runs the tunnel, rule
 - The tray icon shows the state by shape: the rose is in colour only while connected; otherwise it is grey with a badge for connecting, traffic blocked (by the kill switch, or by Lockdown while disconnected), a failed connection and the service not running. Its menu shows the state, connects or disconnects, switches between your five most recent servers and opens the window. **Notifications** say when the VPN drops, comes back or cannot connect; they name no server, since Windows shows them on the lock screen. Turn them off in Settings › General.
 - **Quitting** Rosetun while connected asks whether to disconnect or keep the VPN, which the service holds without the window; the answer can be remembered (Settings › General › **When quitting Rosetun**).
 - **New versions** are offered on the connection screen, in the tray menu and by one notification per version, until you update or skip that version. Nothing is downloaded or installed by itself.
-- Command line: `rosetun status`, `temporary`, `connect`, `apply`, `probe`, `delay`, `exits`, `select`, `sub add|update|list|remove`, `nodes`, `config`, `connections`, `connections close`, `xray auto|off|always`, `lan on|off`, `lockdown on|off`, `reset-firewall`, `disconnect`, `shutdown`.
+- Command line: `rosetun status`, `temporary`, `connect`, `apply`, `probe`, `delay`, `exits`, `select`, `sub add|update|list|remove`, `nodes`, `config`, `connections`, `connections close`, `xray auto|off|always`, `lan on|off`, `lockdown on|off`, `reconnect`, `reset-firewall`, `disconnect`, `shutdown`.
 - **Start with Windows**, English and Russian interfaces, six colour themes and **Reduce motion**.
 
 ## Local network

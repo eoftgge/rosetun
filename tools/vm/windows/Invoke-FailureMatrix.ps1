@@ -1317,6 +1317,32 @@ Test-Step 'apply rules' 'tunnel carries traffic' -Note (Format-Egress $egress) {
 Test-Step 'apply rules' 'direct egress is blocked' { -not (Test-RosetunDirectEgress) }
 Test-Step 'apply rules' 'IPv6 outside the tunnel is blocked' { -not (Test-RosetunIpv6Egress) }
 
+Write-Host 'Reconnect under the kill switch...'
+Start-RosetunEgressWatch
+$egressWatchActive = $true
+$watch = $null
+try {
+    $reconnect = Invoke-RosetunCli -Quiet 'reconnect'
+    Test-Step 'reconnect' 'reconnect succeeds' -Note "exit $($reconnect.ExitCode)" { $reconnect.ExitCode -eq 0 }
+    Test-Step 'reconnect' 'state is Connected' { (Get-RosetunState) -eq 'Connected' }
+    Test-Step 'reconnect' 'WFP filters stay installed' { Test-RosetunWfpFilters }
+    Test-Step 'reconnect' 'direct egress is blocked' { -not (Test-RosetunDirectEgress) }
+    Test-Step 'reconnect' 'IPv6 outside the tunnel is blocked' { -not (Test-RosetunIpv6Egress) }
+}
+finally {
+    $watch = Stop-RosetunEgressWatch
+    $egressWatchActive = $false
+}
+Test-Step 'reconnect' "no direct leak through the restart ($($watch.Probes) probes)" {
+    $watch.Probes -gt 0 -and $watch.Leaks -eq 0
+}
+$status = Invoke-RosetunCli -Quiet 'status'
+Test-Step 'reconnect' 'node is unchanged' {
+    $status.ExitCode -eq 0 -and $status.Output -match ('(?m)^node: {0}$' -f [regex]::Escape($initialNodeId))
+}
+$egress = Wait-RosetunTunnelEgress
+Test-Step 'reconnect' 'tunnel carries traffic' -Note (Format-Egress $egress) { $egress.Ok }
+
 $apply = Invoke-RosetunApply 'request-apply-node.json' -Quiet
 Test-Step 'apply node' 'apply succeeds' -Note "exit $($apply.ExitCode)" { $apply.ExitCode -eq 0 }
 Test-Step 'apply node' 'state is Connected' { (Get-RosetunState) -eq 'Connected' }

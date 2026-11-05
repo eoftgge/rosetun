@@ -104,6 +104,23 @@ impl WorkerDispatcher {
         });
     }
 
+    #[cfg(any(windows, test))]
+    pub(crate) fn reconnect(&self) {
+        self.spawn_task("rosetun-reconnect", move |publisher| {
+            tracing::info!("reconnect command started");
+            let result = with_helper(rosetun_ipc::HelperClient::reconnect_tunnel);
+            match &result {
+                Ok(()) => tracing::info!("reconnect command succeeded"),
+                Err(error) => tracing::warn!(%error, "reconnect command failed"),
+            }
+            emit(
+                &publisher.tx,
+                &publisher.repaint,
+                WorkerEvent::Reconnect(result),
+            );
+        });
+    }
+
     pub(crate) fn open_network(&self) {
         self.spawn_task("rosetun-open-network", move |publisher| {
             let result = with_helper(rosetun_ipc::HelperClient::open_network);

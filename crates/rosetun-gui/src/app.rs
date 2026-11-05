@@ -59,6 +59,7 @@ pub(crate) enum ShellEvent {
     OpenLink(OpenedLink),
     Hide,
     Primary,
+    Reconnect,
     SelectServer(rosetun_config::Selection),
     ShowServers,
     /// The tray's update item: the release page in the browser.
@@ -418,6 +419,8 @@ impl App {
             Job::RestoreEdits(snapshot) => self.workers.restore_edits(snapshot),
             Job::LoadTemporaryRules(request) => self.workers.load_temporary_rules(request),
             Job::Disconnect => self.workers.disconnect(),
+            #[cfg(any(windows, test))]
+            Job::Reconnect => self.workers.reconnect(),
             Job::OpenNetwork => self.workers.open_network(),
             Job::SetInterfaceScale(percent) => self.workers.set_interface_scale(percent),
             Job::SetLanguage(language) => self.workers.set_language(language),
@@ -684,6 +687,11 @@ impl eframe::App for App {
                     ShellEvent::Hide => self.hide_window(ctx),
                     ShellEvent::Primary => {
                         if let Some(job) = self.state.act(Action::Primary) {
+                            self.dispatch(job);
+                        }
+                    }
+                    ShellEvent::Reconnect => {
+                        if let Some(job) = self.state.act(Action::Reconnect) {
                             self.dispatch(job);
                         }
                     }

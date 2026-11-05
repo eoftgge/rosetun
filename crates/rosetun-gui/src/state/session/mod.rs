@@ -445,6 +445,15 @@ impl State {
             || self.settings_busy_shown(self.frame_time())
     }
 
+    /// Only a connected tunnel restarts, and only one thing talks to the service at a time.
+    #[cfg(any(windows, test))]
+    pub(crate) fn can_reconnect(&self) -> bool {
+        self.helper_available
+            && !self.operations.helper
+            && !self.session.flow.restore_pending()
+            && matches!(self.status.state, ConnectionState::Connected)
+    }
+
     pub(crate) fn can_apply(&self) -> bool {
         self.can_change_temporary() && !self.saving_config_shown() && self.has_pending_apply()
     }
