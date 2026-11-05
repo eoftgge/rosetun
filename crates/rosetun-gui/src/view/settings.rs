@@ -1942,9 +1942,10 @@ mod pending_notice_tests {
 
                     state.config.settings.allow_lan = false;
                     let shown = drawn(&state, size, nav);
+                    // No line under this row, and the nested title stands at the top of its own.
                     let lan = top_of(&shown, &tr!("private-networks"))
                         - top_of(&shown, &tr!("allow-lan"))
-                        - 1.0;
+                        + theme::space::L;
                     assert!(lan <= limit, "{language:?} {size:?}: {lan} > {limit}");
                 }
             });

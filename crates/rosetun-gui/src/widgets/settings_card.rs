@@ -44,7 +44,8 @@ pub(crate) fn row_detail(ui: &mut egui::Ui, detail: &str, pending: bool) {
 pub(crate) struct RowOptions {
     /// The change waits for a new connection; see `row_detail`.
     pub(crate) pending: bool,
-    /// The setting belongs to the row above: its text steps in, its control keeps the column.
+    /// The setting belongs to the row above: no line or top padding parts them, its text steps
+    /// in and its control keeps the column.
     pub(crate) nested: bool,
 }
 
@@ -114,7 +115,7 @@ impl SettingsCard<'_> {
         options: RowOptions,
         control: impl FnOnce(&mut egui::Ui),
     ) -> egui::Rect {
-        if self.rows > 0 {
+        if self.rows > 0 && !options.nested {
             let (line, _) = self.ui.allocate_exact_size(
                 egui::vec2(self.ui.available_width(), 1.0),
                 egui::Sense::hover(),
@@ -127,16 +128,16 @@ impl SettingsCard<'_> {
         }
         self.rows += 1;
         let width = self.ui.available_width();
-        let left = if options.nested {
-            theme::space::L + theme::space::XL
+        let (left, top) = if options.nested {
+            (theme::space::L + theme::space::XL, 0.0)
         } else {
-            theme::space::L
+            (theme::space::L, theme::space::L)
         };
         egui::Frame::new()
             .inner_margin(egui::Margin {
                 left: theme::margin::side(left),
                 right: theme::margin::side(theme::space::L),
-                top: theme::margin::side(theme::space::L),
+                top: theme::margin::side(top),
                 bottom: theme::margin::side(theme::space::L),
             })
             .show(self.ui, |ui| {
@@ -318,6 +319,40 @@ mod tests {
         assert!(title_width >= 200.0, "title width: {title_width}");
         assert!(control_rect.left() > rects[0].center().x);
         assert!((tall_control.center().y - rects[2].center().y).abs() <= 2.0);
+    }
+
+    #[test]
+    fn a_nested_row_joins_the_row_above_and_the_next_row_is_parted_again() {
+        let ctx = egui::Context::default();
+        let mut rects = Vec::new();
+        let nested = RowOptions {
+            nested: true,
+            ..RowOptions::default()
+        };
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(640.0, 480.0),
+                )),
+                ..egui::RawInput::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    settings_card(ui, |card| {
+                        let plain = RowOptions::default();
+                        rects.push(card.row_inner("Parent", None, Some("A"), plain, |_| {}));
+                        rects.push(card.row_inner("Child", None, Some("B"), nested, |_| {}));
+                        rects.push(card.row_inner("Next", None, Some("C"), plain, |_| {}));
+                    });
+                });
+            },
+        );
+        output.textures_delta.clear();
+        assert_eq!(rects[1].top(), rects[0].bottom());
+        assert_eq!(rects[2].top() - rects[1].bottom(), 1.0);
+        assert_eq!(rects[1].height(), rects[0].height() - theme::space::L);
+        assert_eq!(rects[1].width(), rects[0].width());
     }
 
     /// The text of a caption and the colour and size of each of its parts.
