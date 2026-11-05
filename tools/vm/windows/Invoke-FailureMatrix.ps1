@@ -1854,8 +1854,9 @@ Test-Step 'allow LAN' 'state is Connected' { Wait-RosetunState 'Connected' }
 if ($UseHostNode) {
     # The node is the listener's host: its own address is left out of the network,
     # and every other device of the network stays open.
-    $lanDevice = Start-RosetunLanDevice
+    $lanDevice = $null
     try {
+        $lanDevice = Start-RosetunLanDevice
         Test-Step 'allow LAN' "another device on the VPN server's network answers" {
             Test-RosetunLanListener $lanDevice
         }
@@ -1877,8 +1878,15 @@ if ($UseHostNode) {
             (Get-RosetunHelperLogSince $lanLogMark) -match 'open without the address of a VPN server'
         }
     }
+    catch {
+        # Stopping here would lose the rest of the matrix and its results.
+        Test-Step 'allow LAN' 'the checks of a device on the network ran' -Note "$_" { $false }
+    }
     finally {
-        Stop-RosetunLanDevice $lanDevice
+        if ($lanDevice) {
+            try { Stop-RosetunLanDevice $lanDevice }
+            catch { Write-Warning "Could not remove the temporary LAN device: $_" }
+        }
     }
 }
 else {

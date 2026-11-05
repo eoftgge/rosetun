@@ -809,8 +809,9 @@ try {
                 $serverLog -match 'open without the address of a VPN server' -and
                     $serverLog -notmatch 'too many VPN servers'
             }
-            $lanDevice = Start-RosetunLanDevice
+            $lanDevice = $null
             try {
+                $lanDevice = Start-RosetunLanDevice
                 $route = Get-RosetunGuestRoute -Address $lanDevice.Address
                 Test-Step 'server in the network' 'another device goes through the physical adapter' `
                     -Note "$($route.InterfaceAlias) $($route.SourceAddress)" {
@@ -826,8 +827,15 @@ try {
                     $dns.Error -eq 'AccessDenied'
                 }
             }
+            catch {
+                # Stopping here would lose the results of the whole matrix.
+                Test-Step 'server in the network' 'the checks of a device on the network ran' -Note "$_" { $false }
+            }
             finally {
-                Stop-RosetunLanDevice $lanDevice
+                if ($lanDevice) {
+                    try { Stop-RosetunLanDevice $lanDevice }
+                    catch { Write-Warning "Could not remove the temporary LAN device: $_" }
+                }
             }
             $route = Get-RosetunGuestRoute -Address $hostAddress
             Test-Step 'server in the network' "the server's address is routed into the tunnel" `

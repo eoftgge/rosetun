@@ -1422,6 +1422,17 @@ function Start-RosetunLanDevice {
     New-NetIPAddress -InterfaceAlias 'vEthernet (Default Switch)' -IPAddress $address `
         -PrefixLength $subnet.PrefixLength -SkipAsSource $true -ErrorAction Stop | Out-Null
     try {
+        # A new address is Tentative during duplicate detection, and binding to
+        # it fails with WSAEADDRNOTAVAIL until it is Preferred.
+        $preferred = Wait-RosetunCondition {
+            @(Get-NetIPAddress -IPAddress $address -PolicyStore ActiveStore -ErrorAction SilentlyContinue |
+                Where-Object { "$($_.AddressState)" -eq 'Preferred' }).Count -gt 0
+        } -TimeoutSeconds 15
+        if (-not $preferred) {
+            $state = @(Get-NetIPAddress -IPAddress $address -PolicyStore ActiveStore -ErrorAction SilentlyContinue |
+                ForEach-Object { "$($_.AddressState)" }) -join ','
+            throw "The device's address $address did not become usable on the host, its state: $state."
+        }
         Start-RosetunLanListener -Address $address
     }
     catch {
@@ -1438,7 +1449,6 @@ function Stop-RosetunLanDevice {
 
 function Start-RosetunLanListener {
     param([string]$Address)
-    $address = $Address
     if (-not $address) {
         $address = Get-NetIPAddress -InterfaceAlias 'vEthernet (Default Switch)' -AddressFamily IPv4 -AddressState Preferred -ErrorAction Stop |
             Where-Object { $_.IPAddress -notlike '169.254.*' -and -not $_.SkipAsSource } |
