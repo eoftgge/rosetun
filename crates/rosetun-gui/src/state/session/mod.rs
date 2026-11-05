@@ -14,6 +14,7 @@ use crate::errors;
 use crate::rules::RuleFilter;
 use crate::worker::{HelperCommandError, WorkerEvent};
 
+#[derive(Clone, Copy)]
 pub(crate) enum SessionPart {
     Server,
     Rules,

@@ -479,6 +479,56 @@ fn local_network_hint_requires_a_known_active_request_with_a_different_value() {
 }
 
 #[test]
+fn each_connection_setting_waits_on_its_own() {
+    let mut state = connected_state_for_apply();
+    assert!(!state.private_networks_next_connect());
+    assert!(!state.auto_reconnect_next_connect());
+
+    state.config.settings.auto_reconnect = !state.config.settings.auto_reconnect;
+    assert!(state.auto_reconnect_next_connect());
+    assert!(!state.allow_lan_next_connect());
+    assert!(!state.private_networks_next_connect());
+    state.config.settings.auto_reconnect = !state.config.settings.auto_reconnect;
+
+    state.config.settings.private_networks = !state.config.settings.private_networks;
+    assert!(
+        !state.private_networks_next_connect(),
+        "does nothing without the local network"
+    );
+    state.config.settings.allow_lan = true;
+    assert!(state.private_networks_next_connect());
+    assert!(state.allow_lan_next_connect());
+
+    state.status.state = ConnectionState::Disconnected;
+    assert!(!state.private_networks_next_connect());
+    assert!(!state.allow_lan_next_connect());
+    assert!(!state.auto_reconnect_next_connect());
+}
+
+#[test]
+fn the_kill_switch_waits_for_a_connection_even_when_apply_is_open() {
+    let mut state = connected_state_for_apply();
+    assert!(!state.waits_for_next_connect(SessionPart::Protection));
+    state.config.settings.kill_switch = !state.config.settings.kill_switch;
+    state.refresh_cached_request();
+    assert!(state.waits_for_next_connect(SessionPart::Protection));
+    state.status.state = ConnectionState::Disconnected;
+    assert!(!state.waits_for_next_connect(SessionPart::Protection));
+}
+
+#[test]
+fn dns_waits_for_a_connection_only_while_apply_is_closed() {
+    let mut state = connected_state_for_apply();
+    state.config.settings.dns.server_name = "changed.example.com".to_owned();
+    state.refresh_cached_request();
+    assert!(state.can_apply());
+    assert!(!state.waits_for_next_connect(SessionPart::Dns));
+    state.status.state = ConnectionState::Reconnecting;
+    assert!(!state.can_apply());
+    assert!(state.waits_for_next_connect(SessionPart::Dns));
+}
+
+#[test]
 fn network_protection_hint_uses_running_request_not_edited_settings() {
     let mut state = connected_state_for_apply();
     state.status.state = ConnectionState::Reconnecting;

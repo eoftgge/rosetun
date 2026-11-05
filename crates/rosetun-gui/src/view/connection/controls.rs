@@ -44,6 +44,7 @@ fn protection_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>, 
         let unavailable = state.kill_switch_unavailable();
         let mut kill_switch = !unavailable && (state.config.settings.kill_switch || lockdown);
         let dim = theme::palette().text_dim;
+        let waits = state.waits_for_next_connect(SessionPart::Protection);
         if widgets::toggle_row_with_detail(
             ui,
             tr!("kill-switch"),
@@ -61,12 +62,7 @@ fn protection_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>, 
                     return;
                 }
                 if !lockdown {
-                    ui.add(
-                        egui::Label::new(
-                            RichText::new(tr!("kill-switch-detail")).small().color(dim),
-                        )
-                        .wrap(),
-                    );
+                    widgets::row_detail(ui, &tr!("kill-switch-detail"), waits);
                     return;
                 }
                 ui.horizontal_wrapped(|ui| {
@@ -79,6 +75,11 @@ fn protection_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>, 
                     ui.label(RichText::new(tr!("apply-separator")).small().color(dim));
                     if widgets::link(ui, &tr!("settings"), true).clicked() {
                         actions.push(Action::OpenSettingsSection(SettingsSection::Connection));
+                    }
+                    if waits {
+                        let muted = theme::palette().text_muted;
+                        ui.label(RichText::new(tr!("apply-separator")).small().color(dim));
+                        ui.label(RichText::new(tr!("next-connect")).small().color(muted));
                     }
                 });
             },
@@ -106,13 +107,6 @@ fn protection_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>, 
         .changed()
         {
             actions.push(Action::SetConnectOnStart(connect_on_start));
-        }
-        if tunnel_up(state) && state.pending_reconnect(SessionPart::Protection) {
-            ui.label(
-                RichText::new(tr!("next-connect"))
-                    .small()
-                    .color(theme::palette().accent_light),
-            );
         }
     });
 }

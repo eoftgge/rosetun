@@ -1,4 +1,4 @@
-use eframe::egui::{self, Align, Layout, RichText, Stroke};
+use eframe::egui::{self, Align, Layout, RichText, Stroke, text::LayoutJob};
 
 use super::tag::title_with_tag;
 use super::toggle::{TOGGLE_SIZE, paint_toggle};
@@ -22,6 +22,32 @@ pub(crate) fn settings_card(ui: &mut egui::Ui, add_rows: impl FnOnce(&mut Settin
         });
 }
 
+/// A row's caption. While the change waits for a new connection, the caption says so after its
+/// last word, in the same type and in a quiet colour: this is news, not a fault.
+pub(crate) fn row_detail(ui: &mut egui::Ui, detail: &str, pending: bool) {
+    let mut job = LayoutJob::default();
+    let valign = ui.text_valign();
+    let mut append = |text: RichText| {
+        text.small()
+            .append_to(&mut job, ui.style(), egui::FontSelection::Default, valign);
+    };
+    append(RichText::new(detail).color(theme::palette().text_dim));
+    if pending {
+        let note = format!(" {}", tr!("next-connect-note"));
+        append(RichText::new(note).color(theme::palette().text_muted));
+    }
+    ui.add(egui::Label::new(job).wrap());
+}
+
+/// What a row may ask for beyond its title, caption and control.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct RowOptions {
+    /// The change waits for a new connection; see `row_detail`.
+    pub(crate) pending: bool,
+    /// The setting belongs to the row above: its text steps in, its control keeps the column.
+    pub(crate) nested: bool,
+}
+
 pub(crate) struct SettingsCard<'a> {
     ui: &'a mut egui::Ui,
     rows: usize,
@@ -36,7 +62,18 @@ impl SettingsCard<'_> {
         detail: Option<&str>,
         control: impl FnOnce(&mut egui::Ui),
     ) {
-        self.row_inner(title.as_ref(), None, detail, control);
+        self.row_inner(title.as_ref(), None, detail, RowOptions::default(), control);
+    }
+
+    /// `row` with `RowOptions`.
+    pub(crate) fn row_with(
+        &mut self,
+        title: impl AsRef<str>,
+        detail: Option<&str>,
+        options: RowOptions,
+        control: impl FnOnce(&mut egui::Ui),
+    ) {
+        self.row_inner(title.as_ref(), None, detail, options, control);
     }
 
     fn row_inner(
@@ -44,9 +81,10 @@ impl SettingsCard<'_> {
         title: &str,
         tag: Option<&str>,
         detail: Option<&str>,
+        options: RowOptions,
         control: impl FnOnce(&mut egui::Ui),
     ) -> egui::Rect {
-        self.row_with_title(
+        self.row_parts(
             |ui| {
                 title_with_tag(
                     ui,
@@ -55,6 +93,7 @@ impl SettingsCard<'_> {
                 );
             },
             detail,
+            options,
             control,
         )
     }
@@ -63,6 +102,16 @@ impl SettingsCard<'_> {
         &mut self,
         title: impl FnOnce(&mut egui::Ui),
         detail: Option<&str>,
+        control: impl FnOnce(&mut egui::Ui),
+    ) -> egui::Rect {
+        self.row_parts(title, detail, RowOptions::default(), control)
+    }
+
+    fn row_parts(
+        &mut self,
+        title: impl FnOnce(&mut egui::Ui),
+        detail: Option<&str>,
+        options: RowOptions,
         control: impl FnOnce(&mut egui::Ui),
     ) -> egui::Rect {
         if self.rows > 0 {
@@ -78,15 +127,20 @@ impl SettingsCard<'_> {
         }
         self.rows += 1;
         let width = self.ui.available_width();
+        let left = if options.nested {
+            theme::space::L + theme::space::XL
+        } else {
+            theme::space::L
+        };
         egui::Frame::new()
             .inner_margin(egui::Margin {
-                left: theme::margin::side(theme::space::L),
+                left: theme::margin::side(left),
                 right: theme::margin::side(theme::space::L),
                 top: theme::margin::side(theme::space::L),
                 bottom: theme::margin::side(theme::space::L),
             })
             .show(self.ui, |ui| {
-                ui.set_min_width((width - 2.0 * theme::space::L).max(0.0));
+                ui.set_min_width((width - left - theme::space::L).max(0.0));
                 ui.set_min_height(32.0);
                 ui.spacing_mut().item_spacing.x = theme::space::L;
                 ui.allocate_ui_with_layout(
@@ -105,14 +159,7 @@ impl SettingsCard<'_> {
                                     ui.spacing_mut().item_spacing.y = theme::space::XXS;
                                     title(ui);
                                     if let Some(detail) = detail {
-                                        ui.add(
-                                            egui::Label::new(
-                                                RichText::new(detail)
-                                                    .small()
-                                                    .color(theme::palette().text_dim),
-                                            )
-                                            .wrap(),
-                                        );
+                                        row_detail(ui, detail, options.pending);
                                     }
                                 });
                             },
@@ -142,12 +189,25 @@ impl SettingsCard<'_> {
         on: &mut bool,
         enabled: bool,
     ) -> egui::Response {
+        self.toggle_with(title, tag, detail, RowOptions::default(), on, enabled)
+    }
+
+    /// `toggle` with `RowOptions`.
+    pub(crate) fn toggle_with(
+        &mut self,
+        title: impl AsRef<str>,
+        tag: Option<&str>,
+        detail: impl AsRef<str>,
+        options: RowOptions,
+        on: &mut bool,
+        enabled: bool,
+    ) -> egui::Response {
         let title = title.as_ref();
         let detail = detail.as_ref();
         let enabled = enabled && self.ui.is_enabled();
         let id = self.ui.next_auto_id();
         let mut switch = egui::Rect::NOTHING;
-        let row = self.row_inner(title, tag, Some(detail), |ui| {
+        let row = self.row_inner(title, tag, Some(detail), options, |ui| {
             switch = ui.allocate_exact_size(TOGGLE_SIZE, egui::Sense::hover()).0;
         });
         let mut response = self.ui.interact(
@@ -229,7 +289,13 @@ mod tests {
                                     .0;
                             },
                         ));
-                        rects.push(card.row_inner("Motion", None, Some("A detail"), |_| {}));
+                        rects.push(card.row_inner(
+                            "Motion",
+                            None,
+                            Some("A detail"),
+                            RowOptions::default(),
+                            |_| {},
+                        ));
                         rects.push(card.row_with_title(
                             |ui| {
                                 ui.label("Reconnect automatically");
@@ -252,6 +318,50 @@ mod tests {
         assert!(title_width >= 200.0, "title width: {title_width}");
         assert!(control_rect.left() > rects[0].center().x);
         assert!((tall_control.center().y - rects[2].center().y).abs() <= 2.0);
+    }
+
+    /// The text of a caption and the colour and size of each of its parts.
+    fn caption_parts(pending: bool) -> (String, Vec<(egui::Color32, f32)>) {
+        let ctx = egui::Context::default();
+        theme::apply(&ctx);
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| row_detail(ui, "Caption.", pending));
+        });
+        output.textures_delta.clear();
+        let galley = output
+            .shapes
+            .iter()
+            .find_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text) => Some(text.galley.clone()),
+                _ => None,
+            })
+            .expect("the caption is painted");
+        let parts = galley
+            .job
+            .sections
+            .iter()
+            .map(|section| (section.format.color, section.format.font_id.size))
+            .collect();
+        (galley.text().to_owned(), parts)
+    }
+
+    #[test]
+    fn the_note_stays_quiet_and_in_the_size_of_the_caption() {
+        let (text, parts) = caption_parts(false);
+        assert_eq!(text, "Caption.");
+        assert_eq!(parts, [(theme::palette().text_dim, theme::font::CAPTION)]);
+
+        let (text, parts) = caption_parts(true);
+        assert_eq!(text, format!("Caption. {}", tr!("next-connect-note")));
+        assert_eq!(
+            parts,
+            [
+                (theme::palette().text_dim, theme::font::CAPTION),
+                (theme::palette().text_muted, theme::font::CAPTION),
+            ]
+        );
+        assert_ne!(parts[1].0, theme::palette().accent_light);
+        assert_ne!(parts[1].0, theme::ERROR);
     }
 
     #[test]
@@ -281,6 +391,7 @@ mod tests {
                                         "Rosetun service: not running",
                                         None,
                                         Some("The service runs the tunnel with system rights."),
+                                        RowOptions::default(),
                                         |_| {},
                                     ));
                                 });
@@ -291,6 +402,7 @@ mod tests {
                                         "Log",
                                         None,
                                         Some("Useful when something breaks and you contact support."),
+                                        RowOptions::default(),
                                         |ui| {
                                             ui.allocate_exact_size(
                                                 egui::vec2(130.0, 32.0),
@@ -302,6 +414,7 @@ mod tests {
                                         "Verbose log",
                                         None,
                                         Some("Turns itself off after a day. While on, it records site addresses and applies on next connect."),
+                                        RowOptions::default(),
                                         |ui| {
                                             ui.allocate_exact_size(TOGGLE_SIZE, egui::Sense::hover());
                                         },

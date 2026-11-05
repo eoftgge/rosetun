@@ -226,6 +226,13 @@ fn windows(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     });
 }
 
+fn pending(pending: bool) -> widgets::RowOptions {
+    widgets::RowOptions {
+        pending,
+        ..widgets::RowOptions::default()
+    }
+}
+
 fn connection(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     widgets::settings_card(ui, |card| {
         let editable = state.can_edit_settings();
@@ -247,7 +254,7 @@ fn connection(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
         let mut kill_switch =
             !kill_switch_unavailable && (state.config.settings.kill_switch || lockdown);
         if card
-            .toggle(
+            .toggle_with(
                 tr!("kill-switch"),
                 None,
                 if kill_switch_unavailable {
@@ -257,6 +264,7 @@ fn connection(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                 } else {
                     tr!("kill-switch-detail")
                 },
+                pending(state.waits_for_next_connect(SessionPart::Protection)),
                 &mut kill_switch,
                 state.config_ready
                     && !kill_switch_unavailable
@@ -287,10 +295,11 @@ fn connection(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
         }
         let mut allow_lan = state.config.settings.allow_lan;
         if card
-            .toggle(
+            .toggle_with(
                 tr!("allow-lan"),
                 None,
                 tr!("allow-lan-detail"),
+                pending(state.allow_lan_next_connect()),
                 &mut allow_lan,
                 editable,
             )
@@ -299,30 +308,28 @@ fn connection(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
         {
             actions.push(Action::SetAllowLan(allow_lan));
         }
-        if state.config.settings.allow_lan {
-            let mut private_networks = state.config.settings.private_networks;
-            if card
-                .toggle(
-                    tr!("private-networks"),
-                    None,
-                    tr!("private-networks-detail"),
-                    &mut private_networks,
-                    editable,
-                )
-                .on_hover_text(tr!("private-networks-hint"))
-                .changed()
-            {
-                actions.push(Action::SetPrivateNetworks(private_networks));
-            }
-        }
-        if state.allow_lan_next_connect() {
-            card.body(|ui| {
-                ui.label(
-                    RichText::new(tr!("next-connect"))
-                        .small()
-                        .color(theme::palette().accent_light),
-                );
-            });
+        let lan_on = state.config.settings.allow_lan;
+        let mut private_networks = state.config.settings.private_networks;
+        if card
+            .toggle_with(
+                tr!("private-networks"),
+                None,
+                tr!("private-networks-detail"),
+                widgets::RowOptions {
+                    pending: state.private_networks_next_connect(),
+                    nested: true,
+                },
+                &mut private_networks,
+                editable && lan_on,
+            )
+            .on_hover_text(if lan_on {
+                tr!("private-networks-hint")
+            } else {
+                tr!("private-networks-needs-lan")
+            })
+            .changed()
+        {
+            actions.push(Action::SetPrivateNetworks(private_networks));
         }
         if state.outside_scope && state.lockdown_active() {
             card.body(|ui| {
@@ -344,10 +351,11 @@ fn connection(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
         }
         let mut auto_reconnect = state.config.settings.auto_reconnect;
         if card
-            .toggle(
+            .toggle_with(
                 tr!("auto-reconnect"),
                 None,
                 tr!("auto-reconnect-detail"),
+                pending(state.auto_reconnect_next_connect()),
                 &mut auto_reconnect,
                 editable,
             )
@@ -375,9 +383,10 @@ fn connection(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
 
 fn dns(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
     widgets::settings_card(ui, |card| {
-        card.row(
+        card.row_with(
             tr!("dns-through-tunnel"),
             Some(&tr!("dns-explanation")),
+            pending(state.waits_for_next_connect(SessionPart::Dns)),
             |_| {},
         );
         card.body(|ui| {
@@ -430,47 +439,28 @@ fn dns(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
                     .small()
                     .color(theme::palette().text_dim),
             );
-            pending_note(ui, state, SessionPart::Dns, actions);
+            apply_note(ui, state, SessionPart::Dns, actions);
         });
     });
 }
 
-/// "Not applied · Apply" under a setting that a running session has not picked up yet.
-fn pending_note(ui: &mut egui::Ui, state: &State, part: SessionPart, actions: &mut Vec<Action>) {
-    if !state
-        .visible_status()
-        .is_some_and(|status| status.state.is_active() || status.state.is_transitional())
-        || !state.pending_reconnect(part)
-    {
+/// "Not applied · Apply" under a setting that a running session can pick up right away.
+fn apply_note(ui: &mut egui::Ui, state: &State, part: SessionPart, actions: &mut Vec<Action>) {
+    if !state.session_up() || !state.pending_reconnect(part) || !state.can_apply() {
         return;
     }
-    if state.can_apply() {
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 0.0;
-            ui.label(
-                RichText::new(tr!("apply-on-leave"))
-                    .small()
-                    .color(theme::palette().accent_light),
-            );
-            ui.label(
-                RichText::new(tr!("apply-separator"))
-                    .small()
-                    .color(theme::palette().accent_light),
-            );
-            if widgets::link(ui, &tr!("apply-now"), true)
-                .on_hover_text(tr!("apply-hint"))
-                .clicked()
-            {
-                actions.push(Action::Apply);
-            }
-        });
-    } else {
-        ui.label(
-            RichText::new(tr!("next-connect"))
-                .small()
-                .color(theme::palette().accent_light),
-        );
-    }
+    let muted = theme::palette().text_muted;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 0.0;
+        ui.label(RichText::new(tr!("apply-on-leave")).small().color(muted));
+        ui.label(RichText::new(tr!("apply-separator")).small().color(muted));
+        if widgets::link(ui, &tr!("apply-now"), true)
+            .on_hover_text(tr!("apply-hint"))
+            .clicked()
+        {
+            actions.push(Action::Apply);
+        }
+    });
 }
 
 fn dns_choice(
@@ -603,7 +593,14 @@ fn fragment(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
             tr!("fragment-detail")
         };
         if card
-            .toggle(tr!("fragment-title"), None, detail, &mut on, editable)
+            .toggle_with(
+                tr!("fragment-title"),
+                None,
+                detail,
+                pending(state.waits_for_next_connect(SessionPart::Fragment)),
+                &mut on,
+                editable,
+            )
             .changed()
         {
             actions.push(Action::SetTlsFragment(on));
@@ -611,7 +608,7 @@ fn fragment(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
         if enabled {
             card.body(|ui| {
                 fragment_form(ui, state, editable, actions);
-                pending_note(ui, state, SessionPart::Fragment, actions);
+                apply_note(ui, state, SessionPart::Fragment, actions);
             });
         }
     });
@@ -700,7 +697,12 @@ fn fragment_form(ui: &mut egui::Ui, state: &mut State, editable: bool, actions: 
 
 fn xray(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     widgets::settings_card(ui, |card| {
-        card.row(tr!("xray-title"), Some(&tr!("xray-detail")), |_| {});
+        card.row_with(
+            tr!("xray-title"),
+            Some(&tr!("xray-detail")),
+            pending(state.xray_next_connect()),
+            |_| {},
+        );
         card.body(|ui| {
             let selected = state.config.settings.xray;
             for (index, setting, title, detail) in [
@@ -820,9 +822,6 @@ fn xray(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                     )
                     .wrap(),
                 );
-                if status.xray_use.is_some_and(|running| running != selected) {
-                    ui.colored_label(theme::palette().accent_light, tr!("xray-next-connect"));
-                }
             }
         });
     });
@@ -1793,5 +1792,315 @@ mod fragment_tests {
                     .any(|action| matches!(action, Action::SaveTlsFragment))
             );
         });
+    }
+}
+
+#[cfg(test)]
+mod pending_notice_tests {
+    use rosetun_config::{
+        AppConfig, Node, NodeId, Outbound, Selection, Status, Subscription, SubscriptionId,
+        VlessParams,
+    };
+    use rosetun_ipc::ConnectRequest;
+
+    use super::*;
+    use crate::i18n::{self, Language};
+    use crate::test_ui::{TestScreen, Texts};
+    use crate::worker::WorkerEvent;
+
+    const WINDOWS: [(egui::Vec2, f32); 2] = [
+        (egui::vec2(960.0, 640.0), 200.0),
+        (egui::vec2(1200.0, 780.0), 240.0),
+    ];
+    const LANGUAGES: [Language; 2] = [Language::English, Language::Russian];
+
+    fn connected(status: ConnectionState) -> State {
+        let mut config = AppConfig::default();
+        config.subscriptions.push(Subscription {
+            id: SubscriptionId::new("1"),
+            name: "Provider".into(),
+            url: "https://example.com/secret-path".into(),
+            nodes: vec![Node {
+                id: NodeId::new("node"),
+                name: "Test".into(),
+                server: "127.0.0.1".into(),
+                port: 443,
+                outbound: Outbound::Vless(VlessParams {
+                    uuid: "00000000-0000-0000-0000-000000000000".into(),
+                    flow: None,
+                }),
+                stream: Default::default(),
+                raw: None,
+            }],
+            auto_update: false,
+            updated_at_unix: None,
+            user_agent: None,
+            send_hwid: true,
+            hwid_scope: rosetun_config::HwidScope::Machine,
+            info: None,
+            update_interval_hours: None,
+            support_url: None,
+            web_page_url: None,
+            announce: None,
+            notices: vec![],
+        });
+        config.active = Some(Selection {
+            subscription: SubscriptionId::new("1"),
+            node: NodeId::new("node"),
+        });
+        config.settings.allow_lan = true;
+        let request = ConnectRequest::from_config(&config).unwrap();
+        let mut state = State::default();
+        state.config = config;
+        state.config_ready = true;
+        state.reduce(WorkerEvent::HelperAvailable {
+            version: "0.9.0".into(),
+            protection: crate::worker::FULL_PROTECTION,
+        });
+        state.reduce(WorkerEvent::Connect(Ok(request)));
+        state.reduce(WorkerEvent::Status(Status {
+            state: status,
+            ..Status::default()
+        }));
+        state
+    }
+
+    /// Draws the section where the settings screen draws it: beside the navigation, with the
+    /// screen's own margins.
+    fn page(ui: &mut egui::Ui, nav: f32, content: impl FnOnce(&mut egui::Ui)) {
+        egui::Panel::left("nav").exact_size(nav).show(ui, |_| {});
+        egui::CentralPanel::default()
+            .frame(egui::Frame::new().inner_margin(theme::margin::same(theme::space::XXL)))
+            .show(ui, content);
+    }
+
+    fn drawn(state: &State, size: egui::Vec2, nav: f32) -> Texts {
+        let mut screen = TestScreen::new(size);
+        screen.settle(|ui| page(ui, nav, |ui| connection(ui, state, &mut Vec::new())))
+    }
+
+    fn with_note(shown: &Texts) -> Vec<String> {
+        let note = tr!("next-connect-note");
+        shown
+            .iter()
+            .filter(|(text, _)| text.contains(&note))
+            .map(|(text, _)| text.clone())
+            .collect()
+    }
+
+    fn top_of(shown: &Texts, title: &str) -> f32 {
+        shown
+            .iter()
+            .find(|(text, _)| text == title)
+            .unwrap_or_else(|| panic!("no {title:?} on the screen"))
+            .1
+            .top()
+    }
+
+    /// How high a row with a caption of two lines is at this window size.
+    fn two_line_row(size: egui::Vec2, nav: f32) -> f32 {
+        let mut height = 0.0;
+        let mut screen = TestScreen::new(size);
+        screen.settle(|ui| {
+            page(ui, nav, |ui| {
+                widgets::settings_card(ui, |card| {
+                    let mut on = false;
+                    height = card
+                        .toggle("Title", None, "First line\nSecond line", &mut on, true)
+                        .rect
+                        .height();
+                });
+            });
+        });
+        height
+    }
+
+    #[test]
+    fn a_row_with_the_note_is_no_higher_than_one_with_a_two_line_caption() {
+        for language in LANGUAGES {
+            i18n::in_language(language, || {
+                for (size, nav) in WINDOWS {
+                    let mut state = connected(ConnectionState::Connected);
+                    state.config.settings.allow_lan = true;
+                    state.config.settings.private_networks = true;
+                    state.config.settings.auto_reconnect = false;
+                    let limit = two_line_row(size, nav);
+                    let shown = drawn(&state, size, nav);
+                    let row = |from: String, to: String| {
+                        top_of(&shown, &to) - top_of(&shown, &from) - 1.0
+                    };
+                    let private = row(tr!("private-networks"), tr!("auto-reconnect"));
+                    let reconnect = row(tr!("auto-reconnect"), tr!("auto-update-subscriptions"));
+                    assert!(private <= limit, "{language:?} {size:?}: {private} > {limit}");
+                    assert!(
+                        reconnect <= limit,
+                        "{language:?} {size:?}: {reconnect} > {limit}"
+                    );
+
+                    state.config.settings.allow_lan = false;
+                    let shown = drawn(&state, size, nav);
+                    let lan = top_of(&shown, &tr!("private-networks"))
+                        - top_of(&shown, &tr!("allow-lan"))
+                        - 1.0;
+                    assert!(lan <= limit, "{language:?} {size:?}: {lan} > {limit}");
+                }
+            });
+        }
+    }
+
+    #[test]
+    fn the_note_follows_the_caption_of_the_changed_setting_only() {
+        for language in LANGUAGES {
+            i18n::in_language(language, || {
+                let (size, nav) = WINDOWS[0];
+                let note = tr!("next-connect-note");
+                let mut state = connected(ConnectionState::Connected);
+                assert_eq!(with_note(&drawn(&state, size, nav)), Vec::<String>::new());
+                assert!(
+                    drawn(&state, size, nav)
+                        .iter()
+                        .any(|(text, _)| *text == tr!("auto-reconnect-detail")),
+                    "the caption of the reconnect setting stands alone"
+                );
+
+                state.config.settings.private_networks = true;
+                assert_eq!(
+                    with_note(&drawn(&state, size, nav)),
+                    [format!("{} {note}", tr!("private-networks-detail"))]
+                );
+
+                state.config.settings.private_networks = false;
+                state.config.settings.auto_reconnect = false;
+                assert_eq!(
+                    with_note(&drawn(&state, size, nav)),
+                    [format!("{} {note}", tr!("auto-reconnect-detail"))]
+                );
+
+                state.config.settings.auto_reconnect = true;
+                state.config.settings.allow_lan = false;
+                assert_eq!(
+                    with_note(&drawn(&state, size, nav)),
+                    [format!("{} {note}", tr!("allow-lan-detail"))]
+                );
+            });
+        }
+    }
+
+    #[test]
+    fn nothing_waits_without_a_connection() {
+        let (size, nav) = WINDOWS[0];
+        let mut state = connected(ConnectionState::Disconnected);
+        state.config.settings.private_networks = true;
+        state.config.settings.auto_reconnect = false;
+        assert_eq!(with_note(&drawn(&state, size, nav)), Vec::<String>::new());
+    }
+
+    #[test]
+    fn the_xray_note_shows_only_while_the_session_runs_another_mode() {
+        let mut state = connected(ConnectionState::Connected);
+        state.status.xray_use = Some(state.config.settings.xray);
+        let shown = |state: &State| {
+            TestScreen::new(egui::vec2(960.0, 900.0))
+                .settle(|ui| page(ui, 200.0, |ui| xray(ui, state, &mut Vec::new())))
+        };
+        assert_eq!(with_note(&shown(&state)), Vec::<String>::new());
+        state.config.settings.xray = XrayUse::Off;
+        assert_eq!(
+            with_note(&shown(&state)),
+            [format!(
+                "{} {}",
+                tr!("xray-detail"),
+                tr!("next-connect-note")
+            )]
+        );
+    }
+
+    #[test]
+    fn private_networks_step_in_under_the_local_network() {
+        let (size, nav) = WINDOWS[0];
+        let state = connected(ConnectionState::Disconnected);
+        let shown = drawn(&state, size, nav);
+        let left = |title: String| {
+            shown
+                .iter()
+                .find(|(text, _)| *text == title)
+                .expect("the title is drawn")
+                .1
+                .left()
+        };
+        assert_eq!(
+            left(tr!("private-networks")) - left(tr!("allow-lan")),
+            theme::space::XL
+        );
+    }
+
+    /// Presses the row beside its title: a click on the title's text goes to the selectable label.
+    fn click_private_networks(state: &State) -> Vec<Action> {
+        let (size, nav) = WINDOWS[0];
+        let mut actions = Vec::new();
+        let mut screen = TestScreen::new(size);
+        let mut show = |ui: &mut egui::Ui| {
+            page(ui, nav, |ui| connection(ui, state, &mut actions));
+        };
+        let title = tr!("private-networks");
+        let rect = screen
+            .settle(&mut show)
+            .into_iter()
+            .find(|(text, _)| *text == title)
+            .expect("the row stays on the screen")
+            .1;
+        let pos = egui::pos2(rect.right() + 100.0, rect.center().y);
+        let button = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        screen.run(vec![egui::Event::PointerMoved(pos), button(true)], &mut show);
+        screen.run(vec![button(false)], &mut show);
+        actions
+    }
+
+    #[test]
+    fn private_networks_are_unavailable_without_the_local_network_and_say_why() {
+        for language in LANGUAGES {
+            i18n::in_language(language, || {
+                let (size, nav) = WINDOWS[0];
+                let mut state = connected(ConnectionState::Disconnected);
+                assert!(matches!(
+                    click_private_networks(&state).as_slice(),
+                    [Action::SetPrivateNetworks(true)]
+                ));
+
+                state.config.settings.allow_lan = false;
+                assert!(click_private_networks(&state).is_empty());
+
+                let mut screen = TestScreen::new(size);
+                let mut show = |ui: &mut egui::Ui| {
+                    page(ui, nav, |ui| connection(ui, &state, &mut Vec::new()));
+                };
+                let title = tr!("private-networks");
+                let rect = screen
+                    .settle(&mut show)
+                    .into_iter()
+                    .find(|(text, _)| *text == title)
+                    .expect("the row stays on the screen")
+                    .1;
+                screen.run(
+                    vec![egui::Event::PointerMoved(egui::pos2(
+                        rect.right() + 100.0,
+                        rect.center().y,
+                    ))],
+                    &mut show,
+                );
+                let shown = screen.settle(&mut show);
+                assert!(
+                    shown
+                        .iter()
+                        .any(|(text, _)| *text == tr!("private-networks-needs-lan")),
+                    "{language:?}: {shown:?}"
+                );
+            });
+        }
     }
 }

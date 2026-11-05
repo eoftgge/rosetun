@@ -2,10 +2,12 @@ use std::mem::{Discriminant, discriminant};
 use std::path::PathBuf;
 use std::time::Duration;
 
-use rosetun_config::{ConnectionState, DnsSettings, Node, Outbound, TlsFragment, TlsMode, XrayUse};
+use rosetun_config::{
+    ConnectionState, DnsSettings, Node, Outbound, Settings, TlsFragment, TlsMode, XrayUse,
+};
 use rosetun_core::{DnsPreset, SettingChange};
 
-use super::{Action, Job, Screen, State, now_unix};
+use super::{Action, Job, Screen, SessionPart, State, now_unix};
 use crate::errors;
 use crate::worker::WorkerEvent;
 
@@ -162,19 +164,52 @@ impl State {
             })
     }
 
-    pub(crate) fn allow_lan_next_connect(&self) -> bool {
+    /// A tunnel is up or on its way, so a saved change can differ from what it runs with.
+    pub(crate) fn session_up(&self) -> bool {
         self.visible_status()
             .is_some_and(|status| status.state.is_active() || status.state.is_transitional())
+    }
+
+    fn differs_from_session(&self, differs: impl FnOnce(&Settings, &Settings) -> bool) -> bool {
+        self.session_up()
             && self
                 .session
                 .session_request
                 .as_ref()
-                .is_some_and(|request| {
-                    request.settings.allow_lan != self.config.settings.allow_lan
-                        || (self.config.settings.allow_lan
-                            && request.settings.private_networks
-                                != self.config.settings.private_networks)
-                })
+                .is_some_and(|request| differs(&request.settings, &self.config.settings))
+    }
+
+    pub(crate) fn allow_lan_next_connect(&self) -> bool {
+        self.differs_from_session(|running, saved| running.allow_lan != saved.allow_lan)
+    }
+
+    /// Without the local network this setting does nothing, so nothing waits for it.
+    pub(crate) fn private_networks_next_connect(&self) -> bool {
+        self.differs_from_session(|running, saved| {
+            saved.allow_lan && running.private_networks != saved.private_networks
+        })
+    }
+
+    pub(crate) fn auto_reconnect_next_connect(&self) -> bool {
+        self.differs_from_session(|running, saved| running.auto_reconnect != saved.auto_reconnect)
+    }
+
+    pub(crate) fn xray_next_connect(&self) -> bool {
+        self.visible_status().is_some_and(|status| {
+            matches!(
+                status.state,
+                ConnectionState::Connected | ConnectionState::Reconnecting
+            ) && status
+                .xray_use
+                .is_some_and(|running| running != self.config.settings.xray)
+        })
+    }
+
+    /// `part` differs from the running session and only a new connection picks it up: Apply
+    /// never changes the protection, and takes the rest whenever it is available.
+    pub(crate) fn waits_for_next_connect(&self, part: SessionPart) -> bool {
+        let applies_later = matches!(part, SessionPart::Protection) || !self.can_apply();
+        self.session_up() && self.pending_reconnect(part) && applies_later
     }
 
     pub(crate) fn running_session_protected(&self) -> bool {
