@@ -31,6 +31,7 @@ $ErrorActionPreference = 'Stop'
 
 # How many moments of each kind the summary lists.
 $script:MomentsListed = 20
+$script:ClockError = [timespan]::Zero
 
 function Get-RosetunPercentile {
     param([double[]]$Sorted, [double]$Fraction)
@@ -77,9 +78,34 @@ function Get-RosetunIntervals {
     return @($intervals)
 }
 
-# When a present happened, to compare with the GUI log. PresentMon's date and
-# time are local and the log's are UTC, so a date comes out in UTC. A CSV written
-# without --date_time has only the time since the measurement started.
+function Get-RosetunTimeColumn {
+    param([object]$Row)
+    return Get-RosetunColumn $Row @(
+        'TimeInDateTime', 'CPUStartDateTime', 'TimeInMs', 'CPUStartTimeInMs', 'TimeInSeconds', 'CPUStartTimeInSeconds'
+    )
+}
+
+function ConvertFrom-RosetunDate {
+    param([string]$Text, [ref]$Parsed)
+    $styles = [System.Globalization.DateTimeStyles]::AssumeUniversal -bor [System.Globalization.DateTimeStyles]::AdjustToUniversal
+    return [datetime]::TryParse($Text, [cultureinfo]::InvariantCulture, $styles, $Parsed)
+}
+
+# How far PresentMon's --date_time is from UTC. It was seen a whole time zone ahead
+# of the local clock, so neither is assumed: the CSV was last written just after its
+# last row, and time zones differ from UTC in steps of 15 minutes.
+function Get-RosetunClockError {
+    param([object]$LastRow, [string]$Column, [string]$Path)
+    $parsed = [datetime]::MinValue
+    if ($null -eq $Column -or $Column -notlike '*DateTime' -or -not (ConvertFrom-RosetunDate $LastRow.$Column ([ref]$parsed))) {
+        return [timespan]::Zero
+    }
+    $written = (Get-Item -LiteralPath $Path).LastWriteTimeUtc
+    return [timespan]::FromMinutes([math]::Round(($parsed - $written).TotalMinutes / 15.0) * 15.0)
+}
+
+# When a present happened, in UTC as in the GUI log. A CSV written without
+# --date_time has only the time since the measurement started.
 function Get-RosetunPresentTime {
     param([object]$Row, [string]$Column)
     if ($null -eq $Column) {
@@ -88,9 +114,8 @@ function Get-RosetunPresentTime {
     $text = $Row.$Column
     if ($Column -like '*DateTime') {
         $parsed = [datetime]::MinValue
-        $styles = [System.Globalization.DateTimeStyles]::AssumeLocal -bor [System.Globalization.DateTimeStyles]::AdjustToUniversal
-        if ([datetime]::TryParse($text, [cultureinfo]::InvariantCulture, $styles, [ref]$parsed)) {
-            return $parsed.ToString('yyyy-MM-ddTHH:mm:ss.fffZ', [cultureinfo]::InvariantCulture)
+        if (ConvertFrom-RosetunDate $text ([ref]$parsed)) {
+            return ($parsed - $script:ClockError).ToString('yyyy-MM-ddTHH:mm:ss.fffZ', [cultureinfo]::InvariantCulture)
         }
         return $text
     }
@@ -118,9 +143,7 @@ function Write-RosetunMoments {
 # window presents nothing, so compare the moments with the GUI log.
 function Write-RosetunGaps {
     param([object[]]$Rows, [double]$RefreshHz)
-    $timeColumn = Get-RosetunColumn $Rows[0] @(
-        'TimeInDateTime', 'CPUStartDateTime', 'TimeInMs', 'CPUStartTimeInMs', 'TimeInSeconds', 'CPUStartTimeInSeconds'
-    )
+    $timeColumn = Get-RosetunTimeColumn $Rows[0]
     if ($null -ne (Get-RosetunColumn $Rows[0] @('MsUntilDisplayed'))) {
         $dropped = @($Rows | Where-Object { $_.MsUntilDisplayed -eq 'NA' } | ForEach-Object {
             Get-RosetunPresentTime $_ $timeColumn
@@ -151,6 +174,8 @@ function Write-RosetunSummary {
         Write-Host 'Presents: 0 (the window presented nothing while measured)'
         return
     }
+    $timeColumn = Get-RosetunTimeColumn $rows[0]
+    $script:ClockError = Get-RosetunClockError $rows[-1] $timeColumn $Path
 
     $intervals = @(Get-RosetunIntervals $rows | Where-Object { $_ -ge 0 })
     $perSecond = $rows.Count / $WindowSeconds
@@ -161,18 +186,18 @@ function Write-RosetunSummary {
         Write-Host ('  {0,-45} {1,7} {2,6:N1} %' -f $mode.Name, $mode.Count, (100.0 * $mode.Count / $rows.Count))
     }
 
-    $switches = 0
+    $switches = [System.Collections.Generic.List[string]]::new()
     $chain = Get-RosetunColumn $rows[0] @('SwapChainAddress')
     $groups = if ($null -ne $chain) { @($rows | Group-Object -Property $chain) } else { @(@{ Group = $rows }) }
     foreach ($group in $groups) {
-        $modes = @($group.Group | ForEach-Object { $_.PresentMode })
-        for ($index = 1; $index -lt $modes.Count; $index++) {
-            if ($modes[$index] -ne $modes[$index - 1]) {
-                $switches++
+        $chainRows = @($group.Group)
+        for ($index = 1; $index -lt $chainRows.Count; $index++) {
+            if ($chainRows[$index].PresentMode -ne $chainRows[$index - 1].PresentMode) {
+                $switches.Add(('{0}  {1} -> {2}' -f (Get-RosetunPresentTime $chainRows[$index] $timeColumn), $chainRows[$index - 1].PresentMode, $chainRows[$index].PresentMode))
             }
         }
     }
-    Write-Host "PresentMode switches: $switches"
+    Write-RosetunMoments 'PresentMode switches' @($switches)
 
     $sorted = [double[]]@($intervals | Sort-Object)
     Write-Host ('Between presents: median {0:N2} ms, 99th percentile {1:N2} ms ({2} intervals)' -f `

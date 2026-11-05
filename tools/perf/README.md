@@ -27,14 +27,14 @@ for 15 s: fast, with abrupt stops. The CSV goes to `target/perf/`
 (`presents-<label>-<time>.csv`) and the summary prints:
 
 - presents in total and per second;
-- each present mode with its share, and the number of switches between modes;
+- each present mode with its share, and the switches between modes with their moments;
 - the median and the 99th percentile of the time between presents;
 - presents that never reached the screen (`MsUntilDisplayed = NA`);
 - gaps between presents longer than two refreshes of the monitor
   (`-MonitorHz`, default 100; 300 for a 300 Hz monitor).
 
-The last two list their first 20 moments, in UTC like the GUI log (a CSV
-written before this option has only the time since the start of the run).
+Each list shows its first 20 moments, in UTC like the GUI log (a CSV written
+before this option has only the time since the start of the run).
 Compare them with the `window frame summary` lines in the GUI log, written at
 most every 10 s while something happens: swap chain configures, size, DPI and
 monitor changes, surface errors by kind, skipped frames, and how long a size
