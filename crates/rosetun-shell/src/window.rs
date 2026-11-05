@@ -816,7 +816,10 @@ mod tests {
             SelectObject(dc, previous);
             DeleteObject(bitmap);
             DeleteDC(dc);
-            assert_ne!(erased, 0, "the window left the erase to the default handler");
+            assert_ne!(
+                erased, 0,
+                "the window left the erase to the default handler"
+            );
             pixel
         }
     }
