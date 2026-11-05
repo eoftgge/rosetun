@@ -1852,13 +1852,33 @@ $lanLogMark = Get-RosetunHelperLogLength
 Connect-RosetunTunnel -RequestName 'request-lan-allowed.json' | Out-Null
 Test-Step 'allow LAN' 'state is Connected' { Wait-RosetunState 'Connected' }
 if ($UseHostNode) {
-    # The node is the listener's host, and a network that holds a VPN server stays closed.
-    # Invoke-LanMatrix.ps1 keeps its node elsewhere and checks that the network opens.
-    Test-Step 'allow LAN' "the VPN server's network stays closed" {
-        -not (Test-RosetunLanListener $lanListener)
+    # The node is the listener's host: its own address is left out of the network,
+    # and every other device of the network stays open.
+    $lanDevice = Start-RosetunLanDevice
+    try {
+        Test-Step 'allow LAN' "another device on the VPN server's network answers" {
+            Test-RosetunLanListener $lanDevice
+        }
+        Test-Step 'allow LAN' "past the tunnel, the VPN server's own address stays closed" {
+            -not (Test-RosetunLanListener $lanListener)
+        }
+        $serverRoute = Get-RosetunGuestRoute -Address $lanListener.Address
+        Test-Step 'allow LAN' "the VPN server's address is routed into the tunnel" `
+            -Note "$($serverRoute.InterfaceAlias) $($serverRoute.SourceAddress)" {
+            $serverRoute.InterfaceAlias -eq 'rosetun0' -and $serverRoute.SourceAddress -eq '172.19.0.1'
+        }
+        $throughTunnel = Test-RosetunGuestConnectThroughTunnel -Lan $lanListener -TunAddress '172.19.0.1'
+        Test-Step 'allow LAN' "the listener on the VPN server's host answers through the tunnel" `
+            -Note $throughTunnel.Note { $throughTunnel.Ok }
+        $egress = Wait-RosetunTunnelEgress -TimeoutSeconds 15
+        Test-Step 'allow LAN' 'the engine still connects to the VPN server' `
+            -Note (Format-Egress $egress) { $egress.Ok }
+        Test-Step 'allow LAN' 'the service says the address is left out' {
+            (Get-RosetunHelperLogSince $lanLogMark) -match 'open without the address of a VPN server'
+        }
     }
-    Test-Step 'allow LAN' 'the service says why' {
-        (Get-RosetunHelperLogSince $lanLogMark) -match 'holds a VPN server'
+    finally {
+        Stop-RosetunLanDevice $lanDevice
     }
 }
 else {

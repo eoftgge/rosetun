@@ -18,9 +18,10 @@ param(
     [string]$ExtraAddress = '198.51.100.10',
     [string]$ExtraPeer = '198.51.100.20',
     # Where the guest reaches the test node: a second host address on the
-    # Default Switch, outside the guest's network. A VPN server inside the
-    # network closes the whole network, so the node cannot sit on the host's
-    # own Default Switch address, which is the device under test.
+    # Default Switch, outside the guest's network. A VPN server's own address
+    # is left out of the network, so the node cannot sit on the host's own
+    # Default Switch address, which is the device under test, except in the
+    # scenario about exactly that.
     [string]$NodeAddress = '203.0.113.1',
     # The port of the limited-broadcast check; nothing else listens on it.
     [int]$BroadcastPort = 47901,
@@ -73,16 +74,18 @@ function Write-RosetunLanNote {
 
 function New-RosetunLanRequests {
     # Request variants next to request.json in the guest: kill switch on, and
-    # "Local network" off, on, on with private networks, and on with a rule
-    # that sends the host through the VPN.
+    # "Local network" off, on, on with private networks, on with a rule that
+    # sends the host through the VPN, and on with the node on the host's own
+    # address, inside the guest's network.
     param([Parameter(Mandatory)][string]$HostAddress)
     Invoke-RosetunGuest -ScriptBlock {
         param($dir, $hostAddress)
         $variants = @{
-            'lan-off.json'     = @{ allow = $false; private = $false; rule = $false }
-            'lan-on.json'      = @{ allow = $true; private = $false; rule = $false }
-            'lan-private.json' = @{ allow = $true; private = $true; rule = $false }
-            'lan-rule.json'    = @{ allow = $true; private = $false; rule = $true }
+            'lan-off.json'     = @{ allow = $false; private = $false; rule = $false; server = $false }
+            'lan-on.json'      = @{ allow = $true; private = $false; rule = $false; server = $false }
+            'lan-private.json' = @{ allow = $true; private = $true; rule = $false; server = $false }
+            'lan-rule.json'    = @{ allow = $true; private = $false; rule = $true; server = $false }
+            'lan-server.json'  = @{ allow = $true; private = $false; rule = $false; server = $true }
         }
         foreach ($name in $variants.Keys) {
             $variant = $variants[$name]
@@ -91,6 +94,7 @@ function New-RosetunLanRequests {
             $request.settings | Add-Member -NotePropertyName auto_reconnect -NotePropertyValue $true -Force
             $request.settings | Add-Member -NotePropertyName allow_lan -NotePropertyValue $variant.allow -Force
             $request.settings | Add-Member -NotePropertyName private_networks -NotePropertyValue $variant.private -Force
+            if ($variant.server) { $request.node.server = $hostAddress }
             if ($variant.rule) {
                 $rule = [pscustomobject]@{
                     id      = 'host-through-vpn'
@@ -111,54 +115,6 @@ function Connect-RosetunLan {
     Wait-RosetunState 'Disconnected' | Out-Null
     $result = Connect-RosetunTunnel -RequestName $RequestName
     $result.ExitCode -eq 0 -and (Wait-RosetunState 'Connected')
-}
-
-function Get-RosetunGuestRoute {
-    # The adapter and source address Windows picks in the guest for $Address.
-    param([Parameter(Mandatory)][string]$Address)
-    Invoke-RosetunGuest -ScriptBlock {
-        param($address)
-        # Find-NetRoute returns the source address and the route it chose.
-        $found = @(Find-NetRoute -RemoteIPAddress $address -ErrorAction Stop)
-        $source = @($found | Where-Object { $_.CimClass.CimClassName -eq 'MSFT_NetIPAddress' }) | Select-Object -First 1
-        $next = @($found | Where-Object { $_.CimClass.CimClassName -eq 'MSFT_NetRoute' }) | Select-Object -First 1
-        [pscustomobject]@{
-            InterfaceAlias = if ($next) { $next.InterfaceAlias } else { '' }
-            SourceAddress  = if ($source) { $source.IPAddress } else { '' }
-        }
-    } -ArgumentList $Address
-}
-
-function Invoke-RosetunGuestConnect {
-    # A TCP connect from the guest without a bound source, as an application
-    # makes it. Returns the local address it used or the socket error.
-    param(
-        [Parameter(Mandatory)][string]$Address,
-        [Parameter(Mandatory)][int]$Port,
-        [int]$TimeoutMs = 3000
-    )
-    Invoke-RosetunGuest -ScriptBlock {
-        param($address, $port, $timeout)
-        $client = [Net.Sockets.TcpClient]::new()
-        try {
-            $task = $client.ConnectAsync($address, $port)
-            if ($task.Wait($timeout)) {
-                return [pscustomobject]@{
-                    Connected = $true
-                    Local     = ([Net.IPEndPoint]$client.Client.LocalEndPoint).Address.ToString()
-                    Error     = ''
-                }
-            }
-            [pscustomobject]@{ Connected = $false; Local = ''; Error = 'TimedOut' }
-        }
-        catch {
-            $inner = $_.Exception
-            while ($inner.InnerException) { $inner = $inner.InnerException }
-            $code = if ($inner -is [Net.Sockets.SocketException]) { "$($inner.SocketErrorCode)" } else { $inner.GetType().Name }
-            [pscustomobject]@{ Connected = $false; Local = ''; Error = $code }
-        }
-        finally { $client.Dispose() }
-    } -ArgumentList $Address, $Port, $TimeoutMs
 }
 
 function Start-RosetunMulticastWatch {
@@ -671,7 +627,7 @@ try {
         Test-Step 'route' "the service opens the guest's network" `
             -Note (@($segmentLog -split '\r?\n' | Where-Object { $_ -match 'local network' }) -join ' | ') {
             $segmentLog -match 'connected networks stay outside the tunnel' -and
-                $segmentLog -notmatch 'holds a VPN server' -and $guestSubnet.PrefixLength -ge 16
+                $segmentLog -notmatch 'VPN server' -and $guestSubnet.PrefixLength -ge 16
         }
         $route = Get-RosetunGuestRoute -Address $hostAddress
         Test-Step 'route' 'the host goes through the physical adapter, not rosetun0' `
@@ -842,6 +798,62 @@ try {
                 Receive-RosetunMulticast -Watch $entry -Token $token
             }
         }
+
+        # The VPN server inside the guest's network: its own address stays
+        # closed past the tunnel, the rest of the network does not.
+        if ($UseHostNode) {
+            $mark = Get-RosetunHelperLogLength
+            Test-Step 'server in the network' 'lan-server connects' { Connect-RosetunLan 'lan-server.json' }
+            $serverLog = Get-RosetunHelperLogSince -Offset $mark
+            Test-Step 'server in the network' 'the service leaves out only the address' {
+                $serverLog -match 'open without the address of a VPN server' -and
+                    $serverLog -notmatch 'too many VPN servers'
+            }
+            $lanDevice = Start-RosetunLanDevice
+            try {
+                $route = Get-RosetunGuestRoute -Address $lanDevice.Address
+                Test-Step 'server in the network' 'another device goes through the physical adapter' `
+                    -Note "$($route.InterfaceAlias) $($route.SourceAddress)" {
+                    $route.InterfaceAlias -eq $physical.Alias -and $route.SourceAddress -eq $physical.Address
+                }
+                $connect = Invoke-RosetunGuestConnect -Address $lanDevice.Address -Port $lanDevice.Port
+                Test-Step 'server in the network' 'TCP to another device connects from the guest address' `
+                    -Note "$($connect.Local) $($connect.Error)" {
+                    $connect.Connected -and $connect.Local -eq $physical.Address
+                }
+                $dns = Invoke-RosetunGuestConnect -Address $lanDevice.Address -Port 53
+                Test-Step 'server in the network' 'TCP to another device on port 53 is blocked' -Note $dns.Error {
+                    $dns.Error -eq 'AccessDenied'
+                }
+            }
+            finally {
+                Stop-RosetunLanDevice $lanDevice
+            }
+            $route = Get-RosetunGuestRoute -Address $hostAddress
+            Test-Step 'server in the network' "the server's address is routed into the tunnel" `
+                -Note "$($route.InterfaceAlias) $($route.SourceAddress)" {
+                $route.InterfaceAlias -eq $TunAlias -and $route.SourceAddress -eq $TunAddress
+            }
+            Test-Step 'server in the network' "past the tunnel, the server's address stays closed" {
+                -not (Test-RosetunLanListener $lan)
+            }
+            $throughTunnel = Test-RosetunGuestConnectThroughTunnel -Lan $lan -TunAddress $TunAddress
+            Test-Step 'server in the network' "the listener on the server's host answers through the tunnel" `
+                -Note $throughTunnel.Note { $throughTunnel.Ok }
+            $egress = Wait-RosetunTunnelEgress -TimeoutSeconds 15
+            Test-Step 'server in the network' 'the engine connects to the server' { $egress.Ok }
+
+            # The node moves out of the network: the host's address opens again.
+            Test-Step 'server in the network' 'lan-on connects after lan-server' { Connect-RosetunLan 'lan-on.json' }
+            $connect = Invoke-RosetunGuestConnect -Address $hostAddress -Port $lan.Port
+            Test-Step 'server in the network' 'with the node elsewhere the host is reached directly' `
+                -Note "$($connect.Local) $($connect.Error)" {
+                $connect.Connected -and $connect.Local -eq $physical.Address
+            }
+        }
+        else {
+            Write-RosetunLanNote 'server in the network' 'skipped: it needs the node on the host (-UseHostNode)'
+        }
     }
     finally {
         Disconnect-RosetunTunnel | Out-Null
@@ -858,7 +870,7 @@ try {
         catch { Write-Warning "Could not stop the LAN listener: $_" }
         Invoke-RosetunGuest -ScriptBlock {
             param($dir)
-            foreach ($name in @('lan-off.json', 'lan-on.json', 'lan-private.json', 'lan-rule.json')) {
+            foreach ($name in @('lan-off.json', 'lan-on.json', 'lan-private.json', 'lan-rule.json', 'lan-server.json')) {
                 Remove-Item -Path (Join-Path $dir $name) -Force -ErrorAction SilentlyContinue
             }
         } -ArgumentList (Get-RosetunGuestDir)

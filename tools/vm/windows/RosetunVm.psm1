@@ -1335,10 +1335,115 @@ function Get-RosetunEgressAddress {
     (Get-RosetunEgressInterface).Address
 }
 
+function Get-RosetunGuestRoute {
+    # The adapter and source address Windows picks in the guest for $Address.
+    param([Parameter(Mandatory)][string]$Address)
+    Invoke-RosetunGuest -ScriptBlock {
+        param($address)
+        # Find-NetRoute returns the source address and the route it chose.
+        $found = @(Find-NetRoute -RemoteIPAddress $address -ErrorAction Stop)
+        $source = @($found | Where-Object { $_.CimClass.CimClassName -eq 'MSFT_NetIPAddress' }) | Select-Object -First 1
+        $next = @($found | Where-Object { $_.CimClass.CimClassName -eq 'MSFT_NetRoute' }) | Select-Object -First 1
+        [pscustomobject]@{
+            InterfaceAlias = if ($next) { $next.InterfaceAlias } else { '' }
+            SourceAddress  = if ($source) { $source.IPAddress } else { '' }
+        }
+    } -ArgumentList $Address
+}
+
+function Invoke-RosetunGuestConnect {
+    # A TCP connect from the guest without a bound source, as an application
+    # makes it. Returns the local address it used or the socket error. $HoldMs
+    # keeps the connection open: through the tunnel a connect succeeds at the
+    # engine, before the engine has dialled the destination.
+    param(
+        [Parameter(Mandatory)][string]$Address,
+        [Parameter(Mandatory)][int]$Port,
+        [int]$TimeoutMs = 3000,
+        [int]$HoldMs = 0
+    )
+    Invoke-RosetunGuest -ScriptBlock {
+        param($address, $port, $timeout, $hold)
+        $client = [Net.Sockets.TcpClient]::new()
+        try {
+            $task = $client.ConnectAsync($address, $port)
+            if ($task.Wait($timeout)) {
+                Start-Sleep -Milliseconds $hold
+                return [pscustomobject]@{
+                    Connected = $true
+                    Local     = ([Net.IPEndPoint]$client.Client.LocalEndPoint).Address.ToString()
+                    Error     = ''
+                }
+            }
+            [pscustomobject]@{ Connected = $false; Local = ''; Error = 'TimedOut' }
+        }
+        catch {
+            $inner = $_.Exception
+            while ($inner.InnerException) { $inner = $inner.InnerException }
+            $code = if ($inner -is [Net.Sockets.SocketException]) { "$($inner.SocketErrorCode)" } else { $inner.GetType().Name }
+            [pscustomobject]@{ Connected = $false; Local = ''; Error = $code }
+        }
+        finally { $client.Dispose() }
+    } -ArgumentList $Address, $Port, $TimeoutMs, $HoldMs
+}
+
+function Test-RosetunGuestConnectThroughTunnel {
+    # Whether an application's connect to the host's listener, with no bound
+    # source, leaves the guest from the tunnel's address and arrives. Earlier
+    # checks may have left connections queued on the listener.
+    param(
+        [Parameter(Mandatory)]$Lan,
+        [Parameter(Mandatory)][string]$TunAddress
+    )
+    while ($Lan.Listener.Pending()) { $Lan.Listener.AcceptTcpClient().Dispose() }
+    $connect = Invoke-RosetunGuestConnect -Address $Lan.Address -Port $Lan.Port -HoldMs 1500
+    [pscustomobject]@{
+        Ok   = $connect.Connected -and $connect.Local -eq $TunAddress -and
+            (Wait-RosetunCondition { $Lan.Listener.Pending() } -TimeoutSeconds 5)
+        Note = "$($connect.Local) $($connect.Error)"
+    }
+}
+
+function Start-RosetunLanDevice {
+    # Another device on the guest's network, next to a VPN server on the host's
+    # own Default Switch address: the network's last usable address, added to the
+    # host and skipped as a source, with a listener of its own.
+    $subnet = Get-RosetunHostSwitchSubnet
+    $bytes = [Net.IPAddress]::Parse($subnet.Address).GetAddressBytes()
+    [Array]::Reverse($bytes)
+    $hostBits = ([uint64]1 -shl (32 - $subnet.PrefixLength)) - 1
+    $last = ([uint64][BitConverter]::ToUInt32($bytes, 0) -bor $hostBits) - 1
+    $lastBytes = [BitConverter]::GetBytes([uint32]$last)
+    [Array]::Reverse($lastBytes)
+    $address = ([Net.IPAddress]::new($lastBytes)).ToString()
+    if ($address -eq $subnet.Address) {
+        throw "The host already has the address a device would take: $address."
+    }
+    New-NetIPAddress -InterfaceAlias 'vEthernet (Default Switch)' -IPAddress $address `
+        -PrefixLength $subnet.PrefixLength -SkipAsSource $true -ErrorAction Stop | Out-Null
+    try {
+        Start-RosetunLanListener -Address $address
+    }
+    catch {
+        Remove-NetIPAddress -IPAddress $address -Confirm:$false -ErrorAction SilentlyContinue
+        throw
+    }
+}
+
+function Stop-RosetunLanDevice {
+    param([Parameter(Mandatory)]$Device)
+    try { Stop-RosetunLanListener $Device }
+    finally { Remove-NetIPAddress -IPAddress $Device.Address -Confirm:$false -ErrorAction SilentlyContinue }
+}
+
 function Start-RosetunLanListener {
-    $address = Get-NetIPAddress -InterfaceAlias 'vEthernet (Default Switch)' -AddressFamily IPv4 -AddressState Preferred -ErrorAction Stop |
-        Where-Object { $_.IPAddress -notlike '169.254.*' } |
-        Select-Object -First 1 -ExpandProperty IPAddress
+    param([string]$Address)
+    $address = $Address
+    if (-not $address) {
+        $address = Get-NetIPAddress -InterfaceAlias 'vEthernet (Default Switch)' -AddressFamily IPv4 -AddressState Preferred -ErrorAction Stop |
+            Where-Object { $_.IPAddress -notlike '169.254.*' -and -not $_.SkipAsSource } |
+            Select-Object -First 1 -ExpandProperty IPAddress
+    }
     if (-not $address) {
         throw 'The Default Switch has no usable IPv4 gateway address.'
     }
@@ -2464,7 +2569,8 @@ function Get-RosetunHostSwitchSubnet {
     # The host's address on the Default Switch and its prefix. The host picks
     # a new subnet for the switch after its own reboot.
     $address = Get-NetIPAddress -InterfaceAlias 'vEthernet (Default Switch)' -AddressFamily IPv4 `
-        -AddressState Preferred -ErrorAction Stop | Select-Object -First 1
+        -AddressState Preferred -ErrorAction Stop |
+        Where-Object { -not $_.SkipAsSource } | Select-Object -First 1
     [pscustomobject]@{ Address = $address.IPAddress; PrefixLength = [int]$address.PrefixLength }
 }
 
