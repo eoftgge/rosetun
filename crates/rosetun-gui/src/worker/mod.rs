@@ -134,9 +134,9 @@ pub(crate) enum WorkerEvent {
     SetLanguage(Result<(), SettingsError>),
     SetAccent(Result<(), SettingsError>),
     Setting(SettingChange, Result<(), SettingsError>),
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     AutostartLoaded(std::io::Result<bool>),
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     SetAutostart(std::io::Result<bool>),
     SkipVersion(Result<(), SettingsError>),
     #[cfg(any(windows, test))]

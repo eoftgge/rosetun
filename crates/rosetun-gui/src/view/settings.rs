@@ -160,12 +160,14 @@ fn quit_action_label(action: QuitAction) -> String {
 fn desktop(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     widgets::settings_card(ui, |card| {
         let editable = state.can_edit_settings();
-        #[cfg(windows)]
         let mut autostart = state.settings.screen.autostart.unwrap_or(false);
-        #[cfg(windows)]
         if card
             .toggle(
-                tr!("start-with-windows"),
+                if cfg!(windows) {
+                    tr!("start-with-windows")
+                } else {
+                    tr!("start-at-sign-in")
+                },
                 None,
                 tr!("start-with-windows-detail"),
                 &mut autostart,

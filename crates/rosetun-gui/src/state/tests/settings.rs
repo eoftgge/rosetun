@@ -613,7 +613,7 @@ fn release_settings_use_jobs_and_respect_busy_state() {
     ));
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 #[test]
 fn opening_settings_refreshes_autostart_every_time() {
     let mut state = State::default();
@@ -709,7 +709,7 @@ fn windows_settings_jobs_respect_busy_state_and_saved_values() {
     assert!(state.act(Action::SetCloseToTray(false)).is_none());
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 #[test]
 fn failed_autostart_write_clears_busy_and_loaded_state() {
     let mut state = State {

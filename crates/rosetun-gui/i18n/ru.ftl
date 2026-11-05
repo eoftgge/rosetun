@@ -274,6 +274,7 @@ reduce-motion = Уменьшить анимацию
 reduce-motion-detail = Без плавных переходов и пульсации.
 start-with-windows = Запускать вместе с Windows
 start-with-windows-detail = Открывается в трее при входе в систему.
+start-at-sign-in = Запускать при входе в систему
 keep-in-tray = Сворачивать в трей при закрытии
 keep-in-tray-detail = Крестик прячет окно. Выйти можно из меню в трее.
 quit-action = При выходе из Rosetun

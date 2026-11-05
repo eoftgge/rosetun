@@ -485,9 +485,9 @@ impl App {
             Job::SetLanguage(language) => self.workers.set_language(language),
             Job::SetAccent(accent) => self.workers.set_accent(accent),
             Job::Setting(change) => self.workers.change_setting(change),
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "linux"))]
             Job::LoadAutostart => self.workers.load_autostart(),
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "linux"))]
             Job::SetAutostart(enabled) => self.workers.set_autostart(enabled),
             Job::SkipVersion(version) => self.workers.skip_version(version),
             #[cfg(any(windows, test))]

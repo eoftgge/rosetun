@@ -6,6 +6,8 @@
     reason = "Win32 FFI; every unsafe block carries a SAFETY comment"
 )]
 mod autostart;
+#[cfg(target_os = "linux")]
+mod autostart_linux;
 #[cfg(windows)]
 #[expect(
     unsafe_code,
@@ -97,6 +99,8 @@ mod window;
 pub use autostart::{
     Autostart, autostart_enabled, disable_autostart, enable_autostart, move_autostart_to_task,
 };
+#[cfg(target_os = "linux")]
+pub use autostart_linux::{Autostart, autostart_enabled, disable_autostart, enable_autostart};
 #[cfg(windows)]
 pub use elevated::run_elevated;
 #[cfg(windows)]

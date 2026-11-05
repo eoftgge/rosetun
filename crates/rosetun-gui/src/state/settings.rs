@@ -45,7 +45,7 @@ pub(crate) struct SettingsScreen {
     pub(crate) xray_connect_ready: bool,
     pub(crate) config_folder: Option<PathBuf>,
     pub(crate) licenses_folder: Option<PathBuf>,
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     pub(crate) autostart: Option<bool>,
     #[cfg(windows)]
     pub(crate) report_running: bool,
@@ -139,12 +139,9 @@ fn waits_for_save(action: &Action) -> bool {
         #[cfg(any(windows, test))]
         Action::AnnounceUpdate(_) => true,
         #[cfg(any(windows, target_os = "linux"))]
-        Action::SetCloseToTray(_) | Action::SetOnQuit(_) => true,
+        Action::SetAutostart(_) | Action::SetCloseToTray(_) | Action::SetOnQuit(_) => true,
         #[cfg(windows)]
-        Action::SetAutostart(_)
-        | Action::SetNotifications(_)
-        | Action::ShowReportFolder
-        | Action::OpenFolder(_) => true,
+        Action::SetNotifications(_) | Action::ShowReportFolder | Action::OpenFolder(_) => true,
         _ => false,
     }
 }
@@ -389,7 +386,7 @@ impl State {
             WorkerEvent::SetInterfaceScale(result) => self.finish_settings(result),
             WorkerEvent::SetLanguage(result) => self.finish_settings(result),
             WorkerEvent::SetAccent(result) => self.finish_settings(result),
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "linux"))]
             WorkerEvent::AutostartLoaded(result) => match result {
                 Ok(enabled) => self.settings.screen.autostart = Some(enabled),
                 Err(error) => {
@@ -398,7 +395,7 @@ impl State {
                     self.operation_error = Some(self.text(&message));
                 }
             },
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "linux"))]
             WorkerEvent::SetAutostart(result) => {
                 self.settings.screen.autostart = result.as_ref().ok().copied();
                 let error = result.err().map(|error| {
@@ -504,13 +501,13 @@ impl State {
                     }
                 }
                 let job = self.show_screen(Screen::Settings);
-                #[cfg(windows)]
+                #[cfg(any(windows, target_os = "linux"))]
                 {
                     self.session.queued_leave_apply = job;
                     self.settings.screen.autostart = None;
                     return Some(Job::LoadAutostart);
                 }
-                #[cfg(not(windows))]
+                #[cfg(not(any(windows, target_os = "linux")))]
                 return job;
             }
             Action::OpenSettingsSection(section) => {
@@ -552,7 +549,7 @@ impl State {
                     return self.start_settings(Job::Setting(SettingChange::ReduceMotion(enabled)));
                 }
             }
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "linux"))]
             Action::SetAutostart(enabled) => {
                 if self.can_edit_settings()
                     && self.settings.screen.autostart.is_some()

@@ -25,7 +25,7 @@ impl WorkerDispatcher {
         });
     }
 
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     pub(crate) fn load_autostart(&self) {
         self.spawn_task("rosetun-load-autostart", move |publisher| {
             let result = std::env::current_exe()
@@ -41,7 +41,7 @@ impl WorkerDispatcher {
         });
     }
 
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     pub(crate) fn set_autostart(&self, enabled: bool) {
         self.spawn_task("rosetun-set-autostart", move |publisher| {
             let result = (|| {
@@ -141,7 +141,7 @@ impl WorkerDispatcher {
     }
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 fn autostart<'a>(exe: &'a Path, description: &'a str) -> rosetun_shell::Autostart<'a> {
     rosetun_shell::Autostart {
         exe,

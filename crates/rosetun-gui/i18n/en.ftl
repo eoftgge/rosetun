@@ -265,6 +265,7 @@ reduce-motion = Reduce motion
 reduce-motion-detail = No smooth transitions or pulsing.
 start-with-windows = Start with Windows
 start-with-windows-detail = Opens in the tray when you sign in.
+start-at-sign-in = Start at sign-in
 keep-in-tray = Hide to tray on close
 keep-in-tray-detail = The close button hides the window. Quit from the tray menu.
 quit-action = When quitting Rosetun

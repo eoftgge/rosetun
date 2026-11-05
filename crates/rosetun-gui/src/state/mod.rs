@@ -259,7 +259,7 @@ pub(crate) enum Action {
     SetLanguage(LanguageSetting),
     SetAccent(AccentPreset),
     SetReduceMotion(bool),
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     SetAutostart(bool),
     #[cfg(any(windows, target_os = "linux"))]
     SetCloseToTray(bool),
@@ -464,9 +464,9 @@ pub(crate) enum Job {
     SetLanguage(LanguageSetting),
     SetAccent(AccentPreset),
     Setting(SettingChange),
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     LoadAutostart,
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     SetAutostart(bool),
     SkipVersion(String),
     #[cfg(any(windows, test))]
@@ -674,11 +674,14 @@ impl State {
             | WorkerEvent::SetVerboseLog(_)) => self.reduce_settings(event),
             #[cfg(any(windows, test))]
             WorkerEvent::AnnounceUpdate => self.reduce_settings(event),
+            #[cfg(any(windows, target_os = "linux"))]
+            event @ (WorkerEvent::AutostartLoaded(_) | WorkerEvent::SetAutostart(_)) => {
+                self.reduce_settings(event);
+            }
             #[cfg(windows)]
-            event @ (WorkerEvent::ReportSaved { .. }
-            | WorkerEvent::AutostartLoaded(_)
-            | WorkerEvent::SetAutostart(_)
-            | WorkerEvent::OpenFolder(_)) => self.reduce_settings(event),
+            event @ (WorkerEvent::ReportSaved { .. } | WorkerEvent::OpenFolder(_)) => {
+                self.reduce_settings(event);
+            }
             WorkerEvent::UpdateCheck { checked_at, result } => {
                 self.reduce_updates(result, checked_at);
             }
@@ -780,12 +783,13 @@ impl State {
             | Action::ConfirmResetSettings
             | Action::SetVerboseLog(_)) => return self.act_settings(action),
             #[cfg(any(windows, target_os = "linux"))]
-            action @ (Action::SetCloseToTray(_) | Action::SetOnQuit(_)) => {
+            action @ (Action::SetAutostart(_)
+            | Action::SetCloseToTray(_)
+            | Action::SetOnQuit(_)) => {
                 return self.act_settings(action);
             }
             #[cfg(windows)]
-            action @ (Action::SetAutostart(_)
-            | Action::SetNotifications(_)
+            action @ (Action::SetNotifications(_)
             | Action::SaveReport
             | Action::ShowReportFolder
             | Action::OpenFolder(_)) => {
