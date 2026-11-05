@@ -113,6 +113,10 @@ impl Face {
     }
 }
 
+/// Each one is opened to read its character map; a character no font has must stay cheap.
+#[cfg(not(windows))]
+const MAX_SEARCHED_FONTS: usize = 512;
+
 struct Script {
     ranges: &'static [RangeInclusive<u32>],
     #[cfg_attr(
@@ -172,6 +176,9 @@ struct Loaded {
     /// Characters fontconfig was asked about, so each is asked once.
     #[cfg(not(windows))]
     asked: HashSet<char>,
+    /// The font files found without fontconfig, once looked for.
+    #[cfg(not(windows))]
+    font_files: Option<Vec<PathBuf>>,
 }
 
 impl Loaded {
@@ -287,8 +294,92 @@ fn fontconfig_face(loaded: &mut Loaded, c: char) -> Option<LoadedFace> {
     if !loaded.asked.insert(c) {
         return None;
     }
+    if !fontconfig_present() {
+        return searched_face(loaded, c);
+    }
     fontconfig_pattern_face(loaded, &format!("sans-serif:charset={:x}", u32::from(c)))
         .filter(|face| face.has(c))
+}
+
+/// `fc-match` comes with the fontconfig package, which a desktop has but a small system may not.
+#[cfg(not(windows))]
+fn fontconfig_present() -> bool {
+    static PRESENT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *PRESENT.get_or_init(|| {
+        std::process::Command::new("fc-match")
+            .arg("--version")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok()
+    })
+}
+
+/// Without fontconfig: the first font in the usual folders that has the character.
+#[cfg(not(windows))]
+fn searched_face(loaded: &mut Loaded, c: char) -> Option<LoadedFace> {
+    let files = loaded
+        .font_files
+        .get_or_insert_with(|| font_files_in(&font_folders()))
+        .clone();
+    files.into_iter().find_map(|path| {
+        loaded
+            .face(&Location { path, index: 0 })
+            .filter(|face| face.has(c))
+    })
+}
+
+#[cfg(not(windows))]
+fn font_folders() -> Vec<PathBuf> {
+    let mut folders = vec![
+        PathBuf::from("/usr/share/fonts"),
+        PathBuf::from("/usr/local/share/fonts"),
+    ];
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .filter(|home| home.is_absolute());
+    if let Some(data) = std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .filter(|data| data.is_absolute())
+        .or_else(|| home.as_ref().map(|home| home.join(".local/share")))
+    {
+        folders.push(data.join("fonts"));
+    }
+    folders.extend(home.map(|home| home.join(".fonts")));
+    folders
+}
+
+/// The font files under `folders`, in a stable order, at most [`MAX_SEARCHED_FONTS`].
+#[cfg(not(windows))]
+fn font_files_in(folders: &[PathBuf]) -> Vec<PathBuf> {
+    fn walk(folder: &std::path::Path, depth: usize, files: &mut Vec<PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(folder) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                if depth < 6 {
+                    walk(&path, depth + 1, files);
+                }
+            } else if path.extension().is_some_and(|extension| {
+                ["ttf", "otf", "ttc"]
+                    .iter()
+                    .any(|known| extension.eq_ignore_ascii_case(known))
+            }) {
+                files.push(path);
+            }
+        }
+    }
+
+    let mut files = Vec::new();
+    for folder in folders {
+        walk(folder, 0, &mut files);
+    }
+    files.sort();
+    files.truncate(MAX_SEARCHED_FONTS);
+    files
 }
 
 #[cfg(not(windows))]

@@ -11,7 +11,7 @@ use std::time::Instant;
 use eframe::egui;
 use rosetun_core::Store;
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 use crate::notices::{Notice, Notices};
 use crate::repaint::Repaint;
 use crate::repaint_trace::RepaintTrace;
@@ -95,7 +95,7 @@ pub(crate) struct App {
     shell_events: Option<Receiver<ShellEvent>>,
     #[cfg(any(windows, target_os = "linux"))]
     tray: Option<tray::Tray>,
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     notices: Notices,
     #[cfg(windows)]
     hide_on_start: bool,
@@ -185,7 +185,7 @@ impl App {
             shell_events: None,
             #[cfg(any(windows, target_os = "linux"))]
             tray: None,
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "linux"))]
             notices: Notices::default(),
             #[cfg(windows)]
             hide_on_start: false,
@@ -490,7 +490,7 @@ impl App {
             #[cfg(any(windows, target_os = "linux"))]
             Job::SetAutostart(enabled) => self.workers.set_autostart(enabled),
             Job::SkipVersion(version) => self.workers.skip_version(version),
-            #[cfg(any(windows, test))]
+            #[cfg(any(windows, target_os = "linux", test))]
             Job::AnnounceUpdate(version) => self.workers.announce_update(version),
             Job::CheckUpdates => self.workers.check_updates(),
             Job::SetDns(dns) => self.workers.set_dns(dns),
@@ -583,18 +583,14 @@ fn session_ending() -> bool {
     false
 }
 
-#[cfg(all(windows, not(test)))]
+#[cfg(all(any(windows, target_os = "linux"), not(test)))]
 fn system_language() -> Option<i18n::Language> {
     rosetun_shell::user_language().and_then(|locale| i18n::language_of_locale(&locale))
 }
 
-#[cfg(all(not(windows), not(test)))]
+#[cfg(all(not(any(windows, target_os = "linux")), not(test)))]
 fn system_language() -> Option<i18n::Language> {
-    ["LC_ALL", "LC_MESSAGES", "LANG"]
-        .into_iter()
-        .filter_map(|key| std::env::var(key).ok())
-        .find(|value| !value.trim().is_empty())
-        .and_then(|value| i18n::language_of_locale(&value))
+    None
 }
 
 /// The language is one setting for the whole process, and tests run side by side.
@@ -711,7 +707,6 @@ impl App {
         }
         #[cfg(any(windows, target_os = "linux"))]
         if self.state.take_upgrade_attention() {
-            #[cfg(windows)]
             if self.window_hidden
                 && self.state.config.interface.notifications
                 && let Some(tray) = &self.tray
@@ -903,29 +898,23 @@ impl App {
                     viewport.focused.unwrap_or(false),
                 )
             });
-            #[cfg(target_os = "linux")]
-            let _ = focused;
             let window_shown = !self.window_hidden && !minimized;
             if let Some(tray) = &mut self.tray {
                 tray.sync(&tray::tray_view(&self.state, window_shown));
             }
-            #[cfg(windows)]
             let notice = self.notices.observe(
                 self.state.visible_status().map(|status| &status.state),
                 self.state.operations.helper,
                 window_shown && focused,
                 Instant::now(),
             );
-            #[cfg(windows)]
             if let Some(notice) = notice
                 && self.state.config.interface.notifications
                 && let Some(tray) = &self.tray
             {
                 tray.notify(notice);
             }
-            #[cfg(windows)]
             let interface = &self.state.config.interface;
-            #[cfg(windows)]
             let announce = self.notices.observe_update(
                 self.state
                     .available_update()
@@ -935,7 +924,6 @@ impl App {
                 interface.notifications && self.tray.is_some(),
                 window_shown && focused,
             );
-            #[cfg(windows)]
             if let Some(version) = announce {
                 if let Some(tray) = &self.tray {
                     tray.notify_update(&version);

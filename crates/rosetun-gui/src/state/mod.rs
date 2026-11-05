@@ -274,7 +274,7 @@ pub(crate) enum Action {
     Quit {
         disconnect: bool,
     },
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     SetNotifications(bool),
     SetConnectOnStart(bool),
     SetAutoReconnect(bool),
@@ -289,7 +289,7 @@ pub(crate) enum Action {
     CheckUpdatesNow,
     SkipVersion,
     /// The tray announced this version; saved so it is announced once.
-    #[cfg(any(windows, test))]
+    #[cfg(any(windows, target_os = "linux", test))]
     AnnounceUpdate(String),
     SaveDns,
     SelectCustomDns,
@@ -469,7 +469,7 @@ pub(crate) enum Job {
     #[cfg(any(windows, target_os = "linux"))]
     SetAutostart(bool),
     SkipVersion(String),
-    #[cfg(any(windows, test))]
+    #[cfg(any(windows, target_os = "linux", test))]
     AnnounceUpdate(String),
     CheckUpdates,
     SetDns(DnsSettings),
@@ -672,7 +672,7 @@ impl State {
             | WorkerEvent::SetDns(_)
             | WorkerEvent::ResetSettings(_)
             | WorkerEvent::SetVerboseLog(_)) => self.reduce_settings(event),
-            #[cfg(any(windows, test))]
+            #[cfg(any(windows, target_os = "linux", test))]
             WorkerEvent::AnnounceUpdate => self.reduce_settings(event),
             #[cfg(any(windows, target_os = "linux"))]
             event @ (WorkerEvent::AutostartLoaded(_) | WorkerEvent::SetAutostart(_)) => {
@@ -785,17 +785,15 @@ impl State {
             #[cfg(any(windows, target_os = "linux"))]
             action @ (Action::SetAutostart(_)
             | Action::SetCloseToTray(_)
-            | Action::SetOnQuit(_)) => {
+            | Action::SetOnQuit(_)
+            | Action::SetNotifications(_)) => {
                 return self.act_settings(action);
             }
             #[cfg(windows)]
-            action @ (Action::SetNotifications(_)
-            | Action::SaveReport
-            | Action::ShowReportFolder
-            | Action::OpenFolder(_)) => {
+            action @ (Action::SaveReport | Action::ShowReportFolder | Action::OpenFolder(_)) => {
                 return self.act_settings(action);
             }
-            #[cfg(any(windows, test))]
+            #[cfg(any(windows, target_os = "linux", test))]
             action @ Action::AnnounceUpdate(_) => return self.act_updates(action),
             action @ (Action::CheckUpdatesNow | Action::SkipVersion) => {
                 return self.act_updates(action);

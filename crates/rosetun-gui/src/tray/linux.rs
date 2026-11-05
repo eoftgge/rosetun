@@ -12,9 +12,10 @@ use rosetun_shell::{StatusItem, TrayEntry, TrayInput, TrayItem, TrayPixmap};
 
 use super::{IconSlot, TrayView};
 use crate::app::ShellEvent;
+use crate::notices::Notice;
 use crate::repaint::Repaint;
 use crate::rose_icon::{self, RoseIcon, TrayState};
-use crate::{constants, theme};
+use crate::{constants, i18n, theme};
 
 const STATUS_ID: i32 = 1;
 const PRIMARY_ID: i32 = 2;
@@ -81,6 +82,14 @@ impl Tray {
         self.slot.forget();
     }
 
+    pub(crate) fn notify(&self, notice: Notice) {
+        show_notice(constants::TITLE.to_owned(), notice.text());
+    }
+
+    pub(crate) fn notify_update(&self, version: &str) {
+        show_notice(i18n::update_offer(version), tr!("notice-update-body"));
+    }
+
     pub(crate) fn sync(&mut self, view: &TrayView) {
         let icon = self.slot.update(
             view.icon,
@@ -117,6 +126,20 @@ impl Tray {
             self.item.set_menu(menu);
         }
         self.shown = Some(view.clone());
+    }
+}
+
+/// On a thread of its own: the call waits for the session bus, and a notice is not worth a frame.
+fn show_notice(title: String, text: String) {
+    let spawned = std::thread::Builder::new()
+        .name("rosetun-notice".into())
+        .spawn(move || {
+            if let Err(error) = rosetun_shell::tray_notice(&title, &text) {
+                tracing::warn!(%error, "could not show a notification");
+            }
+        });
+    if let Err(error) = spawned {
+        tracing::warn!(%error, "could not start the notification thread");
     }
 }
 

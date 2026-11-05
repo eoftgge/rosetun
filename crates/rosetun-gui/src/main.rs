@@ -23,7 +23,7 @@ mod icons;
 mod layout_fence;
 mod logging;
 mod motion;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 mod notices;
 mod program_icons;
 mod programs;

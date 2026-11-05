@@ -136,12 +136,15 @@ fn waits_for_save(action: &Action) -> bool {
         | Action::SkipVersion
         | Action::Apply
         | Action::RestoreMyEdits => true,
-        #[cfg(any(windows, test))]
+        #[cfg(any(windows, target_os = "linux", test))]
         Action::AnnounceUpdate(_) => true,
         #[cfg(any(windows, target_os = "linux"))]
-        Action::SetAutostart(_) | Action::SetCloseToTray(_) | Action::SetOnQuit(_) => true,
+        Action::SetAutostart(_)
+        | Action::SetCloseToTray(_)
+        | Action::SetOnQuit(_)
+        | Action::SetNotifications(_) => true,
         #[cfg(windows)]
-        Action::SetNotifications(_) | Action::ShowReportFolder | Action::OpenFolder(_) => true,
+        Action::ShowReportFolder | Action::OpenFolder(_) => true,
         _ => false,
     }
 }
@@ -432,7 +435,7 @@ impl State {
             }
             WorkerEvent::SkipVersion(result) => self.finish_settings(result),
             // A background record: its failure costs one more notice at most.
-            #[cfg(any(windows, test))]
+            #[cfg(any(windows, target_os = "linux", test))]
             WorkerEvent::AnnounceUpdate => self.end_settings(None),
             WorkerEvent::SetDns(result) => {
                 if result.is_ok() {
@@ -570,7 +573,7 @@ impl State {
                     return self.start_settings(Job::Setting(SettingChange::QuitAction(action)));
                 }
             }
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "linux"))]
             Action::SetNotifications(enabled) => {
                 if self.can_edit_settings() && self.config.interface.notifications != enabled {
                     return self

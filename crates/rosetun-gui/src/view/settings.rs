@@ -214,9 +214,7 @@ fn desktop(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                 actions.push(Action::SetOnQuit(selected));
             }
         });
-        #[cfg(windows)]
         let mut notifications = state.config.interface.notifications;
-        #[cfg(windows)]
         if card
             .toggle(
                 tr!("notifications"),

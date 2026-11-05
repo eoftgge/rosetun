@@ -188,6 +188,7 @@ fn exec_program(value: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::ffi::OsStrExt;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
@@ -287,7 +288,6 @@ mod tests {
     #[test]
     fn a_line_break_or_foreign_bytes_are_refused() {
         assert!(entry_text(&start("/opt/a\nb")).is_err());
-        use std::os::unix::ffi::OsStrExt;
         let exe = Path::new(std::ffi::OsStr::from_bytes(b"/opt/\xff"));
         let autostart = Autostart {
             exe,

@@ -165,17 +165,70 @@ pub fn device_info(scope: HwidFor<'_>) -> Result<DeviceInfo, HwidError> {
         std::fs::read_to_string("/etc/machine-id").map_err(|_| HwidError::MachineIdUnavailable)?;
     let hwid = hwid_for(&machine_id, scope)?;
 
-    let os_version = std::fs::read_to_string("/proc/sys/kernel/osrelease")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
+    // Only the HWID is required, as on Windows.
+    let os_version = ["/etc/os-release", "/usr/lib/os-release"]
+        .iter()
+        .find_map(|path| std::fs::read_to_string(path).ok())
+        .and_then(|text| linux_version(&text))
         .unwrap_or_else(|| "unknown".to_owned());
+    let model = std::fs::read_to_string("/sys/class/dmi/id/product_name").unwrap_or_default();
 
     Ok(DeviceInfo {
         hwid,
         os: "Linux",
-        os_version: sanitize_header_value(os_version.trim()),
-        model: "PC".to_owned(),
+        os_version: sanitize_header_value(&os_version),
+        model: sanitize_header_value(&linux_model(&model)),
     })
+}
+
+/// `PRETTY_NAME` of an os-release file, or `VERSION_ID` without one.
+#[cfg(any(target_os = "linux", test))]
+fn linux_version(os_release: &str) -> Option<String> {
+    ["PRETTY_NAME", "VERSION_ID"].iter().find_map(|wanted| {
+        os_release.lines().find_map(|line| {
+            let (key, value) = line.trim().split_once('=')?;
+            (key == *wanted)
+                .then(|| os_release_value(value))
+                .filter(|value| !value.is_empty())
+        })
+    })
+}
+
+/// A value of an os-release file: shell-quoted, with backslash escapes in double quotes.
+#[cfg(any(target_os = "linux", test))]
+fn os_release_value(value: &str) -> String {
+    let value = value.trim();
+    if let Some(quoted) = value
+        .strip_prefix('\'')
+        .and_then(|value| value.strip_suffix('\''))
+    {
+        return quoted.to_owned();
+    }
+    let Some(quoted) = value
+        .strip_prefix('"')
+        .and_then(|value| value.strip_suffix('"'))
+    else {
+        return value.to_owned();
+    };
+    let mut unquoted = String::with_capacity(quoted.len());
+    let mut characters = quoted.chars();
+    while let Some(character) = characters.next() {
+        unquoted.push(if character == '\\' {
+            characters.next().unwrap_or(character)
+        } else {
+            character
+        });
+    }
+    unquoted
+}
+
+/// The DMI product name, or what Windows sends when the firmware gives none.
+#[cfg(any(target_os = "linux", test))]
+fn linux_model(product_name: &str) -> String {
+    match product_name.trim() {
+        "" => "PC".to_owned(),
+        model => model.to_owned(),
+    }
 }
 
 #[cfg(not(any(windows, target_os = "linux")))]
@@ -186,8 +239,8 @@ pub fn device_info(_scope: HwidFor<'_>) -> Result<DeviceInfo, HwidError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Hwid, HwidError, HwidFor, hwid_for, hwid_for_provider, hwid_from_machine_id,
-        sanitize_header_value,
+        Hwid, HwidError, HwidFor, hwid_for, hwid_for_provider, hwid_from_machine_id, linux_model,
+        linux_version, sanitize_header_value,
     };
 
     const MACHINE_ID: &str = "12345678-abcd-1234-abcd-123456789abc";
@@ -200,6 +253,34 @@ mod tests {
                 .bytes()
                 .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'=' | b'-'))
         );
+    }
+
+    #[test]
+    fn the_version_is_the_pretty_name_or_else_the_version_id() {
+        let debian =
+            "PRETTY_NAME=\"Debian GNU/Linux 13 (trixie)\"\nNAME=\"Debian\"\nVERSION_ID=\"13\"\n";
+        assert_eq!(
+            linux_version(debian).as_deref(),
+            Some("Debian GNU/Linux 13 (trixie)")
+        );
+        assert_eq!(linux_version("VERSION_ID=13\n").as_deref(), Some("13"));
+        assert_eq!(
+            linux_version("PRETTY_NAME=\"\"\nVERSION_ID='13.1'\n").as_deref(),
+            Some("13.1")
+        );
+        assert_eq!(
+            linux_version("PRETTY_NAME=\"A \\\"B\\\" C\"\n").as_deref(),
+            Some("A \"B\" C")
+        );
+        assert_eq!(linux_version("NAME=Debian\n"), None);
+        assert_eq!(linux_version(""), None);
+    }
+
+    #[test]
+    fn the_model_is_the_product_name_or_else_pc() {
+        assert_eq!(linux_model("Example Laptop 13\n"), "Example Laptop 13");
+        assert_eq!(linux_model(" \n"), "PC");
+        assert_eq!(linux_model(""), "PC");
     }
 
     #[test]

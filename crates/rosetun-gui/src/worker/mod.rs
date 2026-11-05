@@ -139,7 +139,7 @@ pub(crate) enum WorkerEvent {
     #[cfg(any(windows, target_os = "linux"))]
     SetAutostart(std::io::Result<bool>),
     SkipVersion(Result<(), SettingsError>),
-    #[cfg(any(windows, test))]
+    #[cfg(any(windows, target_os = "linux", test))]
     AnnounceUpdate,
     UpdateCheck {
         checked_at: u64,

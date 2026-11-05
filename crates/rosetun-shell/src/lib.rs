@@ -8,6 +8,8 @@
 mod autostart;
 #[cfg(target_os = "linux")]
 mod autostart_linux;
+#[cfg(target_os = "linux")]
+mod desktop_linux;
 #[cfg(windows)]
 #[expect(
     unsafe_code,
@@ -101,6 +103,8 @@ pub use autostart::{
 };
 #[cfg(target_os = "linux")]
 pub use autostart_linux::{Autostart, autostart_enabled, disable_autostart, enable_autostart};
+#[cfg(target_os = "linux")]
+pub use desktop_linux::{tray_notice, user_language};
 #[cfg(windows)]
 pub use elevated::run_elevated;
 #[cfg(windows)]

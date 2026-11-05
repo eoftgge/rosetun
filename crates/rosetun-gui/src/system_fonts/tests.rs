@@ -212,6 +212,28 @@ fn the_log_has_the_count_of_fallback_fonts_and_no_paths() {
 
 #[cfg(not(windows))]
 #[test]
+fn font_files_are_found_under_the_folders_in_a_stable_order() {
+    let root = std::env::temp_dir().join(format!("rosetun-font-files-{}", std::process::id()));
+    let nested = root.join("truetype/noto");
+    std::fs::create_dir_all(&nested).unwrap();
+    for file in ["b.TTF", "a.otf", "c.ttc", "notes.txt"] {
+        std::fs::write(nested.join(file), "").unwrap();
+    }
+    std::fs::write(root.join("z.ttf"), "").unwrap();
+    assert_eq!(
+        font_files_in(&[root.clone(), root.join("missing")]),
+        [
+            nested.join("a.otf"),
+            nested.join("b.TTF"),
+            nested.join("c.ttc"),
+            root.join("z.ttf"),
+        ]
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(not(windows))]
+#[test]
 fn fontconfig_answers_are_parsed_into_a_face_of_a_file() {
     assert_eq!(
         parse_fontconfig_match(b"2 /usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
