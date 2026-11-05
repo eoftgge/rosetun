@@ -223,10 +223,10 @@ function Get-RosetunGuestDiscoverySource {
 }
 
 function Test-RosetunGuestBroadcastRoute {
-    # One check that the system's routes for multicast and the limited broadcast
-    # are there or gone and where a socket for the limited broadcast goes, which
-    # can take a moment after a connect. Where a socket for multicast goes is
-    # recorded.
+    # One check that the broadcast route is there or gone and where a socket for
+    # the limited broadcast goes, which can take a moment after a connect, and
+    # that multicast's route stays. Where a socket for multicast goes is recorded:
+    # Windows does not settle it by these routes.
     param(
         [Parameter(Mandatory)][string]$Scenario,
         [Parameter(Mandatory)][bool]$OnTunnel
@@ -240,14 +240,15 @@ function Test-RosetunGuestBroadcastRoute {
         if ($source -eq $expected) { break }
         Start-Sleep -Milliseconds 500
     } while ([DateTime]::UtcNow -lt $deadline)
+    Test-Step $Scenario 'rosetun0 keeps 224.0.0.0/4' -Note ($routes -join ', ') { $routes -contains '224.0.0.0/4' }
     if ($OnTunnel) {
-        foreach ($prefix in @('224.0.0.0/4', '255.255.255.255/32')) {
-            Test-Step $Scenario "rosetun0 has $prefix" -Note ($routes -join ', ') { $routes -contains $prefix }
+        Test-Step $Scenario 'rosetun0 has 255.255.255.255/32' -Note ($routes -join ', ') {
+            $routes -contains '255.255.255.255/32'
         }
     }
     else {
-        foreach ($prefix in @('224.0.0.0/4', '255.255.255.255/32')) {
-            Test-Step $Scenario "rosetun0 does not have $prefix" -Note ($routes -join ', ') { $routes -notcontains $prefix }
+        Test-Step $Scenario 'rosetun0 does not have 255.255.255.255/32' -Note ($routes -join ', ') {
+            $routes -notcontains '255.255.255.255/32'
         }
         $chosen = Get-RosetunGuestRoute -Address '255.255.255.255'
         Test-Step $Scenario "Find-NetRoute sends the limited broadcast through $($physical.Alias)" -Note $chosen.InterfaceAlias {
@@ -702,7 +703,10 @@ try {
                     # 224.0.0.0/4 deleted from rosetun0, and then with
                     # 224.0.0.0/24 and 239.255.255.250/32 at metric 0 on the
                     # physical adapter, sockets took the tunnel's address within
-                    # seconds of a connect and no datagram arrived. Before the
+                    # seconds of a connect and no datagram arrived. So too over 5
+                    # minutes with 224.0.0.0/4 also out of the tunnel's routes, so
+                    # that no route on rosetun0 covered multicast: 0 of 321 for
+                    # either group, the limited broadcast 321 of 321. Before the
                     # connect, sockets for SSDP already took 127.0.0.1. This
                     # send follows one on the physical adapter, which can pass
                     # for success.
