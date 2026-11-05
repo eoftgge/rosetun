@@ -1061,8 +1061,9 @@ mod tests {
         };
         config.rule_sets[0].rules.insert(0, template.clone());
         let request = ConnectRequest::from_config(&config).unwrap();
-        assert_eq!(request.rule_set.rules.len(), 8);
-        for (rule, matcher) in request.rule_set.rules[..7]
+        let conditions = RuleTemplate::Torrents.matchers().len();
+        assert_eq!(request.rule_set.rules.len(), conditions + 1);
+        for (rule, matcher) in request.rule_set.rules[..conditions]
             .iter()
             .zip(RuleTemplate::Torrents.matchers())
         {
@@ -1071,7 +1072,10 @@ mod tests {
             assert_eq!(rule.target, template.target);
             assert_eq!(rule.matcher, matcher);
         }
-        assert_eq!(request.rule_set.rules[7], config.rule_sets[0].rules[1]);
+        assert_eq!(
+            request.rule_set.rules[conditions],
+            config.rule_sets[0].rules[1]
+        );
         assert!(
             request
                 .rule_set

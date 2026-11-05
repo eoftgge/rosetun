@@ -463,7 +463,11 @@ mod tests {
             (
                 "template torrents",
                 "nothing.invalid",
-                Some(r"C:\Program Files\Example\qbittorrent.exe"),
+                Some(if cfg!(windows) {
+                    r"C:\Program Files\Example\qbittorrent.exe"
+                } else {
+                    "/usr/bin/qbittorrent"
+                }),
                 ConnectionRoute::Direct,
             ),
             ("rule 2", "www.example.com", None, ConnectionRoute::Direct),
