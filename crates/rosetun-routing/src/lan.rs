@@ -2,6 +2,7 @@
 //! connected to, which stay outside the tunnel and are the only ones the
 //! kill switch opens, each on its own adapter.
 
+use std::fmt;
 use std::net::IpAddr;
 
 use rosetun_config::IpPrefix;
@@ -14,6 +15,12 @@ pub const MIN_IPV4_LENGTH: u8 = 16;
 /// The IPv6 counterpart: a link is a /64; anything shorter than a site's
 /// /48 is not one segment.
 pub const MIN_IPV6_LENGTH: u8 = 48;
+/// How many VPN servers one connected network may hold and still stay open
+/// without their addresses. A session has a main node and a few exits, rarely
+/// on one network. This bounds the address conditions of a WFP filter, which
+/// keeps Lockdown's one fixed key per connected network, and the prefixes
+/// sing-box gets.
+pub const MAX_SERVERS_PER_NETWORK: usize = 8;
 
 /// An adapter as the routing layer identifies it, opaque outside the crate.
 /// On Windows the value is the interface LUID.
@@ -28,11 +35,25 @@ pub struct SegmentNetwork {
 }
 
 /// The computer's own segment: connected networks of the physical adapters
-/// and the adapters themselves, which carry link-local traffic.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// and the adapters themselves, which carry link-local traffic. The addresses
+/// of VPN servers inside those networks are not part of it: only the engine
+/// goes there, by its own permit.
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct LanSegment {
     networks: Vec<SegmentNetwork>,
     interfaces: Vec<InterfaceId>,
+    left_out: Vec<IpAddr>,
+}
+
+/// Node addresses stay out of logs, and plans and scans are logged whole.
+impl fmt::Debug for LanSegment {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LanSegment")
+            .field("networks", &self.networks)
+            .field("interfaces", &self.interfaces)
+            .field("left_out", &self.left_out.len())
+            .finish()
+    }
 }
 
 impl LanSegment {
@@ -48,7 +69,22 @@ impl LanSegment {
         Self {
             networks,
             interfaces,
+            left_out: Vec::new(),
         }
+    }
+
+    /// This segment without these addresses, as `select` leaves out servers,
+    /// for tests of code that only passes segments along.
+    #[doc(hidden)]
+    pub fn leaving_out(mut self, addresses: &[IpAddr]) -> Self {
+        self.left_out.extend(addresses.iter().filter(|address| {
+            self.networks
+                .iter()
+                .any(|network| network.prefix.contains(**address))
+        }));
+        self.left_out.sort_unstable();
+        self.left_out.dedup();
+        self
     }
 
     /// A segment of these networks on one adapter, for tests of code that
@@ -64,6 +100,7 @@ impl LanSegment {
                 })
                 .collect(),
             interfaces: vec![InterfaceId(1)],
+            left_out: Vec::new(),
         }
     }
 
@@ -71,8 +108,30 @@ impl LanSegment {
         &self.networks
     }
 
+    /// The connected networks whole, which say less about a server than
+    /// `route_networks` does: this is the list for logs.
     pub fn prefixes(&self) -> Vec<IpPrefix> {
         self.networks.iter().map(|network| network.prefix).collect()
+    }
+
+    /// The VPN servers' addresses left out of the networks, in order.
+    pub fn left_out(&self) -> &[IpAddr] {
+        &self.left_out
+    }
+
+    /// The segment as routes: each connected network without the addresses
+    /// left out. Traffic to one of those stays in the tunnel, as to any
+    /// address outside.
+    pub fn route_networks(&self) -> Vec<IpPrefix> {
+        let mut prefixes: Vec<IpPrefix> = self
+            .networks
+            .iter()
+            .flat_map(|network| network.prefix.without(&self.left_out))
+            .collect();
+        // The same network on two adapters is one route.
+        prefixes.sort_unstable();
+        prefixes.dedup();
+        prefixes
     }
 
     /// The physical adapters that are up, in a stable order.
@@ -107,8 +166,9 @@ pub enum SkipReason {
     TooWide,
     /// It holds the tunnel's own addresses.
     OverlapsTunnel,
-    /// A VPN server is inside it.
-    OverlapsServer,
+    /// It holds more than `MAX_SERVERS_PER_NETWORK` VPN servers, or nothing
+    /// else.
+    TooManyServers,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -124,7 +184,8 @@ pub struct SegmentQuery<'a> {
     pub tunnel_alias: &'a str,
     /// The tunnel's own networks, such as 172.19.0.0/30.
     pub tunnel_networks: &'a [IpPrefix],
-    /// Addresses of the VPN servers of the session.
+    /// Addresses of the VPN servers of the session, which the networks stay
+    /// open without.
     pub servers: &'a [IpAddr],
 }
 
@@ -207,14 +268,23 @@ pub(crate) fn select(adapters: &[Adapter], query: &SegmentQuery<'_>) -> SegmentS
                 .any(|tunnel| tunnel.overlaps(prefix))
             {
                 Some(SkipReason::OverlapsTunnel)
-            } else if query
-                .servers
-                .iter()
-                .any(|server| prefix.contains(server.to_canonical()))
-            {
-                Some(SkipReason::OverlapsServer)
             } else {
-                None
+                let mut servers: Vec<IpAddr> = query
+                    .servers
+                    .iter()
+                    .map(|server| server.to_canonical())
+                    .filter(|server| prefix.contains(*server))
+                    .collect();
+                servers.sort_unstable();
+                servers.dedup();
+                if servers.len() > MAX_SERVERS_PER_NETWORK
+                    || prefix.ranges_without(&servers).is_empty()
+                {
+                    Some(SkipReason::TooManyServers)
+                } else {
+                    scan.segment.left_out.extend(servers);
+                    None
+                }
             };
             match reason {
                 Some(reason) => {
@@ -240,6 +310,8 @@ pub(crate) fn select(adapters: &[Adapter], query: &SegmentQuery<'_>) -> SegmentS
     scan.segment
         .networks
         .sort_by_key(|network| (network.prefix, network.interface));
+    scan.segment.left_out.sort_unstable();
+    scan.segment.left_out.dedup();
     scan
 }
 
@@ -370,25 +442,23 @@ mod tests {
     }
 
     #[test]
-    fn wide_networks_and_ones_holding_the_tunnel_or_a_server_are_left_out() {
+    fn wide_networks_and_ones_holding_the_tunnel_are_left_out() {
         let adapters = [with(
             adapter(1, "Ethernet", 6, true),
             &[
                 ("10.1.2.3", 8),
                 ("2001:db8::5", 32),
                 ("172.19.0.9", 24),
-                ("198.51.100.9", 24),
                 ("192.0.2.9", 16),
             ],
         )];
-        let servers = ["198.51.100.200".parse().unwrap()];
         let tunnel = [prefix("172.19.0.0", 30)];
         let scan = select(
             &adapters,
             &SegmentQuery {
                 tunnel_alias: "rosetun0",
                 tunnel_networks: &tunnel,
-                servers: &servers,
+                servers: &[],
             },
         );
         assert_eq!(scan.segment.prefixes(), [prefix("192.0.0.0", 16)]);
@@ -398,9 +468,118 @@ mod tests {
                 (prefix("10.0.0.0", 8), SkipReason::TooWide),
                 (prefix("2001:db8::", 32), SkipReason::TooWide),
                 (prefix("172.19.0.0", 24), SkipReason::OverlapsTunnel),
-                (prefix("198.51.100.0", 24), SkipReason::OverlapsServer),
             ]
         );
+    }
+
+    fn scan_with_servers(addresses: &[(&str, u8)], servers: &[IpAddr]) -> SegmentScan {
+        let adapters = [with(adapter(1, "Ethernet", 6, true), addresses)];
+        select(
+            &adapters,
+            &SegmentQuery {
+                tunnel_alias: "rosetun0",
+                tunnel_networks: &[prefix("172.19.0.0", 30)],
+                servers,
+            },
+        )
+    }
+
+    fn ips(list: &[&str]) -> Vec<IpAddr> {
+        list.iter().map(|text| text.parse().unwrap()).collect()
+    }
+
+    #[test]
+    fn a_network_holding_a_server_stays_open_without_that_address() {
+        let servers = ips(&["198.51.100.200", "203.0.113.5", "2001:db8:1::7"]);
+        let scan = scan_with_servers(
+            &[("198.51.100.9", 24), ("2001:db8:1::9", 64), ("192.0.2.9", 24)],
+            &servers,
+        );
+        assert!(scan.skipped.is_empty());
+        assert_eq!(
+            scan.segment.prefixes(),
+            [
+                prefix("192.0.2.0", 24),
+                prefix("198.51.100.0", 24),
+                prefix("2001:db8:1::", 64),
+            ]
+        );
+        // The server outside every network is nobody's concern here.
+        assert_eq!(
+            scan.segment.left_out(),
+            ips(&["198.51.100.200", "2001:db8:1::7"])
+        );
+        let routes = scan.segment.route_networks();
+        assert!(routes.contains(&prefix("192.0.2.0", 24)));
+        assert!(routes.contains(&prefix("198.51.100.0", 25)));
+        assert!(routes.contains(&prefix("198.51.100.201", 32)));
+        for server in scan.segment.left_out() {
+            assert!(routes.iter().all(|route| !route.contains(*server)));
+        }
+    }
+
+    #[test]
+    fn a_server_given_as_a_mapped_address_counts_as_ipv4() {
+        let scan = scan_with_servers(&[("198.51.100.9", 24)], &ips(&["::ffff:198.51.100.200"]));
+        assert_eq!(scan.segment.left_out(), ips(&["198.51.100.200"]));
+    }
+
+    #[test]
+    fn a_network_holding_the_tunnel_stays_closed_whatever_servers_it_holds() {
+        let scan = scan_with_servers(&[("172.19.0.9", 24)], &ips(&["172.19.0.200"]));
+        assert!(scan.segment.networks().is_empty());
+        assert!(scan.segment.left_out().is_empty());
+        assert_eq!(
+            scan.skipped,
+            [(prefix("172.19.0.0", 24), SkipReason::OverlapsTunnel)]
+        );
+    }
+
+    #[test]
+    fn a_network_with_more_servers_than_the_limit_stays_closed() {
+        let servers: Vec<IpAddr> = (1..=u8::try_from(MAX_SERVERS_PER_NETWORK + 1).unwrap())
+            .map(|host| IpAddr::from([198, 51, 100, host]))
+            .collect();
+        let at_limit = scan_with_servers(
+            &[("198.51.100.200", 24)],
+            &servers[..MAX_SERVERS_PER_NETWORK],
+        );
+        assert!(at_limit.skipped.is_empty());
+        assert_eq!(at_limit.segment.left_out().len(), MAX_SERVERS_PER_NETWORK);
+
+        let past_limit = scan_with_servers(&[("198.51.100.200", 24)], &servers);
+        assert!(past_limit.segment.networks().is_empty());
+        assert!(past_limit.segment.left_out().is_empty());
+        assert_eq!(
+            past_limit.skipped,
+            [(prefix("198.51.100.0", 24), SkipReason::TooManyServers)]
+        );
+    }
+
+    #[test]
+    fn a_network_of_only_servers_stays_closed() {
+        let scan = scan_with_servers(
+            &[("198.51.100.0", 31)],
+            &ips(&["198.51.100.0", "198.51.100.1"]),
+        );
+        assert!(scan.segment.networks().is_empty());
+        assert_eq!(
+            scan.skipped,
+            [(prefix("198.51.100.0", 31), SkipReason::TooManyServers)]
+        );
+    }
+
+    #[test]
+    fn the_debug_form_of_a_segment_does_not_name_a_server() {
+        let scan = scan_with_servers(&[("198.51.100.9", 24)], &ips(&["198.51.100.200"]));
+        assert!(!format!("{scan:?}").contains("198.51.100.200"));
+    }
+
+    #[test]
+    fn another_server_address_makes_another_segment() {
+        let one = scan_with_servers(&[("198.51.100.9", 24)], &ips(&["198.51.100.200"]));
+        let other = scan_with_servers(&[("198.51.100.9", 24)], &ips(&["198.51.100.201"]));
+        assert_ne!(one.segment, other.segment);
     }
 
     #[test]

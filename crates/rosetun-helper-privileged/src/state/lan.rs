@@ -4,6 +4,7 @@
 use std::net::IpAddr;
 
 use rosetun_config::{IpPrefix, Settings, TunSettings};
+use rosetun_ipc::{ErrorCode, HelperError};
 use rosetun_routing::{
     RouteRelease, TunnelInterface,
     lan::{LanAccess, LanSegment, SegmentQuery, SegmentScan, SkipReason},
@@ -110,11 +111,14 @@ fn log_scan(scan: &SegmentScan) {
                 network = %prefix,
                 "local network: a connected network overlaps the tunnel's addresses and stays closed"
             ),
-            // The network would tell where the server is.
-            SkipReason::OverlapsServer => tracing::warn!(
-                "local network: a connected network holds a VPN server and stays closed"
+            // The network would tell where the servers are.
+            SkipReason::TooManyServers => tracing::warn!(
+                "local network: a connected network holds too many VPN servers and stays closed"
             ),
         }
+    }
+    if !scan.segment.left_out().is_empty() {
+        tracing::info!("local network: a connected network is open without the address of a VPN server");
     }
 }
 
@@ -164,18 +168,46 @@ impl Session {
         allow_lan: bool,
         private_networks: bool,
     ) -> Option<LanAccess> {
-        allow_lan.then(|| {
-            let tun = self
-                .request
-                .as_ref()
-                .map(|request| request.settings.tun.clone())
-                .unwrap_or_default();
-            LanAccess {
-                segment: self.scan_lan(&tun, &self.lan_servers, false),
-                private_networks,
-                ipv6_multicast: false,
-            }
+        allow_lan.then(|| LanAccess {
+            segment: self.lockdown_segment_around(&self.lan_servers),
+            private_networks,
+            ipv6_multicast: false,
         })
+    }
+
+    fn lockdown_segment_around(&self, servers: &[IpAddr]) -> LanSegment {
+        let tun = self
+            .request
+            .as_ref()
+            .map(|request| request.settings.tun.clone())
+            .unwrap_or_default();
+        self.scan_lan(&tun, servers, false)
+    }
+
+    /// The session's servers are these from now on. Lockdown's persistent
+    /// permit of the segment follows before the session's filters go in: it
+    /// sits beside them in one sublayer, so a server's address left open there
+    /// would be open whatever the session's own permit says. An error fails the
+    /// connect, and teardown puts the segment back as it was.
+    pub(super) fn follow_servers_in_lockdown(
+        &mut self,
+        servers: &[IpAddr],
+    ) -> Result<(), HelperError> {
+        let previous = std::mem::replace(&mut self.lan_servers, servers.to_vec());
+        let state = lockdown::read(&self.lockdown);
+        if !state.enabled || !state.allow_lan || state.upgrade_hold {
+            return Ok(());
+        }
+        let Some(lan) = self.lockdown_lan(true, state.private_networks) else {
+            return Ok(());
+        };
+        if lan.segment == self.lockdown_segment_around(&previous) {
+            return Ok(());
+        }
+        self.routing
+            .enable_lockdown(Some(&lan), &self.lockdown_programs())
+            .map_err(|error| HelperError::new(ErrorCode::RoutingFailed, error.to_string()))?;
+        Ok(())
     }
 
     /// With "Local network" on, a broadcast without a chosen adapter leaves the

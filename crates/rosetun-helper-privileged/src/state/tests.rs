@@ -7800,13 +7800,18 @@ impl RoutingBackend for LanRouting {
         _engine_binaries: &[&Path],
     ) -> Result<RoutingGuard, RoutingError> {
         let segment = |plan: &RoutingPlan| {
-            plan.lan
+            let networks = plan
+                .lan
                 .segment
                 .prefixes()
                 .iter()
                 .map(ToString::to_string)
                 .collect::<Vec<_>>()
-                .join(",")
+                .join(",");
+            match plan.lan.segment.left_out() {
+                [] => networks,
+                left_out => format!("{networks} without {left_out:?}"),
+            }
         };
         self.events
             .lock()
@@ -7886,6 +7891,96 @@ fn a_new_local_network_is_followed_by_a_protected_reconnect() {
     helper.supervise(now);
     assert_eq!(controls.spawns(), 2);
     LAN_VARIANT.store(0, Ordering::Release);
+}
+
+/// The segment 192.0.2.0/24, without the session's servers, as `select`
+/// leaves them out.
+fn segment_around_servers(
+    query: &rosetun_routing::lan::SegmentQuery<'_>,
+) -> std::io::Result<rosetun_routing::lan::SegmentScan> {
+    let prefix = rosetun_config::IpPrefix::new("192.0.2.0".parse().unwrap(), 24).unwrap();
+    Ok(rosetun_routing::lan::SegmentScan {
+        segment: rosetun_routing::lan::LanSegment::for_tests(&[prefix]).leaving_out(query.servers),
+        skipped: Vec::new(),
+    })
+}
+
+fn lan_helper(events: &Arc<Mutex<Vec<String>>>, controls: &Arc<EngineControls>) -> Helper {
+    let mut engines = EngineRegistry::new();
+    engines.register(Box::new(ControlledEngine {
+        controls: Arc::clone(controls),
+        dns_server: None,
+    }));
+    Helper::new(
+        engines,
+        Box::new(LanRouting {
+            events: Arc::clone(events),
+        }),
+        VerboseGate::default(),
+    )
+    .with_lan_scan(segment_around_servers)
+}
+
+#[test]
+fn another_server_address_moves_the_hole_in_the_segment_by_a_protected_reconnect() {
+    let controls = Arc::new(EngineControls::default());
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let helper = lan_helper(&events, &controls);
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    request.settings.allow_lan = true;
+    request.node.server = "192.0.2.10".to_owned();
+    helper.connect(&request).expect("connect");
+    assert_eq!(
+        *events.lock().unwrap(),
+        ["begin 192.0.2.0/24 without [192.0.2.10]", "authorize"]
+    );
+
+    let now = Instant::now();
+    for _ in 0..4 {
+        helper.supervise(now);
+    }
+    assert_eq!(controls.spawns(), 1, "the server's own hole is no change");
+
+    request.node.server = "192.0.2.20".to_owned();
+    helper.apply(&request).expect("apply");
+    assert_eq!(
+        *events.lock().unwrap(),
+        [
+            "begin 192.0.2.0/24 without [192.0.2.10]",
+            "authorize",
+            "prepare 192.0.2.0/24 without [192.0.2.20]",
+            "authorize"
+        ]
+    );
+    for _ in 0..4 {
+        helper.supervise(now);
+    }
+    assert_eq!(controls.spawns(), 2, "the new hole holds");
+
+    // A server outside the network leaves the network whole.
+    request.node.server = "203.0.113.5".to_owned();
+    helper.apply(&request).expect("apply");
+    assert_eq!(
+        events.lock().unwrap().iter().rev().nth(1).unwrap(),
+        "prepare 192.0.2.0/24"
+    );
+}
+
+#[test]
+fn the_tunnels_routes_skip_the_server_and_the_log_list_does_not() {
+    let prefix = rosetun_config::IpPrefix::new("192.0.2.0".parse().unwrap(), 24).unwrap();
+    let segment = rosetun_routing::lan::LanSegment::for_tests(&[prefix])
+        .leaving_out(&["192.0.2.128".parse().unwrap()]);
+    assert_eq!(segment.prefixes(), [prefix]);
+    let routes = segment
+        .route_networks()
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    assert_eq!(routes[0], "192.0.2.0/25");
+    assert!(routes.contains(&"192.0.2.129/32".to_owned()));
+    assert!(!routes.contains(&"192.0.2.128/32".to_owned()));
 }
 
 #[test]

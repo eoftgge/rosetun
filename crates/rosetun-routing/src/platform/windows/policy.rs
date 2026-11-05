@@ -93,6 +93,20 @@ pub(super) const LAN_SUBNETS: [Subnet; 6] = [
     },
 ];
 
+/// Remote addresses from `low` to `high`, both included, of one family.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) struct AddressRange {
+    pub(super) low: IpAddr,
+    pub(super) high: IpAddr,
+}
+
+/// The bounds tell where a VPN server is, and conditions go to the debug log.
+impl std::fmt::Debug for AddressRange {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("AddressRange(..)")
+    }
+}
+
 /// IP protocol numbers of the private DNS block, in this order: UDP, TCP.
 pub(super) const DNS_PROTOCOLS: [u8; 2] = [17, 6];
 
@@ -118,6 +132,8 @@ pub(super) enum Condition {
     /// so several of them match any of these adapters.
     LocalInterface(u64),
     RemoteSubnet(Subnet),
+    /// Like `LocalInterface`, several of them match any of these ranges.
+    RemoteRange(AddressRange),
     Protocol(u8),
     RemotePort(u16),
 }
@@ -233,15 +249,28 @@ pub(super) enum LanRule {
 pub(super) fn lan_rules(lan: &LanAccess) -> Vec<(LanRule, Rule)> {
     let mut rules = Vec::new();
     for network in lan.segment.networks() {
+        let destination = segment_destination(network.prefix, lan.segment.left_out());
+        // A permit with no address condition would open the whole adapter.
+        if destination.is_empty() {
+            continue;
+        }
+        let family = Subnet::from(network.prefix).family();
+        let mut permit = destination.clone();
+        permit.push(Condition::LocalInterface(network.interface.0));
         rules.push((
             LanRule::Segment(network.prefix),
-            interface_permit(network.prefix.into(), &[network.interface.0]),
+            Rule::allow(family, permit, BOOTSTRAP_ALLOW_WEIGHT),
         ));
-        for (index, block) in private_dns_blocks(network.prefix.into())
-            .into_iter()
-            .enumerate()
-        {
-            rules.push((LanRule::SegmentDns(network.prefix, index), block));
+        // The block outranks the engine's permit, so with a server's address
+        // in it an engine could not reach a server on port 53. Without it,
+        // other programs still hit the block of everything else.
+        for (index, protocol) in DNS_PROTOCOLS.into_iter().enumerate() {
+            let mut block = destination.clone();
+            block.extend([Condition::Protocol(protocol), Condition::RemotePort(53)]);
+            rules.push((
+                LanRule::SegmentDns(network.prefix, index),
+                Rule::block(family, block, PRIVATE_DNS_BLOCK_WEIGHT),
+            ));
         }
     }
     let interfaces: Vec<u64> = lan.segment.interfaces().iter().map(|id| id.0).collect();
@@ -267,6 +296,27 @@ pub(super) fn lan_rules(lan: &LanAccess) -> Vec<(LanRule, Rule)> {
         }
     }
     rules
+}
+
+/// The remote-address conditions of a connected network: the whole network,
+/// or the ranges around the VPN servers in it.
+///
+/// A permit that does not match is why a server's address stays closed: other
+/// programs fall to the block of everything else, while the engine keeps its
+/// own permit. A block on the address at a higher weight would decide for the
+/// engine too, since only the heaviest matching filter counts. All ranges sit
+/// in one filter, so the number of filters and Lockdown's keys do not change.
+/// Should Windows ever take the conditions as AND, the permit would match
+/// nothing, which is closed.
+fn segment_destination(prefix: IpPrefix, left_out: &[IpAddr]) -> Vec<Condition> {
+    if !left_out.iter().any(|address| prefix.contains(*address)) {
+        return vec![Condition::RemoteSubnet(prefix.into())];
+    }
+    prefix
+        .ranges_without(left_out)
+        .into_iter()
+        .map(|(low, high)| Condition::RemoteRange(AddressRange { low, high }))
+        .collect()
 }
 
 /// The link-local networks "Local network" opens. IPv6 link-local
@@ -366,6 +416,7 @@ pub(super) fn tunnel_authorization(luid: u64, lockdown: bool) -> Vec<Rule> {
 
 #[cfg(test)]
 pub(super) mod tests {
+    use std::net::IpAddr;
     use std::path::Path;
 
     use super::{
@@ -438,10 +489,29 @@ pub(super) mod tests {
                     .iter()
                     .all(|condition| !matches!(condition, Condition::LocalInterface(_)))
                     || interfaces.any(|value| value == luid);
+                // So are conditions on the remote address.
+                let target = u32::from_be_bytes(destination);
+                let mut ranges = rule
+                    .conditions
+                    .iter()
+                    .filter_map(|condition| match condition {
+                        Condition::RemoteRange(range) => Some(range),
+                        _ => None,
+                    })
+                    .peekable();
+                let range_matches = ranges.peek().is_none()
+                    || ranges.any(|range| match (range.low, range.high) {
+                        (IpAddr::V4(low), IpAddr::V4(high)) => {
+                            (low.to_bits()..=high.to_bits()).contains(&target)
+                        }
+                        _ => false,
+                    });
                 rule.family == AddressFamily::Ipv4
                     && rule.layer == layer
                     && interface_matches
+                    && range_matches
                     && rule.conditions.iter().all(|condition| match condition {
+                        Condition::RemoteRange(_) => true,
                         Condition::RemoteSubnet(Subnet::V4 { address, prefix }) => {
                             let mask = u32::MAX << (32 - *prefix);
                             u32::from_be_bytes(destination) & mask
@@ -713,6 +783,155 @@ pub(super) mod tests {
             decide(&rules, [192, 168, 3, 101], 6, 7575, 999),
             Action::Allow
         );
+    }
+
+    /// `lan_plan(false)` with VPN servers at 192.0.2.1 and 192.0.2.200.
+    fn plan_with_servers() -> RoutingPlan {
+        let mut plan = lan_plan(false);
+        plan.lan.segment = plan.lan.segment.leaving_out(&[
+            "192.0.2.1".parse().unwrap(),
+            "192.0.2.200".parse().unwrap(),
+            "203.0.113.5".parse().unwrap(),
+        ]);
+        plan
+    }
+
+    #[test]
+    fn the_segment_opens_without_the_servers_and_the_engine_still_reaches_them() {
+        let engine = Path::new(r"C:\sing-box.exe");
+        let policy = BootstrapPolicy::from_plan(&plan_with_servers(), &[engine]);
+        let rules: Vec<_> = policy.rules.iter().collect();
+
+        for (destination, action) in [
+            ([192, 0, 2, 0], Action::Allow),
+            ([192, 0, 2, 1], Action::Block),
+            ([192, 0, 2, 2], Action::Allow),
+            ([192, 0, 2, 199], Action::Allow),
+            ([192, 0, 2, 200], Action::Block),
+            ([192, 0, 2, 201], Action::Allow),
+            ([192, 0, 2, 255], Action::Allow),
+            ([203, 0, 113, 5], Action::Block),
+        ] {
+            assert_eq!(
+                decide(&rules, destination, 6, 7575, 7),
+                action,
+                "{destination:?}"
+            );
+        }
+        // The ranges are still on this adapter only.
+        assert_eq!(decide(&rules, [192, 0, 2, 10], 6, 7575, 8), Action::Block);
+
+        // A server on any port, DNS's included, is open to the engine alone.
+        for port in [443, 53] {
+            for (service_account, action) in [(true, Action::Allow), (false, Action::Block)] {
+                let reach = decide_for(
+                    Some(Process {
+                        path: engine,
+                        service_account,
+                    }),
+                    Layer::Connect,
+                    &rules,
+                    [192, 0, 2, 1],
+                    6,
+                    port,
+                    7,
+                );
+                assert_eq!(reach, action, "port {port}, service {service_account}");
+            }
+        }
+
+        // DNS to the other devices stays blocked, to the server by the rest.
+        for destination in [[192, 0, 2, 10], [192, 0, 2, 1]] {
+            for protocol in [17, 6] {
+                assert_eq!(
+                    decide(&rules, destination, protocol, 53, 7),
+                    Action::Block,
+                    "{destination:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn no_range_of_any_filter_covers_a_server() {
+        let policy = BootstrapPolicy::from_plan(&plan_with_servers(), &[Path::new("C:\\e.exe")]);
+        let server: IpAddr = "192.0.2.1".parse().unwrap();
+        for rule in &policy.rules {
+            for condition in &rule.conditions {
+                if let Condition::RemoteRange(range) = condition {
+                    assert!(
+                        !(range.low..=range.high).contains(&server),
+                        "{:?} covers the server",
+                        rule.action
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_segment_without_servers_keeps_its_filters_as_they_were() {
+        let engine = Path::new(r"C:\sing-box.exe");
+        let plain = BootstrapPolicy::from_plan(&lan_plan(false), &[engine]);
+        let mut elsewhere = lan_plan(false);
+        elsewhere.lan.segment = elsewhere
+            .lan
+            .segment
+            .leaving_out(&["203.0.113.5".parse().unwrap()]);
+        assert_eq!(BootstrapPolicy::from_plan(&elsewhere, &[engine]), plain);
+    }
+
+    #[test]
+    fn an_ipv6_segment_also_opens_without_its_server() {
+        let prefix = IpPrefix::new("2001:db8:1::".parse().unwrap(), 64).unwrap();
+        let server: IpAddr = "2001:db8:1::5".parse().unwrap();
+        let lan = LanAccess {
+            segment: LanSegment::from_parts(
+                vec![SegmentNetwork {
+                    prefix,
+                    interface: InterfaceId(7),
+                }],
+                vec![InterfaceId(7)],
+            )
+            .leaving_out(&[server]),
+            ..LanAccess::default()
+        };
+        let rules = super::lan_rules(&lan);
+        let segment: Vec<_> = rules
+            .iter()
+            .filter(|(what, _)| {
+                matches!(
+                    what,
+                    super::LanRule::Segment(_) | super::LanRule::SegmentDns(..)
+                )
+            })
+            .collect();
+        assert_eq!(segment.len(), 3);
+        for (_, rule) in segment {
+            assert_eq!(rule.family, AddressFamily::Ipv6);
+            let ranges: Vec<_> = rule
+                .conditions
+                .iter()
+                .filter_map(|condition| match condition {
+                    Condition::RemoteRange(range) => Some(*range),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(ranges.len(), 2);
+            assert!(
+                ranges
+                    .iter()
+                    .all(|range| !(range.low..=range.high).contains(&server))
+            );
+        }
+    }
+
+    #[test]
+    fn the_debug_form_of_a_rule_does_not_name_a_server() {
+        let policy = BootstrapPolicy::from_plan(&plan_with_servers(), &[Path::new("C:\\e.exe")]);
+        let text = format!("{policy:?}");
+        assert!(text.contains("AddressRange"));
+        assert!(!text.contains("192.0.2."));
     }
 
     #[test]

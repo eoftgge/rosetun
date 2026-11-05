@@ -2059,6 +2059,54 @@ mod tests {
     }
 
     #[test]
+    fn a_vpn_server_inside_the_local_network_stays_in_the_tunnel_and_off_the_direct_rule() {
+        let server: std::net::IpAddr = "192.0.2.10".parse().unwrap();
+        let segment = IpPrefix::new("192.0.2.0".parse().unwrap(), 24)
+            .unwrap()
+            .without(&[server]);
+        let node = node();
+        let rules = rules();
+        let settings = Settings {
+            allow_lan: true,
+            ..Settings::default()
+        };
+        let rendered = render::render(&RenderRequest {
+            extra: &[],
+            node: &node,
+            socks: None,
+            rules: &rules,
+            lists: &[],
+            settings: &settings,
+            lan_segment: &segment,
+            control: None,
+            verbose_log: false,
+        })
+        .expect("rendered");
+        let config: Value = serde_json::from_slice(&rendered.body).expect("JSON");
+
+        let exclude = config["inbounds"][0]["route_exclude_address"]
+            .as_array()
+            .expect("the excluded networks");
+        let route = config["route"]["rules"].as_array().expect("rules");
+        let direct = route
+            .iter()
+            .find(|rule| rule["ip_cidr"][0] == "192.0.2.0/29")
+            .expect("the direct rule of the local network");
+        for list in [exclude, direct["ip_cidr"].as_array().expect("networks")] {
+            let listed: Vec<IpPrefix> = list
+                .iter()
+                .map(|value| {
+                    let (address, length) = value.as_str().unwrap().split_once('/').unwrap();
+                    IpPrefix::new(address.parse().unwrap(), length.parse().unwrap()).unwrap()
+                })
+                .collect();
+            assert!(listed.iter().all(|prefix| !prefix.contains(server)));
+            assert!(listed.contains(&IpPrefix::new("192.0.2.11".parse().unwrap(), 32).unwrap()));
+            assert!(listed.contains(&IpPrefix::new("192.0.2.128".parse().unwrap(), 25).unwrap()));
+        }
+    }
+
+    #[test]
     fn the_local_network_goes_direct_before_a_users_rule_sends_its_address_to_the_vpn() {
         let segment = [
             IpPrefix::new("192.0.2.0".parse().unwrap(), 24).unwrap(),

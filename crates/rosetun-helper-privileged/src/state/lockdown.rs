@@ -673,6 +673,8 @@ mod tests {
     #[derive(Debug, Default)]
     struct Calls {
         enabled: Mutex<Vec<bool>>,
+        /// The addresses each write of the set left out of the segment.
+        left_out: Mutex<Vec<Vec<std::net::IpAddr>>>,
         apps: Mutex<Vec<LockdownApps>>,
         disabled: AtomicUsize,
         hold_ended: AtomicUsize,
@@ -755,6 +757,10 @@ mod tests {
         ) -> Result<LockdownStatus, RoutingError> {
             let allow_lan = lan.is_some();
             self.0.enabled.lock().unwrap().push(allow_lan);
+            self.0.left_out.lock().unwrap().push(
+                lan.map(|lan| lan.segment.left_out().to_vec())
+                    .unwrap_or_default(),
+            );
             self.0.apps.lock().unwrap().push(apps.clone());
             let held = self
                 .0
@@ -943,6 +949,65 @@ mod tests {
             .unwrap();
         helper.session.lock().unwrap().teardown();
         assert_eq!(calls.apps.lock().unwrap().len(), 2);
+    }
+
+    fn segment_around_servers(
+        query: &rosetun_routing::lan::SegmentQuery<'_>,
+    ) -> std::io::Result<rosetun_routing::lan::SegmentScan> {
+        let prefix = rosetun_config::IpPrefix::new("192.0.2.0".parse().unwrap(), 24).unwrap();
+        Ok(rosetun_routing::lan::SegmentScan {
+            segment: rosetun_routing::lan::LanSegment::for_tests(&[prefix])
+                .leaving_out(query.servers),
+            skipped: Vec::new(),
+        })
+    }
+
+    #[test]
+    fn lockdowns_segment_leaves_out_the_sessions_servers_until_the_session_ends() {
+        let calls = Arc::new(Calls::default());
+        let helper = lockdown_helper(&calls).with_lan_scan(segment_around_servers);
+        helper
+            .set_lockdown_as(&Caller::fake(b"admin", true), true, true, false)
+            .unwrap();
+        let writes = || calls.left_out.lock().unwrap().clone();
+        assert_eq!(writes(), [Vec::<std::net::IpAddr>::new()]);
+        let (one, other) = (
+            "192.0.2.10".parse().unwrap(),
+            "192.0.2.20".parse().unwrap(),
+        );
+
+        let mut session = helper.session.lock().unwrap();
+        session.follow_servers_in_lockdown(&[one]).unwrap();
+        assert_eq!(writes().last().unwrap(), &[one]);
+        session.follow_servers_in_lockdown(&[one]).unwrap();
+        assert_eq!(writes().len(), 2, "the same server rewrites nothing");
+        session.follow_servers_in_lockdown(&[other]).unwrap();
+        assert_eq!(writes().last().unwrap(), &[other]);
+        assert_eq!(writes().len(), 3);
+
+        // A connect that failed before the session's filters: nothing was withdrawn.
+        session.teardown();
+        assert!(writes().last().unwrap().is_empty());
+        assert_eq!(writes().len(), 4);
+
+        // A session that ran: its end restores the programs and the whole segment.
+        session.follow_servers_in_lockdown(&[one]).unwrap();
+        session.programs_withdrawn = true;
+        session.teardown();
+        assert!(writes().last().unwrap().is_empty());
+        assert!(session.lan_servers.is_empty());
+        assert!(!session.programs_withdrawn);
+    }
+
+    #[test]
+    fn without_lockdown_a_sessions_servers_write_nothing() {
+        let calls = Arc::new(Calls::default());
+        let helper = lockdown_helper(&calls).with_lan_scan(segment_around_servers);
+        let server = "192.0.2.10".parse().unwrap();
+        let mut session = helper.session.lock().unwrap();
+        session.follow_servers_in_lockdown(&[server]).unwrap();
+        assert_eq!(session.lan_servers, [server]);
+        assert!(calls.left_out.lock().unwrap().is_empty());
     }
 
     #[test]

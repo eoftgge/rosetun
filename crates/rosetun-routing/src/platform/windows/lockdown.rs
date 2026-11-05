@@ -1261,7 +1261,9 @@ mod tests {
         BLOCK_WEIGHT, LockdownFilter, Part, RESOLVER_WEIGHT, SEGMENT_SLOTS, every_filter,
         filter_set, slot,
     };
-    use crate::lan::{InterfaceId, LanAccess, LanSegment, SegmentNetwork};
+    use crate::lan::{
+        InterfaceId, LanAccess, LanSegment, MAX_SERVERS_PER_NETWORK, SegmentNetwork,
+    };
     use crate::platform::windows::policy::{
         self, Action, AddressFamily, BOOTSTRAP_ALLOW_WEIGHT, BootstrapPolicy, Condition, Layer,
         PRIVATE_DNS_BLOCK_WEIGHT, Rule, TUNNEL_WEIGHT,
@@ -1701,6 +1703,69 @@ mod tests {
             assert!(keys.contains(&slot(super::keys::SEGMENT_DNS[0][1], index)));
         }
         assert!(!keys.contains(&slot(super::keys::OUTBOUND_SEGMENT[0], SEGMENT_SLOTS)));
+    }
+
+    fn keys_of(lan: &LanAccess) -> Vec<u128> {
+        let mut keys: Vec<u128> = filter_set(Some(lan), &LockdownApps::default())
+            .iter()
+            .map(|filter| filter.key)
+            .collect();
+        keys.sort_unstable();
+        keys
+    }
+
+    #[test]
+    fn leaving_out_servers_changes_conditions_under_the_same_keys() {
+        let plain = lan(false);
+        let servers: Vec<std::net::IpAddr> = (1..=u8::try_from(MAX_SERVERS_PER_NETWORK).unwrap())
+            .map(|host| std::net::IpAddr::from([192, 0, 2, host * 10]))
+            .collect();
+        let mut around = lan(false);
+        around.segment = around.segment.leaving_out(&servers);
+        assert_eq!(around.segment.left_out().len(), MAX_SERVERS_PER_NETWORK);
+        assert_eq!(keys_of(&around), keys_of(&plain));
+
+        let every = every_filter()
+            .into_iter()
+            .map(|filter| filter.key)
+            .collect::<HashSet<_>>();
+        assert!(keys_of(&around).iter().all(|key| every.contains(key)));
+
+        let permit = |access: &LanAccess| {
+            filter_set(Some(access), &LockdownApps::default())
+                .into_iter()
+                .find(|filter| filter.key == slot(super::keys::OUTBOUND_SEGMENT[0], 0))
+                .unwrap()
+        };
+        assert_ne!(permit(&around).rule, permit(&plain).rule);
+    }
+
+    #[test]
+    fn lockdown_opens_the_segment_both_ways_without_the_server() {
+        let mut around = lan(false);
+        around.segment = around.segment.leaving_out(&["192.0.2.1".parse().unwrap()]);
+        let set = filter_set(Some(&around), &LockdownApps::default());
+        let rules = persistent(&set);
+        for layer in [Layer::Connect, Layer::RecvAccept] {
+            for (destination, action) in [
+                ([192, 0, 2, 0], Action::Allow),
+                ([192, 0, 2, 1], Action::Block),
+                ([192, 0, 2, 2], Action::Allow),
+                ([192, 0, 2, 255], Action::Allow),
+            ] {
+                assert_eq!(
+                    decide_at(layer, &rules, destination, 6, 8080, 7),
+                    action,
+                    "{destination:?}"
+                );
+            }
+        }
+        for protocol in [17, 6] {
+            assert_eq!(
+                decide_at(Layer::Connect, &rules, [192, 0, 2, 10], protocol, 53, 7),
+                Action::Block
+            );
+        }
     }
 
     #[test]

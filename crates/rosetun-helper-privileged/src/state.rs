@@ -310,7 +310,7 @@ struct Session {
     lan_scan: lan::LanScan,
     /// What "Local network" opens for the running session.
     lan: rosetun_routing::lan::LanAccess,
-    /// The session's VPN servers, which the segment must not hold.
+    /// The session's VPN servers, whose addresses the segment leaves out.
     lan_servers: Vec<IpAddr>,
     lan_watch: lan::LanWatch,
     broadcast_route_release: lan::BroadcastRouteRelease,
@@ -2081,7 +2081,8 @@ impl Session {
             .copied()
             .collect::<Vec<_>>();
         let lan = self.lan_access(settings, &servers);
-        let lan_prefixes = lan.segment.prefixes();
+        let lan_prefixes = lan.segment.route_networks();
+        self.follow_servers_in_lockdown(&servers)?;
         if extra.blocked_rules() > 0 {
             tracing::warn!(
                 count = extra.blocked_rules(),
@@ -2821,7 +2822,13 @@ impl Session {
         {
             tracing::error!(%error, "failed to roll back routes");
         }
-        self.restore_lockdown_programs();
+        // Without a session no server is special: Lockdown's segment opens whole.
+        if self.programs_withdrawn {
+            self.lan_servers.clear();
+            self.restore_lockdown_programs();
+        } else if let Err(error) = self.follow_servers_in_lockdown(&[]) {
+            tracing::error!(%error, "Lockdown's local network keeps a VPN server's address closed");
+        }
         *self
             .owner
             .lock()
