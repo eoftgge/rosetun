@@ -137,6 +137,7 @@ fn check_local(own_alias: &str) -> Vec<CheckResult> {
     vec![clock, proxy, packet_interceptor, other_vpn]
 }
 
+#[cfg(windows)]
 const OTHER_VPN_PROCESSES: &[&str] = &[
     "v2rayN.exe",
     "nekoray.exe",
@@ -150,6 +151,25 @@ const OTHER_VPN_PROCESSES: &[&str] = &[
     "openvpn.exe",
     "NetZapret.exe",
 ];
+#[cfg(not(windows))]
+const OTHER_VPN_PROCESSES: &[&str] = &[
+    "v2rayN",
+    "nekoray",
+    "Throne",
+    "Hiddify",
+    "clash-verge",
+    "verge-mihomo",
+    "mihomo",
+    "FlClash",
+    "AmneziaVPN",
+    "openvpn",
+    "openconnect",
+];
+/// Engines the service runs too: another copy of one is another VPN.
+#[cfg(windows)]
+const ENGINE_PROCESSES: &[&str] = &["sing-box.exe", "xray.exe"];
+#[cfg(not(windows))]
+const ENGINE_PROCESSES: &[&str] = &["sing-box", "xray"];
 
 fn process_names(
     processes: &[RunningProcess],
@@ -201,7 +221,7 @@ fn other_vpn_result(
         {
             return true;
         }
-        if !["sing-box.exe", "xray.exe"]
+        if !ENGINE_PROCESSES
             .iter()
             .any(|name| process.name.eq_ignore_ascii_case(name))
         {
@@ -543,6 +563,33 @@ mod tests {
         );
     }
 
+    #[cfg(not(windows))]
+    #[test]
+    fn on_linux_only_the_installed_engines_are_ours() {
+        let exe = Path::new("/usr/lib/rosetun/rosetun-gui");
+        let own = [
+            process("sing-box", Some("/usr/lib/rosetun/sing-box")),
+            process("xray", None),
+        ];
+        assert_eq!(other_vpn_result(&own, vec![], exe).status, CheckStatus::Ok);
+        let other = [
+            process("sing-box", Some("/opt/other/sing-box")),
+            process("openvpn", Some("/usr/sbin/openvpn")),
+        ];
+        assert_eq!(
+            other_vpn_result(&other, vec![], exe).detail,
+            CheckDetail::OtherVpn {
+                processes: vec!["openvpn".into(), "sing-box".into()],
+                adapters: vec![]
+            }
+        );
+        assert_eq!(
+            other_vpn_result(&[], vec!["wg0".into()], exe).status,
+            CheckStatus::Warning
+        );
+    }
+
+    #[cfg(windows)]
     #[test]
     fn ignores_own_engines_and_unknown_paths_but_detects_external_engines() {
         let exe = Path::new("C:/Example/Rosetun/rosetun-gui.exe");

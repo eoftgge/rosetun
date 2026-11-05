@@ -1,5 +1,7 @@
 #![deny(unsafe_code)]
 
+#[cfg(target_os = "linux")]
+mod linux;
 #[cfg(windows)]
 #[expect(
     unsafe_code,
@@ -8,7 +10,7 @@
 mod windows;
 
 use std::io;
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "linux", test))]
 use std::net::Ipv4Addr;
 
 #[cfg(any(windows, test))]
@@ -22,7 +24,7 @@ struct Adapter {
     up: bool,
 }
 
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "linux", test))]
 #[derive(Debug, Default, Clone, Copy)]
 struct DefaultRoutes {
     full: bool,
@@ -30,7 +32,7 @@ struct DefaultRoutes {
     upper_half: bool,
 }
 
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "linux", test))]
 impl DefaultRoutes {
     fn observe(&mut self, address: Ipv4Addr, prefix: u8) {
         match (address.octets(), prefix) {
@@ -77,13 +79,18 @@ fn is_active_vpn_adapter(adapter: &Adapter, own_alias: &str) -> bool {
         })
 }
 
-/// Names of active Wintun, TAP or WireGuard adapters other than our own.
+/// Names of active Wintun, TAP or WireGuard adapters other than our own; on Linux
+/// also the VPN connections NetworkManager has up.
 pub fn active_vpn_adapters(own_alias: &str) -> io::Result<Vec<String>> {
     #[cfg(windows)]
     {
         windows::active_vpn_adapters(own_alias)
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    {
+        linux::active_vpn_adapters(own_alias)
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
     {
         let _ = own_alias;
         Ok(Vec::new())
@@ -97,7 +104,11 @@ pub fn other_tunnels(own_alias: &str) -> io::Result<Vec<String>> {
     {
         windows::other_tunnels(own_alias)
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    {
+        linux::other_tunnels(own_alias)
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
     {
         let _ = own_alias;
         Ok(Vec::new())
