@@ -272,7 +272,7 @@ pub(crate) fn select(adapters: &[Adapter], query: &SegmentQuery<'_>) -> SegmentS
                 let mut servers: Vec<IpAddr> = query
                     .servers
                     .iter()
-                    .map(|server| server.to_canonical())
+                    .map(IpAddr::to_canonical)
                     .filter(|server| prefix.contains(*server))
                     .collect();
                 servers.sort_unstable();
