@@ -138,10 +138,10 @@ fn waits_for_save(action: &Action) -> bool {
         | Action::RestoreMyEdits => true,
         #[cfg(any(windows, test))]
         Action::AnnounceUpdate(_) => true,
+        #[cfg(any(windows, target_os = "linux"))]
+        Action::SetCloseToTray(_) | Action::SetOnQuit(_) => true,
         #[cfg(windows)]
         Action::SetAutostart(_)
-        | Action::SetCloseToTray(_)
-        | Action::SetOnQuit(_)
         | Action::SetNotifications(_)
         | Action::ShowReportFolder
         | Action::OpenFolder(_) => true,
@@ -350,7 +350,7 @@ impl State {
 
     /// Whether closing the window hides it to the tray. With unreadable
     /// settings there is nothing to keep running, so closing quits.
-    #[cfg(any(windows, test))]
+    #[cfg(any(windows, target_os = "linux", test))]
     pub(crate) fn close_hides_window(&self) -> bool {
         if self.config_ready {
             self.config.interface.close_to_tray
@@ -561,13 +561,13 @@ impl State {
                     return self.start_settings(Job::SetAutostart(enabled));
                 }
             }
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "linux"))]
             Action::SetCloseToTray(enabled) => {
                 if self.can_edit_settings() && self.config.interface.close_to_tray != enabled {
                     return self.start_settings(Job::Setting(SettingChange::CloseToTray(enabled)));
                 }
             }
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "linux"))]
             Action::SetOnQuit(action) => {
                 if self.can_edit_settings() && self.config.interface.quit_action != action {
                     return self.start_settings(Job::Setting(SettingChange::QuitAction(action)));

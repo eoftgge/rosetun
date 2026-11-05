@@ -20,7 +20,7 @@ use crate::worker::{ConfigWorkerError, FailureInterference, WorkerEvent};
 mod connection;
 mod exits;
 mod lists;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 mod quit;
 mod route_reason;
 mod rules;
@@ -40,9 +40,9 @@ use lists::ListsState;
 pub(crate) use lists::{AddListDialog, ListOutcome, RulesTab, source_file_name, used_by};
 #[cfg(test)]
 pub(crate) use lists::{RemoveListDialog, RenameListDialog};
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 pub(crate) use quit::QuitDecision;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 use quit::QuitState;
 #[cfg(test)]
 pub(crate) use rules::NameDialog;
@@ -173,7 +173,7 @@ pub(crate) struct State {
     /// The GUI runs outside the scope Lockdown permits (Linux): under Lockdown
     /// it has no network without a session.
     pub(crate) outside_scope: bool,
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     pub(crate) quit: QuitState,
 }
 
@@ -227,7 +227,7 @@ impl Default for State {
             lockdown_lan_sync: false,
             lockdown_lan_kept: false,
             outside_scope: false,
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "linux"))]
             quit: QuitState::default(),
         }
     }
@@ -261,16 +261,16 @@ pub(crate) enum Action {
     SetReduceMotion(bool),
     #[cfg(windows)]
     SetAutostart(bool),
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     SetCloseToTray(bool),
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     SetOnQuit(rosetun_config::QuitAction),
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     SetRememberQuit(bool),
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     CancelQuit,
     /// The quit question's answer; `disconnect` turns the VPN off first.
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     Quit {
         disconnect: bool,
     },
@@ -397,10 +397,10 @@ pub(crate) enum Action {
     ConfirmProtectionOff,
     SelectNode(SubscriptionId, NodeId),
     /// The tray's item: the same session again, without dropping its protection.
-    #[cfg(any(windows, test))]
+    #[cfg(any(windows, target_os = "linux", test))]
     Reconnect,
     /// The tray's server list: as `SelectNode`, and a disconnected tunnel connects.
-    #[cfg(any(windows, test))]
+    #[cfg(any(windows, target_os = "linux", test))]
     SelectNodeFromTray(SubscriptionId, NodeId),
     RevealServer,
     RevealDone,
@@ -457,7 +457,7 @@ pub(crate) enum Job {
     RestoreEdits(AppliedSnapshot),
     LoadTemporaryRules(u64),
     Disconnect,
-    #[cfg(any(windows, test))]
+    #[cfg(any(windows, target_os = "linux", test))]
     Reconnect,
     OpenNetwork,
     SetInterfaceScale(u16),
@@ -628,7 +628,7 @@ impl State {
             | WorkerEvent::SetKillSwitch(_)
             | WorkerEvent::SetLockdown { .. }
             | WorkerEvent::TunnelDelay(_)) => self.reduce_connection(event),
-            #[cfg(any(windows, test))]
+            #[cfg(any(windows, target_os = "linux", test))]
             event @ WorkerEvent::Reconnect(_) => self.reduce_connection(event),
             event @ WorkerEvent::TemporaryRules { .. } => self.reduce_session(event),
             WorkerEvent::Connections {
@@ -733,7 +733,7 @@ impl State {
             | Action::RequestLockdown(_)
             | Action::CancelLockdown
             | Action::ConfirmLockdown) => return self.act_connection(action),
-            #[cfg(any(windows, test))]
+            #[cfg(any(windows, target_os = "linux", test))]
             action @ (Action::Reconnect | Action::SelectNodeFromTray(_, _)) => {
                 return self.act_connection(action);
             }
@@ -751,7 +751,7 @@ impl State {
             }
             #[cfg(windows)]
             action @ Action::WindowMinimized => return self.act_session(action),
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "linux"))]
             action @ (Action::SetRememberQuit(_) | Action::CancelQuit | Action::Quit { .. }) => {
                 return self.act_quit(action);
             }
@@ -779,10 +779,12 @@ impl State {
             | Action::CancelResetSettings
             | Action::ConfirmResetSettings
             | Action::SetVerboseLog(_)) => return self.act_settings(action),
+            #[cfg(any(windows, target_os = "linux"))]
+            action @ (Action::SetCloseToTray(_) | Action::SetOnQuit(_)) => {
+                return self.act_settings(action);
+            }
             #[cfg(windows)]
             action @ (Action::SetAutostart(_)
-            | Action::SetCloseToTray(_)
-            | Action::SetOnQuit(_)
             | Action::SetNotifications(_)
             | Action::SaveReport
             | Action::ShowReportFolder

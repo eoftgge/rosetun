@@ -104,7 +104,7 @@ impl WorkerDispatcher {
         });
     }
 
-    #[cfg(any(windows, test))]
+    #[cfg(any(windows, target_os = "linux", test))]
     pub(crate) fn reconnect(&self) {
         self.spawn_task("rosetun-reconnect", move |publisher| {
             tracing::info!("reconnect command started");

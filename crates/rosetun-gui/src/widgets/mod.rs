@@ -32,7 +32,7 @@ pub(crate) use dialogs::{
     ConfirmModal, Dialog, DialogFooter, DialogWidth, FooterChoice, ModalChoice, NameModal,
     confirm_modal, dialog_done, dialog_footer, name_modal,
 };
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 pub(crate) use dialogs::{ThreeWayChoice, ThreeWayModal, three_way_modal};
 pub(crate) use frames::{
     card_chrome_height, card_frame, dismissible_error, dismissible_error_with_action,

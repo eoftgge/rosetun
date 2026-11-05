@@ -6,7 +6,6 @@ use std::sync::{Arc, Mutex, mpsc::Sender};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use eframe::egui;
 use rosetun_config::{
     AccentPreset, AppConfig, DnsSettings, Exit, ExitId, ExitTarget, LanguageSetting, List, ListId,
     LiveConnection, Node, NodeId, ProtectionCapabilities, Rule, RuleId, RuleMatcher, RuleSet,
@@ -35,6 +34,7 @@ use rosetun_ipc::{
 use rosetun_processes::{ProcessListError, RunningProcess, running_processes};
 
 use crate::qr::QrError;
+use crate::repaint::Repaint;
 use crate::state::{ExitRoute, RequestInputs};
 
 const CLIENT_NAME: &str = concat!("rosetun-gui/", env!("CARGO_PKG_VERSION"));
@@ -127,7 +127,7 @@ pub(crate) enum WorkerEvent {
         result: Result<Vec<Rule>, HelperCommandError>,
     },
     Disconnect(Result<(), HelperCommandError>),
-    #[cfg(any(windows, test))]
+    #[cfg(any(windows, target_os = "linux", test))]
     Reconnect(Result<(), HelperCommandError>),
     OpenNetwork(Result<(), HelperCommandError>),
     SetInterfaceScale(Result<(), SettingsError>),
@@ -259,7 +259,7 @@ pub(crate) struct WorkerDispatcher {
 struct ConfigPublisher {
     store: Store,
     tx: Sender<WorkerEvent>,
-    repaint: egui::Context,
+    repaint: Repaint,
     generation: Arc<Mutex<u64>>,
 }
 
@@ -344,11 +344,7 @@ impl ConfigPublisher {
     }
 }
 
-pub(crate) fn start(
-    store: Store,
-    tx: Sender<WorkerEvent>,
-    repaint: egui::Context,
-) -> WorkerDispatcher {
+pub(crate) fn start(store: Store, tx: Sender<WorkerEvent>, repaint: Repaint) -> WorkerDispatcher {
     let publisher = ConfigPublisher {
         store,
         tx: tx.clone(),
@@ -525,11 +521,11 @@ fn status_changed(last: Option<&Status>, next: &Status) -> bool {
     })
 }
 
-fn emit(tx: &Sender<WorkerEvent>, repaint: &egui::Context, event: WorkerEvent) -> bool {
+fn emit(tx: &Sender<WorkerEvent>, repaint: &Repaint, event: WorkerEvent) -> bool {
     if tx.send(event).is_err() {
         return false;
     }
-    repaint.request_repaint();
+    repaint.request();
     true
 }
 
@@ -579,7 +575,7 @@ mod tests {
         let publisher = ConfigPublisher {
             store: Store::at(&path),
             tx,
-            repaint: egui::Context::default(),
+            repaint: Repaint::of(eframe::egui::Context::default()),
             generation: Arc::new(Mutex::new(0)),
         };
         let workers: Vec<_> = (0..8)

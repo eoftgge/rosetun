@@ -12,6 +12,8 @@ memmap2.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc.workspace = true
+serde.workspace = true
+zbus.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 serde.workspace = true

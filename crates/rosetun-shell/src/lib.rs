@@ -47,6 +47,8 @@ mod mapped_file;
     )
 )]
 mod program_icon;
+#[cfg(target_os = "linux")]
+mod status_item;
 
 #[cfg(windows)]
 #[expect(
@@ -115,6 +117,8 @@ pub use program_icon::ComApartment;
 pub use program_icon::{IconImage, program_icon};
 #[cfg(windows)]
 pub use screen_clip::{clipboard_sequence, start_screen_clip};
+#[cfg(target_os = "linux")]
+pub use status_item::{StatusItem, TrayEntry, TrayInput, TrayItem, TrayPixmap};
 #[cfg(windows)]
 pub use system_checks::{proxy_settings, windivert_running};
 #[cfg(windows)]

@@ -3,7 +3,7 @@ use rosetun_config::{ConnectStage, FailureKind, Node, Outbound, RuleTemplate, Tl
 
 use super::{Language, tr_in};
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 pub(crate) fn tray_tooltip(status: &str, server: Option<&str>) -> String {
     let title = crate::constants::TITLE;
     match server {

@@ -199,7 +199,7 @@ mod exits;
 mod lists;
 mod protection;
 mod qr;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 mod quit;
 mod recent;
 mod route_reason;

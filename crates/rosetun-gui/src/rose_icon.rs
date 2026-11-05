@@ -2,7 +2,7 @@
 use eframe::egui::Color32;
 
 use crate::rose_shape::PETALS;
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "linux", test))]
 use crate::theme;
 use crate::theme::Palette;
 
@@ -16,12 +16,12 @@ pub(crate) enum RoseIcon {
     /// Outside the window (taskbar, Explorer, installer), on a dark plate.
     App,
     /// The tray: a rose with a state-specific corner badge.
-    #[cfg(any(windows, test))]
+    #[cfg(any(windows, target_os = "linux", test))]
     Tray(TrayState),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "linux", test))]
 pub(crate) enum TrayState {
     Connected,
     Disconnected,
@@ -31,10 +31,10 @@ pub(crate) enum TrayState {
     ServiceUnavailable,
 }
 
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "linux", test))]
 type Pt = (f32, f32);
 
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "linux", test))]
 fn segment_distance_squared(point: Pt, a: Pt, b: Pt) -> f32 {
     let dx = b.0 - a.0;
     let dy = b.1 - a.1;
@@ -50,7 +50,7 @@ fn segment_distance_squared(point: Pt, a: Pt, b: Pt) -> f32 {
     x * x + y * y
 }
 
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "linux", test))]
 fn badge_color(state: TrayState, palette: &Palette) -> Option<Color32> {
     match state {
         TrayState::Connected | TrayState::Disconnected => None,
@@ -62,7 +62,7 @@ fn badge_color(state: TrayState, palette: &Palette) -> Option<Color32> {
 
 /// The badge's place in a raster of one size, in design units.
 #[derive(Debug, Clone, Copy)]
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "linux", test))]
 struct BadgeGrid {
     /// How far the badge moves from the 48 px design so that the edge of its
     /// disc lies on a pixel boundary; a disc between pixels blurs on all sides.
@@ -71,7 +71,7 @@ struct BadgeGrid {
     pixel: f32,
 }
 
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "linux", test))]
 impl BadgeGrid {
     fn new(size: u32) -> Self {
         let pixel = 48.0 / size as f32;
@@ -84,7 +84,7 @@ impl BadgeGrid {
     }
 }
 
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "linux", test))]
 fn badge_mark(point: Pt, state: TrayState, pixel: f32) -> bool {
     let (x, y) = point;
     // Below about a pixel a stroke turns into a grey smear on the disc.
@@ -119,7 +119,7 @@ fn badge_mark(point: Pt, state: TrayState, pixel: f32) -> bool {
     }
 }
 
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "linux", test))]
 fn sample_badge(
     point: Pt,
     state: TrayState,
@@ -144,13 +144,13 @@ fn sample_badge(
 }
 
 fn sample(
-    #[cfg(any(windows, test))] point: Pt,
+    #[cfg(any(windows, target_os = "linux", test))] point: Pt,
     icon: RoseIcon,
     inside: bool,
-    #[cfg(any(windows, test))] grid: BadgeGrid,
+    #[cfg(any(windows, target_os = "linux", test))] grid: BadgeGrid,
     palette: &Palette,
 ) -> Option<(Color32, u8)> {
-    #[cfg(any(windows, test))]
+    #[cfg(any(windows, target_os = "linux", test))]
     if let RoseIcon::Tray(state) = icon
         && let Some(badge) = sample_badge(point, state, grid, palette)
     {
@@ -158,18 +158,18 @@ fn sample(
     }
     let color = match icon {
         RoseIcon::Emblem | RoseIcon::App => palette.accent_base,
-        #[cfg(any(windows, test))]
+        #[cfg(any(windows, target_os = "linux", test))]
         RoseIcon::Tray(TrayState::Connected) => palette.accent_base,
-        #[cfg(any(windows, test))]
+        #[cfg(any(windows, target_os = "linux", test))]
         RoseIcon::Tray(_) => theme::DISCONNECTED,
     };
-    #[cfg(any(windows, test))]
+    #[cfg(any(windows, target_os = "linux", test))]
     let opacity = if matches!(icon, RoseIcon::Tray(TrayState::ServiceUnavailable)) {
         140
     } else {
         255
     };
-    #[cfg(not(any(windows, test)))]
+    #[cfg(not(any(windows, target_os = "linux", test)))]
     let opacity = 255;
     inside.then_some((color, opacity))
 }
@@ -205,7 +205,7 @@ fn sample_coordinate(pixel: usize, sub: usize, scale: f32) -> f32 {
 fn drawn_mask(size: u32, icon: RoseIcon, palette: &Palette) -> Vec<bool> {
     let scale = 48.0 / size as f32;
     let side = size as usize * SAMPLES_PER_AXIS;
-    #[cfg(any(windows, test))]
+    #[cfg(any(windows, target_os = "linux", test))]
     let grid = BadgeGrid::new(size);
     let mut mask = vec![false; side * side];
     let mut intersections = Vec::new();
@@ -219,11 +219,11 @@ fn drawn_mask(size: u32, icon: RoseIcon, palette: &Palette) -> Vec<bool> {
                 crossing += 1;
             }
             let drawn = sample(
-                #[cfg(any(windows, test))]
+                #[cfg(any(windows, target_os = "linux", test))]
                 (sample_x, sample_y),
                 icon,
                 crossing % 2 == 1,
-                #[cfg(any(windows, test))]
+                #[cfg(any(windows, target_os = "linux", test))]
                 grid,
                 palette,
             );
@@ -366,7 +366,7 @@ fn back(size: u32, icon: RoseIcon, palette: &Palette) -> Vec<bool> {
 fn rasterize(size: u32, icon: RoseIcon, plate: Option<&[bool]>, palette: &Palette) -> Vec<u8> {
     let scale = 48.0 / size as f32;
     let sample_side = size as usize * SAMPLES_PER_AXIS;
-    #[cfg(any(windows, test))]
+    #[cfg(any(windows, target_os = "linux", test))]
     let grid = BadgeGrid::new(size);
     let mut rgba = Vec::with_capacity(size as usize * size as usize * 4);
     let mut row = vec![[0_u32; 4]; size as usize];
@@ -384,11 +384,11 @@ fn rasterize(size: u32, icon: RoseIcon, plate: Option<&[bool]>, palette: &Palett
                         crossing += 1;
                     }
                     let foreground = sample(
-                        #[cfg(any(windows, test))]
+                        #[cfg(any(windows, target_os = "linux", test))]
                         (sample_x, sample_y),
                         icon,
                         crossing % 2 == 1,
-                        #[cfg(any(windows, test))]
+                        #[cfg(any(windows, target_os = "linux", test))]
                         grid,
                         palette,
                     );

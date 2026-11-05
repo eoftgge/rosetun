@@ -446,7 +446,7 @@ impl State {
     }
 
     /// Only a connected tunnel restarts, and only one thing talks to the service at a time.
-    #[cfg(any(windows, test))]
+    #[cfg(any(windows, target_os = "linux", test))]
     pub(crate) fn can_reconnect(&self) -> bool {
         self.helper_available
             && !self.operations.helper

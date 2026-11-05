@@ -293,7 +293,7 @@ pub(crate) fn protection_dialog(ctx: &egui::Context, state: &State, actions: &mu
     }
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 pub(crate) fn quit_dialog(ctx: &egui::Context, state: &State, actions: &mut Vec<Action>) {
     let choice = widgets::three_way_modal(
         ctx,

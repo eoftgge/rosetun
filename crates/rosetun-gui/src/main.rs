@@ -30,6 +30,7 @@ mod programs;
 mod qr;
 mod renderer;
 mod reorder;
+mod repaint;
 mod repaint_trace;
 #[cfg(windows)]
 mod report;
@@ -41,7 +42,7 @@ mod system_fonts;
 #[cfg(test)]
 mod test_ui;
 mod theme;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 mod tray;
 mod view;
 mod widgets;
@@ -167,12 +168,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Before the window and its icon exist, so a non-rose preset never flashes rose.
     theme::set_accent(app::initial_accent(&store));
-    let viewport = eframe::egui::ViewportBuilder::default()
-        .with_title(constants::TITLE)
-        .with_icon(std::sync::Arc::new(brand::window_icon(theme::palette())))
-        .with_decorations(!view::header::CUSTOM_FRAME)
-        .with_inner_size([1200.0, 780.0])
-        .with_min_inner_size([960.0, 640.0]);
+    #[cfg(target_os = "linux")]
+    app::host::run(
+        app::App::without_window(store, repaint::Repaint::default())
+            .outside_scope(scope != rosetun_core::Scope::Inside)
+            .with_shell(activation, open_link, start_hidden)
+            .after_upgrade(after_upgrade),
+        window_viewport,
+    )?;
+    #[cfg(not(target_os = "linux"))]
+    let viewport = base_viewport();
     #[cfg(windows)]
     let viewport = if start_hidden {
         // eframe shows the window after its first frame; keep that frame off every screen.
@@ -180,14 +185,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         viewport
     };
+    #[cfg(not(target_os = "linux"))]
     renderer::run(
         viewport,
         Box::new(move |cc| {
             let app = app::App::new(cc, store);
-            #[cfg(target_os = "linux")]
-            let app = app.outside_scope(scope != rosetun_core::Scope::Inside);
-            #[cfg(target_os = "linux")]
-            let app = app.with_instance(&cc.egui_ctx, activation, open_link);
             #[cfg(windows)]
             let app = app.with_shell(
                 &cc.egui_ctx,
@@ -197,12 +199,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 start_hidden,
                 window_memory::WindowMemory::new(cc, window_file),
             );
-            #[cfg(any(windows, target_os = "linux"))]
+            #[cfg(windows)]
             let app = app.after_upgrade(after_upgrade);
             Ok(Box::new(app))
         }),
     )?;
     Ok(())
+}
+
+fn base_viewport() -> eframe::egui::ViewportBuilder {
+    eframe::egui::ViewportBuilder::default()
+        .with_title(constants::TITLE)
+        .with_icon(std::sync::Arc::new(brand::window_icon(theme::palette())))
+        .with_decorations(!view::header::CUSTOM_FRAME)
+        .with_inner_size([1200.0, 780.0])
+        .with_min_inner_size([960.0, 640.0])
+}
+
+/// Each window the Linux GUI opens, the size of the last one if there was one.
+#[cfg(target_os = "linux")]
+fn window_viewport(shape: app::host::WindowShape) -> eframe::egui::ViewportBuilder {
+    let viewport = base_viewport().with_maximized(shape.maximized);
+    match shape.size {
+        Some(size) => viewport.with_inner_size(size),
+        None => viewport,
+    }
 }
 
 /// The link after `--open-url`. A missing or unreadable value is an empty

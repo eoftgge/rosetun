@@ -114,7 +114,7 @@ mod tests {
                     std::process::id()
                 ))),
                 tx,
-                repaint: egui::Context::default(),
+                repaint: crate::repaint::Repaint::of(eframe::egui::Context::default()),
                 generation: Arc::default(),
             },
             connections: Arc::default(),

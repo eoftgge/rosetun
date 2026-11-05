@@ -1,6 +1,11 @@
-use std::sync::mpsc::{self, Receiver};
-use std::time::Duration;
+#[cfg(target_os = "linux")]
+pub(crate) mod host;
+
 #[cfg(windows)]
+use std::sync::mpsc;
+use std::sync::mpsc::Receiver;
+use std::time::Duration;
+#[cfg(any(windows, target_os = "linux"))]
 use std::time::Instant;
 
 use eframe::egui;
@@ -8,13 +13,12 @@ use rosetun_core::Store;
 
 #[cfg(windows)]
 use crate::notices::{Notice, Notices};
+use crate::repaint::Repaint;
 use crate::repaint_trace::RepaintTrace;
-#[cfg(target_os = "linux")]
-use crate::state::{Action, OpenedLink};
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 use crate::state::{Action, OpenedLink, QuitDecision};
 use crate::state::{Job, State};
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 use crate::tray;
 #[cfg(windows)]
 use crate::window_memory::WindowMemory;
@@ -26,7 +30,7 @@ use crate::{brand, display, i18n, motion, system_fonts, theme, view};
 pub(crate) const OFFSCREEN: egui::Pos2 = egui::pos2(-32000.0, -32000.0);
 
 /// How the window goes away.
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Leave {
     /// Out of sight, still running (the tray, or a quit waiting for the service).
@@ -54,7 +58,7 @@ fn centered_position(monitor: Option<egui::Vec2>, window: egui::Vec2) -> egui::P
     })
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 #[derive(Debug)]
 pub(crate) enum ShellEvent {
     Show,
@@ -67,6 +71,9 @@ pub(crate) enum ShellEvent {
     /// The tray's update item: the release page in the browser.
     OpenUpdate,
     Quit,
+    /// A later run was started by the package upgrade.
+    #[cfg(target_os = "linux")]
+    AfterUpgrade,
 }
 
 pub(crate) struct App {
@@ -77,17 +84,16 @@ pub(crate) struct App {
     system_language: Option<i18n::Language>,
     /// Set only with `ROSETUN_REPAINT_TRACE`.
     repaint_trace: Option<RepaintTrace>,
-    /// What later runs asked for, from the instance socket's thread.
     #[cfg(target_os = "linux")]
-    instance_messages: Option<Receiver<rosetun_shell::InstanceMessage>>,
+    life: host::WindowLife,
     #[cfg(windows)]
     frame_stats: crate::frame_stats::FrameStats,
     /// Frames reach the screen through DirectComposition, above the window's own surface.
     #[cfg(windows)]
     composited: bool,
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     shell_events: Option<Receiver<ShellEvent>>,
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     tray: Option<tray::Tray>,
     #[cfg(windows)]
     notices: Notices,
@@ -102,34 +108,44 @@ pub(crate) struct App {
     cloaked_frame: Option<egui::Vec2>,
     #[cfg(windows)]
     maximize_in: Option<u8>,
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     window_minimized: bool,
     /// eframe on Windows cannot tell a window hidden in the tray from a shown one.
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     window_hidden: bool,
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     quitting: bool,
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     quit_apply_deadline: Option<Instant>,
     /// The quit waits for the tunnel to go down, not only for the service's answer.
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     quit_disconnecting: bool,
 }
 
 impl App {
+    #[cfg(not(target_os = "linux"))]
     pub(crate) fn new(cc: &eframe::CreationContext<'_>, store: Store) -> Self {
-        theme::apply(&cc.egui_ctx);
-        cc.egui_ctx
-            .add_font_provider(std::sync::Arc::new(system_fonts::SystemFonts::new()));
+        Self::prepare_context(&cc.egui_ctx);
+        let app = Self::without_window(store, Repaint::of(cc.egui_ctx.clone()));
+        if let Some(percent) = app.applied_scale {
+            cc.egui_ctx.set_zoom_factor(f32::from(percent) / 100.0);
+        }
         #[cfg(windows)]
-        let system_language =
-            rosetun_shell::user_language().and_then(|locale| i18n::language_of_locale(&locale));
-        #[cfg(not(windows))]
-        let system_language = ["LC_ALL", "LC_MESSAGES", "LANG"]
-            .into_iter()
-            .filter_map(|key| std::env::var(key).ok())
-            .find(|value| !value.trim().is_empty())
-            .and_then(|value| i18n::language_of_locale(&value));
+        let app = Self {
+            composited: cc.wgpu_render_state.is_some(),
+            ..app
+        };
+        app
+    }
+
+    fn prepare_context(ctx: &egui::Context) {
+        theme::apply(ctx);
+        ctx.add_font_provider(std::sync::Arc::new(system_fonts::SystemFonts::new()));
+    }
+
+    /// Everything but the window: the workers run from here on.
+    pub(crate) fn without_window(store: Store, repaint: Repaint) -> Self {
+        let system_language = system_language();
         let setting = store
             .load()
             .map_or(rosetun_config::LanguageSetting::System, |config| {
@@ -137,9 +153,7 @@ impl App {
             });
         i18n::set_language(i18n::resolve_language(setting, system_language));
         let applied_scale = initial_scale(&store);
-        cc.egui_ctx
-            .set_zoom_factor(f32::from(applied_scale) / 100.0);
-        let (tx, events) = mpsc::channel();
+        let (tx, events) = std::sync::mpsc::channel();
         let mut state = State::default();
         state.settings.screen.config_folder =
             store.path().parent().map(std::borrow::ToOwned::to_owned);
@@ -147,7 +161,7 @@ impl App {
             .ok()
             .and_then(|exe| exe.parent().map(|dir| dir.join("licenses")))
             .filter(|dir| dir.is_dir());
-        let workers = worker::start(store, tx, cc.egui_ctx.clone());
+        let workers = worker::start(store, tx, repaint.clone());
         #[cfg(windows)]
         workers.move_autostart_to_task();
         let repaint_trace = RepaintTrace::from_env();
@@ -162,14 +176,14 @@ impl App {
             system_language,
             repaint_trace,
             #[cfg(target_os = "linux")]
-            instance_messages: None,
+            life: host::WindowLife::new(repaint),
             #[cfg(windows)]
             frame_stats: crate::frame_stats::FrameStats::default(),
             #[cfg(windows)]
-            composited: cc.wgpu_render_state.is_some(),
-            #[cfg(windows)]
+            composited: false,
+            #[cfg(any(windows, target_os = "linux"))]
             shell_events: None,
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "linux"))]
             tray: None,
             #[cfg(windows)]
             notices: Notices::default(),
@@ -183,15 +197,15 @@ impl App {
             cloaked_frame: None,
             #[cfg(windows)]
             maximize_in: None,
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "linux"))]
             window_minimized: false,
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "linux"))]
             window_hidden: false,
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "linux"))]
             quitting: false,
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "linux"))]
             quit_apply_deadline: None,
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "linux"))]
             quit_disconnecting: false,
         }
     }
@@ -210,68 +224,6 @@ impl App {
             self.state.start_after_upgrade();
         }
         self
-    }
-
-    /// Serves later runs of the GUI; `open_link` is what this run was started for.
-    #[cfg(target_os = "linux")]
-    pub(crate) fn with_instance(
-        mut self,
-        ctx: &egui::Context,
-        activation: Option<rosetun_shell::Activation>,
-        open_link: Option<String>,
-    ) -> Self {
-        let (sender, messages) = mpsc::channel();
-        self.instance_messages = Some(messages);
-        if let Some(link) = open_link {
-            let _ = sender.send(rosetun_shell::InstanceMessage::OpenLink(link));
-        }
-        if let Some(activation) = activation {
-            let ctx = ctx.clone();
-            std::thread::spawn(move || {
-                let served = activation.serve(|message| {
-                    let _ = sender.send(message);
-                    ctx.request_repaint();
-                });
-                if let Err(error) = served {
-                    tracing::warn!(%error, "the instance socket stopped");
-                }
-            });
-        }
-        self
-    }
-
-    #[cfg(target_os = "linux")]
-    fn receive_instance_messages(&mut self, ctx: &egui::Context) {
-        use rosetun_shell::InstanceMessage;
-
-        while let Some(message) = self
-            .instance_messages
-            .as_ref()
-            .and_then(|messages| messages.try_recv().ok())
-        {
-            ctx.request_repaint();
-            match message {
-                InstanceMessage::Show => self.show_window(ctx),
-                InstanceMessage::AfterUpgrade => self.state.start_after_upgrade(),
-                InstanceMessage::OpenLink(link) => {
-                    if let Some(job) = self.state.act(Action::OpenLink(OpenedLink(link))) {
-                        self.dispatch(job);
-                    }
-                    self.show_window(ctx);
-                }
-            }
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    fn show_window(&self, ctx: &egui::Context) {
-        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
-        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
-        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
-        // Wayland lets no program raise itself; this marks the window for the user.
-        ctx.send_viewport_cmd(egui::ViewportCommand::RequestUserAttention(
-            egui::UserAttentionType::Informational,
-        ));
     }
 
     #[cfg(windows)]
@@ -383,11 +335,14 @@ impl App {
         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
     }
 
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     fn hide_window(&mut self, ctx: &egui::Context) {
+        #[cfg(windows)]
         if let Some(window) = &self.window {
             window.save();
         }
+        #[cfg(target_os = "linux")]
+        self.remember_shape(ctx);
         if let Some(job) = self.state.apply_on_leave() {
             self.dispatch(job);
         }
@@ -404,6 +359,17 @@ impl App {
         send_leaving(ctx, how, || self.cloak_before_leaving());
     }
 
+    #[cfg(windows)]
+    fn closing_for_good(&self) {
+        if let Some(window) = &self.window {
+            window.save();
+        }
+        self.cloak_before_leaving();
+    }
+
+    #[cfg(target_os = "linux")]
+    fn closing_for_good(&self) {}
+
     /// For a window that is closing without a command of ours: eframe closes it once the
     /// close request goes unanswered.
     #[cfg(windows)]
@@ -415,7 +381,7 @@ impl App {
 
     /// Hides the window and closes it once the service has the last request,
     /// at most 10 s later. Without one it closes at once.
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     fn quit(&mut self, ctx: &egui::Context, disconnect: bool) {
         self.quitting = true;
         // A disconnect leaves no session for pending edits to go to.
@@ -429,9 +395,12 @@ impl App {
             self.dispatch(job);
         }
         if waits {
+            #[cfg(windows)]
             if let Some(window) = &self.window {
                 window.save();
             }
+            #[cfg(target_os = "linux")]
+            self.remember_shape(ctx);
             self.leave_window(ctx, Leave::Hide);
             self.quit_disconnecting = disconnect;
             self.quit_apply_deadline = Some(Instant::now() + Duration::from_secs(10));
@@ -478,17 +447,17 @@ impl App {
         self.tray.is_some() && !self.quitting && self.state.close_hides_window()
     }
 
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "linux")))]
     fn hides_on_close(&self) -> bool {
         false
     }
 
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     fn window_hidden(&self) -> bool {
         self.window_hidden
     }
 
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "linux")))]
     fn window_hidden(&self) -> bool {
         false
     }
@@ -509,7 +478,7 @@ impl App {
             Job::RestoreEdits(snapshot) => self.workers.restore_edits(snapshot),
             Job::LoadTemporaryRules(request) => self.workers.load_temporary_rules(request),
             Job::Disconnect => self.workers.disconnect(),
-            #[cfg(any(windows, test))]
+            #[cfg(any(windows, target_os = "linux", test))]
             Job::Reconnect => self.workers.reconnect(),
             Job::OpenNetwork => self.workers.open_network(),
             Job::SetInterfaceScale(percent) => self.workers.set_interface_scale(percent),
@@ -602,6 +571,38 @@ impl App {
     }
 }
 
+/// A Windows session that is ending closes every window at once. On Linux
+/// the session manager ends programs with a signal, so nothing here waits on it.
+#[cfg(windows)]
+fn session_ending() -> bool {
+    rosetun_shell::session_ending()
+}
+
+#[cfg(target_os = "linux")]
+fn session_ending() -> bool {
+    false
+}
+
+#[cfg(all(windows, not(test)))]
+fn system_language() -> Option<i18n::Language> {
+    rosetun_shell::user_language().and_then(|locale| i18n::language_of_locale(&locale))
+}
+
+#[cfg(all(not(windows), not(test)))]
+fn system_language() -> Option<i18n::Language> {
+    ["LC_ALL", "LC_MESSAGES", "LANG"]
+        .into_iter()
+        .filter_map(|key| std::env::var(key).ok())
+        .find(|value| !value.trim().is_empty())
+        .and_then(|value| i18n::language_of_locale(&value))
+}
+
+/// The language is one setting for the whole process, and tests run side by side.
+#[cfg(test)]
+fn system_language() -> Option<i18n::Language> {
+    None
+}
+
 pub(crate) fn initial_accent(store: &Store) -> rosetun_config::AccentPreset {
     store
         .load()
@@ -635,6 +636,55 @@ impl eframe::App for App {
     }
 
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.tick(ctx);
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        if let Some(trace) = &mut self.repaint_trace {
+            trace.observe(ui.ctx());
+        }
+        #[cfg(windows)]
+        self.frame_stats
+            .observe(rosetun_shell::take_window_activity());
+        #[cfg(windows)]
+        self.uncloak_when_painted(ui.ctx());
+        // The root `Ui` copies the style before `logic` runs, so a new accent applied there
+        // would otherwise paint one frame of old widget colours around the new palette.
+        ui.set_style(ui.ctx().global_style());
+        if self.state.config_ready
+            && let Some(percent) = next_scale(
+                self.applied_scale,
+                self.state.config.interface.scale_percent,
+            )
+        {
+            ui.ctx().set_zoom_factor(f32::from(percent) / 100.0);
+            self.applied_scale = Some(percent);
+        }
+        let actions = view::show(ui, &mut self.state);
+        if !actions.is_empty() {
+            ui.ctx().request_repaint();
+        }
+        for action in actions {
+            #[cfg(windows)]
+            if matches!(action, Action::WindowMinimized) {
+                self.window_minimized = true;
+            }
+            if let Some(job) = self.state.act(action) {
+                self.dispatch(job);
+            }
+        }
+        if let Some(delay) = repaint_delay(
+            !self.window_hidden() && view::shows_clock(&self.state),
+            self.state.next_wake(display::now_unix()),
+        ) {
+            ui.ctx().request_repaint_after(delay);
+        }
+    }
+}
+
+impl App {
+    /// One pass of everything that runs with or without a window on screen.
+    fn tick(&mut self, ctx: &egui::Context) {
         #[cfg(windows)]
         if let Some(frames) = self.maximize_in.as_mut() {
             if *frames == 0 {
@@ -659,8 +709,9 @@ impl eframe::App for App {
         if let Some(job) = self.state.take_auto_connect() {
             self.dispatch(job);
         }
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "linux"))]
         if self.state.take_upgrade_attention() {
+            #[cfg(windows)]
             if self.window_hidden
                 && self.state.config.interface.notifications
                 && let Some(tray) = &self.tray
@@ -727,8 +778,6 @@ impl eframe::App for App {
         if let Some(job) = self.state.take_screen_clip_poll(display::now_unix()) {
             self.dispatch(job);
         }
-        #[cfg(target_os = "linux")]
-        self.receive_instance_messages(ctx);
         // A hidden window runs `logic` only, so the schedule must be requested here, not in `ui`.
         if let Some(delay) = repaint_delay(false, self.state.next_wake(display::now_unix())) {
             ctx.request_repaint_after(delay);
@@ -750,17 +799,22 @@ impl eframe::App for App {
             ))));
             #[cfg(windows)]
             self.paint_window_surface();
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "linux"))]
             if let Some(tray) = &mut self.tray {
                 tray.forget_icons();
             }
             ctx.request_repaint();
         }
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "linux"))]
         {
+            #[cfg(windows)]
             if std::mem::take(&mut self.hide_on_start) && !self.quitting {
                 self.hide_window(ctx);
             }
+            #[cfg(target_os = "linux")]
+            self.wait_for_host(ctx);
+            #[cfg(target_os = "linux")]
+            self.open_pending_web_link(ctx);
             while let Some(event) = self
                 .shell_events
                 .as_ref()
@@ -804,19 +858,25 @@ impl eframe::App for App {
                     }
                     ShellEvent::OpenUpdate => {
                         if let Some(release) = self.state.available_update() {
+                            #[cfg(windows)]
                             crate::display::open_web_link(ctx, &release.url);
-                        }
-                    }
-                    ShellEvent::Quit => {
-                        match self.state.quit_decision(rosetun_shell::session_ending()) {
-                            QuitDecision::Ask => {
-                                self.show_window(ctx);
-                                self.state.open_quit_dialog();
+                            #[cfg(target_os = "linux")]
+                            {
+                                let url = release.url.clone();
+                                self.open_web_link(ctx, url);
                             }
-                            QuitDecision::Disconnect => self.quit(ctx, true),
-                            QuitDecision::Leave => self.quit(ctx, false),
                         }
                     }
+                    #[cfg(target_os = "linux")]
+                    ShellEvent::AfterUpgrade => self.state.start_after_upgrade(),
+                    ShellEvent::Quit => match self.state.quit_decision(session_ending()) {
+                        QuitDecision::Ask => {
+                            self.show_window(ctx);
+                            self.state.open_quit_dialog();
+                        }
+                        QuitDecision::Disconnect => self.quit(ctx, true),
+                        QuitDecision::Leave => self.quit(ctx, false),
+                    },
                 }
             }
             if let Some(disconnect) = self.state.take_quit()
@@ -843,23 +903,29 @@ impl eframe::App for App {
                     viewport.focused.unwrap_or(false),
                 )
             });
+            #[cfg(target_os = "linux")]
+            let _ = focused;
             let window_shown = !self.window_hidden && !minimized;
             if let Some(tray) = &mut self.tray {
                 tray.sync(&tray::tray_view(&self.state, window_shown));
             }
+            #[cfg(windows)]
             let notice = self.notices.observe(
                 self.state.visible_status().map(|status| &status.state),
                 self.state.operations.helper,
                 window_shown && focused,
                 Instant::now(),
             );
+            #[cfg(windows)]
             if let Some(notice) = notice
                 && self.state.config.interface.notifications
                 && let Some(tray) = &self.tray
             {
                 tray.notify(notice);
             }
+            #[cfg(windows)]
             let interface = &self.state.config.interface;
+            #[cfg(windows)]
             let announce = self.notices.observe_update(
                 self.state
                     .available_update()
@@ -869,6 +935,7 @@ impl eframe::App for App {
                 interface.notifications && self.tray.is_some(),
                 window_shown && focused,
             );
+            #[cfg(windows)]
             if let Some(version) = announce {
                 if let Some(tray) = &self.tray {
                     tray.notify_update(&version);
@@ -887,19 +954,23 @@ impl eframe::App for App {
             self.window_minimized = minimized;
         }
         if ctx.input(|input| input.viewport().close_requested()) {
-            #[cfg(windows)]
+            #[cfg(target_os = "linux")]
+            if self.life.leaving() {
+                return;
+            }
+            #[cfg(any(windows, target_os = "linux"))]
             if self.quit_apply_deadline.is_some() {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
                 return;
             }
             if self.hides_on_close() {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-                #[cfg(windows)]
+                #[cfg(any(windows, target_os = "linux"))]
                 self.hide_window(ctx);
             } else {
-                #[cfg(windows)]
+                #[cfg(any(windows, target_os = "linux"))]
                 if !self.quitting {
-                    match self.state.quit_decision(rosetun_shell::session_ending()) {
+                    match self.state.quit_decision(session_ending()) {
                         QuitDecision::Ask => {
                             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
                             self.state.open_quit_dialog();
@@ -913,55 +984,9 @@ impl eframe::App for App {
                         QuitDecision::Leave => {}
                     }
                 }
-                #[cfg(windows)]
-                if let Some(window) = &self.window {
-                    window.save();
-                }
-                #[cfg(windows)]
-                self.cloak_before_leaving();
+                #[cfg(any(windows, target_os = "linux"))]
+                self.closing_for_good();
             }
-        }
-    }
-
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        if let Some(trace) = &mut self.repaint_trace {
-            trace.observe(ui.ctx());
-        }
-        #[cfg(windows)]
-        self.frame_stats
-            .observe(rosetun_shell::take_window_activity());
-        #[cfg(windows)]
-        self.uncloak_when_painted(ui.ctx());
-        // The root `Ui` copies the style before `logic` runs, so a new accent applied there
-        // would otherwise paint one frame of old widget colours around the new palette.
-        ui.set_style(ui.ctx().global_style());
-        if self.state.config_ready
-            && let Some(percent) = next_scale(
-                self.applied_scale,
-                self.state.config.interface.scale_percent,
-            )
-        {
-            ui.ctx().set_zoom_factor(f32::from(percent) / 100.0);
-            self.applied_scale = Some(percent);
-        }
-        let actions = view::show(ui, &mut self.state);
-        if !actions.is_empty() {
-            ui.ctx().request_repaint();
-        }
-        for action in actions {
-            #[cfg(windows)]
-            if matches!(action, Action::WindowMinimized) {
-                self.window_minimized = true;
-            }
-            if let Some(job) = self.state.act(action) {
-                self.dispatch(job);
-            }
-        }
-        if let Some(delay) = repaint_delay(
-            !self.window_hidden() && view::shows_clock(&self.state),
-            self.state.next_wake(display::now_unix()),
-        ) {
-            ui.ctx().request_repaint_after(delay);
         }
     }
 }
@@ -985,7 +1010,7 @@ mod tests {
     use std::fs;
     use std::time::Duration;
 
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     #[test]
     fn an_opened_link_is_not_in_shell_event_debug() {
         let event = super::ShellEvent::OpenLink(crate::state::OpenedLink(

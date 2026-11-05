@@ -3060,6 +3060,7 @@ dependencies = [
  "memmap2",
  "serde",
  "windows-sys 0.61.2",
+ "zbus",
 ]
 
 [[package]]

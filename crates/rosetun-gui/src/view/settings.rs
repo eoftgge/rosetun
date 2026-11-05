@@ -1,5 +1,5 @@
 use eframe::egui::{self, RichText};
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 use rosetun_config::QuitAction;
 use rosetun_config::{AccentPreset, ConnectionState, LanguageSetting, TlsMode, XrayUse};
 use rosetun_core::{CheckKind, CheckStatus, DnsPreset};
@@ -119,10 +119,10 @@ fn general(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
             actions.push(Action::SetReduceMotion(reduce_motion));
         }
     });
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     {
         ui.add_space(theme::space::L);
-        windows(ui, state, actions);
+        desktop(ui, state, actions);
     }
 }
 
@@ -147,7 +147,7 @@ fn accent_label(accent: AccentPreset) -> String {
     }
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 fn quit_action_label(action: QuitAction) -> String {
     match action {
         QuitAction::Ask => tr!("quit-action-ask"),
@@ -156,11 +156,13 @@ fn quit_action_label(action: QuitAction) -> String {
     }
 }
 
-#[cfg(windows)]
-fn windows(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
+#[cfg(any(windows, target_os = "linux"))]
+fn desktop(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     widgets::settings_card(ui, |card| {
         let editable = state.can_edit_settings();
+        #[cfg(windows)]
         let mut autostart = state.settings.screen.autostart.unwrap_or(false);
+        #[cfg(windows)]
         if card
             .toggle(
                 tr!("start-with-windows"),
@@ -210,7 +212,9 @@ fn windows(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                 actions.push(Action::SetOnQuit(selected));
             }
         });
+        #[cfg(windows)]
         let mut notifications = state.config.interface.notifications;
+        #[cfg(windows)]
         if card
             .toggle(
                 tr!("notifications"),
@@ -1644,7 +1648,7 @@ mod drop_down_tests {
         });
     }
 
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     #[test]
     fn choosing_what_quitting_does_asks_for_that_action() {
         i18n::in_language(Language::English, || {
@@ -1653,7 +1657,7 @@ mod drop_down_tests {
             let mut actions = Vec::new();
             let mut screen = screen();
             let mut show = |ui: &mut egui::Ui| {
-                egui::CentralPanel::default().show(ui, |ui| windows(ui, &state, &mut actions));
+                egui::CentralPanel::default().show(ui, |ui| desktop(ui, &state, &mut actions));
             };
             screen.click_text(&tr!("quit-action-ask"), &mut show);
             screen.click_text(&tr!("quit-action-keep"), &mut show);

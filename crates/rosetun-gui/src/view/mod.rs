@@ -201,7 +201,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
     if state.settings.screen.reset_open {
         settings::reset_dialog(ctx, state, &mut actions);
     }
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     if state.quit.asking {
         connection::quit_dialog(ctx, state, &mut actions);
     }

@@ -130,7 +130,7 @@ impl State {
 
     /// The tray says what a connect waits for only while it checks the
     /// engine, the one stage that can take a minute without a fault.
-    #[cfg(any(windows, test))]
+    #[cfg(any(windows, target_os = "linux", test))]
     pub(crate) fn tray_stage_label(&self) -> Option<String> {
         let status = self
             .visible_status()
@@ -179,7 +179,7 @@ impl State {
     }
 
     /// Whether the window should come up to explain the closed network.
-    #[cfg(any(windows, test))]
+    #[cfg(any(windows, target_os = "linux", test))]
     pub(crate) fn take_upgrade_attention(&mut self) -> bool {
         std::mem::take(&mut self.upgrade_attention)
     }
@@ -659,7 +659,7 @@ impl State {
                     Err(error) => self.helper_result(Err(error)),
                 }
             }
-            #[cfg(any(windows, test))]
+            #[cfg(any(windows, target_os = "linux", test))]
             WorkerEvent::Reconnect(result) => {
                 self.operations.helper = self.cancel_in_flight;
                 match result {
@@ -776,8 +776,8 @@ impl State {
                     return Some(Job::SelectNode(subscription, node));
                 }
             }
-            #[cfg(any(windows, test))]
-            #[cfg(any(windows, test))]
+            #[cfg(any(windows, target_os = "linux", test))]
+            #[cfg(any(windows, target_os = "linux", test))]
             Action::Reconnect => {
                 if self.can_reconnect() {
                     self.operations.helper = true;
@@ -785,7 +785,7 @@ impl State {
                     return Some(Job::Reconnect);
                 }
             }
-            #[cfg(any(windows, test))]
+            #[cfg(any(windows, target_os = "linux", test))]
             Action::SelectNodeFromTray(subscription, node) => {
                 let disconnected = matches!(
                     self.visible_status().map(|status| &status.state),
