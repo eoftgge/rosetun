@@ -294,7 +294,11 @@ pub(super) fn lan_rules(lan: &LanAccess) -> Vec<(LanRule, Rule)> {
         // permit without the interface condition would open every adapter.
         if !interfaces.is_empty() && !destination.is_empty() {
             let mut permit = destination.clone();
-            permit.extend(interfaces.iter().map(|&luid| Condition::LocalInterface(luid)));
+            permit.extend(
+                interfaces
+                    .iter()
+                    .map(|&luid| Condition::LocalInterface(luid)),
+            );
             rules.push((
                 LanRule::LinkLocal(prefix),
                 Rule::allow(family, permit, BOOTSTRAP_ALLOW_WEIGHT),
@@ -317,9 +321,10 @@ pub(super) fn lan_rules(lan: &LanAccess) -> Vec<(LanRule, Rule)> {
                     Rule::allow(subnet.family(), destination.clone(), BOOTSTRAP_ALLOW_WEIGHT),
                 ));
             }
-            for (protocol, block) in dns_blocks(subnet.family(), &whole_if_empty(destination, prefix))
-                .into_iter()
-                .enumerate()
+            for (protocol, block) in
+                dns_blocks(subnet.family(), &whole_if_empty(destination, prefix))
+                    .into_iter()
+                    .enumerate()
             {
                 rules.push((LanRule::PrivateDns(index, protocol), block));
             }
@@ -331,9 +336,14 @@ pub(super) fn lan_rules(lan: &LanAccess) -> Vec<(LanRule, Rule)> {
 /// `segment_destination` for a range that no scan looked at: past the limit of
 /// servers it has no destination, and so no permit.
 fn bounded_destination(prefix: IpPrefix, servers: &[IpAddr]) -> Vec<Condition> {
-    let inside = servers.iter().filter(|server| prefix.contains(**server)).count();
+    let inside = servers
+        .iter()
+        .filter(|server| prefix.contains(**server))
+        .count();
     if inside > MAX_SERVERS_PER_NETWORK {
-        tracing::warn!("local network: a private range holds too many VPN servers and stays closed");
+        tracing::warn!(
+            "local network: a private range holds too many VPN servers and stays closed"
+        );
         return Vec::new();
     }
     segment_destination(prefix, servers)
@@ -991,7 +1001,10 @@ pub(super) mod tests {
         let servers: Vec<&str> = servers.iter().map(String::as_str).collect();
         let policy = BootstrapPolicy::from_plan(&private_plan_with(&servers), &[engine]);
         let rules: Vec<_> = policy.rules.iter().collect();
-        assert_eq!(decide(&rules, [192, 168, 3, 100], 6, 80, 999), Action::Block);
+        assert_eq!(
+            decide(&rules, [192, 168, 3, 100], 6, 80, 999),
+            Action::Block
+        );
         assert_eq!(decide(&rules, [10, 1, 2, 3], 6, 80, 999), Action::Allow);
         // The block has an address: without one it would close all DNS.
         assert!(policy.rules.iter().all(|rule| {
@@ -999,11 +1012,17 @@ pub(super) mod tests {
                 && !rule.conditions.starts_with(&[Condition::Protocol(6)])
         }));
         assert_eq!(decide(&rules, [203, 0, 113, 7], 17, 53, 999), Action::Block);
-        assert_eq!(decide(&rules, [192, 168, 3, 100], 17, 53, 999), Action::Block);
+        assert_eq!(
+            decide(&rules, [192, 168, 3, 100], 17, 53, 999),
+            Action::Block
+        );
         let at_limit = &servers[..crate::lan::MAX_SERVERS_PER_NETWORK];
         let open = BootstrapPolicy::from_plan(&private_plan_with(at_limit), &[engine]);
         let rules: Vec<_> = open.rules.iter().collect();
-        assert_eq!(decide(&rules, [192, 168, 3, 100], 6, 80, 999), Action::Allow);
+        assert_eq!(
+            decide(&rules, [192, 168, 3, 100], 6, 80, 999),
+            Action::Allow
+        );
     }
 
     #[test]

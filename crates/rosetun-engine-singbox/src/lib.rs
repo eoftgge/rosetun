@@ -2146,14 +2146,13 @@ mod tests {
             config["route"]["rules"].as_array().expect("rules").clone()
         };
 
-        assert!(route(&[]).iter().any(|rule| {
-            rule["ip_is_private"] == true && rule["outbound"] == "direct"
-        }));
+        assert!(
+            route(&[])
+                .iter()
+                .any(|rule| { rule["ip_is_private"] == true && rule["outbound"] == "direct" })
+        );
 
-        let servers = [
-            "192.168.3.1".parse().unwrap(),
-            "fd00::5".parse().unwrap(),
-        ];
+        let servers = ["192.168.3.1".parse().unwrap(), "fd00::5".parse().unwrap()];
         let rendered = route(&servers);
         assert!(rendered.iter().all(|rule| rule["ip_is_private"].is_null()));
         let private = rendered
