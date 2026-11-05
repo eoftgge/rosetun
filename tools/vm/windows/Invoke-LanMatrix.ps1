@@ -24,7 +24,7 @@ param(
     [string]$NodeAddress = '203.0.113.1',
     # The port of the limited-broadcast check; nothing else listens on it.
     [int]$BroadcastPort = 47901,
-    # Only prints where unbound discovery goes over time, and stops. About 4 minutes.
+    # Only prints where unbound discovery goes over time, and stops. About 10 minutes.
     [switch]$DiscoveryTimelineOnly
 )
 
@@ -236,19 +236,6 @@ function Write-RosetunGuestPathCache {
     }
 }
 
-function Get-RosetunGuestSettledSource {
-    # The sources once all of them are $Expected, or as they are after a few
-    # seconds: the service repeats its flush on ticks 500 ms apart.
-    param([Parameter(Mandatory)][string]$Expected, [int]$TimeoutSeconds = 5)
-    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
-    do {
-        $sources = @(Get-RosetunGuestSettledSource -Expected $(if ($OnTunnel) { $TunAddress } else { $physical.Address }))
-        if (-not @($sources | Where-Object { $_.Source -ne $Expected })) { break }
-        Start-Sleep -Milliseconds 500
-    } while ([DateTime]::UtcNow -lt $deadline)
-    $sources
-}
-
 function Test-RosetunGuestDiscoveryRoute {
     # One check that the routes are there or gone, and where the guest's stack
     # now sends discovery: to the tunnel with the routes on it, to the physical
@@ -289,13 +276,21 @@ function Test-RosetunGuestDiscoveryRoute {
 
 function Write-RosetunGuestDiscoveryTimeline {
     # Prints the sockets' source addresses at these moments after the last
-    # connect, then the cached paths and the routes they could take.
+    # connect, and whether a datagram sent without a chosen adapter really
+    # reaches the host, then the cached paths and the routes they could take.
+    # Nothing is sent on the physical adapter first: such a send would leave a
+    # path of its own for the next one to follow.
     param([Parameter(Mandatory)][string]$Label, [int[]]$AtSeconds = @(0, 2, 5, 15, 30, 60))
     $started = [DateTime]::UtcNow
     foreach ($second in $AtSeconds) {
         $wait = $started.AddSeconds($second) - [DateTime]::UtcNow
         if ($wait -gt [TimeSpan]::Zero) { Start-Sleep -Milliseconds ([int]$wait.TotalMilliseconds) }
         $line = (@(Get-RosetunGuestDiscoverySource) | ForEach-Object { "$($_.Address)=$($_.Source)" }) -join '  '
+        foreach ($entry in @($multicast) + @($broadcast)) {
+            $token = [guid]::NewGuid().ToString('N')
+            Send-RosetunGuestMulticast -Group $entry.Group -Port $entry.Port -Token $token | Out-Null
+            $line += "  $($entry.Group)=$(if (Receive-RosetunMulticast -Watch $entry -Token $token -Seconds 2) { 'arrived' } else { 'lost' })"
+        }
         Write-Host "TIMELINE $Label +$($second)s  $line"
     }
     foreach ($group in @('224.0.0.251', '239.255.255.250')) { Write-RosetunGuestPathCache -Address $group }
@@ -309,20 +304,16 @@ function Write-RosetunGuestDiscoveryTimeline {
 }
 
 function Invoke-RosetunDiscoveryTimeline {
-    # A service that has released no route yet, so it flushes nothing: what
-    # Windows does by itself. Then the same after a session with "Local
-    # network", and after a flush by hand with everything in place.
-    Write-Host "TIMELINE connect lan-off, first of this service: $(Connect-RosetunLan 'lan-off.json')"
-    Write-RosetunGuestDiscoveryTimeline -Label 'first lan-off'
+    # Does unbound multicast hold on the physical adapter while the routes are
+    # off the tunnel, and where does it go after that?
+    Write-Host "TIMELINE connect lan-off: $(Connect-RosetunLan 'lan-off.json')"
+    Write-RosetunGuestDiscoveryTimeline -Label 'first lan-off' -AtSeconds @(0, 15, 30)
     Write-Host "TIMELINE connect lan-on: $(Connect-RosetunLan 'lan-on.json')"
-    Write-RosetunGuestDiscoveryTimeline -Label 'lan-on' -AtSeconds @(0, 5)
-    $mark = Get-RosetunHelperLogLength
+    Write-RosetunGuestDiscoveryTimeline -Label 'first lan-on' -AtSeconds @(0, 5, 15, 30, 60, 120, 180)
     Write-Host "TIMELINE connect lan-off after lan-on: $(Connect-RosetunLan 'lan-off.json')"
-    Write-RosetunGuestDiscoveryTimeline -Label 'lan-off after lan-on'
-    @((Get-RosetunHelperLogSince -Offset $mark) -split '\r?\n' | Where-Object { $_ -match 'discovery' }) |
-        ForEach-Object { Write-Host "TIMELINE log $_" }
-    Invoke-RosetunGuest -ScriptBlock { netsh.exe interface ipv4 delete destinationcache | Out-Null }
-    Write-RosetunGuestDiscoveryTimeline -Label 'after a flush by hand' -AtSeconds @(0, 2, 5, 15)
+    Write-RosetunGuestDiscoveryTimeline -Label 'lan-off after lan-on' -AtSeconds @(0, 15, 30, 60, 120)
+    Write-Host "TIMELINE connect lan-on again: $(Connect-RosetunLan 'lan-on.json')"
+    Write-RosetunGuestDiscoveryTimeline -Label 'second lan-on' -AtSeconds @(0, 5, 15, 30, 60, 120)
 }
 
 function Set-RosetunGuestFilterAudit {
