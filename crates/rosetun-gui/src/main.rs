@@ -217,9 +217,15 @@ fn base_viewport() -> eframe::egui::ViewportBuilder {
 }
 
 /// Each window the Linux GUI opens, the size of the last one if there was one.
+///
+/// Wayland has no window icon of a program's own: the compositor finds the menu
+/// entry by this ID and shows the icon named there. The frame is the system's,
+/// so the window moves and resizes as every other on the desktop.
 #[cfg(target_os = "linux")]
 fn window_viewport(shape: app::host::WindowShape) -> eframe::egui::ViewportBuilder {
-    let viewport = base_viewport().with_maximized(shape.maximized);
+    let viewport = base_viewport()
+        .with_app_id("rosetun")
+        .with_maximized(shape.maximized);
     match shape.size {
         Some(size) => viewport.with_inner_size(size),
         None => viewport,
@@ -261,7 +267,25 @@ fn message_to_first(
 mod tests {
     use rosetun_shell::InstanceMessage;
 
-    use super::{message_to_first, open_url_arg};
+    use super::{message_to_first, open_url_arg, window_viewport};
+
+    #[test]
+    fn a_window_names_its_menu_entry_and_comes_back_at_its_last_size() {
+        let shape = crate::app::host::WindowShape {
+            size: Some(eframe::egui::vec2(1000.0, 700.0)),
+            maximized: true,
+        };
+        let viewport = window_viewport(shape);
+        assert_eq!(viewport.app_id.as_deref(), Some("rosetun"));
+        assert_eq!(viewport.decorations, Some(true), "the system's frame");
+        assert_eq!(viewport.inner_size, Some(eframe::egui::vec2(1000.0, 700.0)));
+        assert_eq!(viewport.maximized, Some(true));
+        let first = window_viewport(crate::app::host::WindowShape {
+            size: None,
+            maximized: false,
+        });
+        assert_eq!(first.inner_size, Some(eframe::egui::vec2(1200.0, 780.0)));
+    }
 
     #[test]
     fn a_later_run_asks_for_what_it_was_started_for() {
