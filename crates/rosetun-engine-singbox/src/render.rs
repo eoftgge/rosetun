@@ -1,7 +1,8 @@
 use rosetun_config::{
     DnsSettings, DomainMatch, EXIT_TRACE_IP, EXIT_TRACE_PORT, ExitId, IpPrefix, LINK_LOCAL_V4,
-    LINK_LOCAL_V6, ListRef, LogLevel, Node, Outbound, ProcessMatch, Rule, RuleId, RuleMatcher,
-    RuleSet, RuleTarget, Settings, TlsMode, Transport, UploadedListFormat, list_tag,
+    LINK_LOCAL_V6, ListRef, LogLevel, MULTICAST_V4, MULTICAST_V6, Node, Outbound, ProcessMatch,
+    Rule, RuleId, RuleMatcher, RuleSet, RuleTarget, Settings, TlsMode, Transport,
+    UploadedListFormat, list_tag,
 };
 use rosetun_engine::errors::EngineError;
 use rosetun_engine::{
@@ -209,14 +210,19 @@ fn tun_inbound(settings: &Settings, lan: Option<&[IpPrefix]>) -> Value {
     // sing-tun takes these out of the tunnel's routes, so Windows sends them
     // by its own routes, on the adapter. IPv6 only when the tunnel has it:
     // without an IPv6 address sing-tun installs no IPv6 routes at all.
-    // Multicast is not listed: Windows routes 224.0.0.0/4 on every adapter
-    // by itself, the tunnel's included, and excluding it here changes none
-    // of that.
+    // Multicast only on Windows, where it is what the tunnel's wide routes must
+    // not cover once the service deletes the tunnel's own route to it. Linux
+    // keeps it in the tunnel.
     if let Some(segment) = lan.filter(|_| tun.auto_route) {
         let ipv6 = tun.ipv6.is_some();
+        let multicast = cfg!(windows)
+            .then_some([MULTICAST_V4, MULTICAST_V6])
+            .into_iter()
+            .flatten();
         let exclude: Vec<String> = segment
             .iter()
             .copied()
+            .chain(multicast)
             .chain([LINK_LOCAL_V4[0], LINK_LOCAL_V6[0]])
             .filter(|prefix| prefix.is_ipv4() || ipv6)
             .map(|prefix| prefix.to_string())
@@ -803,11 +809,21 @@ mod tests {
             control: Some(&control),
             verbose_log: false,
         };
+        // The fixtures hold what Windows renders; elsewhere multicast stays
+        // in the tunnel.
+        let expected = |fixture: &str| {
+            if cfg!(windows) {
+                fixture.to_owned()
+            } else {
+                fixture.replace("        \"224.0.0.0/4\",\n", "")
+            }
+            .into_bytes()
+        };
         let rendered = render(&request).unwrap();
         assert!(rendered.unsupported.is_empty());
         assert_eq!(
             rendered.body,
-            include_bytes!("../tests/fixtures/full-config.json")
+            expected(include_str!("../tests/fixtures/full-config.json"))
         );
 
         let chained = render(&RenderRequest {
@@ -823,7 +839,7 @@ mod tests {
         assert!(chained.unsupported.is_empty());
         assert_eq!(
             chained.body,
-            include_bytes!("../tests/fixtures/xray-chain-config.json")
+            expected(include_str!("../tests/fixtures/xray-chain-config.json"))
         );
     }
 

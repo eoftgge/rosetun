@@ -8,17 +8,17 @@ use windows_sys::Win32::{
         },
         Ndis::{IfOperStatusUp, NET_LUID_LH},
     },
-    Networking::WinSock::AF_INET,
+    Networking::WinSock::{ADDRESS_FAMILY, AF_INET},
 };
 
 pub(super) struct ForwardTable(*mut MIB_IPFORWARD_TABLE2);
 
 impl ForwardTable {
-    /// The IPv4 routes; the error is the Windows status.
-    pub(super) fn get() -> Result<Self, u32> {
+    /// The routes of a family; the error is the Windows status.
+    pub(super) fn get(family: ADDRESS_FAMILY) -> Result<Self, u32> {
         let mut table = ptr::null_mut();
         // The API allocates the table and transfers ownership to the caller.
-        let status = unsafe { GetIpForwardTable2(AF_INET, &mut table) };
+        let status = unsafe { GetIpForwardTable2(family, &mut table) };
         if table.is_null() {
             return Err(status);
         }
@@ -53,7 +53,7 @@ fn alias(luid: &NET_LUID_LH) -> Option<String> {
 
 /// Avoid the live TUN even when its route has the best metric.
 pub(super) fn physical_default_interface(exclude_alias: &str) -> Option<String> {
-    let routes = ForwardTable::get().ok()?;
+    let routes = ForwardTable::get(AF_INET).ok()?;
     let mut best: Option<(u64, String)> = None;
     for route in routes.routes() {
         if route.DestinationPrefix.PrefixLength != 0 {
