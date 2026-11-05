@@ -1,4 +1,4 @@
-use eframe::egui::{self, Align, Layout, RichText, Stroke, text::LayoutJob};
+use eframe::egui::{self, Align, Layout, RichText, Stroke, emath::GuiRounding, text::LayoutJob};
 
 use super::tag::title_with_tag;
 use super::toggle::{TOGGLE_SIZE, paint_toggle};
@@ -45,7 +45,7 @@ pub(crate) struct RowOptions {
     /// The change waits for a new connection; see `row_detail`.
     pub(crate) pending: bool,
     /// The setting belongs to the row above: no line or top padding parts them, its text steps
-    /// in and its control keeps the column.
+    /// in behind a guide line and its control keeps the column.
     pub(crate) nested: bool,
 }
 
@@ -133,7 +133,7 @@ impl SettingsCard<'_> {
         } else {
             (theme::space::L, theme::space::L)
         };
-        egui::Frame::new()
+        let row = egui::Frame::new()
             .inner_margin(egui::Margin {
                 left: theme::margin::side(left),
                 right: theme::margin::side(theme::space::L),
@@ -169,7 +169,18 @@ impl SettingsCard<'_> {
                 );
             })
             .response
-            .rect
+            .rect;
+        if options.nested {
+            // Under the left edge of the parent's text, as high as this row's text.
+            let x = (row.left() + theme::space::L)
+                .round_to_pixel_center(self.ui.ctx().pixels_per_point());
+            self.ui.painter().vline(
+                x,
+                row.top()..=row.bottom() - theme::space::L,
+                Stroke::new(theme::stroke::HAIRLINE, theme::palette().border_strong),
+            );
+        }
+        row
     }
 
     /// Shows `hint` while the pointer rests anywhere on the row at `rect`.
@@ -353,6 +364,23 @@ mod tests {
         assert_eq!(rects[2].top() - rects[1].bottom(), 1.0);
         assert_eq!(rects[1].height(), rects[0].height() - theme::space::L);
         assert_eq!(rects[1].width(), rects[0].width());
+
+        let guides: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                egui::Shape::LineSegment { points, stroke } if points[0].x == points[1].x => {
+                    Some((*points, *stroke))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(guides.len(), 1, "only the nested row has a guide");
+        let ([start, end], stroke) = guides[0];
+        assert_eq!(start.y, rects[1].top());
+        assert_eq!(end.y, rects[1].bottom() - theme::space::L);
+        assert!((start.x - (rects[1].left() + theme::space::L)).abs() <= 0.5);
+        assert_eq!(stroke.color, theme::palette().border_strong);
     }
 
     /// The text of a caption and the colour and size of each of its parts.
