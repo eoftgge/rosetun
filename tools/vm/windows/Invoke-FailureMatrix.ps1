@@ -1844,9 +1844,22 @@ Disconnect-RosetunTunnel | Out-Null
 Wait-RosetunState 'Disconnected' | Out-Null
 
 Write-Host 'LAN with kill switch...'
+$lanLogMark = Get-RosetunHelperLogLength
 Connect-RosetunTunnel -RequestName 'request-lan-allowed.json' | Out-Null
 Test-Step 'allow LAN' 'state is Connected' { Wait-RosetunState 'Connected' }
-Test-Step 'allow LAN' 'host LAN listener is reachable' { Test-RosetunLanListener $lanListener }
+if ($UseHostNode) {
+    # The node is the listener's host, and a network that holds a VPN server stays closed.
+    # Invoke-LanMatrix.ps1 keeps its node elsewhere and checks that the network opens.
+    Test-Step 'allow LAN' "the VPN server's network stays closed" {
+        -not (Test-RosetunLanListener $lanListener)
+    }
+    Test-Step 'allow LAN' 'the service says why' {
+        (Get-RosetunHelperLogSince $lanLogMark) -match 'holds a VPN server'
+    }
+}
+else {
+    Test-Step 'allow LAN' 'host LAN listener is reachable' { Test-RosetunLanListener $lanListener }
+}
 Test-Step 'allow LAN' 'direct internet is still blocked' { -not (Test-RosetunDirectEgress) }
 Disconnect-RosetunTunnel | Out-Null
 Test-Step 'allow LAN' 'state is Disconnected' { Wait-RosetunState 'Disconnected' }
