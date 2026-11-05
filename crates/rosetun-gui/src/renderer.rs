@@ -41,7 +41,12 @@ fn should_fallback(renderer: Renderer, failed: bool, creator_available: bool) ->
 
 fn options(viewport: eframe::egui::ViewportBuilder, renderer: Renderer) -> eframe::NativeOptions {
     let mut options = eframe::NativeOptions {
-        viewport: viewport.with_transparent(false),
+        // An opaque swap chain can leave the desktop compositor for a hardware plane, and
+        // with G-SYNC on for windowed programs the driver then runs the whole monitor at this
+        // window's present rate: it flashes as presents start and stop. DWM always composes a
+        // transparent one. Every frame stays opaque: the clear colour has full alpha and
+        // egui's blending keeps it. glow has no such swap chain.
+        viewport: viewport.with_transparent(renderer == Renderer::Wgpu),
         renderer: eframe::Renderer::Glow,
         // `system_fonts::SystemFonts` takes its place.
         system_font_fallback: false,
@@ -221,6 +226,17 @@ mod tests {
                 assert_eq!(select(windows, Some(value)), (default, true));
             }
         }
+    }
+
+    #[test]
+    fn only_wgpu_asks_for_a_transparent_window() {
+        let transparent = |renderer| {
+            options(eframe::egui::ViewportBuilder::default(), renderer)
+                .viewport
+                .transparent
+        };
+        assert_eq!(transparent(Renderer::Wgpu), Some(true));
+        assert_eq!(transparent(Renderer::Glow), Some(false));
     }
 
     #[test]
