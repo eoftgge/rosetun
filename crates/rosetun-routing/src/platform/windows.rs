@@ -22,10 +22,6 @@ pub(super) fn release_discovery_routes(
     discovery_routes::release(tunnel, ipv6)
 }
 
-pub(super) fn flush_discovery_paths(tunnel: &crate::TunnelInterface) -> crate::DiscoveryFlush {
-    discovery_routes::flush_for_tunnel(tunnel)
-}
-
 use session::Engine;
 
 pub(super) fn physical_default_interface(exclude_alias: &str) -> Option<String> {

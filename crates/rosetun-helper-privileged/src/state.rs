@@ -316,11 +316,6 @@ struct Session {
     discovery_route_release: lan::DiscoveryRouteRelease,
     /// The last sweep's failure, which is logged once.
     discovery_route_failure: Option<u32>,
-    /// This service took discovery routes off a tunnel since the last flush
-    /// for a session without them off.
-    discovery_routes_released: bool,
-    discovery_path_flush: lan::DiscoveryPathFlush,
-    discovery_flushes: u8,
     /// The segment Lockdown's set was last written for without a session.
     lockdown_segment: rosetun_routing::lan::LanSegment,
 }
@@ -429,12 +424,6 @@ impl Helper {
                 #[cfg(test)]
                 discovery_route_release: lan::test_release,
                 discovery_route_failure: None,
-                discovery_routes_released: false,
-                #[cfg(not(test))]
-                discovery_path_flush: rosetun_routing::flush_discovery_paths,
-                #[cfg(test)]
-                discovery_path_flush: lan::test_flush,
-                discovery_flushes: 0,
                 lockdown_segment: rosetun_routing::lan::LanSegment::default(),
                 #[cfg(not(test))]
                 adapter_lookup: rosetun_routing::tunnel_adapter_present,
@@ -481,15 +470,6 @@ impl Helper {
             .get_mut()
             .expect("new session is not poisoned")
             .discovery_route_release = release;
-        self
-    }
-
-    #[cfg(test)]
-    fn with_discovery_path_flush(mut self, flush: lan::DiscoveryPathFlush) -> Self {
-        self.session
-            .get_mut()
-            .expect("new session is not poisoned")
-            .discovery_path_flush = flush;
         self
     }
 
@@ -2260,7 +2240,6 @@ impl Session {
         self.lan_servers = servers;
         self.lan_watch = lan::LanWatch::default();
         self.discovery_route_failure = None;
-        self.discovery_flushes = 0;
         let cold_start = self.cold_start;
 
         if chain {
@@ -2439,8 +2418,6 @@ impl Session {
         // supervisor tick after the connect does this if it is too early here.
         if settings.allow_lan {
             self.release_discovery_routes(&settings.tun);
-        } else {
-            self.forget_released_discovery_routes(&settings.tun);
         }
 
         if let Some(server) = dns_server {

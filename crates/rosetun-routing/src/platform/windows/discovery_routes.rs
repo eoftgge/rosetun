@@ -7,35 +7,25 @@
 //! Windows picks a real adapter, where the WFP filters decide as for any other
 //! traffic. The rows belong to the adapter: they go with it, and the next
 //! adapter gets them again, so nothing here has to put them back.
-//!
-//! Windows also keeps a path per multicast destination, and a deleted route
-//! does not end it: a socket follows the old adapter until the path ages out,
-//! for as long as discovery keeps using it. So a change of these routes
-//! flushes the paths.
 
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, UdpSocket};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use windows_sys::Win32::{
     Foundation::ERROR_NOT_FOUND,
-    NetworkManagement::IpHelper::{DeleteIpForwardEntry2, FlushIpPathTable, MIB_IPFORWARD_ROW2},
+    NetworkManagement::IpHelper::{DeleteIpForwardEntry2, MIB_IPFORWARD_ROW2},
     Networking::WinSock::{
         AF_INET, AF_INET6, AF_UNSPEC, MIB_IPPROTO_LOCAL, NL_ROUTE_PROTOCOL, SOCKADDR_INET,
     },
 };
 
 use super::{physical::ForwardTable, tunnel};
-use crate::{DiscoveryFlush, DiscoveryRoutes, TunnelInterface};
+use crate::{DiscoveryRoutes, TunnelInterface};
 
 const IPV4_ROUTES: [(IpAddr, u8); 2] = [
     (IpAddr::V4(Ipv4Addr::new(224, 0, 0, 0)), 4),
     (IpAddr::V4(Ipv4Addr::BROADCAST), 32),
 ];
 const IPV6_ROUTE: (IpAddr, u8) = (IpAddr::V6(Ipv6Addr::new(0xff00, 0, 0, 0, 0, 0, 0, 0)), 8);
-/// mDNS and SSDP, which the system's own services keep sending to.
-const PROBED_GROUPS: [Ipv4Addr; 2] = [
-    Ipv4Addr::new(224, 0, 0, 251),
-    Ipv4Addr::new(239, 255, 255, 250),
-];
 
 /// The fields of a route row that decide whether it goes.
 #[derive(Debug, Clone, Copy)]
@@ -89,43 +79,6 @@ fn route(row: &MIB_IPFORWARD_ROW2) -> Option<Route> {
     })
 }
 
-/// The first Windows error code. Cached paths only save a lookup, so flushing
-/// them costs each destination one fresh route lookup.
-fn flush_paths() -> Option<u32> {
-    [AF_INET, AF_INET6]
-        .into_iter()
-        // SAFETY: the call takes a family by value and touches no memory of ours.
-        .map(|family| unsafe { FlushIpPathTable(family) })
-        .fold(None, |first, status| {
-            first.or((status != 0).then_some(status))
-        })
-}
-
-/// The address a socket without a chosen adapter takes for `group`. Connecting
-/// a datagram socket looks the route up and sends nothing.
-fn source_for(group: Ipv4Addr) -> Option<IpAddr> {
-    let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).ok()?;
-    socket.connect((group, 9)).ok()?;
-    Some(socket.local_addr().ok()?.ip())
-}
-
-fn settled(tunnel: Ipv4Addr, sources: impl IntoIterator<Item = Option<IpAddr>>) -> bool {
-    sources
-        .into_iter()
-        .all(|source| source == Some(IpAddr::V4(tunnel)))
-}
-
-/// Flushes the paths, then looks the groups up afresh. They only come out on
-/// the tunnel once its routes and metric are in place, and a service that sent
-/// between an earlier flush and that moment cached the other adapter again.
-pub(super) fn flush_for_tunnel(tunnel: &TunnelInterface) -> DiscoveryFlush {
-    let failure = flush_paths();
-    DiscoveryFlush {
-        settled: settled(tunnel.ipv4, PROBED_GROUPS.map(source_for)),
-        failure,
-    }
-}
-
 /// Removes what is there; a repeat finds nothing and does nothing. A tunnel
 /// that does not pass validation, such as a stale adapter with the same
 /// alias, is left alone: the next read may find it ready.
@@ -147,11 +100,6 @@ pub(super) fn release(tunnel: &TunnelInterface, ipv6: bool) -> DiscoveryRoutes {
             // synchronous call. The call copies what it needs from the row.
             record(&mut sweep, unsafe { DeleteIpForwardEntry2(row) });
         }
-    }
-    if sweep.removed > 0
-        && let Some(code) = flush_paths()
-    {
-        sweep.failure.get_or_insert(code);
     }
     sweep
 }
@@ -270,16 +218,6 @@ mod tests {
                 failure: Some(5)
             }
         );
-    }
-
-    #[test]
-    fn the_paths_are_settled_only_when_every_group_takes_the_tunnel() {
-        let tunnel = Ipv4Addr::new(172, 19, 0, 1);
-        let on_tunnel = Some(IpAddr::V4(tunnel));
-        let elsewhere = Some(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 10)));
-        assert!(settled(tunnel, [on_tunnel, on_tunnel]));
-        assert!(!settled(tunnel, [on_tunnel, elsewhere]));
-        assert!(!settled(tunnel, [on_tunnel, None]));
     }
 
     #[test]

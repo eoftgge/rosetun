@@ -88,21 +88,6 @@ pub(super) fn release_discovery_routes(
     }
 }
 
-pub(super) fn flush_discovery_paths(tunnel: &crate::TunnelInterface) -> crate::DiscoveryFlush {
-    #[cfg(windows)]
-    {
-        windows::flush_discovery_paths(tunnel)
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = tunnel;
-        crate::DiscoveryFlush {
-            settled: true,
-            failure: None,
-        }
-    }
-}
-
 pub(super) fn physical_default_interface(exclude_alias: &str) -> Option<String> {
     #[cfg(windows)]
     {

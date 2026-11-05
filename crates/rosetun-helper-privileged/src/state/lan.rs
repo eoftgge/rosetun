@@ -5,7 +5,7 @@ use std::net::IpAddr;
 
 use rosetun_config::{IpPrefix, Settings, TunSettings};
 use rosetun_routing::{
-    DiscoveryFlush, DiscoveryRoutes, TunnelInterface,
+    DiscoveryRoutes, TunnelInterface,
     lan::{LanAccess, LanSegment, SegmentQuery, SegmentScan, SkipReason},
 };
 
@@ -16,13 +16,6 @@ pub(super) type LanScan = fn(&SegmentQuery<'_>) -> std::io::Result<SegmentScan>;
 
 /// Takes the system's discovery routes off the tunnel; a hook for tests.
 pub(super) type DiscoveryRouteRelease = fn(&TunnelInterface, bool) -> DiscoveryRoutes;
-
-/// Ends what Windows remembers of a released route; a hook for tests.
-pub(super) type DiscoveryPathFlush = fn(&TunnelInterface) -> DiscoveryFlush;
-
-/// Flushes for one session before giving up, one at the connect and the rest a
-/// supervisor tick (500 ms) apart.
-const FLUSH_ATTEMPTS: u8 = 20;
 
 /// Equal reads in a row, one supervisor tick (500 ms) apart, before a new
 /// segment counts. Joining Wi-Fi, a DHCP lease and waking from sleep change
@@ -75,14 +68,6 @@ pub(super) fn test_scan(_: &SegmentQuery<'_>) -> std::io::Result<SegmentScan> {
 #[cfg(test)]
 pub(super) fn test_release(_: &TunnelInterface, _: bool) -> DiscoveryRoutes {
     DiscoveryRoutes::default()
-}
-
-#[cfg(test)]
-pub(super) fn test_flush(_: &TunnelInterface) -> DiscoveryFlush {
-    DiscoveryFlush {
-        settled: true,
-        failure: None,
-    }
 }
 
 /// The failure to log: a tick repeats the sweep, and the same error twice a
@@ -202,7 +187,6 @@ impl Session {
         };
         let sweep = (self.discovery_route_release)(&tunnel, tun.ipv6.is_some());
         if sweep.removed > 0 {
-            self.discovery_routes_released = true;
             tracing::info!(
                 removed = sweep.removed,
                 "local network: discovery without a chosen adapter stays out of the tunnel"
@@ -215,37 +199,6 @@ impl Session {
             );
         }
         self.discovery_route_failure = sweep.failure;
-    }
-
-    /// A connect without "Local network" after one with it: the tunnel has its
-    /// routes again, but Windows would keep sending discovery where the last
-    /// session sent it, outside the tunnel, until its cached paths age out.
-    /// Repeats on the supervisor's ticks until a fresh lookup takes the tunnel.
-    pub(super) fn forget_released_discovery_routes(&mut self, tun: &TunSettings) {
-        if !self.discovery_routes_released {
-            return;
-        }
-        let Ok(tunnel) = TunnelInterface::try_from(tun) else {
-            self.discovery_routes_released = false;
-            return;
-        };
-        let flush = (self.discovery_path_flush)(&tunnel);
-        if let Some(code) = new_failure(self.discovery_route_failure, flush.failure) {
-            tracing::warn!(
-                code,
-                "local network: could not flush the discovery paths of the last session"
-            );
-        }
-        self.discovery_route_failure = flush.failure;
-        self.discovery_flushes += 1;
-        if flush.settled {
-            self.discovery_routes_released = false;
-        } else if self.discovery_flushes >= FLUSH_ATTEMPTS {
-            self.discovery_routes_released = false;
-            tracing::warn!(
-                "local network: discovery still leaves outside the tunnel after the last session"
-            );
-        }
     }
 
     /// A supervisor tick of a running session: whether the computer is on
@@ -262,7 +215,6 @@ impl Session {
             return false;
         };
         if !settings.allow_lan {
-            self.forget_released_discovery_routes(&settings.tun);
             return false;
         }
         self.release_discovery_routes(&settings.tun);
