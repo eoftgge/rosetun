@@ -34,10 +34,23 @@ pub(super) enum Action {
     Block,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Subnet {
     V4 { address: [u8; 4], prefix: u8 },
     V6 { address: [u8; 16], prefix: u8 },
+}
+
+/// A public network tells where the computer is, and conditions go to the
+/// debug log.
+impl std::fmt::Debug for Subnet {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let prefix = self.prefix();
+        if prefix.is_private() {
+            write!(f, "Subnet({prefix})")
+        } else {
+            f.write_str("Subnet(public)")
+        }
+    }
 }
 
 impl Subnet {
@@ -1036,6 +1049,16 @@ pub(super) mod tests {
                     .all(|range| !(range.low..=range.high).contains(&server))
             );
         }
+    }
+
+    #[test]
+    fn the_debug_form_of_a_rule_names_private_networks_only() {
+        let policy = BootstrapPolicy::from_plan(&lan_plan(true), &[Path::new("C:\\e.exe")]);
+        let text = format!("{policy:?}");
+        assert!(text.contains("Subnet(192.168.0.0/16)"), "{text}");
+        assert!(text.contains("Subnet(public)"), "{text}");
+        assert!(!text.contains("192.0.2"), "{text}");
+        assert!(!text.contains("[192, 0, 2"), "{text}");
     }
 
     #[test]

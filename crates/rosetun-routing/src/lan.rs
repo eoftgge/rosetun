@@ -28,10 +28,23 @@ pub const MAX_SERVERS_PER_NETWORK: usize = 8;
 pub struct InterfaceId(pub(crate) u64);
 
 /// One connected network and the adapter it is connected through.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct SegmentNetwork {
     pub prefix: IpPrefix,
     pub(crate) interface: InterfaceId,
+}
+
+/// A public network tells where the computer is, and plans reach the log.
+impl fmt::Debug for SegmentNetwork {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut debug = f.debug_struct("SegmentNetwork");
+        if self.prefix.is_private() {
+            debug.field("prefix", &self.prefix);
+        } else {
+            debug.field("prefix", &format_args!("public"));
+        }
+        debug.field("interface", &self.interface).finish()
+    }
 }
 
 /// The computer's own segment: connected networks of the physical adapters
@@ -589,6 +602,15 @@ mod tests {
     fn the_debug_form_of_a_segment_does_not_name_a_server() {
         let scan = scan_with_servers(&[("198.51.100.9", 24)], &ips(&["198.51.100.200"]));
         assert!(!format!("{scan:?}").contains("198.51.100.200"));
+    }
+
+    #[test]
+    fn the_debug_form_of_a_segment_names_private_networks_only() {
+        let scan = scan_with_servers(&[("198.51.100.9", 24), ("192.168.1.9", 24)], &[]);
+        let text = format!("{:?}", scan.segment);
+        assert!(text.contains("192.168.1.0"), "{text}");
+        assert!(text.contains("prefix: public"), "{text}");
+        assert!(!text.contains("198.51.100"), "{text}");
     }
 
     #[test]

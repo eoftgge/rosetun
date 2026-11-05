@@ -96,12 +96,21 @@ fn private_servers(servers: &[IpAddr]) -> Vec<IpAddr> {
     private
 }
 
+/// A network as the log may name it: a public one tells where the computer is.
+fn for_log(prefix: IpPrefix) -> String {
+    if prefix.is_private() {
+        prefix.to_string()
+    } else {
+        "public".to_owned()
+    }
+}
+
 fn log_scan(scan: &SegmentScan) {
     let networks = scan
         .segment
         .prefixes()
-        .iter()
-        .map(ToString::to_string)
+        .into_iter()
+        .map(for_log)
         .collect::<Vec<_>>()
         .join(", ");
     tracing::info!(
@@ -111,11 +120,11 @@ fn log_scan(scan: &SegmentScan) {
     for (prefix, reason) in &scan.skipped {
         match reason {
             SkipReason::TooWide => tracing::info!(
-                network = %prefix,
+                network = %for_log(*prefix),
                 "local network: a connected network is too wide to open"
             ),
             SkipReason::OverlapsTunnel => tracing::warn!(
-                network = %prefix,
+                network = %for_log(*prefix),
                 "local network: a connected network overlaps the tunnel's addresses and stays closed"
             ),
             // The network would tell where the servers are.
@@ -338,6 +347,17 @@ mod tests {
         assert_eq!(new_failure(Some(5), Some(5)), None);
         assert_eq!(new_failure(Some(5), Some(87)), Some(87));
         assert_eq!(new_failure(Some(5), None), None);
+    }
+
+    #[test]
+    fn the_log_names_private_networks_and_hides_public_ones() {
+        let network = |text: &str, length| IpPrefix::new(text.parse().unwrap(), length).unwrap();
+        assert_eq!(for_log(network("192.168.1.0", 24)), "192.168.1.0/24");
+        assert_eq!(for_log(network("fd00:1::", 64)), "fd00:1::/64");
+        assert_eq!(for_log(network("198.51.100.0", 24)), "public");
+        assert_eq!(for_log(network("2001:db8:1::", 64)), "public");
+        // Wider than any private network, though it starts inside one.
+        assert_eq!(for_log(network("10.0.0.0", 7)), "public");
     }
 
     #[test]
