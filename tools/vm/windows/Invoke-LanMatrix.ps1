@@ -25,7 +25,11 @@ param(
     # The port of the limited-broadcast check; nothing else listens on it.
     [int]$BroadcastPort = 47901,
     # Only prints where unbound discovery goes over time, and stops. About 10 minutes.
-    [switch]$DiscoveryTimelineOnly
+    [switch]$DiscoveryTimelineOnly,
+    # Only records unbound multicast once a second and every route change for
+    # $TraceSeconds after a connect with "Local network", and stops.
+    [switch]$MulticastTraceOnly,
+    [int]$TraceSeconds = 180
 )
 
 Set-StrictMode -Version Latest
@@ -314,6 +318,97 @@ function Invoke-RosetunDiscoveryTimeline {
     Write-RosetunGuestDiscoveryTimeline -Label 'lan-off after lan-on' -AtSeconds @(0, 15, 30, 60, 120)
     Write-Host "TIMELINE connect lan-on again: $(Connect-RosetunLan 'lan-on.json')"
     Write-RosetunGuestDiscoveryTimeline -Label 'second lan-on' -AtSeconds @(0, 5, 15, 30, 60, 120)
+}
+
+function Invoke-RosetunMulticastTrace {
+    # The trace starts before the connect, so the route changes of the connect
+    # itself are in it. The host counts what arrives while the guest sends.
+    $dir = Get-RosetunGuestDir
+    Disconnect-RosetunTunnel | Out-Null
+    Wait-RosetunState 'Disconnected' | Out-Null
+    $seconds = $TraceSeconds + 30
+    $source = Get-Content -Path (Join-Path $PSScriptRoot 'Trace-RosetunGuestMulticast.ps1') -Raw
+    $commandLine = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$dir\trace-multicast.ps1`" " +
+        "-OutDir `"$dir`" -Seconds $seconds -BroadcastPort $BroadcastPort " +
+        "-PhysicalAlias `"$($physical.Alias)`" -TunAlias `"$TunAlias`""
+    $mark = Get-RosetunHelperLogLength
+    Invoke-RosetunGuest -ScriptBlock {
+        param($dir, $source, $commandLine)
+        foreach ($name in @('multicast-samples.csv', 'multicast-routes.csv', 'multicast-interfaces.csv',
+                'multicast-error.txt', 'multicast-done.txt')) {
+            Remove-Item -Path (Join-Path $dir $name) -Force -ErrorAction SilentlyContinue
+        }
+        [IO.File]::WriteAllText((Join-Path $dir 'trace-multicast.ps1'), $source)
+        # Win32_Process: a process of this session would end with this call.
+        $started = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $commandLine }
+        if ($started.ReturnValue -ne 0) { throw "the trace did not start: $($started.ReturnValue)" }
+    } -ArgumentList $dir, $source, $commandLine
+    # A few samples of the state before the connect.
+    Start-Sleep -Seconds 5
+    $arrived = @{}
+    $watches = @($multicast) + @($broadcast)
+    $connected = Connect-RosetunLan 'lan-on.json'
+    $connectedAt = Invoke-RosetunGuest -ScriptBlock { [DateTime]::UtcNow.ToString('o') }
+    Write-Host "TRACE connect lan-on: $connected at $connectedAt"
+    $done = $false
+    $deadline = [DateTime]::UtcNow.AddSeconds($seconds + 60)
+    $remote = [Net.IPEndPoint]::new([Net.IPAddress]::Any, 0)
+    $nextCheck = [DateTime]::UtcNow
+    while (-not $done -and [DateTime]::UtcNow -lt $deadline) {
+        foreach ($entry in $watches) {
+            while ($entry.Socket.Available -gt 0) {
+                try {
+                    $text = [Text.Encoding]::ASCII.GetString($entry.Socket.Receive([ref]$remote))
+                    if ($text -match 'trace-(\d+)') { $arrived["$($entry.Group) $($Matches[1])"] = $true }
+                }
+                catch [Net.Sockets.SocketException] { break }
+            }
+        }
+        if ([DateTime]::UtcNow -ge $nextCheck) {
+            $nextCheck = [DateTime]::UtcNow.AddSeconds(5)
+            $done = Invoke-RosetunGuest -ScriptBlock { param($dir) Test-Path (Join-Path $dir 'multicast-done.txt') } -ArgumentList $dir
+        }
+        Start-Sleep -Milliseconds 100
+    }
+    $files = Invoke-RosetunGuest -ScriptBlock {
+        param($dir)
+        $read = {
+            param($name)
+            $path = Join-Path $dir $name
+            if (Test-Path $path) { Get-Content -Path $path -Raw } else { '' }
+        }
+        [pscustomobject]@{
+            Samples = & $read 'multicast-samples.csv'
+            Routes = & $read 'multicast-routes.csv'
+            Interfaces = & $read 'multicast-interfaces.csv'
+            Error = & $read 'multicast-error.txt'
+        }
+    } -ArgumentList $dir
+    if ($files.Error) { Write-Host "TRACE guest error: $($files.Error)" }
+    $out = Join-Path $RepoRoot "tools\vm\logs\multicast-trace-$([DateTime]::Now.ToString('yyyyMMdd-HHmmss'))"
+    New-Item -ItemType Directory -Path $out | Out-Null
+    $rows = @($files.Samples | ConvertFrom-Csv | ForEach-Object {
+        $sequence = $_.sequence
+        $_ | Add-Member -NotePropertyName arrived_239 -NotePropertyValue ($arrived.ContainsKey("239.255.255.250 $sequence")) -PassThru |
+            Add-Member -NotePropertyName arrived_224 -NotePropertyValue ($arrived.ContainsKey("224.0.0.251 $sequence")) -PassThru |
+            Add-Member -NotePropertyName arrived_255 -NotePropertyValue ($arrived.ContainsKey("255.255.255.255 $sequence")) -PassThru
+    })
+    $rows | Export-Csv -Path (Join-Path $out 'samples.csv') -NoTypeInformation -Encoding UTF8
+    [IO.File]::WriteAllText((Join-Path $out 'routes.csv'), "$($files.Routes)")
+    [IO.File]::WriteAllText((Join-Path $out 'interfaces.csv'), "$($files.Interfaces)")
+    [IO.File]::WriteAllText((Join-Path $out 'discovery-log.txt'),
+        ((@((Get-RosetunHelperLogSince -Offset $mark) -split '\r?\n' | Where-Object { $_ -match 'discovery' })) -join "`n"))
+    # One line each time the state changes: the moment multicast is lost.
+    $last = ''
+    foreach ($row in $rows) {
+        $state = "best=$($row.best_route_239) socket239=$($row.socket_239) socket224=$($row.socket_224) " +
+            "tunnel224/4=$($row.tunnel_has_224_4) physical224/4=$($row.physical_has_224_4) " +
+            "default=$($row.tunnel_has_default) paths=$($row.path_adapters_239) find=$($row.find_route_239) " +
+            "arrived239=$($row.arrived_239) arrived224=$($row.arrived_224) arrived255=$($row.arrived_255)"
+        if ($state -ne $last) { Write-Host "TRACE $($row.utc) #$($row.sequence) $state" }
+        $last = $state
+    }
+    Write-Host "TRACE files in $out"
 }
 
 function Set-RosetunGuestFilterAudit {
@@ -623,6 +718,10 @@ try {
     try {
         if ($DiscoveryTimelineOnly) {
             Invoke-RosetunDiscoveryTimeline
+            return
+        }
+        if ($MulticastTraceOnly) {
+            Invoke-RosetunMulticastTrace
             return
         }
 
