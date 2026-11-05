@@ -127,14 +127,18 @@ function Get-GuestDnsCacheEntries {
 }
 
 # Resolves example.com with the system resolver so the cache holds it,
-# retrying for up to 15 s.
+# retrying for up to 15 s. An entry counts only if it is still there a moment
+# later and has time left: right after a connect it can vanish before the next
+# read, and the checks that follow need it to last until the flush they test.
 function Set-GuestDnsCacheEntry {
     Invoke-RosetunGuest -ScriptBlock {
         $deadline = (Get-Date).AddSeconds(15)
         do {
             $null = Resolve-DnsName 'example.com' -Type A -ErrorAction SilentlyContinue
-            if (@(Get-DnsClientCache -Entry 'example.com' -ErrorAction SilentlyContinue).Count -gt 0) { break }
             Start-Sleep -Milliseconds 500
+            $lasting = @(Get-DnsClientCache -Entry 'example.com' -ErrorAction SilentlyContinue |
+                Where-Object { $_.TimeToLive -ge 5 })
+            if ($lasting.Count -gt 0) { break }
         } while ((Get-Date) -lt $deadline)
     }
     @(Get-GuestDnsCacheEntries).Count -gt 0
