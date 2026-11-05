@@ -2043,38 +2043,19 @@ mod tests {
             config["inbounds"][0]["route_exclude_address"].clone()
         };
         assert_eq!(exclude(false, None), Value::Null);
-        assert_eq!(exclude(false, Some("fdfe:dcba:9876::1/126")), Value::Null);
-        if cfg!(windows) {
-            assert_eq!(
-                exclude(true, None),
-                serde_json::json!(["192.0.2.0/24", "224.0.0.0/4", "169.254.0.0/16"])
-            );
-            assert_eq!(
-                exclude(true, Some("fdfe:dcba:9876::1/126")),
-                serde_json::json!([
-                    "192.0.2.0/24",
-                    "2001:db8:1::/64",
-                    "224.0.0.0/4",
-                    "ff00::/8",
-                    "169.254.0.0/16",
-                    "fe80::/10"
-                ])
-            );
-        } else {
-            assert_eq!(
-                exclude(true, None),
-                serde_json::json!(["192.0.2.0/24", "169.254.0.0/16"])
-            );
-            assert_eq!(
-                exclude(true, Some("fdfe:dcba:9876::1/126")),
-                serde_json::json!([
-                    "192.0.2.0/24",
-                    "2001:db8:1::/64",
-                    "169.254.0.0/16",
-                    "fe80::/10"
-                ])
-            );
-        }
+        assert_eq!(
+            exclude(true, None),
+            serde_json::json!(["192.0.2.0/24", "169.254.0.0/16"])
+        );
+        assert_eq!(
+            exclude(true, Some("fdfe:dcba:9876::1/126")),
+            serde_json::json!([
+                "192.0.2.0/24",
+                "2001:db8:1::/64",
+                "169.254.0.0/16",
+                "fe80::/10"
+            ])
+        );
     }
 
     #[test]

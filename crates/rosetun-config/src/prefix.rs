@@ -20,12 +20,6 @@ pub const LINK_LOCAL_V4: [IpPrefix; 4] = [
     IpPrefix::v4([255, 255, 255, 255], 32),
 ];
 
-/// All of IPv4 multicast, which Windows routes on every adapter.
-pub const MULTICAST_V4: IpPrefix = IpPrefix::v4([224, 0, 0, 0], 4);
-
-/// All of IPv6 multicast.
-pub const MULTICAST_V6: IpPrefix = IpPrefix::v6([0xff00, 0, 0, 0, 0, 0, 0, 0], 8);
-
 /// The IPv6 counterpart of `LINK_LOCAL_V4`: link-local unicast and
 /// link-local scope multicast (ff02::/16, which holds mDNS and SSDP).
 pub const LINK_LOCAL_V6: [IpPrefix; 2] = [

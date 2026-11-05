@@ -7704,14 +7704,13 @@ fn a_new_local_network_is_followed_by_a_protected_reconnect() {
 }
 
 #[test]
-fn local_network_keeps_discovery_routes_off_the_tunnel_at_connect_and_on_every_tick() {
+fn local_network_keeps_the_broadcast_route_off_the_tunnel_at_connect_and_on_every_tick() {
     static RELEASES: AtomicUsize = AtomicUsize::new(0);
     let (helper, _, _, _) = supervised_helper(true);
-    let helper = helper.with_discovery_route_release(|tunnel, ipv6| {
+    let helper = helper.with_broadcast_route_release(|tunnel| {
         assert_eq!(tunnel.alias, rosetun_config::TunSettings::default().name);
-        assert!(!ipv6, "the default tunnel carries IPv4 only");
         RELEASES.fetch_add(1, Ordering::AcqRel);
-        rosetun_routing::DiscoveryRoutes::default()
+        rosetun_routing::RouteRelease::default()
     });
     let mut request = connect_request();
     request.settings.kill_switch = true;
@@ -7724,24 +7723,9 @@ fn local_network_keeps_discovery_routes_off_the_tunnel_at_connect_and_on_every_t
 }
 
 #[test]
-fn a_tunnel_that_carries_ipv6_gives_up_its_ipv6_discovery_route_too() {
-    static IPV6: AtomicBool = AtomicBool::new(false);
-    let (helper, _, _, _) = supervised_helper(true);
-    let helper = helper.with_discovery_route_release(|_, ipv6| {
-        IPV6.store(ipv6, Ordering::Release);
-        rosetun_routing::DiscoveryRoutes::default()
-    });
-    let mut request = connect_request();
-    request.settings.allow_lan = true;
-    request.settings.tun.ipv6 = Some("fdfe:dcba:9876::1/126".to_owned());
-    helper.connect(&request).expect("connect");
-    assert!(IPV6.load(Ordering::Acquire));
-}
-
-#[test]
-fn a_failure_to_release_discovery_routes_does_not_fail_the_connect() {
+fn a_failure_to_release_the_broadcast_route_does_not_fail_the_connect() {
     let (helper, controls, _, _) = supervised_helper(true);
-    let helper = helper.with_discovery_route_release(|_, _| rosetun_routing::DiscoveryRoutes {
+    let helper = helper.with_broadcast_route_release(|_| rosetun_routing::RouteRelease {
         removed: 0,
         failure: Some(5),
     });
@@ -7755,10 +7739,10 @@ fn a_failure_to_release_discovery_routes_does_not_fail_the_connect() {
 }
 
 #[test]
-fn without_local_network_the_discovery_routes_stay() {
+fn without_local_network_the_broadcast_route_stays() {
     let (helper, _, _, _) = supervised_helper(true);
     let helper =
-        helper.with_discovery_route_release(|_, _| panic!("the routes stay without Local network"));
+        helper.with_broadcast_route_release(|_| panic!("the route stays without Local network"));
     let mut request = connect_request();
     request.settings.kill_switch = true;
     helper.connect(&request).expect("connect");
