@@ -112,9 +112,12 @@ fn main() -> ExitCode {
             Ok((_, private_networks)) => update_lockdown_lan(enabled, private_networks),
             Err(message) => local_result(Err(message)),
         },
-        Command::Lockdown(enabled) => match saved_lan() {
+        // The local network matters only to Lockdown going on, and the way out must
+        // not depend on finding the settings of whoever runs it.
+        Command::Lockdown(false) => with_helper(|client| lockdown(client, false, false, false)),
+        Command::Lockdown(true) => match saved_lan() {
             Ok((allow_lan, private_networks)) => {
-                with_helper(|client| lockdown(client, enabled, allow_lan, private_networks))
+                with_helper(|client| lockdown(client, true, allow_lan, private_networks))
             }
             Err(message) => local_result(Err(message)),
         },
