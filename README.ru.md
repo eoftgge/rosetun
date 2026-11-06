@@ -181,5 +181,3 @@ Lockdown защищает от случайных утечек: VPN упал, с
 Лицензия Rosetun: **GPL-3.0-or-later**, © 2026 Sandaar. Текст в [LICENSE](LICENSE). В составе программы идёт официальная сборка sing-box без изменений, также под GPL-3.0-or-later. Также в составе идёт официальная сборка Xray-core без изменений под MPL-2.0; её исходники приложены к каждому выпуску, а лицензия устанавливается в `licenses/`. Файлы Xray `geoip.dat` и `geosite.dat` не устанавливаются. В исполняемый файл встроен Wintun 0.14.1, авторские права принадлежат WireGuard LLC; он распространяется по [Wintun Prebuilt Binaries License](installer/third-party/wintun-prebuilt-binaries-license.txt). Лицензия и уведомление устанавливаются как `licenses/wintun-prebuilt-binaries-license.txt` и `licenses/wintun.txt`. Шрифты Manrope и Cormorant Garamond распространяются под OFL-1.1. Уведомления о лицензиях крейтов Rust устанавливаются в `licenses/third-party.html`.
 
 Rosetun не связан с sing-box, SagerNet или Project X.
-
-![CI](https://github.com/eoftgge/rosetun/actions/workflows/ci.yml/badge.svg)
