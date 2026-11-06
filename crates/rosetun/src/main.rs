@@ -198,7 +198,7 @@ fn apply_error_message(error: &ClientError) -> Option<&'static str> {
 fn access_denied_message(error: &ClientError) -> Option<&'static str> {
     matches!(error, ClientError::Helper(helper) if helper.code == ErrorCode::AccessDenied)
         .then_some(
-            "the tunnel is connected from another Windows account; only that account or an administrator can control it",
+            "the tunnel is connected from another account; only that account or an administrator can control it",
         )
 }
 
@@ -378,7 +378,7 @@ fn temporary_rules_status(result: Result<Vec<Rule>, ClientError>) -> Result<Stri
             Ok("unavailable while the service is busy".to_owned())
         }
         Err(ClientError::Helper(helper)) if helper.code == ErrorCode::AccessDenied => {
-            Ok("unavailable for another Windows account".to_owned())
+            Ok("unavailable for another account".to_owned())
         }
         Err(error) => Err(error),
     }
@@ -1112,9 +1112,9 @@ mod tests {
     fn denied_control_has_a_clear_message() {
         let denied = ClientError::Helper(HelperError::new(
             ErrorCode::AccessDenied,
-            "the tunnel belongs to another Windows account",
+            "the tunnel belongs to another account",
         ));
-        let message = "the tunnel is connected from another Windows account; only that account or an administrator can control it";
+        let message = "the tunnel is connected from another account; only that account or an administrator can control it";
         assert_eq!(access_denied_message(&denied), Some(message));
         assert_eq!(apply_error_message(&denied), Some(message));
         assert_eq!(access_denied_message(&ClientError::Closed), None);
@@ -1153,10 +1153,10 @@ mod tests {
         assert_eq!(
             temporary_rules_status(Err(ClientError::Helper(HelperError::new(
                 ErrorCode::AccessDenied,
-                "another Windows account",
+                "another account",
             ))))
             .unwrap(),
-            "unavailable for another Windows account"
+            "unavailable for another account"
         );
         assert!(matches!(
             temporary_rules_status(Err(ClientError::Helper(HelperError::new(

@@ -1230,15 +1230,15 @@ mod tests {
         }
         let denied = ClientError::Helper(HelperError::new(
             ErrorCode::AccessDenied,
-            "the tunnel belongs to another Windows account",
+            "the tunnel belongs to another account",
         ));
         assert_eq!(
             client(Language::English, &denied),
-            "The tunnel was connected from another Windows account. Only that account or an administrator can control it."
+            "The tunnel was connected from another account. Only that account or an administrator can control it."
         );
         assert_eq!(
             client(Language::Russian, &denied),
-            "Туннель подключён из другой учётной записи Windows. Управлять им может только она или администратор."
+            "Туннель подключён из другой учётной записи. Управлять им может только она или администратор."
         );
         let empty = ClientError::Helper(HelperError::new(ErrorCode::EngineFailed, ""));
         assert_eq!(

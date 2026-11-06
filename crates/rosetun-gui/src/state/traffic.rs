@@ -163,7 +163,7 @@ pub(crate) struct ConnectionsList {
     pub(crate) closed: Vec<LiveConnection>,
     /// The service answered since the tab was opened.
     pub(crate) received: bool,
-    /// The tunnel belongs to another Windows account.
+    /// The tunnel belongs to another account.
     pub(crate) denied: bool,
     pub(crate) programs: ProgramNames,
     /// Program paths in the order they stood when the user started working

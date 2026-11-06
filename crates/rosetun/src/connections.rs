@@ -248,7 +248,7 @@ fn matching<'a>(active: &'a [LiveConnection], id: &str) -> Vec<&'a str> {
 fn report(error: &ClientError, verb: &str) -> ExitCode {
     match error {
         ClientError::Helper(helper) if helper.code == ErrorCode::AccessDenied => eprintln!(
-            "the tunnel is connected from another Windows account; only that account can {verb} its connections"
+            "the tunnel is connected from another account; only that account can {verb} its connections"
         ),
         ClientError::Helper(helper) if helper.code == ErrorCode::Busy => {
             eprintln!("the service is busy; try again in a moment");
