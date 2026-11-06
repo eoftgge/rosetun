@@ -363,6 +363,12 @@ watch_down() {
     ! "$NFT" list table inet "$WATCH_TABLE" >/dev/null 2>&1
 }
 
+# Back to zero. `nft reset counters` is for named counters and leaves a rule's alone;
+# `reset rules` needs a newer nft than a stand may have. A new table works on all.
+watch_zero() {
+    watch_down && watch_up && [ "$(watch_packets)" = 0 ]
+}
+
 # Who sent what the counter saw since the kernel log's time $1, for the report:
 # account, protocol and port with a count, and when the first and the last left. Short,
 # as a reason keeps 300 characters; the lines go to the report's folder as well.
@@ -460,7 +466,7 @@ scenario_upgrade() {
         direct_https >/dev/null
         packets=$(watch_packets)
         [ "${packets:-0}" -gt 0 ] || { fail_reason="HTTPS to the probe was not counted"; return 1; }
-        "$NFT" reset counters table inet "$WATCH_TABLE" >/dev/null || { fail_reason="could not reset the counter"; return 1; }
+        watch_zero || { fail_reason="could not bring the counter back to zero"; return 1; }
     }
     check upgrade.watch "the counter works" do_watch
     passed upgrade.watch || return 0
@@ -469,7 +475,7 @@ scenario_upgrade() {
         local prober_pid packets attempts missing since
         connect_with request-kill-switch.json || return 1
         table_present || { fail_reason="a kill-switch session has no table"; return 1; }
-        "$NFT" reset counters table inet "$WATCH_TABLE" >/dev/null
+        watch_zero || { fail_reason="could not bring the counter back to zero"; return 1; }
         since=$(date +%s)
         rm -f -- "$STATE/prober-stop" "$STATE/prober-attempts" "$STATE/prober-no-table"
         prober &
