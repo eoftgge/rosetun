@@ -1,5 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="400" viewBox="0 0 1280 400" role="img" aria-label="Rosetun: VPN client for Windows">
-<title>Rosetun: VPN client for Windows</title>
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="400" viewBox="0 0 1280 400" role="img" aria-label="Rosetun: VPN client for Windows and Linux">
+<title>Rosetun: VPN client for Windows and Linux</title>
 <style>
 @keyframes sheen{0%,100%{stop-color:#F4A3B4}25%{stop-color:#E86A80}50%{stop-color:#B98AD8}75%{stop-color:#F0B38C}}
 .s{animation:sheen 16s ease-in-out infinite}
