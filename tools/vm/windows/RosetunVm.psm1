@@ -576,11 +576,11 @@ $script:WfpSublayerNotFound = [uint32]'0x80320007'
 # Adds or removes a persistent sublayer on this machine and returns the status.
 # A script block so the same code runs in the guest and in the self-test on the
 # host. C# 5: the guest's Windows PowerShell compiles it with the framework's csc.
+# Plain parameters with names of its own: Invoke-Command -Session runs a block in the
+# session's global scope, so a parameter and its attributes stay there, and a validated
+# $Action made the next block's `$action = New-ScheduledTaskAction` fail.
 $script:WfpSublayerCall = {
-    param(
-        [Parameter(Mandatory)][ValidateSet('Add', 'Remove')][string]$Action,
-        [Parameter(Mandatory)][string]$Key
-    )
+    param($wfpSublayerAction, $wfpSublayerKey)
     if (-not ('RosetunStand.WfpSublayer' -as [type])) {
         Add-Type -TypeDefinition @'
 using System;
@@ -671,11 +671,10 @@ namespace RosetunStand {
 }
 '@
     }
-    if ($Action -eq 'Add') {
-        [RosetunStand.WfpSublayer]::Add([guid]$Key)
-    }
-    else {
-        [RosetunStand.WfpSublayer]::Remove([guid]$Key)
+    switch ($wfpSublayerAction) {
+        'Add' { [RosetunStand.WfpSublayer]::Add([guid]$wfpSublayerKey) }
+        'Remove' { [RosetunStand.WfpSublayer]::Remove([guid]$wfpSublayerKey) }
+        default { throw "Unknown sublayer action '$wfpSublayerAction'." }
     }
 }
 
@@ -689,7 +688,12 @@ function Invoke-RosetunLocalWfpSublayer {
         [Parameter(Mandatory)][ValidateSet('Add', 'Remove')][string]$Action,
         [Parameter(Mandatory)][string]$Key
     )
-    & $script:WfpSublayerCall -Action $Action -Key $Key
+    & $script:WfpSublayerCall $Action $Key
+}
+
+function Get-RosetunWfpSublayerCall {
+    # For the self-test, which runs it as a guest session does.
+    $script:WfpSublayerCall
 }
 
 function Add-RosetunSublayerBlock {

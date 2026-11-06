@@ -61,6 +61,29 @@ Assert-RosetunCheck 'the matrix does not try to stop BFE, which Windows refuses'
     (Get-Content -LiteralPath $Matrix -Raw) -notmatch "Stop-Service[^\r\n]*'BFE'"
 }
 
+# As Invoke-Command -Session runs a block: in the runspace's global scope, where what
+# it leaves is there for the next block.
+$runspace = [runspacefactory]::CreateRunspace()
+$runspace.Open()
+try {
+    $session = [powershell]::Create()
+    $session.Runspace = $runspace
+    [void]$session.AddScript((Get-RosetunWfpSublayerCall).ToString(), $false).
+        AddArgument('Remove').AddArgument([guid]::NewGuid().ToString())
+    [void]$session.Invoke()
+    $session.Commands.Clear()
+    $session.Streams.Error.Clear()
+    [void]$session.AddScript('$action = [pscustomobject]@{ task = 1 }; $key = 1; $status = 1', $false)
+    [void]$session.Invoke()
+    Assert-RosetunCheck "the block leaves a session's later variables alone" {
+        $session.Streams.Error.Count -eq 0
+    }
+    $session.Dispose()
+}
+finally {
+    $runspace.Dispose()
+}
+
 $probe = [guid]::NewGuid().ToString()
 $first = [uint32](Invoke-RosetunLocalWfpSublayer -Action Add -Key $probe)
 Assert-RosetunCheck 'FWPM_SUBLAYER0 has its 64-bit size' { [RosetunStand.WfpSublayer]::StructSize() -eq 72 }
