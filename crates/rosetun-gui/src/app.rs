@@ -384,6 +384,7 @@ impl App {
     #[cfg(any(windows, target_os = "linux"))]
     fn quit(&mut self, ctx: &egui::Context, disconnect: bool) {
         self.quitting = true;
+        self.workers.restore_system_proxy();
         // A disconnect leaves no session for pending edits to go to.
         let job = if disconnect {
             self.state.quit_disconnect()
@@ -481,6 +482,7 @@ impl App {
             #[cfg(any(windows, target_os = "linux", test))]
             Job::Reconnect => self.workers.reconnect(),
             Job::OpenNetwork => self.workers.open_network(),
+            Job::SyncSystemProxy(wish) => self.workers.sync_system_proxy(wish),
             Job::JoinServiceGroup => self.workers.join_service_group(),
             Job::SetInterfaceScale(percent) => self.workers.set_interface_scale(percent),
             Job::SetLanguage(language) => self.workers.set_language(language),
@@ -770,6 +772,9 @@ impl App {
         if let Some(job) = self.state.take_session_lists() {
             self.dispatch(job);
         }
+        if let Some(job) = self.state.take_system_proxy() {
+            self.dispatch(job);
+        }
         if let Some(job) = self.state.take_lockdown_lan() {
             self.dispatch(job);
         }
@@ -972,7 +977,7 @@ impl App {
                             self.quit(ctx, true);
                             return;
                         }
-                        QuitDecision::Leave => {}
+                        QuitDecision::Leave => self.workers.restore_system_proxy(),
                     }
                 }
                 #[cfg(any(windows, target_os = "linux"))]

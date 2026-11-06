@@ -281,6 +281,7 @@ pub fn latest_release(
         .build();
     let agent = crate::resolve::agent(
         ureq::Agent::config_builder()
+            .proxy(crate::resolve::agent_proxy())
             .tls_config(tls)
             .timeout_global(Some(timeout))
             .max_redirects(0)

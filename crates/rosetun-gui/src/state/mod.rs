@@ -15,7 +15,7 @@ use rosetun_ipc::{ClientError, ConnectRequest};
 
 use crate::display;
 use crate::rules::TypeFilter;
-use crate::worker::{ConfigWorkerError, FailureInterference, WorkerEvent};
+use crate::worker::{ConfigWorkerError, FailureInterference, SystemProxyWish, WorkerEvent};
 
 mod connection;
 mod exits;
@@ -28,6 +28,7 @@ mod session;
 mod settings;
 mod subscriptions;
 mod system_checks;
+mod system_proxy;
 mod traffic;
 mod updates;
 
@@ -184,6 +185,7 @@ pub(crate) struct State {
     /// The Lockdown value waiting for the user's confirmation.
     pub(crate) lockdown_confirmation: Option<bool>,
     lockdown_lan_pending: bool,
+    system_proxy: system_proxy::SystemProxySync,
     /// The Lockdown command in flight only brings its LAN access in line
     /// with the saved "Local network" value.
     lockdown_lan_sync: bool,
@@ -249,6 +251,7 @@ impl Default for State {
             protection_confirmation: false,
             lockdown_confirmation: None,
             lockdown_lan_pending: false,
+            system_proxy: system_proxy::SystemProxySync::default(),
             lockdown_lan_sync: false,
             lockdown_lan_kept: false,
             outside_scope: false,
@@ -468,6 +471,7 @@ pub(crate) enum Action {
 }
 
 pub(crate) enum Job {
+    SyncSystemProxy(SystemProxyWish),
     Connect(RequestInputs),
     CheckSystem {
         request: u64,
@@ -651,6 +655,7 @@ impl State {
             | WorkerEvent::Connect(_)
             | WorkerEvent::Disconnect(_)
             | WorkerEvent::OpenNetwork(_)
+            | WorkerEvent::SystemProxy { .. }
             | WorkerEvent::JoinServiceGroup(_)
             | WorkerEvent::SelectNode(_)
             | WorkerEvent::SelectRuleSet(_)

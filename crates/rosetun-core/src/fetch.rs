@@ -215,6 +215,7 @@ fn agent_for(url: &Url, timeouts: Timeouts) -> ureq::Agent {
 
     crate::resolve::agent(
         ureq::Agent::config_builder()
+            .proxy(crate::resolve::agent_proxy())
             .tls_config(tls)
             .timeout_connect(Some(timeouts.connect))
             .timeout_global(Some(timeouts.global))

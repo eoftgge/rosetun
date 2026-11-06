@@ -102,6 +102,14 @@ mod tray_notice;
     reason = "Win32 FFI; every unsafe block carries a SAFETY comment"
 )]
 mod window;
+#[cfg(windows)]
+#[expect(
+    unsafe_code,
+    reason = "Win32 FFI; every unsafe block carries a SAFETY comment"
+)]
+mod wininet;
+
+mod desktop_proxy;
 
 #[cfg(windows)]
 pub use autostart::{
@@ -111,6 +119,7 @@ pub use autostart::{
 pub use autostart_linux::{Autostart, autostart_enabled, disable_autostart, enable_autostart};
 #[cfg(target_os = "linux")]
 pub use desktop_linux::{tray_notice, user_language};
+pub use desktop_proxy::{DesktopProxy, ProxyRestore, ProxySet};
 #[cfg(windows)]
 pub use elevated::run_elevated;
 #[cfg(windows)]

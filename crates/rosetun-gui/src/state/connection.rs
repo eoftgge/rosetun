@@ -699,6 +699,7 @@ impl State {
                     Err(error) => self.helper_result(Err(error)),
                 }
             }
+            WorkerEvent::SystemProxy { wish, outcome } => self.reduce_system_proxy(wish, outcome),
             WorkerEvent::OpenNetwork(result) => {
                 self.operations.helper = false;
                 match result {

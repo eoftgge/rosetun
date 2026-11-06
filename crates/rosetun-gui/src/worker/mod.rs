@@ -146,6 +146,10 @@ pub(crate) enum WorkerEvent {
     #[cfg(any(windows, target_os = "linux", test))]
     Reconnect(Result<(), HelperCommandError>),
     OpenNetwork(Result<(), HelperCommandError>),
+    SystemProxy {
+        wish: SystemProxyWish,
+        outcome: SystemProxyOutcome,
+    },
     JoinServiceGroup(ServiceGroupResult),
     SetInterfaceScale(Result<(), SettingsError>),
     SetLanguage(Result<(), SettingsError>),
@@ -268,6 +272,8 @@ pub(crate) enum WorkerEvent {
 #[derive(Clone)]
 pub(crate) struct WorkerDispatcher {
     publisher: ConfigPublisher,
+    /// The desktop's proxy settings; one change at a time.
+    desktop_proxy: Arc<DesktopProxyKeeper>,
     /// Requests for the connection list, served over one kept pipe connection.
     connections: Arc<Mutex<Option<Sender<()>>>>,
 }
@@ -290,7 +296,11 @@ mod rules;
 mod settings;
 mod subscriptions;
 mod system_checks;
+mod system_proxy;
 mod updates;
+
+use system_proxy::DesktopProxyKeeper;
+pub(crate) use system_proxy::{SystemProxyOutcome, SystemProxyWish};
 
 impl WorkerDispatcher {
     fn spawn_task(&self, name: &'static str, task: impl FnOnce(ConfigPublisher) + Send + 'static) {
@@ -362,6 +372,7 @@ impl ConfigPublisher {
 }
 
 pub(crate) fn start(store: Store, tx: Sender<WorkerEvent>, repaint: Repaint) -> WorkerDispatcher {
+    let desktop_proxy = DesktopProxyKeeper::new(&store);
     let publisher = ConfigPublisher {
         store,
         tx: tx.clone(),
@@ -468,6 +479,7 @@ pub(crate) fn start(store: Store, tx: Sender<WorkerEvent>, repaint: Repaint) -> 
         })
         .expect("could not spawn helper watcher");
     WorkerDispatcher {
+        desktop_proxy,
         publisher,
         connections: Arc::default(),
     }

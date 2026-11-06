@@ -3060,6 +3060,8 @@ dependencies = [
  "libc",
  "memmap2",
  "serde",
+ "serde_json",
+ "tracing",
  "windows-sys 0.61.2",
  "zbus",
 ]

@@ -3,16 +3,19 @@
 //! network's DNS servers itself; otherwise it uses the system resolver.
 
 use std::net::{SocketAddr, ToSocketAddrs};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::time::Duration;
 
 use rosetun_config::{ConnectionState, Status};
+use ureq::Proxy;
 use ureq::config::Config;
 use ureq::http::Uri;
 use ureq::unversioned::resolver::{DefaultResolver, ResolvedSocketAddrs, Resolver};
 use ureq::unversioned::transport::{DefaultConnector, NextTimeout};
 
 static DIRECT: AtomicBool = AtomicBool::new(false);
+/// The port of the session's local proxy, 0 without one.
+static LOCAL_PROXY: AtomicU16 = AtomicU16::new(0);
 
 /// `ResolvedSocketAddrs` holds no more; pushing beyond it panics.
 const MAX_ADDRESSES: usize = 16;
@@ -24,6 +27,22 @@ const DIRECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// unreachable, which leaves the system resolver.
 pub fn follow_service_status(status: Option<&Status>) {
     DIRECT.store(direct_for(status), Ordering::Relaxed);
+    let port = status.and_then(Status::running_local_proxy).unwrap_or(0);
+    LOCAL_PROXY.store(port, Ordering::Relaxed);
+}
+
+/// The proxy for an agent's requests: the session's local proxy if it has one,
+/// otherwise what the environment says, as an agent does by default. There is
+/// no adapter in the proxy mode to carry Rosetun's own requests, and with its
+/// kill switch they could not go out by themselves.
+pub(crate) fn agent_proxy() -> Option<Proxy> {
+    local_proxy_url(LOCAL_PROXY.load(Ordering::Relaxed))
+        .and_then(|url| Proxy::new(&url).ok())
+        .or_else(Proxy::try_from_env)
+}
+
+fn local_proxy_url(port: u16) -> Option<String> {
+    (port != 0).then(|| format!("http://127.0.0.1:{port}"))
 }
 
 fn direct_for(status: Option<&Status>) -> bool {
@@ -107,7 +126,37 @@ impl Resolver for Lookup {
 mod tests {
     use rosetun_config::{ConnectionState, Status};
 
-    use super::direct_for;
+    use super::{direct_for, local_proxy_url};
+
+    #[test]
+    fn requests_use_the_local_proxy_only_while_its_session_is_up() {
+        let status = |state, port| Status {
+            state,
+            local_proxy_port: port,
+            ..Status::default()
+        };
+        assert_eq!(
+            status(ConnectionState::Connected, Some(10808)).running_local_proxy(),
+            Some(10808)
+        );
+        assert_eq!(
+            status(ConnectionState::Reconnecting, Some(10808)).running_local_proxy(),
+            None
+        );
+        assert_eq!(
+            status(ConnectionState::Disconnected, Some(10808)).running_local_proxy(),
+            None
+        );
+        assert_eq!(
+            status(ConnectionState::Connected, None).running_local_proxy(),
+            None
+        );
+        assert_eq!(local_proxy_url(0), None);
+        assert_eq!(
+            local_proxy_url(10808).as_deref(),
+            Some("http://127.0.0.1:10808")
+        );
+    }
 
     #[test]
     fn direct_lookups_only_under_lockdown_without_a_tunnel() {

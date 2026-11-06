@@ -32,6 +32,7 @@ pub fn exit_info(timeout: Duration) -> Result<ExitInfo, ExitInfoError> {
         .root_certs(RootCerts::PlatformVerifier)
         .build();
     let agent: ureq::Agent = ureq::Agent::config_builder()
+        .proxy(crate::resolve::agent_proxy())
         .tls_config(tls)
         .timeout_global(Some(timeout))
         .max_redirects(0)

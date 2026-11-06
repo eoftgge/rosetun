@@ -353,6 +353,7 @@ fn check_clock() -> CheckResult {
     let kind = CheckKind::Clock;
     let agent = crate::resolve::agent(
         ureq::Agent::config_builder()
+            .proxy(crate::resolve::agent_proxy())
             .timeout_global(Some(Duration::from_secs(5)))
             .max_redirects(0)
             .https_only(false)

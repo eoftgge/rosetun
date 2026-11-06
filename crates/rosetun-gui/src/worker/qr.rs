@@ -107,12 +107,14 @@ mod tests {
             Err(QrError::ScreenClipUnavailable)
         ));
         let (tx, rx) = mpsc::channel();
+        let store = Store::at(std::env::temp_dir().join(format!(
+            "rosetun-screen-clip-unavailable-{}",
+            std::process::id()
+        )));
         let workers = WorkerDispatcher {
+            desktop_proxy: crate::worker::DesktopProxyKeeper::new(&store),
             publisher: ConfigPublisher {
-                store: Store::at(std::env::temp_dir().join(format!(
-                    "rosetun-screen-clip-unavailable-{}",
-                    std::process::id()
-                ))),
+                store,
                 tx,
                 repaint: crate::repaint::Repaint::of(eframe::egui::Context::default()),
                 generation: Arc::default(),
