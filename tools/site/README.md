@@ -36,6 +36,7 @@ refresh the site from `master` with the unchanged latest stable download.
 Manual deployment must select `master`. The workflow does not enable Pages;
 the owner must first choose GitHub Actions in Settings → Pages.
 
-Add the public site link to both READMEs only after the owner enables Pages and
-verifies the deployment. Do not replace stable-release copy with unreleased
-features when editing the site on `dev`.
+Deployment takes `master`, so copy edited on `dev` reaches visitors when `master`
+moves forward. Text that depends on the stable release having a Debian package
+sits in `<!-- linux-ready ... -->` and `<!-- linux-soon -->...<!-- /linux-soon -->`
+markers: publication keeps one and drops the other.

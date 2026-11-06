@@ -1,6 +1,6 @@
-# Linux L2 stand
+# Linux stand
 
-A Hyper-V test bench for the Linux IPC transport (the L2 stage). The owner runs
+A Hyper-V test bench for Rosetun on Linux, in stages: the IPC transport (L2, described first), the kill switch (L3), Lockdown (L4), the package (L5) and the system proxy (Proxy). The owner runs
 it; nothing in it starts implicitly. It drives a **separate Debian 13 VM** over
 SSH. The Windows matrices (`../windows/Invoke-*Matrix.ps1`, PowerShell Direct) and the
 Windows VM `rosetun-test` are not involved and keep their behaviour.
@@ -19,7 +19,7 @@ The unit tests run as an ordinary account against the build you staged. They
 are not a substitute for the fixture, and the fixture is not a substitute for
 them. L2 makes **no claim** about the network, a kill switch, systemd
 integration of Rosetun, engines or Lockdown. The kill switch on the real
-service is the separate L3 run ("L3" below); Lockdown is a later stage.
+service is the separate L3 run, Lockdown L4, the package L5 and the system proxy Proxy, each with its section below.
 
 ## Quick start
 
@@ -81,7 +81,7 @@ runs, the job goes on in the guest; reconnect with
 
 | File | Purpose |
 |---|---|
-| `Invoke-LinuxL2Matrix.ps1` | Host entry point: `-Run` (L2), `-Run -Stage L3`, `-Run -Stage L4`, `-Run -Stage L5`, and the single steps `-InitKnownHosts`, `-PrepareLauncher`, stage (default), `-Collect` |
+| `Invoke-LinuxL2Matrix.ps1` | Host entry point: `-Run` (L2), `-Run -Stage L3`, `-Run -Stage L4`, `-Run -Stage L5`, `-Run -Stage Proxy`, and the single steps `-InitKnownHosts`, `-PrepareLauncher`, stage (default), `-Collect` |
 | `RosetunLinuxVm.psm1` | Host module: settings, SSH/SCP with a pinned host key, VM identity, the WSL build, artifact checks, report verdict |
 | `stand.example.psd1` | The settings with documentation values; copy it to `stand.local.psd1` (git-ignored) |
 | `build-in-wsl.sh` | Runs in WSL for the host: updates the stand's clone to `HEAD` and calls `build-artifacts.sh` |
@@ -92,8 +92,9 @@ runs, the job goes on in the guest; reconnect with
 | `guest/run-l2.sh`, `guest/lib.sh` | The L2 job itself: scenarios, cleanup, report |
 | `guest/run-l3.sh` | The L3 job: installs the service, kill switch, DNS lock, IPv6, inbound and forwarding scenarios (a peer network namespace), crashes, cleanup, report |
 | `guest/run-l5.sh` | The L5 job: the real package, installed, upgraded under the kill switch and Lockdown, removed and purged |
+| `guest/run-proxy.sh` | The Proxy job: the system proxy mode on the service, sharing, Lockdown and the desktop's settings |
 | `guest/run-l4.sh` | The L4 job: Lockdown on the service, the scopes, inbound, crashes, two reboots (with its own early and resume units), reset-firewall, cleanup, report |
-| `scenarios.tsv`, `scenarios-l3.tsv`, `scenarios-l4.tsv`, `scenarios-l5.tsv` | The scenario lists, shared by the guest and the host |
+| `scenarios.tsv`, `scenarios-l3.tsv`, `scenarios-l4.tsv`, `scenarios-l5.tsv`, `scenarios-proxy.tsv` | The scenario lists, shared by the guest and the host |
 | `tests/` | Unprivileged self-tests of the stand (not a VM run) |
 
 Reports go to `tools/vm/linux/logs/<run id>/` (git-ignored): `stage.json`,
@@ -438,6 +439,7 @@ checking, restore `l2-clean` again.
    sudo install -m 0644 -o root -g root rosetun-helper.service /usr/lib/systemd/system/rosetun-helper.service
    sudo install -m 0644 -o root -g root rosetun-lockdown.service /usr/lib/systemd/system/rosetun-lockdown.service
    sudo install -m 0644 -o root -g root io.github.eoftgge.rosetun.policy /usr/share/polkit-1/actions/io.github.eoftgge.rosetun.policy
+   sudo install -m 0644 -o root -g root rosetun-engine.rules /usr/share/polkit-1/rules.d/50-rosetun-engine.rules
    sudo install -m 0644 -o root -g root rosetun.sysusers /usr/lib/sysusers.d/rosetun.conf
    sudo systemd-sysusers
    sudo systemctl daemon-reload
@@ -531,7 +533,7 @@ checking, restore `l2-clean` again.
    sudo rosetun reset-firewall
    sudo systemctl disable --now rosetun-helper
    sudo systemctl disable rosetun-lockdown
-   sudo rm -f /usr/lib/systemd/system/rosetun-helper.service /usr/lib/systemd/system/rosetun-lockdown.service /usr/share/polkit-1/actions/io.github.eoftgge.rosetun.policy /usr/lib/sysusers.d/rosetun.conf /usr/local/bin/rosetun
+   sudo rm -f /usr/lib/systemd/system/rosetun-helper.service /usr/lib/systemd/system/rosetun-lockdown.service /usr/share/polkit-1/actions/io.github.eoftgge.rosetun.policy /usr/share/polkit-1/rules.d/50-rosetun-engine.rules /usr/lib/sysusers.d/rosetun.conf /usr/local/bin/rosetun
    sudo rm -rf /usr/lib/rosetun /var/lib/rosetun
    sudo systemctl daemon-reload
    ```
@@ -755,4 +757,4 @@ Each needs its own stand extension and a decision by the owner first:
 - Power-cut scenarios with the table in place; the GUI and polkit on a
   desktop guest.
 - The missing-group case on a clean VM.
-- The `.deb` installer and desktop integration.
+- Desktop integration: the tray, autostart and `rosetun://` on a real desktop.

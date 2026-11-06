@@ -14,8 +14,9 @@ walks through the kill-switch failure scenarios, printing a PASS/FAIL table.
 |---|---|
 | `vm/windows/RosetunVm.psm1` | Module with every building block: VM session, deploy, helper task, CLI, probes |
 | `vm/windows/Invoke-FailureMatrix.ps1` | The failure matrix |
+| `vm/windows/Invoke-{List,Lan,Proxy,Lockdown,Upgrade}Matrix.ps1` | The other Windows matrices; see `vm/windows/README.md` |
 | `perf/` | `Measure-RosetunPresents.ps1`: PresentMon summary of the GUI's presents while its window is dragged; see `perf/README.md` |
-| `vm/linux/` | Separate Linux L2 stand for a Debian VM over SSH; see `vm/linux/README.md`. The Windows matrices do not use it |
+| `vm/linux/` | Separate Linux stand for a Debian VM over SSH, stages L2 to L5 and Proxy; see `vm/linux/README.md`. The Windows matrices do not use it |
 | `vm/windows/test-node.json` | sing-box config for a Shadowsocks test node running on the host |
 | `vm/windows/request-local.json` | `ConnectRequest` pointing at the test node, with the test password |
 | `sing-box.exe` | The pinned sing-box build (currently 1.14.3). Not committed: `Install-RosetunSingBox` downloads it from the sing-box GitHub releases and checks its SHA-256 |
@@ -250,7 +251,7 @@ re-registers the task and starts the helper again.
 
 ## The matrix
 
-In the order the script runs them:
+The main scenarios, in the order the script runs them; the script has more (the DNS lock, REALITY, XHTTP, exits and others):
 
 | Scenario | What must hold |
 |---|---|
@@ -315,7 +316,7 @@ The helper runs as SYSTEM from the scheduled task `RosetunHelper`.
 
 When the matrix fails it copies every helper log of the run, and the test
 node log, to `vm\logs\<time>\` on the host; `Save-RosetunLogs` does the same
-by hand. Add `/tools/vm/logs/` to `.gitignore`.
+by hand. The folder is git-ignored.
 
 ```powershell
 Get-RosetunState
