@@ -352,7 +352,7 @@ watch_up() {
 table inet $WATCH_TABLE {
 	chain postrouting {
 		type filter hook postrouting priority 300; policy accept;
-		oifname "$PHYS" ip daddr $PROBE_ADDRESS counter
+		oifname "$PHYS" ip daddr $PROBE_ADDRESS log prefix "rosetun-l5-watch: " flags skuid counter
 	}
 }
 EOF
@@ -361,6 +361,20 @@ EOF
 watch_down() {
     "$NFT" delete table inet "$WATCH_TABLE" 2>/dev/null
     ! "$NFT" list table inet "$WATCH_TABLE" >/dev/null 2>&1
+}
+
+# Who sent what the counter saw since the kernel log's time $1, for the report:
+# account, protocol and port with a count, and when the first and the last left. Short,
+# as a reason keeps 300 characters; the lines go to the report's folder as well.
+watch_senders() {
+    local lines="$REPORT/watch-packets.txt"
+    journalctl -k -b --no-pager -o short-monotonic --since "@$1" 2>/dev/null | grep 'rosetun-l5-watch: ' >"$lines"
+    [ -s "$lines" ] || { printf 'the kernel log has none of them'; return 0; }
+    printf '%s; first %s, last %s, started %s' \
+        "$(grep -oE 'PROTO=[A-Z0-9]+( |.* )DPT=[0-9]+|UID=[0-9]+' "$lines" | sed 's/ .* / /' | paste -d' ' - - |
+            sort | uniq -c | sort -rn | head -n 3 | sed 's/^ *//' | paste -sd, -)" \
+        "$(sed -n '1s/^\[ *\([0-9.]*\)\].*/\1/p' "$lines")" "$(sed -n '$s/^\[ *\([0-9.]*\)\].*/\1/p' "$lines")" \
+        "$(cut -d' ' -f1 /proc/uptime)"
 }
 
 watch_packets() {
@@ -452,10 +466,11 @@ scenario_upgrade() {
     passed upgrade.watch || return 0
 
     do_no_leak() {
-        local prober_pid packets attempts missing
+        local prober_pid packets attempts missing since
         connect_with request-kill-switch.json || return 1
         table_present || { fail_reason="a kill-switch session has no table"; return 1; }
         "$NFT" reset counters table inet "$WATCH_TABLE" >/dev/null
+        since=$(date +%s)
         rm -f -- "$STATE/prober-stop" "$STATE/prober-attempts" "$STATE/prober-no-table"
         prober &
         prober_pid=$!
@@ -469,7 +484,7 @@ scenario_upgrade() {
         missing=$(stat -c %s -- "$STATE/prober-no-table" 2>/dev/null || echo 0)
         [ "$attempts" -gt 0 ] || { fail_reason="the prober made no attempt during the upgrade"; return 1; }
         [ "$missing" -eq 0 ] || { fail_reason="the table was gone at $missing of $attempts looks"; return 1; }
-        [ "${packets:-1}" -eq 0 ] || { fail_reason="$packets packets reached the probe past the tunnel"; return 1; }
+        [ "${packets:-1}" -eq 0 ] || { fail_reason="$packets packets past the tunnel: $(watch_senders "$since")"; return 1; }
     }
     check upgrade.kill-switch-no-leak "the table stayed and nothing left past the tunnel" do_no_leak
     passed upgrade.kill-switch-no-leak || return 0
