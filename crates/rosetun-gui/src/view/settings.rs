@@ -872,7 +872,7 @@ fn xray(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                 ),
             ] {
                 let width = ui.available_width();
-                let response = widgets::choice_card(
+                let response = widgets::radio_card(
                     ui,
                     ("xray-setting", index),
                     width,
@@ -881,47 +881,22 @@ fn xray(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                     &title,
                     |ui| {
                         ui.horizontal(|ui| {
-                            let (radio, _) = ui
-                                .allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
-                            ui.painter().circle_stroke(
-                                radio.center(),
-                                7.0,
-                                egui::Stroke::new(
-                                    theme::stroke::GLYPH,
-                                    if selected == setting {
-                                        theme::palette().accent_light
-                                    } else {
-                                        theme::palette().text_dim
-                                    },
-                                ),
-                            );
-                            if selected == setting {
-                                ui.painter().circle_filled(
-                                    radio.center(),
-                                    3.5,
+                            ui.label(RichText::new(&title).strong());
+                            if setting == XrayUse::Auto {
+                                ui.colored_label(
                                     theme::palette().accent_light,
+                                    tr!("xray-recommended"),
                                 );
                             }
-                            ui.vertical(|ui| {
-                                ui.horizontal(|ui| {
-                                    ui.label(RichText::new(&title).strong());
-                                    if setting == XrayUse::Auto {
-                                        ui.colored_label(
-                                            theme::palette().accent_light,
-                                            tr!("xray-recommended"),
-                                        );
-                                    }
-                                });
-                                ui.add(
-                                    egui::Label::new(
-                                        RichText::new(&detail)
-                                            .small()
-                                            .color(theme::palette().text_dim),
-                                    )
-                                    .wrap(),
-                                );
-                            });
                         });
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(&detail)
+                                    .small()
+                                    .color(theme::palette().text_dim),
+                            )
+                            .wrap(),
+                        );
                     },
                 );
                 if response.clicked() && selected != setting {
@@ -2103,6 +2078,44 @@ mod pending_notice_tests {
                         - top_of(&shown, &tr!("allow-lan"))
                         + theme::space::L;
                     assert!(lan <= limit, "{language:?} {size:?}: {lan} > {limit}");
+                }
+            });
+        }
+    }
+
+    #[test]
+    fn the_xray_cards_centre_their_rings_on_their_text() {
+        for language in LANGUAGES {
+            i18n::in_language(language, || {
+                for size in [egui::vec2(960.0, 640.0), egui::vec2(1200.0, 780.0)] {
+                    let state = connected(ConnectionState::Disconnected);
+                    let mut screen = TestScreen::new(size);
+                    let (texts, circles) =
+                        screen.settle_with_circles(|ui| xray(ui, &state, &mut Vec::new()));
+                    let rect_of = |wanted: String| {
+                        texts
+                            .iter()
+                            .find(|(text, _)| *text == wanted)
+                            .unwrap_or_else(|| panic!("no text {wanted:?}"))
+                            .1
+                    };
+                    let rings = circles
+                        .iter()
+                        .filter(|(_, radius)| *radius == theme::radio::RING)
+                        .collect::<Vec<_>>();
+                    let cards = [
+                        (tr!("xray-auto"), tr!("xray-auto-detail")),
+                        (tr!("xray-off"), tr!("xray-off-detail")),
+                        (tr!("xray-always"), tr!("xray-always-detail")),
+                    ];
+                    assert_eq!(rings.len(), cards.len(), "{language:?} {size:?}");
+                    for ((title, detail), (ring, _)) in cards.into_iter().zip(rings) {
+                        let title = rect_of(title);
+                        let text = title.union(rect_of(detail));
+                        let offset = (ring.y - text.center().y).abs();
+                        assert!(offset <= 1.0, "{language:?} {size:?}: {offset}");
+                        assert!(ring.x < title.left(), "{language:?} {size:?}");
+                    }
                 }
             });
         }

@@ -8,6 +8,9 @@ use crate::theme;
 /// What one frame painted: each text with the rectangle it fills.
 pub(crate) type Texts = Vec<(String, egui::Rect)>;
 
+/// What one frame painted: each circle with its centre and radius.
+pub(crate) type Circles = Vec<(egui::Pos2, f32)>;
+
 pub(crate) struct TestScreen {
     ctx: egui::Context,
     size: egui::Vec2,
@@ -21,6 +24,14 @@ fn flatten(shape: &egui::Shape, out: &mut Texts) {
             text.galley.text().to_owned(),
             text.galley.rect.translate(text.pos.to_vec2()),
         )),
+        _ => {}
+    }
+}
+
+fn flatten_circles(shape: &egui::Shape, out: &mut Circles) {
+    match shape {
+        egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| flatten_circles(shape, out)),
+        egui::Shape::Circle(circle) => out.push((circle.center, circle.radius)),
         _ => {}
     }
 }
@@ -40,8 +51,34 @@ impl TestScreen {
     pub(crate) fn run(
         &mut self,
         events: Vec<egui::Event>,
-        mut show: impl FnMut(&mut egui::Ui),
+        show: impl FnMut(&mut egui::Ui),
     ) -> Texts {
+        let mut texts = Vec::new();
+        for shape in self.paint(events, show) {
+            flatten(&shape, &mut texts);
+        }
+        texts
+    }
+
+    /// Settles and returns the texts and the circles of the last frame.
+    pub(crate) fn settle_with_circles(
+        &mut self,
+        mut show: impl FnMut(&mut egui::Ui),
+    ) -> (Texts, Circles) {
+        self.settle(&mut show);
+        let (mut texts, mut circles) = (Vec::new(), Vec::new());
+        for shape in self.paint(Vec::new(), &mut show) {
+            flatten(&shape, &mut texts);
+            flatten_circles(&shape, &mut circles);
+        }
+        (texts, circles)
+    }
+
+    fn paint(
+        &mut self,
+        events: Vec<egui::Event>,
+        mut show: impl FnMut(&mut egui::Ui),
+    ) -> Vec<egui::Shape> {
         self.frame += 1;
         let mut output = self.ctx.run_ui(
             egui::RawInput {
@@ -53,11 +90,11 @@ impl TestScreen {
             &mut show,
         );
         output.textures_delta.clear();
-        let mut texts = Vec::new();
-        for clipped in &output.shapes {
-            flatten(&clipped.shape, &mut texts);
-        }
-        texts
+        output
+            .shapes
+            .into_iter()
+            .map(|clipped| clipped.shape)
+            .collect()
     }
 
     /// Runs frames until what is shown has settled (layouts that need a second pass, fades).

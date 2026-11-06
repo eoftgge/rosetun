@@ -342,6 +342,16 @@ pub(crate) mod stroke {
     pub(crate) const MARK: f32 = 2.0;
 }
 
+/// The radio mark of a choice card.
+pub(crate) mod radio {
+    /// The width of the column the mark stands in.
+    pub(crate) const COLUMN: f32 = 18.0;
+    /// The radius of the ring.
+    pub(crate) const RING: f32 = 7.0;
+    /// The radius of the dot of a selected choice.
+    pub(crate) const DOT: f32 = 3.5;
+}
+
 /// Opacity levels, by role.
 pub(crate) mod alpha {
     use eframe::egui::Color32;
