@@ -304,6 +304,9 @@ skip_rest() {
 package_version() { dpkg-deb -f "$1" Version; }
 installed_version() { dpkg-query -W -f='${Version}' rosetun 2>/dev/null; }
 installed_cleanly() { [ "$(dpkg-query -W -f='${db:Status-Abbrev}' rosetun 2>/dev/null)" = 'ii ' ]; }
+# After a refused dpkg -r: dpkg keeps what was asked for, r, but the package is
+# installed and whole, with no error flag.
+installed_after_refused_removal() { [ "$(dpkg-query -W -f='${db:Status-Abbrev}' rosetun 2>/dev/null)" = 'ri ' ]; }
 
 # dpkg_run ARGS...: dpkg's output in DPKG_OUT, its exit code in DPKG_RC.
 dpkg_run() {
@@ -541,7 +544,7 @@ scenario_remove() {
         [ "$DPKG_RC" -ne 0 ] || { fail_reason="dpkg --remove succeeded although Lockdown could not be removed"; return 1; }
         printf '%s' "$DPKG_OUT" | grep -q 'rosetun reset-firewall' || { fail_reason="the way out was not printed: $DPKG_OUT"; return 1; }
         [ -x "$HELPER" ] && [ -x "$CLI" ] || { fail_reason="the programs were removed"; return 1; }
-        installed_cleanly || { fail_reason="dpkg reports the state '$(dpkg-query -W -f='${db:Status-Abbrev}' rosetun)'"; return 1; }
+        installed_after_refused_removal || { fail_reason="dpkg reports the state '$(dpkg-query -W -f='${db:Status-Abbrev}' rosetun)'"; return 1; }
         [ -f "$RECORD" ] || { fail_reason="the record is gone"; return 1; }
         table_present || { fail_reason="the table is gone"; return 1; }
         expect_blocked "HTTPS on $PHYS" direct_https
