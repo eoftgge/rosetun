@@ -44,7 +44,9 @@ $lockdownKeys = [ordered]@{
     Dhcp     = '98419911-30f0-4f71-9178-263b40bc7f6e'
     # The service's DNS permit (IPv4, UDP), present whenever Lockdown is.
     ServiceDns = 'cb0f8c4b-4967-4626-a493-a4e32369e6f5'
-    Lan      = 'ce01436a-65d3-48e9-b921-e0a167b05f7b'
+    # The first connected network's permit (OUTBOUND_SEGMENT, slot 0), not a private
+    # range's: those are only for "Private networks behind the router".
+    Lan      = 'f6a5849d-943f-4d77-917c-8811e9a70000'
     # The CLI's permits (IPv4: TCP to any port, UDP DNS) exist only while no
     # session runs. The GUI is not deployed, so it has none.
     CliTcp   = 'e0222624-bc2f-43a6-8058-b939a77ddd4b'
