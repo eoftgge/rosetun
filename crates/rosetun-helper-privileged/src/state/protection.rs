@@ -147,11 +147,12 @@ impl ProtectionRuntime {
         self.change_report(|report| report.scope = scope);
     }
 
-    /// A start with these settings: earlier failures no longer count.
+    /// A start with these settings. The reason for a missing lock stays until
+    /// the lock is in: a restart is when system DNS can leave, and the warning
+    /// must not go away for exactly that time.
     pub(super) fn begin_attempt(&self, settings: &Settings) {
         self.change_report(|report| {
             report.requested = requested_by(settings);
-            report.shortfall = None;
             report.connection_mode = Some(settings.connection_mode);
         });
     }
@@ -280,6 +281,7 @@ impl ProtectionRuntime {
         // The same transaction removed Lockdown's GUI and CLI permits.
         self.programs_withdrawn |= plan.lockdown;
         self.report_scope();
+        self.change_report(|report| report.shortfall = None);
         Ok(())
     }
 

@@ -8498,21 +8498,91 @@ fn a_dns_lock_in_place_reports_no_shortfall() {
 }
 
 #[test]
-fn a_new_attempt_clears_the_reason_of_the_last_one() {
+fn a_missing_lock_is_reported_through_an_engine_restart() {
     use super::dns::test_support::{Behavior, Server};
 
     let server = Server::new(Behavior::Noerror);
-    let helper = dns_engine_helper(Box::new(FailingRouting), &server);
+    let controls = Arc::new(EngineControls::default());
+    let mut engines = EngineRegistry::new();
+    engines.register(Box::new(ControlledEngine {
+        controls: Arc::clone(&controls),
+        dns_server: Some(server.address()),
+    }));
+    let helper = Helper::new(engines, Box::new(FailingRouting), VerboseGate::default());
+    shorten_dns_timeouts(&helper);
     let request = dns_lock_request();
     helper.connect(&request).unwrap();
     assert!(helper.status().protection.unmet().is_some());
 
+    // What the status says while the new start has not got to the lock.
     helper
         .session()
         .unwrap()
         .protection
         .begin_attempt(&request.settings);
-    assert_eq!(helper.status().protection.shortfall, None);
+    assert!(helper.status().protection.unmet().is_some());
+
+    controls.kill();
+    helper.supervise(Instant::now());
+    assert_eq!(controls.spawns(), 2);
+    let status = helper.status();
+    assert!(matches!(status.state, ConnectionState::Connected));
+    assert_eq!(
+        status.protection.unmet().expect("still missing").code,
+        ProtectionShortfallCode::FirewallUnavailable
+    );
+}
+
+#[test]
+fn a_lock_that_goes_in_later_takes_the_reason_away() {
+    let report = protection::SharedReport::default();
+    let mut runtime = protection::ProtectionRuntime::new(Arc::clone(&report));
+    runtime.record_shortfall(ProtectionShortfallCode::FirewallRefused);
+    let mut backend = UnusedLockBackend;
+    runtime
+        .install(
+            &mut backend,
+            &RoutingPlan {
+                scope: ProtectionScope::DnsOnly,
+                allow_lan: false,
+                lan: Default::default(),
+                lockdown: false,
+                shared_proxy: None,
+            },
+        )
+        .unwrap();
+    let state = report
+        .lock()
+        .unwrap()
+        .state(lockdown::LockdownState::default());
+    assert_eq!(state.shortfall, None);
+    assert_eq!(state.installed, InstalledProtection::DnsLock);
+}
+
+/// Installs a lock that does nothing.
+#[derive(Debug)]
+struct UnusedLockBackend;
+
+impl RoutingBackend for UnusedLockBackend {
+    fn name(&self) -> &'static str {
+        "lock"
+    }
+
+    fn capabilities(&self) -> ProtectionCapabilities {
+        FULL_PROTECTION
+    }
+
+    fn preflight(&self) -> Result<(), RoutingError> {
+        Ok(())
+    }
+
+    fn begin_protection(
+        &mut self,
+        _plan: &RoutingPlan,
+        _engine_binaries: &[&Path],
+    ) -> Result<RoutingGuard, RoutingError> {
+        Ok(RoutingGuard::noop())
+    }
 }
 
 #[test]
