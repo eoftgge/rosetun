@@ -9,6 +9,10 @@ After=network.target
 # Both may start with `flush ruleset`, which would take the helper's table with
 # it. Neither is needed, so this only orders them when they are there.
 After=nftables.service firewalld.service
+# Never give up restarting. A kill switch's table outlives a crash, so a service
+# that stayed down would leave the network closed with nobody to open it but
+# `rosetun reset-firewall`. RestartSec keeps the attempts cheap.
+StartLimitIntervalSec=0
 
 [Service]
 # The helper sends READY=1 once its socket is published and STOPPING=1 when a
