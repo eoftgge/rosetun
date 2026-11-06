@@ -8775,3 +8775,206 @@ fn rules_that_cannot_be_checked_show_in_the_status_until_they_can() {
     helper.supervise(start + Duration::from_secs(2));
     assert!(!helper.status().protection.check_failed);
 }
+
+/// A backend where turning Lockdown on and off both work.
+#[derive(Debug)]
+struct WholeLockdownRouting;
+
+impl RoutingBackend for WholeLockdownRouting {
+    fn name(&self) -> &'static str {
+        "whole-lockdown"
+    }
+
+    fn capabilities(&self) -> ProtectionCapabilities {
+        FULL_PROTECTION
+    }
+
+    fn preflight(&self) -> Result<(), RoutingError> {
+        Ok(())
+    }
+
+    fn begin_protection(
+        &mut self,
+        _plan: &RoutingPlan,
+        _engine_binaries: &[&Path],
+    ) -> Result<RoutingGuard, RoutingError> {
+        Ok(RoutingGuard::noop())
+    }
+
+    fn lockdown_status(&self) -> Result<rosetun_routing::LockdownStatus, RoutingError> {
+        Ok(rosetun_routing::LockdownStatus::default())
+    }
+
+    fn enable_lockdown(
+        &self,
+        _lan: Option<&rosetun_routing::lan::LanAccess>,
+        _apps: &LockdownApps,
+    ) -> Result<rosetun_routing::LockdownStatus, RoutingError> {
+        Ok(rosetun_routing::LockdownStatus {
+            enabled: true,
+            complete: true,
+            ..Default::default()
+        })
+    }
+
+    fn disable_lockdown(&self) -> Result<bool, RoutingError> {
+        Ok(true)
+    }
+}
+
+/// Says a client has ended, however it ended.
+struct Finished(Sender<()>);
+
+impl Drop for Finished {
+    fn drop(&mut self) {
+        let _ = self.0.send(());
+    }
+}
+
+/// One client's requests, over and over. Only what the service answers when
+/// clients are in each other's way may fail: an internal error, or a failure of
+/// the engine or the firewall, would mean they got into each other's state.
+fn run_client(attempts: usize, mut request: impl FnMut() -> Result<(), HelperError>) {
+    for _ in 0..attempts {
+        if let Err(error) = request() {
+            assert!(
+                matches!(
+                    error.code,
+                    ErrorCode::Busy
+                        | ErrorCode::AccessDenied
+                        | ErrorCode::InvalidState
+                        | ErrorCode::Cancelled
+                ),
+                "{:?}: {}",
+                error.code,
+                error.message
+            );
+        }
+    }
+}
+
+#[test]
+fn clients_at_once_do_not_block_each_other_and_leave_the_state_right() {
+    use super::dns::test_support::{Behavior, Server};
+    use std::sync::mpsc::RecvTimeoutError;
+
+    const ATTEMPTS: usize = 40;
+    let server = Server::new(Behavior::Noerror);
+    let controls = Arc::new(EngineControls::default());
+    let mut engines = EngineRegistry::new();
+    engines.register(Box::new(ControlledEngine {
+        controls: Arc::clone(&controls),
+        dns_server: Some(server.address()),
+    }));
+    let helper = Helper::new(
+        engines,
+        Box::new(WholeLockdownRouting),
+        VerboseGate::default(),
+    );
+    shorten_dns_timeouts(&helper);
+    let helper = Arc::new(helper);
+    let owner = test_caller;
+    let other = || Caller::fake(b"another-account", false);
+    let admin = || Caller::fake(b"an-administrator", true);
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+
+    let (finished, ended) = channel();
+    let mut clients: Vec<Box<dyn FnOnce() + Send>> = Vec::new();
+    {
+        let (helper, caller, request) = (Arc::clone(&helper), owner(), request.clone());
+        clients.push(Box::new(move || {
+            run_client(ATTEMPTS, || helper.connect_as(&caller, &request));
+        }));
+    }
+    {
+        let (helper, caller, request) = (
+            Arc::clone(&helper),
+            other(),
+            request_with_new_rules(&request),
+        );
+        clients.push(Box::new(move || {
+            run_client(ATTEMPTS, || helper.apply_as(&caller, &request));
+        }));
+    }
+    {
+        let (helper, caller) = (Arc::clone(&helper), owner());
+        clients.push(Box::new(move || {
+            run_client(ATTEMPTS, || helper.reconnect_as(&caller));
+        }));
+    }
+    {
+        let (helper, caller) = (Arc::clone(&helper), admin());
+        clients.push(Box::new(move || {
+            let mut enabled = true;
+            run_client(ATTEMPTS, || {
+                let result = helper.set_lockdown_as(&caller, enabled, false, false);
+                enabled = !enabled;
+                result
+            });
+        }));
+    }
+    {
+        let (helper, caller) = (Arc::clone(&helper), other());
+        clients.push(Box::new(move || {
+            run_client(ATTEMPTS, || helper.disconnect_as(&caller));
+        }));
+    }
+    {
+        let (helper, caller) = (Arc::clone(&helper), owner());
+        clients.push(Box::new(move || {
+            run_client(ATTEMPTS, || helper.disconnect_as(&caller));
+        }));
+    }
+    {
+        let helper = Arc::clone(&helper);
+        clients.push(Box::new(move || {
+            for _ in 0..ATTEMPTS {
+                helper.supervise(Instant::now());
+                let _ = helper.status();
+                thread::sleep(Duration::from_millis(5));
+            }
+        }));
+    }
+    let count = clients.len();
+    let handles = clients
+        .into_iter()
+        .map(|client| {
+            let finished = Finished(finished.clone());
+            thread::spawn(move || {
+                // Told also by a client that panics, which `join` then reports:
+                // only a client that never ends runs into the timeout.
+                let _finished = finished;
+                client();
+            })
+        })
+        .collect::<Vec<_>>();
+    for _ in 0..count {
+        match ended.recv_timeout(Duration::from_secs(120)) {
+            Ok(()) => {}
+            Err(RecvTimeoutError::Timeout) => panic!("the clients are blocking each other"),
+            Err(RecvTimeoutError::Disconnected) => unreachable!("this test keeps a sender"),
+        }
+    }
+    for handle in handles {
+        handle.join().unwrap();
+    }
+
+    // Whoever won, an administrator ends it, and nothing is left behind.
+    let admin = admin();
+    helper
+        .disconnect_as(&admin)
+        .expect("an administrator disconnects");
+    helper
+        .set_lockdown_as(&admin, false, false, false)
+        .expect("an administrator turns Lockdown off");
+    let status = helper.status();
+    assert!(matches!(status.state, ConnectionState::Disconnected));
+    assert_eq!(status.protection, ProtectionState::default());
+    let session = helper.session().unwrap();
+    assert!(!session.protection.is_active());
+    assert!(session.process.is_none());
+    assert!(session.request.is_none());
+    drop(session);
+    assert!(controls.spawns() > 0, "no client got anywhere");
+}

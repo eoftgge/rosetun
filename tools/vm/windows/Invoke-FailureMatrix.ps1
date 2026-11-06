@@ -2117,6 +2117,24 @@ try {
         $status.Output -match '(?m)^protection missing: DNS lock: \S'
     }
     Test-Step 'dns lock unavailable' 'direct DNS is open, as the status says' { Test-RosetunDirectDns }
+    # The expected leak, written down: while the engine restarts nothing holds DNS
+    # back, and what is checked is that the status keeps saying so.
+    Set-RosetunEngineAvailable $false
+    Stop-RosetunEngine
+    Test-Step 'dns lock unavailable restart' 'state is Reconnecting' { Wait-RosetunState 'Reconnecting' }
+    Test-Step 'dns lock unavailable restart' 'direct DNS leaves during the restart' { Test-RosetunDirectDns }
+    $status = Invoke-RosetunCli -Quiet 'status'
+    Test-Step 'dns lock unavailable restart' 'status names the missing lock during the restart' -Note $status.Output {
+        $status.Output -match '(?m)^protection missing: DNS lock: \S'
+    }
+    Set-RosetunEngineAvailable $true
+    Test-Step 'dns lock unavailable restart' 'state returns to Connected within 45 s' {
+        Wait-RosetunState 'Connected' -TimeoutSeconds 45
+    }
+    $status = Invoke-RosetunCli -Quiet 'status'
+    Test-Step 'dns lock unavailable restart' 'status names the missing lock after the restart' -Note $status.Output {
+        $status.Output -match '(?m)^protection missing: DNS lock: \S'
+    }
     Disconnect-RosetunTunnel | Out-Null
     $status = Invoke-RosetunCli -Quiet 'status'
     Test-Step 'dns lock unavailable' 'the line goes after a disconnect' -Note $status.Output {

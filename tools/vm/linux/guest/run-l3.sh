@@ -622,6 +622,33 @@ scenario_dns_lock() {
             { fail_reason="status still names a missing lock after the disconnect: $CLI_OUT"; return 1; }
     }
     check dnslock.unavailable "the session connected without the lock, status named it and its reason, UDP 53 left" dns_lock_unavailable
+    # The leak this records is the expected one, and what is checked is that the
+    # status says so. The binary stays untrusted, or the restart would put the lock in.
+    dns_lock_unavailable_restart() {
+        local rc=0
+        : >"$STATE/nft-untrusted"
+        chmod o+w "$NFT" || { fail_reason="could not change the mode of $NFT"; return 1; }
+        missing_through_restart || rc=1
+        chmod o-w "$NFT"
+        rm -f -- "$STATE/nft-untrusted"
+        [ "$rc" -eq 0 ] || return 1
+        disconnect
+    }
+    missing_through_restart() {
+        says_lock_missing() {
+            cli 15 status
+            printf '%s\n' "$CLI_OUT" | grep -q '^protection missing: DNS lock: ' ||
+                { fail_reason="status does not name the missing lock $1: $CLI_OUT"; return 1; }
+        }
+        connect_with request-dns-lock.json || return 1
+        says_lock_missing "before the restart" || return 1
+        pkill -KILL -x sing-box || { fail_reason="no sing-box process to kill"; return 1; }
+        expect_udp_dns_sent || return 1
+        says_lock_missing "during the restart" || return 1
+        wait_state '^Connected' 60 || return 1
+        says_lock_missing "after the restart"
+    }
+    check dnslock.unavailable-restart "UDP 53 left during the restart, as status said before, during and after" dns_lock_unavailable_restart
 }
 
 # ---------------------------------------------------------------- IPv6, inbound, forwarding
@@ -744,6 +771,31 @@ scenario_crash() {
         expect_reached "HTTPS to $PROBE_ADDRESS on $PHYS" direct_https
     }
     check crash.dns-lock-killed "the restarted helper removed the DNS lock and said so, UDP 53 left" dns_lock_killed
+
+    five_kills() {
+        local round leaf=/system.slice/rosetun-helper.service
+        connect_with request-kill-switch.json || return 1
+        for round in 1 2 3 4 5; do
+            kill_helper || { fail_reason="round $round: $fail_reason"; return 1; }
+            [ "$KILLED_TABLE_PRESENT" = 1 ] || { fail_reason="round $round: the table went away with the helper"; return 1; }
+            blocked_rc "$KILLED_DIRECT_RC" ||
+                { fail_reason="round $round: HTTPS on $PHYS was not refused right after the kill (curl exit $KILLED_DIRECT_RC)"; return 1; }
+            expect_blocked "HTTPS to $PROBE_ADDRESS on $PHYS in round $round" direct_https ||
+                { fail_reason="round $round: $fail_reason"; return 1; }
+        done
+        # The service has settled: the same connect as ever, with this start's cgroups.
+        sleep 15
+        connect_with request-kill-switch.json || return 1
+        expect_reached "HTTPS through the tunnel" tunnel_https || return 1
+        expect_blocked "HTTPS to $PROBE_ADDRESS on $PHYS" direct_https || return 1
+        "$NFT" list table inet rosetun | grep -q "${leaf#/}/engines" ||
+            { fail_reason="the rules do not name the engines' cgroup"; return 1; }
+        [ "$(cat "/proc/$(pgrep -x sing-box | head -n 1)/cgroup")" = "0::$leaf/engines" ] ||
+            { fail_reason="sing-box is not in the cgroup the rules name"; return 1; }
+        disconnect || return 1
+        expect_reached "HTTPS to $PROBE_ADDRESS on $PHYS" direct_https
+    }
+    check crash.five-kills "closed through five kills; then a connect works under rules with the current cgroups" five_kills
 }
 
 scenario_stop() {
