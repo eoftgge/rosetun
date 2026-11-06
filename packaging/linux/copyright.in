@@ -1,0 +1,53 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: Rosetun
+Upstream-Contact: https://github.com/eoftgge/rosetun/issues
+Source: https://github.com/eoftgge/rosetun
+Comment:
+ The full licence texts and the Rust crates' notices are in
+ /usr/share/doc/rosetun/licenses/. third-party.html there lists every Rust crate
+ compiled into Rosetun with its licence.
+
+Files: *
+Copyright: Rosetun contributors
+License: GPL-3+
+
+Files: usr/lib/rosetun/sing-box
+Copyright: 2022 nekohasekai <contact-sagernet@sekai.icu>
+License: GPL-3+
+Comment:
+ The unmodified official sing-box @SING_BOX_VERSION@ build, with the additional term
+ in licenses/sing-box.txt on the use of its name. Corresponding source: see
+ licenses/sing-box-source.txt.
+
+Files: usr/lib/rosetun/xray
+Copyright: Xray-core contributors
+License: MPL-2.0
+Comment:
+ The unmodified official Xray-core @XRAY_VERSION@ build. Corresponding source: see
+ licenses/xray-source.txt.
+
+Files: usr/lib/rosetun/rosetun-gui
+Copyright: Rosetun contributors
+License: GPL-3+ and OFL-1.1
+Comment:
+ The GUI embeds the Manrope and Cormorant Garamond fonts under OFL-1.1; their
+ copyright lines are in licenses/OFL-Manrope.txt and
+ licenses/OFL-CormorantGaramond.txt. Like the helper and the CLI, it is built
+ with Rust crates under the licences in licenses/third-party.html.
+
+License: GPL-3+
+ This program is free software: you can redistribute it and/or modify it under
+ the terms of the GNU General Public License as published by the Free Software
+ Foundation, either version 3 of the License, or (at your option) any later
+ version.
+ .
+ On Debian systems, the complete text of the GNU General Public License version
+ 3 can be found in /usr/share/common-licenses/GPL-3.
+
+License: MPL-2.0
+ On Debian systems, the complete text of the Mozilla Public License 2.0 can be
+ found in /usr/share/common-licenses/MPL-2.0, and in licenses/xray-mpl-2.0.txt.
+
+License: OFL-1.1
+ The complete text of the SIL Open Font License 1.1 is in
+ /usr/share/doc/rosetun/licenses/OFL-Manrope.txt and OFL-CormorantGaramond.txt.

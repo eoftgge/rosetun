@@ -1,14 +1,16 @@
-# The menu entry. Installed as /usr/share/applications/rosetun.desktop, with
-# crates/rosetun-gui/assets/icon/rosetun.svg as
-# /usr/share/icons/hicolor/scalable/apps/rosetun.svg. Wayland finds this file by
-# the window's app ID, `rosetun`; X11 by the window class, the program's file name.
+# The menu entry and the rosetun:// handler. Installed as
+# /usr/share/applications/rosetun.desktop, with crates/rosetun-gui/assets/icon/rosetun.svg
+# and packaging/linux/icons in /usr/share/icons/hicolor. Wayland finds this file by the
+# window's app ID, `rosetun`; X11 by the window class, the program's file name. From the
+# menu %u expands to nothing, and --open-url without a link is a plain start.
 [Desktop Entry]
 Type=Application
 Name=Rosetun
 Comment=VPN client
-Exec=/usr/lib/rosetun/rosetun-gui
+Exec=/usr/lib/rosetun/rosetun-gui --open-url %u
 Icon=rosetun
 Terminal=false
 Categories=Network;
 StartupNotify=true
 StartupWMClass=rosetun-gui
+MimeType=x-scheme-handler/rosetun;

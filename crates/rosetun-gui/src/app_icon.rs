@@ -4,6 +4,9 @@ use crate::theme::Palette;
 /// Desktop sizes Windows asks for at 100, 125, 150 and 200 % scaling.
 const SIZES: [u32; 11] = [16, 20, 24, 32, 40, 48, 64, 72, 96, 128, 256];
 
+/// The sizes of `packaging/linux/icons`, which the package puts in `hicolor`.
+const LINUX_SIZES: [u32; 10] = [16, 22, 24, 32, 48, 64, 96, 128, 256, 512];
+
 /// The `.ico` embedded in the executable: the icon at every size.
 fn app_icon() -> Vec<u8> {
     let mut ico = Vec::new();
@@ -62,6 +65,41 @@ mod tests {
     fn write_app_icon() {
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/rosetun.ico");
         std::fs::write(path, app_icon()).unwrap();
+    }
+
+    fn linux_icon_path(size: u32) -> String {
+        format!(
+            "{}/../../packaging/linux/icons/{size}.png",
+            env!("CARGO_MANIFEST_DIR")
+        )
+    }
+
+    #[test]
+    #[ignore = "writes packaging/linux/icons; run after changing the icon"]
+    fn write_linux_icons() {
+        for size in LINUX_SIZES {
+            let rgba = rose_icon::rose_icon_rgba(size, RoseIcon::App, &Palette::ROSE);
+            image::save_buffer(
+                linux_icon_path(size),
+                &rgba,
+                size,
+                size,
+                image::ColorType::Rgba8,
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn committed_linux_icons_match_the_rose_renderer() {
+        for size in LINUX_SIZES {
+            let committed = image::open(linux_icon_path(size)).unwrap().into_rgba8();
+            assert_eq!(committed.dimensions(), (size, size));
+            assert_eq!(
+                committed.as_raw(),
+                &rose_icon::rose_icon_rgba(size, RoseIcon::App, &Palette::ROSE)
+            );
+        }
     }
 
     #[test]

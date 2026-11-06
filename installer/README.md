@@ -55,6 +55,14 @@ The installer includes `licenses/wintun.txt` and the unchanged `licenses/wintun-
 
 When updating sing-box, also review its embedded Wintun version. Download the matching official `wintun-<version>.zip` from `https://www.wintun.net/builds/`, verify the byte length and SHA-256 of `bin/amd64/wintun.dll`, and compare the archive's license with the unchanged license from that upstream tag. Stop on any mismatch; do not bypass the guard. Update `$wintunVersion`, `$wintunDllLength` and `$wintunDllHash` beside the sing-box pin in `build.ps1`, the vendored license if it changed, and the version/hash documentation here. Review the public license notices and release-note template as well. Verify that the official sing-box executable passes the embedded-DLL guard before releasing.
 
+## Debian package
+
+`installer/linux/build-deb.sh` builds `rosetun_<version>_amd64.deb` for Debian 13. It runs on Debian or in Debian under WSL, as an ordinary user, and needs Rust 1.96, `cargo-about` 0.9.2, `dpkg-dev`, `curl` and `unzip`. Keep `CARGO_TARGET_DIR` on a Linux filesystem: a Windows drive under WSL keeps no file modes, and the script refuses it. The result is `<target>/deb/rosetun_<version>_amd64.deb`; the script prints its SHA-256.
+
+The sing-box and Xray archives are pinned by version and SHA-256 at the top of the script, and the build stops when a version differs from `SUPPORTED_SING_BOX_VERSION` or `SUPPORTED_XRAY_VERSION`. Update them together with `build.ps1`. Two builds of one commit in the same folder give the same bytes: `SOURCE_DATE_EPOCH` is the commit's time unless it is set.
+
+The file lists in `packaging/linux` go into the package as they are. `packaging/linux/icons` is rendered from the rose: after changing the icon, run `cargo test -p rosetun-gui write_linux_icons -- --ignored`.
+
 ## Releases
 
 All development takes place on `dev`; `master` contains only released commits and remains the default branch. There are no pull requests between these branches. CI runs on pushes to both branches. A signed `v<version>` tag on `master` matching the version in `Cargo.toml` builds and publishes a GitHub Release. Versions with `-alpha.N` or another prerelease suffix are marked as prereleases. Existing releases are never overwritten.

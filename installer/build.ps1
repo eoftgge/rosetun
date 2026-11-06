@@ -25,7 +25,7 @@ if ($LASTEXITCODE -ne 0 -or ($installedCargoAbout | Out-String).Trim() -ne "carg
     }
 }
 
-# Update these together with Install-RosetunSingBox and SUPPORTED_SING_BOX_VERSION.
+# Update these together with Install-RosetunSingBox, SUPPORTED_SING_BOX_VERSION and installer/linux/build-deb.sh.
 $singBoxVersion = '1.14.3'
 $expectedHash = '5C19BB3F8C12D4E85B3D47FE63123A7624B314B58DD7A8E32F51004F1C4D2FAF'
 $xrayVersion = '26.10.21'

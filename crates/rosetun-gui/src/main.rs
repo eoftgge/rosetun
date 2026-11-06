@@ -238,11 +238,9 @@ fn window_viewport(shape: app::host::WindowShape) -> eframe::egui::ViewportBuild
 fn open_url_arg(args: impl Iterator<Item = std::ffi::OsString>) -> Option<String> {
     let mut args = args.skip_while(|arg| arg != OPEN_URL_ARG);
     args.next()?;
-    Some(
-        args.next()
-            .and_then(|link| link.into_string().ok())
-            .unwrap_or_default(),
-    )
+    args.next()
+        .and_then(|link| link.into_string().ok())
+        .filter(|link| !link.is_empty())
 }
 
 /// What a run that found another one asks of it. Autostart while the GUI
@@ -318,9 +316,8 @@ mod tests {
             open_url_arg(args(&["rosetun-gui", "--open-url", "rosetun://add/x"])).as_deref(),
             Some("rosetun://add/x")
         );
-        assert_eq!(
-            open_url_arg(args(&["rosetun-gui", "--open-url"])).as_deref(),
-            Some("")
-        );
+        // The menu entry's %u expands to nothing: a plain start.
+        assert_eq!(open_url_arg(args(&["rosetun-gui", "--open-url"])), None);
+        assert_eq!(open_url_arg(args(&["rosetun-gui", "--open-url", ""])), None);
     }
 }
