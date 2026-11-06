@@ -2114,7 +2114,8 @@ try {
     Test-Step 'dns lock unavailable' 'status names the missing lock and its reason' -Note $status.Output {
         $status.Output -match '(?m)^protection missing: DNS lock: \S'
     }
-    Test-Step 'dns lock unavailable' 'direct DNS is open, as the status says' { Test-RosetunDirectDns }
+    # sing-box's strict route closes port 53 outside the tunnel by itself while it runs.
+    Test-Step 'dns lock unavailable' "sing-box's own filter still closes direct DNS" { -not (Test-RosetunDirectDns) }
     # The expected leak, written down: while the engine restarts nothing holds DNS
     # back, and what is checked is that the status keeps saying so.
     Set-RosetunEngineAvailable $false

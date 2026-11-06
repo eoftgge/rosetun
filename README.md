@@ -144,7 +144,7 @@ What stays closed outside the tunnel at each moment:
 - **held:** closed, and it stays closed until you connect or run `rosetun open-network`.
 - **\*** read from the code: no matrix scenario covers this cell. Every other cell has a scenario in [`tools/vm`](tools/README.md); a release's notes say which matrices were run for it.
 
-"No protection" means the kill switch is off and the DNS lock is not in place: the firewall refused it, or the tunnel has no DNS of its own.
+"No protection" means the kill switch is off and the DNS lock is not in place: the firewall refused it, or the tunnel has no DNS of its own. On Windows sing-box closes port 53 outside the tunnel by itself while it runs, so system DNS can leave only while it restarts, or after the service stops. On Linux a program that picks the physical interface itself can also send DNS past the tunnel while connected.
 
 **Windows**
 
