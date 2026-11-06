@@ -64,6 +64,22 @@ pub(crate) enum HelperCommandError {
     LockdownCommand(u32),
 }
 
+/// How adding this account to the service's group ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(
+    not(any(target_os = "linux", test)),
+    expect(
+        dead_code,
+        reason = "only Linux guards the service's socket with a group"
+    )
+)]
+pub(crate) enum ServiceGroupResult {
+    Joined,
+    /// The user declined the polkit prompt.
+    Declined,
+    Failed,
+}
+
 /// How an elevated Lockdown command ended without an error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LockdownChange {
@@ -130,6 +146,7 @@ pub(crate) enum WorkerEvent {
     #[cfg(any(windows, target_os = "linux", test))]
     Reconnect(Result<(), HelperCommandError>),
     OpenNetwork(Result<(), HelperCommandError>),
+    JoinServiceGroup(ServiceGroupResult),
     SetInterfaceScale(Result<(), SettingsError>),
     SetLanguage(Result<(), SettingsError>),
     SetAccent(Result<(), SettingsError>),

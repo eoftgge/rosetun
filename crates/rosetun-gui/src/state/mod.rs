@@ -108,6 +108,17 @@ pub(crate) enum Screen {
     Settings,
 }
 
+/// Adding this account to the service's group, when the socket refuses it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum ServiceGroup {
+    #[default]
+    Offered,
+    Joining,
+    Failed,
+    /// Takes effect at the next login.
+    Joined,
+}
+
 pub(crate) struct State {
     pub(crate) config: AppConfig,
     pub(crate) config_ready: bool,
@@ -117,6 +128,15 @@ pub(crate) struct State {
     after_upgrade: bool,
     /// The connect in flight is that start's.
     after_upgrade_connect: bool,
+    /// This run took over from one an upgrade replaced: a hold on the first
+    /// status means it should connect.
+    #[cfg(any(target_os = "linux", test))]
+    relaunched: bool,
+    /// The service answered since the last look, even if only to refuse this
+    /// program's protocol.
+    #[cfg(any(target_os = "linux", test))]
+    helper_answered: bool,
+    pub(crate) service_group: ServiceGroup,
     /// That start found nothing to connect to, or its connect failed: the
     /// window should show why the network is closed.
     upgrade_attention: bool,
@@ -185,6 +205,11 @@ impl Default for State {
             auto_connect_pending: true,
             after_upgrade: false,
             after_upgrade_connect: false,
+            #[cfg(any(target_os = "linux", test))]
+            relaunched: false,
+            #[cfg(any(target_os = "linux", test))]
+            helper_answered: false,
+            service_group: ServiceGroup::default(),
             upgrade_attention: false,
             connect_after_choice: false,
             subscriptions: SubscriptionsState::default(),
@@ -390,6 +415,8 @@ pub(crate) enum Action {
     CancelConnection,
     /// Lifts the hold an upgrade left on the network.
     OpenNetwork,
+    /// Adds this account to the group that may reach the service.
+    JoinServiceGroup,
     Apply,
     RestoreMyEdits,
     RequestProtectionOff,
@@ -460,6 +487,7 @@ pub(crate) enum Job {
     #[cfg(any(windows, target_os = "linux", test))]
     Reconnect,
     OpenNetwork,
+    JoinServiceGroup,
     SetInterfaceScale(u16),
     SetLanguage(LanguageSetting),
     SetAccent(AccentPreset),
@@ -623,6 +651,7 @@ impl State {
             | WorkerEvent::Connect(_)
             | WorkerEvent::Disconnect(_)
             | WorkerEvent::OpenNetwork(_)
+            | WorkerEvent::JoinServiceGroup(_)
             | WorkerEvent::SelectNode(_)
             | WorkerEvent::SelectRuleSet(_)
             | WorkerEvent::SetKillSwitch(_)
@@ -724,6 +753,7 @@ impl State {
             | Action::Primary
             | Action::CancelConnection
             | Action::OpenNetwork
+            | Action::JoinServiceGroup
             | Action::RequestProtectionOff
             | Action::KeepBlocked
             | Action::ConfirmProtectionOff

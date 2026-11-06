@@ -44,9 +44,10 @@ RestartSec=2
 # controller: "yes" is just how systemd spells handing over the subtree.
 Delegate=yes
 # The nftables table (inet rosetun) is removed by the helper on a normal
-# stop. On purpose there is no ExecStopPost that removes it: after a crash
-# the table keeps the network closed until the restarted helper is asked to
-# open it or a connect replaces it.
+# stop. On purpose there is no ExecStopPost that removes it: after a crash, or
+# a stop for a package upgrade (the package's prerm leaves the file "upgrading"
+# in /run/rosetun), the table keeps the network closed until the restarted
+# helper is asked to open it or a connect replaces it.
 
 # Hardening, limited to what cannot touch the TUN device, routes, /proc,
 # nftables or the cgroup tree (so no ProtectControlGroups or

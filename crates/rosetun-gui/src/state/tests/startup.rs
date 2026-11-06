@@ -1,4 +1,70 @@
+use rosetun_ipc::{ClientError, ErrorCode, HelperError};
+
 use super::*;
+use crate::state::ServiceGroup;
+use crate::worker::ServiceGroupResult;
+
+#[test]
+fn a_relaunched_run_connects_when_the_first_status_shows_the_hold() {
+    let mut state = state_for_auto_connect();
+    state.config.interface.connect_on_start = false;
+    state.start_relaunched();
+    assert!(state.take_auto_connect().is_none());
+    state.reduce(WorkerEvent::Status(Status {
+        upgrade_hold: true,
+        ..Status::default()
+    }));
+    assert!(matches!(state.take_auto_connect(), Some(Job::Connect(_))));
+}
+
+#[test]
+fn a_relaunched_run_without_the_hold_does_not_connect_by_itself() {
+    let mut state = state_for_auto_connect();
+    state.config.interface.connect_on_start = false;
+    state.start_relaunched();
+    state.reduce(WorkerEvent::Status(Status::default()));
+    assert!(state.take_auto_connect().is_none());
+    // Only the first status decides: a later hold is an ordinary one.
+    state.reduce(WorkerEvent::Status(Status {
+        upgrade_hold: true,
+        ..Status::default()
+    }));
+    assert!(state.take_auto_connect().is_none());
+}
+
+#[test]
+fn the_service_answers_also_when_it_refuses_this_programs_protocol() {
+    let mut state = State::default();
+    state.reduce(WorkerEvent::HelperUnavailable(ClientError::Closed));
+    assert!(!state.take_helper_answered());
+    state.reduce(WorkerEvent::HelperUnavailable(ClientError::Helper(
+        HelperError::new(ErrorCode::ProtocolMismatch, ""),
+    )));
+    assert!(state.take_helper_answered());
+    assert!(!state.take_helper_answered(), "once for each answer");
+}
+
+#[test]
+fn a_refused_socket_offers_the_group_until_it_is_joined() {
+    let mut state = State::default();
+    assert!(state.act(Action::JoinServiceGroup).is_none());
+    state.reduce(WorkerEvent::HelperUnavailable(ClientError::SocketDenied));
+    assert!(state.service_socket_denied());
+    assert!(matches!(
+        state.act(Action::JoinServiceGroup),
+        Some(Job::JoinServiceGroup)
+    ));
+    assert!(
+        state.act(Action::JoinServiceGroup).is_none(),
+        "one at a time"
+    );
+    state.reduce(WorkerEvent::JoinServiceGroup(ServiceGroupResult::Declined));
+    assert_eq!(state.service_group, ServiceGroup::Offered);
+    state.act(Action::JoinServiceGroup);
+    state.reduce(WorkerEvent::JoinServiceGroup(ServiceGroupResult::Joined));
+    assert_eq!(state.service_group, ServiceGroup::Joined);
+    assert!(state.act(Action::JoinServiceGroup).is_none());
+}
 
 #[test]
 fn auto_connect_waits_for_config_helper_and_first_status_then_runs_once() {

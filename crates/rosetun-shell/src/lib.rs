@@ -52,6 +52,12 @@ mod mapped_file;
 )]
 mod program_icon;
 #[cfg(target_os = "linux")]
+#[expect(
+    unsafe_code,
+    reason = "the account's name over libc; every unsafe block carries a SAFETY comment"
+)]
+mod service_group_linux;
+#[cfg(target_os = "linux")]
 mod status_item;
 
 #[cfg(windows)]
@@ -125,6 +131,8 @@ pub use program_icon::ComApartment;
 pub use program_icon::{IconImage, program_icon};
 #[cfg(windows)]
 pub use screen_clip::{clipboard_sequence, start_screen_clip};
+#[cfg(target_os = "linux")]
+pub use service_group_linux::{ServiceGroupJoin, join_service_group};
 #[cfg(target_os = "linux")]
 pub use status_item::{StatusItem, TrayEntry, TrayInput, TrayItem, TrayPixmap};
 #[cfg(windows)]

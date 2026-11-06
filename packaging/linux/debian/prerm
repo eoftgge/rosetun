@@ -1,0 +1,76 @@
+#!/bin/sh
+# Before the old files go. Every path here can run twice: dpkg repeats a failed
+# step, and a stopped service or a missing table is simply nothing to do.
+#
+# dpkg runs the OLD package's script for an upgrade, so what this file promises
+# about the service it promises for the version installed with it.
+
+set -eu
+
+HELPER=/usr/lib/rosetun/rosetun-helper-privileged
+RECORD=/var/lib/rosetun/lockdown
+MARKER=/run/rosetun/upgrading
+SERVICE=rosetun-helper.service
+LOCKDOWN_UNIT=rosetun-lockdown.service
+
+running_systemd() {
+    [ -z "${DPKG_ROOT:-}" ] && [ -d /run/systemd/system ]
+}
+
+# The service leaves the firewall as it is when it finds the marker, so a kill
+# switch or Lockdown keeps the network closed until the new version starts and
+# reports it as the hold. A stop without the marker would open the network.
+stop_for_upgrade() {
+    running_systemd || return 0
+    if systemctl --quiet is-active "$SERVICE"; then
+        if ! touch "$MARKER"; then
+            echo "rosetun: cannot prepare the upgrade, so Rosetun stays as it is and the network stays as it is." >&2
+            exit 1
+        fi
+    fi
+    if ! deb-systemd-invoke stop "$SERVICE"; then
+        echo "rosetun: cannot stop the Rosetun service, so the upgrade stops here." >&2
+        exit 1
+    fi
+}
+
+# Without the program nobody could open a closed network, so it goes only after
+# Lockdown has. --reset-firewall also removes what a kill switch left and starts
+# a running service again; it is stopped for good below.
+remove_lockdown() {
+    if ! running_systemd && [ ! -e "$RECORD" ]; then
+        return 0
+    fi
+    code=0
+    if [ -x "$HELPER" ]; then
+        "$HELPER" --reset-firewall || code=$?
+    elif [ -e "$RECORD" ]; then
+        code=127
+    fi
+    if [ "$code" -ne 0 ]; then
+        cat >&2 <<EOF
+rosetun: could not remove Lockdown (code $code).
+Rosetun was kept, so the network can still be opened. The network may be closed.
+Restart the computer and remove Rosetun again, or run this first:
+    sudo rosetun reset-firewall
+EOF
+        exit 1
+    fi
+}
+
+case "$1" in
+upgrade | failed-upgrade)
+    stop_for_upgrade
+    ;;
+remove)
+    remove_lockdown
+    if running_systemd; then
+        deb-systemd-invoke stop "$SERVICE" "$LOCKDOWN_UNIT" || true
+    fi
+    ;;
+deconfigure) ;;
+*)
+    echo "prerm called with unknown argument '$1'" >&2
+    exit 1
+    ;;
+esac

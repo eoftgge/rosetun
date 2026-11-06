@@ -1,0 +1,56 @@
+#!/bin/sh
+# deb-systemd-helper remembers a unit the administrator disabled, so an upgrade
+# does not enable it again; deb-systemd-invoke honours policy-rc.d and starts no
+# disabled unit. Both are what dh_installsystemd would generate, written out
+# because the only differences are the ones below: `start`, never `restart`,
+# since a running service must not be stopped normally (that opens the network),
+# and rosetun-lockdown.service is enabled without being started.
+
+set -eu
+
+MARKER=/run/rosetun/upgrading
+SERVICE=rosetun-helper.service
+LOCKDOWN_UNIT=rosetun-lockdown.service
+NFT=/usr/sbin/nft
+
+running_systemd() {
+    [ -z "${DPKG_ROOT:-}" ] && [ -d /run/systemd/system ]
+}
+
+enable_unit() {
+    deb-systemd-helper unmask "$1" >/dev/null || true
+    if deb-systemd-helper --quiet was-enabled "$1"; then
+        deb-systemd-helper enable "$1" >/dev/null || true
+    else
+        deb-systemd-helper update-state "$1" >/dev/null || true
+    fi
+}
+
+start_service() {
+    # A service that never stopped must not take a later ordinary stop for an upgrade.
+    rm -f "$MARKER"
+    enable_unit "$LOCKDOWN_UNIT"
+    enable_unit "$SERVICE"
+    if running_systemd; then
+        systemctl --system daemon-reload >/dev/null || true
+        deb-systemd-invoke start "$SERVICE" || true
+    fi
+}
+
+case "$1" in
+configure)
+    # The group must exist before the service makes its socket.
+    systemd-sysusers rosetun.conf
+    start_service
+    if [ -n "${2:-}" ] && running_systemd && "$NFT" list table inet rosetun >/dev/null 2>&1; then
+        echo "rosetun: the network stays closed until Rosetun connects: rosetun connect, or the running window. To open it instead: rosetun open-network"
+    fi
+    ;;
+abort-upgrade | abort-remove | abort-deconfigure)
+    start_service
+    ;;
+*)
+    echo "postinst called with unknown argument '$1'" >&2
+    exit 1
+    ;;
+esac

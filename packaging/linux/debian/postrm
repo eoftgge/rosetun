@@ -1,0 +1,29 @@
+#!/bin/sh
+# purge removes what the service kept: lists and Lockdown's record, in
+# /var/lib/rosetun. It leaves the group `rosetun`, as Debian does with system
+# groups (files or accounts may still refer to its number), and everything in
+# home folders: settings and autostart entries belong to their users.
+
+set -eu
+
+SERVICE=rosetun-helper.service
+LOCKDOWN_UNIT=rosetun-lockdown.service
+
+case "$1" in
+remove)
+    if [ -z "${DPKG_ROOT:-}" ] && [ -d /run/systemd/system ]; then
+        systemctl --system daemon-reload >/dev/null || true
+    fi
+    deb-systemd-helper mask "$SERVICE" "$LOCKDOWN_UNIT" >/dev/null || true
+    ;;
+purge)
+    deb-systemd-helper purge "$SERVICE" "$LOCKDOWN_UNIT" >/dev/null || true
+    deb-systemd-helper unmask "$SERVICE" "$LOCKDOWN_UNIT" >/dev/null || true
+    rm -rf /var/lib/rosetun
+    ;;
+upgrade | failed-upgrade | abort-install | abort-upgrade | disappear) ;;
+*)
+    echo "postrm called with unknown argument '$1'" >&2
+    exit 1
+    ;;
+esac

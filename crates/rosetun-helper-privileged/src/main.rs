@@ -44,6 +44,10 @@ use tracing_subscriber::prelude::*;
 use crate::log_gate::VerboseGate;
 use crate::server::{Helper, Server};
 
+/// The package's `prerm` creates this file in the runtime folder before it
+/// stops the service for an upgrade. systemd removes it with the folder.
+#[cfg(target_os = "linux")]
+const UPGRADE_MARKER: &str = "upgrading";
 const USAGE: &str = "usage: rosetun-helper-privileged [--service | --install-service | --uninstall-service | --reset-firewall | --verify-install-dir <path> | --secure-install-dir <path> | --finalize-install-dir <path> | --hold-for-upgrade <path> | --restore-lockdown]";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -560,11 +564,12 @@ fn initialize(
         .map_err(|error| StartError(format!("failed to start engine warmup thread: {error}")))?;
     engines.register(Box::new(singbox));
 
-    let helper = Arc::new(
-        Helper::new(engines, routing, gate)
-            .with_xray(xray)
-            .with_list_store(lists, run_dir.join("sing-box")),
-    );
+    let helper = Helper::new(engines, routing, gate)
+        .with_xray(xray)
+        .with_list_store(lists, run_dir.join("sing-box"));
+    #[cfg(target_os = "linux")]
+    let helper = helper.with_upgrade_marker(run_dir.join(UPGRADE_MARKER));
+    let helper = Arc::new(helper);
     helper.restore_lockdown();
     state::spawn_list_reaper(Arc::clone(&helper))
         .map_err(|error| StartError(format!("failed to start list cleanup thread: {error}")))?;

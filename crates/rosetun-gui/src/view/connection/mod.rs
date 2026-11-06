@@ -5,7 +5,9 @@ use rosetun_ipc::ProbeOutcome;
 use crate::actions::{PrimaryAction, ProtectionAction, protection_action};
 use crate::errors;
 use crate::icons::{self, Icon};
-use crate::state::{Action, ExitLookup, ExitRoute, SessionPart, State, TunnelDelay, primary_label};
+use crate::state::{
+    Action, ExitLookup, ExitRoute, ServiceGroup, SessionPart, State, TunnelDelay, primary_label,
+};
 use crate::{display, i18n, motion, theme, widgets};
 
 use super::rose_button::{self, RosePhase};
@@ -30,7 +32,10 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
     if !state.config_ready {
         ui.colored_label(theme::palette().text_dim, tr!("loading"));
     }
-    if !state.helper_available {
+    if state.service_socket_denied() {
+        group_access_banner(ui, state, actions);
+        ui.add_space(theme::SECTION_GAP);
+    } else if !state.helper_available {
         service_banner(ui, state);
         ui.add_space(theme::SECTION_GAP);
     }
@@ -50,6 +55,48 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
     // scrolling; the exits card only reports and comes last.
     control_cards(ui, state, actions);
     exits_card(ui, state);
+}
+
+fn group_access_banner(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
+    let join = state.service_group;
+    let body = match join {
+        ServiceGroup::Offered | ServiceGroup::Joining => tr!("group-access-body"),
+        ServiceGroup::Failed => tr!("group-access-failed"),
+        ServiceGroup::Joined => tr!("group-access-joined"),
+    };
+    widgets::card_frame().show(ui, |ui| {
+        ui.set_min_width(ui.available_width());
+        egui::Sides::new().shrink_left().wrap().spacing(16.0).show(
+            ui,
+            |ui| {
+                ui.vertical(|ui| {
+                    ui.label(
+                        RichText::new(tr!("group-access-title"))
+                            .strong()
+                            .color(theme::palette().text),
+                    );
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(body).small().color(theme::palette().text_dim),
+                        )
+                        .wrap(),
+                    );
+                });
+            },
+            |ui| {
+                if join != ServiceGroup::Joined
+                    && widgets::outline_button(
+                        ui,
+                        tr!("group-access-add"),
+                        join != ServiceGroup::Joining,
+                    )
+                    .clicked()
+                {
+                    actions.push(Action::JoinServiceGroup);
+                }
+            },
+        );
+    });
 }
 
 fn service_banner(ui: &mut egui::Ui, state: &State) {

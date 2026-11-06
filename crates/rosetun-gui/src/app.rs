@@ -481,6 +481,7 @@ impl App {
             #[cfg(any(windows, target_os = "linux", test))]
             Job::Reconnect => self.workers.reconnect(),
             Job::OpenNetwork => self.workers.open_network(),
+            Job::JoinServiceGroup => self.workers.join_service_group(),
             Job::SetInterfaceScale(percent) => self.workers.set_interface_scale(percent),
             Job::SetLanguage(language) => self.workers.set_language(language),
             Job::SetAccent(accent) => self.workers.set_accent(accent),
@@ -696,6 +697,8 @@ impl App {
         while let Ok(event) = self.events.try_recv() {
             self.state.reduce(event);
         }
+        #[cfg(target_os = "linux")]
+        self.relaunch_if_replaced();
         while let Some(job) = self.state.take_queued_setting() {
             self.dispatch(job);
         }

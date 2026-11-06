@@ -223,6 +223,9 @@ libraries=$(cd "$work/shlibs" && dpkg-shlibdeps -O \
     sed -n 's/^shlibs:Depends=//p')
 [ -n "$libraries" ] || die 'dpkg-shlibdeps found no libraries'
 
+for script in prerm postinst postrm; do
+    place 0755 "packaging/linux/debian/$script" "DEBIAN/$script"
+done
 find "$root" -type d -exec chmod 0755 {} +
 installed_kib=$(find "$root" -path "$root/DEBIAN" -prune -o -type f -printf '%s\n' |
     awk '{ total += $1 } END { printf "%d", (total + 1023) / 1024 }')

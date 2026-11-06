@@ -18,7 +18,7 @@ use rosetun_shell::{Activation, InstanceMessage};
 use super::{App, Leave, ShellEvent};
 use crate::repaint::Repaint;
 use crate::state::OpenedLink;
-use crate::{display, renderer, tray};
+use crate::{display, relaunch, renderer, tray};
 
 /// How long a start from autostart waits for the panel before it shows the
 /// window after all: at sign-in the panel can come up after this program.
@@ -178,6 +178,22 @@ impl App {
             serve_later_runs(activation, sender, self.life.repaint.clone());
         }
         self
+    }
+
+    pub(crate) fn after_relaunch(mut self, relaunched: bool) -> Self {
+        if relaunched {
+            self.state.start_relaunched();
+        }
+        self
+    }
+
+    /// The service answered: if a package upgrade has replaced this program
+    /// by now, the new one takes over, whichever protocol the service speaks.
+    pub(super) fn relaunch_if_replaced(&mut self) {
+        if self.state.take_helper_answered() && relaunch::binary_replaced() {
+            let error = relaunch::exec(!self.life.has_window);
+            tracing::warn!(%error, "could not start the upgraded GUI");
+        }
     }
 
     /// A new window: eframe made a new context, so everything kept in the

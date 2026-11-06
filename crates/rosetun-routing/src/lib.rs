@@ -234,6 +234,12 @@ pub trait RoutingBackend: std::fmt::Debug + Send {
         Ok(())
     }
 
+    /// The service stops for a package upgrade, before the session's
+    /// teardown: from here on it changes no rule, so whatever closes the
+    /// network keeps closing it for the new version to find, as after a
+    /// crash. Nothing on Windows, where the installer places its own hold.
+    fn keep_protection_on_stop(&self) {}
+
     /// The service stops normally, after the session's teardown: removes
     /// what only a crash may leave behind. Nothing on Windows, where a
     /// dynamic WFP session dies with the process anyway and the upgrade

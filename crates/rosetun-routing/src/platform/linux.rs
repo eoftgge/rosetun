@@ -104,6 +104,8 @@ struct Shared {
     loaded: bool,
     /// The programs' scopes found by the last scan.
     programs: Vec<Program>,
+    /// The service stops for an upgrade: the table stays as it is.
+    frozen: bool,
 }
 
 /// Where the backend looks; fixed outside tests.
@@ -156,6 +158,9 @@ impl Table {
         shared: &mut Shared,
         change: impl FnOnce(&mut Shared),
     ) -> Result<(), RoutingError> {
+        if shared.frozen {
+            return Ok(());
+        }
         let mut next = shared.clone();
         change(&mut next);
         self.scan_programs(&mut next);
@@ -631,12 +636,18 @@ impl RoutingBackend for NftBackend {
         self.table.change(&mut shared, |_| {})
     }
 
+    fn keep_protection_on_stop(&self) {
+        self.shared().frozen = true;
+    }
+
     /// Lifts the hold. Lockdown stays: a stopped service leaves the network
     /// closed.
     fn release_on_stop(&self) -> Result<(), RoutingError> {
-        if self.shared().lockdown.is_some() {
+        let shared = self.shared();
+        if shared.lockdown.is_some() || shared.frozen {
             return Ok(());
         }
+        drop(shared);
         self.disable_lockdown().map(drop)
     }
 }
@@ -1475,6 +1486,38 @@ mod tests {
         backend.lockdown_status().unwrap();
         backend.release_on_stop().unwrap();
         assert!(!nft.has_table());
+    }
+
+    #[test]
+    fn a_stop_for_an_upgrade_leaves_a_kill_switch_for_the_new_version_as_the_hold() {
+        let nft = Arc::new(FakeNft::default());
+        let mount = Mount::new(true);
+        let mut old = backend(&nft, &mount);
+        let mut guard = old
+            .begin_protection(&plan(ProtectionScope::AllTraffic), &[])
+            .unwrap();
+        let written = nft.applied().len();
+
+        old.keep_protection_on_stop();
+        guard.revert_in_place().unwrap();
+        old.release_on_stop().unwrap();
+        assert_eq!(nft.applied().len(), written, "not one rule changes");
+        assert!(nft.has_table());
+
+        let new = backend(&nft, &mount);
+        assert!(new.lockdown_status().unwrap().upgrade_hold);
+        assert!(nft.has_table());
+    }
+
+    #[test]
+    fn a_stop_for_an_upgrade_keeps_the_hold_a_normal_stop_would_lift() {
+        let nft = FakeNft::left(ProtectionScope::AllTraffic);
+        let mount = Mount::new(true);
+        let backend = backend(&nft, &mount);
+        backend.lockdown_status().unwrap();
+        backend.keep_protection_on_stop();
+        backend.release_on_stop().unwrap();
+        assert!(nft.has_table());
     }
 
     #[test]

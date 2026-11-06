@@ -704,6 +704,7 @@ pub(crate) fn client(language: Language, error: &ClientError) -> String {
         ),
         ClientError::Unexpected => tr_in(language, "error-helper-unexpected", &FluentArgs::new()),
         ClientError::Closed => tr_in(language, "error-helper-closed", &FluentArgs::new()),
+        ClientError::SocketDenied => tr_in(language, "group-access-title", &FluentArgs::new()),
         ClientError::Helper(error) => {
             let title = match error.code {
                 ErrorCode::ProtocolMismatch => {

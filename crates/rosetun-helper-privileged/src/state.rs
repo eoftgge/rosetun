@@ -168,6 +168,9 @@ pub struct Helper {
     probe: Mutex<()>,
     lists: Option<Arc<Mutex<ListStore>>>,
     shutting_down: AtomicBool,
+    /// Present when the package's upgrade stops the service. Its folder is
+    /// writable by root alone.
+    upgrade_marker: Option<PathBuf>,
     resumed: AtomicBool,
     cancelled: Arc<AtomicBool>,
     lockdown: lockdown::SharedLockdown,
@@ -364,6 +367,7 @@ impl Helper {
             probe: Mutex::new(()),
             lists: None,
             shutting_down: AtomicBool::new(false),
+            upgrade_marker: None,
             resumed: AtomicBool::new(false),
             cancelled: Arc::clone(&cancelled),
             session_holder: AtomicU8::new(SessionHolder::Nobody as u8),
@@ -480,6 +484,12 @@ impl Helper {
             .get_mut()
             .expect("new session is not poisoned")
             .physical_interface = lookup;
+        self
+    }
+
+    #[cfg(any(target_os = "linux", test))]
+    pub(crate) fn with_upgrade_marker(mut self, marker: PathBuf) -> Self {
+        self.upgrade_marker = Some(marker);
         self
     }
 
@@ -1327,6 +1337,14 @@ impl Helper {
         session.stopping = true;
         session.request = None;
         session.reconnect = None;
+        if self
+            .upgrade_marker
+            .as_deref()
+            .is_some_and(|marker| marker.try_exists().unwrap_or(true))
+        {
+            tracing::info!("stopping for an upgrade: the firewall stays as it is");
+            session.routing.keep_protection_on_stop();
+        }
         session.teardown();
         // A normal stop leaves nothing behind; only a crash keeps the
         // network closed.

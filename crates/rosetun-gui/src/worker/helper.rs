@@ -121,6 +121,17 @@ impl WorkerDispatcher {
         });
     }
 
+    pub(crate) fn join_service_group(&self) {
+        self.spawn_task("rosetun-join-group", move |publisher| {
+            let result = join_service_group();
+            emit(
+                &publisher.tx,
+                &publisher.repaint,
+                WorkerEvent::JoinServiceGroup(result),
+            );
+        });
+    }
+
     pub(crate) fn open_network(&self) {
         self.spawn_task("rosetun-open-network", move |publisher| {
             let result = with_helper(rosetun_ipc::HelperClient::open_network);
@@ -276,6 +287,26 @@ fn run_lockdown_command(
         Ok(Some(code)) => Err(HelperCommandError::LockdownCommand(code)),
         Err(error) => Err(HelperCommandError::LockdownLaunch(error)),
     }
+}
+
+#[cfg(target_os = "linux")]
+fn join_service_group() -> ServiceGroupResult {
+    use rosetun_shell::ServiceGroupJoin;
+
+    match rosetun_shell::join_service_group() {
+        Ok(ServiceGroupJoin::Joined) => ServiceGroupResult::Joined,
+        Ok(ServiceGroupJoin::Declined) => ServiceGroupResult::Declined,
+        Err(error) => {
+            tracing::warn!(%error, "could not add the account to the service's group");
+            ServiceGroupResult::Failed
+        }
+    }
+}
+
+/// Only Linux guards the service's socket with a group.
+#[cfg(not(target_os = "linux"))]
+fn join_service_group() -> ServiceGroupResult {
+    ServiceGroupResult::Failed
 }
 
 /// The installed CLI through `pkexec`, so polkit asks for an administrator

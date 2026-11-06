@@ -28,6 +28,8 @@ mod notices;
 mod program_icons;
 mod programs;
 mod qr;
+#[cfg(target_os = "linux")]
+mod relaunch;
 mod renderer;
 mod reorder;
 mod repaint;
@@ -173,7 +175,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         app::App::without_window(store, repaint::Repaint::default())
             .outside_scope(scope != rosetun_core::Scope::Inside)
             .with_shell(activation, open_link, start_hidden)
-            .after_upgrade(after_upgrade),
+            .after_upgrade(after_upgrade)
+            .after_relaunch(std::env::args_os().any(|arg| arg == relaunch::RELAUNCHED_ARG)),
         window_viewport,
     )?;
     #[cfg(not(target_os = "linux"))]

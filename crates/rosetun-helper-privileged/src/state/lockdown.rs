@@ -684,6 +684,7 @@ mod tests {
         /// outside its service.
         unprotected: std::sync::atomic::AtomicBool,
         released_on_stop: AtomicUsize,
+        kept_on_stop: AtomicUsize,
     }
 
     impl Calls {
@@ -739,6 +740,10 @@ mod tests {
             _engine_binaries: &[&Path],
         ) -> Result<RoutingGuard, RoutingError> {
             Ok(RoutingGuard::noop())
+        }
+
+        fn keep_protection_on_stop(&self) {
+            self.0.kept_on_stop.fetch_add(1, Ordering::AcqRel);
         }
 
         fn release_on_stop(&self) -> Result<(), RoutingError> {
@@ -870,6 +875,30 @@ mod tests {
         assert!(helper.status().upgrade_hold);
         helper.shutdown();
         assert_eq!(calls.released_on_stop.load(Ordering::Acquire), 1);
+    }
+
+    #[test]
+    fn a_stop_for_an_upgrade_keeps_protection_only_with_the_marker() {
+        let folder =
+            std::env::temp_dir().join(format!("rosetun-upgrade-marker-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let marker = folder.join("upgrading");
+        let _ = std::fs::remove_file(&marker);
+
+        let without = Calls::held();
+        held_helper(&without)
+            .with_upgrade_marker(marker.clone())
+            .shutdown();
+        assert_eq!(without.kept_on_stop.load(Ordering::Acquire), 0);
+
+        std::fs::write(&marker, b"").unwrap();
+        let with = Calls::held();
+        held_helper(&with)
+            .with_upgrade_marker(marker.clone())
+            .shutdown();
+        assert_eq!(with.kept_on_stop.load(Ordering::Acquire), 1);
+
+        std::fs::remove_dir_all(folder).unwrap();
     }
 
     #[test]

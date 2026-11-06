@@ -16,6 +16,21 @@ pub enum ClientError {
     Unexpected,
     #[error("helper closed the connection")]
     Closed,
+    /// The socket's permissions refused this account.
+    #[error(
+        "no access to the Rosetun service: run sudo usermod -aG rosetun \"$USER\", then log out and log in again"
+    )]
+    SocketDenied,
+}
+
+fn connect_error(error: &std::io::Error) -> ClientError {
+    // Only the system's own refusal: the transport's checks of who serves the
+    // socket report PermissionDenied as well, and joining a group fixes none.
+    #[cfg(target_os = "linux")]
+    if error.raw_os_error() == Some(libc::EACCES) {
+        return ClientError::SocketDenied;
+    }
+    ClientError::Transport(error.to_string())
 }
 
 #[derive(Debug)]
@@ -30,8 +45,7 @@ pub struct HelperClient {
 
 impl HelperClient {
     pub fn connect(endpoint: &Path, client_name: &str) -> Result<Self, ClientError> {
-        let connection =
-            crate::connect(endpoint).map_err(|error| ClientError::Transport(error.to_string()))?;
+        let connection = crate::connect(endpoint).map_err(|error| connect_error(&error))?;
         let mut client = Self {
             connection,
             next_id: 1,

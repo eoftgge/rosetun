@@ -4,10 +4,10 @@ use rosetun_config::{
 use rosetun_core::AppliedSnapshot;
 use rosetun_ipc::{ClientError, ErrorCode, ExitOutcome, HelperError, ProbeOutcome, TunnelDelays};
 
-use super::{Action, Job, Screen, State};
+use super::{Action, Job, Screen, ServiceGroup, State};
 use crate::actions::{self, PrimaryAction};
 use crate::errors;
-use crate::worker::{HelperCommandError, LockdownChange, WorkerEvent};
+use crate::worker::{HelperCommandError, LockdownChange, ServiceGroupResult, WorkerEvent};
 
 /// The engine check after a cold boot can wait for an antivirus; past this
 /// the connection screen says why.
@@ -176,6 +176,22 @@ impl State {
     pub(crate) fn start_after_upgrade(&mut self) {
         self.after_upgrade = true;
         self.auto_connect_pending = true;
+    }
+
+    /// This run took over from one an upgrade replaced.
+    #[cfg(any(target_os = "linux", test))]
+    pub(crate) fn start_relaunched(&mut self) {
+        self.relaunched = true;
+    }
+
+    #[cfg(any(target_os = "linux", test))]
+    pub(crate) fn take_helper_answered(&mut self) -> bool {
+        std::mem::take(&mut self.helper_answered)
+    }
+
+    /// The socket refused this account, which a group membership fixes.
+    pub(crate) fn service_socket_denied(&self) -> bool {
+        matches!(self.helper_error, Some(ClientError::SocketDenied))
     }
 
     /// Whether the window should come up to explain the closed network.
@@ -434,6 +450,10 @@ impl State {
                 version,
                 protection,
             } => {
+                #[cfg(any(target_os = "linux", test))]
+                {
+                    self.helper_answered = true;
+                }
                 self.helper_available = true;
                 self.protection = Some(protection);
                 self.helper_version = Some(version);
@@ -445,6 +465,13 @@ impl State {
                 self.refresh_cached_request();
             }
             WorkerEvent::HelperUnavailable(error) => {
+                #[cfg(any(target_os = "linux", test))]
+                if matches!(
+                    &error,
+                    ClientError::Helper(helper) if helper.code == ErrorCode::ProtocolMismatch
+                ) {
+                    self.helper_answered = true;
+                }
                 self.helper_available = false;
                 self.clear_temporary();
                 self.tunnel_delay = TunnelDelay::Idle;
@@ -495,6 +522,10 @@ impl State {
                 {
                     self.tunnel_delay = TunnelDelay::Idle;
                     self.delay_last_auto = None;
+                }
+                #[cfg(any(target_os = "linux", test))]
+                if std::mem::take(&mut self.relaunched) && status.upgrade_hold {
+                    self.start_after_upgrade();
                 }
                 self.status_received = true;
                 self.reduce_session_status(&status);
@@ -678,6 +709,13 @@ impl State {
                     Err(error) => self.helper_result(Err(error)),
                 }
             }
+            WorkerEvent::JoinServiceGroup(result) => {
+                self.service_group = match result {
+                    ServiceGroupResult::Joined => ServiceGroup::Joined,
+                    ServiceGroupResult::Declined => ServiceGroup::Offered,
+                    ServiceGroupResult::Failed => ServiceGroup::Failed,
+                };
+            }
             WorkerEvent::TunnelDelay(result) => {
                 if !self.status_received
                     || !matches!(
@@ -731,6 +769,17 @@ impl State {
                     self.operations.helper = true;
                     self.operation_error = None;
                     return Some(Job::OpenNetwork);
+                }
+            }
+            Action::JoinServiceGroup => {
+                if self.service_socket_denied()
+                    && matches!(
+                        self.service_group,
+                        ServiceGroup::Offered | ServiceGroup::Failed
+                    )
+                {
+                    self.service_group = ServiceGroup::Joining;
+                    return Some(Job::JoinServiceGroup);
                 }
             }
             Action::CancelConnection => {
