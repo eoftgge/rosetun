@@ -68,7 +68,9 @@ pub fn lan_address() -> Option<IpAddr> {
 }
 
 fn usable_lan_address(address: IpAddr) -> Option<IpAddr> {
-    (!address.is_unspecified() && !address.is_loopback()).then_some(address)
+    // Linux listens only on private addresses, and a public one would not answer.
+    let reachable = cfg!(windows) || rosetun_config::is_private_address(address);
+    (reachable && !address.is_unspecified() && !address.is_loopback()).then_some(address)
 }
 
 /// The addresses of `host:port` for a TCP connection.

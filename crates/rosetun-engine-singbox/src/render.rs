@@ -246,22 +246,32 @@ fn tun_inbound(settings: &Settings, lan: Option<&[IpPrefix]>) -> Value {
 /// With the wildcard `::` Go opens one dual-stack socket (sing's
 /// `NetworkFromNetAddr` leaves "tcp" as it is), so IPv4 clients are served too,
 /// and a second inbound on 0.0.0.0 would fail on Linux as already in use.
-fn local_proxy_inbounds(listen: LocalProxyListen) -> Vec<Value> {
-    vec![
-        json!({
-            "type": "mixed",
-            "tag": "mixed-in",
-            "listen": listen.address.ip().to_string(),
-            "listen_port": listen.address.port(),
-        }),
-        json!({
-            "type": "direct",
-            "tag": TAG_LOCAL_DNS,
-            "network": "udp",
-            "listen": listen.dns.ip().to_string(),
-            "listen_port": listen.dns.port(),
-        }),
-    ]
+fn local_proxy_inbounds(listen: &LocalProxyListen) -> Vec<Value> {
+    let mut inbounds: Vec<Value> = listen
+        .addresses
+        .iter()
+        .enumerate()
+        .map(|(index, address)| {
+            let tag = match index {
+                0 => "mixed-in".to_owned(),
+                _ => format!("mixed-in-{index}"),
+            };
+            json!({
+                "type": "mixed",
+                "tag": tag,
+                "listen": address.ip().to_string(),
+                "listen_port": address.port(),
+            })
+        })
+        .collect();
+    inbounds.push(json!({
+        "type": "direct",
+        "tag": TAG_LOCAL_DNS,
+        "network": "udp",
+        "listen": listen.dns.ip().to_string(),
+        "listen_port": listen.dns.port(),
+    }));
+    inbounds
 }
 
 fn socks_outbound(socks: SocksProxy<'_>, tag: &str) -> Value {
@@ -1130,8 +1140,8 @@ mod tests {
             lan_servers: &[],
             control: None,
             verbose_log: false,
-            local_proxy: Some(LocalProxyListen {
-                address: address.parse().unwrap(),
+            local_proxy: Some(&LocalProxyListen {
+                addresses: vec![address.parse().unwrap()],
                 dns: "127.0.0.1:53535".parse().unwrap(),
             }),
         })
@@ -1201,6 +1211,45 @@ mod tests {
         assert_eq!(mixed[0]["listen"], "::");
         // Only the proxy is shared.
         assert_eq!(inbounds[1]["listen"], "127.0.0.1");
+    }
+
+    #[test]
+    fn a_proxy_on_several_addresses_gets_an_inbound_for_each() {
+        let node = shadowsocks_node("main", "203.0.113.10");
+        let rules = local_proxy_rules();
+        let body = render(&RenderRequest {
+            node: &node,
+            socks: None,
+            extra: &[],
+            rules: &rules,
+            lists: &[],
+            settings: &Settings::default(),
+            lan_segment: &[],
+            lan_servers: &[],
+            control: None,
+            verbose_log: false,
+            local_proxy: Some(&LocalProxyListen {
+                addresses: vec![
+                    "127.0.0.1:10808".parse().unwrap(),
+                    "192.168.1.5:10808".parse().unwrap(),
+                    "[fd00:1::5]:10808".parse().unwrap(),
+                ],
+                dns: "127.0.0.1:53535".parse().unwrap(),
+            }),
+        })
+        .unwrap()
+        .body;
+        let value: Value = serde_json::from_slice(&body).unwrap();
+        let inbounds = value["inbounds"].as_array().unwrap();
+        let mixed: Vec<_> = inbounds
+            .iter()
+            .filter(|inbound| inbound["type"] == "mixed")
+            .collect();
+        assert_eq!(mixed.len(), 3);
+        assert_eq!(mixed[0]["tag"], "mixed-in");
+        assert_eq!(mixed[1]["listen"], "192.168.1.5");
+        assert_eq!(mixed[2]["tag"], "mixed-in-2");
+        assert_eq!(mixed[2]["listen"], "fd00:1::5");
     }
 
     #[test]

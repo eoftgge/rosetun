@@ -8308,6 +8308,39 @@ fn a_shared_proxy_reads_the_networks_without_local_network_and_follows_them() {
 }
 
 #[test]
+fn a_shared_proxy_follows_the_addresses_it_listens_on() {
+    use super::dns::test_support::{Behavior, Server};
+
+    fn first() -> Vec<std::net::IpAddr> {
+        vec!["127.0.0.2".parse().unwrap()]
+    }
+    fn second() -> Vec<std::net::IpAddr> {
+        vec!["127.0.0.3".parse().unwrap()]
+    }
+
+    let dns = Server::new(Behavior::Noerror);
+    let (helper, _controls) = ordered_helper();
+    {
+        let mut session = helper.session().unwrap();
+        session.test_local_dns = Some(dns.address());
+        session.shared_proxy_addresses = first;
+    }
+    let mut request = local_proxy_request(true);
+    request.settings.local_proxy.share_on_lan = true;
+    helper.connect(&request).unwrap();
+
+    let mut session = helper.session().unwrap();
+    assert!(!session.local_network_changed(), "the same addresses");
+    session.shared_proxy_addresses = second;
+    assert!(!session.local_network_changed());
+    assert!(!session.local_network_changed());
+    assert!(
+        session.local_network_changed(),
+        "the third equal read counts"
+    );
+}
+
+#[test]
 fn the_scope_of_the_proxy_mode_follows_the_kill_switch_and_sharing() {
     use super::lockdown::protection_scope;
     use rosetun_routing::ProtectionScope;

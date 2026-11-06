@@ -280,6 +280,16 @@ impl Session {
         if settings.allow_lan && settings.connection_mode == ConnectionMode::Tun {
             self.release_broadcast_route(&settings.tun);
         }
+        if shares_local_proxy(&settings)
+            && let read = (self.shared_proxy_addresses)()
+            && self
+                .shared_address_watch
+                .observe(&self.shared_addresses, read)
+                .is_some()
+        {
+            tracing::info!("the addresses a shared proxy listens on changed");
+            return true;
+        }
         let read = self.scan_lan(&settings.tun, &self.lan_servers, false);
         let Some(segment) = self.lan_watch.observe(&self.lan.segment, read) else {
             return false;

@@ -1,7 +1,9 @@
 //! The proxy mode: what the engine listens on, found free before it starts.
 
 use std::io;
-use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener, UdpSocket};
+#[cfg(windows)]
+use std::net::Ipv6Addr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, UdpSocket};
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
@@ -45,22 +47,50 @@ fn try_bind(address: SocketAddr) -> Result<(), PortProblem> {
         .map_err(|error| PortProblem::of(&error))
 }
 
-/// What the local proxy listens on when `port` is free for it. A shared proxy
-/// listens on `::` where the system has IPv6, which also serves IPv4 clients.
-fn free_address(port: u16, share: bool) -> Result<SocketAddr, PortProblem> {
+/// What the local proxy listens on when `port` is free for it.
+///
+/// Shared on Windows it listens on `::` where the system has IPv6, which also
+/// serves IPv4 clients, and filters let in only the computer's own networks.
+#[cfg(windows)]
+fn free_addresses(port: u16, share: bool, _: &[IpAddr]) -> Result<Vec<SocketAddr>, PortProblem> {
     let loopback = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
     try_bind(loopback)?;
     if !share {
-        return Ok(loopback);
+        return Ok(vec![loopback]);
     }
     let any_v4 = SocketAddr::from((Ipv4Addr::UNSPECIFIED, port));
     try_bind(any_v4)?;
     let any_v6 = SocketAddr::from((Ipv6Addr::UNSPECIFIED, port));
     match try_bind(any_v6) {
-        Ok(()) => Ok(any_v6),
-        Err(PortProblem::NoAddress) => Ok(any_v4),
+        Ok(()) => Ok(vec![any_v6]),
+        Err(PortProblem::NoAddress) => Ok(vec![any_v4]),
         Err(problem) => Err(problem),
     }
+}
+
+/// Shared on Linux it listens on loopback and `connected`, the private addresses
+/// of the physical interfaces: without Lockdown nothing else limits who gets in.
+/// An address that went away meanwhile only costs that address.
+#[cfg(not(windows))]
+fn free_addresses(
+    port: u16,
+    share: bool,
+    connected: &[IpAddr],
+) -> Result<Vec<SocketAddr>, PortProblem> {
+    let loopback = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+    try_bind(loopback)?;
+    let mut addresses = vec![loopback];
+    if share {
+        for address in connected {
+            let address = SocketAddr::new(*address, port);
+            match try_bind(address) {
+                Ok(()) => addresses.push(address),
+                Err(PortProblem::NoAddress) => {}
+                Err(problem) => return Err(problem),
+            }
+        }
+    }
+    Ok(addresses)
 }
 
 /// A free loopback port for the engine's DNS. As with the control endpoint,
@@ -90,6 +120,7 @@ pub(super) fn shared_port(settings: &Settings, lockdown: &LockdownState) -> Opti
 pub(super) fn listen_for(
     settings: &Settings,
     sharing_allowed: bool,
+    connected: &[IpAddr],
     cancelled: &AtomicBool,
 ) -> Result<Option<LocalProxyListen>, HelperError> {
     if settings.connection_mode != ConnectionMode::SystemProxy {
@@ -97,10 +128,14 @@ pub(super) fn listen_for(
     }
     let port = settings.local_proxy.port;
     let mut tries = 0;
-    let address = loop {
+    let addresses = loop {
         tries += 1;
-        match free_address(port, settings.local_proxy.share_on_lan && sharing_allowed) {
-            Ok(address) => break address,
+        match free_addresses(
+            port,
+            settings.local_proxy.share_on_lan && sharing_allowed,
+            connected,
+        ) {
+            Ok(addresses) => break addresses,
             Err(PortProblem::Busy) if tries < PORT_TRIES => {
                 sleep_cancellable(PORT_RETRY_DELAY, cancelled)?;
             }
@@ -122,7 +157,7 @@ pub(super) fn listen_for(
             format!("cannot pick a port for the engine's DNS: {error}"),
         )
     })?;
-    Ok(Some(LocalProxyListen { address, dns }))
+    Ok(Some(LocalProxyListen { addresses, dns }))
 }
 
 #[cfg(test)]
@@ -151,7 +186,7 @@ mod tests {
     fn the_tunnel_mode_listens_on_nothing() {
         let cancelled = AtomicBool::new(false);
         assert_eq!(
-            listen_for(&Settings::default(), true, &cancelled).unwrap(),
+            listen_for(&Settings::default(), true, &[], &cancelled).unwrap(),
             None
         );
     }
@@ -159,12 +194,17 @@ mod tests {
     #[test]
     fn an_unshared_proxy_listens_on_loopback_only() {
         let port = free_port();
-        let listen = listen_for(&proxy_settings(port, false), true, &AtomicBool::new(false))
-            .unwrap()
-            .unwrap();
+        let listen = listen_for(
+            &proxy_settings(port, false),
+            true,
+            &[],
+            &AtomicBool::new(false),
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(
-            listen.address,
-            SocketAddr::from((Ipv4Addr::LOCALHOST, port))
+            listen.addresses,
+            [SocketAddr::from((Ipv4Addr::LOCALHOST, port))]
         );
         assert!(listen.dns.ip().is_loopback());
     }
@@ -172,29 +212,87 @@ mod tests {
     #[test]
     fn a_shared_proxy_listens_on_a_wildcard_address() {
         let port = free_port();
-        let listen = listen_for(&proxy_settings(port, true), true, &AtomicBool::new(false))
-            .unwrap()
-            .unwrap();
-        assert!(listen.address.ip().is_unspecified());
-        assert_eq!(listen.address.port(), port);
+        let listen = listen_for(
+            &proxy_settings(port, true),
+            true,
+            &[],
+            &AtomicBool::new(false),
+        )
+        .unwrap()
+        .unwrap();
+        #[cfg(windows)]
+        assert!(listen.addresses[0].ip().is_unspecified());
+        // Linux takes its addresses from `connected`, which is empty here.
+        #[cfg(not(windows))]
+        assert_eq!(
+            listen.addresses,
+            [SocketAddr::from((Ipv4Addr::LOCALHOST, port))]
+        );
+        assert_eq!(listen.addresses[0].port(), port);
         assert!(listen.dns.ip().is_loopback());
     }
 
     #[test]
     fn lockdown_without_its_local_network_keeps_the_proxy_on_loopback() {
         let port = free_port();
-        let listen = listen_for(&proxy_settings(port, true), false, &AtomicBool::new(false))
-            .unwrap()
-            .unwrap();
-        assert!(listen.address.ip().is_loopback());
+        let listen = listen_for(
+            &proxy_settings(port, true),
+            false,
+            &[],
+            &AtomicBool::new(false),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(
+            listen
+                .addresses
+                .iter()
+                .all(|address| address.ip().is_loopback())
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn a_shared_proxy_on_linux_listens_only_on_the_addresses_it_is_given() {
+        let port = free_port();
+        let connected: Vec<IpAddr> = vec!["127.0.0.2".parse().unwrap()];
+        let listen = listen_for(
+            &proxy_settings(port, true),
+            true,
+            &connected,
+            &AtomicBool::new(false),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            listen.addresses,
+            [
+                SocketAddr::from((Ipv4Addr::LOCALHOST, port)),
+                SocketAddr::new(connected[0], port),
+            ]
+        );
+        let unshared = listen_for(
+            &proxy_settings(port, false),
+            true,
+            &connected,
+            &AtomicBool::new(false),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(unshared.addresses.len(), 1);
     }
 
     #[test]
     fn a_taken_port_is_an_error_that_names_it() {
         let holder = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         let port = holder.local_addr().unwrap().port();
-        let error =
-            listen_for(&proxy_settings(port, false), true, &AtomicBool::new(false)).unwrap_err();
+        let error = listen_for(
+            &proxy_settings(port, false),
+            true,
+            &[],
+            &AtomicBool::new(false),
+        )
+        .unwrap_err();
         assert_eq!(error.code, ErrorCode::LocalProxyPortBusy);
         assert_eq!(error.local_proxy_port(), Some(port));
     }

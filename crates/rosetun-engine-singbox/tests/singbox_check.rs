@@ -176,8 +176,8 @@ fn sing_box_check_validates_local_rule_set_config() {
                 lan_servers: &[],
                 control: None,
                 verbose_log: false,
-                local_proxy: Some(rosetun_engine::LocalProxyListen {
-                    address: address.parse().unwrap(),
+                local_proxy: Some(&rosetun_engine::LocalProxyListen {
+                    addresses: vec![address.parse().unwrap()],
                     dns: "127.0.0.1:53535".parse().unwrap(),
                 }),
             })

@@ -312,6 +312,11 @@ struct Session {
     /// whether it succeeds or not.
     cold_start: bool,
     /// Reads the computer's segment; a hook for tests.
+    /// Reads where a shared proxy may listen; a hook for tests.
+    shared_proxy_addresses: fn() -> Vec<IpAddr>,
+    /// What the running session's proxy was given.
+    shared_addresses: Vec<IpAddr>,
+    shared_address_watch: lan::LanWatch<Vec<IpAddr>>,
     /// Stands in for the engine's loopback DNS in the proxy mode.
     #[cfg(test)]
     test_local_dns: Option<SocketAddr>,
@@ -421,6 +426,12 @@ impl Helper {
                 programs_withdrawn: false,
                 protected_binaries: Vec::new(),
                 cold_start: true,
+                #[cfg(not(test))]
+                shared_proxy_addresses: rosetun_routing::shared_proxy_addresses,
+                #[cfg(test)]
+                shared_proxy_addresses: Vec::new,
+                shared_addresses: Vec::new(),
+                shared_address_watch: lan::LanWatch::default(),
                 #[cfg(test)]
                 test_local_dns: None,
                 #[cfg(not(test))]
@@ -2049,9 +2060,11 @@ impl Session {
             ));
         }
 
+        let shared_addresses = (self.shared_proxy_addresses)();
         let local_proxy = local_proxy::listen_for(
             settings,
             local_proxy::sharing_allowed(&lockdown::read(&self.lockdown)),
+            &shared_addresses,
             &self.cancelled,
         )?;
         #[cfg(test)]
@@ -2157,7 +2170,7 @@ impl Session {
                 format!("engine {} is not registered", settings.engine.as_str()),
             )
         })?;
-        let dns_server = match local_proxy {
+        let dns_server = match local_proxy.as_ref() {
             Some(listen) => Some(listen.dns),
             None => backend.tunnel_dns_server(&settings.tun),
         };
@@ -2191,7 +2204,7 @@ impl Session {
                 lan_servers: private_exceptions,
                 control: control.as_ref(),
                 verbose_log: verbose_until.is_some(),
-                local_proxy,
+                local_proxy: local_proxy.as_ref(),
             },
         )?;
 
@@ -2314,6 +2327,8 @@ impl Session {
         self.lan = lan;
         self.lan_servers = servers;
         self.lan_watch = lan::LanWatch::default();
+        self.shared_addresses = shared_addresses;
+        self.shared_address_watch = lan::LanWatch::default();
         self.broadcast_route_failure = None;
         let cold_start = self.cold_start;
 
