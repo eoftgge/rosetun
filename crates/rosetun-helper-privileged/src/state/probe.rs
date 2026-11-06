@@ -370,10 +370,7 @@ impl Helper {
             let routing = match &lockdown_routing {
                 Some(routing) => Some(Arc::clone(routing)),
                 None => match self.acquire_session(SessionHolder::Probe, SESSION_WAIT) {
-                    Some(Acquired::Locked(session)) => session
-                        .guard
-                        .as_ref()
-                        .map(|guard| Arc::clone(&guard.routing)),
+                    Some(Acquired::Locked(session)) => session.protection.routing(),
                     None => {
                         return Err(self.session_busy(
                             SessionHolder::Probe,

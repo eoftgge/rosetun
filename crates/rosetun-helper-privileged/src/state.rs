@@ -8,6 +8,7 @@ mod local_proxy;
 mod lockdown;
 mod path;
 mod probe;
+mod protection;
 mod session_lock;
 #[cfg(test)]
 mod tests;
@@ -37,7 +38,7 @@ use rosetun_ipc::{
     SessionExit,
 };
 use rosetun_routing::{
-    LockdownApps, ProtectionScope, RoutingBackend, RoutingGuard, RoutingPlan, TunnelInterface,
+    LockdownApps, ProtectionScope, RoutingBackend, RoutingPlan, TunnelInterface,
 };
 
 use crate::list_store::{ListChunk, ListStore, valid_hash, valid_tag};
@@ -247,12 +248,6 @@ impl XrayRunner for XrayHelper {
     }
 }
 
-/// Routing protection that outlives one engine process.
-struct Guard {
-    routing: Arc<Mutex<RoutingGuard>>,
-    scope: ProtectionScope,
-}
-
 struct Session {
     engines: Arc<EngineRegistry>,
     routing: Box<dyn RoutingBackend>,
@@ -268,7 +263,7 @@ struct Session {
     watchdog: Option<DnsWatchdog>,
     tunnel_dns: Option<SocketAddr>,
     path_addresses: Arc<Mutex<Vec<Ipv4Addr>>>,
-    guard: Option<Guard>,
+    protection: protection::ProtectionRuntime,
     last_endpoint: Option<SuccessfulEndpoint>,
     /// Last addresses of extra nodes by exit, for reconnects that cannot resolve.
     last_extra_endpoints: HashMap<ExitId, SuccessfulEndpoint>,
@@ -300,12 +295,6 @@ struct Session {
     lockdown: lockdown::SharedLockdown,
     /// The programs Lockdown permits; a hook for tests.
     lockdown_apps: fn() -> LockdownApps,
-    /// Lockdown's GUI and CLI permits are removed because the session's
-    /// filters sit in its sublayer; `teardown` puts them back.
-    programs_withdrawn: bool,
-    /// The engine binaries the current protection permits, for changing its
-    /// scope when Lockdown is turned on or off.
-    protected_binaries: Vec<PathBuf>,
     /// No engine has been started since the service started. After a power
     /// cut an antivirus may scan the engine again on its first run, so that
     /// start gets the slow-start deadline. Cleared by the first start,
@@ -317,20 +306,10 @@ struct Session {
     /// What the running session's proxy was given.
     shared_addresses: Vec<IpAddr>,
     shared_address_watch: lan::LanWatch<Vec<IpAddr>>,
+    lan: lan::LanRuntime,
     /// Stands in for the engine's loopback DNS in the proxy mode.
     #[cfg(test)]
     test_local_dns: Option<SocketAddr>,
-    lan_scan: lan::LanScan,
-    /// What "Local network" opens for the running session.
-    lan: rosetun_routing::lan::LanAccess,
-    /// The session's VPN servers, whose addresses the segment leaves out.
-    lan_servers: Vec<IpAddr>,
-    lan_watch: lan::LanWatch,
-    broadcast_route_release: lan::BroadcastRouteRelease,
-    /// The last release's failure, which is logged once.
-    broadcast_route_failure: Option<u32>,
-    /// The segment Lockdown's set was last written for without a session.
-    lockdown_segment: rosetun_routing::lan::LanSegment,
 }
 
 impl std::fmt::Debug for Helper {
@@ -399,7 +378,7 @@ impl Helper {
                 watchdog: None,
                 tunnel_dns: None,
                 path_addresses: Arc::new(Mutex::new(Vec::new())),
-                guard: None,
+                protection: protection::ProtectionRuntime::default(),
                 last_endpoint: None,
                 last_extra_endpoints: HashMap::new(),
                 exit_tags: Vec::new(),
@@ -423,8 +402,6 @@ impl Helper {
                 lockdown_apps: lockdown::lockdown_apps,
                 #[cfg(test)]
                 lockdown_apps: lockdown::test_apps,
-                programs_withdrawn: false,
-                protected_binaries: Vec::new(),
                 cold_start: true,
                 #[cfg(not(test))]
                 shared_proxy_addresses: rosetun_routing::shared_proxy_addresses,
@@ -432,21 +409,9 @@ impl Helper {
                 shared_proxy_addresses: Vec::new,
                 shared_addresses: Vec::new(),
                 shared_address_watch: lan::LanWatch::default(),
+                lan: lan::LanRuntime::default(),
                 #[cfg(test)]
                 test_local_dns: None,
-                #[cfg(not(test))]
-                lan_scan: rosetun_routing::lan_segment,
-                #[cfg(test)]
-                lan_scan: lan::test_scan,
-                lan: rosetun_routing::lan::LanAccess::default(),
-                lan_servers: Vec::new(),
-                lan_watch: lan::LanWatch::default(),
-                #[cfg(not(test))]
-                broadcast_route_release: rosetun_routing::release_broadcast_route,
-                #[cfg(test)]
-                broadcast_route_release: lan::test_release,
-                broadcast_route_failure: None,
-                lockdown_segment: rosetun_routing::lan::LanSegment::default(),
                 #[cfg(not(test))]
                 adapter_lookup: rosetun_routing::tunnel_adapter_present,
                 #[cfg(test)]
@@ -482,7 +447,8 @@ impl Helper {
         self.session
             .get_mut()
             .expect("new session is not poisoned")
-            .lan_scan = scan;
+            .lan
+            .scan = scan;
         self
     }
 
@@ -491,6 +457,7 @@ impl Helper {
         self.session
             .get_mut()
             .expect("new session is not poisoned")
+            .lan
             .broadcast_route_release = release;
         self
     }
@@ -939,7 +906,7 @@ impl Helper {
                 if xray_exited {
                     self.with_status(|status| status.xray_stopped = true);
                 }
-                let protected = session.keeps_protection();
+                let protected = session.protection.keeps_protection();
                 if !auto_reconnect {
                     tracing::warn!(%reason, protected, "the engine terminated itself");
                     if !protected {
@@ -1032,11 +999,7 @@ impl Helper {
         let request = session.request.clone().expect("active request is present");
         let reconnect = session.reconnect.take().expect("reconnect is scheduled");
         let attempt = reconnect.failures + 1;
-        let mode = if session.guard.is_some() {
-            StartMode::ProtectedReconnect
-        } else {
-            StartMode::Fresh
-        };
+        let mode = session.protection.restart_mode();
         tracing::info!(
             cause = reconnect.cause,
             attempt,
@@ -1109,7 +1072,7 @@ impl Helper {
                     });
                     tracing::warn!(cause = reconnect.cause, attempt, %error, "tunnel reconnect failed; retrying");
                 } else {
-                    let protected = session.keeps_protection();
+                    let protected = session.protection.keeps_protection();
                     if protected {
                         if let Err(cleanup_error) = session.stop_engine() {
                             tracing::error!(%cleanup_error, "failed to stop engine after protected reconnect failure");
@@ -1241,7 +1204,7 @@ impl Helper {
                     self.finish_cancelled(&mut session);
                     return Err(error);
                 }
-                let protected = session.keeps_protection()
+                let protected = session.protection.keeps_protection()
                     && (mode == StartMode::ProtectedReconnect
                         || error.code == ErrorCode::XrayStartFailed);
                 if protected {
@@ -1897,14 +1860,6 @@ impl Session {
         Ok(())
     }
 
-    /// Only the kill switch keeps blocking after a failure. The DNS lock goes
-    /// with the session.
-    fn keeps_protection(&self) -> bool {
-        self.guard
-            .as_ref()
-            .is_some_and(|guard| guard.scope == ProtectionScope::AllTraffic)
-    }
-
     fn reserve_lists(
         &self,
         request: &ConnectRequest,
@@ -2077,26 +2032,20 @@ impl Session {
             self.wait_for_previous_adapter(&settings.tun.name)?;
         }
 
-        if mode == StartMode::Fresh
-            && let Some(guard) = self.guard.take()
-            && let Err(error) = guard
-                .routing
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .revert_in_place()
-        {
-            tracing::error!(%error, "failed to roll back stale routing protection");
+        if mode == StartMode::Fresh {
+            self.protection
+                .release("failed to roll back stale routing protection");
         }
 
         if mode == StartMode::ProtectedReconnect {
-            if self.guard.is_none() {
+            if !self.protection.is_active() {
                 return Err(HelperError::new(
                     ErrorCode::RoutingFailed,
                     "protected reconnect is impossible: the routing guard is missing",
                 ));
             }
             if !settings.kill_switch
-                && self.keeps_protection()
+                && self.protection.keeps_protection()
                 && !lockdown::read(&self.lockdown).enabled
             {
                 return Err(HelperError::new(
@@ -2137,7 +2086,7 @@ impl Session {
             .chain(extra_endpoints.iter().flatten())
             .copied()
             .collect::<Vec<_>>();
-        let lan = self.lan_access(settings, &servers);
+        let lan = self.lan.access_for(settings, &servers);
         let lan_prefixes = lan.segment.route_networks();
         self.follow_servers_in_lockdown(&servers)?;
         // On Linux the kill switch still opens every private range to every
@@ -2232,14 +2181,14 @@ impl Session {
             binaries.push(path.as_path());
         }
 
-        self.protected_binaries = binaries.iter().map(|path| path.to_path_buf()).collect();
+        self.protection.permit_binaries(&binaries);
 
         let lockdown = lockdown::read(&self.lockdown).enabled;
         if lockdown && !settings.kill_switch {
             tracing::info!("Lockdown is on: the kill switch is forced on");
         }
         let shared_proxy = local_proxy::shared_port(settings, &lockdown::read(&self.lockdown));
-        let scope = lockdown::protection_scope(
+        let scope = protection::protection_scope(
             mode,
             settings.kill_switch,
             dns_server.is_some(),
@@ -2254,16 +2203,8 @@ impl Session {
             .transpose()
             .map_err(|error| HelperError::new(ErrorCode::RoutingFailed, error.to_string()))?;
         // A DNS lock has nothing to do without an adapter.
-        if scope.is_none()
-            && local_proxy.is_some()
-            && let Some(guard) = self.guard.take()
-            && let Err(error) = guard
-                .routing
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .revert_in_place()
-        {
-            tracing::error!(%error, "failed to remove the DNS lock");
+        if scope.is_none() && local_proxy.is_some() {
+            self.protection.release("failed to remove the DNS lock");
         }
 
         if let Some(scope) = scope {
@@ -2276,60 +2217,26 @@ impl Session {
             };
 
             match mode {
-                StartMode::Fresh => {
-                    let result = self
-                        .routing
-                        .preflight()
-                        .and_then(|()| self.routing.begin_protection(&plan, &binaries));
-                    match result {
-                        Ok(routing) => {
-                            self.guard = Some(Guard {
-                                routing: Arc::new(Mutex::new(routing)),
-                                scope,
-                            });
-                            // The same transaction removed Lockdown's GUI and CLI permits.
-                            self.programs_withdrawn |= lockdown;
-                            tracing::info!(?scope, "routing protection installed");
-                        }
-                        Err(error) if scope == ProtectionScope::DnsOnly => {
-                            tracing::warn!(%error, "DNS lock is unavailable; connecting without it");
-                        }
-                        Err(error) => {
-                            return Err(HelperError::new(
-                                ErrorCode::RoutingFailed,
-                                error.to_string(),
-                            ));
-                        }
+                StartMode::Fresh => match self.protection.install(self.routing.as_mut(), &plan) {
+                    Ok(()) => tracing::info!(?scope, "routing protection installed"),
+                    Err(error) if scope == ProtectionScope::DnsOnly => {
+                        tracing::warn!(%error, "DNS lock is unavailable; connecting without it");
                     }
-                }
-                StartMode::ProtectedReconnect => {
-                    let guard = self
-                        .guard
-                        .as_mut()
-                        .expect("protected reconnect validated the guard");
-                    guard
-                        .routing
-                        .lock()
-                        .map_err(|_| {
-                            HelperError::new(ErrorCode::RoutingFailed, "routing guard is poisoned")
-                        })?
-                        .prepare_reconnect(&plan, &binaries)
-                        .map_err(|error| {
-                            HelperError::new(ErrorCode::RoutingFailed, error.to_string())
-                        })?;
-                    guard.scope = scope;
-                    self.programs_withdrawn |= lockdown;
-                }
+                    Err(error) => {
+                        return Err(HelperError::new(
+                            ErrorCode::RoutingFailed,
+                            error.to_string(),
+                        ));
+                    }
+                },
+                StartMode::ProtectedReconnect => self.protection.prepare_reconnect(&plan)?,
             }
         }
         // Without a guard there is no filter to authorize on the tunnel.
-        let tunnel = tunnel.filter(|_| self.guard.is_some());
-        self.lan = lan;
-        self.lan_servers = servers;
-        self.lan_watch = lan::LanWatch::default();
+        let tunnel = tunnel.filter(|_| self.protection.is_active());
+        self.lan.begin_session(lan, servers);
         self.shared_addresses = shared_addresses;
         self.shared_address_watch = lan::LanWatch::default();
-        self.broadcast_route_failure = None;
         let cold_start = self.cold_start;
 
         if chain {
@@ -2470,21 +2377,10 @@ impl Session {
                 Err(error)
                     if mode == StartMode::Fresh
                         && error.code == ErrorCode::RoutingFailed
-                        && self
-                            .guard
-                            .as_ref()
-                            .is_some_and(|guard| guard.scope == ProtectionScope::DnsOnly) =>
+                        && self.protection.scope() == Some(ProtectionScope::DnsOnly) =>
                 {
                     tracing::warn!(reason = %error.message, "DNS lock cannot authorize the tunnel; connecting without it");
-                    if let Some(guard) = self.guard.take()
-                        && let Err(error) = guard
-                            .routing
-                            .lock()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner)
-                            .revert_in_place()
-                    {
-                        tracing::error!(%error, "failed to roll back DNS lock");
-                    }
+                    self.protection.release("failed to roll back DNS lock");
                 }
                 Err(error) => return Err(error),
             }
@@ -2507,7 +2403,7 @@ impl Session {
         // Without a guard the tunnel has not been validated yet; the first
         // supervisor tick after the connect does this if it is too early here.
         if settings.allow_lan && local_proxy.is_none() {
-            self.release_broadcast_route(&settings.tun);
+            self.lan.release_broadcast_route(&settings.tun);
         }
 
         if let Some(server) = dns_server {
@@ -2807,17 +2703,7 @@ impl Session {
                 ));
             }
 
-            let routing = self.guard.as_ref().ok_or_else(|| {
-                HelperError::new(
-                    ErrorCode::RoutingFailed,
-                    "routing protection disappeared before tunnel authorization",
-                )
-            })?;
-            let mut guard = routing.routing.lock().map_err(|_| {
-                HelperError::new(ErrorCode::RoutingFailed, "routing guard is poisoned")
-            })?;
-
-            match guard.authorize_tunnel(tunnel) {
+            match self.protection.authorize_tunnel(tunnel) {
                 Ok(()) => {
                     tracing::info!(
                         alias = %tunnel.alias,
@@ -2913,18 +2799,10 @@ impl Session {
             Err(error) => tracing::error!(%error, "failed to stop the engine"),
         }
         self.pin_lists(&[]);
-        if let Some(guard) = self.guard.take()
-            && let Err(error) = guard
-                .routing
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .revert_in_place()
-        {
-            tracing::error!(%error, "failed to roll back routes");
-        }
+        self.protection.release("failed to roll back routes");
         // Without a session no server is special: Lockdown's segment opens whole.
-        if self.programs_withdrawn {
-            self.lan_servers.clear();
+        if self.protection.programs_withdrawn() {
+            self.lan.forget_servers();
             self.restore_lockdown_programs();
         } else if let Err(error) = self.follow_servers_in_lockdown(&[]) {
             tracing::error!(%error, "Lockdown's local network keeps a VPN server's address closed");

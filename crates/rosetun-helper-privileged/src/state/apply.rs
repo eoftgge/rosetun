@@ -166,11 +166,7 @@ impl Helper {
             "applying session changes"
         );
         self.begin_attempt(ConnectionState::Reconnecting);
-        let mode = if session.guard.is_some() {
-            StartMode::ProtectedReconnect
-        } else {
-            StartMode::Fresh
-        };
+        let mode = session.protection.restart_mode();
         // The proxy mode without a kill switch drops the DNS lock; the
         // previous session has to bring it back, so its start cannot rely on it.
         match session
@@ -197,11 +193,7 @@ impl Helper {
                     return Err(error);
                 }
                 tracing::warn!(code = ?error.code, "session changes failed; restoring previous session");
-                let mode = if session.guard.is_some() {
-                    StartMode::ProtectedReconnect
-                } else {
-                    StartMode::Fresh
-                };
+                let mode = session.protection.restart_mode();
                 let rollback = session
                     .start(
                         &current,
@@ -265,11 +257,7 @@ impl Helper {
         let request = session.request.clone().ok_or_else(|| {
             HelperError::new(ErrorCode::InvalidState, "the tunnel is not connected")
         })?;
-        let mode = if session.guard.is_some() {
-            StartMode::ProtectedReconnect
-        } else {
-            StartMode::Fresh
-        };
+        let mode = session.protection.restart_mode();
         tracing::info!(?mode, "reconnecting at the client's request");
         self.begin_attempt(ConnectionState::Reconnecting);
         match session.start(&request, mode, None, None).and_then(|()| {
@@ -326,7 +314,7 @@ impl Helper {
             });
             return;
         }
-        let protected = session.keeps_protection();
+        let protected = session.protection.keeps_protection();
         if protected {
             if let Err(cleanup_error) = session.stop_engine() {
                 tracing::error!(code = ?cleanup_error.code, cause, "failed to stop engine after a failed protected restart");

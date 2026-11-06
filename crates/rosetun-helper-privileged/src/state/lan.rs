@@ -146,15 +146,71 @@ fn shares_local_proxy(settings: &Settings) -> bool {
     settings.connection_mode == ConnectionMode::SystemProxy && settings.local_proxy.share_on_lan
 }
 
-impl Session {
-    fn scan_lan(&self, tun: &TunSettings, servers: &[IpAddr], log: bool) -> LanSegment {
+/// What "Local network" opens now, and what follows it.
+pub(super) struct LanRuntime {
+    pub(super) scan: LanScan,
+    /// What "Local network" opens for the running session.
+    access: LanAccess,
+    /// The session's VPN servers, whose addresses the segment leaves out.
+    servers: Vec<IpAddr>,
+    watch: LanWatch,
+    pub(super) broadcast_route_release: BroadcastRouteRelease,
+    /// The last release's failure, which is logged once.
+    broadcast_route_failure: Option<u32>,
+    /// The segment Lockdown's set was last written for without a session.
+    lockdown_segment: LanSegment,
+}
+
+impl Default for LanRuntime {
+    fn default() -> Self {
+        Self {
+            #[cfg(not(test))]
+            scan: rosetun_routing::lan_segment,
+            #[cfg(test)]
+            scan: test_scan,
+            access: LanAccess::default(),
+            servers: Vec::new(),
+            watch: LanWatch::default(),
+            #[cfg(not(test))]
+            broadcast_route_release: rosetun_routing::release_broadcast_route,
+            #[cfg(test)]
+            broadcast_route_release: test_release,
+            broadcast_route_failure: None,
+            lockdown_segment: LanSegment::default(),
+        }
+    }
+}
+
+impl LanRuntime {
+    pub(super) fn access(&self) -> &LanAccess {
+        &self.access
+    }
+
+    #[cfg(test)]
+    pub(super) fn servers(&self) -> &[IpAddr] {
+        &self.servers
+    }
+
+    /// The running session's segment and servers are these from now on.
+    pub(super) fn begin_session(&mut self, access: LanAccess, servers: Vec<IpAddr>) {
+        self.access = access;
+        self.servers = servers;
+        self.watch = LanWatch::default();
+        self.broadcast_route_failure = None;
+    }
+
+    pub(super) fn forget_servers(&mut self) {
+        self.servers.clear();
+    }
+
+    fn read_segment(&self, tun: &TunSettings, servers: &[IpAddr], log: bool) -> LanSegment {
         let tunnel_networks = tunnel_networks(tun);
         let query = SegmentQuery {
             tunnel_alias: &tun.name,
             tunnel_networks: &tunnel_networks,
             servers,
         };
-        match (self.lan_scan)(&query) {
+        match (self.scan)(&query) {
             Ok(scan) => {
                 if log {
                     log_scan(&scan);
@@ -173,70 +229,16 @@ impl Session {
 
     /// What "Local network" opens for a session with these settings and
     /// servers; nothing when it is off.
-    pub(super) fn lan_access(&self, settings: &Settings, servers: &[IpAddr]) -> LanAccess {
+    pub(super) fn access_for(&self, settings: &Settings, servers: &[IpAddr]) -> LanAccess {
         if !settings.allow_lan && !shares_local_proxy(settings) {
             return LanAccess::default();
         }
         LanAccess {
-            segment: self.scan_lan(&settings.tun, servers, true),
+            segment: self.read_segment(&settings.tun, servers, true),
             private_networks: settings.private_networks,
             ipv6_multicast: settings.tun.ipv6.is_some(),
             servers: canonical_servers(servers),
         }
-    }
-
-    /// Lockdown's "Local network" set, `None` when it is off. Lockdown
-    /// outlives sessions, so it takes the tunnel of the running session or
-    /// the default one.
-    pub(super) fn lockdown_lan(
-        &self,
-        allow_lan: bool,
-        private_networks: bool,
-    ) -> Option<LanAccess> {
-        allow_lan.then(|| LanAccess {
-            segment: self.lockdown_segment_around(&self.lan_servers),
-            private_networks,
-            ipv6_multicast: false,
-            servers: canonical_servers(&self.lan_servers),
-        })
-    }
-
-    fn lockdown_segment_around(&self, servers: &[IpAddr]) -> LanSegment {
-        let tun = self
-            .request
-            .as_ref()
-            .map(|request| request.settings.tun.clone())
-            .unwrap_or_default();
-        self.scan_lan(&tun, servers, false)
-    }
-
-    /// The session's servers are these from now on. Lockdown's persistent
-    /// permit of the segment follows before the session's filters go in: it
-    /// sits beside them in one sublayer, so a server's address left open there
-    /// would be open whatever the session's own permit says. An error fails the
-    /// connect, and teardown puts the segment back as it was. A public server
-    /// outside the segment touches nothing, so the usual connect writes nothing.
-    pub(super) fn follow_servers_in_lockdown(
-        &mut self,
-        servers: &[IpAddr],
-    ) -> Result<(), HelperError> {
-        let previous = std::mem::replace(&mut self.lan_servers, servers.to_vec());
-        let state = lockdown::read(&self.lockdown);
-        if !state.enabled || !state.allow_lan || state.upgrade_hold {
-            return Ok(());
-        }
-        let Some(lan) = self.lockdown_lan(true, state.private_networks) else {
-            return Ok(());
-        };
-        if lan.segment == self.lockdown_segment_around(&previous)
-            && private_servers(&previous) == private_servers(servers)
-        {
-            return Ok(());
-        }
-        self.routing
-            .enable_lockdown(Some(&lan), &self.lockdown_programs())
-            .map_err(|error| HelperError::new(ErrorCode::RoutingFailed, error.to_string()))?;
-        Ok(())
     }
 
     /// With "Local network" on, a broadcast without a chosen adapter leaves the
@@ -261,6 +263,74 @@ impl Session {
         self.broadcast_route_failure = release.failure;
     }
 
+    /// One tick of a running session: the new segment, once it has held.
+    fn session_segment_changed(&mut self, tun: &TunSettings) -> Option<LanSegment> {
+        let read = self.read_segment(tun, &self.servers, false);
+        self.watch.observe(&self.access.segment, read)
+    }
+
+    /// One tick without a session: the new segment, once it has held.
+    fn lockdown_segment_changed(&mut self) -> Option<LanSegment> {
+        let read = self.read_segment(&TunSettings::default(), &[], false);
+        self.watch.observe(&self.lockdown_segment, read)
+    }
+}
+
+impl Session {
+    /// Lockdown's "Local network" set, `None` when it is off. Lockdown
+    /// outlives sessions, so it takes the tunnel of the running session or
+    /// the default one.
+    pub(super) fn lockdown_lan(
+        &self,
+        allow_lan: bool,
+        private_networks: bool,
+    ) -> Option<LanAccess> {
+        allow_lan.then(|| LanAccess {
+            segment: self.lockdown_segment_around(&self.lan.servers),
+            private_networks,
+            ipv6_multicast: false,
+            servers: canonical_servers(&self.lan.servers),
+        })
+    }
+
+    fn lockdown_segment_around(&self, servers: &[IpAddr]) -> LanSegment {
+        let tun = self
+            .request
+            .as_ref()
+            .map(|request| request.settings.tun.clone())
+            .unwrap_or_default();
+        self.lan.read_segment(&tun, servers, false)
+    }
+
+    /// The session's servers are these from now on. Lockdown's persistent
+    /// permit of the segment follows before the session's filters go in: it
+    /// sits beside them in one sublayer, so a server's address left open there
+    /// would be open whatever the session's own permit says. An error fails the
+    /// connect, and teardown puts the segment back as it was. A public server
+    /// outside the segment touches nothing, so the usual connect writes nothing.
+    pub(super) fn follow_servers_in_lockdown(
+        &mut self,
+        servers: &[IpAddr],
+    ) -> Result<(), HelperError> {
+        let previous = std::mem::replace(&mut self.lan.servers, servers.to_vec());
+        let state = lockdown::read(&self.lockdown);
+        if !state.enabled || !state.allow_lan || state.upgrade_hold {
+            return Ok(());
+        }
+        let Some(lan) = self.lockdown_lan(true, state.private_networks) else {
+            return Ok(());
+        };
+        if lan.segment == self.lockdown_segment_around(&previous)
+            && private_servers(&previous) == private_servers(servers)
+        {
+            return Ok(());
+        }
+        self.routing
+            .enable_lockdown(Some(&lan), &self.lockdown_programs())
+            .map_err(|error| HelperError::new(ErrorCode::RoutingFailed, error.to_string()))?;
+        Ok(())
+    }
+
     /// A supervisor tick of a running session: whether the computer is on
     /// another segment for good, which the session follows with a protected
     /// reconnect. Lockdown's persistent set follows at once. The broadcast
@@ -278,7 +348,7 @@ impl Session {
             return false;
         }
         if settings.allow_lan && settings.connection_mode == ConnectionMode::Tun {
-            self.release_broadcast_route(&settings.tun);
+            self.lan.release_broadcast_route(&settings.tun);
         }
         if shares_local_proxy(&settings)
             && let read = (self.shared_proxy_addresses)()
@@ -290,8 +360,7 @@ impl Session {
             tracing::info!("the addresses a shared proxy listens on changed");
             return true;
         }
-        let read = self.scan_lan(&settings.tun, &self.lan_servers, false);
-        let Some(segment) = self.lan_watch.observe(&self.lan.segment, read) else {
+        let Some(segment) = self.lan.session_segment_changed(&settings.tun) else {
             return false;
         };
         tracing::info!(networks = segment.networks().len(), "local network changed");
@@ -306,9 +375,7 @@ impl Session {
         if !state.enabled || !state.allow_lan || state.upgrade_hold {
             return;
         }
-        let tun = TunSettings::default();
-        let read = self.scan_lan(&tun, &[], false);
-        if let Some(segment) = self.lan_watch.observe(&self.lockdown_segment, read) {
+        if let Some(segment) = self.lan.lockdown_segment_changed() {
             tracing::info!(networks = segment.networks().len(), "local network changed");
             self.follow_lan_in_lockdown_now();
         }
@@ -327,7 +394,7 @@ impl Session {
             .enable_lockdown(Some(&lan), &self.lockdown_programs())
         {
             Ok(_) => {
-                self.lockdown_segment = lan.segment;
+                self.lan.lockdown_segment = lan.segment;
                 tracing::info!("Lockdown's local network follows the new network");
             }
             Err(error) => tracing::error!(

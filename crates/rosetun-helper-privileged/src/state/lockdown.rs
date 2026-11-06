@@ -11,14 +11,10 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, TryLockError};
 
-use rosetun_config::ConnectionMode;
 use rosetun_ipc::{ErrorCode, HelperError};
-use rosetun_routing::{
-    LockdownApps, ProtectionScope, RoutingBackend, RoutingError, RoutingGuard, RoutingPlan,
-    TunnelInterface,
-};
+use rosetun_routing::{LockdownApps, RoutingBackend, RoutingError, RoutingGuard};
 
-use super::{Acquired, Caller, Guard, Helper, SESSION_WAIT, Session, SessionHolder, StartMode};
+use super::{Acquired, Caller, Helper, SESSION_WAIT, Session, SessionHolder};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(super) struct LockdownState {
@@ -43,34 +39,6 @@ fn write(shared: &SharedLockdown, state: LockdownState) {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = state;
     shared.clear_poison();
-}
-
-/// Lockdown forces the kill switch: under its block a session without its
-/// own permits in the Lockdown sublayer has no tunnel at all.
-pub(super) fn protection_scope(
-    mode: StartMode,
-    kill_switch: bool,
-    tunnel_dns: bool,
-    lockdown: bool,
-    local_proxy: bool,
-    shared_proxy: bool,
-) -> Option<ProtectionScope> {
-    if kill_switch || lockdown {
-        return Some(ProtectionScope::AllTraffic);
-    }
-    // The engine resolves names itself, so there is no system DNS to confine:
-    // a program that goes around the proxy goes around all of it, and that
-    // is what this mode without the kill switch says it does. Only Windows
-    // limits a shared port this way; Linux listens on its private addresses
-    // alone, and has no filter to keep up without a kill switch.
-    if local_proxy {
-        return (shared_proxy && cfg!(windows)).then_some(ProtectionScope::SharedProxy);
-    }
-    match mode {
-        StartMode::Fresh => tunnel_dns.then_some(ProtectionScope::DnsOnly),
-        // The guard stays; only the kill switch may widen it.
-        StartMode::ProtectedReconnect => Some(ProtectionScope::DnsOnly),
-    }
 }
 
 /// The GUI and the CLI next to the service, so a subscription can be updated
@@ -257,7 +225,7 @@ impl Helper {
         let Some(Acquired::Locked(session)) = self.try_session(SessionHolder::Lockdown) else {
             return;
         };
-        if session.programs_withdrawn {
+        if session.protection.programs_withdrawn() {
             return;
         }
         if let Err(error) = session.routing.refresh_lockdown_programs() {
@@ -287,7 +255,7 @@ impl Helper {
                 ));
             }
         };
-        if !read(&session.lockdown).enabled || session.guard.is_some() {
+        if !read(&session.lockdown).enabled || session.protection.is_active() {
             return Ok(None);
         }
         let guard = session
@@ -313,8 +281,8 @@ impl Session {
         // During a session the GUI and the CLI get no permits: the session's
         // filters land in the Lockdown sublayer, above its block but below
         // them.
-        if self.guard.is_some() || self.request.is_some() {
-            self.programs_withdrawn = true;
+        if self.protection.is_active() || self.request.is_some() {
+            self.protection.withdraw_programs();
         }
         let lan = self.lockdown_lan(allow_lan, private_networks);
         let status = self
@@ -341,93 +309,27 @@ impl Session {
     }
 
     fn cover_with_lockdown(&mut self) -> Result<(), HelperError> {
-        let request = self.request.clone();
-        let Some(guard) = self.guard.as_mut() else {
-            let Some(request) = request else {
-                return Ok(());
-            };
-            // A session without protection gets the kill switch it now needs.
-            let (plan, tunnel) = all_traffic(&request, &self.lan, &read(&self.lockdown))?;
-            let binaries = self
-                .protected_binaries
-                .iter()
-                .map(PathBuf::as_path)
-                .collect::<Vec<_>>();
-            let mut routing = self
-                .routing
-                .begin_protection(&plan, &binaries)
-                .map_err(routing_failed)?;
-            if let Some(tunnel) = tunnel.as_ref() {
-                routing.authorize_tunnel(tunnel).map_err(routing_failed)?;
-            }
-            self.guard = Some(Guard {
-                routing: Arc::new(Mutex::new(routing)),
-                scope: ProtectionScope::AllTraffic,
-            });
-            tracing::info!("Lockdown is on: the kill switch is forced on for this session");
-            return Ok(());
-        };
-        let mut routing = guard
-            .routing
-            .lock()
-            .map_err(|_| HelperError::new(ErrorCode::RoutingFailed, "routing guard is poisoned"))?;
-        match (guard.scope, request) {
-            (ProtectionScope::DnsOnly | ProtectionScope::SharedProxy, Some(request)) => {
-                let (plan, tunnel) = all_traffic(&request, &self.lan, &read(&self.lockdown))?;
-                let binaries = self
-                    .protected_binaries
-                    .iter()
-                    .map(PathBuf::as_path)
-                    .collect::<Vec<_>>();
-                routing
-                    .prepare_reconnect(&plan, &binaries)
-                    .map_err(routing_failed)?;
-                if let Some(tunnel) = tunnel.as_ref() {
-                    routing.authorize_tunnel(tunnel).map_err(routing_failed)?;
-                }
-                guard.scope = ProtectionScope::AllTraffic;
-                tracing::info!("Lockdown is on: the kill switch is forced on for this session");
-            }
-            _ => routing.set_lockdown(true).map_err(routing_failed)?,
-        }
-        Ok(())
+        self.protection.cover_with_lockdown(
+            self.routing.as_mut(),
+            self.request.as_ref(),
+            self.lan.access(),
+            &read(&self.lockdown),
+        )
     }
 
     /// The session's filters move back to the Rosetun sublayer first, so
     /// removing the Lockdown sublayer does not fail with FWP_E_IN_USE.
     fn disable_lockdown(&mut self) -> Result<(), HelperError> {
-        if let Some(guard) = self.guard.as_ref() {
-            guard
-                .routing
-                .lock()
-                .map_err(|_| {
-                    HelperError::new(ErrorCode::RoutingFailed, "routing guard is poisoned")
-                })?
-                .set_lockdown(false)
-                .map_err(routing_failed)?;
-        }
+        self.protection.leave_lockdown()?;
         let removed = match self.routing.disable_lockdown() {
             Ok(removed) => removed,
             Err(error) => {
-                // The persistent block stays; without its permits back above
-                // it the session would be "connected" with no network.
-                if let Some(guard) = self.guard.as_ref()
-                    && let Err(restore) = guard
-                        .routing
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .set_lockdown(true)
-                {
-                    tracing::error!(
-                        error = %restore,
-                        "could not move the session back above the Lockdown block"
-                    );
-                }
+                self.protection.return_to_lockdown();
                 return Err(routing_failed(error));
             }
         };
         write(&self.lockdown, LockdownState::default());
-        self.programs_withdrawn = false;
+        self.protection.programs_restored();
         tracing::info!(removed, "Lockdown turned off");
         self.release_forced_kill_switch();
         Ok(())
@@ -469,7 +371,7 @@ impl Session {
     /// the session's filters keep their permits away.
     pub(super) fn lockdown_programs(&self) -> LockdownApps {
         let apps = (self.lockdown_apps)();
-        if self.programs_withdrawn {
+        if self.protection.programs_withdrawn() {
             LockdownApps {
                 gui: None,
                 cli: None,
@@ -484,12 +386,12 @@ impl Session {
     /// Lockdown permits back. A failure leaves them blocked until the next
     /// disconnect or service start, which is closed rather than open.
     pub(super) fn restore_lockdown_programs(&mut self) {
-        if !self.programs_withdrawn {
+        if !self.protection.programs_withdrawn() {
             return;
         }
         let state = read(&self.lockdown);
         if !state.enabled {
-            self.programs_withdrawn = false;
+            self.protection.programs_restored();
             return;
         }
         let lan = self.lockdown_lan(state.allow_lan, state.private_networks);
@@ -498,7 +400,7 @@ impl Session {
             .enable_lockdown(lan.as_ref(), &(self.lockdown_apps)())
         {
             Ok(_) => {
-                self.programs_withdrawn = false;
+                self.protection.programs_restored();
                 tracing::info!("Lockdown permits for Rosetun's programs restored");
             }
             Err(error) => tracing::error!(
@@ -508,98 +410,16 @@ impl Session {
         }
     }
 
-    /// Lockdown forced the kill switch on a session whose settings have it
-    /// off; give it the protection it would have had, or a protected
-    /// reconnect would refuse to narrow it.
     fn release_forced_kill_switch(&mut self) {
-        let Some(request) = self.request.as_ref() else {
+        let Some(settings) = self.request.as_ref().map(|request| &request.settings) else {
             return;
         };
-        let settings = &request.settings;
-        if settings.kill_switch
-            || !self
-                .guard
-                .as_ref()
-                .is_some_and(|guard| guard.scope == ProtectionScope::AllTraffic)
-        {
-            return;
-        }
-        let tunnel = settings.connection_mode == ConnectionMode::Tun;
-        let tunnel_dns = tunnel
-            && self
-                .engines
-                .get(settings.engine)
-                .is_some_and(|backend| backend.tunnel_dns_server(&settings.tun).is_some());
-        let shared_proxy = super::local_proxy::shared_port(settings, &LockdownState::default());
-        let scope = protection_scope(
-            StartMode::Fresh,
-            false,
-            tunnel_dns,
-            false,
-            !tunnel,
-            shared_proxy.is_some(),
-        );
-        let Some(scope) = scope else {
-            if let Some(guard) = self.guard.take()
-                && let Err(error) = guard
-                    .routing
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .revert_in_place()
-            {
-                tracing::error!(%error, "failed to remove the forced kill switch");
-            }
-            tracing::info!("kill switch released with Lockdown");
-            return;
-        };
-        let plan = RoutingPlan {
-            scope,
-            allow_lan: settings.allow_lan,
-            lan: if shared_proxy.is_some() {
-                self.lan.clone()
-            } else {
-                Default::default()
-            },
-            lockdown: false,
-            shared_proxy,
-        };
-        let adapter = if tunnel {
-            match TunnelInterface::try_from(&settings.tun) {
-                Ok(adapter) => Some(adapter),
-                Err(error) => {
-                    tracing::warn!(%error, "the kill switch stays on until the next connect");
-                    return;
-                }
-            }
-        } else {
-            None
-        };
-        let binaries = self
-            .protected_binaries
-            .iter()
-            .map(PathBuf::as_path)
-            .collect::<Vec<_>>();
-        let guard = self.guard.as_mut().expect("checked above");
-        let result = guard
-            .routing
-            .lock()
-            .map_err(|_| RoutingError::Route("routing guard is poisoned".to_owned()))
-            .and_then(|mut routing| {
-                routing.prepare_reconnect(&plan, &binaries)?;
-                match adapter.as_ref() {
-                    Some(adapter) => routing.authorize_tunnel(adapter),
-                    None => Ok(()),
-                }
-            });
-        match result {
-            Ok(()) => {
-                guard.scope = scope;
-                tracing::info!(?scope, "kill switch released with Lockdown");
-            }
-            Err(error) => {
-                tracing::warn!(%error, "the kill switch stays on until the next connect");
-            }
-        }
+        let tunnel_dns = self
+            .engines
+            .get(settings.engine)
+            .is_some_and(|backend| backend.tunnel_dns_server(&settings.tun).is_some());
+        self.protection
+            .release_forced_kill_switch(settings, tunnel_dns, self.lan.access());
     }
 }
 
@@ -646,31 +466,6 @@ pub(super) fn sync_lan(
     Ok(())
 }
 
-/// The plan of a kill switch forced on a running session, and the adapter to
-/// authorize, which the proxy mode does not have.
-fn all_traffic(
-    request: &rosetun_ipc::ConnectRequest,
-    lan: &rosetun_routing::lan::LanAccess,
-    state: &LockdownState,
-) -> Result<(RoutingPlan, Option<TunnelInterface>), HelperError> {
-    let tunnel = match request.settings.connection_mode {
-        ConnectionMode::Tun => {
-            Some(TunnelInterface::try_from(&request.settings.tun).map_err(routing_failed)?)
-        }
-        ConnectionMode::SystemProxy => None,
-    };
-    Ok((
-        RoutingPlan {
-            scope: ProtectionScope::AllTraffic,
-            allow_lan: request.settings.allow_lan,
-            lan: lan.clone(),
-            lockdown: true,
-            shared_proxy: super::local_proxy::shared_port(&request.settings, state),
-        },
-        tunnel,
-    ))
-}
-
 #[cfg(test)]
 mod tests {
     use std::path::Path;
@@ -685,9 +480,9 @@ mod tests {
         RoutingError, RoutingGuard, RoutingPlan,
     };
 
-    use super::protection_scope;
+    use super::super::protection::protection_scope;
     use crate::log_gate::VerboseGate;
-    use crate::state::{Caller, Guard, Helper, SessionHolder, StartMode};
+    use crate::state::{Caller, Helper, SessionHolder, StartMode};
 
     #[test]
     fn lockdown_forces_the_all_traffic_policy() {
@@ -986,15 +781,13 @@ mod tests {
         helper.set_lockdown_as(&caller, true, false, false).unwrap();
         let moves = Arc::new(Mutex::new(Vec::new()));
         let recorded = Arc::clone(&moves);
-        helper.session.lock().unwrap().guard = Some(Guard {
-            routing: Arc::new(Mutex::new(RoutingGuard::new_with_lockdown(
-                move |lockdown| {
-                    recorded.lock().unwrap().push(lockdown);
-                    Ok(())
-                },
-            ))),
-            scope: ProtectionScope::AllTraffic,
-        });
+        helper.session.lock().unwrap().protection.install_for_test(
+            RoutingGuard::new_with_lockdown(move |lockdown| {
+                recorded.lock().unwrap().push(lockdown);
+                Ok(())
+            }),
+            ProtectionScope::AllTraffic,
+        );
         calls.fail_disable.store(true, Ordering::Release);
 
         let error = helper
@@ -1010,10 +803,10 @@ mod tests {
         let calls = Arc::new(Calls::default());
         let helper = lockdown_helper(&calls);
         let caller = Caller::fake(b"admin", true);
-        helper.session.lock().unwrap().guard = Some(Guard {
-            routing: Arc::new(Mutex::new(RoutingGuard::new_with_lockdown(|_| Ok(())))),
-            scope: ProtectionScope::AllTraffic,
-        });
+        helper.session.lock().unwrap().protection.install_for_test(
+            RoutingGuard::new_with_lockdown(|_| Ok(())),
+            ProtectionScope::AllTraffic,
+        );
 
         helper.set_lockdown_as(&caller, true, false, false).unwrap();
         let during = calls.apps.lock().unwrap()[0].clone();
@@ -1023,10 +816,22 @@ mod tests {
         helper.session.lock().unwrap().teardown();
         let after = calls.apps.lock().unwrap()[1].clone();
         assert_eq!(after, super::test_apps());
-        assert!(!helper.session.lock().unwrap().programs_withdrawn);
+        assert!(
+            !helper
+                .session
+                .lock()
+                .unwrap()
+                .protection
+                .programs_withdrawn()
+        );
 
         // Without Lockdown nothing comes back.
-        helper.session.lock().unwrap().programs_withdrawn = true;
+        helper
+            .session
+            .lock()
+            .unwrap()
+            .protection
+            .withdraw_programs();
         helper
             .set_lockdown_as(&caller, false, false, false)
             .unwrap();
@@ -1072,11 +877,11 @@ mod tests {
 
         // A session that ran: its end restores the programs and the whole segment.
         session.follow_servers_in_lockdown(&[one]).unwrap();
-        session.programs_withdrawn = true;
+        session.protection.withdraw_programs();
         session.teardown();
         assert!(writes().last().unwrap().is_empty());
-        assert!(session.lan_servers.is_empty());
-        assert!(!session.programs_withdrawn);
+        assert!(session.lan.servers().is_empty());
+        assert!(!session.protection.programs_withdrawn());
     }
 
     #[test]
@@ -1112,7 +917,7 @@ mod tests {
         let server = "192.0.2.10".parse().unwrap();
         let mut session = helper.session.lock().unwrap();
         session.follow_servers_in_lockdown(&[server]).unwrap();
-        assert_eq!(session.lan_servers, [server]);
+        assert_eq!(session.lan.servers(), [server]);
         assert!(calls.left_out.lock().unwrap().is_empty());
     }
 

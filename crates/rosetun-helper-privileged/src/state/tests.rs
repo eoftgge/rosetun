@@ -8,6 +8,7 @@ use rosetun_engine::{
     RenderedConfig, RuleCapabilities, TrafficSample,
 };
 use rosetun_ipc::{ExtraNode, SessionExit, TunnelDelays};
+use rosetun_routing::RoutingGuard;
 use rosetun_routing::errors::RoutingError;
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Write};
@@ -1691,12 +1692,7 @@ fn fresh_connect_waits_for_dns_with_and_without_kill_switch() {
                 .is_empty()
         );
         assert_eq!(
-            helper
-                .session()
-                .expect("session")
-                .guard
-                .as_ref()
-                .map(|guard| guard.scope),
+            helper.session().expect("session").protection.scope(),
             Some(if kill_switch {
                 ProtectionScope::AllTraffic
             } else {
@@ -1743,7 +1739,7 @@ fn fresh_dns_timeout_stops_engine_and_releases_protection() {
         assert_eq!(reverted.load(Ordering::Acquire), 1);
 
         let session = helper.session().expect("session");
-        assert!(session.guard.is_none());
+        assert!(!session.protection.is_active());
         assert!(session.process.is_none());
         assert!(session.last_endpoint.is_none());
         assert!(session.tunnel_dns.is_none());
@@ -2263,7 +2259,7 @@ fn dns_lock_failure_does_not_block_connect() {
                 .expect("DNS lock failure is optional");
             assert!(matches!(helper.status().state, ConnectionState::Connected));
             let session = helper.session().expect("session");
-            assert!(session.guard.is_none());
+            assert!(!session.protection.is_active());
             assert_eq!(session.tunnel_dns, Some(server.address()));
             assert!(session.watchdog.is_some());
             assert_eq!(stopped.load(Ordering::Acquire), 0);
@@ -2304,12 +2300,12 @@ fn dns_lock_is_dropped_when_the_tunnel_cannot_be_authorized() {
                 helper.status().state,
                 ConnectionState::Failed { .. }
             ));
-            assert!(helper.session().expect("session").guard.is_none());
+            assert!(!helper.session().expect("session").protection.is_active());
         } else {
             helper.connect(&request).expect("DNS lock is optional");
             assert!(matches!(helper.status().state, ConnectionState::Connected));
             let session = helper.session().expect("session");
-            assert!(session.guard.is_none());
+            assert!(!session.protection.is_active());
             assert_eq!(session.tunnel_dns, Some(server.address()));
         }
         assert_eq!(reverted.load(Ordering::Acquire), 1);
@@ -2344,7 +2340,7 @@ fn protected_dns_timeout_stops_engine_but_retains_guard_and_cache() {
     assert_eq!(stopped.load(Ordering::Acquire), 1);
 
     let session = helper.session().expect("session");
-    assert!(session.guard.is_some());
+    assert!(session.protection.is_active());
     assert!(session.process.is_none());
     assert!(session.tunnel_dns.is_none());
     assert!(session.watchdog.is_none());
@@ -2852,7 +2848,7 @@ fn missing_route_fails_before_starting_engine_or_protection() {
     assert_eq!(error.code, ErrorCode::NoNetwork);
     assert!(started.elapsed() < Duration::from_secs(1));
     assert_eq!(controls.spawns(), 0);
-    assert!(helper.session().unwrap().guard.is_none());
+    assert!(!helper.session().unwrap().protection.is_active());
     assert!(matches!(
         helper.status().state,
         ConnectionState::Failed {
@@ -3558,12 +3554,7 @@ fn dns_lock_survives_engine_restarts() {
         .connect(&request)
         .expect("first connect with DNS lock");
     assert_eq!(
-        helper
-            .session()
-            .expect("session")
-            .guard
-            .as_ref()
-            .map(|guard| guard.scope),
+        helper.session().expect("session").protection.scope(),
         Some(ProtectionScope::DnsOnly)
     );
 
@@ -3574,12 +3565,7 @@ fn dns_lock_survives_engine_restarts() {
     assert_eq!(prepared.load(Ordering::Acquire), 1);
     assert_eq!(reverted.load(Ordering::Acquire), 0);
     assert_eq!(
-        helper
-            .session()
-            .expect("session")
-            .guard
-            .as_ref()
-            .map(|guard| guard.scope),
+        helper.session().expect("session").protection.scope(),
         Some(ProtectionScope::DnsOnly)
     );
 }
@@ -3620,7 +3606,7 @@ fn dns_lock_is_released_when_reconnects_are_exhausted() {
     );
     assert_eq!(reverted.load(Ordering::Acquire), 1);
     let session = helper.session().expect("session");
-    assert!(session.guard.is_none());
+    assert!(!session.protection.is_active());
     assert!(session.process.is_none());
     assert!(session.tunnel_dns.is_none());
     assert!(session.watchdog.is_none());
@@ -3648,7 +3634,7 @@ fn dns_lock_is_released_when_auto_reconnect_is_off() {
     ));
     assert_eq!(reverted.load(Ordering::Acquire), 1);
     let session = helper.session().expect("session");
-    assert!(session.guard.is_none());
+    assert!(!session.protection.is_active());
     assert!(session.process.is_none());
     assert!(session.tunnel_dns.is_none());
     assert!(session.watchdog.is_none());
@@ -3671,7 +3657,7 @@ fn disconnect_releases_dns_lock() {
         ConnectionState::Disconnected
     ));
     assert_eq!(reverted.load(Ordering::Acquire), 1);
-    assert!(helper.session().expect("session").guard.is_none());
+    assert!(!helper.session().expect("session").protection.is_active());
 }
 
 #[test]
@@ -3742,7 +3728,7 @@ fn supervisor_backs_off_and_gives_up_after_five_failures() {
                 prepared.load(Ordering::Acquire),
                 RECONNECT_ATTEMPTS as usize
             );
-            assert!(helper.session().expect("session").guard.is_some());
+            assert!(helper.session().expect("session").protection.is_active());
         }
         helper.supervise(now + Duration::from_secs(600));
         assert_eq!(controls.spawns(), (RECONNECT_ATTEMPTS + 1) as usize);
@@ -3861,8 +3847,8 @@ fn protected_helper(
         let prepare_count = Arc::clone(&prepared);
         let authorize_count = Arc::clone(&authorized);
         let revert_count = Arc::clone(&reverted);
-        session.guard = Some(Guard {
-            routing: Arc::new(Mutex::new(RoutingGuard::new_with_reconnector(
+        session.protection.install_for_test(
+            RoutingGuard::new_with_reconnector(
                 move |plan, _| {
                     assert!(plan.allow_lan);
                     prepare_count.fetch_add(1, Ordering::AcqRel);
@@ -3876,9 +3862,9 @@ fn protected_helper(
                     revert_count.fetch_add(1, Ordering::AcqRel);
                     Ok(())
                 },
-            ))),
-            scope: ProtectionScope::AllTraffic,
-        });
+            ),
+            ProtectionScope::AllTraffic,
+        );
         session.last_endpoint = Some(SuccessfulEndpoint {
             // This domain must never be resolved during reconnect.
             server: "cached.invalid".to_owned(),
@@ -3967,7 +3953,7 @@ fn failed_protected_reconnect_does_not_revert_guard() {
     ));
     assert_eq!(prepared.load(Ordering::Acquire), 1);
     assert_eq!(reverted.load(Ordering::Acquire), 0);
-    assert!(helper.session().expect("session").guard.is_some());
+    assert!(helper.session().expect("session").protection.is_active());
 }
 
 #[test]
@@ -4320,7 +4306,7 @@ fn xray_crash_keeps_protection_and_distinguishes_stopped_from_not_started() {
     assert_eq!(helper.status().state, ConnectionState::Reconnecting);
     assert!(helper.status().xray_stopped);
     assert_eq!(controls.spawns(), 1);
-    assert!(helper.session().unwrap().guard.is_some());
+    assert!(helper.session().unwrap().protection.is_active());
     helper.supervise(Instant::now() + Duration::from_secs(3));
     assert_eq!(helper.status().state, ConnectionState::Connected);
     assert!(!helper.status().xray_stopped);
@@ -4336,7 +4322,7 @@ fn xray_crash_keeps_protection_and_distinguishes_stopped_from_not_started() {
             ..
         }
     ));
-    assert!(helper.session().unwrap().guard.is_some());
+    assert!(helper.session().unwrap().protection.is_active());
     helper.disconnect().unwrap();
 }
 
@@ -4364,7 +4350,7 @@ fn xray_stop_without_auto_reconnect_is_a_protected_failure() {
             .unwrap()
             .load(Ordering::Acquire)
     );
-    assert!(helper.session().unwrap().guard.is_some());
+    assert!(helper.session().unwrap().protection.is_active());
     helper.disconnect().unwrap();
 }
 
@@ -4753,7 +4739,7 @@ fn a_failed_reconnect_without_retries_keeps_the_guard_and_blocks() {
     ));
     let events = controls.events.lock().unwrap();
     assert!(!events.contains(&"revert"), "{events:?}");
-    assert!(helper.session().unwrap().guard.is_some());
+    assert!(helper.session().unwrap().protection.is_active());
 }
 
 #[test]
@@ -4771,7 +4757,7 @@ fn a_failed_reconnect_with_retries_stays_reconnecting_under_the_guard() {
     ));
     assert!(!controls.events.lock().unwrap().contains(&"revert"));
     let session = helper.session().unwrap();
-    assert!(session.guard.is_some());
+    assert!(session.protection.is_active());
     assert_eq!(
         session.reconnect.as_ref().map(|retry| retry.cause),
         Some("reconnect failed")
@@ -5253,7 +5239,7 @@ fn apply_dns_lock_reuses_guard() {
         .expect("apply under DNS lock");
     assert!(matches!(helper.status().state, ConnectionState::Connected));
     assert_eq!(
-        helper.session().unwrap().guard.as_ref().unwrap().scope,
+        helper.session().unwrap().protection.scope().unwrap(),
         ProtectionScope::DnsOnly
     );
     assert_eq!(controls.spawns(), 2);
@@ -5609,7 +5595,7 @@ fn apply_failed_start_and_rollback_without_reconnect_remain_protected() {
     assert!(helper.status().since_unix.is_none());
     let session = helper.session().unwrap();
     assert!(session.request.is_none());
-    assert!(session.guard.is_some());
+    assert!(session.protection.is_active());
     drop(session);
     assert_eq!(controls.spawns(), 3);
     assert_eq!(prepared.load(Ordering::Acquire), 2);
@@ -6320,7 +6306,7 @@ fn cancellation_at_each_stage_releases_the_session_and_guard() {
         );
         assert_eq!(helper.status(), Status::default());
         let session = helper.session().expect("session lock is released");
-        assert!(session.guard.is_none());
+        assert!(!session.protection.is_active());
         assert!(session.process.is_none());
         assert!(session.request.is_none());
         drop(session);
@@ -7149,7 +7135,7 @@ fn lockdown_program_permits_leave_with_a_session_and_return_after_it() {
         request.settings.allow_lan = true;
         helper.connect_as(&caller, &request).expect("DNS responds");
         assert_eq!(*plans.lock().unwrap(), [true]);
-        assert!(helper.session().unwrap().programs_withdrawn);
+        assert!(helper.session().unwrap().protection.programs_withdrawn());
         // Only an administrator's connect syncs Lockdown's LAN permits; it
         // runs before protection, and the routing layer removes the
         // programs' permits in the transaction that adds the session's.
@@ -7168,7 +7154,7 @@ fn lockdown_program_permits_leave_with_a_session_and_return_after_it() {
         let after = enabled.lock().unwrap().clone();
         assert_eq!(after.len(), 2 + synced);
         assert!(with_programs(&after[1 + synced]));
-        assert!(!helper.session().unwrap().programs_withdrawn);
+        assert!(!helper.session().unwrap().protection.programs_withdrawn());
     }
 }
 
@@ -7407,7 +7393,7 @@ fn a_kill_switch_connect_without_the_capability_is_refused_before_the_engine_sta
     assert_eq!(helper.status().state, ConnectionState::Disconnected);
     let session = helper.session().unwrap();
     assert!(session.request.is_none());
-    assert!(session.guard.is_none());
+    assert!(!session.protection.is_active());
 }
 
 #[test]
@@ -7484,7 +7470,7 @@ fn without_cgroup_leaves_engines_run_and_only_the_kill_switch_is_refused() {
         .expect("connect without protection");
     assert!(matches!(helper.status().state, ConnectionState::Connected));
     assert_eq!(controls.spawns(), 1);
-    assert!(helper.session().unwrap().guard.is_none());
+    assert!(!helper.session().unwrap().protection.is_active());
 }
 
 #[test]
@@ -7498,7 +7484,7 @@ fn a_connect_with_the_kill_switch_still_works_where_it_exists() {
     assert!(matches!(helper.status().state, ConnectionState::Connected));
     assert_eq!(controls.spawns(), 1);
     assert_eq!(prepared.load(Ordering::Acquire), 0);
-    assert!(helper.session().unwrap().guard.is_some());
+    assert!(helper.session().unwrap().protection.is_active());
 }
 
 #[test]
@@ -8219,12 +8205,12 @@ fn changing_to_the_proxy_without_a_kill_switch_drops_the_dns_lock() {
 
     assert_eq!(helper.status().state, ConnectionState::Connected);
     assert_eq!(reverted.load(Ordering::SeqCst), 1);
-    assert!(helper.session().unwrap().guard.is_none());
+    assert!(!helper.session().unwrap().protection.is_active());
 
     request.settings.connection_mode = rosetun_config::ConnectionMode::Tun;
     helper.apply(&request).expect("the proxy back to TUN");
     assert!(
-        helper.session().unwrap().guard.is_some(),
+        helper.session().unwrap().protection.is_active(),
         "the lock is back"
     );
 }
@@ -8250,7 +8236,7 @@ fn a_failed_change_to_the_proxy_brings_the_session_back() {
     assert_eq!(error.code, ErrorCode::LocalProxyPortBusy);
     assert_eq!(helper.status().state, ConnectionState::Connected);
     assert_eq!(helper.status().running_local_proxy(), None);
-    assert!(helper.session().unwrap().guard.is_some());
+    assert!(helper.session().unwrap().protection.is_active());
 }
 
 #[test]
@@ -8286,7 +8272,7 @@ fn a_shared_proxy_reads_the_networks_without_local_network_and_follows_them() {
     {
         let mut session = helper.session().unwrap();
         session.test_local_dns = Some(dns.address());
-        session.lan_scan = |_| panic!("not read until sharing is on");
+        session.lan.scan = |_| panic!("not read until sharing is on");
     }
     helper.connect(&local_proxy_request(false)).unwrap();
     assert!(!helper.session().unwrap().local_network_changed());
@@ -8294,7 +8280,7 @@ fn a_shared_proxy_reads_the_networks_without_local_network_and_follows_them() {
 
     {
         let mut session = helper.session().unwrap();
-        session.lan_scan = |_| {
+        session.lan.scan = |_| {
             SCANS.fetch_add(1, Ordering::SeqCst);
             Ok(rosetun_routing::lan::SegmentScan::default())
         };
@@ -8343,7 +8329,7 @@ fn a_shared_proxy_follows_the_addresses_it_listens_on() {
 
 #[test]
 fn the_scope_of_the_proxy_mode_follows_the_kill_switch_and_sharing() {
-    use super::lockdown::protection_scope;
+    use super::protection::protection_scope;
     use rosetun_routing::ProtectionScope;
 
     let scope = |kill_switch, lockdown, shared| {
