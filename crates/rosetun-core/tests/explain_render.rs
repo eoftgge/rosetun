@@ -101,7 +101,14 @@ fn request(allow_lan: bool) -> ConnectRequest {
             )
         },
     ];
-    let (rule_set, rule_templates) = set.expand_templates();
+    let (mut rule_set, rule_templates) = set.expand_templates();
+    // This test builds the engine as a release does, and on Linux it does not
+    // offer rules by program, which `render` then reports instead of rendering.
+    if !cfg!(windows) {
+        rule_set
+            .rules
+            .retain(|rule| !matches!(rule.matcher, RuleMatcher::Process(_)));
+    }
     ConnectRequest {
         selection: Selection {
             subscription: SubscriptionId::new("example"),
