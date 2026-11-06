@@ -1524,8 +1524,9 @@ mod tests {
                 .iter()
                 .filter(|rule| rule.get("process_path_regex").is_some())
                 .count(),
-            usize::from(cfg!(windows)),
-            "only the exit lookup looks at a program, and only on Windows"
+            1,
+            "only the exit lookup looks at a program: the set still names one, so the \
+             session reads them, and the rule it cannot render is refused"
         );
     }
 
@@ -1682,14 +1683,15 @@ mod tests {
         assert!(fallback.get("outbound").is_none());
     }
 
-    fn exit_lookup_rule() -> Value {
+    fn exit_lookup_rule(with_rules_by_program: bool) -> Value {
         let mut rule = serde_json::json!({
             "ip_cidr": ["1.1.1.1/32"],
             "port": [443],
             "action": "route",
             "outbound": "proxy",
         });
-        if cfg!(windows) {
+        // Linux reads programs only for a session with rules by program.
+        if cfg!(windows) || with_rules_by_program {
             rule["process_path_regex"] =
                 serde_json::json!([render::process_name_regex(render::GUI_PROCESS)]);
         }
@@ -1715,7 +1717,7 @@ mod tests {
             let rules = route["rules"].as_array().expect("rules");
             assert_eq!(rules[0]["action"], "sniff");
             assert_eq!(rules[1]["action"], "hijack-dns");
-            assert_eq!(rules[2], exit_lookup_rule());
+            assert_eq!(rules[2], exit_lookup_rule(true));
             assert_eq!(rules[3]["domain_suffix"][0], "google.com");
             assert_eq!(rules[5]["outbound"], "direct");
             assert_eq!(
@@ -1932,7 +1934,7 @@ mod tests {
                     "protocol": "dns",
                     "action": "hijack-dns",
                 }),
-                exit_lookup_rule(),
+                exit_lookup_rule(true),
                 serde_json::json!({
                     "ip_cidr": [
                         "169.254.0.0/16",

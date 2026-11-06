@@ -5,7 +5,7 @@ use rosetun_config::{
 };
 use rosetun_engine::errors::EngineError;
 use rosetun_engine::{
-    EngineRoute, ExtraOutbound, LocalProxyListen, ProbeRenderRequest, RenderRequest,
+    EngineRights, EngineRoute, ExtraOutbound, LocalProxyListen, ProbeRenderRequest, RenderRequest,
     RenderedConfig, RuleCapabilities, SocksProxy, exit_tag,
 };
 use serde_json::{Map, Value, json};
@@ -518,7 +518,7 @@ fn route_section_with_lists(
             "protocol": "dns",
             "action": "hijack-dns",
         }),
-        exit_trace_rule(),
+        exit_trace_rule(rules),
     ];
     if local_proxy {
         route_rules.insert(
@@ -701,17 +701,23 @@ fn route_rule(rule: &Rule) -> Option<Map<String, Value>> {
 /// On Linux the address alone decides: the engine reads programs only with a rule
 /// by program, a condition on the program would start that search for every
 /// session, and a search that misses would send this lookup down the user's rules.
-fn exit_trace_rule() -> Value {
+fn exit_trace_rule(rules: &RuleSet) -> Value {
     let mut rule = json!({
         "ip_cidr": [format!("{EXIT_TRACE_IP}/32")],
         "port": [EXIT_TRACE_PORT],
         "action": "route",
         "outbound": TAG_PROXY,
     });
-    if cfg!(windows) {
+    if tells_programs_apart(rules) {
         rule["process_path_regex"] = json!([process_name_regex(GUI_PROCESS)]);
     }
     rule
+}
+
+/// Linux reads other accounts' programs only for a session with rules by program,
+/// and a rule of the user's for this address must not lose to the lookup there.
+fn tells_programs_apart(rules: &RuleSet) -> bool {
+    cfg!(windows) || EngineRights::for_rules(rules) == EngineRights::NetworkAndProcesses
 }
 
 pub(crate) fn process_name_regex(name: &str) -> String {
@@ -768,10 +774,20 @@ mod tests {
     }
 
     #[test]
-    fn only_windows_tells_the_exit_lookup_by_its_program() {
-        let rule = exit_trace_rule();
+    fn the_exit_lookup_goes_by_its_program_where_programs_can_be_told_apart() {
+        let mut set = RuleSet::new(RuleSetId::new("set"), "Set", RuleTarget::Proxy);
+        let rule = exit_trace_rule(&set);
         assert_eq!(rule.get("process_path_regex").is_some(), cfg!(windows));
         assert_eq!(rule["outbound"], TAG_PROXY);
+
+        set.rules.push(Rule {
+            id: RuleId::new("curl"),
+            enabled: true,
+            matcher: RuleMatcher::Process(ProcessMatch::Name("curl".into())),
+            target: RuleTarget::Direct,
+            exit: None,
+        });
+        assert!(exit_trace_rule(&set).get("process_path_regex").is_some());
     }
 
     use super::*;
