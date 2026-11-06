@@ -72,6 +72,45 @@
                     <pre><code>sudo apt install ./rosetun_VERSION_amd64.deb
 sudo usermod -aG rosetun "$USER"</code></pre>
                 </section>
+                <section id="system-proxy">
+                    <h2>System proxy</h2>
+                    <p>
+                        <strong>Connection mode</strong> in Settings → Connection chooses how
+                        traffic reaches the VPN. <strong>TUN</strong> takes all of this computer's
+                        traffic. <strong>System proxy</strong> starts a local proxy and points your
+                        desktop's proxy settings at it, for when TUN gets in the way of another
+                        VPN, an anti-cheat or an antivirus, or when you only need the browser.
+                    </p>
+                    <ul>
+                        <li>
+                            Only programs that use the system proxy go through the VPN: browsers and
+                            most applications. Games, many console programs and Windows services
+                            (WinHTTP stays as it is) do not, and without the kill switch they go
+                            direct, their DNS included.
+                        </li>
+                        <li>
+                            The <strong>kill switch</strong> here is strict: everything that does not
+                            use the proxy stays without network, while you are connected too.
+                        </li>
+                        <li>
+                            <strong>Access from the local network</strong> lets a phone or a TV on
+                            your network use the proxy. Settings shows the address to enter. Only your
+                            own networks get in; under Lockdown it also needs
+                            <strong>Local network</strong>.
+                        </li>
+                        <li>
+                            Your own proxy settings come back when you disconnect, quit or change the
+                            mode, and at the next start after a crash. If you changed them yourself
+                            meanwhile, they stay.
+                        </li>
+                        <li>
+                            On Linux the settings are changed on KDE Plasma and GNOME. On other
+                            desktops Rosetun shows the address to enter in your system settings. Point
+                            console programs at the proxy yourself.
+                        </li>
+                    </ul>
+                </section>
+
                 <section id="lockdown">
                     <h2>Lockdown and restoring network access</h2>
                     <p>
