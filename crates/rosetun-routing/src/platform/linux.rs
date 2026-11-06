@@ -598,6 +598,7 @@ impl RoutingBackend for NftBackend {
                 self.table
                     .nft
                     .apply(&hold_rules(self.table.leaves.as_ref()))?;
+                shared.written = self.table.read_back(&shared);
             }
             return Ok(Self::hold_status(true, !shared.stopped_for_upgrade));
         }
@@ -1669,6 +1670,25 @@ mod tests {
             ProtectionCheck::Restored
         );
         assert!(nft.has_table());
+    }
+
+    #[test]
+    fn the_holds_own_rules_are_not_taken_for_another_programs_change() {
+        let nft = FakeNft::left(ProtectionScope::AllTraffic);
+        let mount = Mount::new(true);
+        let backend = backend(&nft, &mount);
+        assert!(backend.lockdown_status().unwrap().upgrade_hold);
+        // What the service does at start, and what the next check then looks at.
+        backend
+            .enable_lockdown(None, &LockdownApps::default())
+            .unwrap();
+        let writes = nft.applied().len();
+
+        assert_eq!(
+            backend.verify_protection().unwrap(),
+            ProtectionCheck::Intact
+        );
+        assert_eq!(nft.applied().len(), writes);
     }
 
     #[test]

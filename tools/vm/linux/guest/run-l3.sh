@@ -878,7 +878,12 @@ scenario_crash() {
         printf '%s\n' "$CLI_OUT" | grep -q '^network: held closed' || { fail_reason="status does not report the network held closed: $CLI_OUT"; return 1; }
         printf '%s\n' "$CLI_OUT" | grep -q '^protection: network held closed after a service crash' || { fail_reason="status does not call it the hold after a crash: $CLI_OUT"; return 1; }
         table_present || { fail_reason="the restarted helper removed the table"; return 1; }
-        expect_blocked "HTTPS to $PROBE_ADDRESS on $PHYS during the hold" direct_https
+        expect_blocked "HTTPS to $PROBE_ADDRESS on $PHYS during the hold" direct_https || return 1
+        # Past the service's first checks: nobody but the service touched the table.
+        sleep 5
+        cli 15 status
+        ! printf '%s\n' "$CLI_OUT" | grep -q '^firewall rules: another program' ||
+            { fail_reason="status blames another program for the service's own rules: $CLI_OUT"; return 1; }
     }
     check crash.helper-killed "the table stayed, the helper restarted and reports the hold" killed
     passed crash.helper-killed || return
