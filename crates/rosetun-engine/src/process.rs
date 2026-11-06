@@ -15,8 +15,8 @@
 //!
 //! An engine parses what the network sends it, so it does not run as root: the
 //! child takes the `rosetun-engine` account before `exec`, keeping only the
-//! capabilities in `ENGINE_CAPABILITIES`, as ambient ones so they survive
-//! `exec`. Anything that fails on the way stops the engine before it runs.
+//! capabilities its `EngineRights` name, as ambient ones so they survive `exec`.
+//! Anything that fails on the way stops the engine before it runs.
 
 use std::ffi::CString;
 use std::fs::File;
@@ -29,7 +29,9 @@ use std::sync::mpsc::{self, Sender};
 use std::sync::{Mutex, PoisonError};
 use std::thread;
 
-type Job = (Command, Sender<io::Result<Child>>);
+use crate::EngineRights;
+
+type Job = (Command, EngineRights, Sender<io::Result<Child>>);
 
 /// Never dropped, so the launcher's loop never ends.
 static LAUNCHER: Mutex<Option<Sender<Job>>> = Mutex::new(None);
@@ -41,21 +43,29 @@ static IDENTITY: Mutex<Identity> = Mutex::new(Identity::Inherit);
 /// The account engines run as, from `packaging/linux/rosetun.sysusers`.
 pub const ENGINE_ACCOUNT: &str = "rosetun-engine";
 
+const CAP_DAC_READ_SEARCH: u32 = 2;
 const CAP_NET_BIND_SERVICE: u32 = 10;
 const CAP_NET_ADMIN: u32 = 12;
 const CAP_NET_RAW: u32 = 13;
+const CAP_SYS_PTRACE: u32 = 19;
 
 /// What sing-box and Xray need and nothing else. `CAP_NET_ADMIN`: the TUN device
 /// (`TUNSETIFF`), `auto_route`'s routes and rules over netlink, the rp_filter of
 /// the new interface, `SO_MARK`. `CAP_NET_RAW`: `SO_BINDTODEVICE` for
 /// `auto_detect_interface` and Xray's `sockopt.interface` on kernels before 5.7.
 /// `CAP_NET_BIND_SERVICE`: a local proxy on a port below 1024.
-///
-/// `CAP_SYS_PTRACE`, which sing-box would need to read another account's
-/// `/proc/<pid>/exe` and `/proc/<pid>/fd` for rules by program, is left out on
-/// purpose: it lets a process inject code into root's, which is what this account
-/// is there to prevent. The backend therefore does not offer those rules on Linux.
 const ENGINE_CAPABILITIES: [u32; 3] = [CAP_NET_BIND_SERVICE, CAP_NET_ADMIN, CAP_NET_RAW];
+
+/// What sing-box needs on top of them to find which program owns a connection,
+/// and only an engine with a rule by program gets them. It reads the link
+/// `/proc/<pid>/exe` and the folder and links `/proc/<pid>/fd` of every account.
+/// `CAP_SYS_PTRACE` passes the kernel's ptrace check on those links and on
+/// `hidepid`. The folder is mode 0500 and its owner the program's account, a plain
+/// permission check that ptrace rights do not answer: `CAP_DAC_READ_SEARCH`.
+///
+/// Together they let the engine read any file and inject code into any process,
+/// root's and the helper's too, so this is nearly root for whatever exploits it.
+const PROCESS_READING_CAPABILITIES: [u32; 2] = [CAP_SYS_PTRACE, CAP_DAC_READ_SEARCH];
 
 /// `_LINUX_CAPABILITY_VERSION_3`.
 const CAPABILITY_VERSION: u32 = 0x2008_0522;
@@ -90,11 +100,11 @@ enum Step {
     SetGid(u32),
     SetUid(u32),
     SetCapabilities(u64),
-    RaiseAmbient(u32),
+    RaiseAmbient(u64),
     NoNewPrivileges,
 }
 
-const DROP_STEPS: usize = 6 + ENGINE_CAPABILITIES.len();
+const DROP_STEPS: usize = 7;
 
 fn capability_mask(capabilities: &[u32]) -> u64 {
     capabilities
@@ -102,18 +112,27 @@ fn capability_mask(capabilities: &[u32]) -> u64 {
         .fold(0, |mask, capability| mask | 1u64 << capability)
 }
 
+/// The capabilities an engine with `rights` keeps, as `CapEff` prints them.
+fn rights_mask(rights: EngineRights) -> u64 {
+    let network = capability_mask(&ENGINE_CAPABILITIES);
+    match rights {
+        EngineRights::Network => network,
+        EngineRights::NetworkAndProcesses => {
+            network | capability_mask(&PROCESS_READING_CAPABILITIES)
+        }
+    }
+}
+
 /// A plain value made before `fork`, so the child allocates nothing.
-fn drop_steps(account: Account) -> [Step; DROP_STEPS] {
-    let [first, second, third] = ENGINE_CAPABILITIES;
+fn drop_steps(account: Account, rights: EngineRights) -> [Step; DROP_STEPS] {
+    let mask = rights_mask(rights);
     [
         Step::KeepCapabilities,
         Step::SetGroups(account.gid),
         Step::SetGid(account.gid),
         Step::SetUid(account.uid),
-        Step::SetCapabilities(capability_mask(&ENGINE_CAPABILITIES)),
-        Step::RaiseAmbient(first),
-        Step::RaiseAmbient(second),
-        Step::RaiseAmbient(third),
+        Step::SetCapabilities(mask),
+        Step::RaiseAmbient(mask),
         Step::NoNewPrivileges,
     ]
 }
@@ -164,14 +183,24 @@ unsafe fn apply(step: Step) -> io::Result<()> {
                 ];
                 libc::syscall(libc::SYS_capset, &raw const header, data.as_ptr())
             }
-            Step::RaiseAmbient(capability) => libc::syscall(
-                libc::SYS_prctl,
-                libc::PR_CAP_AMBIENT as libc::c_ulong,
-                libc::PR_CAP_AMBIENT_RAISE as libc::c_ulong,
-                capability as libc::c_ulong,
-                zero,
-                zero,
-            ),
+            Step::RaiseAmbient(mask) => {
+                let mut result = 0;
+                let mut capability: libc::c_ulong = 0;
+                while result == 0 && capability < libc::c_ulong::from(u64::BITS) {
+                    if mask & (1u64 << capability) != 0 {
+                        result = libc::syscall(
+                            libc::SYS_prctl,
+                            libc::PR_CAP_AMBIENT as libc::c_ulong,
+                            libc::PR_CAP_AMBIENT_RAISE as libc::c_ulong,
+                            capability,
+                            zero,
+                            zero,
+                        );
+                    }
+                    capability += 1;
+                }
+                result
+            }
             Step::NoNewPrivileges => libc::syscall(
                 libc::SYS_prctl,
                 libc::PR_SET_NO_NEW_PRIVS as libc::c_ulong,
@@ -254,6 +283,70 @@ pub fn engine_group() -> Option<u32> {
     }
 }
 
+/// Why this helper cannot start an engine with `rights`, if it cannot. Ask after
+/// [`run_engines_as`] and [`place_engines`]: the answer does not change while the
+/// service runs.
+pub fn rights_unavailable(rights: EngineRights) -> Option<String> {
+    let identity = *IDENTITY.lock().unwrap_or_else(PoisonError::into_inner);
+    let placed = matches!(
+        *PLACEMENT.lock().unwrap_or_else(PoisonError::into_inner),
+        Placement::Leaf(_)
+    );
+    let held = std::fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|status| grantable_capabilities(&status));
+    rights_refusal(rights, identity, placed, held)
+}
+
+/// What the helper holds and may hand on: an ambient capability has to be
+/// permitted, and the bounding set limits what a child can make inheritable.
+fn grantable_capabilities(status: &str) -> Option<u64> {
+    let set = |name: &str| {
+        status
+            .lines()
+            .find_map(|line| line.strip_prefix(name)?.strip_prefix(":\t"))
+            .and_then(|hex| u64::from_str_radix(hex, 16).ok())
+    };
+    Some(set("CapPrm")? & set("CapBnd")?)
+}
+
+fn rights_refusal(
+    rights: EngineRights,
+    identity: Identity,
+    placed: bool,
+    held: Option<u64>,
+) -> Option<String> {
+    if rights == EngineRights::Network {
+        return None;
+    }
+    match identity {
+        Identity::Account(_) => {}
+        Identity::Inherit => return Some("the service runs outside its systemd unit".to_owned()),
+        Identity::Missing => return Some(format!("the account {ENGINE_ACCOUNT} is missing")),
+    }
+    if !placed {
+        return Some("the service has no delegated cgroup".to_owned());
+    }
+    let Some(held) = held else {
+        return Some("the service's capabilities cannot be read".to_owned());
+    };
+    let missing: Vec<_> = [
+        (CAP_SYS_PTRACE, "CAP_SYS_PTRACE"),
+        (CAP_DAC_READ_SEARCH, "CAP_DAC_READ_SEARCH"),
+    ]
+    .into_iter()
+    .filter(|(capability, _)| held & (1u64 << capability) == 0)
+    .map(|(_, name)| name)
+    .collect();
+    if missing.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "the service's capability bounding set lacks {}",
+        missing.join(", ")
+    ))
+}
+
 /// Which cgroup engines start in.
 #[derive(Debug)]
 pub enum Placement {
@@ -281,20 +374,25 @@ fn launcher() -> io::Result<Sender<Job>> {
     thread::Builder::new()
         .name("engine-launcher".to_owned())
         .spawn(move || {
-            for (mut command, reply) in jobs {
+            for (mut command, rights, reply) in jobs {
                 let placement = PLACEMENT.lock().unwrap_or_else(PoisonError::into_inner);
                 let identity = *IDENTITY.lock().unwrap_or_else(PoisonError::into_inner);
-                let _ = reply.send(launch(&mut command, &placement, identity));
+                let _ = reply.send(launch(&mut command, &placement, identity, rights));
             }
         })?;
     *launcher = Some(sender.clone());
     Ok(sender)
 }
 
-fn launch(command: &mut Command, placement: &Placement, identity: Identity) -> io::Result<Child> {
+fn launch(
+    command: &mut Command,
+    placement: &Placement,
+    identity: Identity,
+    rights: EngineRights,
+) -> io::Result<Child> {
     let steps = match identity {
         Identity::Inherit => None,
-        Identity::Account(account) => Some(drop_steps(account)),
+        Identity::Account(account) => Some(drop_steps(account, rights)),
         Identity::Missing => {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
@@ -355,9 +453,15 @@ fn launch(command: &mut Command, placement: &Placement, identity: Identity) -> i
 /// it when the helper dies. The standard library clears the signal mask in
 /// the child, so the engine does not inherit the helper's blocked signals.
 pub fn spawn(command: Command) -> io::Result<Child> {
+    spawn_with_rights(command, EngineRights::Network)
+}
+
+/// [`spawn`] for an engine that keeps `rights`. Under an account, a capability
+/// the helper does not hold stops the engine before it runs.
+pub fn spawn_with_rights(command: Command, rights: EngineRights) -> io::Result<Child> {
     let (reply, result) = mpsc::channel();
     launcher()?
-        .send((command, reply))
+        .send((command, rights, reply))
         .map_err(|_| io::Error::other("engine launcher is gone"))?;
     result
         .recv()
@@ -487,7 +591,13 @@ mod tests {
             .args(["-c", "cat \"$1\" > \"$1.seen\"", "fake-engine"])
             .arg(&procs)
             .stdin(Stdio::null());
-        let mut child = launch(&mut command, &leaf, Identity::Inherit).unwrap();
+        let mut child = launch(
+            &mut command,
+            &leaf,
+            Identity::Inherit,
+            EngineRights::Network,
+        )
+        .unwrap();
         assert!(child.wait().unwrap().success());
         // The child wrote before exec; the program it became saw the write.
         assert_eq!(std::fs::read_to_string(&procs).unwrap(), "0");
@@ -504,6 +614,7 @@ mod tests {
             &mut fake_engine(&dir.0),
             &Placement::Inherit,
             Identity::Inherit,
+            EngineRights::Network,
         )
         .unwrap();
         assert!(wait_for(&dir.0.join("ready"), Duration::from_secs(5)));
@@ -521,7 +632,15 @@ mod tests {
         std::fs::write(&procs, "").unwrap();
         // Opened for reading only: the write in the child fails.
         let leaf = Placement::Leaf(File::open(&procs).unwrap());
-        assert!(launch(&mut fake_engine(&dir.0), &leaf, Identity::Inherit).is_err());
+        assert!(
+            launch(
+                &mut fake_engine(&dir.0),
+                &leaf,
+                Identity::Inherit,
+                EngineRights::Network
+            )
+            .is_err()
+        );
         assert!(!wait_for(&dir.0.join("ready"), Duration::from_millis(300)));
     }
 
@@ -636,17 +755,101 @@ mod identity_tests {
     #[test]
     fn engines_keep_exactly_the_network_capabilities() {
         // Bits 10, 12 and 13, as CapEff and CapAmb print them in /proc/<pid>/status.
-        assert_eq!(capability_mask(&ENGINE_CAPABILITIES), 0x3400);
+        assert_eq!(rights_mask(EngineRights::Network), 0x3400);
         assert_eq!(
-            drop_steps(ACCOUNT)[4],
+            drop_steps(ACCOUNT, EngineRights::Network)[4],
             Step::SetCapabilities(0x3400),
             "permitted, effective and inheritable"
         );
     }
 
     #[test]
+    fn an_engine_reading_processes_also_keeps_the_two_it_needs_for_that() {
+        // Bits 2 and 19 on top of the network's.
+        assert_eq!(rights_mask(EngineRights::NetworkAndProcesses), 0x8_3404);
+        let steps = drop_steps(ACCOUNT, EngineRights::NetworkAndProcesses);
+        assert!(steps.contains(&Step::SetCapabilities(0x8_3404)));
+        assert!(steps.contains(&Step::RaiseAmbient(0x8_3404)));
+    }
+
+    const ALL_HELD: Option<u64> = Some(u64::MAX);
+
+    #[test]
+    fn network_rights_are_never_refused() {
+        for identity in [
+            Identity::Inherit,
+            Identity::Missing,
+            Identity::Account(ACCOUNT),
+        ] {
+            assert_eq!(
+                rights_refusal(EngineRights::Network, identity, false, None),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn reading_processes_needs_the_service_with_its_account_and_cgroup() {
+        let refusal = |identity, placed, held| {
+            rights_refusal(EngineRights::NetworkAndProcesses, identity, placed, held)
+        };
+        assert_eq!(refusal(Identity::Account(ACCOUNT), true, ALL_HELD), None);
+        assert!(
+            refusal(Identity::Inherit, true, ALL_HELD)
+                .unwrap()
+                .contains("outside its systemd unit")
+        );
+        assert!(
+            refusal(Identity::Missing, true, ALL_HELD)
+                .unwrap()
+                .contains(ENGINE_ACCOUNT)
+        );
+        assert!(
+            refusal(Identity::Account(ACCOUNT), false, ALL_HELD)
+                .unwrap()
+                .contains("delegated cgroup")
+        );
+        assert!(
+            refusal(Identity::Account(ACCOUNT), true, None)
+                .unwrap()
+                .contains("cannot be read")
+        );
+    }
+
+    #[test]
+    fn a_bounding_set_without_a_capability_names_it_in_the_refusal() {
+        let refusal = |held| {
+            rights_refusal(
+                EngineRights::NetworkAndProcesses,
+                Identity::Account(ACCOUNT),
+                true,
+                Some(held),
+            )
+            .unwrap()
+        };
+        // What the unit gave before rules by program: CAP_DAC_READ_SEARCH only.
+        let old_unit = 0x34e5;
+        let without_search = !(1 << CAP_DAC_READ_SEARCH);
+        assert!(refusal(old_unit).contains("CAP_SYS_PTRACE"));
+        assert!(!refusal(old_unit).contains("CAP_DAC_READ_SEARCH"));
+        assert!(refusal(without_search).contains("CAP_DAC_READ_SEARCH"));
+    }
+
+    #[test]
+    fn a_capability_must_be_both_permitted_and_in_the_bounding_set() {
+        let status = |permitted, bounding| {
+            format!("Name:\thelper\nCapPrm:\t{permitted:016x}\nCapBnd:\t{bounding:016x}\n")
+        };
+        assert_eq!(grantable_capabilities(&status(0xff, 0xff)), Some(0xff));
+        assert_eq!(grantable_capabilities(&status(0xf0, 0xff)), Some(0xf0));
+        assert_eq!(grantable_capabilities(&status(0xff, 0x0f)), Some(0x0f));
+        assert_eq!(grantable_capabilities("Name:\thelper\n"), None);
+        assert_eq!(grantable_capabilities("CapPrm:\tno\nCapBnd:\t00\n"), None);
+    }
+
+    #[test]
     fn the_account_is_taken_in_the_order_the_kernel_needs() {
-        let steps = drop_steps(ACCOUNT);
+        let steps = drop_steps(ACCOUNT, EngineRights::NetworkAndProcesses);
         let keep = position(&steps, |step| matches!(step, Step::KeepCapabilities));
         let groups = position(&steps, |step| matches!(step, Step::SetGroups(_)));
         let gid = position(&steps, |step| matches!(step, Step::SetGid(_)));
@@ -666,7 +869,7 @@ mod identity_tests {
 
     #[test]
     fn the_steps_name_the_account() {
-        let steps = drop_steps(ACCOUNT);
+        let steps = drop_steps(ACCOUNT, EngineRights::Network);
         assert!(steps.contains(&Step::SetGroups(ACCOUNT.gid)));
         assert!(steps.contains(&Step::SetGid(ACCOUNT.gid)));
         assert!(steps.contains(&Step::SetUid(ACCOUNT.uid)));
@@ -674,9 +877,9 @@ mod identity_tests {
 
     #[test]
     fn every_capability_is_raised_as_ambient() {
-        let steps = drop_steps(ACCOUNT);
-        for capability in ENGINE_CAPABILITIES {
-            assert!(steps.contains(&Step::RaiseAmbient(capability)));
+        for rights in [EngineRights::Network, EngineRights::NetworkAndProcesses] {
+            let steps = drop_steps(ACCOUNT, rights);
+            assert!(steps.contains(&Step::RaiseAmbient(rights_mask(rights))));
         }
     }
 
@@ -697,6 +900,7 @@ mod identity_tests {
             &mut marker_command(&marker),
             &Placement::Inherit,
             Identity::Missing,
+            EngineRights::Network,
         )
         .expect_err("no engine as root");
         assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
@@ -714,6 +918,7 @@ mod identity_tests {
             &mut marker_command(&marker),
             &Placement::Inherit,
             Identity::Account(ACCOUNT),
+            EngineRights::Network,
         )
         .expect_err("an ordinary account cannot change its uid");
         assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
@@ -727,6 +932,7 @@ mod identity_tests {
             &mut marker_command(&marker),
             &Placement::Inherit,
             Identity::Inherit,
+            EngineRights::Network,
         )
         .unwrap();
         assert!(child.wait().unwrap().success());

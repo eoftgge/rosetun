@@ -28,8 +28,8 @@ use rosetun_config::{
     Traffic, fragments_tls, list_tag,
 };
 use rosetun_engine::{
-    ControlEndpoint, EngineBackend, EngineProcess, EngineRegistry, RenderRequest, RenderedConfig,
-    TrafficProbe, TrafficTotals, UrlTestTarget, errors::EngineError, url_test_any,
+    ControlEndpoint, EngineBackend, EngineProcess, EngineRegistry, EngineRights, RenderRequest,
+    RenderedConfig, TrafficProbe, TrafficTotals, UrlTestTarget, errors::EngineError, url_test_any,
 };
 use rosetun_engine_xray::{SocksEndpoint, XrayHelper};
 use rosetun_ipc::transport::{AccountIdentity, PeerIdentity};
@@ -182,6 +182,8 @@ pub struct Helper {
     protection: ProtectionCapabilities,
     /// Why the kill switch is missing, for the refusal of a connect.
     protection_unavailable: Option<String>,
+    /// Why engines cannot read programs here, if they cannot.
+    process_rights_unavailable: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -344,6 +346,7 @@ impl Helper {
         Self {
             protection,
             protection_unavailable,
+            process_rights_unavailable: None,
             lockdown: Arc::clone(&lockdown),
             protection_report: Arc::clone(&protection_report),
             status: Arc::clone(&status),
@@ -481,6 +484,15 @@ impl Helper {
         self
     }
 
+    #[cfg(any(target_os = "linux", test))]
+    pub(crate) fn with_process_rights_unavailable(mut self, reason: Option<String>) -> Self {
+        if let Some(reason) = reason.as_deref() {
+            tracing::warn!(reason, "rules by program are not available");
+        }
+        self.process_rights_unavailable = reason;
+        self
+    }
+
     pub(crate) fn with_list_store(mut self, store: ListStore, run_dir: PathBuf) -> Self {
         let lists = Arc::new(Mutex::new(store));
         self.session
@@ -562,6 +574,22 @@ impl Helper {
             return Err(HelperError::new(ErrorCode::ProtectionUnavailable, message));
         }
         Ok(())
+    }
+
+    /// Refuses rules by program where the engine cannot be given what they need,
+    /// before anything of the session is touched: a rule that never matches sends
+    /// the program's traffic another way without a word.
+    fn require_engine_rights(&self, request: &ConnectRequest) -> Result<(), HelperError> {
+        let Some(reason) = self.process_rights_unavailable.as_deref() else {
+            return Ok(());
+        };
+        if EngineRights::for_rules(&request.effective_rule_set()) == EngineRights::Network {
+            return Ok(());
+        }
+        Err(HelperError::new(
+            ErrorCode::UnsupportedRules,
+            format!("rules by program are not available on this system: {reason}"),
+        ))
     }
 
     pub fn status(&self) -> Status {
@@ -1140,6 +1168,7 @@ impl Helper {
         self.check_owner(caller)?;
         validate_request(request)?;
         self.require_protection(request)?;
+        self.require_engine_rights(request)?;
         let state = self.with_status(|status| status.state.clone());
 
         let mode = match state {
@@ -2023,6 +2052,7 @@ impl Session {
         // A stop failure retains its handle and prevents a second engine from starting.
         self.stop_engine()?;
         self.protection.begin_attempt(settings);
+        let rights = EngineRights::for_rules(rules);
         if (self.physical_interface)(&settings.tun.name).is_none() {
             return Err(HelperError::new(
                 ErrorCode::NoNetwork,
@@ -2325,6 +2355,7 @@ impl Session {
                 engine = %backend.kind().as_str(),
                 attempt,
                 cold_start,
+                ?rights,
                 "spawning tunnel engine"
             );
             let spawned_at = Instant::now();
@@ -2332,7 +2363,7 @@ impl Session {
             self.cold_start = false;
             self.process = Some(
                 backend
-                    .spawn_with_log_gate(&binary, &config, self.gate.deadline())
+                    .spawn_with_log_gate(&binary, &config, self.gate.deadline(), rights)
                     .map_err(|error| {
                         HelperError::new(ErrorCode::EngineFailed, error.to_string())
                     })?,

@@ -76,9 +76,6 @@
         "outbound": "proxy",
         "port": [
           443
-        ],
-        "process_path_regex": [
-          "(?:^|[\\\\/])rosetun-gui$"
         ]
       },
       {

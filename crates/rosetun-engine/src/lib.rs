@@ -276,15 +276,42 @@ pub trait EngineBackend: Send + Sync + std::fmt::Debug {
     ) -> Result<Box<dyn EngineProcess>, EngineError>;
 
     /// Shared deadline for logging destinations; the helper can close the gate
-    /// while the process is still draining its output during shutdown.
+    /// while the process is still draining its output during shutdown. `rights`
+    /// are what the session's rules need the process to hold.
     fn spawn_with_log_gate(
         &self,
         binary: &Path,
         config: &RenderedConfig,
         verbose_until_unix: Arc<AtomicU64>,
+        rights: EngineRights,
     ) -> Result<Box<dyn EngineProcess>, EngineError> {
-        let _ = verbose_until_unix;
+        let _ = (verbose_until_unix, rights);
         self.spawn(binary, config)
+    }
+}
+
+/// What a session's engine may do besides the network. Only Linux acts on it,
+/// where the engine runs under an account of its own: on Windows it holds what
+/// the service holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EngineRights {
+    Network,
+    /// Also finds which program owns a connection, whichever account it runs as.
+    NetworkAndProcesses,
+}
+
+impl EngineRights {
+    /// A rule set whose enabled rules look at programs needs them read. Whatever
+    /// such a rule does with the connection, an exit included, it asks the same.
+    pub fn for_rules(rules: &rosetun_config::RuleSet) -> Self {
+        if rules
+            .enabled()
+            .any(|rule| matches!(rule.matcher, rosetun_config::RuleMatcher::Process(_)))
+        {
+            Self::NetworkAndProcesses
+        } else {
+            Self::Network
+        }
     }
 }
 
@@ -586,8 +613,65 @@ impl EngineRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rosetun_config::{ListId, RuleMatcher};
+    use rosetun_config::{
+        DomainMatch, ExitId, ListId, ProcessMatch, Rule, RuleId, RuleMatcher, RuleSet, RuleSetId,
+        RuleTarget,
+    };
     use std::time::Instant;
+
+    fn rule(id: &str, enabled: bool, matcher: RuleMatcher) -> Rule {
+        Rule {
+            id: RuleId::new(id),
+            enabled,
+            matcher,
+            target: RuleTarget::Direct,
+            exit: None,
+        }
+    }
+
+    fn rights(rules: Vec<Rule>) -> EngineRights {
+        let mut set = RuleSet::new(RuleSetId::new("rules"), "rules", RuleTarget::Proxy);
+        set.rules = rules;
+        EngineRights::for_rules(&set)
+    }
+
+    fn program(name: &str) -> RuleMatcher {
+        RuleMatcher::Process(ProcessMatch::Name(name.to_owned()))
+    }
+
+    #[test]
+    fn without_rules_by_program_an_engine_keeps_to_the_network() {
+        assert_eq!(rights(Vec::new()), EngineRights::Network);
+        let site = RuleMatcher::Domain(DomainMatch::Exact("example.com".to_owned()));
+        assert_eq!(rights(vec![rule("a", true, site)]), EngineRights::Network);
+    }
+
+    #[test]
+    fn a_rule_by_program_by_name_or_path_needs_programs_read() {
+        let path = RuleMatcher::Process(ProcessMatch::Path("/opt/example/app".into()));
+        for matcher in [program("app"), path] {
+            assert_eq!(
+                rights(vec![rule("a", true, matcher)]),
+                EngineRights::NetworkAndProcesses
+            );
+        }
+    }
+
+    #[test]
+    fn a_disabled_rule_by_program_needs_nothing() {
+        assert_eq!(
+            rights(vec![rule("a", false, program("app"))]),
+            EngineRights::Network
+        );
+    }
+
+    #[test]
+    fn a_rule_by_program_that_sends_to_an_exit_needs_programs_read() {
+        let mut exit = rule("a", true, program("app"));
+        exit.target = RuleTarget::Exit;
+        exit.exit = Some(ExitId::new("exit"));
+        assert_eq!(rights(vec![exit]), EngineRights::NetworkAndProcesses);
+    }
 
     #[test]
     fn list_rules_require_an_explicit_backend_capability() {

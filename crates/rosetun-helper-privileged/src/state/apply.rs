@@ -23,6 +23,7 @@ impl Helper {
         self.check_owner(caller)?;
         validate_request(request)?;
         self.require_protection(request)?;
+        self.require_engine_rights(request)?;
         if !matches!(
             self.with_status(|status| status.state.clone()),
             ConnectionState::Connected

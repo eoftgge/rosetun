@@ -33,8 +33,8 @@ use readiness::Readiness;
 use rosetun_config::EngineKind;
 use rosetun_engine::{
     ControlEndpoint, EngineBackend, EngineCapabilities, EngineIntegration, EngineProcess,
-    ProbeRenderRequest, RenderRequest, RenderedConfig, TrafficProbe, TrafficSample, UrlTestTarget,
-    errors::EngineError,
+    EngineRights, ProbeRenderRequest, RenderRequest, RenderedConfig, TrafficProbe, TrafficSample,
+    UrlTestTarget, errors::EngineError,
 };
 
 pub use render::render;
@@ -241,7 +241,12 @@ impl EngineBackend for SingBoxBackend {
         binary: &Path,
         config: &RenderedConfig,
     ) -> Result<Box<dyn EngineProcess>, EngineError> {
-        self.spawn_with_log_gate(binary, config, Arc::new(AtomicU64::new(0)))
+        self.spawn_with_log_gate(
+            binary,
+            config,
+            Arc::new(AtomicU64::new(0)),
+            EngineRights::Network,
+        )
     }
 
     fn spawn_with_log_gate(
@@ -249,7 +254,10 @@ impl EngineBackend for SingBoxBackend {
         binary: &Path,
         config: &RenderedConfig,
         verbose_until_unix: Arc<AtomicU64>,
+        rights: EngineRights,
     ) -> Result<Box<dyn EngineProcess>, EngineError> {
+        #[cfg(not(target_os = "linux"))]
+        let _ = rights;
         #[cfg(target_os = "linux")]
         rosetun_engine::installed::verify(binary)?;
         std::fs::create_dir_all(&self.work_dir)?;
@@ -273,7 +281,7 @@ impl EngineBackend for SingBoxBackend {
         #[cfg(windows)]
         let mut child = console::spawn(&mut command)?;
         #[cfg(target_os = "linux")]
-        let mut child = rosetun_engine::process::spawn(command)?;
+        let mut child = rosetun_engine::process::spawn_with_rights(command, rights)?;
         #[cfg(not(any(windows, target_os = "linux")))]
         let mut child = command.spawn()?;
 
@@ -1516,7 +1524,8 @@ mod tests {
                 .iter()
                 .filter(|rule| rule.get("process_path_regex").is_some())
                 .count(),
-            1
+            usize::from(cfg!(windows)),
+            "only the exit lookup looks at a program, and only on Windows"
         );
     }
 
@@ -1673,6 +1682,20 @@ mod tests {
         assert!(fallback.get("outbound").is_none());
     }
 
+    fn exit_lookup_rule() -> Value {
+        let mut rule = serde_json::json!({
+            "ip_cidr": ["1.1.1.1/32"],
+            "port": [443],
+            "action": "route",
+            "outbound": "proxy",
+        });
+        if cfg!(windows) {
+            rule["process_path_regex"] =
+                serde_json::json!([render::process_name_regex(render::GUI_PROCESS)]);
+        }
+        rule
+    }
+
     #[test]
     fn exit_lookup_precedes_user_rules_and_all_default_targets() {
         let mut rule_set = rules();
@@ -1692,21 +1715,12 @@ mod tests {
             let rules = route["rules"].as_array().expect("rules");
             assert_eq!(rules[0]["action"], "sniff");
             assert_eq!(rules[1]["action"], "hijack-dns");
-            assert_eq!(
-                rules[2],
-                serde_json::json!({
-                    "process_path_regex": [render::process_name_regex(render::GUI_PROCESS)],
-                    "ip_cidr": ["1.1.1.1/32"],
-                    "port": [443],
-                    "action": "route",
-                    "outbound": "proxy",
-                })
-            );
+            assert_eq!(rules[2], exit_lookup_rule());
             assert_eq!(rules[3]["domain_suffix"][0], "google.com");
             assert_eq!(rules[5]["outbound"], "direct");
             assert_eq!(
                 rules[5]["process_path_regex"],
-                rules[2]["process_path_regex"]
+                serde_json::json!([render::process_name_regex(render::GUI_PROCESS)])
             );
             assert_eq!(
                 rules.last().unwrap()["action"] == "reject",
@@ -1716,21 +1730,24 @@ mod tests {
     }
 
     /// sing-box looks up the program of every connection only when a route rule
-    /// matches on one; the live connection list relies on that `processPath`.
+    /// matches on one; the live connection list relies on that `processPath`. On
+    /// Linux an engine without a rule by program has no right to look, so nothing
+    /// may turn the search on there.
     #[test]
-    fn process_lookup_is_on_without_process_rules() {
+    fn process_lookup_without_process_rules_is_on_only_on_windows() {
         let rule_set = RuleSet {
             rules: Vec::new(),
             ..rules()
         };
         let (route, _) = render::route_section(&rule_set, render::RULE_CAPABILITIES, false);
 
-        assert!(
+        assert_eq!(
             route["rules"]
                 .as_array()
                 .expect("rules")
                 .iter()
-                .any(|rule| rule.get("process_path_regex").is_some())
+                .any(|rule| rule.get("process_path_regex").is_some()),
+            cfg!(windows)
         );
         assert!(route.get("find_process").is_none());
     }
@@ -1915,13 +1932,7 @@ mod tests {
                     "protocol": "dns",
                     "action": "hijack-dns",
                 }),
-                serde_json::json!({
-                    "process_path_regex": [render::process_name_regex(render::GUI_PROCESS)],
-                    "ip_cidr": ["1.1.1.1/32"],
-                    "port": [443],
-                    "action": "route",
-                    "outbound": "proxy",
-                }),
+                exit_lookup_rule(),
                 serde_json::json!({
                     "ip_cidr": [
                         "169.254.0.0/16",

@@ -48,27 +48,18 @@ pub(crate) fn is_exit_trace(process: Option<&str>, ip: &str, port: u16) -> bool 
             })
 }
 
-/// On Linux the engine has no right to read another account's processes (see
-/// `rosetun_engine::process`). Tests render what Windows does, so one set of
-/// golden files stands for both systems.
-const READS_PROCESSES: bool = cfg!(windows) || cfg!(test);
-
-pub(crate) const RULE_CAPABILITIES: RuleCapabilities = capabilities(READS_PROCESSES);
-
-/// A rule by program that cannot match is not offered, so a connect with one is
-/// refused rather than left to go another way.
-const fn capabilities(reads_processes: bool) -> RuleCapabilities {
-    RuleCapabilities {
-        domain_exact: true,
-        domain_suffix: true,
-        domain_keyword: true,
-        process_name: reads_processes,
-        process_path: reads_processes,
-        ip_cidr: true,
-        lists: true,
-        exits: true,
-    }
-}
+/// Rules by program too: the helper refuses them where it cannot give the engine
+/// the rights to read programs (`rosetun_engine::process::rights_unavailable`).
+pub(crate) const RULE_CAPABILITIES: RuleCapabilities = RuleCapabilities {
+    domain_exact: true,
+    domain_suffix: true,
+    domain_keyword: true,
+    process_name: true,
+    process_path: true,
+    ip_cidr: true,
+    lists: true,
+    exits: true,
+};
 
 pub fn render(request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError> {
     let lan = request.settings.allow_lan.then_some(request.lan_segment);
@@ -527,7 +518,7 @@ fn route_section_with_lists(
             "protocol": "dns",
             "action": "hijack-dns",
         }),
-        exit_trace_rule(READS_PROCESSES),
+        exit_trace_rule(),
     ];
     if local_proxy {
         route_rules.insert(
@@ -707,16 +698,17 @@ fn route_rule(rule: &Rule) -> Option<Map<String, Value>> {
 
 /// A name matched against the whole path: Windows ignores letter case, Linux does not.
 /// The GUI's look at its exit goes through the tunnel whatever the rules say.
-/// Linux cannot tell the GUI from other programs here, so the address alone
-/// decides there: a one-purpose address nothing else asks for.
-fn exit_trace_rule(reads_processes: bool) -> Value {
+/// On Linux the address alone decides: the engine reads programs only with a rule
+/// by program, a condition on the program would start that search for every
+/// session, and a search that misses would send this lookup down the user's rules.
+fn exit_trace_rule() -> Value {
     let mut rule = json!({
         "ip_cidr": [format!("{EXIT_TRACE_IP}/32")],
         "port": [EXIT_TRACE_PORT],
         "action": "route",
         "outbound": TAG_PROXY,
     });
-    if reads_processes {
+    if cfg!(windows) {
         rule["process_path_regex"] = json!([process_name_regex(GUI_PROCESS)]);
     }
     rule
@@ -771,15 +763,15 @@ mod tests {
     };
 
     #[test]
-    fn without_reading_processes_no_rule_by_program_is_offered_and_none_is_rendered() {
-        let linux = capabilities(false);
-        assert!(!linux.process_name && !linux.process_path);
-        assert!(linux.domain_exact && linux.ip_cidr && linux.lists && linux.exits);
+    fn rules_by_program_are_offered_on_every_system() {
+        const { assert!(RULE_CAPABILITIES.process_name && RULE_CAPABILITIES.process_path) };
+    }
 
-        let rule = exit_trace_rule(false);
-        assert!(rule.get("process_path_regex").is_none());
+    #[test]
+    fn only_windows_tells_the_exit_lookup_by_its_program() {
+        let rule = exit_trace_rule();
+        assert_eq!(rule.get("process_path_regex").is_some(), cfg!(windows));
         assert_eq!(rule["outbound"], TAG_PROXY);
-        assert!(exit_trace_rule(true).get("process_path_regex").is_some());
     }
 
     use super::*;
@@ -1067,6 +1059,50 @@ mod tests {
             target: RuleTarget::Exit,
             exit: Some(ExitId::new(exit)),
         }
+    }
+
+    #[test]
+    fn a_rule_by_program_to_an_exit_renders_through_its_node() {
+        let node = shadowsocks_node("main", "203.0.113.10");
+        let work = shadowsocks_node("work", "198.51.100.20");
+        let work_exit = ExitId::new("work-exit");
+        let mut rules = RuleSet::new(RuleSetId::new("exit-rules"), "Exits", RuleTarget::Proxy);
+        rules.rules = vec![exit_rule(
+            "program-exit",
+            RuleMatcher::Process(ProcessMatch::Name("example-app".into())),
+            "work-exit",
+        )];
+        let settings = Settings::default();
+        let rendered = render(&RenderRequest {
+            node: &node,
+            socks: None,
+            extra: &[ExtraOutbound {
+                exit: &work_exit,
+                node: &work,
+                socks: None,
+            }],
+            rules: &rules,
+            lists: &[],
+            settings: &settings,
+            lan_segment: &[],
+            lan_servers: &[],
+            control: None,
+            verbose_log: false,
+            local_proxy: None,
+        })
+        .unwrap();
+        assert!(rendered.unsupported.is_empty());
+        let value: Value = serde_json::from_slice(&rendered.body).unwrap();
+        let rule = value["route"]["rules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|rule| rule["outbound"] == "exit-0")
+            .expect("the rule by program");
+        assert_eq!(
+            rule["process_path_regex"],
+            json!([process_name_regex("example-app")])
+        );
     }
 
     #[test]

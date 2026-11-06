@@ -664,6 +664,7 @@ impl EngineBackend for RunningThenExitedEngine {
 #[derive(Debug, Default)]
 struct EngineControls {
     spawns: AtomicUsize,
+    rights: Mutex<Vec<EngineRights>>,
     events: Mutex<Vec<&'static str>>,
     running: Mutex<Option<Arc<AtomicBool>>>,
     outcomes: Mutex<VecDeque<bool>>,
@@ -773,6 +774,17 @@ impl EngineBackend for ControlledEngine {
                 .collect(),
             unsupported_probes: Vec::new(),
         })
+    }
+
+    fn spawn_with_log_gate(
+        &self,
+        binary: &Path,
+        config: &RenderedConfig,
+        _verbose_until_unix: Arc<AtomicU64>,
+        rights: EngineRights,
+    ) -> Result<Box<dyn EngineProcess>, EngineError> {
+        self.controls.rights.lock().unwrap().push(rights);
+        self.spawn(binary, config)
     }
 
     fn spawn(
@@ -4916,6 +4928,148 @@ fn apply_rules_restarts_under_the_guard_and_supervisor_uses_new_rules() {
         controls.rendered_rules.lock().unwrap().last(),
         Some(&changed.rule_set)
     );
+}
+
+fn request_with_a_rule_by_program(request: &ConnectRequest) -> ConnectRequest {
+    let mut updated = request.clone();
+    updated.rule_set.rules.push(Rule {
+        id: RuleId::new("program-direct"),
+        enabled: true,
+        matcher: RuleMatcher::Process(rosetun_config::ProcessMatch::Name("example-app".to_owned())),
+        target: RuleTarget::Direct,
+        exit: None,
+    });
+    updated
+}
+
+#[test]
+fn the_engine_reads_programs_only_while_a_rule_by_program_is_there() {
+    let (helper, controls, prepared, reverted) = supervised_helper(true);
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    helper.connect(&request).expect("connect");
+    let rights = || controls.rights.lock().unwrap().clone();
+    assert_eq!(rights(), [EngineRights::Network]);
+
+    let with_program = request_with_a_rule_by_program(&request);
+    helper.apply(&with_program).expect("rule by program added");
+    assert_eq!(
+        rights(),
+        [EngineRights::Network, EngineRights::NetworkAndProcesses]
+    );
+    helper.apply(&request).expect("rule by program removed");
+    assert_eq!(
+        rights(),
+        [
+            EngineRights::Network,
+            EngineRights::NetworkAndProcesses,
+            EngineRights::Network
+        ]
+    );
+
+    // Each change went through one guard: restarted under it, never lifted.
+    assert_eq!(prepared.load(Ordering::Acquire), 2);
+    assert_eq!(reverted.load(Ordering::Acquire), 0);
+    assert!(helper.session().unwrap().protection.is_active());
+    assert!(matches!(helper.status().state, ConnectionState::Connected));
+}
+
+#[test]
+fn a_restart_by_the_supervisor_keeps_the_rights_of_the_rules() {
+    let (helper, controls, _, _) = supervised_helper(true);
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    let request = request_with_a_rule_by_program(&request);
+    helper.connect(&request).expect("connect");
+
+    controls.kill();
+    helper.supervise(Instant::now());
+
+    assert_eq!(
+        *controls.rights.lock().unwrap(),
+        [
+            EngineRights::NetworkAndProcesses,
+            EngineRights::NetworkAndProcesses
+        ]
+    );
+}
+
+#[test]
+fn a_failed_apply_gives_the_rolled_back_engine_its_earlier_rights() {
+    let (helper, controls, _, reverted) = supervised_helper(true);
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    helper.connect(&request).expect("connect");
+    controls.fail_next(1);
+
+    helper
+        .apply(&request_with_a_rule_by_program(&request))
+        .expect_err("the new engine does not start");
+
+    assert_eq!(
+        *controls.rights.lock().unwrap(),
+        [
+            EngineRights::Network,
+            EngineRights::NetworkAndProcesses,
+            EngineRights::Network
+        ]
+    );
+    assert_eq!(reverted.load(Ordering::Acquire), 0);
+    assert_eq!(helper.session().unwrap().request.as_ref(), Some(&request));
+}
+
+#[test]
+fn a_temporary_rule_by_program_also_gives_the_engine_the_rights() {
+    let (helper, controls, _, _) = supervised_helper(true);
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    helper.connect(&request).expect("connect");
+
+    let mut changed = request.clone();
+    changed.temporary_rules = request_with_a_rule_by_program(&request).rule_set.rules;
+    helper.apply(&changed).expect("temporary rule added");
+
+    assert_eq!(
+        controls.rights.lock().unwrap().last(),
+        Some(&EngineRights::NetworkAndProcesses)
+    );
+}
+
+#[test]
+fn rules_by_program_are_refused_with_the_reason_when_the_rights_cannot_be_given() {
+    let (helper, controls, prepared, _) = supervised_helper(true);
+    let helper = helper.with_process_rights_unavailable(Some("the example reason".to_owned()));
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    let with_program = request_with_a_rule_by_program(&request);
+
+    let error = helper.connect(&with_program).expect_err("no rights");
+    assert_eq!(error.code, ErrorCode::UnsupportedRules);
+    assert!(error.message.contains("the example reason"));
+    assert_eq!(controls.spawns(), 0);
+
+    helper.connect(&request).expect("no rule by program");
+    assert_eq!(*controls.rights.lock().unwrap(), [EngineRights::Network]);
+
+    let error = helper.apply(&with_program).expect_err("no rights");
+    assert_eq!(error.code, ErrorCode::UnsupportedRules);
+    assert!(error.message.contains("the example reason"));
+    assert_eq!(controls.spawns(), 1);
+    assert_eq!(prepared.load(Ordering::Acquire), 0);
+    assert!(matches!(helper.status().state, ConnectionState::Connected));
+    assert_eq!(helper.session().unwrap().request.as_ref(), Some(&request));
+}
+
+#[test]
+fn a_disabled_rule_by_program_is_not_refused_when_the_rights_cannot_be_given() {
+    let (helper, controls, _, _) = supervised_helper(true);
+    let helper = helper.with_process_rights_unavailable(Some("the example reason".to_owned()));
+    let mut request = request_with_a_rule_by_program(&connect_request());
+    request.rule_set.rules[0].enabled = false;
+
+    helper.connect(&request).expect("the rule is off");
+
+    assert_eq!(*controls.rights.lock().unwrap(), [EngineRights::Network]);
 }
 
 #[test]

@@ -57,6 +57,13 @@ Delegate=yes
 # - CAP_NET_ADMIN: the TUN device, routes and rules, nftables;
 # - CAP_NET_RAW: binding a socket to the physical interface;
 # - CAP_NET_BIND_SERVICE: a local proxy on a port below 1024.
+# Only a session with an enabled rule by program also gives its sing-box these
+# two, to find which program owns a connection in /proc:
+# - CAP_SYS_PTRACE: the links exe and fd/* of other accounts' processes;
+# - CAP_DAC_READ_SEARCH: listing their fd folders.
+# With both that sing-box can read any file and inject code into any process,
+# the helper too: nearly root. Without such a rule no engine has them, and
+# without them here a rule by program is refused.
 # The helper needs the rest:
 # - CAP_SETUID, CAP_SETGID: an engine takes its account before it runs;
 # - CAP_KILL: stopping an engine that runs as another account;
@@ -64,8 +71,8 @@ Delegate=yes
 # - CAP_DAC_READ_SEARCH: finding the GUI's and the CLI's scopes in cgroup folders
 #   of other accounts.
 # It owns everything else it touches, so CAP_DAC_OVERRIDE and CAP_SYS_ADMIN stay
-# out, and CAP_SYS_PTRACE: an engine with it could inject code into the helper.
-CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE CAP_SETUID CAP_SETGID CAP_KILL CAP_CHOWN CAP_DAC_READ_SEARCH
+# out.
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE CAP_SETUID CAP_SETGID CAP_KILL CAP_CHOWN CAP_DAC_READ_SEARCH CAP_SYS_PTRACE
 
 # Hardening, limited to what cannot touch the TUN device, routes, /proc,
 # nftables or the cgroup tree (so no ProtectControlGroups or
