@@ -156,6 +156,7 @@ error-list-text-empty = пустая запись
 error-list-reverse-match = Категории с reverse_match не поддерживаются
 error-list-empty = В выбранном списке нет записей
 error-code-not-implemented = служба пока этого не умеет
+error-task-not-started = Rosetun не смог начать это действие. Закройте другие программы и попробуйте снова.
 error-code-internal = внутренняя ошибка службы
 error-autostart-read = не удалось прочитать настройку автозапуска: { $detail }
 error-autostart-write = не удалось изменить автозапуск: { $detail }

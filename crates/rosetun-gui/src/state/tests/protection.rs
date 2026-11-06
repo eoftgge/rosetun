@@ -267,3 +267,16 @@ fn rules_that_cannot_be_checked_are_said_while_it_lasts() {
     let fine = connected_with(rosetun_config::ProtectionState::default());
     assert!(!fine.protection_unverified());
 }
+
+#[test]
+fn a_task_that_could_not_start_says_so_and_nothing_stays_waiting() {
+    let mut state = answered(None);
+    state.operations.helper = true;
+    state.operations.lockdown = true;
+
+    state.reduce(WorkerEvent::TaskNotStarted);
+
+    assert!(!state.operations.helper);
+    assert!(!state.operations.lockdown);
+    assert!(state.operation_error.is_some());
+}

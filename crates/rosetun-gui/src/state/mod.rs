@@ -620,9 +620,20 @@ impl State {
         .map(|due| Duration::from_secs(due.saturating_sub(now)))
     }
 
+    /// No result will come for what was just asked, and which task it was does
+    /// not matter here: a button left waiting would stay disabled for good. A
+    /// task still running elsewhere reports as usual.
+    fn task_not_started(&mut self) {
+        self.operations = Operations::default();
+        self.connect_in_flight = false;
+        self.cancel_in_flight = false;
+        self.operation_error = Some(self.text(&tr!("error-task-not-started")));
+    }
+
     pub(crate) fn reduce(&mut self, event: WorkerEvent) {
         self.finish_rule_step(&event);
         match event {
+            WorkerEvent::TaskNotStarted => self.task_not_started(),
             WorkerEvent::Config { generation, config } => {
                 if generation <= self.config_generation {
                     return;

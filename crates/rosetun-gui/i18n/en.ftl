@@ -157,6 +157,7 @@ error-list-reverse-match = Reverse-match categories are not supported
 error-list-empty = The selected list contains no entries
 error-code-not-implemented = the service does not support this yet
 error-code-internal = internal service error
+error-task-not-started = Rosetun could not start this action. Close other programs and try again.
 error-autostart-read = could not read the autostart setting: { $detail }
 error-autostart-write = could not change autostart: { $detail }
 autostart-task-description = Starts Rosetun when you sign in to Windows.

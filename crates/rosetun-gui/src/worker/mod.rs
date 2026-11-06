@@ -104,6 +104,8 @@ pub(crate) struct FailureInterference {
 }
 
 pub(crate) enum WorkerEvent {
+    /// The system refused a thread, so the task's own result will never come.
+    TaskNotStarted,
     Config {
         generation: u64,
         config: AppConfig,
@@ -305,11 +307,7 @@ pub(crate) use system_proxy::{SystemProxyOutcome, SystemProxyWish};
 
 impl WorkerDispatcher {
     fn spawn_task(&self, name: &'static str, task: impl FnOnce(ConfigPublisher) + Send + 'static) {
-        let publisher = self.publisher.clone();
-        thread::Builder::new()
-            .name(name.into())
-            .spawn(move || task(publisher))
-            .expect("could not spawn GUI worker");
+        start_task(spawn_thread, self.publisher.clone(), name, task);
     }
 
     fn spawn_complete(
@@ -331,6 +329,32 @@ impl WorkerDispatcher {
         self.spawn_task(name, move |publisher| {
             finish(publisher, with_helper(command));
         });
+    }
+}
+
+/// Starts a thread; a parameter of `start_task` so a test can refuse it.
+type SpawnThread = fn(&'static str, Box<dyn FnOnce() + Send>) -> std::io::Result<()>;
+
+fn spawn_thread(name: &'static str, job: Box<dyn FnOnce() + Send>) -> std::io::Result<()> {
+    thread::Builder::new()
+        .name(name.into())
+        .spawn(job)
+        .map(drop)
+}
+
+/// A refused thread goes down the channel the task's result would have taken:
+/// the window keeps running and stops waiting for it.
+fn start_task(
+    spawn: SpawnThread,
+    publisher: ConfigPublisher,
+    name: &'static str,
+    task: impl FnOnce(ConfigPublisher) + Send + 'static,
+) {
+    let tx = publisher.tx.clone();
+    let repaint = publisher.repaint.clone();
+    if let Err(error) = spawn(name, Box::new(move || task(publisher))) {
+        tracing::error!(%error, task = name, "could not start a worker thread");
+        emit(&tx, &repaint, WorkerEvent::TaskNotStarted);
     }
 }
 
@@ -563,6 +587,45 @@ fn emit(tx: &Sender<WorkerEvent>, repaint: &Repaint, event: WorkerEvent) -> bool
 mod tests {
     use super::*;
     use std::sync::mpsc;
+
+    fn test_publisher(test: &str) -> (ConfigPublisher, mpsc::Receiver<WorkerEvent>) {
+        let path =
+            std::env::temp_dir().join(format!("rosetun-gui-task-{test}-{}", std::process::id()));
+        let (tx, rx) = mpsc::channel();
+        let publisher = ConfigPublisher {
+            store: Store::at(&path),
+            tx,
+            repaint: Repaint::of(eframe::egui::Context::default()),
+            generation: Arc::new(Mutex::new(0)),
+        };
+        (publisher, rx)
+    }
+
+    #[test]
+    fn a_refused_thread_is_reported_down_the_tasks_channel_and_the_task_does_not_run() {
+        let (publisher, rx) = test_publisher("refused");
+        start_task(
+            |_, _| Err(std::io::Error::from(std::io::ErrorKind::WouldBlock)),
+            publisher,
+            "rosetun-test",
+            |_| panic!("the task has no thread to run on"),
+        );
+        assert!(matches!(
+            rx.recv_timeout(Duration::from_secs(5)),
+            Ok(WorkerEvent::TaskNotStarted)
+        ));
+    }
+
+    #[test]
+    fn a_started_thread_runs_the_task_and_reports_nothing_more() {
+        let (publisher, rx) = test_publisher("started");
+        let (ran, done) = mpsc::channel();
+        start_task(spawn_thread, publisher, "rosetun-test", move |_| {
+            ran.send(()).unwrap();
+        });
+        done.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(!matches!(rx.try_recv(), Ok(WorkerEvent::TaskNotStarted)));
+    }
 
     #[test]
     fn the_service_is_retried_quickly_only_in_the_first_seconds_before_it_answers() {
