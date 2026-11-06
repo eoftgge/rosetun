@@ -220,7 +220,7 @@ while IFS= read -r path; do
 done <<<"$required"
 l3_allows() { bash -c '. "$1" && l3_start_path_allowed "$2"' _ "$start" "$1"; }
 required_l3=$(bash -c '. "$1" && printf "%s\n" "${L3_START_REQUIRED[@]}"' _ "$start")
-expect "start.sh requires the L3 job, the service, the engine and the requests" test "$(printf '%s\n' "$required_l3" | wc -l)" -eq 14
+expect "start.sh requires the L3 job, the service, the engine and the requests" test "$(printf '%s\n' "$required_l3" | wc -l)" -eq 15
 while IFS= read -r path; do
     expect "every required L3 path passes both lists: $path" bash -c '. "$1" && l2_launch_path_allowed "$3" && . "$2" && l3_start_path_allowed "$3"' _ "$launch" "$start" "$path"
 done <<<"$required_l3"
