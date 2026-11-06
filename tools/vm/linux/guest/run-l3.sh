@@ -39,6 +39,7 @@ UNIT_FILE=/usr/lib/systemd/system/rosetun-helper.service
 CLI=$PREFIX/rosetun
 NFT=/usr/sbin/nft
 FOREIGN_TABLE=rosetun-l3-foreign
+COUNT_TABLE=rosetun-l3-count
 SERVICE_LEAF=/sys/fs/cgroup/system.slice/rosetun-helper.service
 # The peer: documentation addresses on a link of their own, a NAT table of the
 # stand's own and a routing rule that sends the peer's traffic out of the
@@ -475,7 +476,7 @@ scenario_engine() {
         printf '%s\n' "$status" | grep -qP '^NoNewPrivs:\t1$' || { fail_reason="sing-box may gain privileges"; return 1; }
         [ "$(cat "/proc/$pid/cgroup")" = "0::/system.slice/rosetun-helper.service/engines" ] ||
             { fail_reason="sing-box is in $(cat "/proc/$pid/cgroup")"; return 1; }
-        grep -qP '^CapBnd:\t00000000000034e5$' "/proc/$(main_pid)/status" ||
+        grep -qP '^CapBnd:\t00000000000834e5$' "/proc/$(main_pid)/status" ||
             { fail_reason="the helper has $(grep '^CapBnd:' "/proc/$(main_pid)/status")"; return 1; }
     }
     check engine.identity "sing-box runs as rosetun-engine with exactly its three capabilities" identity
@@ -572,6 +573,137 @@ EOF
     }
     check killswitch.flush-restored "the table came back, the direct path was refused, the journal and status said so" flush_restored
     check killswitch.disconnect "the table went away and the direct path answered" disconnect_removes
+}
+
+# engine_capabilities MASK: sing-box holds exactly these, in the three sets.
+engine_capabilities() {
+    local mask=$1 pid status set
+    pid=$(pgrep -x sing-box | head -n 1)
+    [ -n "$pid" ] || { fail_reason="no sing-box process"; return 1; }
+    status=$(cat "/proc/$pid/status")
+    for set in CapPrm CapEff CapAmb; do
+        printf '%s\n' "$status" | grep -qP "^$set:\t0*$mask$" ||
+            { fail_reason="sing-box has $(printf '%s\n' "$status" | grep "^$set:"), not $mask"; return 1; }
+    done
+}
+
+# route_of ACCOUNT PROGRAM: how PROGRAM's HTTPS request to the probe address left,
+# run as ACCOUNT: "direct" when packets to it went out of the physical interface,
+# "tunnel" when it answered and none did. A tunnelled request reaches that interface
+# addressed to the node, and its own packets go out of the tunnel's, so neither counts.
+route_of() {
+    local account=$1 program=$2 family=ip rc packets
+    [[ $PROBE_ADDRESS == *:* ]] && family=ip6
+    "$NFT" -f - <<EOF || { printf 'no counter table'; return 0; }
+table inet $COUNT_TABLE {
+	chain output {
+		type filter hook output priority -300; policy accept;
+		oifname "$PHYS" $family daddr $PROBE_ADDRESS counter
+	}
+}
+EOF
+    timeout --kill-after=3 25 setpriv --reuid="$(uid_of "$account")" --regid="$(gid_of "$account")" --init-groups \
+        --reset-env -- "$program" -s -o /dev/null --connect-timeout 5 --max-time 15 "https://$PROBE_ADDRESS/" </dev/null
+    rc=$?
+    packets=$("$NFT" list table inet "$COUNT_TABLE" | grep -oP 'counter packets \K[0-9]+')
+    "$NFT" delete table inet "$COUNT_TABLE"
+    if ! reached_rc "$rc" || [ "$rc" -ge 124 ]; then
+        printf 'no answer (exit %s)' "$rc"
+    elif [ "${packets:-0}" -gt 0 ]; then
+        printf 'direct'
+    else
+        printf 'tunnel'
+    fi
+}
+
+expect_route() {
+    local what=$1 account=$2 program=$3 wanted=$4 route
+    route=$(route_of "$account" "$program")
+    [ "$route" = "$wanted" ] || { fail_reason="$what: $route, not $wanted"; return 1; }
+}
+
+# apply_guarded REQUEST MASK: applies REQUEST and probes the direct path until it
+# returns. The engine has to be a new process holding MASK, and no probe may get out.
+apply_guarded() {
+    local request=$1 mask=$2 before after apply_pid probes=0 rc
+    before=$(pgrep -x sing-box | head -n 1)
+    install -m 0600 -o "$(uid_of "$USER_A")" -g "$(gid_of "$USER_A")" -- "$ART/$request" "$RUN/work-$USER_A/$request"
+    (cd "$RUN/work-$USER_A" && timeout --kill-after=3 120 setpriv --reuid="$(uid_of "$USER_A")" \
+        --regid="$(gid_of "$USER_A")" --init-groups --reset-env -- /usr/bin/env NO_COLOR=1 "$CLI" apply "$request") \
+        >/dev/null 2>&1 </dev/null &
+    apply_pid=$!
+    while kill -0 "$apply_pid" 2>/dev/null; do
+        rc=$(curl_rc --connect-timeout 1 --max-time 2 --interface "$PHYS" "https://$PROBE_ADDRESS/")
+        probes=$((probes + 1))
+        if ! blocked_rc "$rc" || ! table_present; then
+            wait "$apply_pid"
+            fail_reason="applying $request: probe $probes got out (curl exit $rc) or the table went away"
+            return 1
+        fi
+        sleep 0.2
+    done
+    wait "$apply_pid" || { fail_reason="applying $request failed"; return 1; }
+    [ "$probes" -gt 0 ] || { fail_reason="applying $request ended before the first probe"; return 1; }
+    wait_state '^Connected' 30 || return 1
+    after=$(pgrep -x sing-box | head -n 1)
+    [ -n "$after" ] && [ "$after" != "$before" ] || { fail_reason="applying $request did not restart sing-box"; return 1; }
+    engine_capabilities "$mask" || return 1
+    expect_blocked "HTTPS to $PROBE_ADDRESS on $PHYS after applying $request" direct_https
+}
+
+scenario_program_rules() {
+    local other_dir curl_path other
+    curl_path=$(command -v curl)
+    other_dir=$(mktemp -d /var/tmp/rosetun-l3-program.XXXXXX)
+    chmod 0755 "$other_dir"
+    # The same binary, so only the program's path tells the two requests apart.
+    other="$other_dir/l3-other-program"
+    install -m 0755 -- "$curl_path" "$other"
+
+    capabilities() {
+        connect_with request-kill-switch.json || return 1
+        engine_capabilities 3400 || return 1
+        connect_with request-program-direct.json || return 1
+        engine_capabilities 83404
+    }
+    check rules.capabilities "sing-box held 0x3400 without a rule by program and 0x83404 with one" capabilities
+
+    direct_for_other_account() {
+        [[ $(state_line) =~ ^Connected ]] || connect_with request-program-direct.json || return 1
+        expect_route "curl of $USER_B" "$USER_B" "$curl_path" direct &&
+            expect_route "another program of $USER_B" "$USER_B" "$other" tunnel
+    }
+    check rules.direct-other-account "another account's curl went direct and another program of that account through the tunnel" direct_for_other_account
+
+    through_vpn_by_program() {
+        connect_with request-program-proxy.json || return 1
+        expect_route "curl of $USER_B" "$USER_B" "$curl_path" tunnel &&
+            expect_route "another program of $USER_B" "$USER_B" "$other" direct
+    }
+    check rules.proxy-default-direct "with Direct by default another account's curl went through the tunnel and another program direct" through_vpn_by_program
+
+    restart_guarded() {
+        connect_with request-kill-switch.json || return 1
+        apply_guarded request-program-direct.json 83404 &&
+            apply_guarded request-kill-switch.json 3400
+    }
+    check rules.restart-guarded "adding and removing the rule restarted sing-box with its capabilities, every probe refused" restart_guarded
+
+    # For the report, not a verdict: how often the search found nothing. The engine's
+    # INFO and DEBUG lines reach the journal because the requests turn on the verbose log.
+    local started found misses
+    started=$(l2_now_ms)
+    write_status running rules.search-misses
+    found=$(journalctl -b -u rosetun-helper.service --no-pager 2>/dev/null | grep -c 'found process path')
+    misses=$(journalctl -b -u rosetun-helper.service --no-pager 2>/dev/null | grep -cE 'process not found|find process path')
+    if [ "$found" -gt 0 ]; then
+        record rules.search-misses PASS "$found lookups found the program, $misses did not" "$started"
+    else
+        record rules.search-misses FAIL "the journal has no lookup that found a program ($misses did not)" "$started"
+    fi
+
+    disconnect
+    rm -rf -- "$other_dir"
 }
 
 scenario_lan_on() {
@@ -937,6 +1069,7 @@ if preflight_ok; then
         scenario_protection_reported
         scenario_engine
         scenario_kill_switch
+        scenario_program_rules
         scenario_lan_on
         scenario_dns_lock
         scenario_ipv6

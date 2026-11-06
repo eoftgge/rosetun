@@ -466,6 +466,12 @@ if ($mode -eq 'Run') {
                 $extraFiles['rosetun-helper.service'] = Join-Path $RepoRoot 'packaging\linux\rosetun-helper.service'
                 $extraFiles['rosetun-engine.rules'] = Join-Path $RepoRoot 'packaging\linux\rosetun-engine.rules'
             }
+            if ($Stage -eq 'L3') {
+                $programRequests = New-RosetunLinuxProgramRuleRequests -KillSwitchRequestPath $extraFiles['request-kill-switch.json'] -OutDir $requestDir
+                foreach ($name in $programRequests.Keys) {
+                    $extraFiles[$name] = $programRequests[$name]
+                }
+            }
             if ($Stage -eq 'Proxy') {
                 $proxyRequests = New-RosetunLinuxProxyRequests -KillSwitchRequestPath $extraFiles['request-kill-switch.json'] -OutDir $requestDir
                 foreach ($name in $proxyRequests.Keys) { $extraFiles[$name] = $proxyRequests[$name] }

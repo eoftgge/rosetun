@@ -28,11 +28,12 @@ L2_START_REQUIRED=(guest/launch.sh guest/lib.sh guest/run-l2.sh guest/start.sh s
     artifacts/l2_transport_fixture artifacts/rosetun_helper_privileged_tests artifacts/rosetun_ipc_tests
     artifacts/provenance.json)
 l3_start_path_allowed() {
-    [[ $1 =~ ^(guest/(launch|lib|run-l3|start)\.sh|scenarios-l3\.tsv|job\.env|artifacts/(rosetun-helper-privileged|rosetun|sing-box|rosetun-helper\.service|rosetun-engine\.rules|request-(kill-switch|lan|dns-lock)\.json|provenance\.json))$ ]]
+    [[ $1 =~ ^(guest/(launch|lib|run-l3|start)\.sh|scenarios-l3\.tsv|job\.env|artifacts/(rosetun-helper-privileged|rosetun|sing-box|rosetun-helper\.service|rosetun-engine\.rules|request-(kill-switch|lan|dns-lock|program-direct|program-proxy)\.json|provenance\.json))$ ]]
 }
 L3_START_REQUIRED=(guest/launch.sh guest/lib.sh guest/run-l3.sh guest/start.sh scenarios-l3.tsv job.env
     artifacts/rosetun-helper-privileged artifacts/rosetun artifacts/sing-box artifacts/rosetun-helper.service artifacts/rosetun-engine.rules
     artifacts/request-kill-switch.json artifacts/request-lan.json artifacts/request-dns-lock.json
+    artifacts/request-program-direct.json artifacts/request-program-proxy.json
     artifacts/provenance.json)
 l4_start_path_allowed() {
     [[ $1 =~ ^(guest/(launch|lib|run-l4|start)\.sh|scenarios-l4\.tsv|job\.env|artifacts/(rosetun-helper-privileged|rosetun|sing-box|rosetun-(helper|lockdown)\.service|rosetun-engine\.rules|request-(kill-switch|lan|dns-lock)\.json|provenance\.json))$ ]]

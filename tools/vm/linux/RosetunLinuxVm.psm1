@@ -965,6 +965,44 @@ function New-RosetunLinuxL3Requests {
     $paths
 }
 
+# The requests of L3's rules by program, from its kill-switch request: a rule for
+# curl with the opposite of the default. The verbose log puts each process lookup in
+# the journal for the count in the report. Returns name -> path.
+function New-RosetunLinuxProgramRuleRequests {
+    param(
+        [Parameter(Mandatory)][string]$KillSwitchRequestPath,
+        [Parameter(Mandatory)][string]$OutDir
+    )
+    $variants = [ordered]@{
+        'request-program-direct.json' = @{ default_target = 'proxy'; target = 'direct' }
+        'request-program-proxy.json'  = @{ default_target = 'direct'; target = 'proxy' }
+    }
+    $paths = [ordered]@{}
+    foreach ($name in $variants.Keys) {
+        $request = Get-Content -LiteralPath $KillSwitchRequestPath -Raw | ConvertFrom-Json
+        $ruleSet = [ordered]@{
+            id             = 'l3-program'
+            name           = 'L3 rules by program'
+            rules          = @(
+                [ordered]@{
+                    id      = 'l3-curl'
+                    enabled = $true
+                    matcher = [ordered]@{ process = [ordered]@{ name = 'curl' } }
+                    target  = $variants[$name].target
+                }
+            )
+            default_target = $variants[$name].default_target
+        }
+        $request | Add-Member -NotePropertyName rule_set -NotePropertyValue $ruleSet -Force
+        # The year 2100: past any run.
+        $request.settings | Add-Member -NotePropertyName verbose_log_until -NotePropertyValue 4102444800 -Force
+        $path = Join-Path $OutDir $name
+        [IO.File]::WriteAllText($path, ($request | ConvertTo-Json -Depth 32), [Text.UTF8Encoding]::new($false))
+        $paths[$name] = $path
+    }
+    $paths
+}
+
 # The requests of the proxy stage, next to the L3 ones it also uses: the proxy
 # mode alone, with the kill switch, and shared. Returns name -> path.
 function New-RosetunLinuxProxyRequests {

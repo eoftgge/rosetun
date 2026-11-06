@@ -549,6 +549,14 @@ try {
     Assert-That 'the LAN request has both' ($lan.settings.kill_switch -and $lan.settings.allow_lan)
     Assert-That 'the DNS-lock request has no kill switch' (-not $dns.settings.kill_switch)
     Assert-That 'every request reconnects by itself' ($ks.settings.auto_reconnect -and $lan.settings.auto_reconnect -and $dns.settings.auto_reconnect)
+    $programRequests = New-RosetunLinuxProgramRuleRequests -KillSwitchRequestPath $requests['request-kill-switch.json'] -OutDir $requestDir
+    $programDirect = Get-Content -LiteralPath $programRequests['request-program-direct.json'] -Raw | ConvertFrom-Json
+    $programProxy = Get-Content -LiteralPath $programRequests['request-program-proxy.json'] -Raw | ConvertFrom-Json
+    Assert-That 'the rule by program is enabled and names curl' ($programDirect.rule_set.rules[0].enabled -and $programDirect.rule_set.rules[0].matcher.process.name -eq 'curl')
+    Assert-That 'the Direct rule by program has Through VPN by default' ($programDirect.rule_set.rules[0].target -eq 'direct' -and $programDirect.rule_set.default_target -eq 'proxy')
+    Assert-That 'the Through VPN rule by program has Direct by default' ($programProxy.rule_set.rules[0].target -eq 'proxy' -and $programProxy.rule_set.default_target -eq 'direct')
+    Assert-That 'the requests with rules by program keep the kill switch and the node' ($programDirect.settings.kill_switch -and $programProxy.settings.kill_switch -and $programDirect.node.server -eq '192.0.2.1')
+    Assert-That 'the requests with rules by program log process lookups' ($programDirect.settings.verbose_log_until -gt 4000000000)
     $withDns = [ordered]@{ node = $template.node; settings = [ordered]@{ kill_switch = $true; dns = [ordered]@{ server = '203.0.113.53'; server_name = 'dns.example.com' } } }
     $withDnsPath = Join-Path $l3tmp 'with-dns.json'
     [IO.File]::WriteAllText($withDnsPath, ($withDns | ConvertTo-Json -Depth 5))

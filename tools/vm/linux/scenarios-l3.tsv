@@ -14,6 +14,11 @@ lan.off	yes	real-service	lan	-	"Local network" off: TCP to the host node bound t
 killswitch.foreign-table	yes	real-service	killswitch	-	a foreign nftables table accepting everything at an earlier priority does not open the direct path, and the stand removes only that table
 killswitch.engine-killed	yes	real-service	killswitch	-	sing-box killed with SIGKILL: the direct path stays refused on every probe until the session is Connected again
 killswitch.flush-restored	yes	real-service	killswitch	-	nft flush ruleset during a kill-switch session: within ten seconds the table is back, the direct path is refused, and the journal and rosetun status say the rules were put back
+rules.capabilities	yes	real-service	rules	-	sing-box holds CapEff, CapPrm and CapAmb 0x3400 without a rule by program and 0x83404 (CAP_SYS_PTRACE and CAP_DAC_READ_SEARCH on top) with one
+rules.direct-other-account	yes	real-service	rules	-	a Direct rule for curl: curl of another account goes out of the physical interface, the same binary under another name through the tunnel
+rules.proxy-default-direct	yes	real-service	rules	-	Direct by default and a Through VPN rule for curl: curl of another account goes through the tunnel, the same binary under another name out of the physical interface
+rules.restart-guarded	yes	real-service	rules	-	adding and removing a rule by program while connected restarts sing-box with the capabilities it needs; the direct path stays refused throughout
+rules.search-misses	yes	real-service	rules	-	the journal shows process lookups that found a program; the note counts them and those that did not, for the report
 killswitch.disconnect	yes	real-service	killswitch	-	a disconnect removes the table and the direct path answers again
 lan.on	yes	real-service	lan	-	"Local network" on: TCP to the host node bound to the physical interface connects, the probe address does not
 dnslock.direct-blocked	yes	real-service	dnslock	-	the DNS lock without the kill switch: UDP 53 to the DNS probe address bound to the physical interface is refused locally, HTTPS to the probe address there answers
