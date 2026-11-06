@@ -8,7 +8,7 @@
 
 Details are in the [README](https://github.com/eoftgge/rosetun/blob/dev/README.md).
 
-- **Linux:** Debian 13, amd64, as a `.deb` package. Kill switch, DNS lock and Lockdown on nftables, engines without root, tray, notifications, autostart and `rosetun://` links. KDE Plasma first, GNOME in part; see [Requirements](https://github.com/eoftgge/rosetun/blob/dev/README.md#requirements).
+- **Linux:** Debian 13, amd64, as a `.deb` package. Kill switch, DNS lock and Lockdown on nftables, engines without root, tray, notifications, autostart and `rosetun://` links. Checked by hand on GNOME, not yet on KDE Plasma; see [Requirements](https://github.com/eoftgge/rosetun/blob/dev/README.md#requirements).
 - **System proxy mode**, beside TUN: a local proxy your desktop's settings point at, with a strict kill switch and access from your network. See [TUN and System proxy](https://github.com/eoftgge/rosetun/blob/dev/README.md#tun-and-system-proxy).
 - **The protection in place** shows in the window and in `rosetun status`, with what is missing and whether it stays if the service crashes.
 - **The network stays closed through an update** while the kill switch is on. See [Protection guarantees](https://github.com/eoftgge/rosetun/blob/dev/README.md#protection-guarantees).
@@ -47,7 +47,7 @@ Not tested.
 - **Lockdown is experimental.** Not tested: Windows 10, other firewalls or antivirus programs with their own network filters, firewalld on Linux, hibernation, sleep on real hardware (on Linux, sleep at all) and a power cut on Linux.
 - **With Lockdown on, Wi-Fi with a sign-in page** cannot open its page, and **the system cannot set the clock** without the tunnel. Turn Lockdown off for a moment, sign in or correct the clock, connect, and turn it on again.
 - **Lockdown leaves virtual machines on this computer without network**: Hyper-V on Windows, and most likely WSL2, Docker Desktop, Windows Sandbox and Mobile hotspot. On Linux, virtual machines and containers, without a Rosetun connection. Turn Lockdown off while you need them.
-- **GNOME is supported in part.** Without an extension that provides a tray, closing the window closes the program. Changing its proxy settings is not tested on a real desktop.
+- **Desktops.** KDE Plasma has not been checked on a real desktop yet. On GNOME, without an extension that provides a tray, closing the window closes the program.
 - **The Windows installer is not code-signed yet.**
 - If you switch between networks (for example Wi-Fi and cable) while connected through Xray, the connection may stop until Rosetun reconnects.
 
@@ -93,7 +93,7 @@ On Windows, the sing-box executable embeds Wintun {{wintun_version}}, distribute
 
 Подробности в [README](https://github.com/eoftgge/rosetun/blob/dev/README.ru.md).
 
-- **Linux:** Debian 13, amd64, пакетом `.deb`. Kill switch, замок DNS и Lockdown на nftables, ядра без root, трей, уведомления, автозапуск и ссылки `rosetun://`. В первую очередь KDE Plasma, GNOME частично; см. [Требования](https://github.com/eoftgge/rosetun/blob/dev/README.ru.md#требования).
+- **Linux:** Debian 13, amd64, пакетом `.deb`. Kill switch, замок DNS и Lockdown на nftables, ядра без root, трей, уведомления, автозапуск и ссылки `rosetun://`. Вручную проверено на GNOME, на KDE Plasma пока нет; см. [Требования](https://github.com/eoftgge/rosetun/blob/dev/README.ru.md#требования).
 - **Режим «Системный прокси»** рядом с TUN: локальный прокси, на который указывают настройки системы, со строгим kill switch и доступом из вашей сети. См. [TUN и системный прокси](https://github.com/eoftgge/rosetun/blob/dev/README.ru.md#tun-и-системный-прокси).
 - **Действующая защита** видна в окне и в `rosetun status`, вместе с тем, чего не хватает и останется ли защита при падении службы.
 - **Сеть остаётся закрытой при обновлении**, если включён kill switch. См. [Гарантии защиты](https://github.com/eoftgge/rosetun/blob/dev/README.ru.md#гарантии-защиты).
@@ -132,7 +132,7 @@ On Windows, the sing-box executable embeds Wintun {{wintun_version}}, distribute
 - **Lockdown экспериментальный.** Не проверены: Windows 10, другие брандмауэры и антивирусы со своими сетевыми фильтрами, firewalld на Linux, гибернация, сон на настоящем компьютере (на Linux сон вообще) и отключение питания на Linux.
 - **С включённым Lockdown Wi-Fi со страницей входа** не может открыть эту страницу, а **система не может выставить время** без туннеля. Выключите Lockdown на минуту, войдите или поправьте время, подключитесь и включите его снова.
 - **Lockdown оставляет без сети виртуальные машины на этом компьютере**: Hyper-V на Windows и, скорее всего, WSL2, Docker Desktop, Windows Sandbox и мобильный хот-спот. На Linux виртуальные машины и контейнеры, пока нет подключения Rosetun. Выключайте Lockdown, пока они нужны.
-- **GNOME поддержан частично.** Без расширения, которое даёт трей, закрытие окна закрывает программу. Изменение его настроек прокси на настоящем рабочем столе не проверено.
+- **Рабочие столы.** KDE Plasma на настоящем рабочем столе пока не проверен. На GNOME без расширения, которое даёт трей, закрытие окна закрывает программу.
 - **Установщик Windows пока не подписан.**
 - Если переключать сети (например, Wi-Fi и кабель) при подключении через Xray, соединение может остановиться, пока Rosetun не переподключится.
 

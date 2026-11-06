@@ -31,8 +31,10 @@ Rosetun is a VPN client for Windows and Linux. sing-box runs the tunnel, rules a
 | Desktop | Tray | System proxy settings |
 | --- | --- | --- |
 | KDE Plasma, Wayland and X11 | Yes | Changed by Rosetun (`kioslaverc`) |
-| GNOME | Only with an extension that provides a tray; not tested. Without a tray, closing the window closes the program | Changed by Rosetun (`gsettings`); not tested on a real desktop |
+| GNOME | Only with an extension that provides a tray. Without a tray, closing the window closes the program | Changed by Rosetun (`gsettings`) |
 | Others | Where a tray host answers; not tested | Rosetun shows the address to enter yourself |
+
+The table says what the code does. Rosetun was checked by hand on GNOME, and not yet on KDE Plasma.
 
 Linux does not have these yet:
 
@@ -175,7 +177,7 @@ The difference to remember: **on Windows a crash of the service opens the networ
 - a power cut on Linux;
 - going back to 0.4;
 - on Linux, **Local network** from a program that does not pick the interface itself;
-- on Linux, the window, the tray and the polkit prompt in an automated run: no matrix drives a desktop. KDE Plasma was checked by hand, on Wayland and X11.
+- on Linux, the window, the tray and the polkit prompt in an automated run: no matrix drives a desktop. GNOME was checked by hand; KDE Plasma was not, on Wayland or X11.
 
 Lockdown protects against accidental leaks: the VPN drops, the service stops, the computer boots. It does not protect against malware you run yourself. The kill switch stays the main protection.
 
