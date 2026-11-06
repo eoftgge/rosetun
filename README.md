@@ -76,6 +76,24 @@ Rosetun plans to apply again to [SignPath Foundation](https://signpath.org) for 
 You can choose an installation folder, but not inside a user profile or where standard users can change it; the SYSTEM service requires a protected folder. Uninstalling keeps your configuration in `%APPDATA%\Rosetun` by default, or you can choose to delete your settings, subscriptions and rules.
 When the configuration format is upgraded, Rosetun keeps a copy of the previous file beside it (such as `config.v1.json`); the copy contains the same subscription URLs.
 
+### Debian 13
+
+Linux is still being tested, so treat the package as preliminary until a final release carries one. Download `rosetun_<version>_amd64.deb` from [Releases](https://github.com/eoftgge/rosetun/releases) (amd64 only), compare it with the release's `SHA256SUMS.txt`, install it and add yourself to the group that may reach the service:
+
+```sh
+sha256sum rosetun_<version>_amd64.deb
+sudo apt install ./rosetun_<version>_amd64.deb
+sudo usermod -aG rosetun "$USER"
+```
+
+Then log out and log in again. If you skip the last command, the window offers the same with **Add me**.
+
+**Update:** install the new package the same way. With the kill switch on, the network stays closed through the update: a running window restarts itself and connects again. Without a window, `rosetun status` says `network: held closed`, and `rosetun open-network` opens it.
+
+**Remove:** `sudo apt remove rosetun` takes Lockdown off first. If it cannot, the removal stops and Rosetun stays, so the network can still be opened. `sudo apt purge rosetun` also removes the lists and state in `/var/lib/rosetun`. Your settings in your home folder and the `rosetun` group stay.
+
+**Out of Lockdown:** `sudo rosetun reset-firewall`.
+
 ### Verify the download
 
 Compare `Get-FileHash .\rosetun-<version>-setup.exe -Algorithm SHA256` with the entry in the release's `SHA256SUMS.txt`. For a public tagged release, verify provenance with `gh attestation verify .\rosetun-<version>-setup.exe --repo eoftgge/rosetun`.
