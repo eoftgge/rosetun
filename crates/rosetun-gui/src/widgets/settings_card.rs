@@ -1,6 +1,7 @@
 use eframe::egui::{self, Align, Layout, RichText, Stroke, emath::GuiRounding, text::LayoutJob};
 
 use super::tag::title_with_tag;
+use super::text_field::field_height;
 use super::toggle::{TOGGLE_SIZE, paint_toggle};
 use crate::theme::{self, RADIUS};
 
@@ -47,6 +48,9 @@ pub(crate) struct RowOptions {
     /// The setting belongs to the row above: no line or top padding parts them, its text steps
     /// in behind a guide line and its control keeps the column.
     pub(crate) nested: bool,
+    /// A control taller than a switch: the row centres its text on this height,
+    /// or the two would sit apart.
+    pub(crate) control_height: Option<f32>,
 }
 
 pub(crate) struct SettingsCard<'a> {
@@ -74,6 +78,20 @@ impl SettingsCard<'_> {
         options: RowOptions,
         control: impl FnOnce(&mut egui::Ui),
     ) {
+        self.row_inner(title.as_ref(), None, detail, options, control);
+    }
+
+    /// `row` whose control is a text field.
+    pub(crate) fn field_row(
+        &mut self,
+        title: impl AsRef<str>,
+        detail: Option<&str>,
+        control: impl FnOnce(&mut egui::Ui),
+    ) {
+        let options = RowOptions {
+            control_height: Some(field_height(self.ui)),
+            ..RowOptions::default()
+        };
         self.row_inner(title.as_ref(), None, detail, options, control);
     }
 
@@ -128,6 +146,7 @@ impl SettingsCard<'_> {
         }
         self.rows += 1;
         let width = self.ui.available_width();
+        let height = options.control_height.unwrap_or(32.0);
         let (left, top) = if options.nested {
             (theme::space::L + theme::space::XL, 0.0)
         } else {
@@ -142,26 +161,30 @@ impl SettingsCard<'_> {
             })
             .show(self.ui, |ui| {
                 ui.set_min_width((width - left - theme::space::L).max(0.0));
-                ui.set_min_height(32.0);
+                ui.set_min_height(height);
                 ui.spacing_mut().item_spacing.x = theme::space::L;
                 ui.allocate_ui_with_layout(
-                    egui::vec2(ui.available_width(), 32.0),
+                    egui::vec2(ui.available_width(), height),
                     Layout::right_to_left(Align::Center),
                     |ui| {
                         ui.scope(control);
                         let text_width = (ui.available_width() - 16.0).max(0.0);
                         ui.add_space(theme::space::L);
                         ui.allocate_ui_with_layout(
-                            egui::vec2(text_width, 32.0),
+                            egui::vec2(text_width, height),
                             Layout::left_to_right(Align::Center),
                             |ui| {
                                 ui.set_width(text_width);
+                                let Some(detail) = detail else {
+                                    // A vertical group would keep a lone title at the top,
+                                    // off the line of its control.
+                                    title(ui);
+                                    return;
+                                };
                                 ui.vertical(|ui| {
                                     ui.spacing_mut().item_spacing.y = theme::space::XXS;
                                     title(ui);
-                                    if let Some(detail) = detail {
-                                        row_detail(ui, detail, options.pending);
-                                    }
+                                    row_detail(ui, detail, options.pending);
                                 });
                             },
                         );

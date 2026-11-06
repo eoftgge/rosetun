@@ -254,21 +254,22 @@ fn connection_mode(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
     let proxy = mode == ConnectionMode::SystemProxy;
     let waits = state.waits_for_next_connect(SessionPart::LocalProxy);
     widgets::settings_card(ui, |card| {
-        card.body(|ui| {
-            ui.label(tr!("connection-mode"));
-            ui.add_space(theme::space::S);
-            let options = [
-                (ConnectionMode::Tun, tr!("connection-mode-tun")),
-                (ConnectionMode::SystemProxy, tr!("connection-mode-proxy")),
-            ];
-            if let Some(chosen) =
-                widgets::segmented(ui, "connection_mode", mode, &options, false, editable)
-            {
-                actions.push(Action::SetConnectionMode(chosen));
-            }
-            ui.add_space(theme::space::S);
-            widgets::row_detail(ui, &state.connection_mode_detail(), waits);
-        });
+        card.row_with(
+            tr!("connection-mode"),
+            Some(&state.connection_mode_detail()),
+            pending(waits),
+            |ui| {
+                let options = [
+                    (ConnectionMode::Tun, tr!("connection-mode-tun")),
+                    (ConnectionMode::SystemProxy, tr!("connection-mode-proxy")),
+                ];
+                if let Some(chosen) =
+                    widgets::segmented(ui, "connection_mode", mode, &options, false, editable)
+                {
+                    actions.push(Action::SetConnectionMode(chosen));
+                }
+            },
+        );
         if !proxy {
             return;
         }
@@ -278,23 +279,16 @@ fn connection_mode(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
             form.local_proxy_port = saved.port.to_string();
         }
         let parsed = parse_local_proxy_port(&form.local_proxy_port);
-        card.body(|ui| {
-            let response = ui
-                .horizontal(|ui| {
-                    ui.label(tr!("local-proxy-port"));
-                    ui.add(
-                        widgets::TextField::new(&mut form.local_proxy_port)
-                            .width(LOCAL_PROXY_PORT_WIDTH)
-                            .enabled(editable)
-                            .invalid(parsed.is_none()),
-                    )
-                })
-                .inner;
+        let invalid = parsed.is_none().then(|| tr!("local-proxy-port-invalid"));
+        card.field_row(tr!("local-proxy-port"), invalid.as_deref(), |ui| {
+            let response = ui.add(
+                widgets::TextField::new(&mut form.local_proxy_port)
+                    .width(LOCAL_PROXY_PORT_WIDTH)
+                    .enabled(editable)
+                    .invalid(parsed.is_none()),
+            );
             if response.changed() {
                 form.local_proxy_port_dirty = true;
-            }
-            if parsed.is_none() {
-                ui.colored_label(theme::ERROR, tr!("local-proxy-port-invalid"));
             }
             if response.lost_focus()
                 && let Some(port) = parsed
@@ -445,6 +439,7 @@ fn connection(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                 widgets::RowOptions {
                     pending: state.private_networks_next_connect(),
                     nested: true,
+                    ..widgets::RowOptions::default()
                 },
                 &mut private_networks,
                 editable && lan_on,
@@ -2116,6 +2111,33 @@ mod pending_notice_tests {
                 assert!(shown(&mut state).contains(&tr!("local-proxy-port-invalid")));
             });
         }
+    }
+
+    #[test]
+    fn the_port_sits_in_a_row_like_the_other_settings() {
+        let (size, _) = WINDOWS[0];
+        let mut state = connected(ConnectionState::Disconnected);
+        state.config.settings.connection_mode = ConnectionMode::SystemProxy;
+        let mut screen = TestScreen::new(size);
+        let texts = screen.settle(|ui| connection_mode(ui, &mut state, &mut Vec::new()));
+        let rect = |wanted: &str| {
+            texts
+                .iter()
+                .find(|(text, _)| text == wanted)
+                .map_or_else(|| panic!("{wanted} is not shown"), |(_, rect)| *rect)
+        };
+        let label = rect(&tr!("local-proxy-port"));
+        let value = rect("10808");
+        // Level with its title, and in the column of the controls.
+        assert!(
+            (label.center().y - value.center().y).abs() < 2.0,
+            "{label:?} {value:?}"
+        );
+        assert!(value.left() > size.x / 2.0, "{value:?}");
+        // Under the switch between the modes, at the right as well.
+        let proxy = rect(&tr!("connection-mode-proxy"));
+        assert!(proxy.left() > size.x / 2.0, "{proxy:?}");
+        assert!(rect(&tr!("connection-mode")).left() < label.left() + 1.0);
     }
 
     #[test]
