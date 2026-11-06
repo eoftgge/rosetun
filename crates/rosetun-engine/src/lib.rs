@@ -329,8 +329,20 @@ impl std::fmt::Debug for ExtraOutbound<'_> {
     }
 }
 
+/// The inbounds of the proxy mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LocalProxyListen {
+    /// HTTP and SOCKS5 on one port. A wildcard address only with sharing on.
+    pub address: std::net::SocketAddr,
+    /// Loopback DNS answered by the engine: with no adapter, it is how the
+    /// service checks a session, and how it looks names up behind a kill switch.
+    pub dns: std::net::SocketAddr,
+}
+
 #[derive(Clone, Copy)]
 pub struct RenderRequest<'a> {
+    /// In the proxy mode, what the engine listens on instead of its adapter.
+    pub local_proxy: Option<LocalProxyListen>,
     pub node: &'a Node,
     pub socks: Option<SocksProxy<'a>>,
     pub extra: &'a [ExtraOutbound<'a>],
@@ -362,6 +374,7 @@ impl std::fmt::Debug for RenderRequest<'_> {
             .field("lan_prefixes", &self.lan_segment.len())
             .field("control", &self.control)
             .field("verbose_log", &self.verbose_log)
+            .field("local_proxy", &self.local_proxy)
             .finish_non_exhaustive()
     }
 }

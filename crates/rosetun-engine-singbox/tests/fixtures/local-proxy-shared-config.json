@@ -1,0 +1,109 @@
+{
+  "dns": {
+    "servers": [
+      {
+        "detour": "proxy",
+        "server": "1.1.1.1",
+        "tag": "dns-proxy",
+        "tls": {
+          "server_name": "cloudflare-dns.com"
+        },
+        "type": "https"
+      }
+    ]
+  },
+  "inbounds": [
+    {
+      "listen": "::",
+      "listen_port": 10808,
+      "tag": "mixed-in",
+      "type": "mixed"
+    },
+    {
+      "listen": "127.0.0.1",
+      "listen_port": 53535,
+      "network": "udp",
+      "tag": "dns-in",
+      "type": "direct"
+    }
+  ],
+  "log": {
+    "level": "info",
+    "timestamp": true
+  },
+  "outbounds": [
+    {
+      "method": "aes-128-gcm",
+      "password": "test-secret",
+      "server": "203.0.113.10",
+      "server_port": 443,
+      "tag": "proxy",
+      "type": "shadowsocks"
+    },
+    {
+      "tag": "direct",
+      "type": "direct"
+    }
+  ],
+  "route": {
+    "auto_detect_interface": true,
+    "final": "proxy",
+    "rules": [
+      {
+        "action": "sniff",
+        "sniffer": [
+          "http",
+          "tls",
+          "quic",
+          "dns"
+        ]
+      },
+      {
+        "action": "hijack-dns",
+        "protocol": "dns"
+      },
+      {
+        "action": "hijack-dns",
+        "inbound": [
+          "dns-in"
+        ]
+      },
+      {
+        "action": "route",
+        "ip_cidr": [
+          "1.1.1.1/32"
+        ],
+        "outbound": "proxy",
+        "port": [
+          443
+        ],
+        "process_path_regex": [
+          "(?i)(?:^|[\\\\/])rosetun-gui\\.exe$"
+        ]
+      },
+      {
+        "action": "route",
+        "domain_suffix": [
+          "example.com"
+        ],
+        "outbound": "direct"
+      },
+      {
+        "action": "route",
+        "outbound": "direct",
+        "process_path_regex": [
+          "(?i)(?:^|[\\\\/])example$"
+        ]
+      },
+      {
+        "action": "resolve"
+      },
+      {
+        "action": "reject",
+        "ip_cidr": [
+          "198.51.100.0/24"
+        ]
+      }
+    ]
+  }
+}

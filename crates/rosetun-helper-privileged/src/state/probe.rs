@@ -590,31 +590,28 @@ pub(super) fn resolve_nodes(nodes: &[Node], lookup: NameLookup) -> Vec<Option<Ip
     )
 }
 
-pub(super) fn resolve_for_apply(node: &Node) -> Option<IpAddr> {
-    resolve_for_apply_with_timeout(node, RESOLVE_TIMEOUT)
+pub(super) fn resolve_for_apply(node: &Node, lookup: NameLookup) -> Option<IpAddr> {
+    resolve_for_apply_with_timeout(node, lookup, RESOLVE_TIMEOUT)
 }
 
-pub(super) fn resolve_for_apply_with_timeout(node: &Node, timeout: Duration) -> Option<IpAddr> {
+pub(super) fn resolve_for_apply_with_timeout(
+    node: &Node,
+    lookup: NameLookup,
+    timeout: Duration,
+) -> Option<IpAddr> {
     let deadline = Instant::now() + timeout;
-    // Apply runs in a connected session, whose tunnel carries the system resolver.
-    resolve_with_workers(
-        std::slice::from_ref(node),
-        NameLookup::System,
-        1,
-        deadline,
-        || {
-            loop {
-                let remaining = deadline.saturating_duration_since(Instant::now());
-                if remaining.is_zero() {
-                    return None;
-                }
-                if let Some(slot) = ApplyDnsWorkerSlot::acquire() {
-                    return Some(slot);
-                }
-                thread::sleep(remaining.min(APPLY_DNS_SLOT_POLL));
+    resolve_with_workers(std::slice::from_ref(node), lookup, 1, deadline, || {
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return None;
             }
-        },
-    )[0]
+            if let Some(slot) = ApplyDnsWorkerSlot::acquire() {
+                return Some(slot);
+            }
+            thread::sleep(remaining.min(APPLY_DNS_SLOT_POLL));
+        }
+    })[0]
 }
 
 fn resolve_with_workers<S: Send + 'static>(

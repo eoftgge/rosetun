@@ -47,6 +47,7 @@ pub(super) fn start_endpoints(
 pub(super) fn apply_endpoints(
     extra: &[ExtraNode],
     remembered: &HashMap<ExitId, SuccessfulEndpoint>,
+    lookup: NameLookup,
 ) -> Vec<Option<IpAddr>> {
     extra
         .iter()
@@ -62,7 +63,7 @@ pub(super) fn apply_endpoints(
                         .filter(|cached| cached.server == normalize_server(&extra.node.server))
                         .map(|cached| cached.address)
                 })
-                .or_else(|| resolve_for_apply(&extra.node))
+                .or_else(|| resolve_for_apply(&extra.node, lookup))
         })
         .collect()
 }

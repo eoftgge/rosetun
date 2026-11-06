@@ -5136,7 +5136,7 @@ fn apply_waits_for_a_busy_resolver_slot() {
 
     let mut node = connect_request().node;
     node.server = "localhost".to_owned();
-    let address = super::probe::resolve_for_apply(&node);
+    let address = super::probe::resolve_for_apply(&node, super::NameLookup::System);
     holder.join().unwrap();
     assert!(address.is_some());
 }
@@ -5159,7 +5159,8 @@ fn apply_resolver_slot_wait_respects_the_deadline() {
     node.server = "localhost".to_owned();
     let timeout = Duration::from_millis(250);
     let started = Instant::now();
-    let address = super::probe::resolve_for_apply_with_timeout(&node, timeout);
+    let address =
+        super::probe::resolve_for_apply_with_timeout(&node, super::NameLookup::System, timeout);
     let elapsed = started.elapsed();
     release_tx.send(()).unwrap();
     holder.join().unwrap();
@@ -5402,6 +5403,7 @@ fn invalid_extra_nodes_are_rejected_before_connect_and_apply() {
         lan_servers: &[],
         control: None,
         verbose_log: false,
+        local_proxy: None,
     })
     .expect("render blocked exit rule");
     assert!(rendered.unsupported.is_empty());
@@ -8044,4 +8046,231 @@ fn without_local_network_the_segment_is_not_watched() {
     }
     assert_eq!(controls.spawns(), 1);
     assert_eq!(prepared.load(Ordering::Acquire), 0);
+}
+
+fn free_local_port() -> u16 {
+    std::net::TcpListener::bind(("127.0.0.1", 0))
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
+}
+
+fn local_proxy_request(kill_switch: bool) -> ConnectRequest {
+    let mut request = connect_request();
+    request.settings.kill_switch = kill_switch;
+    request.settings.auto_reconnect = false;
+    request.settings.connection_mode = rosetun_config::ConnectionMode::SystemProxy;
+    request.settings.local_proxy.port = free_local_port();
+    request
+}
+
+#[test]
+fn the_proxy_mode_with_a_kill_switch_stays_in_its_first_phase() {
+    use super::dns::test_support::{Behavior, Server};
+
+    let dns = Server::new(Behavior::Noerror);
+    let (helper, controls) = ordered_helper();
+    helper.session().unwrap().test_local_dns = Some(dns.address());
+    let request = local_proxy_request(true);
+    helper
+        .connect(&request)
+        .expect("connected through the proxy");
+
+    let status = helper.status();
+    assert_eq!(status.state, ConnectionState::Connected);
+    assert_eq!(
+        status.running_local_proxy(),
+        Some(request.settings.local_proxy.port)
+    );
+    let events = controls.events.lock().unwrap().clone();
+    assert!(events.contains(&"protect"));
+    assert!(
+        !events.contains(&"tunnel"),
+        "no adapter to authorize: {events:?}"
+    );
+}
+
+#[test]
+fn the_proxy_mode_without_a_kill_switch_installs_nothing() {
+    use super::dns::test_support::{Behavior, Server};
+
+    let dns = Server::new(Behavior::Noerror);
+    let (helper, controls) = ordered_helper();
+    helper.session().unwrap().test_local_dns = Some(dns.address());
+    helper
+        .connect(&local_proxy_request(false))
+        .expect("connected through the proxy");
+
+    assert_eq!(helper.status().state, ConnectionState::Connected);
+    let events = controls.events.lock().unwrap().clone();
+    assert!(!events.contains(&"protect"), "{events:?}");
+}
+
+#[test]
+fn the_proxy_mode_checks_the_session_through_the_engines_dns() {
+    use super::dns::test_support::{Behavior, Server};
+
+    let dns = Server::new(Behavior::Silent);
+    let (helper, _controls) = ordered_helper();
+    shorten_dns_timeouts(&helper);
+    helper.session().unwrap().test_local_dns = Some(dns.address());
+    let error = helper
+        .connect(&local_proxy_request(false))
+        .expect_err("nothing answers");
+    assert_eq!(error.code, ErrorCode::DnsTimeout);
+    assert!(matches!(
+        helper.status().state,
+        ConnectionState::Failed { .. }
+    ));
+}
+
+#[test]
+fn a_taken_proxy_port_fails_before_the_engine_and_protection() {
+    let holder = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let (helper, controls) = ordered_helper();
+    let mut request = local_proxy_request(true);
+    request.settings.local_proxy.port = holder.local_addr().unwrap().port();
+
+    let error = helper.connect(&request).expect_err("the port is taken");
+
+    assert_eq!(error.code, ErrorCode::LocalProxyPortBusy);
+    assert_eq!(
+        error.local_proxy_port(),
+        Some(request.settings.local_proxy.port)
+    );
+    assert_eq!(controls.spawns.load(Ordering::SeqCst), 0);
+    assert!(controls.events.lock().unwrap().is_empty());
+    assert!(matches!(
+        helper.status().state,
+        ConnectionState::Failed {
+            failure_kind: Some(rosetun_config::FailureKind::LocalProxyPortBusy { port }),
+            ..
+        } if port == request.settings.local_proxy.port
+    ));
+}
+
+#[test]
+fn a_proxy_port_below_the_allowed_range_is_refused() {
+    let (helper, controls) = ordered_helper();
+    let mut request = local_proxy_request(false);
+    request.settings.local_proxy.port = 80;
+    let error = helper.connect(&request).expect_err("refused");
+    assert_eq!(error.code, ErrorCode::InvalidRequest);
+    assert_eq!(controls.spawns.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn changing_the_mode_keeps_the_kill_switch_standing() {
+    use super::dns::test_support::{Behavior, Server};
+
+    let dns = Server::new(Behavior::Noerror);
+    let (helper, controls) = ordered_helper();
+    helper.session().unwrap().test_local_dns = Some(dns.address());
+    let mut request = killswitch_request(false);
+    helper.connect(&request).unwrap();
+    controls.events.lock().unwrap().clear();
+
+    request.settings.connection_mode = rosetun_config::ConnectionMode::SystemProxy;
+    request.settings.local_proxy.port = free_local_port();
+    helper.apply(&request).expect("TUN to the proxy");
+    assert_eq!(helper.status().state, ConnectionState::Connected);
+    assert_eq!(
+        helper.status().running_local_proxy(),
+        Some(request.settings.local_proxy.port)
+    );
+
+    request.settings.connection_mode = rosetun_config::ConnectionMode::Tun;
+    helper.apply(&request).expect("the proxy back to TUN");
+    assert_eq!(helper.status().running_local_proxy(), None);
+
+    let events = controls.events.lock().unwrap().clone();
+    assert!(!events.contains(&"revert"), "never open: {events:?}");
+    assert!(!events.contains(&"protect"), "the same guard: {events:?}");
+    assert_eq!(
+        events.iter().filter(|event| **event == "prepare").count(),
+        2,
+        "{events:?}"
+    );
+    assert_eq!(
+        events.iter().filter(|event| **event == "tunnel").count(),
+        1,
+        "only the way back has an adapter: {events:?}"
+    );
+}
+
+#[test]
+fn changing_to_the_proxy_without_a_kill_switch_drops_the_dns_lock() {
+    use super::dns::test_support::{Behavior, Server};
+
+    let dns = Server::new(Behavior::Noerror);
+    let (helper, _controls, _prepared, reverted) =
+        supervised_helper_with_dns(false, Some(dns.address()));
+    helper.session().unwrap().test_local_dns = Some(dns.address());
+    let mut request = connect_request();
+    request.settings.kill_switch = false;
+    request.settings.auto_reconnect = false;
+    helper.connect(&request).unwrap();
+    assert_eq!(reverted.load(Ordering::SeqCst), 0);
+
+    request.settings.connection_mode = rosetun_config::ConnectionMode::SystemProxy;
+    request.settings.local_proxy.port = free_local_port();
+    helper.apply(&request).expect("TUN to the proxy");
+
+    assert_eq!(helper.status().state, ConnectionState::Connected);
+    assert_eq!(reverted.load(Ordering::SeqCst), 1);
+    assert!(helper.session().unwrap().guard.is_none());
+
+    request.settings.connection_mode = rosetun_config::ConnectionMode::Tun;
+    helper.apply(&request).expect("the proxy back to TUN");
+    assert!(
+        helper.session().unwrap().guard.is_some(),
+        "the lock is back"
+    );
+}
+
+#[test]
+fn a_failed_change_to_the_proxy_brings_the_session_back() {
+    use super::dns::test_support::{Behavior, Server};
+
+    let holder = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let dns = Server::new(Behavior::Noerror);
+    let (helper, _controls, _prepared, _reverted) =
+        supervised_helper_with_dns(false, Some(dns.address()));
+    let mut request = connect_request();
+    request.settings.kill_switch = false;
+    request.settings.auto_reconnect = false;
+    helper.connect(&request).unwrap();
+
+    let mut next = request.clone();
+    next.settings.connection_mode = rosetun_config::ConnectionMode::SystemProxy;
+    next.settings.local_proxy.port = holder.local_addr().unwrap().port();
+    let error = helper.apply(&next).expect_err("the port is taken");
+
+    assert_eq!(error.code, ErrorCode::LocalProxyPortBusy);
+    assert_eq!(helper.status().state, ConnectionState::Connected);
+    assert_eq!(helper.status().running_local_proxy(), None);
+    assert!(helper.session().unwrap().guard.is_some());
+}
+
+#[test]
+fn a_new_server_name_in_the_proxy_mode_is_asked_of_the_engine() {
+    use super::dns::test_support::{Behavior, Server};
+
+    let dns = Server::new(Behavior::Noerror);
+    let (helper, _controls) = ordered_helper();
+    helper.session().unwrap().test_local_dns = Some(dns.address());
+    helper.connect(&local_proxy_request(true)).unwrap();
+    assert_eq!(
+        helper.session().unwrap().engine_lookup(),
+        super::NameLookup::Engine(dns.address())
+    );
+    helper.disconnect().unwrap();
+
+    let (helper, _controls) = ordered_helper();
+    helper.connect(&killswitch_request(false)).unwrap();
+    assert_eq!(
+        helper.session().unwrap().engine_lookup(),
+        super::NameLookup::System
+    );
 }

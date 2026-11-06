@@ -111,6 +111,7 @@ fn sing_box_check_validates_local_rule_set_config() {
             lan_servers: &[],
             control: None,
             verbose_log: false,
+            local_proxy: None,
         })
         .unwrap();
     assert!(config.unsupported.is_empty());
@@ -145,6 +146,7 @@ fn sing_box_check_validates_local_rule_set_config() {
                 lan_servers: &[],
                 control: None,
                 verbose_log: false,
+                local_proxy: None,
             })
             .unwrap();
         let path = directory.0.join(format!("{protocol}.json"));
@@ -159,6 +161,39 @@ fn sing_box_check_validates_local_rule_set_config() {
                 .unwrap()
                 .success(),
             "proxy configuration rejected: {protocol}"
+        );
+    }
+    for address in ["127.0.0.1:10808", "[::]:10808"] {
+        let config = SingBoxBackend::new(&directory.0)
+            .render(&RenderRequest {
+                extra: &[],
+                node: &node,
+                socks: None,
+                rules: &rules,
+                lists: &lists,
+                settings: &settings,
+                lan_segment: &[],
+                lan_servers: &[],
+                control: None,
+                verbose_log: false,
+                local_proxy: Some(rosetun_engine::LocalProxyListen {
+                    address: address.parse().unwrap(),
+                    dns: "127.0.0.1:53535".parse().unwrap(),
+                }),
+            })
+            .unwrap();
+        let path = directory.0.join("local-proxy.json");
+        std::fs::write(&path, config.body).unwrap();
+        assert!(
+            Command::new(&binary)
+                .arg("check")
+                .arg("-c")
+                .arg(&path)
+                .current_dir(&directory.0)
+                .status()
+                .unwrap()
+                .success(),
+            "local proxy configuration rejected: {address}"
         );
     }
     for (path, body) in [
@@ -185,6 +220,7 @@ fn sing_box_check_validates_local_rule_set_config() {
                     lan_servers: &[],
                     control: None,
                     verbose_log: false,
+                    local_proxy: None,
                 })
                 .unwrap();
             std::fs::write(&path, chain.body).unwrap();

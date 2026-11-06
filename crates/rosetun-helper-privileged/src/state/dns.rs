@@ -156,6 +156,36 @@ pub(super) fn resolve_path_addresses(
     timeout: Duration,
     stopped: impl Fn() -> bool,
 ) -> Vec<Ipv4Addr> {
+    resolve_labels(
+        server,
+        &[b"connectivitycheck", b"gstatic", b"com"],
+        timeout,
+        stopped,
+    )
+}
+
+/// The A records of `name`, asked of `server`.
+pub(super) fn resolve_name(server: SocketAddr, name: &str, timeout: Duration) -> Vec<Ipv4Addr> {
+    let labels = name
+        .trim_end_matches('.')
+        .split('.')
+        .map(str::as_bytes)
+        .collect::<Vec<_>>();
+    if labels
+        .iter()
+        .any(|label| label.is_empty() || label.len() > 63)
+    {
+        return Vec::new();
+    }
+    resolve_labels(server, &labels, timeout, || false)
+}
+
+fn resolve_labels(
+    server: SocketAddr,
+    labels: &[&[u8]],
+    timeout: Duration,
+    stopped: impl Fn() -> bool,
+) -> Vec<Ipv4Addr> {
     if timeout.is_zero() || stopped() {
         return Vec::new();
     }
@@ -163,7 +193,7 @@ pub(super) fn resolve_path_addresses(
         return Vec::new();
     };
     let id = random_word() as u16;
-    let packet = query(id, &[b"connectivitycheck", b"gstatic", b"com"]);
+    let packet = query(id, labels);
     let deadline = Instant::now() + timeout;
     let remaining = deadline.saturating_duration_since(Instant::now());
     if socket

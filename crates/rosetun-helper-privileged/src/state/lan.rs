@@ -3,7 +3,7 @@
 
 use std::net::IpAddr;
 
-use rosetun_config::{IpPrefix, Settings, TunSettings};
+use rosetun_config::{ConnectionMode, IpPrefix, Settings, TunSettings};
 use rosetun_ipc::{ErrorCode, HelperError};
 use rosetun_routing::{
     RouteRelease, TunnelInterface,
@@ -271,7 +271,9 @@ impl Session {
         if !settings.allow_lan {
             return false;
         }
-        self.release_broadcast_route(&settings.tun);
+        if settings.connection_mode == ConnectionMode::Tun {
+            self.release_broadcast_route(&settings.tun);
+        }
         let read = self.scan_lan(&settings.tun, &self.lan_servers, false);
         let Some(segment) = self.lan_watch.observe(&self.lan.segment, read) else {
             return false;

@@ -5,14 +5,15 @@ use rosetun_config::{
 };
 use rosetun_engine::errors::EngineError;
 use rosetun_engine::{
-    EngineRoute, ExtraOutbound, ProbeRenderRequest, RenderRequest, RenderedConfig,
-    RuleCapabilities, SocksProxy, exit_tag,
+    EngineRoute, ExtraOutbound, LocalProxyListen, ProbeRenderRequest, RenderRequest,
+    RenderedConfig, RuleCapabilities, SocksProxy, exit_tag,
 };
 use serde_json::{Map, Value, json};
 
 pub(crate) const TAG_PROXY: &str = "proxy";
 const TAG_DIRECT: &str = "direct";
 const TAG_DNS_PROXY: &str = "dns-proxy";
+const TAG_LOCAL_DNS: &str = "dns-in";
 const DEFAULT_FINGERPRINT: &str = "chrome";
 /// The GUI's exit-country lookup is pinned to the main node by this program name.
 #[cfg(windows)]
@@ -70,6 +71,7 @@ pub fn render(request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError
         },
         request.lists,
         request.extra,
+        request.local_proxy.is_some(),
     );
     let mut outbounds = Vec::with_capacity(request.extra.len() + 2);
     outbounds.push(match request.socks {
@@ -87,7 +89,10 @@ pub fn render(request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError
     let mut config = json!({
         "log": log_section(request),
         "dns": dns_section(&request.settings.dns)?,
-        "inbounds": [tun_inbound(request.settings, lan)],
+        "inbounds": match request.local_proxy {
+            Some(listen) => local_proxy_inbounds(listen),
+            None => vec![tun_inbound(request.settings, lan)],
+        },
         "outbounds": outbounds,
         "route": route,
     });
@@ -236,6 +241,27 @@ fn tun_inbound(settings: &Settings, lan: Option<&[IpPrefix]>) -> Value {
         inbound["route_exclude_address"] = json!(exclude);
     }
     inbound
+}
+
+/// With the wildcard `::` Go opens one dual-stack socket (sing's
+/// `NetworkFromNetAddr` leaves "tcp" as it is), so IPv4 clients are served too,
+/// and a second inbound on 0.0.0.0 would fail on Linux as already in use.
+fn local_proxy_inbounds(listen: LocalProxyListen) -> Vec<Value> {
+    vec![
+        json!({
+            "type": "mixed",
+            "tag": "mixed-in",
+            "listen": listen.address.ip().to_string(),
+            "listen_port": listen.address.port(),
+        }),
+        json!({
+            "type": "direct",
+            "tag": TAG_LOCAL_DNS,
+            "network": "udp",
+            "listen": listen.dns.ip().to_string(),
+            "listen_port": listen.dns.port(),
+        }),
+    ]
 }
 
 fn socks_outbound(socks: SocksProxy<'_>, tag: &str) -> Value {
@@ -449,6 +475,7 @@ pub(crate) fn route_section(
         },
         &[],
         &[],
+        false,
     )
 }
 
@@ -468,6 +495,7 @@ fn route_section_with_lists(
     private: PrivateNetworks<'_>,
     lists: &[ListRef],
     extra: &[ExtraOutbound<'_>],
+    local_proxy: bool,
 ) -> (Value, Vec<RuleId>) {
     let mut route_rules = vec![
         json!({
@@ -486,6 +514,15 @@ fn route_section_with_lists(
             "outbound": TAG_PROXY,
         }),
     ];
+    if local_proxy {
+        route_rules.insert(
+            2,
+            json!({
+                "inbound": [TAG_LOCAL_DNS],
+                "action": "hijack-dns",
+            }),
+        );
+    }
     // Before the user's rules: a rule that sends a site or a program through
     // the VPN must not take the devices next to this computer with it.
     if let Some(segment) = lan {
@@ -504,11 +541,24 @@ fn route_section_with_lists(
     }
     let mut unsupported = Vec::new();
     let mut used_lists = Vec::<&ListRef>::new();
+    // Through a proxy a program often names a site instead of its address, and
+    // an address rule matches a name only once it is resolved. Only from the
+    // first rule that needs it: otherwise the server resolves names itself.
+    let mut unresolved = local_proxy;
 
     for rule in rules.enabled() {
         if !capabilities.supports(&rule.matcher) || !capabilities.supports_target(rule.target) {
             unsupported.push(rule.id.clone());
             continue;
+        }
+        if unresolved
+            && matches!(
+                rule.matcher,
+                RuleMatcher::IpCidr(_) | RuleMatcher::List { .. }
+            )
+        {
+            route_rules.push(json!({ "action": "resolve" }));
+            unresolved = false;
         }
         let Some(action) = route_action(rule, extra) else {
             unsupported.push(rule.id.clone());
@@ -708,6 +758,23 @@ mod tests {
         include_bytes!("../tests/fixtures/xray-chain-config-unix.json");
     #[cfg(windows)]
     const GOLDEN_EXTRA_EXITS: &[u8] = include_bytes!("../tests/fixtures/extra-exits-config.json");
+    #[cfg(windows)]
+    const GOLDEN_LOCAL_PROXY: &[u8] = include_bytes!("../tests/fixtures/local-proxy-config.json");
+    #[cfg(not(windows))]
+    const GOLDEN_LOCAL_PROXY: &[u8] =
+        include_bytes!("../tests/fixtures/local-proxy-config-unix.json");
+    #[cfg(windows)]
+    const GOLDEN_LOCAL_PROXY_SHARED: &[u8] =
+        include_bytes!("../tests/fixtures/local-proxy-shared-config.json");
+    #[cfg(not(windows))]
+    const GOLDEN_LOCAL_PROXY_SHARED: &[u8] =
+        include_bytes!("../tests/fixtures/local-proxy-shared-config-unix.json");
+    #[cfg(windows)]
+    const GOLDEN_LOCAL_PROXY_XRAY: &[u8] =
+        include_bytes!("../tests/fixtures/local-proxy-xray-config.json");
+    #[cfg(not(windows))]
+    const GOLDEN_LOCAL_PROXY_XRAY: &[u8] =
+        include_bytes!("../tests/fixtures/local-proxy-xray-config-unix.json");
     #[cfg(not(windows))]
     const GOLDEN_EXTRA_EXITS: &[u8] =
         include_bytes!("../tests/fixtures/extra-exits-config-unix.json");
@@ -914,6 +981,7 @@ mod tests {
             lan_servers: &[],
             control: Some(&control),
             verbose_log: false,
+            local_proxy: None,
         };
         let rendered = render(&request).unwrap();
         assert!(rendered.unsupported.is_empty());
@@ -1020,6 +1088,7 @@ mod tests {
             lan_servers: &[],
             control: None,
             verbose_log: false,
+            local_proxy: None,
         })
         .unwrap();
         assert!(rendered.unsupported.is_empty());
@@ -1044,6 +1113,177 @@ mod tests {
         assert_eq!(routed, ["exit-0", "exit-0", "exit-1"]);
     }
 
+    fn local_proxy_request_body(
+        address: &str,
+        socks: Option<SocksProxy<'_>>,
+        rules: &RuleSet,
+    ) -> Vec<u8> {
+        let node = shadowsocks_node("main", "203.0.113.10");
+        render(&RenderRequest {
+            node: &node,
+            socks,
+            extra: &[],
+            rules,
+            lists: &[],
+            settings: &Settings::default(),
+            lan_segment: &[],
+            lan_servers: &[],
+            control: None,
+            verbose_log: false,
+            local_proxy: Some(LocalProxyListen {
+                address: address.parse().unwrap(),
+                dns: "127.0.0.1:53535".parse().unwrap(),
+            }),
+        })
+        .unwrap()
+        .body
+    }
+
+    fn local_proxy_rules() -> RuleSet {
+        let mut rules = RuleSet::new(RuleSetId::new("local"), "Local", RuleTarget::Proxy);
+        rules.rules = vec![
+            Rule {
+                id: RuleId::new("site"),
+                enabled: true,
+                matcher: RuleMatcher::Domain(DomainMatch::Suffix("example.com".into())),
+                target: RuleTarget::Direct,
+                exit: None,
+            },
+            Rule {
+                id: RuleId::new("program"),
+                enabled: true,
+                matcher: RuleMatcher::Process(ProcessMatch::Name("example".into())),
+                target: RuleTarget::Direct,
+                exit: None,
+            },
+            Rule {
+                id: RuleId::new("network"),
+                enabled: true,
+                matcher: RuleMatcher::IpCidr("198.51.100.0/24".into()),
+                target: RuleTarget::Block,
+                exit: None,
+            },
+        ];
+        rules
+    }
+
+    fn assert_golden(body: &[u8], golden: &[u8]) {
+        let actual: Value = serde_json::from_slice(body).unwrap();
+        let expected: Value = serde_json::from_slice(golden).unwrap();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn the_local_proxy_replaces_the_adapter_and_listens_on_loopback() {
+        let rules = local_proxy_rules();
+        let body = local_proxy_request_body("127.0.0.1:10808", None, &rules);
+        assert_golden(&body, GOLDEN_LOCAL_PROXY);
+        let value: Value = serde_json::from_slice(&body).unwrap();
+        let inbounds = value["inbounds"].as_array().unwrap();
+        assert!(inbounds.iter().all(|inbound| inbound["type"] != "tun"));
+        assert_eq!(inbounds[0]["type"], "mixed");
+        assert_eq!(inbounds[0]["listen"], "127.0.0.1");
+        assert_eq!(inbounds[0]["listen_port"], 10808);
+    }
+
+    #[test]
+    fn a_shared_local_proxy_listens_on_one_dual_stack_socket() {
+        let rules = local_proxy_rules();
+        let body = local_proxy_request_body("[::]:10808", None, &rules);
+        assert_golden(&body, GOLDEN_LOCAL_PROXY_SHARED);
+        let value: Value = serde_json::from_slice(&body).unwrap();
+        let inbounds = value["inbounds"].as_array().unwrap();
+        let mixed: Vec<_> = inbounds
+            .iter()
+            .filter(|inbound| inbound["type"] == "mixed")
+            .collect();
+        assert_eq!(mixed.len(), 1);
+        assert_eq!(mixed[0]["listen"], "::");
+        // Only the proxy is shared.
+        assert_eq!(inbounds[1]["listen"], "127.0.0.1");
+    }
+
+    #[test]
+    fn the_local_proxy_stands_in_front_of_xray_as_the_tunnel_does() {
+        let rules = local_proxy_rules();
+        for (address, golden) in [
+            ("127.0.0.1:10808", GOLDEN_LOCAL_PROXY_XRAY),
+            ("[::]:10808", GOLDEN_LOCAL_PROXY_XRAY),
+        ] {
+            let body = local_proxy_request_body(
+                address,
+                Some(SocksProxy {
+                    address: "127.0.0.1:20000".parse().unwrap(),
+                    username: "fixture-user",
+                    password: "fixture-password",
+                }),
+                &rules,
+            );
+            let mut actual: Value = serde_json::from_slice(&body).unwrap();
+            let listen = actual["inbounds"][0]["listen"].take();
+            assert_eq!(
+                listen,
+                address.rsplit_once(':').unwrap().0.trim_matches(['[', ']'])
+            );
+            let mut expected: Value = serde_json::from_slice(golden).unwrap();
+            expected["inbounds"][0]["listen"].take();
+            assert_eq!(actual, expected);
+        }
+    }
+
+    #[test]
+    fn address_rules_through_the_local_proxy_resolve_names_first() {
+        let rules = local_proxy_rules();
+        let body = local_proxy_request_body("127.0.0.1:10808", None, &rules);
+        let value: Value = serde_json::from_slice(&body).unwrap();
+        let route = value["route"]["rules"].as_array().unwrap();
+        let resolve = route
+            .iter()
+            .position(|rule| rule["action"] == "resolve")
+            .expect("a resolve step");
+        let network = route
+            .iter()
+            .position(|rule| rule.get("ip_cidr").is_some() && rule["action"] == "reject")
+            .expect("the address rule");
+        let site = route
+            .iter()
+            .position(|rule| rule.get("domain_suffix").is_some())
+            .expect("the site rule");
+        assert!(site < resolve && resolve + 1 == network);
+
+        let mut no_addresses = rules.clone();
+        no_addresses.rules.pop();
+        let body = local_proxy_request_body("127.0.0.1:10808", None, &no_addresses);
+        let value: Value = serde_json::from_slice(&body).unwrap();
+        assert!(
+            value["route"]["rules"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|rule| rule["action"] != "resolve")
+        );
+    }
+
+    #[test]
+    fn the_engines_own_dns_answers_on_its_loopback_port() {
+        let rules = local_proxy_rules();
+        let body = local_proxy_request_body("127.0.0.1:10808", None, &rules);
+        let value: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["inbounds"][1]["type"], "direct");
+        assert_eq!(value["inbounds"][1]["network"], "udp");
+        assert_eq!(value["inbounds"][1]["listen_port"], 53535);
+        assert!(
+            value["route"]["rules"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|rule| {
+                    rule["inbound"] == serde_json::json!(["dns-in"])
+                        && rule["action"] == "hijack-dns"
+                })
+        );
+    }
+
     #[test]
     fn exit_rule_without_extra_node_is_unsupported() {
         let node = shadowsocks_node("main", "203.0.113.10");
@@ -1064,6 +1304,7 @@ mod tests {
             lan_servers: &[],
             control: None,
             verbose_log: false,
+            local_proxy: None,
         })
         .unwrap();
         assert_eq!(rendered.unsupported, vec![RuleId::new("orphan")]);
@@ -1105,6 +1346,7 @@ mod tests {
                 lan_servers: &[],
                 control: None,
                 verbose_log: false,
+                local_proxy: None,
             }
         );
         assert!(debug.contains("work-exit"));
@@ -1263,8 +1505,15 @@ mod tests {
                 exit: None,
             });
         }
-        let (route, unsupported) =
-            route_section_with_lists(&set, RULE_CAPABILITIES, None, NO_PRIVATE, &[reference], &[]);
+        let (route, unsupported) = route_section_with_lists(
+            &set,
+            RULE_CAPABILITIES,
+            None,
+            NO_PRIVATE,
+            &[reference],
+            &[],
+            false,
+        );
         assert!(unsupported.is_empty());
         assert_eq!(
             route["rule_set"],
@@ -1283,9 +1532,17 @@ mod tests {
             json!({"rule_set": [tag], "action": "reject"})
         );
         assert!(
-            route_section_with_lists(&set, RuleCapabilities::NONE, None, NO_PRIVATE, &[], &[])
-                .1
-                .len()
+            route_section_with_lists(
+                &set,
+                RuleCapabilities::NONE,
+                None,
+                NO_PRIVATE,
+                &[],
+                &[],
+                false,
+            )
+            .1
+            .len()
                 == 2
         );
     }
@@ -1342,8 +1599,15 @@ mod tests {
             sha256: "b".repeat(64),
             format: UploadedListFormat::Source,
         };
-        let (route, unsupported) =
-            route_section_with_lists(&set, RULE_CAPABILITIES, None, NO_PRIVATE, &[reference], &[]);
+        let (route, unsupported) = route_section_with_lists(
+            &set,
+            RULE_CAPABILITIES,
+            None,
+            NO_PRIVATE,
+            &[reference],
+            &[],
+            false,
+        );
         assert_eq!(unsupported, [vanished]);
         assert_eq!(route["rules"].as_array().unwrap().len(), 4);
         assert_eq!(

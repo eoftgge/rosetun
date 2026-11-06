@@ -4,6 +4,7 @@ mod dns;
 mod dns_cache;
 mod exits;
 mod lan;
+mod local_proxy;
 mod lockdown;
 mod path;
 mod probe;
@@ -311,6 +312,9 @@ struct Session {
     /// whether it succeeds or not.
     cold_start: bool,
     /// Reads the computer's segment; a hook for tests.
+    /// Stands in for the engine's loopback DNS in the proxy mode.
+    #[cfg(test)]
+    test_local_dns: Option<SocketAddr>,
     lan_scan: lan::LanScan,
     /// What "Local network" opens for the running session.
     lan: rosetun_routing::lan::LanAccess,
@@ -417,6 +421,8 @@ impl Helper {
                 programs_withdrawn: false,
                 protected_binaries: Vec::new(),
                 cold_start: true,
+                #[cfg(test)]
+                test_local_dns: None,
                 #[cfg(not(test))]
                 lan_scan: rosetun_routing::lan_segment,
                 #[cfg(test)]
@@ -2043,7 +2049,16 @@ impl Session {
             ));
         }
 
-        self.wait_for_previous_adapter(&settings.tun.name)?;
+        let local_proxy = local_proxy::listen_for(settings, &self.cancelled)?;
+        #[cfg(test)]
+        let local_proxy = local_proxy.map(|listen| rosetun_engine::LocalProxyListen {
+            dns: self.test_local_dns.unwrap_or(listen.dns),
+            ..listen
+        });
+        // No adapter of ours is coming, and an old one that is still going away is in no way.
+        if local_proxy.is_none() {
+            self.wait_for_previous_adapter(&settings.tun.name)?;
+        }
 
         if mode == StartMode::Fresh
             && let Some(guard) = self.guard.take()
@@ -2138,7 +2153,10 @@ impl Session {
                 format!("engine {} is not registered", settings.engine.as_str()),
             )
         })?;
-        let dns_server = backend.tunnel_dns_server(&settings.tun);
+        let dns_server = match local_proxy {
+            Some(listen) => Some(listen.dns),
+            None => backend.tunnel_dns_server(&settings.tun),
+        };
         let control = match ControlEndpoint::local() {
             Ok(control) => Some(control),
             Err(error) => {
@@ -2169,6 +2187,7 @@ impl Session {
                 lan_servers: private_exceptions,
                 control: control.as_ref(),
                 verbose_log: verbose_until.is_some(),
+                local_proxy,
             },
         )?;
 
@@ -2202,12 +2221,31 @@ impl Session {
         if lockdown && !settings.kill_switch {
             tracing::info!("Lockdown is on: the kill switch is forced on");
         }
-        let scope =
-            lockdown::protection_scope(mode, settings.kill_switch, dns_server.is_some(), lockdown);
+        let scope = lockdown::protection_scope(
+            mode,
+            settings.kill_switch,
+            dns_server.is_some(),
+            lockdown,
+            local_proxy.is_some(),
+        );
+        // In the proxy mode nothing is authorized later: what goes up here is all there is.
         let tunnel = scope
+            .filter(|_| local_proxy.is_none())
             .map(|_| TunnelInterface::try_from(&settings.tun))
             .transpose()
             .map_err(|error| HelperError::new(ErrorCode::RoutingFailed, error.to_string()))?;
+        // A DNS lock has nothing to do without an adapter.
+        if scope.is_none()
+            && local_proxy.is_some()
+            && let Some(guard) = self.guard.take()
+            && let Err(error) = guard
+                .routing
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .revert_in_place()
+        {
+            tracing::error!(%error, "failed to remove the DNS lock");
+        }
 
         if let Some(scope) = scope {
             let plan = RoutingPlan {
@@ -2446,7 +2484,7 @@ impl Session {
 
         // Without a guard the tunnel has not been validated yet; the first
         // supervisor tick after the connect does this if it is too early here.
-        if settings.allow_lan {
+        if settings.allow_lan && local_proxy.is_none() {
             self.release_broadcast_route(&settings.tun);
         }
 
@@ -2599,6 +2637,17 @@ impl Session {
         );
         self.exit_tags = exits::exit_tags(&request.extra_nodes, &extra_endpoints);
         check_cancelled(&self.cancelled)
+    }
+
+    /// Who looks a new server's name up during this session.
+    fn engine_lookup(&self) -> NameLookup {
+        let proxy_mode = self.request.as_ref().is_some_and(|request| {
+            request.settings.connection_mode == rosetun_config::ConnectionMode::SystemProxy
+        });
+        match self.tunnel_dns {
+            Some(address) if proxy_mode => NameLookup::Engine(address),
+            _ => NameLookup::System,
+        }
     }
 
     fn start_monitor(&mut self, kind: rosetun_config::EngineKind) {
@@ -3157,6 +3206,10 @@ enum NameLookup {
     /// queries leave from Dnscache, which Lockdown must never permit, since
     /// every program's lookups go through it.
     Direct,
+    /// The engine's own DNS on loopback, in the proxy mode: there is no tunnel
+    /// to carry the system resolver's queries, and with a kill switch they
+    /// could not leave at all.
+    Engine(SocketAddr),
 }
 
 impl NameLookup {
@@ -3211,6 +3264,10 @@ fn lookup_name(server: &str, port: u16, lookup: NameLookup) -> Result<Vec<IpAddr
                 failed(&error, offline)
             })?
         }
+        NameLookup::Engine(address) => dns::resolve_name(address, server, DIRECT_RESOLVE_TIMEOUT)
+            .into_iter()
+            .map(IpAddr::V4)
+            .collect(),
     };
 
     if addresses.is_empty() {

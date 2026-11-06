@@ -11,6 +11,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, TryLockError};
 
+use rosetun_config::ConnectionMode;
 use rosetun_ipc::{ErrorCode, HelperError};
 use rosetun_routing::{
     LockdownApps, ProtectionScope, RoutingBackend, RoutingError, RoutingGuard, RoutingPlan,
@@ -51,9 +52,16 @@ pub(super) fn protection_scope(
     kill_switch: bool,
     tunnel_dns: bool,
     lockdown: bool,
+    local_proxy: bool,
 ) -> Option<ProtectionScope> {
     if kill_switch || lockdown {
         return Some(ProtectionScope::AllTraffic);
+    }
+    // The engine resolves names itself, so there is no system DNS to confine:
+    // a program that goes around the proxy goes around all of it, and that
+    // is what this mode without the kill switch says it does.
+    if local_proxy {
+        return None;
     }
     match mode {
         StartMode::Fresh => tunnel_dns.then_some(ProtectionScope::DnsOnly),
@@ -346,7 +354,9 @@ impl Session {
                 .routing
                 .begin_protection(&plan, &binaries)
                 .map_err(routing_failed)?;
-            routing.authorize_tunnel(&tunnel).map_err(routing_failed)?;
+            if let Some(tunnel) = tunnel.as_ref() {
+                routing.authorize_tunnel(tunnel).map_err(routing_failed)?;
+            }
             self.guard = Some(Guard {
                 routing: Arc::new(Mutex::new(routing)),
                 scope: ProtectionScope::AllTraffic,
@@ -369,7 +379,9 @@ impl Session {
                 routing
                     .prepare_reconnect(&plan, &binaries)
                     .map_err(routing_failed)?;
-                routing.authorize_tunnel(&tunnel).map_err(routing_failed)?;
+                if let Some(tunnel) = tunnel.as_ref() {
+                    routing.authorize_tunnel(tunnel).map_err(routing_failed)?;
+                }
                 guard.scope = ProtectionScope::AllTraffic;
                 tracing::info!("Lockdown is on: the kill switch is forced on for this session");
             }
@@ -509,10 +521,11 @@ impl Session {
         {
             return;
         }
-        let tunnel_dns = self
-            .engines
-            .get(settings.engine)
-            .is_some_and(|backend| backend.tunnel_dns_server(&settings.tun).is_some());
+        let tunnel_dns = settings.connection_mode == ConnectionMode::Tun
+            && self
+                .engines
+                .get(settings.engine)
+                .is_some_and(|backend| backend.tunnel_dns_server(&settings.tun).is_some());
         if !tunnel_dns {
             if let Some(guard) = self.guard.take()
                 && let Err(error) = guard
@@ -608,11 +621,18 @@ pub(super) fn sync_lan(
     Ok(())
 }
 
+/// The plan of a kill switch forced on a running session, and the adapter to
+/// authorize, which the proxy mode does not have.
 fn all_traffic(
     request: &rosetun_ipc::ConnectRequest,
     lan: &rosetun_routing::lan::LanAccess,
-) -> Result<(RoutingPlan, TunnelInterface), HelperError> {
-    let tunnel = TunnelInterface::try_from(&request.settings.tun).map_err(routing_failed)?;
+) -> Result<(RoutingPlan, Option<TunnelInterface>), HelperError> {
+    let tunnel = match request.settings.connection_mode {
+        ConnectionMode::Tun => {
+            Some(TunnelInterface::try_from(&request.settings.tun).map_err(routing_failed)?)
+        }
+        ConnectionMode::SystemProxy => None,
+    };
     Ok((
         RoutingPlan {
             scope: ProtectionScope::AllTraffic,
@@ -647,25 +667,25 @@ mod tests {
         for mode in [StartMode::Fresh, StartMode::ProtectedReconnect] {
             for tunnel_dns in [false, true] {
                 assert_eq!(
-                    protection_scope(mode, false, tunnel_dns, true),
+                    protection_scope(mode, false, tunnel_dns, true, false),
                     Some(ProtectionScope::AllTraffic)
                 );
                 assert_eq!(
-                    protection_scope(mode, true, tunnel_dns, false),
+                    protection_scope(mode, true, tunnel_dns, false, false),
                     Some(ProtectionScope::AllTraffic)
                 );
             }
         }
         assert_eq!(
-            protection_scope(StartMode::Fresh, false, true, false),
+            protection_scope(StartMode::Fresh, false, true, false, false),
             Some(ProtectionScope::DnsOnly)
         );
         assert_eq!(
-            protection_scope(StartMode::Fresh, false, false, false),
+            protection_scope(StartMode::Fresh, false, false, false, false),
             None
         );
         assert_eq!(
-            protection_scope(StartMode::ProtectedReconnect, false, false, false),
+            protection_scope(StartMode::ProtectedReconnect, false, false, false, false),
             Some(ProtectionScope::DnsOnly)
         );
     }

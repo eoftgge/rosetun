@@ -358,6 +358,7 @@ fn the_explainer_agrees_with_the_rendered_route() {
             lan_servers: &[],
             control: None,
             verbose_log: false,
+            local_proxy: None,
         })
         .unwrap();
         assert!(rendered.unsupported.is_empty());

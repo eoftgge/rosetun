@@ -67,7 +67,7 @@ impl Helper {
                     .filter(|cached| cached.server == normalize_server(&request.node.server))
                     .map(|cached| cached.address)
             })
-            .or_else(|| resolve_for_apply(&request.node))
+            .or_else(|| resolve_for_apply(&request.node, session.engine_lookup()))
             .ok_or_else(|| {
                 HelperError::new(
                     ErrorCode::RoutingFailed,
@@ -85,8 +85,11 @@ impl Helper {
             )
         })?;
         let prepared_node = node_with_endpoint(&request.node, endpoint);
-        let extra_endpoints =
-            exits::apply_endpoints(&request.extra_nodes, &session.last_extra_endpoints);
+        let extra_endpoints = exits::apply_endpoints(
+            &request.extra_nodes,
+            &session.last_extra_endpoints,
+            session.engine_lookup(),
+        );
         let effective = request.effective_rule_set();
         let extra = exits::ExtraNodes::new(&request.extra_nodes, &extra_endpoints, &effective);
         let socks = exits::XraySocks::new(&request.node, &extra, &request.settings)?;
@@ -103,6 +106,8 @@ impl Helper {
                 lan_servers: &[],
                 control: None,
                 verbose_log: false,
+                // Checks the rules and nodes; the listener does not change them.
+                local_proxy: None,
             },
         )?;
         if socks.any() {
@@ -166,6 +171,8 @@ impl Helper {
         } else {
             StartMode::Fresh
         };
+        // The proxy mode without a kill switch drops the DNS lock; the
+        // previous session has to bring it back, so its start cannot rely on it.
         match session
             .start(request, mode, Some(endpoint), Some(extra_endpoints))
             .and_then(|()| {
@@ -190,6 +197,11 @@ impl Helper {
                     return Err(error);
                 }
                 tracing::warn!(code = ?error.code, "session changes failed; restoring previous session");
+                let mode = if session.guard.is_some() {
+                    StartMode::ProtectedReconnect
+                } else {
+                    StartMode::Fresh
+                };
                 let rollback = session
                     .start(
                         &current,

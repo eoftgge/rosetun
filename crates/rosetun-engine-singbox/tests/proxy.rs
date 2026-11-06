@@ -56,6 +56,7 @@ fn proxy_rendering_keeps_credentials_structured_and_dns_on_tcp() {
                 lan_servers: &[],
                 control: None,
                 verbose_log: false,
+                local_proxy: None,
             })
             .unwrap();
         let body: Value = serde_json::from_slice(&rendered.body).unwrap();
@@ -115,6 +116,7 @@ fn proxy_routes_preserve_direct_rules_and_never_skip_udp_to_a_fallback() {
             lan_servers: &[],
             control: None,
             verbose_log: false,
+            local_proxy: None,
         })
         .unwrap();
     let body: Value = serde_json::from_slice(&rendered.body).unwrap();
@@ -162,7 +164,8 @@ fn probes_render_all_proxy_protocols_and_reject_unsupported_tls() {
                 lan_segment: &[],
                 lan_servers: &[],
                 control: None,
-                verbose_log: false
+                verbose_log: false,
+                local_proxy: None,
             })
             .is_err()
     );
@@ -182,7 +185,8 @@ fn probes_render_all_proxy_protocols_and_reject_unsupported_tls() {
                 lan_segment: &[],
                 lan_servers: &[],
                 control: None,
-                verbose_log: false
+                verbose_log: false,
+                local_proxy: None,
             })
             .is_err()
     );

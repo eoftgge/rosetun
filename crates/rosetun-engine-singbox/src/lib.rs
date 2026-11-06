@@ -718,6 +718,7 @@ mod tests {
             lan_servers: &[],
             control: Some(&control),
             verbose_log: false,
+            local_proxy: None,
         };
         let config = render::render(&request).unwrap();
         let nodes = vec![("probe-0".to_owned(), node.clone())];
@@ -798,6 +799,7 @@ mod tests {
             lan_servers: &[],
             control: None,
             verbose_log: false,
+            local_proxy: None,
         };
         let config = render::render(&request).expect("config built");
         serde_json::from_slice(&config.body).expect("config is valid json")
@@ -821,6 +823,7 @@ mod tests {
             lan_servers: &[],
             control: None,
             verbose_log: false,
+            local_proxy: None,
         })?;
         Ok(serde_json::from_slice(&config.body).expect("valid JSON"))
     }
@@ -850,6 +853,7 @@ mod tests {
                 lan_servers: &[],
                 control: None,
                 verbose_log,
+                local_proxy: None,
             })
             .expect("config rendered");
             let config: Value = serde_json::from_slice(&config.body).expect("valid JSON");
@@ -879,6 +883,7 @@ mod tests {
             lan_servers: &[],
             control: Some(&control),
             verbose_log: false,
+            local_proxy: None,
         })
         .expect("config rendered");
         let config: Value = serde_json::from_slice(&config.body).expect("valid JSON");
@@ -1606,6 +1611,7 @@ mod tests {
             lan_servers: &[],
             control: None,
             verbose_log: false,
+            local_proxy: None,
         })
         .expect("rendered");
 
@@ -1774,6 +1780,7 @@ mod tests {
             lan_servers: &[],
             control: None,
             verbose_log: false,
+            local_proxy: None,
         })
         .expect("config rendered");
 
@@ -1859,6 +1866,7 @@ mod tests {
             lan_servers: &[],
             control: None,
             verbose_log: false,
+            local_proxy: None,
         };
         assert!(matches!(
             render::render(&request),
@@ -1888,6 +1896,7 @@ mod tests {
             lan_servers: &[],
             control: None,
             verbose_log: false,
+            local_proxy: None,
         })
         .expect("config rendered");
         assert!(rendered.unsupported.is_empty());
@@ -1968,6 +1977,7 @@ mod tests {
                 lan_servers: &[],
                 control: None,
                 verbose_log: false,
+                local_proxy: None,
             })
             .expect("rendered");
             let config: Value = serde_json::from_slice(&rendered.body).expect("JSON");
@@ -2012,6 +2022,7 @@ mod tests {
                 lan_servers: &[],
                 control: None,
                 verbose_log: false,
+                local_proxy: None,
             })
             .expect("rendered");
             let config: Value = serde_json::from_slice(&rendered.body).expect("JSON");
@@ -2050,6 +2061,7 @@ mod tests {
                 lan_servers: &[],
                 control: None,
                 verbose_log: false,
+                local_proxy: None,
             })
             .expect("rendered");
             let config: Value = serde_json::from_slice(&rendered.body).expect("JSON");
@@ -2094,6 +2106,7 @@ mod tests {
             lan_servers: &[],
             control: None,
             verbose_log: false,
+            local_proxy: None,
         })
         .expect("rendered");
         let config: Value = serde_json::from_slice(&rendered.body).expect("JSON");
@@ -2141,6 +2154,7 @@ mod tests {
                 lan_servers,
                 control: None,
                 verbose_log: false,
+                local_proxy: None,
             })
             .expect("rendered");
             let config: Value = serde_json::from_slice(&rendered.body).expect("JSON");
@@ -2207,6 +2221,7 @@ mod tests {
                 lan_servers: &[],
                 control: None,
                 verbose_log: false,
+                local_proxy: None,
             })
             .expect("rendered");
             let config: Value = serde_json::from_slice(&rendered.body).expect("JSON");
