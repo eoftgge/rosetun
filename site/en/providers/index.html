@@ -5,7 +5,7 @@
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <meta
             name="description"
-            content="For providers. VPN client for Windows. Subscriptions, rules and connection protection."
+            content="For providers. VPN client. Subscriptions, rules and connection protection."
         />
         <meta name="referrer" content="no-referrer" />
         <meta
@@ -25,7 +25,7 @@
                 <a class="brand" href="../../en/"
                     ><img src="../../assets/rose.svg" width="40" height="40" alt="" />Rosetun</a
                 >
-                <p class="platform-label">WINDOWS <span aria-hidden="true">·</span> OPEN SOURCE</p>
+                <p class="platform-label">WINDOWS <!-- linux-ready <span aria-hidden="true">·</span> LINUX  --><span aria-hidden="true">·</span> OPEN SOURCE</p>
             </div>
             <nav aria-label="Navigation">
                 <a href="../../en/">Home</a><a href="../../en/providers/">For providers</a
@@ -48,7 +48,12 @@
                     </p>
                     <pre><code>&lt;a href=&quot;rosetun://add/https%3A%2F%2Fprovider.example%2Fsubscription%2Fdemo#Example&quot;&gt;Add to Rosetun&lt;/a&gt;</code></pre>
                     <p>
-                        Once Rosetun is installed, Windows opens the link in the app. Users see an
+                        Once Rosetun is installed, the system opens the link in the app: on Windows
+                        through the scheme the installer registers, on Linux through the package's
+                        <code>.desktop</code> handler (<code>x-scheme-handler/rosetun</code>). A later
+                        start hands the link to a running Rosetun through a channel only the user's
+                        account can open, a named pipe on Windows and a socket in
+                        <code>$XDG_RUNTIME_DIR</code> on Linux. Users see an
                         add dialog with the provider host. Fetching and adding start only after
                         confirmation. An existing subscription opens its card; a link does not
                         replace an open dialog.
@@ -171,6 +176,16 @@
                         Different hosts receive different IDs. Subscriptions added before 0.4 retain
                         their previous shared ID. OS version and model are limited to 64 printable
                         ASCII characters; other characters become ?.
+                    </p>
+                    <p>
+                        On Windows <code>x-device-os</code> is <code>Windows</code>, the ID comes from
+                        <code>MachineGuid</code>, the version from the registry and the model from the
+                        BIOS. On Linux <code>x-device-os</code> is <code>Linux</code>, the ID comes from
+                        <code>/etc/machine-id</code>, the version from <code>PRETTY_NAME</code> in
+                        <code>os-release</code> and the model from
+                        <code>/sys/class/dmi/id/product_name</code>. The model is <code>PC</code> when
+                        the system gives none. The system's identifier itself is never sent, only a
+                        hash of it.
                     </p>
                 </section>
                 <section>

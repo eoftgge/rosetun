@@ -5,7 +5,7 @@
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <meta
             name="description"
-            content="Rosetun. VPN client for Windows. Subscriptions, rules and connection protection."
+            content="Rosetun. VPN client. Subscriptions, rules and connection protection."
         />
         <meta name="referrer" content="no-referrer" />
         <meta
@@ -25,7 +25,7 @@
                 <a class="brand" href="../en/"
                     ><img src="../assets/rose.svg" width="40" height="40" alt="" />Rosetun</a
                 >
-                <p class="platform-label">WINDOWS <span aria-hidden="true">·</span> OPEN SOURCE</p>
+                <p class="platform-label">WINDOWS <!-- linux-ready <span aria-hidden="true">·</span> LINUX  --><span aria-hidden="true">·</span> OPEN SOURCE</p>
             </div>
             <nav aria-label="Navigation">
                 <a href="../en/">Home</a><a href="../en/providers/">For providers</a
@@ -40,7 +40,7 @@
                 <div class="hero-content">
                     <h1 id="hero-title">Your traffic. Your rules.</h1>
                     <p class="lead">
-                        VPN client for Windows: subscriptions, rules, kill switch and Lockdown.
+                        VPN client for Windows<!-- linux-ready  and Linux -->: subscriptions, rules, kill switch and Lockdown.
                     </p>
                     <div class="download-row">
                         <a
@@ -56,7 +56,7 @@
                             >All releases <span aria-hidden="true">↗</span></a
                         ><a href="#verify">Verify download <span aria-hidden="true">↓</span></a>
                     </div>
-                    <p class="compatibility">Windows 10 is untested. <!-- linux-ready Debian 13: <a href="@@DEB_URL@@">@@DEB@@</a>. --><!-- linux-soon -->Linux: coming soon.<!-- /linux-soon --></p>
+                    <p class="compatibility">Windows 10 is untested. <!-- linux-ready Debian 13: <a href="@@DEB_URL@@">@@DEB@@</a>. --><!-- linux-soon -->Linux: coming soon. Until then, a beta for Debian 13 is on <a href="https://github.com/eoftgge/rosetun/releases">Releases</a>.<!-- /linux-soon --></p>
                 </div>
             </section>
             <section>
@@ -67,10 +67,11 @@
                         <span class="number">01</span>
                         <h3>Connection protection</h3>
                         <p>
-                            The kill switch blocks traffic when the tunnel drops while the service
-                            is running. Without it, a DNS lock keeps system DNS inside the tunnel;
-                            if the lock cannot be set, the app says so. Experimental Lockdown keeps
-                            traffic blocked without a connection and after a restart.
+                            The kill switch blocks traffic when the tunnel drops and keeps the
+                            network closed through an update. Without it, a DNS lock keeps system DNS
+                            inside the tunnel. The window and rosetun status show what is in place
+                            and what is missing. Experimental Lockdown keeps traffic blocked without
+                            a connection and after a restart.
                         </p>
                     </article>
                     <article>
@@ -78,8 +79,9 @@
                         <h3>Your rules</h3>
                         <p>
                             Send apps, websites and IP addresses through the VPN, connect directly
-                            or block them. Use GeoIP, GeoSite and your own lists. Temporary rules
-                            last until you disconnect.
+                            or block them. Use GeoIP, GeoSite and your own lists. Undo a change with
+                            Ctrl+Z. Temporary rules last until you disconnect. Rules by app are for
+                            Windows only.
                         </p>
                     </article>
                     <article>
@@ -96,8 +98,8 @@
                         <h3>Subscriptions at hand</h3>
                         <p>
                             Add a subscription with a link, a QR code or a rosetun:// button on your
-                            provider’s site. You can turn off device ID sharing for each
-                            subscription.
+                            provider’s site, or your own HTTP, HTTPS or SOCKS5 proxy. You can turn
+                            off device ID sharing for each subscription.
                         </p>
                     </article>
                     <article>
@@ -105,8 +107,8 @@
                         <h3>Connection choices</h3>
                         <p>
                             VLESS, VMess, Trojan, Shadowsocks and Hysteria2. sing-box and Xray
-                            engines, REALITY and XHTTP. See the provider page for transports and
-                            limitations.
+                            engines, REALITY and XHTTP, TLS fragmentation. See the provider page for
+                            transports and limitations.
                         </p>
                     </article>
                     <article>
@@ -118,12 +120,30 @@
                             disconnect and are not written to disk.
                         </p>
                     </article>
+                    <article>
+                        <span class="number">07</span>
+                        <h3>TUN or system proxy</h3>
+                        <p>
+                            TUN takes all of this computer's traffic. System proxy covers the programs
+                            that use it, for when TUN gets in the way, with a strict kill switch and
+                            access from your network if you want them.
+                        </p>
+                    </article>
+                    <article>
+                        <span class="number">08</span>
+                        <h3>Your local network</h3>
+                        <p>
+                            Reach a printer, a NAS or game streaming past the tunnel. On Windows only
+                            your own network opens, unless you also open private networks behind the
+                            router. On Linux every private range opens.
+                        </p>
+                    </article>
                 </div>
                 <p class="note">
                     Rosetun protects against accidental leaks, not malware running under your
-                    account. Without Lockdown, a service crash removes the block. Lockdown has only
-                    been tested on Windows 11; third-party firewalls, antivirus software, sleep and
-                    hibernation are untested.
+                    account. Without Lockdown, a service crash removes the block on Windows; on
+                    Linux the kill switch stays. Lockdown is experimental: third-party firewalls,
+                    antivirus software, hibernation and sleep on real hardware are untested.
                     <a href="https://github.com/eoftgge/rosetun/blob/master/README.md"
                         >Network requests and protection model</a
                     >
@@ -186,6 +206,10 @@
                     not a Windows code signature.
                 </p>
                 <pre><code data-release-text="gh attestation verify .\@@INSTALLER@@ --repo eoftgge/rosetun">gh attestation verify .\rosetun-VERSION-setup.exe --repo eoftgge/rosetun</code></pre>
+                <p>
+                    The Debian package is in SHA256SUMS.txt and has an attestation too:
+                    <a href="help/#debian">Debian 13</a>.
+                </p>
                 <p><a href="help/">Installation and first launch</a></p>
             </section>
         </main>

@@ -5,7 +5,7 @@
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <meta
             name="description"
-            content="Для провайдеров. VPN-клиент для Windows. Подписки, правила и защита соединения."
+            content="Для провайдеров. VPN-клиент. Подписки, правила и защита соединения."
         />
         <meta name="referrer" content="no-referrer" />
         <meta
@@ -25,7 +25,7 @@
                 <a class="brand" href="../../ru/"
                     ><img src="../../assets/rose.svg" width="40" height="40" alt="" />Rosetun</a
                 >
-                <p class="platform-label">WINDOWS <span aria-hidden="true">·</span> OPEN SOURCE</p>
+                <p class="platform-label">WINDOWS <!-- linux-ready <span aria-hidden="true">·</span> LINUX  --><span aria-hidden="true">·</span> OPEN SOURCE</p>
             </div>
             <nav aria-label="Навигация">
                 <a href="../../ru/">Главная</a><a href="../../ru/providers/">Для провайдеров</a
@@ -48,8 +48,13 @@
                     </p>
                     <pre><code>&lt;a href=&quot;rosetun://add/https%3A%2F%2Fprovider.example%2Fsubscription%2Fdemo#Example&quot;&gt;Добавить в Rosetun&lt;/a&gt;</code></pre>
                     <p>
-                        После установки Rosetun Windows открывает такую ссылку в приложении.
-                        Пользователь видит окно добавления с хостом провайдера. Загрузка и
+                        После установки Rosetun система открывает такую ссылку в приложении: на Windows
+                        через схему, которую регистрирует установщик, на Linux через обработчик
+                        <code>.desktop</code> из пакета (<code>x-scheme-handler/rosetun</code>). Следующий
+                        запуск передаёт ссылку работающему Rosetun по каналу, который может открыть
+                        только учётная запись пользователя: именованный канал на Windows, сокет в
+                        <code>$XDG_RUNTIME_DIR</code> на Linux. Пользователь видит окно добавления с
+                        хостом провайдера. Загрузка и
                         добавление начинаются только после подтверждения. Если подписка уже есть,
                         открывается её карточка; ссылка не заменяет уже открытый диалог.
                     </p>
@@ -173,6 +178,15 @@
                         получают разные ID. У подписок, добавленных до 0.4, сохраняется прежний
                         общий ID. Версия ОС и модель ограничены 64 печатными ASCII-символами;
                         остальные символы заменяются на ?.
+                    </p>
+                    <p>
+                        На Windows <code>x-device-os</code> равен <code>Windows</code>, ID получается из
+                        <code>MachineGuid</code>, версия из реестра, модель из BIOS. На Linux
+                        <code>x-device-os</code> равен <code>Linux</code>, ID получается из
+                        <code>/etc/machine-id</code>, версия из <code>PRETTY_NAME</code> в
+                        <code>os-release</code>, модель из <code>/sys/class/dmi/id/product_name</code>.
+                        Если система модели не даёт, отправляется <code>PC</code>. Сам системный
+                        идентификатор не отправляется, только его хеш.
                     </p>
                 </section>
                 <section>

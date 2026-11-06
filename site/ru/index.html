@@ -5,7 +5,7 @@
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <meta
             name="description"
-            content="Rosetun. VPN-клиент для Windows. Подписки, правила и защита соединения."
+            content="Rosetun. VPN-клиент. Подписки, правила и защита соединения."
         />
         <meta name="referrer" content="no-referrer" />
         <meta
@@ -25,7 +25,7 @@
                 <a class="brand" href="../ru/"
                     ><img src="../assets/rose.svg" width="40" height="40" alt="" />Rosetun</a
                 >
-                <p class="platform-label">WINDOWS <span aria-hidden="true">·</span> OPEN SOURCE</p>
+                <p class="platform-label">WINDOWS <!-- linux-ready <span aria-hidden="true">·</span> LINUX  --><span aria-hidden="true">·</span> OPEN SOURCE</p>
             </div>
             <nav aria-label="Навигация">
                 <a href="../ru/">Главная</a><a href="../ru/providers/">Для провайдеров</a
@@ -41,7 +41,7 @@
                 <div class="hero-content">
                     <h1 id="hero-title">Ваш трафик. Ваши правила.</h1>
                     <p class="lead">
-                        VPN-клиент для Windows: подписки, правила, kill switch и Lockdown.
+                        VPN-клиент для Windows<!-- linux-ready  и Linux -->: подписки, правила, kill switch и Lockdown.
                     </p>
                     <div class="download-row">
                         <a
@@ -57,7 +57,7 @@
                             >Все выпуски <span aria-hidden="true">↗</span></a
                         ><a href="#verify">Проверить загрузку <span aria-hidden="true">↓</span></a>
                     </div>
-                    <p class="compatibility">Windows 10 не проверялась. <!-- linux-ready Debian 13: <a href="@@DEB_URL@@">@@DEB@@</a>. --><!-- linux-soon -->Linux: скоро.<!-- /linux-soon --></p>
+                    <p class="compatibility">Windows 10 не проверялась. <!-- linux-ready Debian 13: <a href="@@DEB_URL@@">@@DEB@@</a>. --><!-- linux-soon -->Linux: скоро. Пока бета для Debian 13 лежит на странице <a href="https://github.com/eoftgge/rosetun/releases">выпусков</a>.<!-- /linux-soon --></p>
                 </div>
             </section>
             <section>
@@ -68,10 +68,11 @@
                         <span class="number">01</span>
                         <h3>Подключение под защитой</h3>
                         <p>
-                            Kill switch блокирует трафик при потере туннеля, пока работает служба.
-                            Без него замок DNS держит системный DNS в туннеле; если замок поставить
-                            не удалось, приложение об этом скажет. Экспериментальный Lockdown
-                            сохраняет блокировку без подключения и после перезагрузки.
+                            Kill switch блокирует трафик при потере туннеля и держит сеть закрытой
+                            при обновлении. Без него замок DNS держит системный DNS в туннеле. Окно и
+                            rosetun status показывают, что установлено и чего не хватает.
+                            Экспериментальный Lockdown сохраняет блокировку без подключения и после
+                            перезагрузки.
                         </p>
                     </article>
                     <article>
@@ -79,8 +80,9 @@
                         <h3>Ваши правила</h3>
                         <p>
                             Отправляйте программы, сайты и IP через VPN, напрямую или блокируйте.
-                            Используйте GeoIP, GeoSite и свои списки. Временные правила действуют до
-                            отключения.
+                            Используйте GeoIP, GeoSite и свои списки. Отменяйте изменения по Ctrl+Z.
+                            Временные правила действуют до отключения. Правила по программам только
+                            на Windows.
                         </p>
                     </article>
                     <article>
@@ -96,7 +98,8 @@
                         <h3>Подписки под рукой</h3>
                         <p>
                             Добавляйте подписку ссылкой, QR-кодом или кнопкой rosetun:// на сайте
-                            провайдера. Отправку ID устройства можно выключить для каждой подписки.
+                            провайдера, а также свой прокси HTTP, HTTPS или SOCKS5. Отправку ID
+                            устройства можно выключить для каждой подписки.
                         </p>
                     </article>
                     <article>
@@ -104,8 +107,8 @@
                         <h3>Выбор соединения</h3>
                         <p>
                             VLESS, VMess, Trojan, Shadowsocks и Hysteria2. Ядра sing-box и Xray,
-                            REALITY и XHTTP. Доступные транспорты и ограничения описаны на странице
-                            для провайдеров.
+                            REALITY и XHTTP, фрагментация TLS. Доступные транспорты и ограничения
+                            описаны на странице для провайдеров.
                         </p>
                     </article>
                     <article>
@@ -117,12 +120,30 @@
                             до отключения, без записи на диск.
                         </p>
                     </article>
+                    <article>
+                        <span class="number">07</span>
+                        <h3>TUN или системный прокси</h3>
+                        <p>
+                            TUN берёт весь трафик компьютера. Системный прокси касается программ,
+                            которые его используют, когда TUN мешает; по желанию со строгим kill
+                            switch и доступом из вашей сети.
+                        </p>
+                    </article>
+                    <article>
+                        <span class="number">08</span>
+                        <h3>Ваша локальная сеть</h3>
+                        <p>
+                            Принтер, NAS и стриминг игр мимо туннеля. На Windows открывается только
+                            ваша сеть, если не открыть ещё и частные сети за роутером. На Linux
+                            открываются все частные диапазоны.
+                        </p>
+                    </article>
                 </div>
                 <p class="note">
                     Rosetun защищает от случайных утечек, а не от вредоносных программ под вашей
-                    учётной записью. Без Lockdown падение службы снимает блокировку. Lockdown
-                    проверен только на Windows 11; сторонние брандмауэры, антивирусы, сон и
-                    гибернация не проверены.
+                    учётной записью. Без Lockdown падение службы снимает блокировку на Windows, а на
+                    Linux kill switch остаётся. Lockdown экспериментальный: сторонние брандмауэры,
+                    антивирусы, гибернация и сон на настоящем компьютере не проверены.
                     <a href="https://github.com/eoftgge/rosetun/blob/master/README.ru.md"
                         >Сетевые обращения и модель защиты</a
                     >
@@ -185,6 +206,10 @@
                     не подпись Windows.
                 </p>
                 <pre><code data-release-text="gh attestation verify .\@@INSTALLER@@ --repo eoftgge/rosetun">gh attestation verify .\rosetun-VERSION-setup.exe --repo eoftgge/rosetun</code></pre>
+                <p>
+                    Пакет Debian тоже есть в SHA256SUMS.txt и имеет аттестацию:
+                    <a href="help/#debian">Debian 13</a>.
+                </p>
                 <p><a href="help/">Установка и первый запуск</a></p>
             </section>
         </main>
