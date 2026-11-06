@@ -8279,6 +8279,8 @@ fn a_new_server_name_in_the_proxy_mode_is_asked_of_the_engine() {
 fn a_shared_proxy_reads_the_networks_without_local_network_and_follows_them() {
     use super::dns::test_support::{Behavior, Server};
 
+    static SCANS: AtomicUsize = AtomicUsize::new(0);
+
     let dns = Server::new(Behavior::Noerror);
     let (helper, _controls) = ordered_helper();
     {
@@ -8290,7 +8292,6 @@ fn a_shared_proxy_reads_the_networks_without_local_network_and_follows_them() {
     assert!(!helper.session().unwrap().local_network_changed());
     helper.disconnect().unwrap();
 
-    static SCANS: AtomicUsize = AtomicUsize::new(0);
     {
         let mut session = helper.session().unwrap();
         session.lan_scan = |_| {

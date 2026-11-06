@@ -1337,8 +1337,10 @@ fn a_change_of_mode_during_a_session_goes_in_through_apply() {
 
 #[test]
 fn a_change_of_mode_without_a_session_waits_for_the_next_connect() {
-    let mut state = State::default();
-    state.config_ready = true;
+    let mut state = State {
+        config_ready: true,
+        ..State::default()
+    };
     state.system_proxy.follow_session();
     assert!(state.take_local_proxy_apply().is_none());
     assert!(state.take_local_proxy_apply().is_none());

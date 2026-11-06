@@ -84,7 +84,7 @@ pub fn change_setting(store: &Store, change: SettingChange) -> Result<(), Settin
             SettingChange::ConnectionMode(mode) => config.settings.connection_mode = mode,
             SettingChange::LocalProxyPort(port) => config.settings.local_proxy.port = port,
             SettingChange::ShareOnLan(enabled) => {
-                config.settings.local_proxy.share_on_lan = enabled
+                config.settings.local_proxy.share_on_lan = enabled;
             }
             SettingChange::PrivateNetworks(enabled) => config.settings.private_networks = enabled,
             SettingChange::AutoUpdateSubscriptions(enabled) => {
