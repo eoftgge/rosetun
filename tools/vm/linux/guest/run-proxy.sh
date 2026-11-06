@@ -471,8 +471,18 @@ scenario_busy() {
     busy() {
         disconnect || return 1
         python3 -c "import socket,time;s=socket.socket();s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1);s.bind(('127.0.0.1',$PROXY_PORT));s.listen();time.sleep(60)" &
-        local holder=$! rc=0
-        sleep 1
+        local holder=$! rc=0 deadline=$((SECONDS + 15))
+        # A fixed wait lost to a slow first start of Python: the connect then found the
+        # port free, and that looked like the service ignoring a taken port.
+        until listening_on | grep -qxF 127.0.0.1; do
+            if [ "$SECONDS" -ge "$deadline" ] || ! kill -0 "$holder" 2>/dev/null; then
+                kill "$holder" 2>/dev/null
+                wait "$holder" 2>/dev/null
+                fail_reason="the stand's program did not take port $PROXY_PORT"
+                return 1
+            fi
+            sleep 0.2
+        done
         install -m 0600 -o "$(uid_of "$USER_A")" -g "$(gid_of "$USER_A")" -- "$ART/request-proxy-strict.json" "$RUN/work-$USER_A/request-proxy-strict.json"
         cli 120 connect request-proxy-strict.json
         if [ "$CLI_RC" -eq 0 ]; then
