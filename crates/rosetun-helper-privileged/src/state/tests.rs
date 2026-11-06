@@ -1,6 +1,7 @@
 use rosetun_config::{
-    DomainMatch, EngineKind, ExitId, NodeId, Outbound, Rule, RuleId, RuleMatcher, RuleSet,
-    RuleSetId, RuleTarget, RuleTemplate, Selection, Settings, SubscriptionId, Traffic, VlessParams,
+    ConnectionMode, DomainMatch, EngineKind, ExitId, InstalledProtection, NodeId, Outbound,
+    ProtectionState, RequestedProtection, Rule, RuleId, RuleMatcher, RuleSet, RuleSetId,
+    RuleTarget, RuleTemplate, Selection, Settings, SubscriptionId, Traffic, VlessParams,
 };
 use rosetun_engine::errors::EngineError;
 use rosetun_engine::{
@@ -8,8 +9,8 @@ use rosetun_engine::{
     RenderedConfig, RuleCapabilities, TrafficSample,
 };
 use rosetun_ipc::{ExtraNode, SessionExit, TunnelDelays};
-use rosetun_routing::RoutingGuard;
 use rosetun_routing::errors::RoutingError;
+use rosetun_routing::{RoutingBackend, RoutingGuard};
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
@@ -7085,6 +7086,7 @@ impl RoutingBackend for LockdownSessionRouting {
             private_networks: false,
             sublayer_weight: Some(0xD000),
             upgrade_hold: false,
+            hold_after_crash: false,
         })
     }
 
@@ -7175,6 +7177,7 @@ impl HoldRouting {
             private_networks: false,
             sublayer_weight: held.then_some(0xD000),
             upgrade_hold: held,
+            hold_after_crash: false,
         }
     }
 }
@@ -7404,6 +7407,7 @@ fn lockdown_without_the_capability_refuses_a_connect_even_without_the_kill_switc
         allow_lan: false,
         private_networks: false,
         upgrade_hold: false,
+        hold_after_crash: false,
     };
     let mut request = connect_request();
     request.settings.kill_switch = false;
@@ -8386,4 +8390,227 @@ fn sharing_under_lockdown_needs_its_local_network() {
     settings.local_proxy.share_on_lan = true;
     settings.connection_mode = rosetun_config::ConnectionMode::Tun;
     assert_eq!(shared_port(&settings, &off), None);
+}
+
+fn dns_lock_request() -> ConnectRequest {
+    let mut request = connect_request();
+    request.settings.kill_switch = false;
+    request
+}
+
+fn dns_engine_helper(
+    routing: Box<dyn RoutingBackend>,
+    server: &super::dns::test_support::Server,
+) -> Helper {
+    let mut engines = EngineRegistry::new();
+    engines.register(Box::new(DnsEngine {
+        server: Some(server.address()),
+        stopped: Arc::new(AtomicUsize::new(0)),
+    }));
+    let helper = Helper::new(engines, routing, VerboseGate::default());
+    shorten_dns_timeouts(&helper);
+    helper
+}
+
+#[test]
+fn a_dns_lock_that_cannot_be_installed_is_reported_with_its_reason() {
+    use super::dns::test_support::{Behavior, Server};
+
+    let server = Server::new(Behavior::Noerror);
+    let helper = dns_engine_helper(Box::new(FailingRouting), &server);
+    helper.connect(&dns_lock_request()).unwrap();
+
+    let status = helper.status();
+    assert!(matches!(status.state, ConnectionState::Connected));
+    assert_eq!(status.protection.installed, InstalledProtection::None);
+    assert_eq!(status.protection.requested, RequestedProtection::DnsLock);
+    let unmet = status.protection.unmet().expect("the lock is missing");
+    assert_eq!(unmet.code, ProtectionShortfallCode::FirewallUnavailable);
+    assert_eq!(unmet.reason, unmet.code.reason());
+
+    helper.disconnect().unwrap();
+    assert_eq!(helper.status().protection, ProtectionState::default());
+}
+
+#[test]
+fn a_refused_dns_lock_is_told_apart_and_its_reason_names_no_address() {
+    let refused = protection::shortfall_of(&RoutingError::Route(
+        "route to 203.0.113.1 refused".to_owned(),
+    ));
+    assert_eq!(refused, ProtectionShortfallCode::FirewallRefused);
+    assert!(!refused.reason().contains("203.0.113.1"));
+    assert_eq!(
+        protection::shortfall_of(&RoutingError::Unavailable("no cgroup".to_owned())),
+        ProtectionShortfallCode::FirewallUnavailable
+    );
+}
+
+#[test]
+fn a_dns_lock_that_cannot_permit_the_tunnel_is_reported_with_its_reason() {
+    use super::dns::test_support::{Behavior, Server};
+
+    let server = Server::new(Behavior::Noerror);
+    let helper = dns_engine_helper(
+        Box::new(RejectingTunnelRouting {
+            reverted: Arc::new(AtomicUsize::new(0)),
+        }),
+        &server,
+    );
+    helper.connect(&dns_lock_request()).unwrap();
+
+    let protection = helper.status().protection;
+    assert_eq!(protection.installed, InstalledProtection::None);
+    assert_eq!(
+        protection.unmet().expect("the lock is gone").code,
+        ProtectionShortfallCode::TunnelNotPermitted
+    );
+}
+
+#[test]
+fn an_engine_without_a_tunnel_dns_address_is_reported() {
+    let (helper, _controls) = ordered_helper();
+    helper.connect(&dns_lock_request()).unwrap();
+
+    let protection = helper.status().protection;
+    assert_eq!(protection.installed, InstalledProtection::None);
+    assert_eq!(
+        protection.unmet().expect("no lock").code,
+        ProtectionShortfallCode::NoTunnelDns
+    );
+}
+
+#[test]
+fn a_dns_lock_in_place_reports_no_shortfall() {
+    use super::dns::test_support::{Behavior, Server};
+
+    let server = Server::new(Behavior::Noerror);
+    let (helper, _controls, _prepared, _reverted) =
+        supervised_helper_with_dns(false, Some(server.address()));
+    shorten_dns_timeouts(&helper);
+    helper.connect(&dns_lock_request()).unwrap();
+
+    let protection = helper.status().protection;
+    assert_eq!(protection.installed, InstalledProtection::DnsLock);
+    assert_eq!(protection.requested, RequestedProtection::DnsLock);
+    assert_eq!(protection.unmet(), None);
+    assert!(!protection.survives_service_crash);
+    assert_eq!(protection.connection_mode, Some(ConnectionMode::Tun));
+}
+
+#[test]
+fn a_new_attempt_clears_the_reason_of_the_last_one() {
+    use super::dns::test_support::{Behavior, Server};
+
+    let server = Server::new(Behavior::Noerror);
+    let helper = dns_engine_helper(Box::new(FailingRouting), &server);
+    let request = dns_lock_request();
+    helper.connect(&request).unwrap();
+    assert!(helper.status().protection.unmet().is_some());
+
+    helper
+        .session()
+        .unwrap()
+        .protection
+        .begin_attempt(&request.settings);
+    assert_eq!(helper.status().protection.shortfall, None);
+}
+
+#[test]
+fn the_kill_switch_is_reported_and_outlives_the_service_only_on_linux() {
+    use super::dns::test_support::{Behavior, Server};
+
+    let server = Server::new(Behavior::Noerror);
+    let (helper, _controls, _prepared, _reverted) =
+        supervised_helper_with_dns(true, Some(server.address()));
+    shorten_dns_timeouts(&helper);
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    helper.connect(&request).unwrap();
+
+    let protection = helper.status().protection;
+    assert_eq!(protection.installed, InstalledProtection::KillSwitch);
+    assert_eq!(protection.requested, RequestedProtection::KillSwitch);
+    assert_eq!(protection.survives_service_crash, cfg!(target_os = "linux"));
+    assert_eq!(protection.unmet(), None);
+}
+
+#[test]
+fn lockdown_and_the_holds_are_reported_over_what_the_session_has() {
+    use super::dns::test_support::{Behavior, Server};
+
+    let server = Server::new(Behavior::Noerror);
+    let helper = dns_engine_helper(Box::new(FailingRouting), &server);
+    helper.connect(&dns_lock_request()).unwrap();
+    for (state, installed) in [
+        (
+            lockdown::LockdownState {
+                enabled: true,
+                ..Default::default()
+            },
+            InstalledProtection::Lockdown,
+        ),
+        (
+            lockdown::LockdownState {
+                enabled: true,
+                upgrade_hold: true,
+                ..Default::default()
+            },
+            InstalledProtection::HoldAfterUpgrade,
+        ),
+        (
+            lockdown::LockdownState {
+                enabled: true,
+                upgrade_hold: true,
+                hold_after_crash: true,
+                ..Default::default()
+            },
+            InstalledProtection::HoldAfterCrash,
+        ),
+    ] {
+        *helper.lockdown.lock().unwrap() = state;
+        let protection = helper.status().protection;
+        assert_eq!(protection.installed, installed);
+        assert!(protection.survives_service_crash, "{installed:?}");
+        assert_eq!(protection.unmet(), None, "{installed:?}");
+    }
+    *helper.lockdown.lock().unwrap() = lockdown::LockdownState::default();
+}
+
+#[test]
+fn the_proxy_mode_without_a_kill_switch_asks_for_nothing_and_says_so() {
+    use super::dns::test_support::{Behavior, Server};
+
+    let dns = Server::new(Behavior::Noerror);
+    let (helper, _controls, _prepared, _reverted) =
+        supervised_helper_with_dns(false, Some(dns.address()));
+    helper.session().unwrap().test_local_dns = Some(dns.address());
+    helper.connect(&local_proxy_request(false)).unwrap();
+
+    let protection = helper.status().protection;
+    assert_eq!(protection.requested, RequestedProtection::None);
+    assert_eq!(protection.installed, InstalledProtection::None);
+    assert_eq!(protection.unmet(), None);
+    assert_eq!(
+        protection.connection_mode,
+        Some(ConnectionMode::SystemProxy)
+    );
+}
+
+#[test]
+fn the_proxy_mode_with_a_kill_switch_reports_it() {
+    use super::dns::test_support::{Behavior, Server};
+
+    let dns = Server::new(Behavior::Noerror);
+    let (helper, _controls, _prepared, _reverted) =
+        supervised_helper_with_dns(true, Some(dns.address()));
+    helper.session().unwrap().test_local_dns = Some(dns.address());
+    helper.connect(&local_proxy_request(true)).unwrap();
+
+    let protection = helper.status().protection;
+    assert_eq!(protection.requested, RequestedProtection::KillSwitch);
+    assert_eq!(protection.installed, InstalledProtection::KillSwitch);
+    assert_eq!(
+        protection.connection_mode,
+        Some(ConnectionMode::SystemProxy)
+    );
 }

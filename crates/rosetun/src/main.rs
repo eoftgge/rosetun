@@ -10,8 +10,9 @@ use tracing_subscriber::filter::filter_fn;
 use tracing_subscriber::prelude::*;
 
 use rosetun_config::{
-    ConnectionState, DomainMatch, FailureKind, NodeId, ProcessMatch, ProtectionCapabilities, Rule,
-    RuleMatcher, RuleTarget, Status, SubscriptionId, XrayUse,
+    ConnectionMode, ConnectionState, DomainMatch, FailureKind, InstalledProtection, NodeId,
+    ProcessMatch, ProtectionCapabilities, ProtectionState, RequestedProtection, Rule, RuleMatcher,
+    RuleTarget, Status, SubscriptionId, XrayUse,
 };
 use rosetun_core::{ListOperation, PreparedConnection, terminal_text};
 use rosetun_ipc::{
@@ -333,6 +334,44 @@ fn status_has_no_network(status: &Status) -> bool {
     }
 }
 
+/// What protects the computer now, for `rosetun status`.
+fn protection_lines(protection: &ProtectionState) -> Vec<String> {
+    let installed = match protection.installed {
+        InstalledProtection::None => "none",
+        InstalledProtection::DnsLock => "DNS lock",
+        InstalledProtection::SharedProxyPort => "shared proxy port limited to local networks",
+        InstalledProtection::KillSwitch => "kill switch",
+        InstalledProtection::Lockdown => "Lockdown",
+        InstalledProtection::HoldAfterUpgrade => "network held closed after an upgrade",
+        InstalledProtection::HoldAfterCrash => "network held closed after a service crash",
+    };
+    let mut lines = vec![format!("protection: {installed}")];
+    if let Some(unmet) = protection.unmet() {
+        let requested = match protection.requested {
+            RequestedProtection::KillSwitch => "kill switch",
+            RequestedProtection::DnsLock | RequestedProtection::None => "DNS lock",
+        };
+        lines.push(format!("protection missing: {requested}: {}", unmet.reason));
+    }
+    if protection.connection_mode == Some(ConnectionMode::SystemProxy) {
+        lines.push(
+            "connection mode: system proxy (programs that ignore it are not in the tunnel)"
+                .to_owned(),
+        );
+    }
+    if protection.installed != InstalledProtection::None {
+        lines.push(format!(
+            "if the service crashes: {}",
+            if protection.survives_service_crash {
+                "this stays in place"
+            } else {
+                "this goes with it"
+            }
+        ));
+    }
+    lines
+}
+
 fn status(client: &mut HelperClient) -> ExitCode {
     let result = client.status().and_then(|status| {
         temporary_rules_status(client.temporary_rules())
@@ -346,6 +385,9 @@ fn status(client: &mut HelperClient) -> ExitCode {
             }
             println!("temporary rules: {temporary_count}");
             println!("lockdown: {}", if status.lockdown { "on" } else { "off" });
+            for line in protection_lines(&status.protection) {
+                println!("{line}");
+            }
             if status.upgrade_hold {
                 println!("network: held closed (rosetun open-network opens it)");
             }
@@ -958,12 +1000,13 @@ Options for sub add may appear in any order after the URL."
 mod tests {
     use super::{
         Command, LAN_KEPT_BY_LOCKDOWN, LOCKDOWN_DENIED, access_denied_message, apply_error_message,
-        lockdown_denied, parse_command_arguments, status_has_no_network, temporary_rule_line,
-        temporary_rules_status,
+        lockdown_denied, parse_command_arguments, protection_lines, status_has_no_network,
+        temporary_rule_line, temporary_rules_status,
     };
     use rosetun_config::{
-        ConnectionState, DomainMatch, FailureKind, ProcessMatch, Rule, RuleId, RuleMatcher,
-        RuleTarget, Status, XrayUse,
+        ConnectionMode, ConnectionState, DomainMatch, FailureKind, InstalledProtection,
+        ProcessMatch, ProtectionShortfallCode, ProtectionState, RequestedProtection, Rule, RuleId,
+        RuleMatcher, RuleTarget, Status, XrayUse,
     };
     use rosetun_ipc::{ClientError, ErrorCode, HelperError};
 
@@ -973,6 +1016,45 @@ mod tests {
             .map(|argument| (*argument).to_owned())
             .collect();
         parse_command_arguments(&arguments)
+    }
+
+    #[test]
+    fn status_names_the_missing_protection_only_while_it_is_missing() {
+        let missing = ProtectionState {
+            requested: RequestedProtection::DnsLock,
+            shortfall: Some(ProtectionShortfallCode::FirewallRefused.into()),
+            ..ProtectionState::default()
+        };
+        assert_eq!(
+            protection_lines(&missing),
+            [
+                "protection: none",
+                "protection missing: DNS lock: the firewall refused the rules"
+            ]
+        );
+        let kill_switch = ProtectionState {
+            installed: InstalledProtection::KillSwitch,
+            requested: RequestedProtection::DnsLock,
+            shortfall: Some(ProtectionShortfallCode::FirewallRefused.into()),
+            survives_service_crash: false,
+            ..ProtectionState::default()
+        };
+        assert_eq!(
+            protection_lines(&kill_switch),
+            [
+                "protection: kill switch",
+                "if the service crashes: this goes with it"
+            ]
+        );
+    }
+
+    #[test]
+    fn status_says_the_proxy_mode_leaves_programs_out() {
+        let lines = protection_lines(&ProtectionState {
+            connection_mode: Some(ConnectionMode::SystemProxy),
+            ..ProtectionState::default()
+        });
+        assert!(lines.iter().any(|line| line.contains("system proxy")));
     }
 
     #[test]

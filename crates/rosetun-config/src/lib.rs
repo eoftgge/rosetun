@@ -33,8 +33,9 @@ pub use report::{
 };
 pub use rule::{DomainMatch, ProcessMatch, Rule, RuleMatcher, RuleSet, RuleTarget, RuleTemplate};
 pub use runtime::{
-    ConnectStage, ConnectionNetwork, ConnectionRoute, ConnectionState, FailureKind, LiveConnection,
-    ProtectionCapabilities, Status, Traffic,
+    ConnectStage, ConnectionNetwork, ConnectionRoute, ConnectionState, FailureKind,
+    InstalledProtection, LiveConnection, ProtectionCapabilities, ProtectionShortfall,
+    ProtectionShortfallCode, ProtectionState, RequestedProtection, Status, Traffic,
 };
 pub use settings::{
     ConnectionMode, DnsSettings, EngineKind, FragmentError, FragmentPackets, FragmentRange,

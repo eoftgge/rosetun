@@ -1,5 +1,7 @@
 use eframe::egui::{self, Color32, RichText};
-use rosetun_config::{ConnectionState, FailureKind, Outbound, RuleMatcher, TlsMode, XrayUse};
+use rosetun_config::{
+    ConnectionState, FailureKind, Outbound, ProtectionShortfallCode, RuleMatcher, TlsMode, XrayUse,
+};
 use rosetun_ipc::ProbeOutcome;
 
 use crate::actions::{PrimaryAction, ProtectionAction, protection_action};
@@ -43,6 +45,10 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
     // button stay where they are, and the offer is the first thing read.
     if state.upgrade_hold_shown() {
         upgrade_hold_strip(ui, state, actions);
+        ui.add_space(theme::SECTION_GAP);
+    }
+    if let Some(code) = state.missing_protection() {
+        missing_protection_strip(ui, code);
         ui.add_space(theme::SECTION_GAP);
     }
     if state.available_update().is_some() {
@@ -185,6 +191,28 @@ fn hold_banner() -> String {
     } else {
         tr!("upgrade-hold-banner")
     }
+}
+
+/// The session runs without the protection it asked for. It works, so this
+/// informs rather than alarms: no error colour and nothing to press.
+fn missing_protection_strip(ui: &mut egui::Ui, code: ProtectionShortfallCode) {
+    egui::Frame::new()
+        .fill(theme::palette().input)
+        .stroke(egui::Stroke::new(
+            theme::stroke::HAIRLINE,
+            theme::palette().text_dim,
+        ))
+        .corner_radius(theme::RADIUS)
+        .inner_margin(theme::margin::symmetric(theme::space::L, theme::space::S))
+        .show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.add(
+                egui::Label::new(
+                    RichText::new(i18n::missing_protection(code)).color(theme::palette().text),
+                )
+                .wrap(),
+            );
+        });
 }
 
 /// After an upgrade that held the network closed, until a connect or the

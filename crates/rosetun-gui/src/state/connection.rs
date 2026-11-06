@@ -1,5 +1,6 @@
 use rosetun_config::{
-    ConnectStage, ConnectionMode, ConnectionState, Exit, FailureKind, Status, Transport, XrayUse,
+    ConnectStage, ConnectionMode, ConnectionState, Exit, FailureKind, ProtectionShortfallCode,
+    Status, Transport, XrayUse,
 };
 use rosetun_core::AppliedSnapshot;
 use rosetun_ipc::{ClientError, ErrorCode, ExitOutcome, HelperError, ProbeOutcome, TunnelDelays};
@@ -150,6 +151,18 @@ impl State {
             }
             _ => None,
         }
+    }
+
+    /// Why the protection the session asks for is missing, while the
+    /// session runs without it.
+    pub(crate) fn missing_protection(&self) -> Option<ProtectionShortfallCode> {
+        let status = self.visible_status()?;
+        matches!(
+            status.state,
+            ConnectionState::Connected | ConnectionState::Reconnecting
+        )
+        .then(|| status.protection.unmet().map(|unmet| unmet.code))
+        .flatten()
     }
 
     /// The installer's hold keeps the network closed and nothing is

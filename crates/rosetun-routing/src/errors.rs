@@ -27,6 +27,18 @@ pub enum RoutingError {
 const FWP_E_IN_USE: u32 = 0x8032_000A;
 
 impl RoutingError {
+    /// The firewall cannot be used at all, as opposed to one that was asked
+    /// and said no.
+    pub fn is_unavailable(&self) -> bool {
+        matches!(
+            self,
+            Self::NotPrivileged(_)
+                | Self::MissingDependency(_)
+                | Self::Unsupported
+                | Self::Unavailable(_)
+        )
+    }
+
     pub fn is_tunnel_not_ready(&self) -> bool {
         matches!(self, Self::TunnelNotReady { .. })
     }

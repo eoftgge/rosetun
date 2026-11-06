@@ -425,6 +425,21 @@ scenario_install() {
     check install.service "the unit runs, the helper is in its leaf, the kill switch is offered" do_install
 }
 
+scenario_protection_reported() {
+    reported() {
+        connect_with request-kill-switch.json || return 1
+        cli 15 status
+        printf '%s\n' "$CLI_OUT" | grep -q '^protection: kill switch' ||
+            { fail_reason="status does not say the kill switch is in place: $CLI_OUT"; return 1; }
+        printf '%s\n' "$CLI_OUT" | grep -q '^if the service crashes: this stays in place' ||
+            { fail_reason="status does not say the kill switch stays after a crash: $CLI_OUT"; return 1; }
+        ! printf '%s\n' "$CLI_OUT" | grep -q '^protection missing' ||
+            { fail_reason="status names something as missing: $CLI_OUT"; return 1; }
+        disconnect
+    }
+    check protection.reported "status names the kill switch and that it stays after a crash" reported
+}
+
 scenario_kill_switch() {
     connect_ks() {
         connect_with request-kill-switch.json || return 1
@@ -511,6 +526,29 @@ scenario_dns_lock() {
         disconnect
     }
     check dnslock.tunnel-passes "dig with the guest's resolver was answered through the tunnel" dns_tunnel
+    dns_lock_unavailable() {
+        # The helper trusts an nft binary only root can change, so this fails its
+        # check and nothing else: sing-box does not run that binary.
+        : >"$STATE/nft-untrusted"
+        chmod o+w "$NFT" || { fail_reason="could not change the mode of $NFT"; return 1; }
+        local rc=0
+        connect_with request-dns-lock.json || rc=1
+        chmod o-w "$NFT"
+        rm -f -- "$STATE/nft-untrusted"
+        [ "$rc" -eq 0 ] || return 1
+        ! table_present || { fail_reason="the table is there though the lock could not go in"; return 1; }
+        cli 15 status
+        printf '%s\n' "$CLI_OUT" | grep -q '^protection: none' ||
+            { fail_reason="status does not say nothing is in place: $CLI_OUT"; return 1; }
+        printf '%s\n' "$CLI_OUT" | grep -q '^protection missing: DNS lock: the firewall is unavailable' ||
+            { fail_reason="status does not name the missing lock and its reason: $CLI_OUT"; return 1; }
+        expect_udp_dns_sent || return 1
+        disconnect || return 1
+        cli 15 status
+        ! printf '%s\n' "$CLI_OUT" | grep -q '^protection missing' ||
+            { fail_reason="status still names a missing lock after the disconnect: $CLI_OUT"; return 1; }
+    }
+    check dnslock.unavailable "the session connected without the lock, status named it and its reason, UDP 53 left" dns_lock_unavailable
 }
 
 # ---------------------------------------------------------------- IPv6, inbound, forwarding
@@ -605,6 +643,7 @@ scenario_crash() {
         [ "$KILLED_TABLE_PRESENT" = 1 ] || { fail_reason="the table went away with the helper"; return 1; }
         blocked_rc "$KILLED_DIRECT_RC" || { fail_reason="HTTPS to $PROBE_ADDRESS on $PHYS was not refused after the crash (curl exit $KILLED_DIRECT_RC)"; return 1; }
         printf '%s\n' "$CLI_OUT" | grep -q '^network: held closed' || { fail_reason="status does not report the network held closed: $CLI_OUT"; return 1; }
+        printf '%s\n' "$CLI_OUT" | grep -q '^protection: network held closed after a service crash' || { fail_reason="status does not call it the hold after a crash: $CLI_OUT"; return 1; }
         table_present || { fail_reason="the restarted helper removed the table"; return 1; }
         expect_blocked "HTTPS to $PROBE_ADDRESS on $PHYS during the hold" direct_https
     }
@@ -653,6 +692,9 @@ cleanup() {
     L2_CLEANUP_STATUS=PASS L2_CLEANUP_ACTIONS='' L2_CLEANUP_PROBLEMS=''
     note() { L2_CLEANUP_ACTIONS="$L2_CLEANUP_ACTIONS${L2_CLEANUP_ACTIONS:+; }$1"; }
     problem() { L2_CLEANUP_PROBLEMS="$L2_CLEANUP_PROBLEMS${L2_CLEANUP_PROBLEMS:+; }$1"; L2_CLEANUP_STATUS=ERROR; }
+    if [ -f "$STATE/nft-untrusted" ]; then
+        chmod o-w "$NFT" && rm -f -- "$STATE/nft-untrusted" && note "gave $NFT its mode back" || problem "could not give $NFT its mode back"
+    fi
     if [ -f "$STATE/peer" ]; then
         peer_down && note "removed the peer namespace" || problem "could not remove the peer namespace $PEER_NS, its NAT table or routing rule"
     fi
@@ -766,6 +808,7 @@ scenario_preflight
 if preflight_ok; then
     scenario_install
     if passed install.service; then
+        scenario_protection_reported
         scenario_kill_switch
         scenario_lan_on
         scenario_dns_lock

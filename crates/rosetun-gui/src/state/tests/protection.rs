@@ -167,3 +167,92 @@ fn the_unavailable_texts_read_right_in_both_languages() {
         });
     }
 }
+
+fn connected_with(protection: rosetun_config::ProtectionState) -> State {
+    let mut state = answered(Some(ProtectionCapabilities {
+        kill_switch: true,
+        lockdown: true,
+    }));
+    state.reduce(WorkerEvent::Status(Status {
+        state: ConnectionState::Connected,
+        protection,
+        ..Status::default()
+    }));
+    state
+}
+
+fn dns_lock_missing() -> rosetun_config::ProtectionState {
+    rosetun_config::ProtectionState {
+        requested: rosetun_config::RequestedProtection::DnsLock,
+        shortfall: Some(rosetun_config::ProtectionShortfallCode::FirewallRefused.into()),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn the_warning_shows_only_while_requested_protection_is_missing() {
+    let missing = connected_with(dns_lock_missing());
+    assert_eq!(
+        missing.missing_protection(),
+        Some(rosetun_config::ProtectionShortfallCode::FirewallRefused)
+    );
+
+    // The same failure, but a kill switch covers what was asked for.
+    let covered = connected_with(rosetun_config::ProtectionState {
+        installed: rosetun_config::InstalledProtection::KillSwitch,
+        ..dns_lock_missing()
+    });
+    assert_eq!(covered.missing_protection(), None);
+
+    let in_place = connected_with(rosetun_config::ProtectionState {
+        installed: rosetun_config::InstalledProtection::DnsLock,
+        requested: rosetun_config::RequestedProtection::DnsLock,
+        ..Default::default()
+    });
+    assert_eq!(in_place.missing_protection(), None);
+
+    let nothing_asked = connected_with(rosetun_config::ProtectionState::default());
+    assert_eq!(nothing_asked.missing_protection(), None);
+}
+
+#[test]
+fn the_warning_does_not_outlive_the_session() {
+    let mut state = connected_with(dns_lock_missing());
+    state.reduce(WorkerEvent::Status(Status {
+        state: ConnectionState::Disconnected,
+        protection: dns_lock_missing(),
+        ..Status::default()
+    }));
+    assert_eq!(state.missing_protection(), None);
+}
+
+#[test]
+fn the_tray_tooltip_carries_the_warning_only_while_it_is_shown() {
+    let missing = connected_with(dns_lock_missing());
+    let warning = tr!("tray-protection-missing");
+    assert!(
+        crate::tray::tray_view(&missing, true)
+            .tooltip
+            .contains(&warning)
+    );
+
+    let in_place = connected_with(rosetun_config::ProtectionState::default());
+    assert!(
+        !crate::tray::tray_view(&in_place, true)
+            .tooltip
+            .contains(&warning)
+    );
+}
+
+#[test]
+fn every_reason_reads_in_the_warning() {
+    for code in [
+        rosetun_config::ProtectionShortfallCode::FirewallUnavailable,
+        rosetun_config::ProtectionShortfallCode::FirewallRefused,
+        rosetun_config::ProtectionShortfallCode::TunnelNotPermitted,
+        rosetun_config::ProtectionShortfallCode::NoTunnelDns,
+    ] {
+        let text = crate::i18n::missing_protection(code);
+        assert!(!text.contains("protection-"), "{text}");
+    }
+}

@@ -1,15 +1,39 @@
 use fluent_bundle::FluentArgs;
-use rosetun_config::{ConnectStage, FailureKind, Node, Outbound, RuleTemplate, TlsMode, XrayUse};
+use rosetun_config::{
+    ConnectStage, FailureKind, Node, Outbound, ProtectionShortfallCode, RuleTemplate, TlsMode,
+    XrayUse,
+};
 
 use super::{Language, tr_in};
 
 #[cfg(any(windows, target_os = "linux"))]
-pub(crate) fn tray_tooltip(status: &str, server: Option<&str>) -> String {
+pub(crate) fn tray_tooltip(status: &str, server: Option<&str>, warning: Option<&str>) -> String {
     let title = crate::constants::TITLE;
-    match server {
+    let mut tooltip = match server {
         Some(server) => format!("{title} · {status}\n{server}"),
         None => format!("{title} · {status}"),
+    };
+    if let Some(warning) = warning {
+        tooltip.push('\n');
+        tooltip.push_str(warning);
     }
+    tooltip
+}
+
+pub(crate) fn missing_protection(code: ProtectionShortfallCode) -> String {
+    let reason = match code {
+        ProtectionShortfallCode::FirewallUnavailable => {
+            tr!("protection-reason-firewall-unavailable")
+        }
+        ProtectionShortfallCode::FirewallRefused => {
+            tr!("protection-reason-firewall-refused")
+        }
+        ProtectionShortfallCode::TunnelNotPermitted => {
+            tr!("protection-reason-tunnel-not-permitted")
+        }
+        ProtectionShortfallCode::NoTunnelDns => tr!("protection-reason-no-tunnel-dns"),
+    };
+    tr!("protection-missing", reason = reason.as_str())
 }
 
 pub(crate) fn scale(percent: u16) -> String {

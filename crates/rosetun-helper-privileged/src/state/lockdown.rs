@@ -24,6 +24,8 @@ pub(super) struct LockdownState {
     pub(super) private_networks: bool,
     /// The objects are an upgrade's hold, not the user's Lockdown.
     pub(super) upgrade_hold: bool,
+    /// That hold was left by a crash rather than a stop for an upgrade.
+    pub(super) hold_after_crash: bool,
 }
 
 pub(super) type SharedLockdown = Arc<Mutex<LockdownState>>;
@@ -186,6 +188,7 @@ impl Helper {
                 allow_lan: status.allow_lan,
                 private_networks: status.private_networks,
                 upgrade_hold: status.upgrade_hold,
+                hold_after_crash: status.hold_after_crash,
             },
         );
         if status.upgrade_hold {
@@ -347,6 +350,7 @@ impl Session {
             &self.lockdown,
             LockdownState {
                 upgrade_hold: false,
+                hold_after_crash: false,
                 ..state
             },
         );
@@ -547,6 +551,7 @@ mod tests {
                 private_networks: false,
                 sublayer_weight: Some(0xD000),
                 upgrade_hold: true,
+                hold_after_crash: false,
             });
             calls
         }
@@ -629,6 +634,7 @@ mod tests {
                 private_networks: false,
                 sublayer_weight: Some(0xD000),
                 upgrade_hold: held,
+                hold_after_crash: false,
             };
             *self.0.installed.lock().unwrap() = Some(status);
             Ok(status)
@@ -760,6 +766,7 @@ mod tests {
             private_networks: false,
             sublayer_weight: None,
             upgrade_hold: false,
+            hold_after_crash: false,
         });
         let helper = lockdown_helper(&calls);
         helper.restore_lockdown();
@@ -1000,6 +1007,7 @@ mod tests {
                 allow_lan: false,
                 private_networks: false,
                 upgrade_hold: false,
+                hold_after_crash: false,
             },
         );
         let apps = super::test_apps();

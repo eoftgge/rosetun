@@ -739,6 +739,7 @@ fn read_status(engine: &Engine) -> Result<LockdownStatus, RoutingError> {
         private_networks: lan_present > 0 && private,
         sublayer_weight,
         upgrade_hold,
+        hold_after_crash: false,
     })
 }
 

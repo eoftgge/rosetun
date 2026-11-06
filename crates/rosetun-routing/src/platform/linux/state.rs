@@ -22,6 +22,9 @@ use std::path::Path;
 /// Where the service and the boot unit keep the record: the service's
 /// state directory, root only.
 pub(crate) const STATE_FILE: &str = "/var/lib/rosetun/lockdown";
+/// Left by a service that stops for an upgrade, for the next one to read: the
+/// marker in /run goes with the unit. Its folder is writable by root alone.
+pub(super) const UPGRADE_STOP_FILE: &str = "/var/lib/rosetun/upgrade-stop";
 
 const HEADER: &str = "rosetun lockdown 1";
 /// Far more than the three lines take; a bigger file is not ours.
@@ -176,6 +179,26 @@ pub(crate) fn remove(path: &Path) -> io::Result<bool> {
 fn folder(path: &Path) -> io::Result<&Path> {
     path.parent()
         .ok_or_else(|| io::Error::other("the Lockdown record has no folder"))
+}
+
+/// A failure means the next service calls this hold a crash's, which only
+/// changes what it says, not that the network stays closed.
+pub(super) fn leave_upgrade_stop(path: &Path) {
+    if let Err(error) = std::fs::write(path, b"") {
+        tracing::warn!(%error, "could not note the stop for an upgrade");
+    }
+}
+
+/// Whether the previous service stopped for an upgrade. The word is used up.
+pub(super) fn take_upgrade_stop(path: &Path) -> bool {
+    match std::fs::remove_file(path) {
+        Ok(()) => true,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => {
+            tracing::warn!(%error, "could not remove the note of a stop for an upgrade");
+            false
+        }
+    }
 }
 
 #[cfg(test)]

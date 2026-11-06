@@ -166,6 +166,10 @@ pub struct LockdownStatus {
     /// The objects are an upgrade's hold, not a Lockdown the user turned on
     /// (see `upgrade_hold`). Only with `enabled`.
     pub upgrade_hold: bool,
+    /// The hold was left by a crash rather than a stop for an upgrade. Only
+    /// with `upgrade_hold`; Linux alone tells them apart, as a crash leaves
+    /// nothing behind on Windows.
+    pub hold_after_crash: bool,
 }
 
 /// Programs Lockdown permits by application ID so a subscription can be

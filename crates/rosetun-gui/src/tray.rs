@@ -78,6 +78,9 @@ pub(crate) fn tray_view(state: &State, window_shown: bool) -> TrayView {
         .visible_status()
         .and_then(|_| state.config.active_node())
         .map(|(_, node)| menu_text(state, &node.name));
+    let warning = state
+        .missing_protection()
+        .map(|_| tr!("tray-protection-missing"));
     let menu_server = server.as_deref().map(menu_label);
     let status_label = match (icon, &menu_server) {
         (TrayState::Blocked, _) => tr!("tray-blocked"),
@@ -108,7 +111,11 @@ pub(crate) fn tray_view(state: &State, window_shown: bool) -> TrayView {
         .collect();
     TrayView {
         icon,
-        tooltip: fit_tooltip(&i18n::tray_tooltip(&status, server.as_deref())),
+        tooltip: fit_tooltip(&i18n::tray_tooltip(
+            &status,
+            server.as_deref(),
+            warning.as_deref(),
+        )),
         status_label,
         primary_label,
         primary_enabled: primary_action != PrimaryAction::Disabled,
@@ -349,7 +356,7 @@ mod tests {
         assert_eq!(unknown.icon, TrayState::ServiceUnavailable);
         assert_eq!(
             unknown.tooltip,
-            i18n::tray_tooltip(&tr!("helper-unavailable"), None)
+            i18n::tray_tooltip(&tr!("helper-unavailable"), None, None)
         );
         assert!(!unknown.primary_enabled);
         assert_eq!(unknown.window_label, tr!("tray-hide"));
@@ -374,7 +381,7 @@ mod tests {
         assert_eq!(unavailable.icon, TrayState::ServiceUnavailable);
         assert_eq!(
             unavailable.tooltip,
-            i18n::tray_tooltip(&tr!("helper-unavailable"), None)
+            i18n::tray_tooltip(&tr!("helper-unavailable"), None, None)
         );
     }
 
@@ -407,7 +414,11 @@ mod tests {
             assert_eq!(tray.icon, expected, "{connection:?}");
             assert_eq!(
                 tray.tooltip,
-                i18n::tray_tooltip(&crate::view::connection::state_style(&connection).0, None)
+                i18n::tray_tooltip(
+                    &crate::view::connection::state_style(&connection).0,
+                    None,
+                    None
+                )
             );
         }
     }

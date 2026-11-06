@@ -24,8 +24,8 @@ use std::time::{Duration, Instant, SystemTime};
 
 use rosetun_config::{
     ConnectionState, ExitId, ListRef, LiveConnection, LocalProxySettings, Node,
-    ProtectionCapabilities, Rule, RuleMatcher, RuleTarget, Status, Traffic, fragments_tls,
-    list_tag,
+    ProtectionCapabilities, ProtectionShortfallCode, Rule, RuleMatcher, RuleTarget, Status,
+    Traffic, fragments_tls, list_tag,
 };
 use rosetun_engine::{
     ControlEndpoint, EngineBackend, EngineProcess, EngineRegistry, RenderRequest, RenderedConfig,
@@ -177,6 +177,7 @@ pub struct Helper {
     resumed: AtomicBool,
     cancelled: Arc<AtomicBool>,
     lockdown: lockdown::SharedLockdown,
+    protection_report: protection::SharedReport,
     /// What the routing backend implements, read once when the helper is built.
     protection: ProtectionCapabilities,
     /// Why the kill switch is missing, for the refusal of a connect.
@@ -329,6 +330,7 @@ impl Helper {
         let cancelled = Arc::new(AtomicBool::new(false));
         let owner = Arc::new(Mutex::new(None));
         let lockdown = lockdown::SharedLockdown::default();
+        let protection_report = protection::SharedReport::default();
         let connections = Arc::new(Mutex::new(ConnectionBook::default()));
         let protection = routing.capabilities();
         let protection_unavailable = if protection.kill_switch {
@@ -343,6 +345,7 @@ impl Helper {
             protection,
             protection_unavailable,
             lockdown: Arc::clone(&lockdown),
+            protection_report: Arc::clone(&protection_report),
             status: Arc::clone(&status),
             connections: Arc::clone(&connections),
             owner: Arc::clone(&owner),
@@ -378,7 +381,7 @@ impl Helper {
                 watchdog: None,
                 tunnel_dns: None,
                 path_addresses: Arc::new(Mutex::new(Vec::new())),
-                protection: protection::ProtectionRuntime::default(),
+                protection: protection::ProtectionRuntime::new(protection_report),
                 last_endpoint: None,
                 last_extra_endpoints: HashMap::new(),
                 exit_tags: Vec::new(),
@@ -566,6 +569,11 @@ impl Helper {
         let lockdown = lockdown::read(&self.lockdown);
         status.lockdown = lockdown.enabled && !lockdown.upgrade_hold;
         status.upgrade_hold = lockdown.enabled && lockdown.upgrade_hold;
+        status.protection = self
+            .protection_report
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .state(lockdown);
         status
     }
 
@@ -2008,6 +2016,7 @@ impl Session {
         // Dispose of the old process before borrowing the backend or spawning another.
         // A stop failure retains its handle and prevents a second engine from starting.
         self.stop_engine()?;
+        self.protection.begin_attempt(settings);
         if (self.physical_interface)(&settings.tun.name).is_none() {
             return Err(HelperError::new(
                 ErrorCode::NoNetwork,
@@ -2206,6 +2215,11 @@ impl Session {
         if scope.is_none() && local_proxy.is_some() {
             self.protection.release("failed to remove the DNS lock");
         }
+        if scope.is_none() && local_proxy.is_none() {
+            tracing::warn!("the tunnel has no DNS address; connecting without the DNS lock");
+            self.protection
+                .record_shortfall(ProtectionShortfallCode::NoTunnelDns);
+        }
 
         if let Some(scope) = scope {
             let plan = RoutingPlan {
@@ -2221,6 +2235,8 @@ impl Session {
                     Ok(()) => tracing::info!(?scope, "routing protection installed"),
                     Err(error) if scope == ProtectionScope::DnsOnly => {
                         tracing::warn!(%error, "DNS lock is unavailable; connecting without it");
+                        self.protection
+                            .record_shortfall(protection::shortfall_of(&error));
                     }
                     Err(error) => {
                         return Err(HelperError::new(
@@ -2381,6 +2397,8 @@ impl Session {
                 {
                     tracing::warn!(reason = %error.message, "DNS lock cannot authorize the tunnel; connecting without it");
                     self.protection.release("failed to roll back DNS lock");
+                    self.protection
+                        .record_shortfall(ProtectionShortfallCode::TunnelNotPermitted);
                 }
                 Err(error) => return Err(error),
             }
@@ -2800,6 +2818,7 @@ impl Session {
         }
         self.pin_lists(&[]);
         self.protection.release("failed to roll back routes");
+        self.protection.session_over();
         // Without a session no server is special: Lockdown's segment opens whole.
         if self.protection.programs_withdrawn() {
             self.lan.forget_servers();

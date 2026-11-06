@@ -2094,6 +2094,62 @@ Test-Step 'dns lock helper killed' 'direct DNS works again' {
 }
 Start-RosetunHelper
 
+Write-Host 'DNS lock that cannot go in...'
+# Without the Base Filtering Engine the helper cannot add a filter. It starts again
+# in the same step: a failure here must not take the next scenarios' firewall away.
+$firewallServices = @(Invoke-RosetunGuest -ScriptBlock {
+    $running = @(Get-Service -Name 'BFE' -DependentServices |
+        Where-Object Status -EQ 'Running' | ForEach-Object Name)
+    Stop-Service -Name 'BFE' -Force
+    $running
+})
+try {
+    $connect = Connect-RosetunTunnel -RequestName 'request-dns-lock.json' -Quiet
+    Test-Step 'dns lock unavailable' 'connect succeeds without the lock' -Note "exit $($connect.ExitCode)" {
+        $connect.ExitCode -eq 0
+    }
+    Test-Step 'dns lock unavailable' 'state is Connected' { Wait-RosetunState 'Connected' }
+    $status = Invoke-RosetunCli -Quiet 'status'
+    Test-Step 'dns lock unavailable' 'status says nothing is in place' -Note $status.Output {
+        $status.Output -match '(?m)^protection: none'
+    }
+    Test-Step 'dns lock unavailable' 'status names the missing lock and its reason' -Note $status.Output {
+        $status.Output -match '(?m)^protection missing: DNS lock: \S'
+    }
+    Test-Step 'dns lock unavailable' 'direct DNS is open, as the status says' { Test-RosetunDirectDns }
+    Disconnect-RosetunTunnel | Out-Null
+    $status = Invoke-RosetunCli -Quiet 'status'
+    Test-Step 'dns lock unavailable' 'the line goes after a disconnect' -Note $status.Output {
+        $status.Output -notmatch '(?m)^protection missing'
+    }
+}
+finally {
+    Invoke-RosetunGuest -ScriptBlock {
+        param([string[]]$services)
+        Start-Service -Name 'BFE'
+        foreach ($service in $services) {
+            Start-Service -Name $service -ErrorAction SilentlyContinue
+        }
+    } -ArgumentList (, $firewallServices)
+}
+
+Write-Host 'Protection in the status...'
+Connect-RosetunTunnel -RequestName 'request-dns-lock.json' | Out-Null
+Wait-RosetunState 'Connected' | Out-Null
+$status = Invoke-RosetunCli -Quiet 'status'
+Test-Step 'protection status' 'the DNS lock is in place and nothing is missing' -Note $status.Output {
+    $status.Output -match '(?m)^protection: DNS lock' -and $status.Output -notmatch '(?m)^protection missing'
+}
+Disconnect-RosetunTunnel | Out-Null
+Connect-RosetunTunnel | Out-Null
+Wait-RosetunState 'Connected' | Out-Null
+$status = Invoke-RosetunCli -Quiet 'status'
+Test-Step 'protection status' 'the kill switch goes with the service on Windows' -Note $status.Output {
+    $status.Output -match '(?m)^protection: kill switch' -and
+    $status.Output -match '(?m)^if the service crashes: this goes with it'
+}
+Disconnect-RosetunTunnel | Out-Null
+
 Write-Host 'Hysteria2 through the kill switch...'
 $connect = Connect-RosetunTunnel -RequestName 'request-hysteria2.json' -Quiet
 Test-Step 'hysteria2' 'connect succeeds' -Note "exit $($connect.ExitCode)" {

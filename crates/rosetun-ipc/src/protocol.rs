@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt::Formatter;
 use std::time::Duration;
 
-pub const PROTOCOL_VERSION: u32 = 19;
+pub const PROTOCOL_VERSION: u32 = 20;
 const LOCAL_PROXY_PORT_BUSY: &str = "another program holds the local proxy port ";
 pub const MAX_PROBE_NODES: usize = 256;
 pub const MAX_TEMPORARY_RULES: usize = 256;
@@ -590,7 +590,7 @@ mod tests {
             serde_json::to_string(&super::ErrorCode::AccessDenied).unwrap(),
             "\"access_denied\""
         );
-        assert_eq!(super::PROTOCOL_VERSION, 19);
+        assert_eq!(super::PROTOCOL_VERSION, 20);
         assert_eq!(
             serde_json::to_string(&super::Request::OpenNetwork).unwrap(),
             "\"open_network\""

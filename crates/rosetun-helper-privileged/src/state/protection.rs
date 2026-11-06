@@ -5,7 +5,10 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use rosetun_config::{ConnectionMode, Settings};
+use rosetun_config::{
+    ConnectionMode, InstalledProtection, ProtectionShortfallCode, ProtectionState,
+    RequestedProtection, Settings,
+};
 use rosetun_ipc::{ConnectRequest, ErrorCode, HelperError};
 use rosetun_routing::lan::LanAccess;
 use rosetun_routing::{
@@ -21,8 +24,80 @@ struct Guard {
     scope: ProtectionScope,
 }
 
-#[derive(Default)]
+/// What the status says about the session's protection. `Helper::status`
+/// reads it without the session mutex, as it does Lockdown's state.
+#[derive(Debug, Clone, Default)]
+pub(super) struct ProtectionReport {
+    scope: Option<ProtectionScope>,
+    requested: RequestedProtection,
+    shortfall: Option<ProtectionShortfallCode>,
+    connection_mode: Option<ConnectionMode>,
+}
+
+pub(super) type SharedReport = Arc<Mutex<ProtectionReport>>;
+
+impl ProtectionReport {
+    pub(super) fn state(&self, lockdown: LockdownState) -> ProtectionState {
+        let installed = match (lockdown.enabled, lockdown.upgrade_hold) {
+            (true, true) if lockdown.hold_after_crash => InstalledProtection::HoldAfterCrash,
+            (true, true) => InstalledProtection::HoldAfterUpgrade,
+            (true, false) => InstalledProtection::Lockdown,
+            (false, _) => match self.scope {
+                None => InstalledProtection::None,
+                Some(ProtectionScope::DnsOnly) => InstalledProtection::DnsLock,
+                Some(ProtectionScope::SharedProxy) => InstalledProtection::SharedProxyPort,
+                Some(ProtectionScope::AllTraffic) => InstalledProtection::KillSwitch,
+            },
+        };
+        ProtectionState {
+            installed,
+            requested: self.requested,
+            shortfall: self.shortfall.map(Into::into),
+            connection_mode: self.connection_mode,
+            survives_service_crash: survives_service_crash(installed),
+        }
+    }
+}
+
+/// A kill switch's table outlives the service on Linux. On Windows its filters
+/// belong to the service's dynamic firewall session and go with it, on purpose:
+/// a crash does not leave the computer offline. Lockdown and the holds are
+/// persistent on both.
+fn survives_service_crash(installed: InstalledProtection) -> bool {
+    match installed {
+        InstalledProtection::None
+        | InstalledProtection::DnsLock
+        | InstalledProtection::SharedProxyPort => false,
+        InstalledProtection::KillSwitch => cfg!(target_os = "linux"),
+        InstalledProtection::Lockdown
+        | InstalledProtection::HoldAfterUpgrade
+        | InstalledProtection::HoldAfterCrash => true,
+    }
+}
+
+/// What these settings ask for. The proxy mode has no DNS to lock: without a
+/// kill switch it asks for nothing.
+fn requested_by(settings: &Settings) -> RequestedProtection {
+    if settings.kill_switch {
+        RequestedProtection::KillSwitch
+    } else if settings.connection_mode == ConnectionMode::Tun {
+        RequestedProtection::DnsLock
+    } else {
+        RequestedProtection::None
+    }
+}
+
+/// A DNS lock that could not go in, by what the firewall answered.
+pub(super) fn shortfall_of(error: &RoutingError) -> ProtectionShortfallCode {
+    if error.is_unavailable() {
+        ProtectionShortfallCode::FirewallUnavailable
+    } else {
+        ProtectionShortfallCode::FirewallRefused
+    }
+}
+
 pub(super) struct ProtectionRuntime {
+    report: SharedReport,
     guard: Option<Guard>,
     /// Lockdown's GUI and CLI permits are removed because the session's
     /// filters sit in its sublayer; a teardown puts them back.
@@ -33,6 +108,55 @@ pub(super) struct ProtectionRuntime {
 }
 
 impl ProtectionRuntime {
+    pub(super) fn new(report: SharedReport) -> Self {
+        Self {
+            report,
+            guard: None,
+            programs_withdrawn: false,
+            binaries: Vec::new(),
+        }
+    }
+
+    fn change_report(&self, change: impl FnOnce(&mut ProtectionReport)) {
+        change(
+            &mut self
+                .report
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+        self.report.clear_poison();
+    }
+
+    fn report_scope(&self) {
+        let scope = self.scope();
+        self.change_report(|report| report.scope = scope);
+    }
+
+    /// A start with these settings: earlier failures no longer count.
+    pub(super) fn begin_attempt(&self, settings: &Settings) {
+        self.change_report(|report| {
+            report.requested = requested_by(settings);
+            report.shortfall = None;
+            report.connection_mode = Some(settings.connection_mode);
+        });
+    }
+
+    /// Requested protection did not go in, and the session goes on without it.
+    pub(super) fn record_shortfall(&self, code: ProtectionShortfallCode) {
+        self.change_report(|report| report.shortfall = Some(code));
+    }
+
+    /// The session is over: nothing is asked for any more.
+    pub(super) fn session_over(&self) {
+        let scope = self.scope();
+        self.change_report(|report| {
+            *report = ProtectionReport {
+                scope,
+                ..ProtectionReport::default()
+            };
+        });
+    }
+
     pub(super) fn is_active(&self) -> bool {
         self.guard.is_some()
     }
@@ -93,6 +217,7 @@ impl ProtectionRuntime {
         {
             tracing::error!(%error, "{failure}");
         }
+        self.report_scope();
     }
 
     /// A fresh start: outbound protection goes up before the engine spawns.
@@ -109,6 +234,7 @@ impl ProtectionRuntime {
         });
         // The same transaction removed Lockdown's GUI and CLI permits.
         self.programs_withdrawn |= plan.lockdown;
+        self.report_scope();
         Ok(())
     }
 
@@ -131,6 +257,7 @@ impl ProtectionRuntime {
             .map_err(routing_failed)?;
         guard.scope = plan.scope;
         self.programs_withdrawn |= plan.lockdown;
+        self.report_scope();
         Ok(())
     }
 
@@ -176,6 +303,7 @@ impl ProtectionRuntime {
                 routing: Arc::new(Mutex::new(routing)),
                 scope: ProtectionScope::AllTraffic,
             });
+            self.report_scope();
             tracing::info!("Lockdown is on: the kill switch is forced on for this session");
             return Ok(());
         };
@@ -194,6 +322,8 @@ impl ProtectionRuntime {
             }
             _ => routing.set_lockdown(true).map_err(routing_failed)?,
         }
+        drop(routing);
+        self.report_scope();
         Ok(())
     }
 
@@ -297,6 +427,7 @@ impl ProtectionRuntime {
         match result {
             Ok(()) => {
                 guard.scope = scope;
+                self.report_scope();
                 tracing::info!(?scope, "kill switch released with Lockdown");
             }
             Err(error) => {
@@ -311,6 +442,7 @@ impl ProtectionRuntime {
             routing: Arc::new(Mutex::new(routing)),
             scope,
         });
+        self.report_scope();
     }
 }
 

@@ -113,6 +113,124 @@ impl ProtectionCapabilities {
     }
 }
 
+/// The protection in place right now. `ProtectionCapabilities` says what
+/// can exist; this says what does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InstalledProtection {
+    #[default]
+    None,
+    /// System DNS is confined to the tunnel; other traffic is untouched.
+    DnsLock,
+    /// Only a shared local proxy's port is limited to the computer's networks.
+    SharedProxyPort,
+    KillSwitch,
+    Lockdown,
+    /// The network stays closed after an upgrade until it is opened.
+    HoldAfterUpgrade,
+    /// The network stays closed after the service crashed until it is opened.
+    HoldAfterCrash,
+}
+
+impl InstalledProtection {
+    /// Everything outside the tunnel is blocked, not only DNS.
+    pub fn blocks_all_traffic(self) -> bool {
+        matches!(
+            self,
+            Self::KillSwitch | Self::Lockdown | Self::HoldAfterUpgrade | Self::HoldAfterCrash
+        )
+    }
+}
+
+/// The protection the session's settings ask for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RequestedProtection {
+    /// Nothing is asked for: no session, or the proxy mode without a kill switch.
+    #[default]
+    None,
+    DnsLock,
+    KillSwitch,
+}
+
+/// Why requested protection is not in place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProtectionShortfallCode {
+    FirewallUnavailable,
+    FirewallRefused,
+    TunnelNotPermitted,
+    NoTunnelDns,
+}
+
+impl ProtectionShortfallCode {
+    /// Fixed text: a routing error may name addresses, and the status goes to
+    /// any local account.
+    pub fn reason(self) -> &'static str {
+        match self {
+            Self::FirewallUnavailable => "the firewall is unavailable",
+            Self::FirewallRefused => "the firewall refused the rules",
+            Self::TunnelNotPermitted => "the firewall did not let the tunnel through",
+            Self::NoTunnelDns => "the tunnel has no DNS of its own",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProtectionShortfall {
+    pub code: ProtectionShortfallCode,
+    pub reason: String,
+}
+
+impl From<ProtectionShortfallCode> for ProtectionShortfall {
+    fn from(code: ProtectionShortfallCode) -> Self {
+        Self {
+            code,
+            reason: code.reason().to_owned(),
+        }
+    }
+}
+
+/// What protects the computer now, as opposed to what could (protocol 20).
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct ProtectionState {
+    #[serde(default)]
+    pub installed: InstalledProtection,
+    #[serde(default)]
+    pub requested: RequestedProtection,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shortfall: Option<ProtectionShortfall>,
+    /// The running session's mode; `None` without a session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection_mode: Option<ConnectionMode>,
+    /// What is installed stays if the service crashes. A kill switch does on
+    /// Linux, where its table outlives the service, and does not on Windows,
+    /// where its filters go with the service's firewall session. Lockdown and
+    /// the holds do on both.
+    #[serde(default)]
+    pub survives_service_crash: bool,
+}
+
+impl ProtectionState {
+    fn request_met(&self) -> bool {
+        match self.requested {
+            RequestedProtection::None => true,
+            RequestedProtection::DnsLock => {
+                self.installed == InstalledProtection::DnsLock
+                    || self.installed.blocks_all_traffic()
+            }
+            RequestedProtection::KillSwitch => self.installed.blocks_all_traffic(),
+        }
+    }
+
+    /// Why requested protection is missing. `None` when it is in place, also
+    /// when it went in another way after an earlier failure, and while a
+    /// connect has not got that far.
+    pub fn unmet(&self) -> Option<&ProtectionShortfall> {
+        self.shortfall.as_ref().filter(|_| !self.request_met())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct Status {
     pub state: ConnectionState,
@@ -159,6 +277,9 @@ pub struct Status {
     /// Set with `record_chain`; read it through `running_local_proxy`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub local_proxy_port: Option<u16>,
+    /// What is installed now and what is missing (protocol 20).
+    #[serde(default)]
+    pub protection: ProtectionState,
 }
 
 impl Status {
@@ -236,7 +357,73 @@ impl std::fmt::Debug for LiveConnection {
 
 #[cfg(test)]
 mod failure_tests {
-    use super::{ConnectStage, ConnectionState, FailureKind, ProtectionCapabilities, Status};
+    use super::{
+        ConnectStage, ConnectionState, FailureKind, InstalledProtection, ProtectionCapabilities,
+        ProtectionShortfallCode, ProtectionState, RequestedProtection, Status,
+    };
+
+    #[test]
+    fn a_shortfall_is_unmet_only_while_the_request_is_not_covered() {
+        let state = |installed, requested| ProtectionState {
+            installed,
+            requested,
+            shortfall: Some(ProtectionShortfallCode::FirewallRefused.into()),
+            ..ProtectionState::default()
+        };
+        let dns = RequestedProtection::DnsLock;
+        assert!(state(InstalledProtection::None, dns).unmet().is_some());
+        for covered in [
+            InstalledProtection::DnsLock,
+            InstalledProtection::KillSwitch,
+            InstalledProtection::Lockdown,
+            InstalledProtection::HoldAfterCrash,
+        ] {
+            assert_eq!(state(covered, dns).unmet(), None, "{covered:?}");
+        }
+        assert_eq!(
+            state(InstalledProtection::None, RequestedProtection::None).unmet(),
+            None
+        );
+        // A DNS lock is not the kill switch the settings ask for.
+        assert!(
+            state(
+                InstalledProtection::DnsLock,
+                RequestedProtection::KillSwitch
+            )
+            .unmet()
+            .is_some()
+        );
+    }
+
+    #[test]
+    fn no_shortfall_is_not_unmet_while_a_connect_has_not_got_that_far() {
+        let connecting = ProtectionState {
+            requested: RequestedProtection::DnsLock,
+            ..ProtectionState::default()
+        };
+        assert_eq!(connecting.unmet(), None);
+    }
+
+    #[test]
+    fn a_status_from_before_the_protection_state_reads_as_nothing_installed() {
+        let status: Status = serde_json::from_str(r#"{"state":"connected"}"#).unwrap();
+        assert_eq!(status.protection, ProtectionState::default());
+    }
+
+    #[test]
+    fn shortfall_reasons_name_no_address() {
+        for code in [
+            ProtectionShortfallCode::FirewallUnavailable,
+            ProtectionShortfallCode::FirewallRefused,
+            ProtectionShortfallCode::TunnelNotPermitted,
+            ProtectionShortfallCode::NoTunnelDns,
+        ] {
+            assert!(
+                !code.reason().chars().any(|c| c.is_ascii_digit()),
+                "{code:?}"
+            );
+        }
+    }
 
     #[test]
     fn an_unknown_connect_stage_reads_as_none_and_keeps_the_status() {

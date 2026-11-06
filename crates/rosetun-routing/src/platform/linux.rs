@@ -107,6 +107,8 @@ struct Shared {
     programs: Vec<Program>,
     /// The service stops for an upgrade: the table stays as it is.
     frozen: bool,
+    /// The previous service left word that it stopped for an upgrade.
+    stopped_for_upgrade: bool,
 }
 
 /// Where the backend looks; fixed outside tests.
@@ -114,6 +116,7 @@ struct Shared {
 struct Paths {
     mount: PathBuf,
     record: PathBuf,
+    upgrade_stop: PathBuf,
     wants: Vec<PathBuf>,
 }
 
@@ -122,6 +125,7 @@ impl Default for Paths {
         Self {
             mount: PathBuf::from(cgroup::MOUNT),
             record: PathBuf::from(state::STATE_FILE),
+            upgrade_stop: PathBuf::from(state::UPGRADE_STOP_FILE),
             wants: UNIT_WANTS.iter().map(PathBuf::from).collect(),
         }
     }
@@ -333,8 +337,9 @@ impl NftBackend {
         self.table.lock()
     }
 
-    fn hold_status(hold: bool) -> LockdownStatus {
+    fn hold_status(hold: bool, after_crash: bool) -> LockdownStatus {
         LockdownStatus {
+            hold_after_crash: hold && after_crash,
             enabled: hold,
             complete: hold,
             allow_lan: false,
@@ -361,6 +366,7 @@ impl NftBackend {
             return;
         }
         shared.loaded = true;
+        shared.stopped_for_upgrade = state::take_upgrade_stop(&self.table.paths.upgrade_stop);
         let stored = state::read(&self.table.paths.record);
         if let Stored::Corrupt(reason) = &stored {
             tracing::error!(
@@ -513,8 +519,9 @@ impl RoutingBackend for NftBackend {
                 private_networks: lockdown.private_networks,
                 sublayer_weight: None,
                 upgrade_hold: false,
+                hold_after_crash: false,
             },
-            None => Self::hold_status(shared.hold),
+            None => Self::hold_status(shared.hold, !shared.stopped_for_upgrade),
         })
     }
 
@@ -542,7 +549,7 @@ impl RoutingBackend for NftBackend {
                     .nft
                     .apply(&hold_rules(self.table.leaves.as_ref()))?;
             }
-            return Ok(Self::hold_status(true));
+            return Ok(Self::hold_status(true, !shared.stopped_for_upgrade));
         }
         self.preflight()?;
         let before = shared.lockdown;
@@ -562,6 +569,7 @@ impl RoutingBackend for NftBackend {
             private_networks: wanted.private_networks,
             sublayer_weight: None,
             upgrade_hold: false,
+            hold_after_crash: false,
         })
     }
 
@@ -639,6 +647,9 @@ impl RoutingBackend for NftBackend {
 
     fn keep_protection_on_stop(&self) {
         self.shared().frozen = true;
+        // The marker in /run goes with the unit, so the next service would
+        // take this hold for a crash's.
+        state::leave_upgrade_stop(&self.table.paths.upgrade_stop);
     }
 
     /// Lifts the hold. Lockdown stays: a stopped service leaves the network
@@ -883,6 +894,7 @@ mod tests {
             Paths {
                 mount: self.cgroup(),
                 record: self.record(),
+                upgrade_stop: self.0.join("upgrade-stop"),
                 wants: vec![self.0.join("wants")],
             }
         }
@@ -1478,6 +1490,22 @@ mod tests {
         assert!(backend.disable_lockdown().unwrap());
         assert_eq!(nft.applied().last().unwrap(), &nftables::remove());
         assert!(!backend.lockdown_status().unwrap().enabled);
+    }
+
+    #[test]
+    fn a_table_found_at_start_is_a_crash_unless_the_last_stop_was_for_an_upgrade() {
+        let nft = FakeNft::left(ProtectionScope::AllTraffic);
+        let mount = Mount::new(true);
+        backend(&nft, &mount).keep_protection_on_stop();
+
+        let after_upgrade = backend(&nft, &mount).lockdown_status().unwrap();
+        assert!(after_upgrade.upgrade_hold);
+        assert!(!after_upgrade.hold_after_crash);
+
+        // The word is used up: the next start without it is a crash.
+        let after_crash = backend(&nft, &mount).lockdown_status().unwrap();
+        assert!(after_crash.upgrade_hold);
+        assert!(after_crash.hold_after_crash);
     }
 
     #[test]
