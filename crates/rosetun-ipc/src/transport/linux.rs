@@ -186,16 +186,27 @@ fn engine_directory(path: &Path, mode: u32, group: u32) -> io::Result<()> {
     let name = path
         .file_name()
         .ok_or_else(|| denied("service directory has no name"))?;
-    let next = fd_path(&root_directory(parent, None)?).join(name);
+    engine_directory_in(&root_directory(parent, None)?, name, mode, 0, group)
+}
+
+/// `parent` stays open for the whole call: `next` is a path through its descriptor.
+fn engine_directory_in(
+    parent: &File,
+    name: &std::ffi::OsStr,
+    mode: u32,
+    owner: u32,
+    group: u32,
+) -> io::Result<()> {
+    let next = fd_path(parent).join(name);
     match DirBuilder::new().mode(0o700).create(&next) {
         Ok(()) => {}
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
         Err(error) => return Err(error),
     }
     let directory = open_directory(&next)?;
-    validate_directory(&directory.metadata()?, 0, false)?;
+    validate_directory(&directory.metadata()?, owner, false)?;
     // SAFETY: The descriptor is open for the whole call; the values are plain.
-    if unsafe { libc::fchown(directory.as_raw_fd(), 0, group) } != 0 {
+    if unsafe { libc::fchown(directory.as_raw_fd(), owner, group) } != 0 {
         return Err(io::Error::last_os_error());
     }
     // Set outright: the umask may have narrowed it, and an existing folder has
@@ -626,6 +637,38 @@ mod tests {
         drop(listener);
         assert_eq!(fs::metadata(&path).unwrap().ino(), inode);
         drop(replacement);
+    }
+
+    #[test]
+    fn an_engine_folder_is_made_with_its_mode_and_group_and_made_again_without_harm() {
+        let fixture = Fixture::new();
+        let parent = open_directory(&fixture.0).unwrap();
+        let name = std::ffi::OsStr::new("sing-box");
+        // SAFETY: Plain calls without arguments.
+        let (uid, gid) = unsafe { (libc::geteuid(), libc::getegid()) };
+        for _ in 0..2 {
+            engine_directory_in(&parent, name, 0o750, uid, gid).unwrap();
+            let metadata = fs::symlink_metadata(fixture.0.join(name)).unwrap();
+            assert!(metadata.is_dir());
+            assert_eq!(metadata.mode() & 0o7777, 0o750);
+            assert_eq!((metadata.uid(), metadata.gid()), (uid, gid));
+        }
+    }
+
+    #[test]
+    fn an_engine_folder_of_another_owner_or_a_link_is_refused() {
+        let fixture = Fixture::new();
+        let parent = open_directory(&fixture.0).unwrap();
+        // SAFETY: Plain calls without arguments.
+        let (uid, gid) = unsafe { (libc::geteuid(), libc::getegid()) };
+        let name = std::ffi::OsStr::new("taken");
+        fs::create_dir(fixture.0.join(name)).unwrap();
+        assert!(engine_directory_in(&parent, name, 0o750, uid.wrapping_add(1), gid).is_err());
+
+        let link = std::ffi::OsStr::new("link");
+        symlink(&fixture.0, fixture.0.join(link)).unwrap();
+        assert!(engine_directory_in(&parent, link, 0o750, uid, gid).is_err());
+        assert_eq!(fs::read_link(fixture.0.join(link)).unwrap(), fixture.0);
     }
 
     #[test]
