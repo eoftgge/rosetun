@@ -44,10 +44,11 @@ use tracing_subscriber::prelude::*;
 use crate::log_gate::VerboseGate;
 use crate::server::{Helper, Server};
 
-/// The package's `prerm` creates this file in the runtime folder before it
-/// stops the service for an upgrade. systemd removes it with the folder.
+/// The package's `prerm` creates this file before it stops the service for an
+/// upgrade. systemd removes it with the runtime folder. Not in the engines' private
+/// folder, which the package does not know.
 #[cfg(target_os = "linux")]
-const UPGRADE_MARKER: &str = "upgrading";
+const UPGRADE_MARKER: &str = "/run/rosetun/upgrading";
 const USAGE: &str = "usage: rosetun-helper-privileged [--service | --install-service | --uninstall-service | --reset-firewall | --verify-install-dir <path> | --secure-install-dir <path> | --finalize-install-dir <path> | --hold-for-upgrade <path> | --restore-lockdown]";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -574,7 +575,7 @@ fn initialize(
         .with_list_store(lists, run_dir.join("sing-box"));
     #[cfg(target_os = "linux")]
     let helper = helper
-        .with_upgrade_marker(run_dir.join(UPGRADE_MARKER))
+        .with_upgrade_marker(UPGRADE_MARKER.into())
         .with_process_rights_unavailable(rosetun_engine::process::rights_unavailable(
             rosetun_engine::EngineRights::NetworkAndProcesses,
         ));
@@ -650,6 +651,18 @@ fn backend_from_copy(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_service_looks_for_the_marker_where_the_package_leaves_it() {
+        let line = format!("MARKER={}\n", super::UPGRADE_MARKER);
+        for script in [
+            include_str!("../../../packaging/linux/debian/prerm"),
+            include_str!("../../../packaging/linux/debian/postinst"),
+        ] {
+            assert!(script.replace("\r\n", "\n").contains(&line));
+        }
+    }
+
     use super::*;
 
     #[cfg(target_os = "linux")]
