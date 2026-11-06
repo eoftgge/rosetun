@@ -2095,15 +2095,13 @@ Test-Step 'dns lock helper killed' 'direct DNS works again' {
 Start-RosetunHelper
 
 Write-Host 'DNS lock that cannot go in...'
-# Without the Base Filtering Engine the helper cannot add a filter. It starts again
-# in the same step: a failure here must not take the next scenarios' firewall away.
-$firewallServices = @(Invoke-RosetunGuest -ScriptBlock {
-    $running = @(Get-Service -Name 'BFE' -DependentServices |
-        Where-Object Status -EQ 'Running' | ForEach-Object Name)
-    Stop-Service -Name 'BFE' -Force
-    $running
-})
+# With the session's sublayer key taken the service's preflight fails: the DNS lock is
+# dropped and the session goes on, the kill switch refuses the connect.
 try {
+    Test-Step 'dns lock unavailable' 'the session sublayer key is taken' {
+        Add-RosetunSublayerBlock
+        $true
+    }
     $connect = Connect-RosetunTunnel -RequestName 'request-dns-lock.json' -Quiet
     Test-Step 'dns lock unavailable' 'connect succeeds without the lock' -Note "exit $($connect.ExitCode)" {
         $connect.ExitCode -eq 0
@@ -2140,15 +2138,22 @@ try {
     Test-Step 'dns lock unavailable' 'the line goes after a disconnect' -Note $status.Output {
         $status.Output -notmatch '(?m)^protection missing'
     }
+    # The same failure is not optional for the kill switch.
+    $connect = Connect-RosetunTunnel -Quiet
+    Test-Step 'kill switch unavailable' 'the connect is refused' -Note "exit $($connect.ExitCode)" {
+        $connect.ExitCode -ne 0
+    }
+    Test-Step 'kill switch unavailable' 'state is Failed' { Wait-RosetunState 'Failed' -TimeoutSeconds 10 }
+    $status = Invoke-RosetunCli -Quiet 'status'
+    Test-Step 'kill switch unavailable' 'status says nothing is in place' -Note $status.Output {
+        $status.Output -match '(?m)^protection: none'
+    }
+    Test-Step 'kill switch unavailable' 'direct egress works, as nothing was ever protected' { Test-RosetunDirectEgress }
+    Disconnect-RosetunTunnel | Out-Null
 }
 finally {
-    Invoke-RosetunGuest -ScriptBlock {
-        param([string[]]$services)
-        Start-Service -Name 'BFE'
-        foreach ($service in $services) {
-            Start-Service -Name $service -ErrorAction SilentlyContinue
-        }
-    } -ArgumentList (, $firewallServices)
+    # Every later connect with protection would fail, so a failure here ends the matrix.
+    Remove-RosetunSublayerBlock
 }
 
 Write-Host 'Protection in the status...'

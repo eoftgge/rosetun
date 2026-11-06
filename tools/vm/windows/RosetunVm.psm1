@@ -567,6 +567,155 @@ function Restore-RosetunVm {
     }
 }
 
+# SUBLAYER_KEY in crates/rosetun-routing/src/platform/windows/session.rs, the
+# sublayer of the service's dynamic session. tests\Test-RosetunWfpSublayer.ps1 checks
+# that the two agree and that this is not Lockdown's.
+$script:SessionSublayerKey = '0c035ef5-4c5c-4583-ad9c-179791360f5e'
+
+# FWP_E_SUBLAYER_NOT_FOUND.
+$script:WfpSublayerNotFound = [uint32]'0x80320007'
+
+# Adds or removes a persistent sublayer on this machine and returns the status.
+# A script block so the same code runs in the guest and in the self-test on the
+# host. C# 5: the guest's Windows PowerShell compiles it with the framework's csc.
+$script:WfpSublayerCall = {
+    param(
+        [Parameter(Mandatory)][ValidateSet('Add', 'Remove')][string]$Action,
+        [Parameter(Mandatory)][string]$Key
+    )
+    if (-not ('RosetunStand.WfpSublayer' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+
+namespace RosetunStand {
+    public static class WfpSublayer {
+        // RPC_C_AUTHN_WINNT.
+        private const uint AuthnWinNt = 10;
+        // FWPM_SUBLAYER_FLAG_PERSISTENT.
+        private const uint Persistent = 1;
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        private struct DisplayData {
+            public string Name;
+            public string Description;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct ByteBlob {
+            public uint Size;
+            public IntPtr Data;
+        }
+
+        // FWPM_SUBLAYER0.
+        [StructLayout(LayoutKind.Sequential)]
+        private struct Sublayer {
+            public Guid Key;
+            public DisplayData Display;
+            public uint Flags;
+            public IntPtr ProviderKey;
+            public ByteBlob ProviderData;
+            public ushort Weight;
+        }
+
+        [DllImport("fwpuclnt.dll", CharSet = CharSet.Unicode)]
+        private static extern uint FwpmEngineOpen0(string serverName, uint authnService,
+            IntPtr authIdentity, IntPtr session, out IntPtr engine);
+
+        [DllImport("fwpuclnt.dll")]
+        private static extern uint FwpmEngineClose0(IntPtr engine);
+
+        [DllImport("fwpuclnt.dll")]
+        private static extern uint FwpmSubLayerAdd0(IntPtr engine, ref Sublayer sublayer,
+            IntPtr securityDescriptor);
+
+        [DllImport("fwpuclnt.dll")]
+        private static extern uint FwpmSubLayerDeleteByKey0(IntPtr engine, ref Guid key);
+
+        public static int StructSize() {
+            return Marshal.SizeOf(typeof(Sublayer));
+        }
+
+        public static uint Add(Guid key) {
+            IntPtr engine;
+            uint status = FwpmEngineOpen0(null, AuthnWinNt, IntPtr.Zero, IntPtr.Zero, out engine);
+            if (status != 0) {
+                return status;
+            }
+            try {
+                Sublayer sublayer = new Sublayer();
+                sublayer.Key = key;
+                sublayer.Display.Name = "Rosetun stand: a taken session sublayer";
+                sublayer.Display.Description = "Left by the failure matrix; safe to delete";
+                sublayer.Flags = Persistent;
+                sublayer.Weight = 1;
+                return FwpmSubLayerAdd0(engine, ref sublayer, IntPtr.Zero);
+            }
+            finally {
+                FwpmEngineClose0(engine);
+            }
+        }
+
+        public static uint Remove(Guid key) {
+            IntPtr engine;
+            uint status = FwpmEngineOpen0(null, AuthnWinNt, IntPtr.Zero, IntPtr.Zero, out engine);
+            if (status != 0) {
+                return status;
+            }
+            try {
+                return FwpmSubLayerDeleteByKey0(engine, ref key);
+            }
+            finally {
+                FwpmEngineClose0(engine);
+            }
+        }
+    }
+}
+'@
+    }
+    if ($Action -eq 'Add') {
+        [RosetunStand.WfpSublayer]::Add([guid]$Key)
+    }
+    else {
+        [RosetunStand.WfpSublayer]::Remove([guid]$Key)
+    }
+}
+
+function Get-RosetunSessionSublayerKey {
+    $script:SessionSublayerKey
+}
+
+function Invoke-RosetunLocalWfpSublayer {
+    # For the self-test, on this machine: it names its own key, never the service's.
+    param(
+        [Parameter(Mandatory)][ValidateSet('Add', 'Remove')][string]$Action,
+        [Parameter(Mandatory)][string]$Key
+    )
+    & $script:WfpSublayerCall -Action $Action -Key $Key
+}
+
+function Add-RosetunSublayerBlock {
+    # Takes the session's sublayer key in the guest, so the service's preflight fails
+    # at FwpmSubLayerAdd0 with FWP_E_ALREADY_EXISTS. Nothing else changes: the sublayer
+    # is empty, so it blocks nothing, and BFE and the firewall keep running. It outlives
+    # a reboot, and every later connect with protection fails until it is removed.
+    $status = [uint32](Invoke-RosetunGuest -ScriptBlock $script:WfpSublayerCall `
+            -ArgumentList 'Add', $script:SessionSublayerKey)
+    if ($status -ne 0) {
+        throw ('Could not take the session sublayer key: 0x{0:X8}' -f $status)
+    }
+}
+
+function Remove-RosetunSublayerBlock {
+    # No error when it is not there. Only with no session running: a session's own
+    # sublayer has the same key.
+    $status = [uint32](Invoke-RosetunGuest -ScriptBlock $script:WfpSublayerCall `
+            -ArgumentList 'Remove', $script:SessionSublayerKey)
+    if ($status -ne 0 -and $status -ne $script:WfpSublayerNotFound) {
+        throw ('Could not free the session sublayer key: 0x{0:X8}' -f $status)
+    }
+}
+
 function Publish-Rosetun {
     param(
         [Parameter(Mandatory)][string]$BuildDir,
@@ -577,6 +726,10 @@ function Publish-Rosetun {
         [switch]$UseHostNode,
         $XrayNode
     )
+    # An interrupted failure matrix may have left the key taken, which would fail every
+    # protected connect of whichever matrix runs next. The callers have stopped the helper.
+    Remove-RosetunSublayerBlock
+
 
     $session = Connect-RosetunVm
     $dir = $script:Config.GuestDir
