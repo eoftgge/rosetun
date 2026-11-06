@@ -944,6 +944,7 @@ rule-category-hint = Выберите другую категорию или о�
 list-missing-summary = Правил без категории: { $n }
 list-missing-card = Пропали категории: { $categories } · правил затронуто: { $n }
 find-app = Найти программу
+rule-app-linux-rights = На Linux правила по программам требуют для ядра права просматривать другие процессы.
 typed-process = Введено вручную
 processes-running = Запущены
 processes-other = Остальные · { $n }

@@ -854,6 +854,9 @@ fn process_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Ve
         input.request_focus();
         dialog.focus_input = false;
     }
+    if cfg!(target_os = "linux") {
+        destination_note(ui, tr!("rule-app-linux-rights"));
+    }
     let folder_id = egui::Id::unique("rule_folder_choice");
     let folder_shown = widgets::reveal_progress(
         ui.ctx(),

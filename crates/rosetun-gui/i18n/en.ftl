@@ -927,6 +927,7 @@ rule-category-hint = Choose another category or update the list
 list-missing-summary = Rules without a category: { $n }
 list-missing-card = Missing categories: { $categories } · rules affected: { $n }
 find-app = Find an app
+rule-app-linux-rights = On Linux, rules by program require the engine to be able to view other processes.
 typed-process = Typed in
 processes-running = Running
 processes-other = Other · { $n }
