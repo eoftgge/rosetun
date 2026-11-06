@@ -1,0 +1,18 @@
+// Installed as /usr/share/polkit-1/rules.d/50-rosetun-engine.rules.
+// sing-box points systemd-resolved at the tunnel with resolvectl when it brings
+// the tunnel up, and takes it back when it stops. It runs as rosetun-engine, not
+// as root, and without this systemd-resolved refuses, so system DNS would stay on
+// the physical interface, where the DNS lock and the kill switch block it. These
+// four actions change only DNS settings of a link and nothing else.
+polkit.addRule(function (action, subject) {
+    var actions = [
+        "org.freedesktop.resolve1.set-dns-servers",
+        "org.freedesktop.resolve1.set-domains",
+        "org.freedesktop.resolve1.set-default-route",
+        "org.freedesktop.resolve1.revert"
+    ];
+    if (subject.user === "rosetun-engine" && actions.indexOf(action.id) >= 0) {
+        return polkit.Result.YES;
+    }
+    return polkit.Result.NOT_HANDLED;
+});

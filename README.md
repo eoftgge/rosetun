@@ -91,7 +91,7 @@ When the configuration format is upgraded, Rosetun keeps a copy of the previous 
 
 ### Debian 13
 
-Linux is still being tested, so treat the package as preliminary until a final release carries one. Download `rosetun_<version>_amd64.deb` from [Releases](https://github.com/eoftgge/rosetun/releases) (amd64 only), compare it with the release's `SHA256SUMS.txt`, install it and add yourself to the group that may reach the service:
+Linux is still being tested, so treat the package as preliminary until a final release carries one. The engines run under their own account, without root, so rules by program are not available on Linux: a connection with such a rule is refused. Download `rosetun_<version>_amd64.deb` from [Releases](https://github.com/eoftgge/rosetun/releases) (amd64 only), compare it with the release's `SHA256SUMS.txt`, install it and add yourself to the group that may reach the service:
 
 ```sh
 sha256sum rosetun_<version>_amd64.deb

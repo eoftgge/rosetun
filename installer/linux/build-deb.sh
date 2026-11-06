@@ -170,6 +170,7 @@ place 0644 packaging/linux/rosetun-helper.service usr/lib/systemd/system/rosetun
 place 0644 packaging/linux/rosetun-lockdown.service usr/lib/systemd/system/rosetun-lockdown.service
 place 0644 packaging/linux/rosetun.sysusers usr/lib/sysusers.d/rosetun.conf
 place 0644 packaging/linux/io.github.eoftgge.rosetun.policy usr/share/polkit-1/actions/io.github.eoftgge.rosetun.policy
+place 0644 packaging/linux/rosetun-engine.rules usr/share/polkit-1/rules.d/50-rosetun-engine.rules
 place 0644 packaging/linux/rosetun.desktop usr/share/applications/rosetun.desktop
 place 0644 crates/rosetun-gui/assets/icon/rosetun.svg usr/share/icons/hicolor/scalable/apps/rosetun.svg
 for size in "${ICON_SIZES[@]}"; do
@@ -233,6 +234,8 @@ installed_kib=$(find "$root" -path "$root/DEBIAN" -prune -o -type f -printf '%s\
 # nftables, systemd and the helpers run the service. pkexec only asks for the
 # password of the GUI's Lockdown switch and its "add me to the group" button;
 # the kill switch and `sudo rosetun` work without it, so it is not required.
+# polkitd lets the engine's account point systemd-resolved at the tunnel; a
+# system without systemd-resolved does not need it.
 cat >"$root/DEBIAN/control" <<CONTROL
 Package: rosetun
 Version: $deb_version
@@ -240,7 +243,7 @@ Architecture: amd64
 Maintainer: $MAINTAINER
 Installed-Size: $installed_kib
 Depends: nftables, systemd, init-system-helpers (>= 1.66), $libraries, $GUI_LIBRARIES
-Recommends: desktop-file-utils, hicolor-icon-theme, pkexec
+Recommends: desktop-file-utils, hicolor-icon-theme, pkexec, polkitd
 Section: net
 Priority: optional
 Homepage: https://github.com/eoftgge/rosetun

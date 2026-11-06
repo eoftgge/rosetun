@@ -6,6 +6,8 @@ preflight.tools	yes	infrastructure	preflight	-	/usr/sbin/nft, curl with tftp, di
 preflight.baseline	yes	infrastructure	preflight	-	without Rosetun the probe address answers HTTPS on the physical interface, UDP 53 leaves it, the guest's resolver answers, and the host node accepts TCP
 install.service	yes	real-service	install	-	the helper runs as the systemd unit in its own cgroup leaf and offers the kill switch
 protection.reported	yes	real-service	killswitch	-	rosetun status says the kill switch is in place and stays if the service crashes, and names nothing as missing
+engine.identity	yes	real-service	engine	-	the running sing-box is rosetun-engine with no other group, CapEff, CapPrm and CapAmb exactly 0x3400, no new privileges, in the engines' leaf; the helper's bounding set is exactly the unit's
+engine.files	yes	real-service	engine	-	the engines' folders are root's with group rosetun-engine, 0710 and 0750: the engine reads its configuration and writes nothing there, and an ordinary account does not get in
 killswitch.direct-blocked	yes	real-service	killswitch	-	connected with the kill switch: HTTPS to the probe address bound to the physical interface is refused
 killswitch.tunnel-passes	yes	real-service	killswitch	-	connected with the kill switch: HTTPS to the probe address through the tunnel answers
 lan.off	yes	real-service	lan	-	"Local network" off: TCP to the host node bound to the physical interface is refused

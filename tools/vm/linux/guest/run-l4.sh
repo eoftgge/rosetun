@@ -430,6 +430,7 @@ EOF
 scenario_install() {
     do_install() {
         : >"$STATE/installed"
+        l2_install_engine_account "$STATE" "$ART" || { fail_reason="could not make the engines' account"; return 1; }
         install -d -m 0755 -o root -g root "$PREFIX" &&
             install -m 0755 -o root -g root "$ART/rosetun-helper-privileged" "$ART/rosetun" "$ART/sing-box" "$PREFIX/" &&
             install -m 0755 -o root -g root "$ART/rosetun" "$PREFIX/rosetun-gui" &&
@@ -806,6 +807,7 @@ cleanup() {
     rm -f -- "$UNIT_FILE" "$LOCKDOWN_UNIT_FILE" "$POLICY_FILE" && systemctl daemon-reload && note "removed the units"
     systemctl reset-failed rosetun-helper.service rosetun-lockdown.service 2>/dev/null
     rm -rf -- "$PREFIX" /var/lib/rosetun && note "removed the installed files"
+    l2_remove_engine_account "$STATE" && note "removed the engines' account" || problem "could not remove the engines' account"
     rm -f -- "$STATE/installed"
 }
 

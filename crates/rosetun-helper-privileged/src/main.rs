@@ -340,6 +340,10 @@ fn run_linux(signals: signals::Blocked, service: bool) -> std::process::ExitCode
         None
     };
 
+    rosetun_engine::process::run_engines_as(engine_identity(
+        rosetun_engine::process::engine_account(),
+        service,
+    ));
     // Before anything else starts: the helper moves into its own leaf and
     // engines go into theirs, or protection stays off with the reason.
     let routing = if service {
@@ -466,9 +470,10 @@ fn prepare_start(run_dir: &Path) -> Result<PreparedStart, StartError> {
     })?;
     #[cfg(target_os = "linux")]
     {
-        rosetun_ipc::transport::prepare_service_directories().map_err(|error| {
-            StartError(format!("failed to prepare service directories: {error}"))
-        })?;
+        rosetun_ipc::transport::prepare_service_directories(
+            rosetun_engine::process::engine_group(),
+        )
+        .map_err(|error| StartError(format!("failed to prepare service directories: {error}")))?;
         Ok(PreparedStart {
             listener,
             run_dir: "/run/rosetun/private".into(),
@@ -593,6 +598,30 @@ fn singbox_backend(run_dir: &Path, data_dir: &Path) -> SingBoxBackend {
     backend_from_copy(work_dir, copied)
 }
 
+/// Who runs the engines. The service never falls back to root: without its
+/// account no engine starts, and the reason reaches the user with the connect.
+/// A helper started by hand is a developer's, with nothing installed.
+#[cfg(target_os = "linux")]
+fn engine_identity(
+    account: std::io::Result<Option<rosetun_engine::process::Account>>,
+    service: bool,
+) -> rosetun_engine::process::Identity {
+    use rosetun_engine::process::{ENGINE_ACCOUNT, Identity};
+
+    let missing = match account {
+        Ok(Some(account)) => return Identity::Account(account),
+        Ok(None) => "the system has no such account".to_owned(),
+        Err(error) => error.to_string(),
+    };
+    if service {
+        tracing::error!(account = ENGINE_ACCOUNT, %missing, "engines cannot start");
+        Identity::Missing
+    } else {
+        tracing::warn!(account = ENGINE_ACCOUNT, %missing, "engines run with the helper's rights");
+        Identity::Inherit
+    }
+}
+
 /// The engines next to the helper. On Linux they run only while root alone
 /// can change them and every folder above them; there is no copy to fall
 /// back to.
@@ -618,6 +647,29 @@ fn backend_from_copy(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_service_never_runs_engines_as_root() {
+        use rosetun_engine::process::{Account, Identity};
+
+        let account = Account {
+            uid: 64000,
+            gid: 64000,
+        };
+        for service in [false, true] {
+            assert_eq!(
+                engine_identity(Ok(Some(account)), service),
+                Identity::Account(account)
+            );
+        }
+        assert_eq!(engine_identity(Ok(None), true), Identity::Missing);
+        assert_eq!(
+            engine_identity(Err(std::io::Error::other("lookup failed")), true),
+            Identity::Missing
+        );
+        assert_eq!(engine_identity(Ok(None), false), Identity::Inherit);
+    }
 
     #[test]
     fn failed_path_preparation_never_initializes_engines_or_background_workers() {

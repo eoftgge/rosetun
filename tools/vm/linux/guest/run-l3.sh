@@ -415,6 +415,7 @@ skip_rest() {
 scenario_install() {
     do_install() {
         : >"$STATE/installed"
+        l2_install_engine_account "$STATE" "$ART" || { fail_reason="could not make the engines' account"; return 1; }
         install -d -m 0755 -o root -g root "$PREFIX" &&
             install -m 0755 -o root -g root "$ART/rosetun-helper-privileged" "$ART/rosetun" "$ART/sing-box" "$PREFIX/" &&
             install -m 0644 -o root -g root "$ART/rosetun-helper.service" "$UNIT_FILE" ||
@@ -450,6 +451,54 @@ scenario_protection_reported() {
         disconnect
     }
     check protection.reported "status names the kill switch and that it stays after a crash" reported
+}
+
+scenario_engine() {
+    identity() {
+        local pid engine_uid engine_gid status
+        connect_with request-kill-switch.json || return 1
+        pid=$(pgrep -x sing-box | head -n 1)
+        [ -n "$pid" ] || { fail_reason="no sing-box process"; return 1; }
+        status=$(cat "/proc/$pid/status")
+        engine_uid=$(id -u rosetun-engine) engine_gid=$(id -g rosetun-engine)
+        printf '%s\n' "$status" | grep -qP "^Uid:\t$engine_uid\t$engine_uid\t$engine_uid\t$engine_uid$" ||
+            { fail_reason="sing-box runs as: $(printf '%s\n' "$status" | grep '^Uid:')"; return 1; }
+        printf '%s\n' "$status" | grep -qP "^Gid:\t$engine_gid\t$engine_gid\t$engine_gid\t$engine_gid$" ||
+            { fail_reason="sing-box has the group: $(printf '%s\n' "$status" | grep '^Gid:')"; return 1; }
+        printf '%s\n' "$status" | grep -qP "^Groups:\t$engine_gid ?$" ||
+            { fail_reason="sing-box has the groups: $(printf '%s\n' "$status" | grep '^Groups:')"; return 1; }
+        local set
+        for set in CapPrm CapEff CapAmb; do
+            printf '%s\n' "$status" | grep -qP "^$set:\t0000000000003400$" ||
+                { fail_reason="sing-box has $(printf '%s\n' "$status" | grep "^$set:")"; return 1; }
+        done
+        printf '%s\n' "$status" | grep -qP '^NoNewPrivs:\t1$' || { fail_reason="sing-box may gain privileges"; return 1; }
+        [ "$(cat "/proc/$pid/cgroup")" = "0::/system.slice/rosetun-helper.service/engines" ] ||
+            { fail_reason="sing-box is in $(cat "/proc/$pid/cgroup")"; return 1; }
+        grep -qP '^CapBnd:\t00000000000034e5$' "/proc/$(main_pid)/status" ||
+            { fail_reason="the helper has $(grep '^CapBnd:' "/proc/$(main_pid)/status")"; return 1; }
+    }
+    check engine.identity "sing-box runs as rosetun-engine with exactly its three capabilities" identity
+
+    files() {
+        passed engine.identity || { fail_reason="no session under the engines' account to test with"; return 1; }
+        local folder expected config as_engine
+        for folder in "/run/rosetun/private 710" "/run/rosetun/private/sing-box 750" "/run/rosetun/private/xray 750"; do
+            expected="${folder##* } root rosetun-engine"
+            [ "$(stat -c '%a %U %G' -- "${folder% *}")" = "$expected" ] ||
+                { fail_reason="${folder% *} is $(stat -c '%a %U %G' -- "${folder% *}"), not $expected"; return 1; }
+        done
+        config=$(find /run/rosetun/private/sing-box -maxdepth 1 -type f -name '*.json' | head -n 1)
+        [ -n "$config" ] || { fail_reason="no configuration in the engines' folder"; return 1; }
+        as_engine=(setpriv --reuid=rosetun-engine --regid=rosetun-engine --clear-groups --)
+        "${as_engine[@]}" test -r "$config" || { fail_reason="the engines' account cannot read $config"; return 1; }
+        ! "${as_engine[@]}" test -w "$config" || { fail_reason="the engines' account can change $config"; return 1; }
+        ! "${as_engine[@]}" test -w /run/rosetun/private/sing-box || { fail_reason="the engines' account can write its folder"; return 1; }
+        ! setpriv --reuid="$(uid_of "$USER_A")" --regid="$(gid_of "$USER_A")" --init-groups -- test -r "$config" ||
+            { fail_reason="$USER_A can read the engine's configuration"; return 1; }
+        disconnect
+    }
+    check engine.files "the engine reads its configuration and writes nothing, an ordinary account does not get in" files
 }
 
 scenario_kill_switch() {
@@ -740,6 +789,7 @@ cleanup() {
     rm -f -- "$UNIT_FILE" && systemctl daemon-reload && note "removed the unit"
     systemctl reset-failed rosetun-helper.service 2>/dev/null
     rm -rf -- "$PREFIX" /var/lib/rosetun && note "removed the installed files"
+    l2_remove_engine_account "$STATE" && note "removed the engines' account" || problem "could not remove the engines' account"
     rm -f -- "$STATE/installed"
 }
 
@@ -833,6 +883,7 @@ if preflight_ok; then
     scenario_install
     if passed install.service; then
         scenario_protection_reported
+        scenario_engine
         scenario_kill_switch
         scenario_lan_on
         scenario_dns_lock

@@ -464,6 +464,7 @@ if ($mode -eq 'Run') {
             if ($Stage -ne 'L5') {
                 $extraFiles['sing-box'] = (Resolve-Path -LiteralPath $SingBoxLinuxPath).ProviderPath
                 $extraFiles['rosetun-helper.service'] = Join-Path $RepoRoot 'packaging\linux\rosetun-helper.service'
+                $extraFiles['rosetun-engine.rules'] = Join-Path $RepoRoot 'packaging\linux\rosetun-engine.rules'
             }
             if ($Stage -eq 'Proxy') {
                 $proxyRequests = New-RosetunLinuxProxyRequests -KillSwitchRequestPath $extraFiles['request-kill-switch.json'] -OutDir $requestDir

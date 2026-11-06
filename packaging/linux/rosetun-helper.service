@@ -52,6 +52,21 @@ Delegate=yes
 # in /run/rosetun), the table keeps the network closed until the restarted
 # helper is asked to open it or a connect replaces it.
 
+# All this service and its engines may ever hold. The engines keep the first
+# three (see rosetun_engine::process) and run as rosetun-engine:
+# - CAP_NET_ADMIN: the TUN device, routes and rules, nftables;
+# - CAP_NET_RAW: binding a socket to the physical interface;
+# - CAP_NET_BIND_SERVICE: a local proxy on a port below 1024.
+# The helper needs the rest:
+# - CAP_SETUID, CAP_SETGID: an engine takes its account before it runs;
+# - CAP_KILL: stopping an engine that runs as another account;
+# - CAP_CHOWN: the socket's group rosetun, the engine folders' group;
+# - CAP_DAC_READ_SEARCH: finding the GUI's and the CLI's scopes in cgroup folders
+#   of other accounts.
+# It owns everything else it touches, so CAP_DAC_OVERRIDE and CAP_SYS_ADMIN stay
+# out, and CAP_SYS_PTRACE: an engine with it could inject code into the helper.
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE CAP_SETUID CAP_SETGID CAP_KILL CAP_CHOWN CAP_DAC_READ_SEARCH
+
 # Hardening, limited to what cannot touch the TUN device, routes, /proc,
 # nftables or the cgroup tree (so no ProtectControlGroups or
 # ProtectKernelTunables, which make /sys/fs/cgroup read-only):

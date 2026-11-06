@@ -1,3 +1,5 @@
 # Installed as /usr/lib/sysusers.d/rosetun.conf. Members of group rosetun may
-# connect to the helper's socket (/run/rosetun/helper.sock, mode 0660).
+# connect to the helper's socket (/run/rosetun/helper.sock, mode 0660). The
+# engines run as rosetun-engine, which has no home, no login and no other group.
 g rosetun - -
+u rosetun-engine - "Rosetun engines" - -

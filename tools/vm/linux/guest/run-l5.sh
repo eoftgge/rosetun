@@ -422,6 +422,8 @@ scenario_install() {
         done
         [ -f /usr/share/icons/hicolor/scalable/apps/rosetun.svg ] || { fail_reason="no scalable icon"; return 1; }
         [ -f /usr/share/polkit-1/actions/io.github.eoftgge.rosetun.policy ] || { fail_reason="no polkit policy"; return 1; }
+        [ -f /usr/share/polkit-1/rules.d/50-rosetun-engine.rules ] || { fail_reason="no polkit rule for the engines' account"; return 1; }
+        getent passwd rosetun-engine >/dev/null || { fail_reason="the package did not make the engines' account"; return 1; }
         [ -s /usr/share/doc/rosetun/copyright ] || { fail_reason="no copyright file"; return 1; }
     }
     check install.desktop "the menu entry, the handler, the icons and the policy" do_desktop

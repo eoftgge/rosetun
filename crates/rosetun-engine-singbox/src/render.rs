@@ -48,16 +48,27 @@ pub(crate) fn is_exit_trace(process: Option<&str>, ip: &str, port: u16) -> bool 
             })
 }
 
-pub(crate) const RULE_CAPABILITIES: RuleCapabilities = RuleCapabilities {
-    domain_exact: true,
-    domain_suffix: true,
-    domain_keyword: true,
-    process_name: true,
-    process_path: true,
-    ip_cidr: true,
-    lists: true,
-    exits: true,
-};
+/// On Linux the engine has no right to read another account's processes (see
+/// `rosetun_engine::process`). Tests render what Windows does, so one set of
+/// golden files stands for both systems.
+const READS_PROCESSES: bool = cfg!(windows) || cfg!(test);
+
+pub(crate) const RULE_CAPABILITIES: RuleCapabilities = capabilities(READS_PROCESSES);
+
+/// A rule by program that cannot match is not offered, so a connect with one is
+/// refused rather than left to go another way.
+const fn capabilities(reads_processes: bool) -> RuleCapabilities {
+    RuleCapabilities {
+        domain_exact: true,
+        domain_suffix: true,
+        domain_keyword: true,
+        process_name: reads_processes,
+        process_path: reads_processes,
+        ip_cidr: true,
+        lists: true,
+        exits: true,
+    }
+}
 
 pub fn render(request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError> {
     let lan = request.settings.allow_lan.then_some(request.lan_segment);
@@ -516,13 +527,7 @@ fn route_section_with_lists(
             "protocol": "dns",
             "action": "hijack-dns",
         }),
-        json!({
-            "process_path_regex": [process_name_regex(GUI_PROCESS)],
-            "ip_cidr": [format!("{EXIT_TRACE_IP}/32")],
-            "port": [EXIT_TRACE_PORT],
-            "action": "route",
-            "outbound": TAG_PROXY,
-        }),
+        exit_trace_rule(READS_PROCESSES),
     ];
     if local_proxy {
         route_rules.insert(
@@ -701,6 +706,22 @@ fn route_rule(rule: &Rule) -> Option<Map<String, Value>> {
 }
 
 /// A name matched against the whole path: Windows ignores letter case, Linux does not.
+/// The GUI's look at its exit goes through the tunnel whatever the rules say.
+/// Linux cannot tell the GUI from other programs here, so the address alone
+/// decides there: a one-purpose address nothing else asks for.
+fn exit_trace_rule(reads_processes: bool) -> Value {
+    let mut rule = json!({
+        "ip_cidr": [format!("{EXIT_TRACE_IP}/32")],
+        "port": [EXIT_TRACE_PORT],
+        "action": "route",
+        "outbound": TAG_PROXY,
+    });
+    if reads_processes {
+        rule["process_path_regex"] = json!([process_name_regex(GUI_PROCESS)]);
+    }
+    rule
+}
+
 pub(crate) fn process_name_regex(name: &str) -> String {
     let flags = if cfg!(windows) { "(?i)" } else { "" };
     format!(r"{flags}(?:^|[\\/]){}$", quote_process_name(name))
@@ -748,6 +769,18 @@ mod tests {
         ExitId, Hysteria2Params, ListId, NodeId, Rule, RuleSetId, RuleTemplate, StreamSettings,
         TlsParams,
     };
+
+    #[test]
+    fn without_reading_processes_no_rule_by_program_is_offered_and_none_is_rendered() {
+        let linux = capabilities(false);
+        assert!(!linux.process_name && !linux.process_path);
+        assert!(linux.domain_exact && linux.ip_cidr && linux.lists && linux.exits);
+
+        let rule = exit_trace_rule(false);
+        assert!(rule.get("process_path_regex").is_none());
+        assert_eq!(rule["outbound"], TAG_PROXY);
+        assert!(exit_trace_rule(true).get("process_path_regex").is_some());
+    }
 
     use super::*;
 

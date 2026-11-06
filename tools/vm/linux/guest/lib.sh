@@ -237,6 +237,33 @@ l2_cleanup_run() {
 
 # l2_read_env_file FILE KEY...: strict KEY=VALUE reader for the job description.
 # Only listed keys, only conservative values; never evaluated by the shell.
+# l2_install_engine_account STATE ART: what the package brings for the engines:
+# their account, and the polkit rule that lets it set the tunnel's DNS. Each is
+# noted in STATE when this run made it, for l2_remove_engine_account.
+l2_install_engine_account() {
+    local state=$1 art=$2
+    if ! getent passwd rosetun-engine >/dev/null; then
+        useradd --system --no-create-home --shell /usr/sbin/nologin rosetun-engine || return 1
+        : >"$state/engine-account"
+    fi
+    if [ -d /usr/share/polkit-1 ]; then
+        install -d -m 0755 /usr/share/polkit-1/rules.d &&
+            install -m 0644 -o root -g root "$art/rosetun-engine.rules" /usr/share/polkit-1/rules.d/50-rosetun-engine.rules ||
+            return 1
+        : >"$state/engine-rule"
+    fi
+}
+
+l2_remove_engine_account() {
+    local state=$1
+    if [ -f "$state/engine-rule" ]; then
+        rm -f -- /usr/share/polkit-1/rules.d/50-rosetun-engine.rules "$state/engine-rule" || return 1
+    fi
+    if [ -f "$state/engine-account" ]; then
+        userdel rosetun-engine && rm -f -- "$state/engine-account" || return 1
+    fi
+}
+
 l2_read_env_file() {
     local file=$1 key value allowed line
     shift

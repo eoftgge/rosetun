@@ -590,6 +590,7 @@ try {
     foreach ($name in $requests.Keys) { $extra[$name] = $requests[$name] }
     $extra['sing-box'] = $engine
     $extra['rosetun-helper.service'] = Join-Path $PSScriptRoot '..\..\..\..\packaging\linux\rosetun-helper.service'
+    $extra['rosetun-engine.rules'] = Join-Path $PSScriptRoot '..\..\..\..\packaging\linux\rosetun-engine.rules'
     $jobExtra = [ordered]@{ HOST_ADDRESS = '192.0.2.1'; NODE_PORT = '8388'; PROBE_ADDRESS = '198.51.100.1'; DNS_PROBE_ADDRESS = '203.0.113.53' }
     $l3env = New-RosetunLinuxJobEnv -RunId $runId -StandId 'stand-1' -BootId $bootId -UserA 'ipc_owner' -UserB 'ipc_other' `
         -BiosGuid '00112233-4455-6677-8899-aabbccddeeff' -Extra $jobExtra

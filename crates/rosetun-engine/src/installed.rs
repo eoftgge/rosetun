@@ -1,4 +1,4 @@
-//! Linux: the helper runs engines as root, so it runs only files that only
+//! Linux: the helper starts engines from root, so it runs only files that only
 //! root can change: the file and every folder above it are owned by root and
 //! writable by nobody else. Without that, whoever can write one of them
 //! chooses what runs as root. There is no fallback to another file.

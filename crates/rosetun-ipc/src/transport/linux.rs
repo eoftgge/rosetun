@@ -166,14 +166,55 @@ fn root_directory(path: &Path, create_mode: Option<u32>) -> io::Result<File> {
     Ok(directory)
 }
 
-/// Prepare fixed root-only state and secret configuration directories.
+/// The folders engines read their configuration and lists from, with the mode
+/// each needs when engines have a group of their own: the group passes through
+/// the parent and reads, and writes nothing, so an engine cannot change what the
+/// next one starts with. No one else gets in, as the configuration holds the
+/// server's credentials.
+const ENGINE_DIRECTORIES: [(&str, u32); 3] = [
+    ("/run/rosetun/private", 0o710),
+    ("/run/rosetun/private/sing-box", 0o750),
+    ("/run/rosetun/private/xray", 0o750),
+];
+
+/// A folder of `ENGINE_DIRECTORIES`: root's, with the engines' group. A folder
+/// someone else owns is refused rather than taken over.
+fn engine_directory(path: &Path, mode: u32, group: u32) -> io::Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| denied("service directory has no parent"))?;
+    let name = path
+        .file_name()
+        .ok_or_else(|| denied("service directory has no name"))?;
+    let next = fd_path(&root_directory(parent, None)?).join(name);
+    match DirBuilder::new().mode(0o700).create(&next) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(error),
+    }
+    let directory = open_directory(&next)?;
+    validate_directory(&directory.metadata()?, 0, false)?;
+    // SAFETY: The descriptor is open for the whole call; the values are plain.
+    if unsafe { libc::fchown(directory.as_raw_fd(), 0, group) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // Set outright: the umask may have narrowed it, and an existing folder has
+    // the mode an earlier start gave it.
+    directory.set_permissions(fs::Permissions::from_mode(mode))
+}
+
+/// Prepare fixed root-only state and secret configuration directories, which
+/// `engine_group` may read when engines run as an account of their own.
 /// Existing objects are validated, never repaired or migrated.
-pub fn prepare_service_directories() -> io::Result<()> {
+pub fn prepare_service_directories(engine_group: Option<u32>) -> io::Result<()> {
     root_directory(Path::new("/var/lib/rosetun"), Some(0o700))?;
     root_directory(Path::new("/var/lib/rosetun/lists"), Some(0o700))?;
-    root_directory(Path::new("/run/rosetun/private"), Some(0o700))?;
-    root_directory(Path::new("/run/rosetun/private/sing-box"), Some(0o700))?;
-    root_directory(Path::new("/run/rosetun/private/xray"), Some(0o700))?;
+    for (path, mode) in ENGINE_DIRECTORIES {
+        match engine_group {
+            Some(group) => engine_directory(Path::new(path), mode, group)?,
+            None => drop(root_directory(Path::new(path), Some(0o700))?),
+        }
+    }
     Ok(())
 }
 
@@ -395,6 +436,15 @@ mod tests {
     use std::io::Read;
     use std::os::unix::fs::symlink;
     use std::process::Command;
+
+    #[test]
+    fn engine_folders_let_no_one_but_the_engines_group_in_and_it_writes_nothing() {
+        for (path, mode) in ENGINE_DIRECTORIES {
+            assert_eq!(mode & 0o007, 0, "{path} is open to others");
+            assert_eq!(mode & 0o020, 0, "{path} is writable by the group");
+            assert_eq!(mode & 0o010, 0o010, "{path} does not let the group through");
+        }
+    }
 
     use super::*;
 
