@@ -582,13 +582,21 @@ rosetun_private() {
 }
 
 scenario_lockdown() {
-    lockdown_cli() { "$CLI" lockdown "$@" </dev/null >/dev/null 2>&1; }
+    lockdown_cli() {
+        CLI_OUT=$("$CLI" lockdown "$@" </dev/null 2>&1) && return 0
+        fail_reason="rosetun lockdown $*: $(printf '%s' "$CLI_OUT" | sed 's/\x1b\[[0-9;]*m//g' | tail -n 1)"
+        return 1
+    }
     closed() {
         install -m 0644 -o root -g root "$ART/rosetun-lockdown.service" "$LOCKDOWN_UNIT_FILE" &&
             systemctl daemon-reload && systemctl enable --quiet rosetun-lockdown.service ||
             { fail_reason="installing the Lockdown unit failed"; return 1; }
         : >"$STATE/lockdown-unit"
-        lockdown_cli on --lan off || { fail_reason="lockdown on failed"; return 1; }
+        # The service reads what it can offer once, when it starts, and it started
+        # before this stage enabled the unit.
+        timeout "$UNIT_TIMEOUT_SECONDS" systemctl restart rosetun-helper.service ||
+            { fail_reason="the service did not start again with the Lockdown unit enabled"; return 1; }
+        lockdown_cli on --lan off || return 1
         connect_with request-proxy-share.json || return 1
         expect_reached "HTTPS through the proxy" through_proxy || return 1
         expect_blocked "HTTPS to $PROBE_ADDRESS on $PHYS" direct_https || return 1
@@ -598,7 +606,7 @@ scenario_lockdown() {
     check lockdown.share-closed "without its local network Lockdown keeps the proxy on loopback" closed
     opened() {
         disconnect || return 1
-        lockdown_cli on --lan on || { fail_reason="lockdown on --lan on failed"; return 1; }
+        lockdown_cli on --lan on || return 1
         connect_with request-proxy-share.json || return 1
         listening_on | grep -qxF "$(phys_address)" || { fail_reason="sharing stayed off with Lockdown's local network"; return 1; }
         "$NFT" list table inet rosetun | grep -q 'ip saddr {' || { fail_reason="the input chain takes no private range"; return 1; }
@@ -606,7 +614,7 @@ scenario_lockdown() {
     check lockdown.share-open "with its local network the proxy is shared and the input chain takes the private ranges" opened
     off() {
         disconnect || return 1
-        lockdown_cli off || { fail_reason="lockdown off failed"; return 1; }
+        lockdown_cli off || return 1
         ! table_present || { fail_reason="the table stayed after Lockdown went off"; return 1; }
     }
     check lockdown.off "Lockdown went off with the session" off
