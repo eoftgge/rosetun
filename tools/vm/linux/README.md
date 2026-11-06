@@ -465,8 +465,9 @@ checking, restore `l2-clean` again.
    stand it already exists (step 2 of the preparation).
 
 5. **Group membership.** Only members of `rosetun` may connect. Add the account
-   that runs the CLI or the GUI, then log out and in again: a session keeps the
-   groups it started with (`id` shows `rosetun` once it took effect):
+   that runs the CLI or the GUI, then restart the guest: a session keeps the
+   groups it started with, and the user's systemd manager can outlive a logout
+   (`id` shows `rosetun` once it took effect):
 
    ```sh
    sudo usermod -aG rosetun <account>

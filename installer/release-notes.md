@@ -42,7 +42,7 @@ Install it over 0.3.x or 0.4.0-beta.1; settings and Lockdown are carried over.
 
 Windows 11, x64. Download `{{setup}}` from this release. [Code signing policy](https://github.com/eoftgge/rosetun/blob/master/CODE_SIGNING_POLICY.md): the installer is not code-signed yet; if SmartScreen says "Windows protected your PC", select **More info** and then **Run anyway**.
 
-Debian 13, amd64 (Linux is still being tested): download `{{deb}}`, compare `sha256sum {{deb}}` with `{{deb_sha256}}`, then run `sudo apt install ./{{deb}}`. Add yourself to the service's group with `sudo usermod -aG rosetun "$USER"`, then log out and log in again.
+Debian 13, amd64 (Linux is still being tested): download `{{deb}}`, compare `sha256sum {{deb}}` with `{{deb_sha256}}`, then run `sudo apt install ./{{deb}}`. Add yourself to the service's group with `sudo usermod -aG rosetun "$USER"`, then restart the computer.
 
 ## Verify
 
@@ -100,7 +100,7 @@ The executable embeds Wintun {{wintun_version}}, distributed under the Wintun Pr
 
 Windows 11, x64. Скачайте `{{setup}}` из этого релиза. [Политика подписи кода](https://github.com/eoftgge/rosetun/blob/master/CODE_SIGNING_POLICY.md) (Code signing policy): установщик пока не подписан; если SmartScreen показывает «Windows protected your PC», нажмите **More info**, затем **Run anyway**.
 
-Debian 13, amd64 (Linux ещё проверяется): скачайте `{{deb}}`, сравните `sha256sum {{deb}}` с `{{deb_sha256}}` и выполните `sudo apt install ./{{deb}}`. Добавьте себя в группу службы командой `sudo usermod -aG rosetun "$USER"`, затем выйдите из системы и войдите снова.
+Debian 13, amd64 (Linux ещё проверяется): скачайте `{{deb}}`, сравните `sha256sum {{deb}}` с `{{deb_sha256}}` и выполните `sudo apt install ./{{deb}}`. Добавьте себя в группу службы командой `sudo usermod -aG rosetun "$USER"`, затем перезагрузите компьютер.
 
 ### Проверка
 

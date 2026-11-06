@@ -115,7 +115,7 @@ pub(crate) enum ServiceGroup {
     Offered,
     Joining,
     Failed,
-    /// Takes effect at the next login.
+    /// Takes effect after a restart.
     Joined,
 }
 

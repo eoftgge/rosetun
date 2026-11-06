@@ -1,6 +1,7 @@
 //! Adding the account to group `rosetun`, whose members may reach the
 //! service's socket. Polkit asks for an administrator; the change counts from
-//! the next login, and until then the socket keeps refusing.
+//! the next start of the user's systemd manager, which can outlive a logout and
+//! passes its groups on to programs, and until then the socket keeps refusing.
 
 use std::ffi::CStr;
 use std::io;
@@ -18,14 +19,14 @@ const DISMISSED: i32 = 126;
 /// How an attempt that ran to its end came out.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ServiceGroupJoin {
-    /// The account is in the group; a new login picks that up.
+    /// The account is in the group; a restart picks that up.
     Joined,
     /// The user dismissed the prompt.
     Declined,
 }
 
 /// Asks polkit only when the account is not listed yet: after an earlier
-/// click all that is missing is the new login.
+/// click all that is missing is the restart.
 pub fn join_service_group() -> io::Result<ServiceGroupJoin> {
     let user = current_user()?;
     if user.starts_with('-') {

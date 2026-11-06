@@ -18,7 +18,7 @@ pub enum ClientError {
     Closed,
     /// The socket's permissions refused this account.
     #[error(
-        "no access to the Rosetun service: run sudo usermod -aG rosetun \"$USER\", then log out and log in again"
+        "no access to the Rosetun service: run sudo usermod -aG rosetun \"$USER\", then restart the computer"
     )]
     SocketDenied,
 }

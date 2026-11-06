@@ -86,7 +86,7 @@ sudo apt install ./rosetun_<version>_amd64.deb
 sudo usermod -aG rosetun "$USER"
 ```
 
-Then log out and log in again. If you skip the last command, the window offers the same with **Add me**.
+Then restart the computer: logging out is not always enough, because the desktop can keep its old list of groups. If you skip the last command, the window offers the same with **Add me**.
 
 **Update:** install the new package the same way. With the kill switch on, the network stays closed through the update: a running window restarts itself and connects again. Without a window, `rosetun status` says `network: held closed`, and `rosetun open-network` opens it.
 
