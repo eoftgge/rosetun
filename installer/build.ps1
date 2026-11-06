@@ -66,7 +66,12 @@ New-Item -ItemType Directory -Path $licensesDir -Force | Out-Null
 
 Push-Location $root
 try {
-    & cargo build -q --release --locked -p rosetun-gui -p rosetun-helper-privileged -p rosetun
+    # The CLI in a run of its own: one run would give it the GUI's features.
+    & cargo build -q --release --locked -p rosetun-gui -p rosetun-helper-privileged
+    if ($LASTEXITCODE -ne 0) {
+        throw "Building release binaries failed with cargo exit code $LASTEXITCODE."
+    }
+    & cargo build -q --release --locked -p rosetun
     if ($LASTEXITCODE -ne 0) {
         throw "Building release binaries failed with cargo exit code $LASTEXITCODE."
     }

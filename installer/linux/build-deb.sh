@@ -133,7 +133,9 @@ fetch "https://github.com/XTLS/Xray-core/releases/download/v$XRAY_VERSION/Xray-l
 # to anyone who reads a panic message.
 export CARGO_PROFILE_RELEASE_STRIP=symbols
 export RUSTFLAGS="--remap-path-prefix=$repo=/rosetun --remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo --remap-path-prefix=$target=/target"
-cargo build -q --release --locked -p rosetun-gui -p rosetun-helper-privileged -p rosetun
+# The CLI in a run of its own: one run would give it the GUI's features.
+cargo build -q --release --locked -p rosetun-gui -p rosetun-helper-privileged
+cargo build -q --release --locked -p rosetun
 
 work=$(mktemp -d "$out/stage.XXXXXXXX")
 trap 'rm -rf -- "$work"' EXIT

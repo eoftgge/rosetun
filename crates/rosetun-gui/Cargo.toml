@@ -18,7 +18,7 @@ image.workspace = true
 unic-langid.workspace = true
 rosetun-adapters.workspace = true
 rosetun-config.workspace = true
-rosetun-core.workspace = true
+rosetun-core = { workspace = true, features = ["system-checks"] }
 rosetun-ipc.workspace = true
 rosetun-processes.workspace = true
 rosetun-shell.workspace = true

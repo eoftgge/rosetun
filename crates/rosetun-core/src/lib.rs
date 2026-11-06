@@ -15,6 +15,7 @@ mod settings;
 pub(crate) mod store;
 mod subscription_url;
 mod subscriptions;
+#[cfg(feature = "system-checks")]
 mod system_checks;
 mod text;
 mod update;
@@ -77,6 +78,7 @@ pub use subscriptions::{
     move_subscription, prepare_subscription, remove_subscription, rename_subscription, save_proxy,
     update_all, update_subscription,
 };
+#[cfg(feature = "system-checks")]
 pub use system_checks::{CheckDetail, CheckKind, CheckResult, CheckStatus, check_system};
 pub use text::{
     expiry_text, fetch_error_message, node_address, node_protocol, node_tls, node_transport,

@@ -7,13 +7,18 @@ repository.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[features]
+# The GUI's system check: it reads adapters, processes and desktop settings,
+# which the CLI has no use for and should not carry.
+system-checks = ["dep:rosetun-adapters", "dep:rosetun-processes", "dep:rosetun-shell"]
+
 [dependencies]
 rosetun-config.workspace = true
 rosetun-dns.workspace = true
 rosetun-subscription.workspace = true
 rosetun-hwid.workspace = true
-rosetun-adapters.workspace = true
-rosetun-processes.workspace = true
+rosetun-adapters = { workspace = true, optional = true }
+rosetun-processes = { workspace = true, optional = true }
 rosetun-ipc.workspace = true
 base64.workspace = true
 percent-encoding.workspace = true
@@ -31,7 +36,7 @@ rosetun-engine.workspace = true
 rosetun-engine-singbox.workspace = true
 
 [target.'cfg(windows)'.dependencies]
-rosetun-shell.workspace = true
+rosetun-shell = { workspace = true, optional = true }
 
 [lints]
 workspace = true
