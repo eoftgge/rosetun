@@ -13,6 +13,10 @@ REPOSITORY = 'eoftgge/rosetun'
 API = f'https://api.github.com/repos/{REPOSITORY}'
 RELEASES = f'https://github.com/{REPOSITORY}/releases/download/'
 MARKERS = {'VERSION', 'INSTALLER', 'DOWNLOAD_URL', 'CHECKSUM_URL', 'SHA256_LINE'}
+# What a page says about Linux depends on whether the stable release has a package.
+LINUX_MARKERS = {'DEB', 'DEB_URL'}
+LINUX_READY = re.compile(r'<!-- linux-ready (.*?) -->', re.DOTALL)
+LINUX_SOON = re.compile(r'<!-- linux-soon -->(.*?)<!-- /linux-soon -->', re.DOTALL)
 
 
 def fetch(url, api=False):
@@ -52,23 +56,37 @@ def replacements(release, sums):
             matching.append(line)
     if len(matching) != 1:
         raise ValueError('expected exactly one installer checksum')
+    deb = f'rosetun_{version}_amd64.deb'
+    deb_url = ''
+    if any(a['name'] == deb for a in assets):
+        deb_url = asset_url(deb)
+        if not any(re.fullmatch(r'[0-9a-fA-F]{64} [ *]' + re.escape(deb), line) for line in sums.splitlines()):
+            raise ValueError('expected a checksum of the Debian package')
     return dict(VERSION=version, INSTALLER=installer, DOWNLOAD_URL=download,
-                CHECKSUM_URL=checksums, SHA256_LINE=matching[0])
+                CHECKSUM_URL=checksums, SHA256_LINE=matching[0], DEB=deb if deb_url else '', DEB_URL=deb_url)
 
 
 def render(source, output, values):
-    if set(values) != MARKERS:
+    if set(values) != MARKERS | LINUX_MARKERS:
         raise ValueError('incomplete release data')
     if output.exists():
         raise ValueError('output must be a new directory')
     shutil.copytree(source, output)
     for path in output.rglob('*.html'):
         text = path.read_text(encoding='utf-8')
+        if values['DEB_URL']:
+            text = LINUX_SOON.sub('', text)
+            text = LINUX_READY.sub(lambda match: match[1], text)
+            for key in LINUX_MARKERS:
+                text = text.replace(f'@@{key}@@', html.escape(values[key], quote=True))
+        else:
+            text = LINUX_READY.sub('', text)
+            text = LINUX_SOON.sub(lambda match: match[1], text)
         found = set(re.findall(r'@@([A-Z0-9_]+)@@', text))
         if found and found != MARKERS:
             raise ValueError(f'incomplete markers in {path}')
-        for key, value in values.items():
-            text = text.replace(f'@@{key}@@', html.escape(value, quote=True))
+        for key in MARKERS:
+            text = text.replace(f'@@{key}@@', html.escape(values[key], quote=True))
         text = re.sub(r'href="[^"]*"\s+data-release-href="([^"]*)"',
                       lambda match: f'href="{match[1]}"', text)
         text = re.sub(r'<(span|code)([^>]*?)\s+data-release-text="([^"]*)"\s*>.*?</\1\s*>',
@@ -85,6 +103,9 @@ if __name__ == '__main__':
     args = parser.parse_args()
     release = json.loads(fetch(f'{API}/releases/latest', api=True))
     # Validate asset URLs before making any release download request.
-    provisional = replacements(release, '0' * 64 + '  rosetun-' + release['tag_name'].removeprefix('v') + '-setup.exe')
+    stable_version = release['tag_name'].removeprefix('v')
+    provisional = replacements(release, '\n'.join(
+        '0' * 64 + '  ' + name for name in (f'rosetun-{stable_version}-setup.exe', f'rosetun_{stable_version}_amd64.deb')
+    ))
     sums = fetch(provisional['CHECKSUM_URL']).decode('utf-8-sig')
     render(Path('site'), args.output, replacements(release, sums))

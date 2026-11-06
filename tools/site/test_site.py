@@ -35,6 +35,31 @@ class SiteChecks(unittest.TestCase):
         binary = self.sums.replace('  rosetun', ' *rosetun')
         self.assertEqual(replacements(self.release, binary)['SHA256_LINE'], binary.strip())
 
+    def rendered_front_page(self, release, sums):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / 'site'
+            render(Path('site'), output, replacements(release, sums))
+            with redirect_stdout(io.StringIO()):
+                check(output, rendered=True)
+            return (output / 'en/index.html').read_text(encoding='utf-8')
+
+    def test_linux_stays_coming_soon_until_the_stable_release_has_a_package(self):
+        page = self.rendered_front_page(self.release, self.sums)
+        self.assertIn('Linux: coming soon.', page)
+        self.assertNotIn('linux-', page)
+        self.assertNotIn('.deb', page)
+
+    def test_a_stable_release_with_a_package_links_it(self):
+        name = 'rosetun_1.2.3_amd64.deb'
+        release = copy.deepcopy(self.release)
+        release['assets'].append(dict(name=name, browser_download_url=f'{RELEASES}v1.2.3/{name}'))
+        with self.assertRaises(ValueError):
+            replacements(release, self.sums)
+        page = self.rendered_front_page(release, self.sums + 'b' * 64 + f'  {name}\n')
+        self.assertIn(f'href="{RELEASES}v1.2.3/{name}"', page)
+        self.assertNotIn('coming soon', page)
+        self.assertNotIn('linux-', page)
+
     def test_rendered_site_passes_and_gate_rejects_bad_links_and_resources(self):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / 'site'
