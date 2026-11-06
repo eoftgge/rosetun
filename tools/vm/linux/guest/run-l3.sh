@@ -213,6 +213,18 @@ system_dns_answers() {
 
 main_pid() { systemctl show -p MainPID --value rosetun-helper.service 2>/dev/null; }
 
+# flush_and_wait_restored: what `flush ruleset` in a firewall's configuration does,
+# then until the helper's next check put the table back.
+flush_and_wait_restored() {
+    local deadline
+    "$NFT" flush ruleset || { fail_reason="nft flush ruleset failed"; return 1; }
+    deadline=$((SECONDS + 10))
+    until table_present; do
+        [ "$SECONDS" -lt "$deadline" ] || { fail_reason="the table did not come back within ten seconds"; return 1; }
+        sleep 0.2
+    done
+}
+
 # kill_helper: SIGKILL to the helper, then until systemd restarted it and its
 # socket answers `rosetun status` (in CLI_OUT).
 kill_helper() {
@@ -498,6 +510,18 @@ EOF
         ! table_present || { fail_reason="the table stays after a disconnect"; return 1; }
         expect_reached "HTTPS to $PROBE_ADDRESS on $PHYS" direct_https
     }
+    flush_restored() {
+        passed killswitch.tunnel-passes || { fail_reason="no kill-switch session to test through"; return 1; }
+        flush_and_wait_restored || return 1
+        expect_blocked "HTTPS to $PROBE_ADDRESS on $PHYS after the flush" direct_https || return 1
+        cli 15 status
+        printf '%s\n' "$CLI_OUT" | grep -q '^firewall rules: another program changed them; put back' ||
+            { fail_reason="status does not say the rules were put back: $CLI_OUT"; return 1; }
+        journalctl -b -u rosetun-helper.service --no-pager 2>/dev/null | grep -q 'another program changed the table' ||
+            { fail_reason="the journal does not say the table was put back"; return 1; }
+        [[ $(state_line) =~ ^Connected ]] || { fail_reason="the session did not stay Connected"; return 1; }
+    }
+    check killswitch.flush-restored "the table came back, the direct path was refused, the journal and status said so" flush_restored
     check killswitch.disconnect "the table went away and the direct path answered" disconnect_removes
 }
 

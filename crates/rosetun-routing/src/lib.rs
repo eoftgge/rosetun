@@ -188,6 +188,15 @@ pub struct LockdownApps {
     pub service: Option<std::path::PathBuf>,
 }
 
+/// What a look at the protection in the system found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProtectionCheck {
+    /// It is as this service wrote it, or nothing is expected.
+    Intact,
+    /// Something else changed or removed it, and it has been put back.
+    Restored,
+}
+
 pub trait RoutingBackend: std::fmt::Debug + Send {
     fn name(&self) -> &'static str;
 
@@ -197,6 +206,15 @@ pub trait RoutingBackend: std::fmt::Debug + Send {
     fn capabilities(&self) -> ProtectionCapabilities;
 
     fn preflight(&self) -> Result<(), RoutingError>;
+
+    /// Whether the protection in the system is still what this service
+    /// wrote, and puts it back if not. Only where another program can remove
+    /// it without the service knowing and nothing else holds it in place:
+    /// nftables' `flush ruleset`. WFP keeps a dynamic session's filters away
+    /// from anyone else's session.
+    fn verify_protection(&self) -> Result<ProtectionCheck, RoutingError> {
+        Ok(ProtectionCheck::Intact)
+    }
 
     /// Why the kill switch is not available, in words for an error message,
     /// when `capabilities` says so.

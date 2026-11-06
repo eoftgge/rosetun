@@ -209,6 +209,14 @@ pub struct ProtectionState {
     /// the holds do on both.
     #[serde(default)]
     pub survives_service_crash: bool,
+    /// When another program last removed or changed the firewall rules and
+    /// the service put them back.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub restored_unix: Option<u64>,
+    /// The service cannot read the firewall rules or put them back, so what
+    /// `installed` says may no longer hold.
+    #[serde(default)]
+    pub check_failed: bool,
 }
 
 impl ProtectionState {

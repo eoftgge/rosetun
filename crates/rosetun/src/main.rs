@@ -359,6 +359,14 @@ fn protection_lines(protection: &ProtectionState) -> Vec<String> {
                 .to_owned(),
         );
     }
+    if protection.check_failed {
+        lines.push("firewall rules: cannot be checked or put back".to_owned());
+    }
+    if let Some(restored) = protection.restored_unix {
+        lines.push(format!(
+            "firewall rules: another program changed them; put back (unix time {restored})"
+        ));
+    }
     if protection.installed != InstalledProtection::None {
         lines.push(format!(
             "if the service crashes: {}",
@@ -1046,6 +1054,21 @@ mod tests {
                 "if the service crashes: this goes with it"
             ]
         );
+    }
+
+    #[test]
+    fn status_says_when_the_rules_were_put_back_or_cannot_be() {
+        let lines = protection_lines(&ProtectionState {
+            restored_unix: Some(1_700_000_000),
+            check_failed: true,
+            ..ProtectionState::default()
+        });
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("put back (unix time 1700000000)"))
+        );
+        assert!(lines.iter().any(|line| line.contains("cannot be checked")));
     }
 
     #[test]

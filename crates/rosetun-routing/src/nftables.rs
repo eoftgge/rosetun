@@ -328,6 +328,17 @@ pub(crate) fn remove() -> String {
 }
 
 /// Whether `nft list tables inet` shows Rosetun's table.
+/// A listing without what `nft` may change between two runs: indentation and
+/// empty lines. Everything else counts, so any change to the rules shows.
+pub(crate) fn normalized(listing: &str) -> String {
+    listing
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 pub(crate) fn lists_table(listing: &str) -> bool {
     let wanted = format!("table inet {TABLE}");
     listing.lines().any(|line| line.trim() == wanted)
@@ -502,6 +513,27 @@ mod proxy_mode_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_listing_compares_equal_whatever_its_layout() {
+        assert_eq!(
+            normalized("table inet rosetun {\n\tchain output {\n\n\t}\n}\n"),
+            normalized("table inet rosetun {\n  chain output {\n  }\n}")
+        );
+    }
+
+    #[test]
+    fn a_changed_rule_or_chain_shows_in_a_listing() {
+        let base = "table inet rosetun {\n\tchain output {\n\t\toif \"lo\" accept\n\t}\n}\n";
+        assert_ne!(
+            normalized(base),
+            normalized(&base.replace("oif \"lo\" accept", "oif \"lo\" drop"))
+        );
+        assert_ne!(
+            normalized(base),
+            normalized(&base.replace("chain output", "chain forward"))
+        );
+    }
 
     fn engines() -> CgroupPath {
         CgroupPath::parse("/system.slice/rosetun-helper.service/engines").unwrap()

@@ -8614,3 +8614,94 @@ fn the_proxy_mode_with_a_kill_switch_reports_it() {
         Some(ConnectionMode::SystemProxy)
     );
 }
+
+/// A backend whose `verify_protection` answers from a script.
+#[derive(Debug)]
+struct CheckedRouting {
+    checks: Arc<AtomicUsize>,
+    answers: Arc<Mutex<VecDeque<Option<rosetun_routing::ProtectionCheck>>>>,
+}
+
+impl RoutingBackend for CheckedRouting {
+    fn name(&self) -> &'static str {
+        "checked"
+    }
+
+    fn capabilities(&self) -> ProtectionCapabilities {
+        FULL_PROTECTION
+    }
+
+    fn preflight(&self) -> Result<(), RoutingError> {
+        Ok(())
+    }
+
+    fn begin_protection(
+        &mut self,
+        _plan: &RoutingPlan,
+        _engine_binaries: &[&Path],
+    ) -> Result<RoutingGuard, RoutingError> {
+        Ok(RoutingGuard::noop())
+    }
+
+    fn verify_protection(&self) -> Result<rosetun_routing::ProtectionCheck, RoutingError> {
+        self.checks.fetch_add(1, Ordering::SeqCst);
+        match self.answers.lock().unwrap().pop_front().flatten() {
+            Some(answer) => Ok(answer),
+            None => Err(RoutingError::Unavailable("no nft".to_owned())),
+        }
+    }
+}
+
+fn checked_helper(
+    answers: &[Option<rosetun_routing::ProtectionCheck>],
+) -> (Helper, Arc<AtomicUsize>) {
+    let checks = Arc::new(AtomicUsize::new(0));
+    let helper = Helper::new(
+        EngineRegistry::new(),
+        Box::new(CheckedRouting {
+            checks: Arc::clone(&checks),
+            answers: Arc::new(Mutex::new(answers.iter().copied().collect())),
+        }),
+        VerboseGate::default(),
+    );
+    (helper, checks)
+}
+
+#[test]
+fn the_rules_are_checked_at_most_every_two_seconds_also_without_a_session() {
+    let intact = Some(rosetun_routing::ProtectionCheck::Intact);
+    let (helper, checks) = checked_helper(&[intact, intact, intact]);
+    let start = Instant::now();
+    helper.supervise(start);
+    helper.supervise(start + Duration::from_millis(500));
+    helper.supervise(start + Duration::from_millis(1999));
+    assert_eq!(checks.load(Ordering::SeqCst), 1);
+    helper.supervise(start + Duration::from_secs(2));
+    assert_eq!(checks.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn restored_rules_show_in_the_status_and_stay_there() {
+    let (helper, _checks) = checked_helper(&[
+        Some(rosetun_routing::ProtectionCheck::Restored),
+        Some(rosetun_routing::ProtectionCheck::Intact),
+    ]);
+    assert_eq!(helper.status().protection.restored_unix, None);
+    let start = Instant::now();
+    helper.supervise(start);
+    let restored = helper.status().protection.restored_unix;
+    assert!(restored.is_some());
+    helper.supervise(start + Duration::from_secs(2));
+    assert_eq!(helper.status().protection.restored_unix, restored);
+    assert!(!helper.status().protection.check_failed);
+}
+
+#[test]
+fn rules_that_cannot_be_checked_show_in_the_status_until_they_can() {
+    let (helper, _checks) = checked_helper(&[None, Some(rosetun_routing::ProtectionCheck::Intact)]);
+    let start = Instant::now();
+    helper.supervise(start);
+    assert!(helper.status().protection.check_failed);
+    helper.supervise(start + Duration::from_secs(2));
+    assert!(!helper.status().protection.check_failed);
+}

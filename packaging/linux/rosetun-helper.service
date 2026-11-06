@@ -6,6 +6,9 @@
 [Unit]
 Description=Rosetun privileged helper
 After=network.target
+# Both may start with `flush ruleset`, which would take the helper's table with
+# it. Neither is needed, so this only orders them when they are there.
+After=nftables.service firewalld.service
 
 [Service]
 # The helper sends READY=1 once its socket is published and STOPPING=1 when a

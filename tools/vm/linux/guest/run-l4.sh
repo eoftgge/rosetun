@@ -539,6 +539,35 @@ scenario_session() {
     check lockdown.after-session "after the disconnect the network stays closed and the GUI's scope gets out again" after
 }
 
+# flush_and_wait_restored: what `flush ruleset` in a firewall's configuration does,
+# then until the helper's next check put the table back.
+flush_and_wait_restored() {
+    local deadline
+    "$NFT" flush ruleset || { fail_reason="nft flush ruleset failed"; return 1; }
+    deadline=$((SECONDS + 10))
+    until table_present; do
+        [ "$SECONDS" -lt "$deadline" ] || { fail_reason="the table did not come back within ten seconds"; return 1; }
+        sleep 0.2
+    done
+}
+
+scenario_flush() {
+    flushed() {
+        flush_and_wait_restored || return 1
+        expect_blocked "HTTPS to $PROBE_ADDRESS on $PHYS after a flush without a session" direct_https || return 1
+        connect_with request-dns-lock.json || return 1
+        flush_and_wait_restored || return 1
+        expect_blocked "HTTPS to $PROBE_ADDRESS on $PHYS after a flush during a session" direct_https || return 1
+        cli 15 status
+        printf '%s\n' "$CLI_OUT" | grep -q '^firewall rules: another program changed them; put back' ||
+            { fail_reason="status does not say the rules were put back: $CLI_OUT"; return 1; }
+        journalctl -b -u rosetun-helper.service --no-pager 2>/dev/null | grep -q 'another program changed the table' ||
+            { fail_reason="the journal does not say the table was put back"; return 1; }
+        disconnect
+    }
+    check lockdown.flush-restored "the table came back both times, the direct path was refused, the journal and status said so" flushed
+}
+
 scenario_crash() {
     stopped() {
         timeout "$UNIT_TIMEOUT_SECONDS" systemctl stop rosetun-helper.service || { fail_reason="systemctl stop failed"; return 1; }
@@ -607,9 +636,16 @@ phase_one() {
         scenario_enable
         if passed lockdown.direct-blocked; then
             scenario_session
+            scenario_flush
             scenario_crash
             scenario_exit_denied
             if passed inbound.lan-open; then
+                # Debian's nftables.conf starts with `flush ruleset`, which runs at
+                # boot now: Lockdown's table must go in after it.
+                systemctl is-enabled --quiet nftables.service || {
+                    : >"$STATE/nftables-enabled"
+                    systemctl enable --quiet nftables.service
+                }
                 systemctl disable --quiet rosetun-helper.service 2>/dev/null
                 timeout "$UNIT_TIMEOUT_SECONDS" systemctl stop rosetun-helper.service
                 reboot_now reboot-1 && return
@@ -651,6 +687,19 @@ phase_after_first_reboot() {
         [ "$ran" = 1 ] || { fail_reason="no known network manager ran in this boot"; return 1; }
     }
     check reboot.table-before-network "the table was in place before network-pre.target and before every network manager" before_network
+
+    after_nftables() {
+        local nftables_end lockdown_end
+        grep -q '^[[:space:]]*flush ruleset' /etc/nftables.conf ||
+            { fail_reason="/etc/nftables.conf does not flush the ruleset, so this proves nothing"; return 1; }
+        nftables_end=$(ended_us nftables.service)
+        lockdown_end=$(started_us rosetun-lockdown.service)
+        [ "${nftables_end:-0}" -gt 0 ] || { fail_reason="nftables.service did not run in this boot"; return 1; }
+        [ "${lockdown_end:-0}" -gt "$nftables_end" ] ||
+            { fail_reason="Lockdown's unit started at ${lockdown_end} us, before nftables.service ended (${nftables_end} us)"; return 1; }
+        table_present || { fail_reason="no table after boot with nftables.service enabled"; return 1; }
+    }
+    check reboot.after-nftables "Lockdown's set went in after nftables.service and is there" after_nftables
 
     closed() {
         ! systemctl is-active --quiet rosetun-helper.service || { fail_reason="the helper runs; it was left disabled"; return 1; }
@@ -731,6 +780,11 @@ cleanup() {
         systemctl disable --quiet "$EARLY_UNIT" "$RESUME_UNIT" 2>/dev/null
         rm -f -- "$STAND_UNIT_DIR/$EARLY_UNIT" "$STAND_UNIT_DIR/$RESUME_UNIT" && rm -f -- "$STATE/stand-units" &&
             note "removed the stand's boot units"
+    fi
+    if [ -f "$STATE/nftables-enabled" ]; then
+        # Disabled, not stopped: stopping it would flush whatever is left to report.
+        systemctl disable --quiet nftables.service && rm -f -- "$STATE/nftables-enabled" &&
+            note "disabled nftables.service" || problem "could not disable nftables.service"
     fi
     [ -f "$STATE/installed" ] || { systemctl daemon-reload; return 0; }
     # The way out the product gives: it stops the service, removes the table and

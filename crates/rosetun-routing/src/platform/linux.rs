@@ -43,8 +43,8 @@ use crate::cgroup::{self, CgroupPath, Leaves};
 use crate::nftables::{self, InterfaceName, LeftBehind, Lockdown, Rules};
 use crate::{
     BootRestore, FirewallReset, LockdownApps, LockdownStatus, ProtectionCapabilities,
-    ProtectionScope, ProtectionSession, RoutingBackend, RoutingError, RoutingGuard, RoutingPlan,
-    TunnelInterface,
+    ProtectionCheck, ProtectionScope, ProtectionSession, RoutingBackend, RoutingError,
+    RoutingGuard, RoutingPlan, TunnelInterface,
 };
 
 use self::nft::{Nft, SystemNft};
@@ -109,6 +109,18 @@ struct Shared {
     frozen: bool,
     /// The previous service left word that it stopped for an upgrade.
     stopped_for_upgrade: bool,
+    /// The table as `nft` listed it right after this service wrote it. Read
+    /// back rather than compared with the script: `nft` prints rules in its
+    /// own words. The text itself, not a hash: it is a few kilobytes, and an
+    /// equal text is the proof a hash would only stand for.
+    written: Option<String>,
+}
+
+impl Shared {
+    /// This service's state calls for a table.
+    fn expects_table(&self) -> bool {
+        self.session.is_some() || self.lockdown.is_some() || self.hold
+    }
 }
 
 /// Where the backend looks; fixed outside tests.
@@ -178,8 +190,23 @@ impl Table {
             next.programs = self.scan();
             self.nft.apply(&render(&next, self.leaves.as_ref()))?;
         }
+        next.written = self.read_back(&next);
         *shared = next;
         Ok(())
+    }
+
+    fn read_back(&self, shared: &Shared) -> Option<String> {
+        if !shared.expects_table() {
+            return None;
+        }
+        match self.nft.list_table() {
+            Ok(listing) => listing.as_deref().map(nftables::normalized),
+            // The next check finds no match and writes the table again.
+            Err(error) => {
+                tracing::warn!(%error, "could not read back the table just written");
+                None
+            }
+        }
     }
 
     /// Scans the scopes only when Lockdown would permit them now.
@@ -501,6 +528,29 @@ impl RoutingBackend for NftBackend {
             table,
             armed: true,
         }))
+    }
+
+    /// `Table::change` writes the whole table from the state in one
+    /// transaction, so whatever happened to it, one write puts it right. A
+    /// table of this name while none is expected is not this service's, and
+    /// another table never counts.
+    fn verify_protection(&self) -> Result<ProtectionCheck, RoutingError> {
+        let mut shared = self.shared();
+        if shared.frozen || !shared.loaded || !shared.expects_table() {
+            return Ok(ProtectionCheck::Intact);
+        }
+        let listing = self.table.nft.list_table()?;
+        let listing = listing.as_deref().map(nftables::normalized);
+        if listing.is_some() && listing == shared.written {
+            return Ok(ProtectionCheck::Intact);
+        }
+        let missing = listing.is_none();
+        self.table.change(&mut shared, |_| {})?;
+        tracing::warn!(
+            missing,
+            "another program changed the table; it is back in place"
+        );
+        Ok(ProtectionCheck::Restored)
     }
 
     /// Lockdown when its record says so; otherwise a table left by a crash
@@ -1506,6 +1556,181 @@ mod tests {
         let after_crash = backend(&nft, &mount).lockdown_status().unwrap();
         assert!(after_crash.upgrade_hold);
         assert!(after_crash.hold_after_crash);
+    }
+
+    fn connected_backend(nft: &Arc<FakeNft>, mount: &Mount) -> (NftBackend, RoutingGuard) {
+        let mut backend = backend(nft, mount);
+        backend.lockdown_status().unwrap();
+        let guard = backend
+            .begin_protection(&plan(ProtectionScope::AllTraffic), &[])
+            .unwrap();
+        (backend, guard)
+    }
+
+    #[test]
+    fn a_table_as_it_was_written_is_left_alone() {
+        let nft = Arc::new(FakeNft::default());
+        let mount = Mount::new(true);
+        let (backend, _guard) = connected_backend(&nft, &mount);
+        let writes = nft.applied().len();
+        assert_eq!(
+            backend.verify_protection().unwrap(),
+            ProtectionCheck::Intact
+        );
+        assert_eq!(nft.applied().len(), writes);
+    }
+
+    #[test]
+    fn a_flushed_table_is_put_back_in_one_transaction() {
+        let nft = Arc::new(FakeNft::default());
+        let mount = Mount::new(true);
+        let (backend, _guard) = connected_backend(&nft, &mount);
+        let written = nft.applied().last().unwrap().clone();
+        *nft.table.lock().unwrap() = None;
+
+        assert_eq!(
+            backend.verify_protection().unwrap(),
+            ProtectionCheck::Restored
+        );
+        assert_eq!(nft.applied().last().unwrap(), &written);
+        assert!(nft.has_table());
+        assert_eq!(
+            backend.verify_protection().unwrap(),
+            ProtectionCheck::Intact
+        );
+    }
+
+    #[test]
+    fn a_changed_rule_is_put_back() {
+        let nft = Arc::new(FakeNft::default());
+        let mount = Mount::new(true);
+        let (backend, _guard) = connected_backend(&nft, &mount);
+        let writes = nft.applied().len();
+        let changed = nft
+            .table
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .replace("policy drop", "policy accept");
+        *nft.table.lock().unwrap() = Some(changed);
+
+        assert_eq!(
+            backend.verify_protection().unwrap(),
+            ProtectionCheck::Restored
+        );
+        assert_eq!(nft.applied().len(), writes + 1);
+        assert!(
+            nft.table
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .contains("policy drop")
+        );
+    }
+
+    #[test]
+    fn only_a_change_of_layout_is_no_change() {
+        let nft = Arc::new(FakeNft::default());
+        let mount = Mount::new(true);
+        let (backend, _guard) = connected_backend(&nft, &mount);
+        let writes = nft.applied().len();
+        let spaced = nft
+            .table
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .replace('\n', "\n\n  ");
+        *nft.table.lock().unwrap() = Some(spaced);
+
+        assert_eq!(
+            backend.verify_protection().unwrap(),
+            ProtectionCheck::Intact
+        );
+        assert_eq!(nft.applied().len(), writes);
+    }
+
+    #[test]
+    fn lockdown_without_a_session_is_put_back_too() {
+        let nft = Arc::new(FakeNft::default());
+        let mount = Mount::new(true);
+        mount.enable_unit();
+        let backend = backend(&nft, &mount);
+        backend.lockdown_status().unwrap();
+        backend
+            .enable_lockdown(None, &LockdownApps::default())
+            .unwrap();
+        *nft.table.lock().unwrap() = None;
+
+        assert_eq!(
+            backend.verify_protection().unwrap(),
+            ProtectionCheck::Restored
+        );
+        assert!(nft.has_table());
+    }
+
+    #[test]
+    fn the_hold_is_put_back_too() {
+        let nft = FakeNft::left(ProtectionScope::AllTraffic);
+        let mount = Mount::new(true);
+        let backend = backend(&nft, &mount);
+        assert!(backend.lockdown_status().unwrap().upgrade_hold);
+        *nft.table.lock().unwrap() = None;
+
+        assert_eq!(
+            backend.verify_protection().unwrap(),
+            ProtectionCheck::Restored
+        );
+        assert_eq!(nft.applied().last().unwrap(), &hold_rules(Some(&leaves())));
+    }
+
+    #[test]
+    fn nothing_is_checked_when_no_table_is_expected() {
+        let nft = Arc::new(FakeNft::default());
+        let mount = Mount::new(true);
+        let backend = backend(&nft, &mount);
+        backend.lockdown_status().unwrap();
+        // A table of this name is not this service's without a state that calls for one.
+        *nft.table.lock().unwrap() = Some("table inet rosetun {\n}\n".to_owned());
+
+        assert_eq!(
+            backend.verify_protection().unwrap(),
+            ProtectionCheck::Intact
+        );
+        assert!(nft.applied().is_empty());
+    }
+
+    #[test]
+    fn a_stop_for_an_upgrade_is_not_restored_over() {
+        let nft = Arc::new(FakeNft::default());
+        let mount = Mount::new(true);
+        let (backend, _guard) = connected_backend(&nft, &mount);
+        backend.keep_protection_on_stop();
+        let writes = nft.applied().len();
+        *nft.table.lock().unwrap() = None;
+
+        assert_eq!(
+            backend.verify_protection().unwrap(),
+            ProtectionCheck::Intact
+        );
+        assert_eq!(nft.applied().len(), writes);
+    }
+
+    #[test]
+    fn a_failed_write_keeps_saying_so_and_tries_again() {
+        let nft = Arc::new(FakeNft::default());
+        let mount = Mount::new(true);
+        let (backend, _guard) = connected_backend(&nft, &mount);
+        *nft.table.lock().unwrap() = None;
+        *nft.fail_next.lock().unwrap() = true;
+
+        assert!(backend.verify_protection().is_err());
+        assert_eq!(
+            backend.verify_protection().unwrap(),
+            ProtectionCheck::Restored
+        );
     }
 
     #[test]

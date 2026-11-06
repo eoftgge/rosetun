@@ -11,6 +11,7 @@ killswitch.tunnel-passes	yes	real-service	killswitch	-	connected with the kill s
 lan.off	yes	real-service	lan	-	"Local network" off: TCP to the host node bound to the physical interface is refused
 killswitch.foreign-table	yes	real-service	killswitch	-	a foreign nftables table accepting everything at an earlier priority does not open the direct path, and the stand removes only that table
 killswitch.engine-killed	yes	real-service	killswitch	-	sing-box killed with SIGKILL: the direct path stays refused on every probe until the session is Connected again
+killswitch.flush-restored	yes	real-service	killswitch	-	nft flush ruleset during a kill-switch session: within ten seconds the table is back, the direct path is refused, and the journal and rosetun status say the rules were put back
 killswitch.disconnect	yes	real-service	killswitch	-	a disconnect removes the table and the direct path answers again
 lan.on	yes	real-service	lan	-	"Local network" on: TCP to the host node bound to the physical interface connects, the probe address does not
 dnslock.direct-blocked	yes	real-service	dnslock	-	the DNS lock without the kill switch: UDP 53 to the DNS probe address bound to the physical interface is refused locally, HTTPS to the probe address there answers

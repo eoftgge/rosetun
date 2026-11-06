@@ -634,6 +634,7 @@ SSH off; the host reads the report afterwards):
 | `forward.blocked` | the guest forwards the peer's traffic (`ip_forward`, a NAT table `ip rosetun-l3-nat`, a routing rule that sends it out of the physical interface past the tunnel): HTTPS from the peer to the probe address answers before the connect, is dropped under the kill switch and answers after the disconnect; the stand then removes the namespace, the table and the rule and restores `ip_forward` |
 | `protection.reported` | connected with the kill switch: `rosetun status` says `protection: kill switch` and `if the service crashes: this stays in place`, and nothing is `protection missing` |
 | `dnslock.unavailable` | `chmod o+w` on the nft binary for the connect, so the helper's trust check fails: the session is Connected without a table, `rosetun status` says `protection: none` and `protection missing: DNS lock: the firewall is unavailable`, UDP 53 leaves the physical interface; the line goes after a disconnect |
+| `killswitch.flush-restored` | `nft flush ruleset` during a kill-switch session: the table is back within 10 s (checked every 2 s), the direct path is refused, the session stays Connected, the journal says `another program changed the table` and `rosetun status` says `firewall rules: another program changed them; put back` |
 | `crash.helper-killed` | `kill -KILL` of the helper: the table stays, the direct path stays refused, systemd restarts the helper (`NRestarts`), `rosetun status` says `network: held closed` and `protection: network held closed after a service crash` |
 | `crash.open-network` | `rosetun open-network` as the first account removes the table, the direct path answers |
 | `crash.dns-lock-killed` | `kill -KILL` of the helper during a DNS-lock session: the table is there right after, the restarted helper removes it and its journal says "removed the DNS lock a crashed helper left", the status is not `held closed`, UDP 53 and HTTPS leave the physical interface |
@@ -700,10 +701,12 @@ checkpoint restore removes everything.
 | `lockdown.session` | a connect without the kill switch (the DNS-lock request) gets it from Lockdown: the tunnel answers, the physical interface is refused |
 | `lockdown.session-scope-closed` | during the session the GUI's scope is refused on the physical interface |
 | `lockdown.after-session` | after the disconnect the network stays closed and the GUI's scope gets out again |
+| `lockdown.flush-restored` | `nft flush ruleset` under Lockdown without a session and again during one: the table is back within 10 s each time, the direct path is refused, the journal and `rosetun status` say so |
 | `crash.stopped` | `systemctl stop`: the table stays, the direct path refused; started again |
 | `crash.killed` | `kill -KILL` of the helper: the table stays, the direct path refused; the restarted helper says `lockdown: on`, not `held closed`, and the CLI's scope gets out |
 | `exit.denied-without-root` | the first account's `rosetun lockdown off` is refused, Lockdown stays |
 | `reboot.table-before-network` | after the first reboot (helper disabled beforehand): the early unit saw the table; `rosetun-lockdown.service` finished (`ExecMainExitTimestampMonotonic`) before NetworkManager, systemd-networkd or networking started, whichever ran |
+| `reboot.after-nftables` | the stand enabled `nftables.service`, whose `/etc/nftables.conf` flushes the ruleset: `rosetun-lockdown.service` started after it ended, and the table is there |
 | `reboot.closed-before-service` | the helper does not run, the table names no cgroup, HTTPS refused on the physical interface and by the route |
 | `reboot.service-completes` | the helper started: `lockdown: on`, the engines' permit in the table, a kill-switch connect answers through the tunnel |
 | `exit.reset-firewall` | `sudo rosetun reset-firewall`: no table, no record, `lockdown: off`, the direct path answers |

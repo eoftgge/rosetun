@@ -256,3 +256,14 @@ fn every_reason_reads_in_the_warning() {
         assert!(!text.contains("protection-"), "{text}");
     }
 }
+
+#[test]
+fn rules_that_cannot_be_checked_are_said_while_it_lasts() {
+    let failing = connected_with(rosetun_config::ProtectionState {
+        check_failed: true,
+        ..Default::default()
+    });
+    assert!(failing.protection_unverified());
+    let fine = connected_with(rosetun_config::ProtectionState::default());
+    assert!(!fine.protection_unverified());
+}

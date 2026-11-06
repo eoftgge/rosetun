@@ -4,6 +4,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use rosetun_config::{
     ConnectionMode, InstalledProtection, ProtectionShortfallCode, ProtectionState,
@@ -12,11 +13,17 @@ use rosetun_config::{
 use rosetun_ipc::{ConnectRequest, ErrorCode, HelperError};
 use rosetun_routing::lan::LanAccess;
 use rosetun_routing::{
-    ProtectionScope, RoutingBackend, RoutingError, RoutingGuard, RoutingPlan, TunnelInterface,
+    ProtectionCheck, ProtectionScope, RoutingBackend, RoutingError, RoutingGuard, RoutingPlan,
+    TunnelInterface,
 };
 
 use super::lockdown::LockdownState;
-use super::{StartMode, local_proxy};
+use super::{StartMode, local_proxy, now_unix};
+
+/// How long rules another program removed can stay gone, against two `nft`
+/// runs each time: a few milliseconds of one core, far from every 100 ms, and
+/// only while a table is expected. A longer wait would mean longer open.
+const TABLE_CHECK_INTERVAL: Duration = Duration::from_secs(2);
 
 /// Routing protection that outlives one engine process.
 struct Guard {
@@ -32,6 +39,8 @@ pub(super) struct ProtectionReport {
     requested: RequestedProtection,
     shortfall: Option<ProtectionShortfallCode>,
     connection_mode: Option<ConnectionMode>,
+    restored_unix: Option<u64>,
+    check_failed: bool,
 }
 
 pub(super) type SharedReport = Arc<Mutex<ProtectionReport>>;
@@ -55,6 +64,8 @@ impl ProtectionReport {
             shortfall: self.shortfall.map(Into::into),
             connection_mode: self.connection_mode,
             survives_service_crash: survives_service_crash(installed),
+            restored_unix: self.restored_unix,
+            check_failed: self.check_failed,
         }
     }
 }
@@ -98,6 +109,8 @@ pub(super) fn shortfall_of(error: &RoutingError) -> ProtectionShortfallCode {
 
 pub(super) struct ProtectionRuntime {
     report: SharedReport,
+    rules_checked: Option<Instant>,
+    rules_failing: bool,
     guard: Option<Guard>,
     /// Lockdown's GUI and CLI permits are removed because the session's
     /// filters sit in its sublayer; a teardown puts them back.
@@ -111,6 +124,8 @@ impl ProtectionRuntime {
     pub(super) fn new(report: SharedReport) -> Self {
         Self {
             report,
+            rules_checked: None,
+            rules_failing: false,
             guard: None,
             programs_withdrawn: false,
             binaries: Vec::new(),
@@ -146,15 +161,45 @@ impl ProtectionRuntime {
         self.change_report(|report| report.shortfall = Some(code));
     }
 
-    /// The session is over: nothing is asked for any more.
+    /// The session is over: nothing is asked for any more. What happened to
+    /// the rules stays, as they may be Lockdown's.
     pub(super) fn session_over(&self) {
-        let scope = self.scope();
         self.change_report(|report| {
-            *report = ProtectionReport {
-                scope,
-                ..ProtectionReport::default()
-            };
+            report.requested = RequestedProtection::None;
+            report.shortfall = None;
+            report.connection_mode = None;
         });
+    }
+
+    /// A supervisor tick, at most every `TABLE_CHECK_INTERVAL`: whether the
+    /// rules in the system are still the ones written. A failure repeats
+    /// every check, so only its start is logged.
+    pub(super) fn check_rules(&mut self, backend: &dyn RoutingBackend, now: Instant) {
+        if self
+            .rules_checked
+            .is_some_and(|last| now.saturating_duration_since(last) < TABLE_CHECK_INTERVAL)
+        {
+            return;
+        }
+        self.rules_checked = Some(now);
+        let outcome = backend.verify_protection();
+        let failed = outcome.is_err();
+        let was_failed = std::mem::replace(&mut self.rules_failing, failed);
+        match outcome {
+            Ok(ProtectionCheck::Intact) => {}
+            Ok(ProtectionCheck::Restored) => {
+                let restored = now_unix();
+                self.change_report(|report| report.restored_unix = Some(restored));
+            }
+            Err(error) if !was_failed => {
+                tracing::error!(%error, "cannot check or restore the firewall rules");
+            }
+            Err(_) => {}
+        }
+        if was_failed && !failed {
+            tracing::info!("the firewall rules can be checked again");
+        }
+        self.change_report(|report| report.check_failed = failed);
     }
 
     pub(super) fn is_active(&self) -> bool {

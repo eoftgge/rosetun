@@ -22,6 +22,13 @@ DefaultDependencies=no
 # are mounted first (and required).
 RequiresMountsFor=/var/lib/rosetun /usr/lib/rosetun /usr/sbin/nft
 After=local-fs.target
+# /etc/nftables.conf starts with `flush ruleset` on Debian, and firewalld may
+# clear rules as well: Lockdown's table goes in after them, or they would remove
+# it. Neither is needed, so this only orders them when they are there. Both are
+# ordered before network-pre.target themselves, so no network comes up in
+# between, and this unit is not ordered before sysinit.target, so waiting for
+# firewalld, which starts after it, makes no cycle.
+After=nftables.service firewalld.service
 # network-pre.target is passive: it orders only when someone pulls it in.
 # Every network manager (NetworkManager, systemd-networkd, ifupdown's
 # networking.service, wpa_supplicant) is ordered after it, so nothing

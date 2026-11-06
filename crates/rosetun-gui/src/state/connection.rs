@@ -165,6 +165,12 @@ impl State {
         .flatten()
     }
 
+    /// The service cannot read the firewall rules or put them back.
+    pub(crate) fn protection_unverified(&self) -> bool {
+        self.visible_status()
+            .is_some_and(|status| status.protection.check_failed)
+    }
+
     /// The installer's hold keeps the network closed and nothing is
     /// connected: the main screen says why and offers both ways out.
     pub(crate) fn upgrade_hold_shown(&self) -> bool {

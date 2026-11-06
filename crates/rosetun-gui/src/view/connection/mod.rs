@@ -1,7 +1,5 @@
 use eframe::egui::{self, Color32, RichText};
-use rosetun_config::{
-    ConnectionState, FailureKind, Outbound, ProtectionShortfallCode, RuleMatcher, TlsMode, XrayUse,
-};
+use rosetun_config::{ConnectionState, FailureKind, Outbound, RuleMatcher, TlsMode, XrayUse};
 use rosetun_ipc::ProbeOutcome;
 
 use crate::actions::{PrimaryAction, ProtectionAction, protection_action};
@@ -48,7 +46,11 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
         ui.add_space(theme::SECTION_GAP);
     }
     if let Some(code) = state.missing_protection() {
-        missing_protection_strip(ui, code);
+        protection_strip(ui, i18n::missing_protection(code));
+        ui.add_space(theme::SECTION_GAP);
+    }
+    if state.protection_unverified() {
+        protection_strip(ui, tr!("protection-unverified"));
         ui.add_space(theme::SECTION_GAP);
     }
     if state.available_update().is_some() {
@@ -193,9 +195,9 @@ fn hold_banner() -> String {
     }
 }
 
-/// The session runs without the protection it asked for. It works, so this
+/// The protection is not what it should be. The connection works, so this
 /// informs rather than alarms: no error colour and nothing to press.
-fn missing_protection_strip(ui: &mut egui::Ui, code: ProtectionShortfallCode) {
+fn protection_strip(ui: &mut egui::Ui, text: String) {
     egui::Frame::new()
         .fill(theme::palette().input)
         .stroke(egui::Stroke::new(
@@ -206,12 +208,7 @@ fn missing_protection_strip(ui: &mut egui::Ui, code: ProtectionShortfallCode) {
         .inner_margin(theme::margin::symmetric(theme::space::L, theme::space::S))
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            ui.add(
-                egui::Label::new(
-                    RichText::new(i18n::missing_protection(code)).color(theme::palette().text),
-                )
-                .wrap(),
-            );
+            ui.add(egui::Label::new(RichText::new(text).color(theme::palette().text)).wrap());
         });
 }
 

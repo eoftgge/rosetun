@@ -15,10 +15,12 @@ inbound.lan-open	yes	real-service	inbound	-	with the local network the peer reac
 lockdown.session	yes	real-service	session	-	a connect without the kill switch under Lockdown gets the kill switch: the tunnel answers, the physical interface is refused
 lockdown.session-scope-closed	yes	real-service	session	-	during the session the GUI's scope is refused HTTPS on the physical interface
 lockdown.after-session	yes	real-service	session	-	after the disconnect the network stays closed and the GUI's scope gets out again
+lockdown.flush-restored	yes	real-service	lockdown	-	nft flush ruleset under Lockdown without a session and during one: within ten seconds the table is back, the direct path is refused, and the journal and rosetun status say the rules were put back
 crash.stopped	yes	real-service	crash	-	systemctl stop leaves the table and the network closed; the service starts again
 crash.killed	yes	real-service	crash	-	kill -KILL of the helper leaves the table and the network closed; the restarted helper reports Lockdown, not the crash hold, and permits the CLI's scope
 exit.denied-without-root	yes	real-service	exit	-	an ordinary account's rosetun lockdown off is refused and Lockdown stays
 reboot.table-before-network	yes	real-service	reboot	-	after a reboot the table existed before network-pre.target, and rosetun-lockdown.service finished before every network manager started
+reboot.after-nftables	yes	real-service	reboot	-	with nftables.service enabled and its configuration flushing the ruleset, Lockdown's set goes in after it and is there after boot
 reboot.closed-before-service	yes	real-service	reboot	-	after the reboot, with the helper not started, the boot set names no cgroup and HTTPS is refused on the physical interface and by the route
 reboot.service-completes	yes	real-service	reboot	-	the started helper reports Lockdown, adds the engines' permit, and a kill-switch connect answers through the tunnel
 exit.reset-firewall	yes	real-service	exit	-	sudo rosetun reset-firewall removes the table and the record, the helper reports Lockdown off, the direct path answers

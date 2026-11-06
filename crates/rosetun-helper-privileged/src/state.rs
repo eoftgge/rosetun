@@ -750,6 +750,12 @@ impl Helper {
         if session.stopping {
             return;
         }
+        {
+            let session = &mut *session;
+            session
+                .protection
+                .check_rules(session.routing.as_ref(), now);
+        }
         let Some(auto_reconnect) = session
             .request
             .as_ref()

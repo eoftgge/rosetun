@@ -468,6 +468,7 @@ notice-restored = Снова подключено
 notice-connect-failed = Не удалось подключиться
 notice-held-after-upgrade = Не удалось подключиться после обновления · интернет закрыт
 protection-missing = Защита DNS не установлена: { $reason }.
+protection-unverified = Rosetun не может проверить правила брандмауэра, защита может быть снята.
 protection-reason-firewall-unavailable = брандмауэр недоступен
 protection-reason-firewall-refused = брандмауэр отклонил правила
 protection-reason-tunnel-not-permitted = брандмауэр не пропустил туннель

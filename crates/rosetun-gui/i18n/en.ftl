@@ -455,6 +455,7 @@ notice-restored = Connected again
 notice-connect-failed = Could not connect
 notice-held-after-upgrade = Could not connect after the update · internet blocked
 protection-missing = DNS protection is not set: { $reason }.
+protection-unverified = Rosetun cannot check the firewall rules, so protection may be off.
 protection-reason-firewall-unavailable = the firewall is unavailable
 protection-reason-firewall-refused = the firewall refused the rules
 protection-reason-tunnel-not-permitted = the firewall did not let the tunnel through
