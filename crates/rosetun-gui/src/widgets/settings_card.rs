@@ -269,6 +269,19 @@ impl SettingsCard<'_> {
         }
     }
 
+    /// Rows that open and close as `transitions::reveal` does, `progress` of the way.
+    pub(crate) fn reveal(
+        &mut self,
+        id: egui::Id,
+        progress: f32,
+        add_rows: impl FnOnce(&mut SettingsCard<'_>),
+    ) {
+        let rows = self.rows;
+        super::transitions::reveal(self.ui, id, progress, |ui| {
+            add_rows(&mut SettingsCard { ui, rows });
+        });
+    }
+
     /// Free content under the rows, with the same padding (DNS cards, the
     /// custom form).
     pub(crate) fn body(&mut self, add_contents: impl FnOnce(&mut egui::Ui)) {

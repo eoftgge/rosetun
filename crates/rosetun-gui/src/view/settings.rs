@@ -248,16 +248,46 @@ fn pending(pending: bool) -> widgets::RowOptions {
 const LOCAL_PROXY_PORT_WIDTH: f32 = 96.0;
 
 /// TUN or the system proxy, and in the proxy mode its port and who may use it.
+/// The proxy's rows open and close as other sections do, and the caption fades
+/// to its new text.
 fn connection_mode(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
     let editable = state.can_edit_settings();
     let mode = state.config.settings.connection_mode;
     let proxy = mode == ConnectionMode::SystemProxy;
     let waits = state.waits_for_next_connect(SessionPart::LocalProxy);
+    let reduce_motion = state.config.interface.reduce_motion;
+    let id = egui::Id::unique("connection_mode");
+    let rows_id = id.with("proxy_rows");
+    let rows_open = widgets::reveal_progress(ui.ctx(), rows_id, proxy, reduce_motion);
+    let saved = state.config.settings.local_proxy;
+    let detail = state.connection_mode_detail();
+    let detail_shown =
+        widgets::appear_progress(ui.ctx(), id.with("detail"), &detail, reduce_motion);
+    let note_id = id.with("note");
+    let note = local_proxy_note(state, saved);
+    let note_open = widgets::reveal_progress(ui.ctx(), note_id, note.is_some(), reduce_motion);
+    // A note that is no longer true closes showing its last words.
+    let note = match note {
+        Some(note) => {
+            ui.data_mut(|data| data.insert_temp(note_id, note.clone()));
+            note
+        }
+        None => ui
+            .data(|data| data.get_temp::<String>(note_id))
+            .unwrap_or_default(),
+    };
     widgets::settings_card(ui, |card| {
-        card.row_with(
-            tr!("connection-mode"),
-            Some(&state.connection_mode_detail()),
-            pending(waits),
+        card.row_with_title(
+            |ui| {
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = theme::space::XXS;
+                    ui.label(RichText::new(tr!("connection-mode")).color(theme::palette().text));
+                    widgets::appear(ui, detail_shown, |ui| {
+                        widgets::row_detail(ui, &detail, waits);
+                    });
+                });
+            },
+            None,
             |ui| {
                 let options = [
                     (ConnectionMode::Tun, tr!("connection-mode-tun")),
@@ -270,54 +300,58 @@ fn connection_mode(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
                 }
             },
         );
-        if !proxy {
-            return;
-        }
-        let saved = state.config.settings.local_proxy;
+        // Closing rows stay on screen for a moment, and take no more input.
+        let editable = editable && proxy;
         let form = &mut state.settings.screen;
-        if !form.local_proxy_port_dirty {
-            form.local_proxy_port = saved.port.to_string();
-        }
-        let parsed = parse_local_proxy_port(&form.local_proxy_port);
-        let invalid = parsed.is_none().then(|| tr!("local-proxy-port-invalid"));
-        card.field_row(tr!("local-proxy-port"), invalid.as_deref(), |ui| {
-            let response = ui.add(
-                widgets::TextField::new(&mut form.local_proxy_port)
-                    .width(LOCAL_PROXY_PORT_WIDTH)
-                    .enabled(editable)
-                    .invalid(parsed.is_none()),
-            );
-            if response.changed() {
-                form.local_proxy_port_dirty = true;
+        card.reveal(rows_id, rows_open, |card| {
+            if !form.local_proxy_port_dirty {
+                form.local_proxy_port = saved.port.to_string();
             }
-            if response.lost_focus()
-                && let Some(port) = parsed
-            {
-                form.local_proxy_port_dirty = false;
-                actions.push(Action::SetLocalProxyPort(port));
-            }
-        });
-        let mut share = saved.share_on_lan;
-        if card
-            .toggle(
-                tr!("share-on-lan"),
-                None,
-                tr!("share-on-lan-detail"),
-                &mut share,
-                editable,
-            )
-            .changed()
-        {
-            actions.push(Action::SetShareOnLan(share));
-        }
-        if let Some(note) = local_proxy_note(state, saved) {
-            card.body(|ui| {
-                ui.add(
-                    egui::Label::new(RichText::new(note).small().color(theme::palette().text_dim))
-                        .wrap(),
+            let parsed = parse_local_proxy_port(&form.local_proxy_port);
+            let invalid = parsed.is_none().then(|| tr!("local-proxy-port-invalid"));
+            card.field_row(tr!("local-proxy-port"), invalid.as_deref(), |ui| {
+                let response = ui.add(
+                    widgets::TextField::new(&mut form.local_proxy_port)
+                        .width(LOCAL_PROXY_PORT_WIDTH)
+                        .enabled(editable)
+                        .invalid(parsed.is_none()),
                 );
+                if response.changed() {
+                    form.local_proxy_port_dirty = true;
+                }
+                if response.lost_focus()
+                    && let Some(port) = parsed
+                {
+                    form.local_proxy_port_dirty = false;
+                    actions.push(Action::SetLocalProxyPort(port));
+                }
             });
-        }
+            let mut share = saved.share_on_lan;
+            if card
+                .toggle(
+                    tr!("share-on-lan"),
+                    None,
+                    tr!("share-on-lan-detail"),
+                    &mut share,
+                    editable,
+                )
+                .changed()
+            {
+                actions.push(Action::SetShareOnLan(share));
+            }
+            card.reveal(note_id, note_open, |card| {
+                card.body(|ui| {
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(note.as_str())
+                                .small()
+                                .color(theme::palette().text_dim),
+                        )
+                        .wrap(),
+                    );
+                });
+            });
+        });
     });
 }
 
@@ -2138,6 +2172,72 @@ mod pending_notice_tests {
         let proxy = rect(&tr!("connection-mode-proxy"));
         assert!(proxy.left() > size.x / 2.0, "{proxy:?}");
         assert!(rect(&tr!("connection-mode")).left() < label.left() + 1.0);
+    }
+
+    #[test]
+    fn the_proxy_rows_close_as_a_section_does_and_at_once_with_reduced_motion() {
+        let (size, _) = WINDOWS[0];
+        let texts = |texts: crate::test_ui::Texts| {
+            texts.into_iter().map(|(text, _)| text).collect::<Vec<_>>()
+        };
+        let share = tr!("share-on-lan");
+        for (reduce_motion, stays) in [(false, true), (true, false)] {
+            let mut state = connected(ConnectionState::Disconnected);
+            state.config.interface.reduce_motion = reduce_motion;
+            state.config.settings.connection_mode = ConnectionMode::SystemProxy;
+            let mut screen = TestScreen::new(size);
+            let shown = screen.settle(|ui| connection_mode(ui, &mut state, &mut Vec::new()));
+            assert!(texts(shown).contains(&share));
+
+            state.config.settings.connection_mode = ConnectionMode::Tun;
+            let next = screen.run(Vec::new(), |ui| {
+                connection_mode(ui, &mut state, &mut Vec::new());
+            });
+            assert_eq!(texts(next).contains(&share), stays, "{reduce_motion}");
+
+            let mut last = Vec::new();
+            for _ in 0..40 {
+                last = screen.run(Vec::new(), |ui| {
+                    connection_mode(ui, &mut state, &mut Vec::new());
+                });
+            }
+            assert!(!texts(last).contains(&share), "closed in the end");
+        }
+    }
+
+    #[test]
+    fn closing_rows_take_no_input() {
+        let (size, _) = WINDOWS[0];
+        // Clicks the share row on `mode`, one frame after the settings changed to it.
+        let clicked = |mode| {
+            let mut state = connected(ConnectionState::Disconnected);
+            state.config.settings.connection_mode = ConnectionMode::SystemProxy;
+            let mut screen = TestScreen::new(size);
+            let shown = screen.settle(|ui| connection_mode(ui, &mut state, &mut Vec::new()));
+            let label = tr!("share-on-lan");
+            let (_, rect) = shown.iter().find(|(text, _)| *text == label).unwrap();
+            // Beside the title, on the row itself.
+            let pos = egui::pos2(rect.right() + 200.0, rect.center().y);
+            let button = |pressed| egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            };
+            state.config.settings.connection_mode = mode;
+            let mut actions = Vec::new();
+            screen.run(vec![egui::Event::PointerMoved(pos), button(true)], |ui| {
+                connection_mode(ui, &mut state, &mut actions);
+            });
+            screen.run(vec![button(false)], |ui| {
+                connection_mode(ui, &mut state, &mut actions);
+            });
+            actions
+                .iter()
+                .any(|action| matches!(action, Action::SetShareOnLan(_)))
+        };
+        assert!(clicked(ConnectionMode::SystemProxy), "the click lands");
+        assert!(!clicked(ConnectionMode::Tun));
     }
 
     #[test]
