@@ -3158,6 +3158,15 @@ function Unregister-RosetunBootCheck {
     } -ArgumentList $TaskName
 }
 
+function Test-RosetunBootCheckRecord {
+    # Whether the boot check's JSON belongs to the boot that started at -BootTime. Read
+    # as text: PowerShell 7's ConvertFrom-Json makes a date of it, and that compared
+    # with the string differs by the host's time zone, so every result looked old.
+    param([Parameter(Mandatory)][string]$Json, [Parameter(Mandatory)][string]$BootTime)
+    $match = [regex]::Match($Json, '"BootTime"\s*:\s*"([^"]+)"')
+    $match.Success -and $match.Groups[1].Value -ceq $BootTime
+}
+
 function Get-RosetunBootCheck {
     # The boot check's attempts of the boot that started at -BootTime.
     param([Parameter(Mandatory)][string]$Directory, [Parameter(Mandatory)][string]$BootTime)
@@ -3169,8 +3178,9 @@ function Get-RosetunBootCheck {
             if (Test-Path -LiteralPath $path) { Get-Content -Raw -LiteralPath $path }
         } -ArgumentList (Join-Path $Directory 'boot-check.json')
         if ($json) {
-            $record = $json | ConvertFrom-Json
-            if ($record.BootTime -eq $BootTime) { return @($record.Attempts) }
+            if (Test-RosetunBootCheckRecord -Json $json -BootTime $BootTime) {
+                return @(($json | ConvertFrom-Json).Attempts)
+            }
             $stale = $true
         }
         Start-Sleep -Seconds 5
