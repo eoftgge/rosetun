@@ -588,9 +588,11 @@ engine_capabilities() {
 }
 
 # route_of ACCOUNT PROGRAM: how PROGRAM's HTTPS request to the probe address left,
-# run as ACCOUNT: "direct" when packets to it went out of the physical interface,
-# "tunnel" when it answered and none did. A tunnelled request reaches that interface
-# addressed to the node, and its own packets go out of the tunnel's, so neither counts.
+# run as ACCOUNT: "direct" when a connection to it was opened out of the physical
+# interface, "tunnel" when it answered and none was. A tunnelled request reaches that
+# interface addressed to the node, and its own packets go out of the tunnel's, so
+# neither counts. Only the opening packet counts: sing-box closes an earlier request's
+# direct connection after that curl has exited, into this one's count.
 route_of() {
     local account=$1 program=$2 family=ip rc packets
     [[ $PROBE_ADDRESS == *:* ]] && family=ip6
@@ -598,7 +600,7 @@ route_of() {
 table inet $COUNT_TABLE {
 	chain output {
 		type filter hook output priority -300; policy accept;
-		oifname "$PHYS" $family daddr $PROBE_ADDRESS counter
+		oifname "$PHYS" $family daddr $PROBE_ADDRESS tcp flags & (syn | ack) == syn counter
 	}
 }
 EOF
