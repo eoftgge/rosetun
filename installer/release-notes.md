@@ -100,9 +100,9 @@ The executable embeds Wintun {{wintun_version}}, distributed under the Wintun Pr
 
 Windows 11, x64. Скачайте `{{setup}}` из этого релиза. [Политика подписи кода](https://github.com/eoftgge/rosetun/blob/master/CODE_SIGNING_POLICY.md) (Code signing policy): установщик пока не подписан; если SmartScreen показывает «Windows protected your PC», нажмите **More info**, затем **Run anyway**.
 
-#Debian 13, amd64 (Linux ещё проверяется): скачайте `{{deb}}`, сравните `sha256sum {{deb}}` с `{{deb_sha256}}` и выполните `sudo apt install ./{{deb}}`. Добавьте себя в группу службы командой `sudo usermod -aG rosetun "$USER"`, затем выйдите из системы и войдите снова.
+Debian 13, amd64 (Linux ещё проверяется): скачайте `{{deb}}`, сравните `sha256sum {{deb}}` с `{{deb_sha256}}` и выполните `sudo apt install ./{{deb}}`. Добавьте себя в группу службы командой `sudo usermod -aG rosetun "$USER"`, затем выйдите из системы и войдите снова.
 
-## Проверка
+### Проверка
 
 Выполните `Get-FileHash .\{{setup}} -Algorithm SHA256` и сравните результат с `{{sha256}}` (он также указан в `SHA256SUMS.txt`). Проверьте происхождение командой `gh attestation verify .\{{setup}} --repo eoftgge/rosetun`.
 
