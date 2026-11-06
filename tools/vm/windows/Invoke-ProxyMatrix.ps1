@@ -165,14 +165,18 @@ function Test-RosetunGuestRecord {
 }
 
 function Test-RosetunHostThroughGuestProxy {
-    # A request from the host through the guest's proxy: another device on the
-    # guest's network using it. curl's exit code 0 is an answer.
+    # A request through the guest's proxy from another device on the guest's network:
+    # the host, from an address of its own. The host's usual address is the test node's,
+    # and a shared proxy leaves the VPN servers' addresses out on purpose. With
+    # -FromServer it is that address. curl's exit code 0 is an answer.
     param(
         [Parameter(Mandatory)][string]$GuestAddress,
         [Parameter(Mandatory)][int]$Port,
-        [Parameter(Mandatory)][string]$Url
+        [Parameter(Mandatory)][string]$Url,
+        [switch]$FromServer
     )
-    & curl.exe --proxy "http://${GuestAddress}:$Port" --max-time 15 --silent --ssl-no-revoke --output NUL $Url 2>$null
+    $source = if ($FromServer) { @() } else { @('--interface', $script:lanDevice.Address) }
+    & curl.exe @source --proxy "http://${GuestAddress}:$Port" --max-time 15 --silent --ssl-no-revoke --output NUL $Url 2>$null
     $code = $LASTEXITCODE
     $global:LASTEXITCODE = 0
     $code -eq 0
@@ -207,6 +211,7 @@ try {
     Start-RosetunHelper
     New-RosetunProxyRequests -Port $ProxyPort
     $guestAddress = @(Get-RosetunGuestIpv4)[0]
+    $script:lanDevice = Start-RosetunLanDevice
 
     # The proxy carries what is sent to it; what is not stays outside the VPN.
     Test-Step 'plain' 'the proxy mode connects without a kill switch' { Connect-RosetunProxy 'proxy-plain.json' }
@@ -299,6 +304,11 @@ try {
         Test-Step 'sharing' "$requestName`: the host on the guest's network uses the proxy" {
             Test-RosetunHostThroughGuestProxy -GuestAddress $guestAddress -Port $ProxyPort -Url $ProbeUrl
         }
+        if ($UseHostNode) {
+            Test-Step 'sharing' "$requestName`: the VPN server's own address does not get in" {
+                -not (Test-RosetunHostThroughGuestProxy -GuestAddress $guestAddress -Port $ProxyPort -Url $ProbeUrl -FromServer)
+            }
+        }
         Test-Step 'sharing' "$requestName`: the proxy still answers on loopback" {
             Test-RosetunProxyCarries -Url $ProbeUrl -Port $ProxyPort
         }
@@ -378,6 +388,10 @@ try {
     }
 }
 finally {
+    if (Get-Variable -Name lanDevice -Scope Script -ValueOnly -ErrorAction SilentlyContinue) {
+        try { Stop-RosetunLanDevice $script:lanDevice }
+        catch { Write-Warning "Could not remove the temporary LAN device: $_" }
+    }
     if (Get-Variable -Name egressWatchActive -ValueOnly -ErrorAction SilentlyContinue) {
         try { Stop-RosetunEgressWatch | Out-Null }
         catch { Write-Warning "Could not stop the egress watch: $_" }
