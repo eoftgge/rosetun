@@ -110,6 +110,8 @@ mod window;
 mod wininet;
 
 mod desktop_proxy;
+#[cfg(target_os = "linux")]
+mod desktop_proxy_linux;
 
 #[cfg(windows)]
 pub use autostart::{

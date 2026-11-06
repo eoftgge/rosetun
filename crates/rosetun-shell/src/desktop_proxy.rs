@@ -23,6 +23,10 @@ pub(crate) const LOOPBACK_V4: &str = "127.0.0.1";
 pub(crate) enum SavedSettings {
     #[cfg(windows)]
     WinInet(crate::wininet::Saved),
+    #[cfg(target_os = "linux")]
+    Kde(crate::desktop_proxy_linux::SavedKde),
+    #[cfg(target_os = "linux")]
+    Gnome(crate::desktop_proxy_linux::SavedGnome),
     /// Stands in for a real backend's settings in tests.
     #[cfg(test)]
     Fake(String),
@@ -39,7 +43,8 @@ pub(crate) trait Backend: Send {
 }
 
 /// The record of a change, kept until it is undone.
-#[derive(Debug, Serialize, Deserialize)]
+/// The saved settings hold the user's own proxy addresses, so this never logs.
+#[derive(Serialize, Deserialize)]
 struct Record {
     port: u16,
     saved: SavedSettings,
@@ -217,7 +222,12 @@ fn default_backend() -> Option<Box<dyn Backend>> {
     Some(Box::new(crate::wininet::WinInet))
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+fn default_backend() -> Option<Box<dyn Backend>> {
+    crate::desktop_proxy_linux::backend()
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
 fn default_backend() -> Option<Box<dyn Backend>> {
     None
 }
