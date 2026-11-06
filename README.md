@@ -38,11 +38,14 @@ The table says what the code does. Rosetun was checked by hand on GNOME, and not
 
 Linux does not have these yet:
 
-- rules by program: the engines run without root and cannot read other programs, so a connection with such a rule is refused;
 - file dialogs: a QR code is read from the clipboard only, and there is no screen capture;
 - **Collect report** and the buttons that open a folder (see [Troubleshooting](#troubleshooting));
 - the system proxy and packet interception checks in **System check**;
 - a remembered window position.
+
+**Rules by program on Linux** have a price. To find a connection's program, sing-box reads the processes of every account, so a session with an enabled rule by program gives its engine `CAP_SYS_PTRACE` and `CAP_DAC_READ_SEARCH`: nearly root for anything that takes the engine over. Without such a rule the engine has neither. Where the service cannot give them (outside its systemd unit, say), a connection with such a rule is refused with the reason.
+
+A known sing-box error on Linux sometimes attributes a connection to the wrong program ([SagerNet/sing-box#4501](https://github.com/SagerNet/sing-box/issues/4501), open; Windows is not affected). So a **Direct** rule for a program can now and then let another program's connection past the tunnel, also with the kill switch on, because the kill switch lets the engine out. A connection whose program is not found matches no rule by program and goes by the rules after them. If this matters, use rules by site and IP instead, and keep **Through VPN** as the default with no **Direct** rule by program.
 
 ## Features
 
@@ -67,7 +70,7 @@ Linux does not have these yet:
 
 **Connection mode** (Settings → Connection) chooses how traffic reaches the VPN. **TUN**, the default, takes all of this computer's traffic. **System proxy** starts a local proxy (HTTP and SOCKS5 on one port, 10808 unless you change it) and points your desktop's proxy settings at it, for when TUN gets in the way of another VPN, an anti-cheat or an antivirus, or when you only need the browser.
 
-- **What goes through the VPN:** only programs that use the system proxy, which means browsers and most applications. Rules by site, address and list work as in TUN, and rules by program too on Windows.
+- **What goes through the VPN:** only programs that use the system proxy, which means browsers and most applications. Rules by site, address, list and program work as in TUN.
 - **What does not:** programs that ignore the system proxy, such as games, many console programs and Windows services (WinHTTP is left as it is). Without the kill switch they go direct, and so does their DNS: this mode has no DNS lock, since it has no adapter. Point console programs at the proxy yourself (`curl -x http://127.0.0.1:10808 ...`); Rosetun does not set `http_proxy` and other variables, which running programs would not read anyway.
 - **Kill switch** here is strict: only Rosetun's engine and this computer's loopback reach the network, while you are connected too, so everything that does not use the proxy stays without network. Off by default, and it asks before it goes on.
 - **Access from the local network** (off by default) lets a phone or a TV on your network use the proxy: Settings shows the address to enter. On Windows only the networks this computer's adapters are connected to get in, without the VPN servers' own addresses, for as long as the session lasts. On Linux the proxy listens only on the private addresses of physical interfaces. Under **Lockdown** it needs **Local network** too, and otherwise stays closed to other devices.
@@ -76,7 +79,7 @@ Linux does not have these yet:
 
 ### Rules
 
-- **Routing rules** for programs (Windows), websites, IP addresses and subnets, and lists, with **Quick templates** and actions **Through VPN**, **Direct** and **Block**.
+- **Routing rules** for programs, websites, IP addresses and subnets, and lists, with **Quick templates** and actions **Through VPN**, **Direct** and **Block**.
 - **Exits:** a rule can send its traffic through another country or a specific server while the rest goes through the server on the main screen. Picking a country or a server in the rule creates an exit on the **Exits** tab, where you can change its server and turn on a fallback to any server of the same country. If an exit's server disappears, its rules block traffic; they never go direct.
 - **Lists:** GeoIP and GeoSite (Xray `.dat` files, sing-box rule sets) and your own text lists, from a file or a link. A list from a link is downloaded again only when it has changed (`ETag` / `Last-Modified`).
 - **Undo:** Ctrl+Z steps back through your changes on the Rules tab, **Revert** returns to the rules applied to the connection, and Del removes the selected rule without asking.
