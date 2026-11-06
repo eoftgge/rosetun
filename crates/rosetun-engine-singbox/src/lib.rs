@@ -1810,27 +1810,34 @@ mod tests {
             .as_array()
             .expect("route rules array");
 
-        assert_eq!(route_rules.len(), 8);
+        // Where it can name the GUI, the exit lookup comes after the service's two.
+        let exit_lookup = usize::from(cfg!(windows));
+        assert_eq!(route_rules.len(), 7 + exit_lookup);
         assert_eq!(route_rules[0]["action"], "sniff");
         assert_eq!(route_rules[1]["action"], "hijack-dns");
-        assert_eq!(route_rules[2]["outbound"], "proxy");
-        assert_eq!(route_rules[3]["outbound"], "direct");
+        if cfg!(windows) {
+            assert_eq!(route_rules[2]["outbound"], "proxy");
+        }
+        assert_eq!(route_rules[2 + exit_lookup]["outbound"], "direct");
 
         // User rules retain their order after the service rules.
-        assert_eq!(route_rules[4]["domain"][0], "direct.example");
-        assert_eq!(route_rules[4]["action"], "route");
-        assert_eq!(route_rules[4]["outbound"], "direct");
+        assert_eq!(route_rules[3 + exit_lookup]["domain"][0], "direct.example");
+        assert_eq!(route_rules[3 + exit_lookup]["action"], "route");
+        assert_eq!(route_rules[3 + exit_lookup]["outbound"], "direct");
 
-        assert_eq!(route_rules[5]["domain_suffix"][0], "proxy.example");
-        assert_eq!(route_rules[5]["action"], "route");
-        assert_eq!(route_rules[5]["outbound"], "proxy");
+        assert_eq!(
+            route_rules[4 + exit_lookup]["domain_suffix"][0],
+            "proxy.example"
+        );
+        assert_eq!(route_rules[4 + exit_lookup]["action"], "route");
+        assert_eq!(route_rules[4 + exit_lookup]["outbound"], "proxy");
 
-        assert_eq!(route_rules[6]["domain_keyword"][0], "blocked");
-        assert_eq!(route_rules[6]["action"], "reject");
+        assert_eq!(route_rules[5 + exit_lookup]["domain_keyword"][0], "blocked");
+        assert_eq!(route_rules[5 + exit_lookup]["action"], "reject");
 
-        assert_eq!(route_rules[7]["ip_is_private"], true);
-        assert_eq!(route_rules[7]["action"], "route");
-        assert_eq!(route_rules[7]["outbound"], "direct");
+        assert_eq!(route_rules[6 + exit_lookup]["ip_is_private"], true);
+        assert_eq!(route_rules[6 + exit_lookup]["action"], "route");
+        assert_eq!(route_rules[6 + exit_lookup]["outbound"], "direct");
 
         let domain_fields = ["domain", "domain_suffix", "domain_keyword"];
         let domain_indices: Vec<usize> = route_rules
@@ -1844,7 +1851,10 @@ mod tests {
             })
             .collect();
 
-        assert_eq!(domain_indices, vec![4, 5, 6]);
+        assert_eq!(
+            domain_indices,
+            vec![3 + exit_lookup, 4 + exit_lookup, 5 + exit_lookup]
+        );
         assert!(domain_indices.iter().all(|&index| index > 1));
         assert_eq!(config["route"]["final"], "proxy");
     }

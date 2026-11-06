@@ -81,16 +81,6 @@
       },
       {
         "action": "route",
-        "ip_cidr": [
-          "1.1.1.1/32"
-        ],
-        "outbound": "proxy",
-        "port": [
-          443
-        ]
-      },
-      {
-        "action": "route",
         "domain_suffix": [
           "example.org"
         ],

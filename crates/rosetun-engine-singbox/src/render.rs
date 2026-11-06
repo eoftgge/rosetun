@@ -518,8 +518,8 @@ fn route_section_with_lists(
             "protocol": "dns",
             "action": "hijack-dns",
         }),
-        exit_trace_rule(rules),
     ];
+    route_rules.extend(exit_trace_rule(rules));
     if local_proxy {
         route_rules.insert(
             2,
@@ -697,27 +697,23 @@ fn route_rule(rule: &Rule) -> Option<Map<String, Value>> {
 }
 
 /// A name matched against the whole path: Windows ignores letter case, Linux does not.
-/// The GUI's look at its exit goes through the tunnel whatever the rules say.
-/// On Linux the address alone decides: the engine reads programs only with a rule
-/// by program, a condition on the program would start that search for every
-/// session, and a search that misses would send this lookup down the user's rules.
-fn exit_trace_rule(rules: &RuleSet) -> Value {
-    let mut rule = json!({
-        "ip_cidr": [format!("{EXIT_TRACE_IP}/32")],
-        "port": [EXIT_TRACE_PORT],
-        "action": "route",
-        "outbound": TAG_PROXY,
-    });
-    if tells_programs_apart(rules) {
-        rule["process_path_regex"] = json!([process_name_regex(GUI_PROCESS)]);
-    }
-    rule
-}
-
-/// Linux reads other accounts' programs only for a session with rules by program,
-/// and a rule of the user's for this address must not lose to the lookup there.
-fn tells_programs_apart(rules: &RuleSet) -> bool {
-    cfg!(windows) || EngineRights::for_rules(rules) == EngineRights::NetworkAndProcesses
+/// The GUI's look at its exit goes through the tunnel whatever the rules say. It
+/// has to name the GUI: by address alone it would override the user's rules for
+/// anyone's traffic to that address, a Block included. Linux reads other accounts'
+/// programs only for a session with rules by program, so without them there is no
+/// such rule, and the lookup goes as the rules send it.
+fn exit_trace_rule(rules: &RuleSet) -> Option<Value> {
+    (cfg!(windows) || EngineRights::for_rules(rules) == EngineRights::NetworkAndProcesses).then(
+        || {
+            json!({
+                "ip_cidr": [format!("{EXIT_TRACE_IP}/32")],
+                "port": [EXIT_TRACE_PORT],
+                "process_path_regex": [process_name_regex(GUI_PROCESS)],
+                "action": "route",
+                "outbound": TAG_PROXY,
+            })
+        },
+    )
 }
 
 pub(crate) fn process_name_regex(name: &str) -> String {
@@ -774,11 +770,9 @@ mod tests {
     }
 
     #[test]
-    fn the_exit_lookup_goes_by_its_program_where_programs_can_be_told_apart() {
+    fn the_exit_lookup_has_a_rule_only_where_it_can_name_the_gui() {
         let mut set = RuleSet::new(RuleSetId::new("set"), "Set", RuleTarget::Proxy);
-        let rule = exit_trace_rule(&set);
-        assert_eq!(rule.get("process_path_regex").is_some(), cfg!(windows));
-        assert_eq!(rule["outbound"], TAG_PROXY);
+        assert_eq!(exit_trace_rule(&set).is_some(), cfg!(windows));
 
         set.rules.push(Rule {
             id: RuleId::new("curl"),
@@ -787,10 +781,15 @@ mod tests {
             target: RuleTarget::Direct,
             exit: None,
         });
-        assert!(exit_trace_rule(&set).get("process_path_regex").is_some());
+        let rule = exit_trace_rule(&set).expect("this session reads programs");
+        assert!(rule.get("process_path_regex").is_some());
+        assert_eq!(rule["outbound"], TAG_PROXY);
     }
 
     use super::*;
+
+    /// Sniffing, DNS and, where it can name the GUI, the exit lookup.
+    const OWN_RULES: usize = if cfg!(windows) { 3 } else { 2 };
 
     const NO_PRIVATE: PrivateNetworks<'static> = PrivateNetworks {
         on: false,
@@ -1614,7 +1613,7 @@ mod tests {
         set.rules.push(list.clone());
         let (route, unsupported) = route_section(&set, RuleCapabilities::ALL, false);
         assert_eq!(unsupported, vec![list.id]);
-        assert_eq!(route["rules"].as_array().unwrap().len(), 3);
+        assert_eq!(route["rules"].as_array().unwrap().len(), OWN_RULES);
     }
 
     #[test]
@@ -1656,13 +1655,13 @@ mod tests {
             }])
         );
         assert_eq!(
-            route["rules"][3],
+            route["rules"][OWN_RULES],
             json!({
                 "rule_set": [tag], "action": "route", "outbound": "direct"
             })
         );
         assert_eq!(
-            route["rules"][4],
+            route["rules"][OWN_RULES + 1],
             json!({"rule_set": [tag], "action": "reject"})
         );
         assert!(
@@ -1743,9 +1742,9 @@ mod tests {
             false,
         );
         assert_eq!(unsupported, [vanished]);
-        assert_eq!(route["rules"].as_array().unwrap().len(), 4);
+        assert_eq!(route["rules"].as_array().unwrap().len(), OWN_RULES + 1);
         assert_eq!(
-            route["rules"][3],
+            route["rules"][OWN_RULES],
             json!({
                 "rule_set": [tag], "action": "route", "outbound": "direct"
             })
@@ -1768,6 +1767,6 @@ mod tests {
         set.rules.push(template.clone());
         let (route, unsupported) = route_section(&set, RuleCapabilities::ALL, false);
         assert_eq!(unsupported, vec![template.id]);
-        assert_eq!(route["rules"].as_array().unwrap().len(), 3);
+        assert_eq!(route["rules"].as_array().unwrap().len(), OWN_RULES);
     }
 }
