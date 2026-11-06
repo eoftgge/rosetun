@@ -29,6 +29,7 @@
 //! do not exist yet); the service adds the engines', its own and the
 //! programs' permits at start. A normal stop leaves Lockdown's table.
 
+pub(super) mod connected;
 mod nft;
 mod physical;
 mod programs;

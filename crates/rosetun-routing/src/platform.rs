@@ -85,6 +85,17 @@ pub(super) fn release_broadcast_route(tunnel: &crate::TunnelInterface) -> crate:
     }
 }
 
+pub(super) fn shared_proxy_addresses() -> Vec<std::net::IpAddr> {
+    #[cfg(target_os = "linux")]
+    {
+        linux::connected::private_addresses()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        Vec::new()
+    }
+}
+
 pub(super) fn physical_default_interface(exclude_alias: &str) -> Option<String> {
     #[cfg(windows)]
     {

@@ -420,6 +420,86 @@ fn v6_list() -> String {
 }
 
 #[cfg(test)]
+mod proxy_mode_tests {
+    use super::*;
+
+    fn engines() -> CgroupPath {
+        CgroupPath::parse("/system.slice/rosetun-helper.service/engines").unwrap()
+    }
+
+    fn proxy_mode(engines: &CgroupPath, allow_lan: bool) -> Rules<'_> {
+        Rules {
+            scope: ProtectionScope::AllTraffic,
+            allow_lan,
+            engines: Some(engines),
+            hold: None,
+            // The proxy mode's kill switch has no second phase.
+            tunnel: None,
+            lockdown: None,
+        }
+    }
+
+    #[test]
+    fn the_kill_switch_of_the_proxy_mode_stays_in_its_first_phase() {
+        let engines = engines();
+        let text = replace(&proxy_mode(&engines, false));
+        assert!(text.contains("type filter hook output priority filter; policy drop;"));
+        assert!(text.contains("oif \"lo\" accept"));
+        assert!(text.contains("system.slice/rosetun-helper.service/engines"));
+        assert!(text.contains("udp sport 68 udp dport 67 accept"));
+        assert!(text.contains(NEIGHBOR_DISCOVERY));
+        assert!(!text.contains("oif \"rosetun"), "no tunnel to permit");
+        assert!(!text.contains("th dport 53 drop"), "no DNS lock");
+        assert!(!text.contains("hook input"), "inbound stays free");
+    }
+
+    #[test]
+    fn local_network_in_the_proxy_mode_opens_the_private_ranges_as_in_the_tunnel_mode() {
+        let engines = engines();
+        let open = replace(&proxy_mode(&engines, true));
+        let closed = replace(&proxy_mode(&engines, false));
+        assert!(open.contains(&v4_list()));
+        assert!(!closed.contains(&format!("ip daddr {{ {} }} accept", v4_list())));
+        let tunnel = InterfaceName::new("rosetun0").unwrap();
+        let tunnel_mode = replace(&Rules {
+            tunnel: Some(&tunnel),
+            ..proxy_mode(&engines, true)
+        });
+        assert_eq!(
+            open,
+            tunnel_mode
+                .lines()
+                .filter(|line| !line.contains("\"rosetun0\""))
+                .map(|line| format!("{line}\n"))
+                .collect::<String>()
+        );
+    }
+
+    #[test]
+    fn lockdown_takes_inbound_only_from_its_local_network() {
+        let engines = engines();
+        let with = |lan| {
+            replace(&Rules {
+                lockdown: Some(Lockdown {
+                    lan,
+                    session: true,
+                    helper: None,
+                    programs: &[],
+                }),
+                ..proxy_mode(&engines, false)
+            })
+        };
+        // Sharing adds no rule: this is the proxy's port like any other.
+        let open = with(true);
+        let closed = with(false);
+        assert!(open.contains(&format!("ip saddr {{ {} }} accept", v4_list())));
+        assert!(open.contains(&format!("ip6 saddr {{ {} }} accept", v6_list())));
+        assert!(!closed.contains("saddr {"));
+        assert!(closed.contains("type filter hook input priority filter; policy drop;"));
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

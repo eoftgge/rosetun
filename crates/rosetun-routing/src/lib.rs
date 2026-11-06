@@ -96,6 +96,13 @@ pub fn lan_segment(query: &lan::SegmentQuery<'_>) -> std::io::Result<lan::Segmen
     platform::lan_segment(query)
 }
 
+/// Where a shared local proxy listens besides loopback, where no filter limits
+/// who reaches it (Linux): the private addresses of the physical interfaces.
+/// Nothing where filters do it instead.
+pub fn shared_proxy_addresses() -> Vec<std::net::IpAddr> {
+    platform::shared_proxy_addresses()
+}
+
 /// Sends limited broadcast that no program chose an adapter for to the local
 /// network: takes the system's route for it off the validated tunnel (Windows;
 /// nothing elsewhere). Safe to call repeatedly. The route comes back with the
