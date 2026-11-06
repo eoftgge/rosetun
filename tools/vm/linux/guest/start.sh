@@ -41,6 +41,12 @@ L4_START_REQUIRED=(guest/launch.sh guest/lib.sh guest/run-l4.sh guest/start.sh s
     artifacts/rosetun-helper-privileged artifacts/rosetun artifacts/sing-box artifacts/rosetun-helper.service
     artifacts/rosetun-lockdown.service artifacts/request-kill-switch.json artifacts/request-lan.json
     artifacts/request-dns-lock.json artifacts/provenance.json)
+l5_start_path_allowed() {
+    [[ $1 =~ ^(guest/(launch|lib|run-l5|start)\.sh|scenarios-l5\.tsv|job\.env|artifacts/(rosetun-old\.deb|rosetun-new\.deb|request-kill-switch\.json|request-lan\.json|request-dns-lock\.json|provenance\.json))$ ]]
+}
+L5_START_REQUIRED=(guest/launch.sh guest/lib.sh guest/run-l5.sh guest/start.sh scenarios-l5.tsv job.env
+    artifacts/rosetun-old.deb artifacts/rosetun-new.deb artifacts/request-kill-switch.json
+    artifacts/request-lan.json artifacts/request-dns-lock.json artifacts/provenance.json)
 
 l2_start_root_only() {
     [ ! -L "$1" ] && [ "$(stat -c %u -- "$1")" -eq 0 ] && [ $((0$(stat -c %a -- "$1") & 022)) -eq 0 ]
@@ -63,12 +69,14 @@ l2_start_main() {
     [ -f "$run/manifest.sha256" ] && l2_start_root_only "$run/manifest.sha256" || die "the run's manifest is missing or not root-owned"
     [ "$(sha256sum -- "$run/manifest.sha256" | cut -d' ' -f1)" = "$manifest_hash" ] || die "the run's manifest is not the one the host computed"
 
-    # A stage that carries the L3 or L4 job is that stage and must hold only its files.
+    # A stage that carries the L3, L4 or L5 job is that stage and must hold only its files.
     local stage=l2 allowed=l2_start_path_allowed required=("${L2_START_REQUIRED[@]}")
     if grep -q '  guest/run-l3\.sh$' "$run/manifest.sha256"; then
         stage=l3 allowed=l3_start_path_allowed required=("${L3_START_REQUIRED[@]}")
     elif grep -q '  guest/run-l4\.sh$' "$run/manifest.sha256"; then
         stage=l4 allowed=l4_start_path_allowed required=("${L4_START_REQUIRED[@]}")
+    elif grep -q '  guest/run-l5\.sh$' "$run/manifest.sha256"; then
+        stage=l5 allowed=l5_start_path_allowed required=("${L5_START_REQUIRED[@]}")
     fi
     local line path paths=()
     while IFS= read -r line; do

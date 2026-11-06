@@ -101,6 +101,20 @@ $l4Scenarios = @(Get-RosetunLinuxScenarios -Stage 'L4')
 Assert-That 'L4 scenarios load' ($l4Scenarios.Count -ge 20) "$($l4Scenarios.Count)"
 Assert-That 'every L4 scenario is required' (@($l4Scenarios | Where-Object { -not $_.Required }).Count -eq 0)
 
+# --- the L5 stage: packages instead of programs, no reboot
+$l5 = Get-RosetunLinuxStageProfile 'L5'
+Assert-That 'L5 stages packages' ($l5['Packages'] -and $l5.Artifacts -contains 'rosetun-old.deb' -and $l5.Artifacts -contains 'rosetun-new.deb')
+Assert-That 'L5 runs its own job' ($l5.Scripts -contains 'run-l5.sh' -and $l5.Scripts -notcontains 'run-l3.sh')
+$l5Scenarios = @(Get-RosetunLinuxScenarios -Stage 'L5')
+Assert-That 'L5 scenarios load' ($l5Scenarios.Count -ge 15) "$($l5Scenarios.Count)"
+Assert-That 'every L5 scenario is required' (@($l5Scenarios | Where-Object { -not $_.Required }).Count -eq 0)
+$notDeb = Join-Path ([IO.Path]::GetTempPath()) "rosetun-not-deb-$PID"
+[IO.File]::WriteAllBytes($notDeb, [Text.Encoding]::ASCII.GetBytes("!<arch>`nsomething-else--------"))
+Assert-That 'another ar archive is not a package' (-not (Test-RosetunLinuxDeb $notDeb))
+[IO.File]::WriteAllBytes($notDeb, [Text.Encoding]::ASCII.GetBytes("!<arch>`ndebian-binary   0"))
+Assert-That 'a package is recognised by its first member' (Test-RosetunLinuxDeb $notDeb)
+Remove-Item -LiteralPath $notDeb
+
 # --- required scenarios cannot be dropped, skipped or invented
 $dropped = New-GoodReport
 $dropped.scenarios = @($dropped.scenarios | Where-Object id -NE 'stale.restart-refused')
@@ -590,7 +604,7 @@ finally {
 }
 
 # --- timeout runs programs: a job's shell function after it only fails in the guest
-foreach ($job in @('run-l2.sh', 'run-l3.sh', 'run-l4.sh')) {
+foreach ($job in @('run-l2.sh', 'run-l3.sh', 'run-l4.sh', 'run-l5.sh')) {
     $text = Get-Content -LiteralPath (Join-Path $PSScriptRoot "..\guest\$job") -Raw
     $functions = @([regex]::Matches($text, '(?m)^\s*([a-z_][a-z0-9_]*)\(\) \{') | ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique)
     $commands = @([regex]::Matches($text, '\btimeout(?: --?[a-z-]+(?:=\S+)?)* +\S+ +([a-z_][a-z0-9_]*)(?=\s)') | ForEach-Object { $_.Groups[1].Value })

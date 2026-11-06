@@ -81,18 +81,19 @@ runs, the job goes on in the guest; reconnect with
 
 | File | Purpose |
 |---|---|
-| `Invoke-LinuxL2Matrix.ps1` | Host entry point: `-Run` (L2), `-Run -Stage L3`, `-Run -Stage L4`, and the single steps `-InitKnownHosts`, `-PrepareLauncher`, stage (default), `-Collect` |
+| `Invoke-LinuxL2Matrix.ps1` | Host entry point: `-Run` (L2), `-Run -Stage L3`, `-Run -Stage L4`, `-Run -Stage L5`, and the single steps `-InitKnownHosts`, `-PrepareLauncher`, stage (default), `-Collect` |
 | `RosetunLinuxVm.psm1` | Host module: settings, SSH/SCP with a pinned host key, VM identity, the WSL build, artifact checks, report verdict |
 | `stand.example.psd1` | The settings with documentation values; copy it to `stand.local.psd1` (git-ignored) |
 | `build-in-wsl.sh` | Runs in WSL for the host: updates the stand's clone to `HEAD` and calls `build-artifacts.sh` |
-| `build-artifacts.sh` | Builds the three L2 binaries (or, with `--l3`, the release helper and CLI) inside Debian and records their provenance |
+| `build-artifacts.sh` | Builds the three L2 binaries (or, with `--l3`, the release helper and CLI; with `--deb`, the package twice) inside Debian and records their provenance |
 | `guest/install-launcher.sh` | One-time installation of the launcher and its sudoers rule in the guest |
 | `guest/launch.sh` | The launcher: proves the staged files and hands over to the verified `start.sh` |
 | `guest/start.sh` | Checks the run directory and starts the autonomous job of its stage |
 | `guest/run-l2.sh`, `guest/lib.sh` | The L2 job itself: scenarios, cleanup, report |
 | `guest/run-l3.sh` | The L3 job: installs the service, kill switch, DNS lock, IPv6, inbound and forwarding scenarios (a peer network namespace), crashes, cleanup, report |
+| `guest/run-l5.sh` | The L5 job: the real package, installed, upgraded under the kill switch and Lockdown, removed and purged |
 | `guest/run-l4.sh` | The L4 job: Lockdown on the service, the scopes, inbound, crashes, two reboots (with its own early and resume units), reset-firewall, cleanup, report |
-| `scenarios.tsv`, `scenarios-l3.tsv`, `scenarios-l4.tsv` | The scenario lists, shared by the guest and the host |
+| `scenarios.tsv`, `scenarios-l3.tsv`, `scenarios-l4.tsv`, `scenarios-l5.tsv` | The scenario lists, shared by the guest and the host |
 | `tests/` | Unprivileged self-tests of the stand (not a VM run) |
 
 Reports go to `tools/vm/linux/logs/<run id>/` (git-ignored): `stage.json`,
@@ -695,6 +696,32 @@ What it does not prove: the GUI itself and the CLI's own way into its scope
 exercised); the polkit prompt (`pkexec` needs a desktop session's agent); a
 power cut; a desktop login before the network (the guest has no display
 manager); Lockdown over IPv6 beyond what the kill switch's scenarios show.
+
+## L5: the real package
+
+The same command as L3 with `-Stage L5`, without `-SingBoxLinuxPath`: the package brings its engines.
+
+```powershell
+.\tools\vm\linux\Invoke-LinuxL2Matrix.ps1 -Run -Stage L5 -SingBoxPath .\tools\sing-box.exe
+```
+
+It builds the package of `HEAD` twice in WSL (the real version and `0.0.1~stand`, one commit, so `dpkg` has something to upgrade from), restores `l2-clean` before and after, and runs in the guest:
+
+| Scenarios | What they check |
+|---|---|
+| `preflight.*` | as L3, and dpkg knows no package `rosetun` |
+| `install.*` | `dpkg -i` on the clean guest, service, boot unit, leaf, modes, menu entry, `rosetun://` in the desktop database, icons, policy; `postinst configure` twice more keeps the helper's process |
+| `upgrade.kill-switch-*` | an upgrade during a kill-switch session: the table stays, no packet to the probe past the tunnel, then the new version's hold, refused both ways |
+| `upgrade.reconnect` | `rosetun connect` lifts the hold through the tunnel; the disconnect opens the network |
+| `upgrade.lockdown` | an upgrade under Lockdown: the record, the table and the refusal stay, no hold |
+| `remove.refused` | `/usr/bin/false` bind-mounted over `nft`, so `reset-firewall` fails: `dpkg -r` stops, prints the way out, keeps the files, the network stays closed |
+| `remove.lockdown`, `purge.state` | `dpkg -r` opens the network and removes the programs; `dpkg -P` removes `/var/lib/rosetun` and keeps the group |
+
+**Before the first L5 run:** in WSL, `sudo apt-get install dpkg-dev unzip` and `cargo install cargo-about --locked --version 0.9.2 --features cli`. The clean checkpoint needs what L3 needs, `desktop-file-utils` and the GUI's libraries. A KDE installation has them; `dpkg -i` does not fetch anything, and a missing dependency fails `install.package` with its name.
+
+**A counter, not a rule:** this is the one stage that adds a table of its own (`inet rosetun-l5-watch`). Its only rule counts packets for the probe after every filter of the output path, and the cleanup removes it. `upgrade.watch` proves it counts before the session starts.
+
+What it does not prove: that the group is created (the checkpoint has it, and the accounts depend on it; `systemd-sysusers` only finds it there); the GUI's takeover after an upgrade and its group button (they need a desktop session); `apt install`'s dependency resolution; a reboot in the middle of an upgrade, after which the table is gone and the network is open until the service is back.
 
 ## Next stages (not implemented here)
 

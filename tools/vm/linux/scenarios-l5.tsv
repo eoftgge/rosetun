@@ -1,0 +1,18 @@
+id	required	evidence	group	detail	title
+preflight.identity	yes	infrastructure	preflight	-	the guest is the designated test machine on the expected boot, x86_64, with systemd
+preflight.accounts	yes	infrastructure	preflight	-	group rosetun and two distinct ordinary accounts exist, both in the group, neither an administrator
+preflight.no-foreign-service	yes	infrastructure	preflight	-	no Rosetun package, unit, helper process, installed files or nftables table rosetun exist
+preflight.tools	yes	infrastructure	preflight	-	/usr/sbin/nft, curl with tftp, dig, dpkg and cgroup v2 are present
+preflight.baseline	yes	infrastructure	preflight	-	without Rosetun the probe address answers HTTPS on the physical interface and the host node answers
+install.package	yes	real-package	install	-	dpkg installs the previous package on the clean guest with every dependency already present
+install.service	yes	real-package	install	-	the helper runs in its leaf and is enabled, the boot unit is enabled and idle, the group exists, Lockdown is offered
+install.desktop	yes	real-package	install	-	the menu entry, the rosetun:// handler in the desktop database, the icons and the polkit policy are in place
+install.repeat	yes	real-package	install	-	running postinst configure twice more keeps the same helper process
+upgrade.watch	yes	infrastructure	upgrade	-	the stand's counter sees a packet that leaves for the probe when nothing blocks it
+upgrade.kill-switch-no-leak	yes	real-package	upgrade	-	dpkg upgrades during a kill-switch session: the table never goes and no packet reaches the probe past the tunnel
+upgrade.kill-switch-hold	yes	real-package	upgrade	-	after the upgrade the new version runs, reports the hold and refuses HTTPS on the physical interface and by the route
+upgrade.reconnect	yes	real-package	upgrade	-	rosetun connect lifts the hold through the tunnel, and the disconnect opens the network
+upgrade.lockdown	yes	real-package	upgrade	-	an upgrade under Lockdown keeps Lockdown: the record, the table and the refusal stay, and no hold is reported
+remove.refused	yes	real-package	remove	-	with reset-firewall made to fail dpkg --remove stops, prints the way out, keeps the files and keeps the network closed
+remove.lockdown	yes	real-package	remove	-	dpkg --remove under Lockdown opens the network and removes the programs, the units' links and the table
+purge.state	yes	real-package	purge	-	dpkg --purge removes /var/lib/rosetun and keeps the group

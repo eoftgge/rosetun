@@ -3,10 +3,12 @@
 # Never run it as root and never cross-build from Windows: the stand accepts only
 # an x86-64 ELF made here, together with provenance.json describing the build.
 #
-#   tools/vm/linux/build-artifacts.sh [--l3] OUTPUT_DIR
+#   tools/vm/linux/build-artifacts.sh [--l3 | --deb] OUTPUT_DIR
 #
-# Without --l3: the L2 artifacts (transport fixture and unit test binaries). With
+# Without an option: the L2 artifacts (transport fixture and unit test binaries). With
 # --l3: the release helper and CLI that the L3 matrix installs as the real service.
+# With --deb: the package twice, as the new version and as an older one to upgrade
+# from; it needs what installer/linux/build-deb.sh needs.
 # OUTPUT_DIR must not exist yet. Needs Rust 1.96.0 (the project MSRV) and a C linker.
 # CARGO_TARGET_DIR may point at a Linux filesystem directory to keep the build fast.
 
@@ -17,9 +19,12 @@ stage=l2
 if [ "${1-}" = --l3 ]; then
     stage=l3
     shift
+elif [ "${1-}" = --deb ]; then
+    stage=l5
+    shift
 fi
 out=${1-}
-[ -n "$out" ] || { echo "usage: build-artifacts.sh [--l3] OUTPUT_DIR" >&2; exit 64; }
+[ -n "$out" ] || { echo "usage: build-artifacts.sh [--l3 | --deb] OUTPUT_DIR" >&2; exit 64; }
 [ "$(id -u)" -ne 0 ] || { echo "build-artifacts.sh: do not build as root" >&2; exit 1; }
 [ "$(uname -s)" = Linux ] && [ "$(uname -m)" = x86_64 ] || { echo "build-artifacts.sh: needs an x86_64 Linux host" >&2; exit 1; }
 [ ! -e "$out" ] || { echo "build-artifacts.sh: $out already exists" >&2; exit 1; }
@@ -57,7 +62,20 @@ provenance() {
 
 target_dir=$(cargo +1.96.0 metadata --locked --format-version 1 --no-deps | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')
 
-if [ "$stage" = l3 ]; then
+if [ "$stage" = l5 ]; then
+    # build_deb DESTINATION ARGS...: one package, under the name the stand expects.
+    build_deb() {
+        local destination=$1 built
+        shift
+        built=$(bash installer/linux/build-deb.sh "$@" | sed -n 's/^Package: //p')
+        [ -n "$built" ] && [ -f "$built" ] || { echo "build-artifacts.sh: the package was not built" >&2; exit 1; }
+        install -m 0644 -- "$built" "$out/$destination"
+    }
+    mkdir -p -- "$out"
+    build_deb rosetun-old.deb --package-version 0.0.1~stand
+    build_deb rosetun-new.deb
+    provenance rosetun-old.deb rosetun-new.deb >"$out/provenance.json"
+elif [ "$stage" = l3 ]; then
     cargo +1.96.0 build -q --locked --release -p rosetun-helper-privileged -p rosetun
     for name in rosetun-helper-privileged rosetun; do
         [ -f "$target_dir/release/$name" ] || { echo "build-artifacts.sh: a build product was not found" >&2; exit 1; }

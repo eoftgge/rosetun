@@ -14,10 +14,12 @@ $script:AccountPattern = '^[a-z_][a-z0-9_-]{0,31}$'
 $script:ArtifactNames = @('l2_transport_fixture', 'rosetun_helper_privileged_tests', 'rosetun_ipc_tests')
 # What each stage builds, stages and judges. L3 and L4 install the real service
 # and run only through -Run -Stage L3 or L4. L4 (Lockdown) reboots the guest twice.
+# L5 installs the real package; its artifacts are packages, not programs.
 $script:StageProfiles = @{
     L2 = @{ Artifacts = $script:ArtifactNames; Scripts = @('launch.sh', 'lib.sh', 'run-l2.sh', 'start.sh'); Scenarios = 'scenarios.tsv' }
     L3 = @{ Artifacts = @('rosetun-helper-privileged', 'rosetun'); Scripts = @('launch.sh', 'lib.sh', 'run-l3.sh', 'start.sh'); Scenarios = 'scenarios-l3.tsv' }
     L4 = @{ Artifacts = @('rosetun-helper-privileged', 'rosetun'); Scripts = @('launch.sh', 'lib.sh', 'run-l4.sh', 'start.sh'); Scenarios = 'scenarios-l4.tsv'; Reboots = 2 }
+    L5 = @{ Artifacts = @('rosetun-old.deb', 'rosetun-new.deb'); Scripts = @('launch.sh', 'lib.sh', 'run-l5.sh', 'start.sh'); Scenarios = 'scenarios-l5.tsv'; Packages = $true }
 }
 # The L3 and L4 stages' requests, made from the owner's request on the host.
 $script:L3Requests = @('request-kill-switch.json', 'request-lan.json', 'request-dns-lock.json')
@@ -38,7 +40,7 @@ function Get-RosetunLinuxRoot {
 }
 
 function Get-RosetunLinuxStageProfile {
-    param([ValidateSet('L2', 'L3', 'L4')][string]$Stage = 'L2')
+    param([ValidateSet('L2', 'L3', 'L4', 'L5')][string]$Stage = 'L2')
     $script:StageProfiles[$Stage]
 }
 
@@ -689,7 +691,7 @@ function Invoke-RosetunLinuxBuild {
         [scriptblock]$Heartbeat,
         [int]$HeartbeatSeconds = 30,
         [int]$TimeoutSeconds = 3600,
-        [ValidateSet('L2', 'L3', 'L4')][string]$Stage = 'L2'
+        [ValidateSet('L2', 'L3', 'L4', 'L5')][string]$Stage = 'L2'
     )
     Assert-RosetunLinuxCleanSource -Source $Source
     if ($WslDistro -notmatch '^[A-Za-z0-9._-]+$') { throw "Unsafe WSL distribution name '$WslDistro'." }
@@ -703,6 +705,7 @@ function Invoke-RosetunLinuxBuild {
     $outWsl = ConvertTo-RosetunLinuxWslPath -WslDistro $WslDistro -Path $outRoot
     $arguments = @('-d', $WslDistro, '--cd', '~', '--exec', 'bash', "$repoWsl/tools/vm/linux/build-in-wsl.sh", $repoWsl, $Source.Sha, "$outWsl/$name")
     if ($Stage -in @('L3', 'L4')) { $arguments += '--l3' }
+    if ($Stage -eq 'L5') { $arguments += '--deb' }
     $result = Invoke-RosetunLinuxProcess -FilePath (Find-RosetunLinuxWsl) -ArgumentList $arguments -TimeoutSeconds $TimeoutSeconds `
         -Heartbeat $Heartbeat -HeartbeatSeconds $HeartbeatSeconds -Environment $script:WslEnvironment
     if ($result.ExitCode -ne 0) {
@@ -713,6 +716,21 @@ function Invoke-RosetunLinuxBuild {
         throw "The build in WSL reported success but '$out' has no provenance.json."
     }
     $out
+}
+
+# True for an ar archive that starts with a Debian package's first member.
+function Test-RosetunLinuxDeb {
+    param([Parameter(Mandatory)][string]$Path)
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $false }
+    $stream = [IO.File]::OpenRead($Path)
+    try {
+        $head = [byte[]]::new(21)
+        if ($stream.Read($head, 0, 21) -ne 21) { return $false }
+        [Text.Encoding]::ASCII.GetString($head) -ceq "!<arch>`ndebian-binary"
+    }
+    finally {
+        $stream.Dispose()
+    }
 }
 
 # True only for a 64-bit little-endian x86-64 ELF executable or PIE: not a PE file,
@@ -746,7 +764,7 @@ function Get-RosetunLinuxArtifacts {
     param(
         [Parameter(Mandatory)][string]$ArtifactDir,
         [Parameter(Mandatory)]$Source,
-        [ValidateSet('L2', 'L3', 'L4')][string]$Stage = 'L2'
+        [ValidateSet('L2', 'L3', 'L4', 'L5')][string]$Stage = 'L2'
     )
     if (-not (Test-Path -LiteralPath $ArtifactDir -PathType Container)) { throw "Artifact directory '$ArtifactDir' does not exist." }
     $provenancePath = Join-Path $ArtifactDir 'provenance.json'
@@ -758,10 +776,16 @@ function Get-RosetunLinuxArtifacts {
         throw 'provenance.json has an unexpected schema or target.'
     }
     $entries = [ordered]@{}
-    foreach ($name in (Get-RosetunLinuxStageProfile $Stage).Artifacts) {
+    $stageProfile = Get-RosetunLinuxStageProfile $Stage
+    foreach ($name in $stageProfile.Artifacts) {
         $path = Join-Path $ArtifactDir $name
-        $elf = Test-RosetunLinuxElf $path
-        if (-not $elf.Ok) { throw "Artifact '$name': $($elf.Reason)." }
+        if ($stageProfile['Packages']) {
+            if (-not (Test-RosetunLinuxDeb $path)) { throw "Artifact '$name' is not a Debian package." }
+        }
+        else {
+            $elf = Test-RosetunLinuxElf $path
+            if (-not $elf.Ok) { throw "Artifact '$name': $($elf.Reason)." }
+        }
         $hash = Get-RosetunLinuxFileSha256 $path
         $recorded = $provenance.artifacts.PSObject.Properties[$name]
         if ($null -eq $recorded -or $recorded.Value.sha256 -ne $hash) {
@@ -792,7 +816,7 @@ function Get-RosetunLinuxArtifacts {
 # ------------------------------------------------------------------ scenarios and staging
 
 function Get-RosetunLinuxScenarios {
-    param([ValidateSet('L2', 'L3', 'L4')][string]$Stage = 'L2', [string]$Path)
+    param([ValidateSet('L2', 'L3', 'L4', 'L5')][string]$Stage = 'L2', [string]$Path)
     if (-not $Path) { $Path = Join-Path (Get-RosetunLinuxRoot) (Get-RosetunLinuxStageProfile $Stage).Scenarios }
     $lines = @(Get-Content -LiteralPath $Path | Where-Object { $_.Trim() -ne '' })
     if ($lines.Count -lt 2 -or $lines[0] -ne "id`trequired`tevidence`tgroup`tdetail`ttitle") {
@@ -863,7 +887,7 @@ function New-RosetunLinuxStage {
         [Parameter(Mandatory)][string]$RunId,
         [Parameter(Mandatory)][string]$ArtifactDir,
         [Parameter(Mandatory)][string]$JobEnv,
-        [ValidateSet('L2', 'L3', 'L4')][string]$Stage = 'L2',
+        [ValidateSet('L2', 'L3', 'L4', 'L5')][string]$Stage = 'L2',
         # Files staged under artifacts/ besides the build, by published name.
         [Collections.IDictionary]$Extra = [ordered]@{}
     )

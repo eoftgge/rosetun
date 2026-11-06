@@ -4,7 +4,7 @@
 # open WSL by hand. It keeps its own clone and cargo cache under ~/.cache/rosetun-l2
 # and writes nothing else except OUTPUT_DIR.
 #
-#   build-in-wsl.sh SOURCE_REPO COMMIT_SHA OUTPUT_DIR [--l3]
+#   build-in-wsl.sh SOURCE_REPO COMMIT_SHA OUTPUT_DIR [--l3 | --deb]
 #
 # SOURCE_REPO is the Windows checkout as WSL sees it (/mnt/<drive>/...). COMMIT_SHA
 # must be its HEAD. The build itself is build-artifacts.sh of that very commit.
@@ -17,9 +17,9 @@ die() {
     exit "${2-1}"
 }
 
-[ $# -eq 3 ] || { [ $# -eq 4 ] && [ "$4" = --l3 ]; } || die "usage: build-in-wsl.sh SOURCE_REPO COMMIT_SHA OUTPUT_DIR [--l3]" 64
+[ $# -eq 3 ] || { [ $# -eq 4 ] && { [ "$4" = --l3 ] || [ "$4" = --deb ]; }; } || die "usage: build-in-wsl.sh SOURCE_REPO COMMIT_SHA OUTPUT_DIR [--l3 | --deb]" 64
 src=$1 sha=$2 out=$3 stage=()
-[ $# -eq 3 ] || stage=(--l3)
+[ $# -eq 3 ] || stage=("$4")
 [[ $sha =~ ^[0-9a-f]{40}$ ]] || die "invalid commit id '$sha'" 64
 [[ $out == /* ]] || die "OUTPUT_DIR must be an absolute path" 64
 [ "$(id -u)" -ne 0 ] || die "do not build as root; make an ordinary account the WSL default user"
