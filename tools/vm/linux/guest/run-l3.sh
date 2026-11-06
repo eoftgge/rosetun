@@ -689,8 +689,9 @@ scenario_program_rules() {
     }
     check rules.restart-guarded "adding and removing the rule restarted sing-box with its capabilities, every probe refused" restart_guarded
 
-    # For the report, not a verdict: how often the search found nothing. The engine's
-    # INFO and DEBUG lines reach the journal because the requests turn on the verbose log.
+    # For the report: how often the search found nothing. It fails only when nothing was
+    # found at all. The engine's INFO and DEBUG lines reach the journal because the
+    # requests turn on the verbose log.
     local started found misses
     started=$(l2_now_ms)
     write_status running rules.search-misses

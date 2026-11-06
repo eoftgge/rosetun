@@ -596,6 +596,7 @@ try {
     [IO.File]::WriteAllBytes($engine, $elfHeader)
     $extra = [ordered]@{}
     foreach ($name in $requests.Keys) { $extra[$name] = $requests[$name] }
+    foreach ($name in $programRequests.Keys) { $extra[$name] = $programRequests[$name] }
     $extra['sing-box'] = $engine
     $extra['rosetun-helper.service'] = Join-Path $PSScriptRoot '..\..\..\..\packaging\linux\rosetun-helper.service'
     $extra['rosetun-engine.rules'] = Join-Path $PSScriptRoot '..\..\..\..\packaging\linux\rosetun-engine.rules'
