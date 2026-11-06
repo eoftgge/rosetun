@@ -297,17 +297,15 @@ function Start-RosetunTestNode {
         $config.inbounds[0].listen_port = $tcpPort
     }
     if ($CloudflareBlocked) {
-        $config | Add-Member -NotePropertyName route -NotePropertyValue ([pscustomobject]@{
-            rules = @(
-                [pscustomobject]@{ action = 'sniff' }
-                [pscustomobject]@{ domain = @('cp.cloudflare.com'); action = 'reject' }
-                [pscustomobject]@{
-                    ip_cidr = @('1.1.1.1/32', '1.0.0.1/32')
-                    action = 'reject'
-                }
-            )
-            final = 'direct'
-        })
+        $config.route | Add-Member -NotePropertyName rules -NotePropertyValue @(
+            [pscustomobject]@{ action = 'sniff' }
+            [pscustomobject]@{ domain = @('cp.cloudflare.com'); action = 'reject' }
+            [pscustomobject]@{
+                ip_cidr = @('1.1.1.1/32', '1.0.0.1/32')
+                action = 'reject'
+            }
+        )
+        $config.route | Add-Member -NotePropertyName final -NotePropertyValue 'direct'
     }
     $tcpListening = Get-NetTCPConnection -LocalPort $tcpPort -State Listen -ErrorAction SilentlyContinue
     $udpListening = if ($null -ne $udpPort) {

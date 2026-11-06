@@ -1,6 +1,6 @@
 # Hyper-V test nodes
 
-Run PowerShell as Administrator on the host with the host VPN off. Once, allow the test nodes only on the Hyper-V Default Switch; the main node serves Shadowsocks on TCP 8388 and Hysteria2 on UDP 8443. The second Shadowsocks node on TCP 8389 blocks Cloudflare at its exit; Xray serves VLESS + REALITY + Vision on TCP 8390 and VLESS + XHTTP + REALITY on TCP 8392:
+Run PowerShell as Administrator on the host. A Rosetun tunnel on the host may stay up: the nodes resolve names over DNS-over-TLS on port 853, which a DNS lock and sing-box's own filter on port 53 leave alone. Lockdown on the host must be off, as Hyper-V guests get no network under it, and the matrix stops if it is on. Once, allow the test nodes only on the Hyper-V Default Switch; the main node serves Shadowsocks on TCP 8388 and Hysteria2 on UDP 8443. The second Shadowsocks node on TCP 8389 blocks Cloudflare at its exit; Xray serves VLESS + REALITY + Vision on TCP 8390 and VLESS + XHTTP + REALITY on TCP 8392:
 
 ```powershell
 New-NetFirewallRule -DisplayName 'Rosetun VM test node TCP' -Direction Inbound -Action Allow -Protocol TCP -LocalPort 8388 -InterfaceAlias 'vEthernet (Default Switch)'

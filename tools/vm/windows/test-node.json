@@ -1,5 +1,15 @@
 {
   "log": { "level": "info", "timestamp": true },
+  "dns": {
+    "servers": [
+      {
+        "type": "tls",
+        "tag": "node-dns",
+        "server": "77.88.8.8",
+        "tls": { "server_name": "common.dot.dns.yandex.net" }
+      }
+    ]
+  },
   "inbounds": [
     {
       "type": "shadowsocks",
@@ -20,5 +30,6 @@
   ],
   "outbounds": [
     { "type": "direct", "tag": "direct" }
-  ]
+  ],
+  "route": { "default_domain_resolver": "node-dns" }
 }
