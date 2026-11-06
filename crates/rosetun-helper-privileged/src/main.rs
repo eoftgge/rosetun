@@ -260,14 +260,23 @@ fn service_command(result: std::io::Result<()>) -> std::process::ExitCode {
     }
 }
 
+/// Dynamic: `filter_fn` asks once per log statement and remembers the answer, so
+/// an engine line first seen with the verbose log off would stay away after it
+/// goes on, and one first seen with it on would stay after it goes off.
+fn log_gate_layer<S: tracing::Subscriber>(
+    gate: &VerboseGate,
+) -> impl tracing_subscriber::Layer<S> + use<S> {
+    let gate = gate.clone();
+    tracing_subscriber::filter::dynamic_filter_fn(move |metadata, _| {
+        gate.allows(metadata) && !rosetun_config::is_sensitive_log_target(metadata.target())
+    })
+}
+
 fn init_console_log(gate: &VerboseGate) {
-    let log_gate = gate.clone();
     tracing_subscriber::fmt()
         .with_env_filter(log_filter())
         .finish()
-        .with(tracing_subscriber::filter::filter_fn(move |metadata| {
-            log_gate.allows(metadata) && !rosetun_config::is_sensitive_log_target(metadata.target())
-        }))
+        .with(log_gate_layer(gate))
         .init();
 }
 
@@ -313,17 +322,13 @@ fn run_console() -> std::process::ExitCode {
 fn run_linux(signals: signals::Blocked, service: bool) -> std::process::ExitCode {
     let gate = VerboseGate::default();
     if service {
-        let log_gate = gate.clone();
         tracing_subscriber::fmt()
             .with_env_filter(log_filter())
             .with_writer(std::io::stderr)
             .with_ansi(false)
             .without_time()
             .finish()
-            .with(tracing_subscriber::filter::filter_fn(move |metadata| {
-                log_gate.allows(metadata)
-                    && !rosetun_config::is_sensitive_log_target(metadata.target())
-            }))
+            .with(log_gate_layer(&gate))
             .init();
     } else {
         init_console_log(&gate);
@@ -393,15 +398,12 @@ fn run_service() -> std::process::ExitCode {
         }
     };
     let gate = VerboseGate::default();
-    let log_gate = gate.clone();
     tracing_subscriber::fmt()
         .with_env_filter(log_filter())
         .with_writer(std::sync::Mutex::new(file))
         .with_ansi(false)
         .finish()
-        .with(tracing_subscriber::filter::filter_fn(move |metadata| {
-            log_gate.allows(metadata) && !rosetun_config::is_sensitive_log_target(metadata.target())
-        }))
+        .with(log_gate_layer(&gate))
         .init();
     let install_dir = std::env::current_exe().and_then(|exe| {
         let parent = exe
@@ -651,6 +653,54 @@ fn backend_from_copy(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_verbose_log_lets_engine_lines_through_only_while_it_is_on() {
+        use std::sync::{Arc, Mutex};
+
+        use tracing_subscriber::prelude::*;
+
+        #[derive(Clone, Default)]
+        struct Captured(Arc<Mutex<Vec<u8>>>);
+
+        impl std::io::Write for Captured {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        fn line(round: &str) {
+            tracing::info!(target: rosetun_engine::ENGINE_OUTPUT_TARGET, "info {round}");
+            tracing::debug!(target: rosetun_engine::ENGINE_OUTPUT_TARGET, "debug {round}");
+        }
+
+        let gate = super::VerboseGate::default();
+        let captured = Captured::default();
+        let writer = captured.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_env_filter(super::log_filter())
+            .with_writer(move || writer.clone())
+            .finish()
+            .with(super::log_gate_layer(&gate));
+        tracing::subscriber::with_default(subscriber, || {
+            line("closed-first");
+            gate.open_until(u64::MAX);
+            line("open");
+            gate.close();
+            line("closed-again");
+        });
+        let text = String::from_utf8(captured.0.lock().unwrap().clone()).unwrap();
+        assert!(
+            text.contains("info open") && text.contains("debug open"),
+            "{text}"
+        );
+        assert!(!text.contains("closed"), "{text}");
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn the_service_looks_for_the_marker_where_the_package_leaves_it() {
