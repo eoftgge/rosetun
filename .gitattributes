@@ -8,6 +8,7 @@
 *.png binary
 *.srs binary
 *.ttf binary
+*.woff2 binary
 
 # Preserve the upstream license bytes, including line endings.
 installer/third-party/wintun-prebuilt-binaries-license.txt -text
