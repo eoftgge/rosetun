@@ -101,6 +101,7 @@ fn config(language: Language, error: &ConfigError) -> String {
         | ConfigError::InvalidListCategory
         | ConfigError::InvalidExitId
         | ConfigError::InvalidFragment
+        | ConfigError::InvalidLocalProxyPort
         | ConfigError::InvalidRuleExit => error.to_string(),
     }
 }
@@ -752,6 +753,15 @@ pub(crate) fn client(language: Language, error: &ClientError) -> String {
                     "error-code-server-name-unresolved",
                     &FluentArgs::new(),
                 ),
+                ErrorCode::LocalProxyPortBusy => {
+                    let mut args = FluentArgs::new();
+                    let port = error
+                        .local_proxy_port()
+                        .map(|port| port.to_string())
+                        .unwrap_or_default();
+                    args.set("port", port);
+                    tr_in(language, "error-code-local-proxy-port-busy", &args)
+                }
                 ErrorCode::Cancelled => tr_in(language, "error-code-cancelled", &FluentArgs::new()),
                 ErrorCode::EngineNotReady => {
                     tr_in(language, "error-code-engine-not-ready", &FluentArgs::new())

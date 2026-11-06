@@ -366,6 +366,10 @@ pub(crate) fn connection_failure(
                 tr!("server-name-unresolved-hint")
             },
         ),
+        FailureKind::LocalProxyPortBusy { port } => (
+            tr!("error-code-local-proxy-port-busy", port = port.to_string()),
+            tr!("local-proxy-port-busy-hint"),
+        ),
     };
     (title, hint)
 }

@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{EngineKind, ExitId, Node, NodeId, Settings, XrayUse, fragments_tls, uses_xray};
+use crate::{
+    ConnectionMode, EngineKind, ExitId, Node, NodeId, Settings, XrayUse, fragments_tls, uses_xray,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -46,6 +48,10 @@ pub enum FailureKind {
     ServerClosed,
     DnsTimeout,
     ServerNameUnresolved,
+    /// Another program holds the local proxy's port (protocol 19).
+    LocalProxyPortBusy {
+        port: u16,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -149,6 +155,10 @@ pub struct Status {
     /// Lockdown's block, but not reported as `lockdown`.
     #[serde(default)]
     pub upgrade_hold: bool,
+    /// The port of the session's local proxy, in the proxy mode (protocol 19).
+    /// Set with `record_chain`; read it through `running_local_proxy`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_proxy_port: Option<u16>,
 }
 
 impl Status {
@@ -159,6 +169,14 @@ impl Status {
         self.xray_stopped = false;
         self.fragmented = fragments_tls(node, settings);
         self.fragment_requested = settings.tls_fragment.enabled;
+        self.local_proxy_port = (settings.connection_mode == ConnectionMode::SystemProxy)
+            .then_some(settings.local_proxy.port);
+    }
+
+    /// The local proxy's port while the session that listens on it is up.
+    pub fn running_local_proxy(&self) -> Option<u16> {
+        self.local_proxy_port
+            .filter(|_| self.state == ConnectionState::Connected)
     }
 }
 

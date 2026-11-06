@@ -1,11 +1,12 @@
 mod support;
 
 use rosetun_config::{
-    AccentPreset, AppConfig, CONFIG_VERSION, ConfigError, CountryCode, EngineKind, Exit, ExitId,
-    ExitTarget, FormatError, HwidScope, Hysteria2Params, List, ListFormat, ListId, ListSource,
-    Node, NodeId, Outbound, QuitAction, RealityParams, Rule, RuleId, RuleMatcher, RuleTarget,
-    Selection, StreamSettings, SubscriptionId, TlsFragment, TlsMode, TlsParams, Transport,
-    VlessParams, XhttpExtra, XhttpMode, XhttpRange, XhttpXmux, from_json,
+    AccentPreset, AppConfig, CONFIG_VERSION, ConfigError, ConnectionMode, CountryCode, EngineKind,
+    Exit, ExitId, ExitTarget, FormatError, HwidScope, Hysteria2Params, List, ListFormat, ListId,
+    ListSource, LocalProxySettings, Node, NodeId, Outbound, QuitAction, RealityParams, Rule,
+    RuleId, RuleMatcher, RuleTarget, Selection, StreamSettings, SubscriptionId, TlsFragment,
+    TlsMode, TlsParams, Transport, VlessParams, XhttpExtra, XhttpMode, XhttpRange, XhttpXmux,
+    from_json,
 };
 use serde_json::{Value, json};
 
@@ -257,6 +258,11 @@ fn current_configuration_fixture_guards_the_serialized_format() {
         length: "100-200".parse().unwrap(),
         interval: "10-20".parse().unwrap(),
     };
+    expected.settings.connection_mode = ConnectionMode::SystemProxy;
+    expected.settings.local_proxy = LocalProxySettings {
+        port: 20808,
+        share_on_lan: true,
+    };
     let (loaded, migrated_from) = from_json(V8).expect("current fixture should load");
 
     assert_eq!(migrated_from, None);
@@ -298,7 +304,20 @@ fn current_configuration_fixture_guards_the_serialized_format() {
 fn with_default_fragmentation(mut config: Value) -> Value {
     config["settings"]["tls_fragment"] = serde_json::to_value(TlsFragment::default()).unwrap();
     config["settings"]["private_networks"] = json!(false);
+    config["settings"]["connection_mode"] = json!("tun");
+    config["settings"]["local_proxy"] =
+        serde_json::to_value(LocalProxySettings::default()).unwrap();
     config
+}
+
+#[test]
+fn a_local_proxy_port_below_the_system_range_is_refused() {
+    let mut config = value(V8);
+    config["settings"]["local_proxy"]["port"] = json!(80);
+    assert!(matches!(
+        from_json(&serde_json::to_vec(&config).unwrap()),
+        Err(FormatError::Config(ConfigError::InvalidLocalProxyPort))
+    ));
 }
 
 fn with_machine_scope(mut config: Value) -> Value {

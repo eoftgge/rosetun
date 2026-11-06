@@ -327,12 +327,12 @@ impl Helper {
         self.with_status(|status| {
             status.state = if protected {
                 ConnectionState::FailedProtected {
-                    failure_kind: super::failure_kind(error.code),
+                    failure_kind: super::failure_kind(&error),
                     reason: error.message,
                 }
             } else {
                 ConnectionState::Failed {
-                    failure_kind: super::failure_kind(error.code),
+                    failure_kind: super::failure_kind(&error),
                     reason: error.message,
                 }
             };

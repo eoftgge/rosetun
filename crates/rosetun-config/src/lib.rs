@@ -37,8 +37,8 @@ pub use runtime::{
     ProtectionCapabilities, Status, Traffic,
 };
 pub use settings::{
-    DnsSettings, EngineKind, FragmentError, FragmentPackets, FragmentRange, LogLevel, Settings,
-    TlsFragment, TunSettings, XrayUse,
+    ConnectionMode, DnsSettings, EngineKind, FragmentError, FragmentPackets, FragmentRange,
+    LocalProxySettings, LogLevel, Settings, TlsFragment, TunSettings, XrayUse,
 };
 pub use subscription::{HwidScope, Selection, Subscription, SubscriptionInfo};
 pub use uploaded_list::{ListRef, UploadedListFormat, list_tag};
@@ -275,6 +275,8 @@ pub enum ConfigError {
     InvalidProxy,
     #[error("invalid TLS fragmentation settings")]
     InvalidFragment,
+    #[error("the local proxy port is outside the allowed range")]
+    InvalidLocalProxyPort,
     #[error(
         "configuration version {found} is not supported (expected to be no higher than {expected})"
     )]
@@ -411,6 +413,9 @@ impl AppConfig {
             .tls_fragment
             .validate()
             .map_err(|_| ConfigError::InvalidFragment)?;
+        if !LocalProxySettings::port_is_valid(self.settings.local_proxy.port) {
+            return Err(ConfigError::InvalidLocalProxyPort);
+        }
         if self.version > CONFIG_VERSION {
             return Err(ConfigError::UnsupportedVersion {
                 found: self.version,

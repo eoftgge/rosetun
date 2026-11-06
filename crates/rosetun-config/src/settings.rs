@@ -299,10 +299,60 @@ impl Default for DnsSettings {
     }
 }
 
+/// How the engine takes traffic from this computer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConnectionMode {
+    /// The engine's own adapter carries the computer's traffic.
+    #[default]
+    Tun,
+    /// The engine listens as a local proxy; programs that read the desktop's
+    /// proxy settings go through it, everything else does not.
+    SystemProxy,
+}
+
+/// The local proxy of `ConnectionMode::SystemProxy`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LocalProxySettings {
+    #[serde(default = "LocalProxySettings::default_port")]
+    pub port: u16,
+    /// Other devices on the computer's own networks may use the proxy.
+    #[serde(default)]
+    pub share_on_lan: bool,
+}
+
+impl Default for LocalProxySettings {
+    fn default() -> Self {
+        Self {
+            port: Self::DEFAULT_PORT,
+            share_on_lan: false,
+        }
+    }
+}
+
+impl LocalProxySettings {
+    pub const DEFAULT_PORT: u16 = 10808;
+    /// Lower ports are reserved for system services.
+    pub const MIN_PORT: u16 = 1024;
+
+    fn default_port() -> u16 {
+        Self::DEFAULT_PORT
+    }
+
+    pub fn port_is_valid(port: u16) -> bool {
+        port >= Self::MIN_PORT
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Settings {
     #[serde(default)]
     pub engine: EngineKind,
+    /// Format 8. A file without it reads as TUN.
+    #[serde(default)]
+    pub connection_mode: ConnectionMode,
+    #[serde(default)]
+    pub local_proxy: LocalProxySettings,
     #[serde(default)]
     pub xray: XrayUse,
     #[serde(default)]
@@ -336,6 +386,8 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             engine: EngineKind::default(),
+            connection_mode: ConnectionMode::default(),
+            local_proxy: LocalProxySettings::default(),
             xray: XrayUse::default(),
             tls_fragment: TlsFragment::default(),
             kill_switch: false,
@@ -363,7 +415,8 @@ impl Settings {
 #[cfg(test)]
 mod settings_tests {
     use super::{
-        DnsSettings, FragmentError, FragmentPackets, FragmentRange, Settings, TlsFragment,
+        ConnectionMode, DnsSettings, FragmentError, FragmentPackets, FragmentRange,
+        LocalProxySettings, Settings, TlsFragment,
     };
     use crate::{
         Node, NodeId, Outbound, ProxyCredentials, StreamSettings, TlsMode, TlsParams, VlessParams,
@@ -602,6 +655,43 @@ mod settings_tests {
         assert!(!fragment.applies_to(&fragment_node(hysteria_like, tls())));
         fragment.enabled = false;
         assert!(!fragment.applies_to(&fragment_node(vless(), tls())));
+    }
+
+    #[test]
+    fn settings_without_a_mode_read_as_tun_with_the_proxy_closed() {
+        let settings: Settings = serde_json::from_str(r#"{"kill_switch":true}"#).unwrap();
+        assert_eq!(settings.connection_mode, ConnectionMode::Tun);
+        assert_eq!(settings.local_proxy.port, LocalProxySettings::DEFAULT_PORT);
+        assert!(!settings.local_proxy.share_on_lan);
+        assert_eq!(Settings::default().connection_mode, ConnectionMode::Tun);
+        assert_eq!(Settings::default().local_proxy, settings.local_proxy);
+    }
+
+    #[test]
+    fn the_proxy_mode_round_trips_under_its_stored_names() {
+        let input = serde_json::json!({
+            "connection_mode": "system_proxy",
+            "local_proxy": { "port": 20808, "share_on_lan": true },
+        });
+        let settings: Settings = serde_json::from_value(input.clone()).unwrap();
+        assert_eq!(settings.connection_mode, ConnectionMode::SystemProxy);
+        assert_eq!(settings.local_proxy.port, 20808);
+        assert!(settings.local_proxy.share_on_lan);
+        let encoded = serde_json::to_value(&settings).unwrap();
+        assert_eq!(encoded["connection_mode"], input["connection_mode"]);
+        assert_eq!(encoded["local_proxy"], input["local_proxy"]);
+
+        let partial: Settings = serde_json::from_str(r#"{"local_proxy":{"share_on_lan":true}}"#)
+            .expect("a proxy without a port");
+        assert_eq!(partial.local_proxy.port, LocalProxySettings::DEFAULT_PORT);
+    }
+
+    #[test]
+    fn a_proxy_port_below_the_system_range_is_refused() {
+        assert!(!LocalProxySettings::port_is_valid(0));
+        assert!(!LocalProxySettings::port_is_valid(1023));
+        assert!(LocalProxySettings::port_is_valid(1024));
+        assert!(LocalProxySettings::port_is_valid(u16::MAX));
     }
 
     #[test]

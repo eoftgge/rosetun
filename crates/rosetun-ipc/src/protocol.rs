@@ -7,7 +7,8 @@ use serde::{Deserialize, Serialize};
 use std::fmt::Formatter;
 use std::time::Duration;
 
-pub const PROTOCOL_VERSION: u32 = 18;
+pub const PROTOCOL_VERSION: u32 = 19;
+const LOCAL_PROXY_PORT_BUSY: &str = "another program holds the local proxy port ";
 pub const MAX_PROBE_NODES: usize = 256;
 pub const MAX_TEMPORARY_RULES: usize = 256;
 pub const MAX_EXTRA_NODES: usize = 16;
@@ -184,6 +185,7 @@ impl std::fmt::Debug for ConnectRequest {
             .field("selection", &self.selection)
             .field("node_id", &self.node.id)
             .field("engine", &self.settings.engine)
+            .field("connection_mode", &self.settings.connection_mode)
             .field("kill_switch", &self.settings.kill_switch)
             .field("tun_alias", &self.settings.tun.name)
             .field("auto_route", &self.settings.tun.auto_route)
@@ -322,6 +324,8 @@ impl ConnectRequest {
             request.settings.kill_switch = running.kill_switch;
             request.settings.allow_lan = running.allow_lan;
             request.settings.private_networks = running.private_networks;
+            // The mode, the port and sharing stay the config's: the service
+            // changes them under the standing protection.
         }
         warn_blocked_exits(blocked);
         Ok(request)
@@ -488,6 +492,21 @@ impl HelperError {
             message: message.into(),
         }
     }
+
+    /// Another program holds the local proxy's port.
+    pub fn local_proxy_port_busy(port: u16) -> Self {
+        Self::new(
+            ErrorCode::LocalProxyPortBusy,
+            format!("{LOCAL_PROXY_PORT_BUSY}{port}"),
+        )
+    }
+
+    /// The port a `local_proxy_port_busy` error names.
+    pub fn local_proxy_port(&self) -> Option<u16> {
+        self.message
+            .strip_prefix(LOCAL_PROXY_PORT_BUSY)
+            .and_then(|port| port.parse().ok())
+    }
 }
 
 impl std::fmt::Display for HelperError {
@@ -513,6 +532,8 @@ pub enum ErrorCode {
     ServerRejected,
     ServerClosed,
     DnsTimeout,
+    /// Another program holds the local proxy's port (protocol 19).
+    LocalProxyPortBusy,
     /// The server's name could not be resolved before connecting (protocol 12).
     ServerNameUnresolved,
     Cancelled,
@@ -535,6 +556,16 @@ mod tests {
     use std::time::Duration;
 
     #[test]
+    fn a_busy_port_error_names_its_port() {
+        let error = super::HelperError::local_proxy_port_busy(10808);
+        assert_eq!(error.code, super::ErrorCode::LocalProxyPortBusy);
+        assert!(error.message.contains("10808"));
+        assert_eq!(error.local_proxy_port(), Some(10808));
+        let other = super::HelperError::new(super::ErrorCode::Busy, "10808");
+        assert_eq!(other.local_proxy_port(), None);
+    }
+
+    #[test]
     fn classified_errors_round_trip() {
         for code in [
             super::ErrorCode::AccessDenied,
@@ -545,6 +576,7 @@ mod tests {
             super::ErrorCode::ServerRejected,
             super::ErrorCode::ServerClosed,
             super::ErrorCode::DnsTimeout,
+            super::ErrorCode::LocalProxyPortBusy,
             super::ErrorCode::ServerNameUnresolved,
             super::ErrorCode::ProtectionUnavailable,
         ] {
@@ -558,7 +590,7 @@ mod tests {
             serde_json::to_string(&super::ErrorCode::AccessDenied).unwrap(),
             "\"access_denied\""
         );
-        assert_eq!(super::PROTOCOL_VERSION, 18);
+        assert_eq!(super::PROTOCOL_VERSION, 19);
         assert_eq!(
             serde_json::to_string(&super::Request::OpenNetwork).unwrap(),
             "\"open_network\""

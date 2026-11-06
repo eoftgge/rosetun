@@ -3,6 +3,11 @@
   "settings": {
     "engine": "sing-box",
     "xray": "auto",
+    "connection_mode": "system_proxy",
+    "local_proxy": {
+      "port": 20808,
+      "share_on_lan": true
+    },
     "tls_fragment": {
       "enabled": true,
       "packets": "1-3",

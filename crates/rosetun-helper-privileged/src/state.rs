@@ -21,8 +21,9 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime};
 
 use rosetun_config::{
-    ConnectionState, ExitId, ListRef, LiveConnection, Node, ProtectionCapabilities, Rule,
-    RuleMatcher, RuleTarget, Status, Traffic, fragments_tls, list_tag,
+    ConnectionState, ExitId, ListRef, LiveConnection, LocalProxySettings, Node,
+    ProtectionCapabilities, Rule, RuleMatcher, RuleTarget, Status, Traffic, fragments_tls,
+    list_tag,
 };
 use rosetun_engine::{
     ControlEndpoint, EngineBackend, EngineProcess, EngineRegistry, RenderRequest, RenderedConfig,
@@ -1100,7 +1101,7 @@ impl Helper {
                         session.teardown();
                     }
                     tracing::warn!(cause = reconnect.cause, attempt, %error, "tunnel reconnect attempts exhausted");
-                    let reason = error.message;
+                    let reason = error.message.clone();
                     self.with_status(|status| {
                         status.state = if protected {
                             ConnectionState::FailedProtected {
@@ -1108,7 +1109,7 @@ impl Helper {
                                 failure_kind: if reconnect.cause == "xray stopped" {
                                     Some(rosetun_config::FailureKind::XrayStopped)
                                 } else {
-                                    failure_kind(error.code)
+                                    failure_kind(&error)
                                 },
                             }
                         } else {
@@ -1117,7 +1118,7 @@ impl Helper {
                                 failure_kind: if reconnect.cause == "xray stopped" {
                                     Some(rosetun_config::FailureKind::XrayStopped)
                                 } else {
-                                    failure_kind(error.code)
+                                    failure_kind(&error)
                                 },
                             }
                         };
@@ -1243,12 +1244,12 @@ impl Helper {
                     status.state = if protected {
                         ConnectionState::FailedProtected {
                             reason,
-                            failure_kind: failure_kind(error.code),
+                            failure_kind: failure_kind(&error),
                         }
                     } else {
                         ConnectionState::Failed {
                             reason,
-                            failure_kind: failure_kind(error.code),
+                            failure_kind: failure_kind(&error),
                         }
                     };
                     status.since_unix = None;
@@ -1507,6 +1508,12 @@ fn validate_request(request: &ConnectRequest) -> Result<(), HelperError> {
             .map_err(|message| HelperError::new(ErrorCode::InvalidRequest, message))?;
     }
     validate_tun_name(&request.settings.tun.name)?;
+    if !LocalProxySettings::port_is_valid(request.settings.local_proxy.port) {
+        return Err(HelperError::new(
+            ErrorCode::InvalidRequest,
+            "the local proxy port is outside the allowed range",
+        ));
+    }
     if request
         .rule_set
         .rules
@@ -2948,9 +2955,9 @@ fn wait_for_previous_adapter(
     wait_for_previous_adapter_cancellable(alias, timeout, interval, lookup, &AtomicBool::new(false))
 }
 
-fn failure_kind(code: ErrorCode) -> Option<rosetun_config::FailureKind> {
+fn failure_kind(error: &HelperError) -> Option<rosetun_config::FailureKind> {
     use rosetun_config::FailureKind;
-    match code {
+    match error.code {
         ErrorCode::EngineNotReady => Some(FailureKind::EngineNotReady),
         ErrorCode::XrayStartFailed => Some(FailureKind::XrayStartFailed),
         ErrorCode::XrayStopped => Some(FailureKind::XrayStopped),
@@ -2960,6 +2967,9 @@ fn failure_kind(code: ErrorCode) -> Option<rosetun_config::FailureKind> {
         ErrorCode::ServerClosed => Some(FailureKind::ServerClosed),
         ErrorCode::DnsTimeout => Some(FailureKind::DnsTimeout),
         ErrorCode::ServerNameUnresolved => Some(FailureKind::ServerNameUnresolved),
+        ErrorCode::LocalProxyPortBusy => error
+            .local_proxy_port()
+            .map(|port| FailureKind::LocalProxyPortBusy { port }),
         _ => None,
     }
 }
