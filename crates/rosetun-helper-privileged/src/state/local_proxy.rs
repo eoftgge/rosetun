@@ -9,6 +9,7 @@ use rosetun_config::{ConnectionMode, Settings};
 use rosetun_engine::LocalProxyListen;
 use rosetun_ipc::{ErrorCode, HelperError};
 
+use super::lockdown::LockdownState;
 use super::sleep_cancellable;
 
 /// The engine a restart replaces has exited, but Windows may hold its port for
@@ -69,10 +70,26 @@ fn free_dns_address() -> io::Result<SocketAddr> {
     UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))?.local_addr()
 }
 
+/// Whether other devices may reach a session's proxy now. Lockdown closes
+/// inbound from everywhere but its own "Local network".
+pub(super) fn sharing_allowed(lockdown: &LockdownState) -> bool {
+    !lockdown.enabled || lockdown.allow_lan
+}
+
+/// The port to open to other devices: only in the proxy mode, with sharing on
+/// and where Lockdown allows it.
+pub(super) fn shared_port(settings: &Settings, lockdown: &LockdownState) -> Option<u16> {
+    (settings.connection_mode == ConnectionMode::SystemProxy
+        && settings.local_proxy.share_on_lan
+        && sharing_allowed(lockdown))
+    .then_some(settings.local_proxy.port)
+}
+
 /// `None` in the TUN mode. In the proxy mode the listener the engine gets, or
 /// the error that names the taken port, before anything has started.
 pub(super) fn listen_for(
     settings: &Settings,
+    sharing_allowed: bool,
     cancelled: &AtomicBool,
 ) -> Result<Option<LocalProxyListen>, HelperError> {
     if settings.connection_mode != ConnectionMode::SystemProxy {
@@ -82,7 +99,7 @@ pub(super) fn listen_for(
     let mut tries = 0;
     let address = loop {
         tries += 1;
-        match free_address(port, settings.local_proxy.share_on_lan) {
+        match free_address(port, settings.local_proxy.share_on_lan && sharing_allowed) {
             Ok(address) => break address,
             Err(PortProblem::Busy) if tries < PORT_TRIES => {
                 sleep_cancellable(PORT_RETRY_DELAY, cancelled)?;
@@ -133,13 +150,16 @@ mod tests {
     #[test]
     fn the_tunnel_mode_listens_on_nothing() {
         let cancelled = AtomicBool::new(false);
-        assert_eq!(listen_for(&Settings::default(), &cancelled).unwrap(), None);
+        assert_eq!(
+            listen_for(&Settings::default(), true, &cancelled).unwrap(),
+            None
+        );
     }
 
     #[test]
     fn an_unshared_proxy_listens_on_loopback_only() {
         let port = free_port();
-        let listen = listen_for(&proxy_settings(port, false), &AtomicBool::new(false))
+        let listen = listen_for(&proxy_settings(port, false), true, &AtomicBool::new(false))
             .unwrap()
             .unwrap();
         assert_eq!(
@@ -152,7 +172,7 @@ mod tests {
     #[test]
     fn a_shared_proxy_listens_on_a_wildcard_address() {
         let port = free_port();
-        let listen = listen_for(&proxy_settings(port, true), &AtomicBool::new(false))
+        let listen = listen_for(&proxy_settings(port, true), true, &AtomicBool::new(false))
             .unwrap()
             .unwrap();
         assert!(listen.address.ip().is_unspecified());
@@ -161,10 +181,20 @@ mod tests {
     }
 
     #[test]
+    fn lockdown_without_its_local_network_keeps_the_proxy_on_loopback() {
+        let port = free_port();
+        let listen = listen_for(&proxy_settings(port, true), false, &AtomicBool::new(false))
+            .unwrap()
+            .unwrap();
+        assert!(listen.address.ip().is_loopback());
+    }
+
+    #[test]
     fn a_taken_port_is_an_error_that_names_it() {
         let holder = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         let port = holder.local_addr().unwrap().port();
-        let error = listen_for(&proxy_settings(port, false), &AtomicBool::new(false)).unwrap_err();
+        let error =
+            listen_for(&proxy_settings(port, false), true, &AtomicBool::new(false)).unwrap_err();
         assert_eq!(error.code, ErrorCode::LocalProxyPortBusy);
         assert_eq!(error.local_proxy_port(), Some(port));
     }

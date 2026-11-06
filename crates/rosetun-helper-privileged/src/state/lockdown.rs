@@ -53,15 +53,18 @@ pub(super) fn protection_scope(
     tunnel_dns: bool,
     lockdown: bool,
     local_proxy: bool,
+    shared_proxy: bool,
 ) -> Option<ProtectionScope> {
     if kill_switch || lockdown {
         return Some(ProtectionScope::AllTraffic);
     }
     // The engine resolves names itself, so there is no system DNS to confine:
     // a program that goes around the proxy goes around all of it, and that
-    // is what this mode without the kill switch says it does.
+    // is what this mode without the kill switch says it does. Only Windows
+    // limits a shared port this way; Linux listens on its private addresses
+    // alone, and has no filter to keep up without a kill switch.
     if local_proxy {
-        return None;
+        return (shared_proxy && cfg!(windows)).then_some(ProtectionScope::SharedProxy);
     }
     match mode {
         StartMode::Fresh => tunnel_dns.then_some(ProtectionScope::DnsOnly),
@@ -344,7 +347,7 @@ impl Session {
                 return Ok(());
             };
             // A session without protection gets the kill switch it now needs.
-            let (plan, tunnel) = all_traffic(&request, &self.lan)?;
+            let (plan, tunnel) = all_traffic(&request, &self.lan, &read(&self.lockdown))?;
             let binaries = self
                 .protected_binaries
                 .iter()
@@ -369,8 +372,8 @@ impl Session {
             .lock()
             .map_err(|_| HelperError::new(ErrorCode::RoutingFailed, "routing guard is poisoned"))?;
         match (guard.scope, request) {
-            (ProtectionScope::DnsOnly, Some(request)) => {
-                let (plan, tunnel) = all_traffic(&request, &self.lan)?;
+            (ProtectionScope::DnsOnly | ProtectionScope::SharedProxy, Some(request)) => {
+                let (plan, tunnel) = all_traffic(&request, &self.lan, &read(&self.lockdown))?;
                 let binaries = self
                     .protected_binaries
                     .iter()
@@ -521,12 +524,22 @@ impl Session {
         {
             return;
         }
-        let tunnel_dns = settings.connection_mode == ConnectionMode::Tun
+        let tunnel = settings.connection_mode == ConnectionMode::Tun;
+        let tunnel_dns = tunnel
             && self
                 .engines
                 .get(settings.engine)
                 .is_some_and(|backend| backend.tunnel_dns_server(&settings.tun).is_some());
-        if !tunnel_dns {
+        let shared_proxy = super::local_proxy::shared_port(settings, &LockdownState::default());
+        let scope = protection_scope(
+            StartMode::Fresh,
+            false,
+            tunnel_dns,
+            false,
+            !tunnel,
+            shared_proxy.is_some(),
+        );
+        let Some(scope) = scope else {
             if let Some(guard) = self.guard.take()
                 && let Err(error) = guard
                     .routing
@@ -538,19 +551,28 @@ impl Session {
             }
             tracing::info!("kill switch released with Lockdown");
             return;
-        }
-        let plan = RoutingPlan {
-            scope: ProtectionScope::DnsOnly,
-            allow_lan: settings.allow_lan,
-            lan: Default::default(),
-            lockdown: false,
         };
-        let tunnel = match TunnelInterface::try_from(&settings.tun) {
-            Ok(tunnel) => tunnel,
-            Err(error) => {
-                tracing::warn!(%error, "the kill switch stays on until the next connect");
-                return;
+        let plan = RoutingPlan {
+            scope,
+            allow_lan: settings.allow_lan,
+            lan: if shared_proxy.is_some() {
+                self.lan.clone()
+            } else {
+                Default::default()
+            },
+            lockdown: false,
+            shared_proxy,
+        };
+        let adapter = if tunnel {
+            match TunnelInterface::try_from(&settings.tun) {
+                Ok(adapter) => Some(adapter),
+                Err(error) => {
+                    tracing::warn!(%error, "the kill switch stays on until the next connect");
+                    return;
+                }
             }
+        } else {
+            None
         };
         let binaries = self
             .protected_binaries
@@ -564,12 +586,15 @@ impl Session {
             .map_err(|_| RoutingError::Route("routing guard is poisoned".to_owned()))
             .and_then(|mut routing| {
                 routing.prepare_reconnect(&plan, &binaries)?;
-                routing.authorize_tunnel(&tunnel)
+                match adapter.as_ref() {
+                    Some(adapter) => routing.authorize_tunnel(adapter),
+                    None => Ok(()),
+                }
             });
         match result {
             Ok(()) => {
-                guard.scope = ProtectionScope::DnsOnly;
-                tracing::info!("kill switch released with Lockdown; the DNS lock stays");
+                guard.scope = scope;
+                tracing::info!(?scope, "kill switch released with Lockdown");
             }
             Err(error) => {
                 tracing::warn!(%error, "the kill switch stays on until the next connect");
@@ -626,6 +651,7 @@ pub(super) fn sync_lan(
 fn all_traffic(
     request: &rosetun_ipc::ConnectRequest,
     lan: &rosetun_routing::lan::LanAccess,
+    state: &LockdownState,
 ) -> Result<(RoutingPlan, Option<TunnelInterface>), HelperError> {
     let tunnel = match request.settings.connection_mode {
         ConnectionMode::Tun => {
@@ -639,6 +665,7 @@ fn all_traffic(
             allow_lan: request.settings.allow_lan,
             lan: lan.clone(),
             lockdown: true,
+            shared_proxy: super::local_proxy::shared_port(&request.settings, state),
         },
         tunnel,
     ))
@@ -667,25 +694,32 @@ mod tests {
         for mode in [StartMode::Fresh, StartMode::ProtectedReconnect] {
             for tunnel_dns in [false, true] {
                 assert_eq!(
-                    protection_scope(mode, false, tunnel_dns, true, false),
+                    protection_scope(mode, false, tunnel_dns, true, false, false),
                     Some(ProtectionScope::AllTraffic)
                 );
                 assert_eq!(
-                    protection_scope(mode, true, tunnel_dns, false, false),
+                    protection_scope(mode, true, tunnel_dns, false, false, false),
                     Some(ProtectionScope::AllTraffic)
                 );
             }
         }
         assert_eq!(
-            protection_scope(StartMode::Fresh, false, true, false, false),
+            protection_scope(StartMode::Fresh, false, true, false, false, false),
             Some(ProtectionScope::DnsOnly)
         );
         assert_eq!(
-            protection_scope(StartMode::Fresh, false, false, false, false),
+            protection_scope(StartMode::Fresh, false, false, false, false, false),
             None
         );
         assert_eq!(
-            protection_scope(StartMode::ProtectedReconnect, false, false, false, false),
+            protection_scope(
+                StartMode::ProtectedReconnect,
+                false,
+                false,
+                false,
+                false,
+                false
+            ),
             Some(ProtectionScope::DnsOnly)
         );
     }

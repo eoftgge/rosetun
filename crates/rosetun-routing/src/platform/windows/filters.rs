@@ -34,8 +34,9 @@ use windows_sys::{
             FWP_UINT8, FWP_UINT16, FWP_UINT32, FWP_UINT64, FWP_VALUE0, FWP_VALUE0_0, FWPM_ACTION0,
             FWPM_CONDITION_IP_LOCAL_INTERFACE, FWPM_CONDITION_IP_LOCAL_PORT,
             FWPM_CONDITION_IP_PROTOCOL, FWPM_CONDITION_IP_REMOTE_PORT, FWPM_FILTER_CONDITION0,
-            FWPM_FILTER0, FWPM_LAYER_ALE_AUTH_CONNECT_V4, FWPM_LAYER_ALE_AUTH_CONNECT_V6,
-            FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4, FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V6,
+            FWPM_FILTER_FLAG_CLEAR_ACTION_RIGHT, FWPM_FILTER0, FWPM_LAYER_ALE_AUTH_CONNECT_V4,
+            FWPM_LAYER_ALE_AUTH_CONNECT_V6, FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4,
+            FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V6,
         },
     },
     Win32::Networking::WinSock::IPPROTO_UDP,
@@ -343,6 +344,34 @@ impl FilterConditions {
             .count();
 
         match &rule.conditions[range_count..] {
+            // A shared local proxy: one connected network, or the ranges of
+            // it around the VPN servers, on its adapter, for the engine.
+            [
+                subnet @ ..,
+                Condition::Application(binary),
+                Condition::ServiceAccount,
+                Condition::Protocol(protocol),
+                Condition::LocalPort(port),
+                Condition::LocalInterface(_),
+            ] if matches!(
+                (range_count, subnet),
+                (1.., []) | (0, [Condition::RemoteSubnet(_)])
+            ) =>
+            {
+                conditions.extend(ranges.conditions());
+                if let [Condition::RemoteSubnet(subnet)] = subnet {
+                    conditions.push(subnet_condition(rule.family, *subnet, &mut v4, &mut v6)?);
+                }
+                let blob = app_id.insert(AppIdBlob::from_path(binary)?);
+                let descriptor = account.insert(AccountDescriptor::current()?);
+                conditions.extend([
+                    application_condition(blob),
+                    account_condition(descriptor),
+                    protocol_condition(*protocol),
+                    port_condition(FWPM_CONDITION_IP_LOCAL_PORT, *port),
+                    interface_condition(&mut luids[0]),
+                ]);
+            }
             // A private range around the VPN servers in it, on any adapter.
             [] if range_count > 0 => conditions.extend(ranges.conditions()),
             // A connected network around the VPN servers in it, on its
@@ -406,6 +435,24 @@ impl FilterConditions {
                 conditions.extend([
                     protocol_condition(*protocol),
                     port_condition(FWPM_CONDITION_IP_REMOTE_PORT, *port),
+                ]);
+            }
+            // A shared local proxy: everyone but its networks and loopback.
+            [Condition::Protocol(protocol), Condition::LocalPort(port)] => {
+                conditions.extend([
+                    protocol_condition(*protocol),
+                    port_condition(FWPM_CONDITION_IP_LOCAL_PORT, *port),
+                ]);
+            }
+            [
+                Condition::Protocol(protocol),
+                Condition::LocalPort(port),
+                Condition::Loopback,
+            ] => {
+                conditions.extend([
+                    protocol_condition(*protocol),
+                    port_condition(FWPM_CONDITION_IP_LOCAL_PORT, *port),
+                    loopback_condition(),
                 ]);
             }
             // Lockdown's TCP permits for Rosetun's own programs.
@@ -590,7 +637,11 @@ pub(super) fn add_rule(
             description: ptr::null_mut(),
         },
         filterKey: placement.key.unwrap_or_default(),
-        flags: placement.flags,
+        flags: if rule.hard {
+            placement.flags | FWPM_FILTER_FLAG_CLEAR_ACTION_RIGHT
+        } else {
+            placement.flags
+        },
         providerKey: (&placement.provider as *const GUID).cast_mut(),
         layerKey: layer_key(rule.family, rule.layer),
         subLayerKey: placement.sublayer,
@@ -946,7 +997,11 @@ mod tests {
             .into_iter()
             .map(|filter| filter.rule)
             .collect::<Vec<_>>();
-        for scope in [ProtectionScope::AllTraffic, ProtectionScope::DnsOnly] {
+        for scope in [
+            ProtectionScope::AllTraffic,
+            ProtectionScope::DnsOnly,
+            ProtectionScope::SharedProxy,
+        ] {
             for allow_lan in [false, true] {
                 for lockdown in [false, true] {
                     let plan = RoutingPlan {
@@ -954,6 +1009,7 @@ mod tests {
                         allow_lan,
                         lan: every_lan_shape(),
                         lockdown,
+                        shared_proxy: Some(10808),
                     };
                     rules.extend(BootstrapPolicy::from_plan(&plan, &[&program, &program]).rules);
                     let mut around_servers = plan.clone();

@@ -2049,7 +2049,11 @@ impl Session {
             ));
         }
 
-        let local_proxy = local_proxy::listen_for(settings, &self.cancelled)?;
+        let local_proxy = local_proxy::listen_for(
+            settings,
+            local_proxy::sharing_allowed(&lockdown::read(&self.lockdown)),
+            &self.cancelled,
+        )?;
         #[cfg(test)]
         let local_proxy = local_proxy.map(|listen| rosetun_engine::LocalProxyListen {
             dns: self.test_local_dns.unwrap_or(listen.dns),
@@ -2221,12 +2225,14 @@ impl Session {
         if lockdown && !settings.kill_switch {
             tracing::info!("Lockdown is on: the kill switch is forced on");
         }
+        let shared_proxy = local_proxy::shared_port(settings, &lockdown::read(&self.lockdown));
         let scope = lockdown::protection_scope(
             mode,
             settings.kill_switch,
             dns_server.is_some(),
             lockdown,
             local_proxy.is_some(),
+            shared_proxy.is_some(),
         );
         // In the proxy mode nothing is authorized later: what goes up here is all there is.
         let tunnel = scope
@@ -2253,6 +2259,7 @@ impl Session {
                 allow_lan: settings.allow_lan,
                 lan: lan.clone(),
                 lockdown,
+                shared_proxy,
             };
 
             match mode {

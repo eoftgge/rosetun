@@ -249,6 +249,8 @@ fn output_chain(text: &mut String, rules: &Rules<'_>) {
         ProtectionScope::DnsOnly => {
             text.push_str("\t\tmeta l4proto { tcp, udp } th dport 53 drop\n");
         }
+        // Nothing to write: see `lockdown::protection_scope` in the helper.
+        ProtectionScope::SharedProxy => {}
     }
     text.push_str("\t}\n");
 }
@@ -274,6 +276,7 @@ fn forward_chain(text: &mut String, rules: &Rules<'_>) {
             ProtectionScope::DnsOnly => {
                 text.push_str("\t\tmeta l4proto { tcp, udp } th dport 53 drop\n");
             }
+            ProtectionScope::SharedProxy => {}
         }
     }
     text.push_str("\t}\n");
@@ -282,7 +285,7 @@ fn forward_chain(text: &mut String, rules: &Rules<'_>) {
 fn chain_head(text: &mut String, hook: &str, scope: ProtectionScope) {
     let policy = match scope {
         ProtectionScope::AllTraffic => "drop",
-        ProtectionScope::DnsOnly => "accept",
+        ProtectionScope::DnsOnly | ProtectionScope::SharedProxy => "accept",
     };
     let _ = writeln!(text, "\tchain {hook} {{");
     let _ = writeln!(

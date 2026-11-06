@@ -926,6 +926,7 @@ mod tests {
             allow_lan: false,
             lan: Default::default(),
             lockdown: false,
+            shared_proxy: None,
         }
     }
 

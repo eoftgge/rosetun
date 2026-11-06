@@ -23,7 +23,8 @@ pub(super) enum AddressFamily {
 pub(super) enum Layer {
     /// `ALE_AUTH_CONNECT`: outbound connections.
     Connect,
-    /// `ALE_AUTH_RECV_ACCEPT`: inbound connections, used by Lockdown only.
+    /// `ALE_AUTH_RECV_ACCEPT`: inbound connections, used by Lockdown and the
+    /// shared local proxy.
     RecvAccept,
 }
 
@@ -128,6 +129,8 @@ impl std::fmt::Debug for AddressRange {
     }
 }
 
+const TCP: u8 = 6;
+
 /// IP protocol numbers of the private DNS block, in this order: UDP, TCP.
 pub(super) const DNS_PROTOCOLS: [u8; 2] = [17, 6];
 
@@ -157,6 +160,7 @@ pub(super) enum Condition {
     RemoteRange(AddressRange),
     Protocol(u8),
     RemotePort(u16),
+    LocalPort(u16),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -166,6 +170,9 @@ pub(super) struct Rule {
     pub(super) action: Action,
     pub(super) conditions: Vec<Condition>,
     pub(super) weight: u8,
+    /// A permit lower sublayers cannot overrule, which Windows Firewall's
+    /// default inbound block sits in.
+    pub(super) hard: bool,
 }
 
 impl Rule {
@@ -176,6 +183,7 @@ impl Rule {
             action: Action::Allow,
             conditions,
             weight,
+            hard: false,
         }
     }
 
@@ -192,6 +200,10 @@ impl Rule {
             ..self
         }
     }
+
+    fn hard(self) -> Self {
+        Self { hard: true, ..self }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -205,12 +217,19 @@ impl BootstrapPolicy {
     /// The engine enforces routing policy and may reach any destination.
     /// WFP identifies the exemption by executable path, not by process ID.
     pub(super) fn from_plan(plan: &RoutingPlan, engine_binaries: &[&Path]) -> Self {
-        match plan.scope {
+        let mut policy = match plan.scope {
             ProtectionScope::AllTraffic => {
                 Self::all_traffic(plan.allow_lan.then_some(&plan.lan), engine_binaries)
             }
             ProtectionScope::DnsOnly => Self::dns_only(engine_binaries),
+            ProtectionScope::SharedProxy => Self { rules: Vec::new() },
+        };
+        if let (Some(port), Some(engine)) = (plan.shared_proxy, engine_binaries.first()) {
+            policy
+                .rules
+                .extend(shared_proxy_rules(port, &plan.lan, engine));
         }
+        policy
     }
 
     fn all_traffic(lan: Option<&LanAccess>, engine_binaries: &[&Path]) -> Self {
@@ -404,6 +423,66 @@ pub(super) fn link_local(ipv6_multicast: bool) -> impl Iterator<Item = IpPrefix>
         .filter(move |prefix| ipv6_multicast || *prefix != multicast_v6)
 }
 
+/// The local proxy listens on every address so that its own networks reach it
+/// wherever the computer moves, and these filters decide who gets in:
+///
+/// - each connected network, on its adapter and without the VPN servers'
+///   addresses, reaches the engine started by the service on this port;
+/// - loopback always does, for the programs on this computer;
+/// - everyone else is blocked, even if a firewall rule or a firewall switched
+///   off would let them in.
+///
+/// The permits of the networks are hard because Windows Firewall blocks inbound
+/// by default from a lower sublayer, and a soft permit here would not overrule
+/// that. They live in the session's dynamic WFP session, so they end with it
+/// even if the service crashes, which a firewall rule would not.
+fn shared_proxy_rules(port: u16, lan: &LanAccess, engine: &Path) -> Vec<Rule> {
+    let mut rules = Vec::new();
+    for network in lan.segment.networks() {
+        let destination = segment_destination(network.prefix, lan.segment.left_out());
+        // A permit with no address condition would open the whole adapter.
+        if destination.is_empty() {
+            continue;
+        }
+        let mut permit = destination;
+        permit.extend(engine_permit(engine));
+        permit.extend([
+            Condition::Protocol(TCP),
+            Condition::LocalPort(port),
+            Condition::LocalInterface(network.interface.0),
+        ]);
+        let family = Subnet::from(network.prefix).family();
+        rules.push(
+            Rule::allow(family, permit, BOOTSTRAP_ALLOW_WEIGHT)
+                .inbound()
+                .hard(),
+        );
+    }
+    for family in [AddressFamily::Ipv4, AddressFamily::Ipv6] {
+        rules.push(
+            Rule::allow(
+                family,
+                vec![
+                    Condition::Protocol(TCP),
+                    Condition::LocalPort(port),
+                    Condition::Loopback,
+                ],
+                BOOTSTRAP_ALLOW_WEIGHT,
+            )
+            .inbound(),
+        );
+        rules.push(
+            Rule::block(
+                family,
+                vec![Condition::Protocol(TCP), Condition::LocalPort(port)],
+                BLOCK_WEIGHT,
+            )
+            .inbound(),
+        );
+    }
+    rules
+}
+
 /// The conditions of an engine permit: the program, run by the service.
 pub(super) fn engine_permit(binary: &Path) -> Vec<Condition> {
     vec![
@@ -474,7 +553,178 @@ pub(super) mod tests {
             allow_lan: false,
             lan: Default::default(),
             lockdown: false,
+            shared_proxy: None,
         }
+    }
+
+    fn proxy_lan() -> LanAccess {
+        let network = |text: &str, length, luid| SegmentNetwork {
+            prefix: IpPrefix::new(text.parse().unwrap(), length).unwrap(),
+            interface: InterfaceId(luid),
+        };
+        LanAccess {
+            segment: LanSegment::from_parts(
+                vec![network("192.168.1.0", 24, 7), network("fd00:1::", 64, 8)],
+                vec![InterfaceId(7), InterfaceId(8)],
+            ),
+            ..Default::default()
+        }
+    }
+
+    fn inbound_rules(policy: &BootstrapPolicy) -> Vec<&Rule> {
+        policy
+            .rules
+            .iter()
+            .filter(|rule| rule.layer == Layer::RecvAccept)
+            .collect()
+    }
+
+    #[test]
+    fn the_kill_switch_of_the_proxy_mode_is_its_first_phase_with_nothing_inbound() {
+        let engine = Path::new(r"C:\Program Files\Rosetun\sing-box.exe");
+        let policy = BootstrapPolicy::from_plan(&plan(), &[engine]);
+        assert!(inbound_rules(&policy).is_empty());
+        assert!(
+            policy
+                .rules
+                .iter()
+                .any(|rule| { rule.action == Action::Block && rule.conditions.is_empty() })
+        );
+        // The same policy as TUN's first phase: the mode changes without a gap.
+        let mut proxy = plan();
+        proxy.shared_proxy = None;
+        assert_eq!(BootstrapPolicy::from_plan(&proxy, &[engine]), policy);
+    }
+
+    #[test]
+    fn a_shared_proxy_without_a_kill_switch_touches_only_its_port() {
+        let engine = Path::new(r"C:\Program Files\Rosetun\sing-box.exe");
+        let shared = RoutingPlan {
+            scope: ProtectionScope::SharedProxy,
+            lan: proxy_lan(),
+            shared_proxy: Some(10808),
+            ..plan()
+        };
+        let policy = BootstrapPolicy::from_plan(&shared, &[engine]);
+        assert!(!policy.rules.is_empty());
+        assert!(
+            policy
+                .rules
+                .iter()
+                .all(|rule| rule.layer == Layer::RecvAccept)
+        );
+        assert!(
+            policy
+                .rules
+                .iter()
+                .all(|rule| rule.conditions.contains(&Condition::LocalPort(10808)))
+        );
+    }
+
+    #[test]
+    fn a_shared_proxy_opens_each_network_on_its_adapter_for_the_engine_alone() {
+        let engine = Path::new(r"C:\Program Files\Rosetun\sing-box.exe");
+        let shared = RoutingPlan {
+            lan: proxy_lan(),
+            shared_proxy: Some(10808),
+            ..plan()
+        };
+        let policy = BootstrapPolicy::from_plan(&shared, &[engine]);
+        let inbound = inbound_rules(&policy);
+        let permits: Vec<_> = inbound.iter().filter(|rule| rule.hard).collect();
+        assert_eq!(permits.len(), 2);
+        for rule in &permits {
+            assert_eq!(rule.action, Action::Allow);
+            assert!(
+                rule.conditions
+                    .contains(&Condition::Application(engine.to_owned()))
+            );
+            assert!(rule.conditions.contains(&Condition::ServiceAccount));
+            assert!(rule.conditions.contains(&Condition::LocalPort(10808)));
+            assert!(rule.conditions.contains(&Condition::Protocol(6)));
+        }
+        assert!(
+            permits[0]
+                .conditions
+                .contains(&Condition::LocalInterface(7))
+        );
+        assert!(
+            permits[1]
+                .conditions
+                .contains(&Condition::LocalInterface(8))
+        );
+        assert!(permits[0].conditions.iter().any(|condition| matches!(
+            condition,
+            Condition::RemoteSubnet(Subnet::V4 {
+                address: [192, 168, 1, 0],
+                prefix: 24
+            })
+        )));
+        for family in [AddressFamily::Ipv4, AddressFamily::Ipv6] {
+            let of_family = |action| {
+                inbound.iter().filter(move |rule| {
+                    rule.family == family && !rule.hard && rule.action == action
+                })
+            };
+            let loopback = of_family(Action::Allow).next().expect("a loopback permit");
+            assert!(loopback.conditions.contains(&Condition::Loopback));
+            let block = of_family(Action::Block)
+                .next()
+                .expect("the block of the rest");
+            assert_eq!(
+                block.conditions,
+                [Condition::Protocol(6), Condition::LocalPort(10808)]
+            );
+            assert!(block.weight < loopback.weight);
+            assert!(permits.iter().all(|permit| block.weight < permit.weight));
+        }
+    }
+
+    #[test]
+    fn a_shared_proxy_never_opens_a_vpn_servers_address() {
+        let engine = Path::new(r"C:\Program Files\Rosetun\sing-box.exe");
+        let server: IpAddr = "192.168.1.5".parse().unwrap();
+        let mut lan = proxy_lan();
+        lan.segment = lan.segment.leaving_out(&[server]);
+        let shared = RoutingPlan {
+            lan,
+            shared_proxy: Some(10808),
+            ..plan()
+        };
+        let policy = BootstrapPolicy::from_plan(&shared, &[engine]);
+        let permit = policy
+            .rules
+            .iter()
+            .find(|rule| rule.hard && rule.family == AddressFamily::Ipv4)
+            .unwrap();
+        let ranges: Vec<_> = permit
+            .conditions
+            .iter()
+            .filter_map(|condition| match condition {
+                Condition::RemoteRange(range) => Some((range.low, range.high)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(ranges.len(), 2);
+        for (low, high) in ranges {
+            let (IpAddr::V4(low), IpAddr::V4(high), IpAddr::V4(server)) = (low, high, server)
+            else {
+                panic!("an IPv4 range");
+            };
+            assert!(!(low.to_bits()..=high.to_bits()).contains(&server.to_bits()));
+        }
+    }
+
+    #[test]
+    fn a_shared_proxy_with_no_network_leaves_only_loopback() {
+        let engine = Path::new(r"C:\Program Files\Rosetun\sing-box.exe");
+        let shared = RoutingPlan {
+            shared_proxy: Some(10808),
+            ..plan()
+        };
+        let policy = BootstrapPolicy::from_plan(&shared, &[engine]);
+        assert!(!policy.rules.iter().any(|rule| rule.hard));
+        assert_eq!(inbound_rules(&policy).len(), 4);
     }
 
     fn decide(rules: &[&Rule], destination: [u8; 4], protocol: u8, port: u16, luid: u64) -> Action {
@@ -709,6 +959,7 @@ pub(super) mod tests {
             allow_lan: true,
             lan: lan(private_networks),
             lockdown: false,
+            shared_proxy: None,
         }
     }
 
@@ -1128,6 +1379,7 @@ pub(super) mod tests {
                 allow_lan: false,
                 lan: Default::default(),
                 lockdown: false,
+                shared_proxy: None,
             },
             &[engine],
         );
@@ -1203,6 +1455,7 @@ pub(super) mod tests {
             allow_lan: false,
             lan: Default::default(),
             lockdown: false,
+            shared_proxy: None,
         };
         let engine = Path::new(r"C:\sing-box.exe");
         let disabled = BootstrapPolicy::from_plan(&plan, &[engine]);

@@ -140,6 +140,12 @@ fn log_scan(scan: &SegmentScan) {
     }
 }
 
+/// A shared local proxy opens the same networks "Local network" does, and
+/// follows them the same way, whether "Local network" is on or not.
+fn shares_local_proxy(settings: &Settings) -> bool {
+    settings.connection_mode == ConnectionMode::SystemProxy && settings.local_proxy.share_on_lan
+}
+
 impl Session {
     fn scan_lan(&self, tun: &TunSettings, servers: &[IpAddr], log: bool) -> LanSegment {
         let tunnel_networks = tunnel_networks(tun);
@@ -168,7 +174,7 @@ impl Session {
     /// What "Local network" opens for a session with these settings and
     /// servers; nothing when it is off.
     pub(super) fn lan_access(&self, settings: &Settings, servers: &[IpAddr]) -> LanAccess {
-        if !settings.allow_lan {
+        if !settings.allow_lan && !shares_local_proxy(settings) {
             return LanAccess::default();
         }
         LanAccess {
@@ -268,10 +274,10 @@ impl Session {
         else {
             return false;
         };
-        if !settings.allow_lan {
+        if !settings.allow_lan && !shares_local_proxy(&settings) {
             return false;
         }
-        if settings.connection_mode == ConnectionMode::Tun {
+        if settings.allow_lan && settings.connection_mode == ConnectionMode::Tun {
             self.release_broadcast_route(&settings.tun);
         }
         let read = self.scan_lan(&settings.tun, &self.lan_servers, false);

@@ -1477,6 +1477,7 @@ mod tests {
             allow_lan: true,
             lan: Default::default(),
             lockdown: true,
+            shared_proxy: None,
         };
         let session =
             BootstrapPolicy::from_plan(&plan, &[std::path::Path::new(r"C:\sing-box.exe")]);
@@ -1776,6 +1777,7 @@ mod tests {
             allow_lan: true,
             lan: Default::default(),
             lockdown: true,
+            shared_proxy: None,
         };
         let session =
             BootstrapPolicy::from_plan(&plan, &[std::path::Path::new(r"C:\sing-box.exe")]);

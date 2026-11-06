@@ -8274,3 +8274,96 @@ fn a_new_server_name_in_the_proxy_mode_is_asked_of_the_engine() {
         super::NameLookup::System
     );
 }
+
+#[test]
+fn a_shared_proxy_reads_the_networks_without_local_network_and_follows_them() {
+    use super::dns::test_support::{Behavior, Server};
+
+    let dns = Server::new(Behavior::Noerror);
+    let (helper, _controls) = ordered_helper();
+    {
+        let mut session = helper.session().unwrap();
+        session.test_local_dns = Some(dns.address());
+        session.lan_scan = |_| panic!("not read until sharing is on");
+    }
+    helper.connect(&local_proxy_request(false)).unwrap();
+    assert!(!helper.session().unwrap().local_network_changed());
+    helper.disconnect().unwrap();
+
+    static SCANS: AtomicUsize = AtomicUsize::new(0);
+    {
+        let mut session = helper.session().unwrap();
+        session.lan_scan = |_| {
+            SCANS.fetch_add(1, Ordering::SeqCst);
+            Ok(rosetun_routing::lan::SegmentScan::default())
+        };
+    }
+    let mut request = local_proxy_request(true);
+    request.settings.local_proxy.share_on_lan = true;
+    helper.connect(&request).unwrap();
+    let after_connect = SCANS.load(Ordering::SeqCst);
+    assert!(after_connect > 0);
+    assert!(!helper.session().unwrap().local_network_changed());
+    assert!(SCANS.load(Ordering::SeqCst) > after_connect);
+}
+
+#[test]
+fn the_scope_of_the_proxy_mode_follows_the_kill_switch_and_sharing() {
+    use super::lockdown::protection_scope;
+    use rosetun_routing::ProtectionScope;
+
+    let scope = |kill_switch, lockdown, shared| {
+        protection_scope(
+            super::StartMode::ProtectedReconnect,
+            kill_switch,
+            true,
+            lockdown,
+            true,
+            shared,
+        )
+    };
+    assert_eq!(scope(true, false, false), Some(ProtectionScope::AllTraffic));
+    assert_eq!(scope(true, false, true), Some(ProtectionScope::AllTraffic));
+    assert_eq!(scope(false, true, false), Some(ProtectionScope::AllTraffic));
+    assert_eq!(
+        scope(false, false, false),
+        None,
+        "no DNS lock without an adapter"
+    );
+    assert_eq!(
+        scope(false, false, true),
+        cfg!(windows).then_some(ProtectionScope::SharedProxy)
+    );
+}
+
+#[test]
+fn sharing_under_lockdown_needs_its_local_network() {
+    use super::local_proxy::{shared_port, sharing_allowed};
+    use super::lockdown::LockdownState;
+
+    let mut settings = rosetun_config::Settings {
+        connection_mode: rosetun_config::ConnectionMode::SystemProxy,
+        ..Default::default()
+    };
+    settings.local_proxy.port = 20808;
+    settings.local_proxy.share_on_lan = true;
+    let off = LockdownState::default();
+    let closed = LockdownState {
+        enabled: true,
+        ..LockdownState::default()
+    };
+    let open = LockdownState {
+        enabled: true,
+        allow_lan: true,
+        ..LockdownState::default()
+    };
+    assert!(sharing_allowed(&off) && sharing_allowed(&open) && !sharing_allowed(&closed));
+    assert_eq!(shared_port(&settings, &off), Some(20808));
+    assert_eq!(shared_port(&settings, &open), Some(20808));
+    assert_eq!(shared_port(&settings, &closed), None);
+    settings.local_proxy.share_on_lan = false;
+    assert_eq!(shared_port(&settings, &off), None);
+    settings.local_proxy.share_on_lan = true;
+    settings.connection_mode = rosetun_config::ConnectionMode::Tun;
+    assert_eq!(shared_port(&settings, &off), None);
+}

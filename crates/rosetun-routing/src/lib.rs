@@ -120,6 +120,9 @@ pub enum ProtectionScope {
     AllTraffic,
     /// DNS lock: only port 53 is confined to the tunnel; other traffic is untouched.
     DnsOnly,
+    /// A shared local proxy without a kill switch: outbound is untouched, and
+    /// only the proxy's port is limited to the computer's own networks.
+    SharedProxy,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -133,6 +136,9 @@ pub struct RoutingPlan {
     /// Puts the session's filters into the Lockdown sublayer instead of the
     /// Rosetun one, above Lockdown's own block.
     pub lockdown: bool,
+    /// The local proxy's port when other devices may use it: from the
+    /// networks `lan.segment` holds and from nowhere else.
+    pub shared_proxy: Option<u16>,
 }
 
 /// What exists of Lockdown.
