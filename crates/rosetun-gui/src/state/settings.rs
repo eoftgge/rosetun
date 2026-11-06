@@ -3,7 +3,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use rosetun_config::{
-    ConnectionState, DnsSettings, Node, Outbound, Settings, TlsFragment, TlsMode, XrayUse,
+    ConnectionState, DnsSettings, LocalProxySettings, Node, Outbound, Settings, TlsFragment,
+    TlsMode, XrayUse,
 };
 use rosetun_core::{DnsPreset, SettingChange};
 
@@ -41,6 +42,9 @@ pub(crate) struct SettingsScreen {
     pub(crate) fragment_length: String,
     pub(crate) fragment_interval: String,
     pub(crate) fragment_dirty: bool,
+    /// The port field while it is being typed in.
+    pub(crate) local_proxy_port: String,
+    pub(crate) local_proxy_port_dirty: bool,
     pub(crate) connect_after_xray_change: bool,
     pub(crate) xray_connect_ready: bool,
     pub(crate) config_folder: Option<PathBuf>,
@@ -121,6 +125,9 @@ fn waits_for_save(action: &Action) -> bool {
         | Action::SetConnectOnStart(_)
         | Action::SetAutoReconnect(_)
         | Action::SetAllowLan(_)
+        | Action::SetConnectionMode(_)
+        | Action::SetLocalProxyPort(_)
+        | Action::SetShareOnLan(_)
         | Action::SetPrivateNetworks(_)
         | Action::SetXray(_)
         | Action::SetTlsFragment(_)
@@ -595,6 +602,29 @@ impl State {
             Action::SetAllowLan(enabled) => {
                 if self.can_edit_settings() && self.config.settings.allow_lan != enabled {
                     return self.start_settings(Job::Setting(SettingChange::AllowLan(enabled)));
+                }
+            }
+            Action::SetConnectionMode(mode) => {
+                if self.can_edit_settings() && self.config.settings.connection_mode != mode {
+                    self.system_proxy.follow_session();
+                    return self.start_settings(Job::Setting(SettingChange::ConnectionMode(mode)));
+                }
+            }
+            Action::SetLocalProxyPort(port) => {
+                if self.can_edit_settings()
+                    && LocalProxySettings::port_is_valid(port)
+                    && self.config.settings.local_proxy.port != port
+                {
+                    self.system_proxy.follow_session();
+                    return self.start_settings(Job::Setting(SettingChange::LocalProxyPort(port)));
+                }
+            }
+            Action::SetShareOnLan(enabled) => {
+                if self.can_edit_settings()
+                    && self.config.settings.local_proxy.share_on_lan != enabled
+                {
+                    self.system_proxy.follow_session();
+                    return self.start_settings(Job::Setting(SettingChange::ShareOnLan(enabled)));
                 }
             }
             Action::SetPrivateNetworks(enabled) => {

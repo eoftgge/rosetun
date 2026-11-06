@@ -1,7 +1,10 @@
 use eframe::egui::{self, RichText};
 #[cfg(any(windows, target_os = "linux"))]
 use rosetun_config::QuitAction;
-use rosetun_config::{AccentPreset, ConnectionState, LanguageSetting, TlsMode, XrayUse};
+use rosetun_config::{
+    AccentPreset, ConnectionMode, ConnectionState, LanguageSetting, LocalProxySettings, TlsMode,
+    XrayUse,
+};
 use rosetun_core::{CheckKind, CheckStatus, DnsPreset};
 
 use crate::brand;
@@ -24,7 +27,11 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
     );
     widgets::appear(ui, shown, |ui| match state.settings.screen.section {
         SettingsSection::General => general(ui, state, actions),
-        SettingsSection::Connection => connection(ui, state, actions),
+        SettingsSection::Connection => {
+            connection_mode(ui, state, actions);
+            ui.add_space(theme::space::M);
+            connection(ui, state, actions);
+        }
         SettingsSection::Network => dns(ui, state, actions),
         SettingsSection::Advanced => advanced(ui, state, actions),
         SettingsSection::Service => service(ui, state, actions),
@@ -237,6 +244,122 @@ fn pending(pending: bool) -> widgets::RowOptions {
     }
 }
 
+/// Wide enough for five digits.
+const LOCAL_PROXY_PORT_WIDTH: f32 = 96.0;
+
+/// TUN or the system proxy, and in the proxy mode its port and who may use it.
+fn connection_mode(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
+    let editable = state.can_edit_settings();
+    let mode = state.config.settings.connection_mode;
+    let proxy = mode == ConnectionMode::SystemProxy;
+    let waits = state.waits_for_next_connect(SessionPart::LocalProxy);
+    widgets::settings_card(ui, |card| {
+        card.body(|ui| {
+            ui.label(tr!("connection-mode"));
+            ui.add_space(theme::space::S);
+            let options = [
+                (ConnectionMode::Tun, tr!("connection-mode-tun")),
+                (ConnectionMode::SystemProxy, tr!("connection-mode-proxy")),
+            ];
+            if let Some(chosen) =
+                widgets::segmented(ui, "connection_mode", mode, &options, false, editable)
+            {
+                actions.push(Action::SetConnectionMode(chosen));
+            }
+            ui.add_space(theme::space::S);
+            widgets::row_detail(ui, &state.connection_mode_detail(), waits);
+        });
+        if !proxy {
+            return;
+        }
+        let saved = state.config.settings.local_proxy;
+        let form = &mut state.settings.screen;
+        if !form.local_proxy_port_dirty {
+            form.local_proxy_port = saved.port.to_string();
+        }
+        let parsed = parse_local_proxy_port(&form.local_proxy_port);
+        card.body(|ui| {
+            let response = ui
+                .horizontal(|ui| {
+                    ui.label(tr!("local-proxy-port"));
+                    ui.add(
+                        widgets::TextField::new(&mut form.local_proxy_port)
+                            .width(LOCAL_PROXY_PORT_WIDTH)
+                            .enabled(editable)
+                            .invalid(parsed.is_none()),
+                    )
+                })
+                .inner;
+            if response.changed() {
+                form.local_proxy_port_dirty = true;
+            }
+            if parsed.is_none() {
+                ui.colored_label(theme::ERROR, tr!("local-proxy-port-invalid"));
+            }
+            if response.lost_focus()
+                && let Some(port) = parsed
+            {
+                form.local_proxy_port_dirty = false;
+                actions.push(Action::SetLocalProxyPort(port));
+            }
+        });
+        let mut share = saved.share_on_lan;
+        if card
+            .toggle(
+                tr!("share-on-lan"),
+                None,
+                tr!("share-on-lan-detail"),
+                &mut share,
+                editable,
+            )
+            .changed()
+        {
+            actions.push(Action::SetShareOnLan(share));
+        }
+        if let Some(note) = local_proxy_note(state, saved) {
+            card.body(|ui| {
+                ui.add(
+                    egui::Label::new(RichText::new(note).small().color(theme::palette().text_dim))
+                        .wrap(),
+                );
+            });
+        }
+    });
+}
+
+/// `None` for what the port field holds and cannot be saved.
+fn parse_local_proxy_port(text: &str) -> Option<u16> {
+    text.trim()
+        .parse()
+        .ok()
+        .filter(|port| LocalProxySettings::port_is_valid(*port))
+}
+
+/// What the user has to know or do about the proxy right now: where other devices
+/// find it, or that the desktop's settings are theirs to set.
+fn local_proxy_note(state: &State, saved: LocalProxySettings) -> Option<String> {
+    let local = format!("127.0.0.1:{}", saved.port);
+    if state.system_proxy.failed {
+        return Some(tr!("system-proxy-failed", address = local));
+    }
+    if state.system_proxy.manual {
+        return Some(tr!("system-proxy-manual", address = local));
+    }
+    if !saved.share_on_lan {
+        return None;
+    }
+    if state.lockdown_active() && !state.lockdown_lan_open() {
+        return Some(tr!("share-on-lan-lockdown"));
+    }
+    Some(match state.system_proxy.lan_address {
+        Some(address) => tr!(
+            "share-on-lan-address",
+            address = std::net::SocketAddr::new(address, saved.port).to_string()
+        ),
+        None => tr!("share-on-lan-no-address"),
+    })
+}
+
 fn connection(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     widgets::settings_card(ui, |card| {
         let editable = state.can_edit_settings();
@@ -266,7 +389,7 @@ fn connection(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                 } else if lockdown {
                     tr!("kill-switch-lockdown")
                 } else {
-                    tr!("kill-switch-detail")
+                    state.kill_switch_detail()
                 },
                 pending(state.waits_for_next_connect(SessionPart::Protection)),
                 &mut kill_switch,
@@ -1953,6 +2076,65 @@ mod pending_notice_tests {
                     assert!(lan <= limit, "{language:?} {size:?}: {lan} > {limit}");
                 }
             });
+        }
+    }
+
+    #[test]
+    fn the_mode_card_shows_the_proxy_settings_only_in_the_proxy_mode() {
+        for language in LANGUAGES {
+            i18n::in_language(language, || {
+                let (size, _) = WINDOWS[0];
+                let shown = |state: &mut State| {
+                    let mut screen = TestScreen::new(size);
+                    screen
+                        .settle(|ui| connection_mode(ui, state, &mut Vec::new()))
+                        .into_iter()
+                        .map(|(text, _)| text)
+                        .collect::<Vec<_>>()
+                };
+                let mut state = connected(ConnectionState::Disconnected);
+                let texts = shown(&mut state);
+                assert!(texts.contains(&tr!("connection-mode-tun-detail")));
+                assert!(!texts.contains(&tr!("share-on-lan")));
+
+                state.config.settings.connection_mode = ConnectionMode::SystemProxy;
+                let texts = shown(&mut state);
+                assert!(texts.contains(&tr!("connection-mode-proxy-detail")));
+                assert!(texts.contains(&tr!("local-proxy-port")));
+                assert!(texts.contains(&tr!("share-on-lan")));
+
+                state.config.settings.local_proxy.share_on_lan = true;
+                state.system_proxy.lan_address = Some("192.0.2.5".parse().unwrap());
+                let address = tr!("share-on-lan-address", address = "192.0.2.5:10808");
+                assert!(shown(&mut state).contains(&address));
+
+                state.system_proxy.lan_address = None;
+                assert!(shown(&mut state).contains(&tr!("share-on-lan-no-address")));
+
+                state.settings.screen.local_proxy_port = "80".into();
+                state.settings.screen.local_proxy_port_dirty = true;
+                assert!(shown(&mut state).contains(&tr!("local-proxy-port-invalid")));
+            });
+        }
+    }
+
+    #[test]
+    fn a_desktop_without_automatic_settings_gets_the_address_to_enter() {
+        let saved = LocalProxySettings::default();
+        let mut state = connected(ConnectionState::Connected);
+        assert_eq!(local_proxy_note(&state, saved), None);
+        state.system_proxy.manual = true;
+        assert_eq!(
+            local_proxy_note(&state, saved),
+            Some(tr!("system-proxy-manual", address = "127.0.0.1:10808"))
+        );
+    }
+
+    #[test]
+    fn only_a_port_in_range_can_be_saved() {
+        assert_eq!(parse_local_proxy_port(" 20808 "), Some(20808));
+        for text in ["", "80", "1023", "65536", "a", "-1"] {
+            assert_eq!(parse_local_proxy_port(text), None, "{text:?}");
         }
     }
 

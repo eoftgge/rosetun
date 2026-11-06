@@ -1,10 +1,17 @@
 //! Keeps the desktop's proxy settings in step with the session: pointed at the
 //! local proxy while it listens, and back to the user's otherwise.
 
-use rosetun_config::ConnectionState;
+use std::net::IpAddr;
 
-use super::{Job, State};
+use rosetun_config::{ConnectionMode, ConnectionState};
+
+use super::{Action, Job, State};
+use crate::display;
 use crate::worker::{SystemProxyOutcome, SystemProxyWish};
+
+/// How often the shown address for other devices is read again while it shows:
+/// the computer moves between networks, and the read costs nothing.
+const LAN_ADDRESS_INTERVAL_MS: u64 = 10_000;
 
 /// What the GUI has asked of the desktop.
 #[derive(Debug, Default)]
@@ -16,6 +23,19 @@ pub(crate) struct SystemProxySync {
     /// This desktop's settings cannot be changed: the user points programs at
     /// the proxy by hand.
     pub(crate) manual: bool,
+    /// A change of mode, port or sharing is saved, and the running session
+    /// should take it, once the save is through.
+    session_follows: bool,
+    /// The computer's address for other devices.
+    pub(crate) lan_address: Option<IpAddr>,
+    lan_address_read_ms: Option<u64>,
+    lan_address_in_flight: bool,
+}
+
+impl SystemProxySync {
+    pub(super) fn follow_session(&mut self) {
+        self.session_follows = true;
+    }
 }
 
 /// What the status asks of the desktop. `None` keeps what is there: an engine
@@ -59,6 +79,75 @@ impl State {
         }
         self.system_proxy.in_flight = true;
         Some(Job::SyncSystemProxy(wish))
+    }
+
+    /// A mode, port or sharing changed during a session goes in by itself, under
+    /// the standing protection. Nothing else in Settings restarts the tunnel, but
+    /// this is what the user just asked for, and it is what `Apply` is for.
+    pub(crate) fn take_local_proxy_apply(&mut self) -> Option<Job> {
+        if !self.system_proxy.session_follows {
+            return None;
+        }
+        if !self.session_up() {
+            self.system_proxy.session_follows = false;
+            return None;
+        }
+        if !self.can_apply() || !self.pending_reconnect(super::SessionPart::LocalProxy) {
+            return None;
+        }
+        self.system_proxy.session_follows = false;
+        self.act(Action::Apply)
+    }
+
+    /// The kill switch's caption: in the proxy mode it holds all the time.
+    pub(crate) fn kill_switch_detail(&self) -> String {
+        match self.config.settings.connection_mode {
+            ConnectionMode::Tun => tr!("kill-switch-detail"),
+            ConnectionMode::SystemProxy => tr!("kill-switch-proxy-detail"),
+        }
+    }
+
+    /// What goes through the VPN in the chosen mode, and what happens to the rest.
+    pub(crate) fn connection_mode_detail(&self) -> String {
+        let settings = &self.config.settings;
+        match settings.connection_mode {
+            ConnectionMode::Tun => tr!("connection-mode-tun-detail"),
+            ConnectionMode::SystemProxy if settings.kill_switch || self.lockdown_active() => {
+                tr!("connection-mode-proxy-strict-detail")
+            }
+            ConnectionMode::SystemProxy => tr!("connection-mode-proxy-detail"),
+        }
+    }
+
+    /// Lockdown keeps its own "Local network", which follows this setting
+    /// unless the last change could not reach it.
+    pub(crate) fn lockdown_lan_open(&self) -> bool {
+        self.config.settings.allow_lan && !self.lockdown_lan_kept
+    }
+
+    /// Whether other devices can use the session's proxy, as far as the settings say.
+    pub(crate) fn shares_local_proxy(&self) -> bool {
+        let settings = &self.config.settings;
+        settings.connection_mode == ConnectionMode::SystemProxy && settings.local_proxy.share_on_lan
+    }
+
+    pub(crate) fn take_lan_address(&mut self) -> Option<Job> {
+        if !self.shares_local_proxy() || self.system_proxy.lan_address_in_flight {
+            return None;
+        }
+        let now = display::monotonic_ms();
+        let read = self.system_proxy.lan_address_read_ms;
+        if read.is_some_and(|read| now.saturating_sub(read) < LAN_ADDRESS_INTERVAL_MS) {
+            return None;
+        }
+        self.system_proxy.lan_address_read_ms = Some(now);
+        self.system_proxy.lan_address_in_flight = true;
+        Some(Job::ReadLanAddress)
+    }
+
+    pub(super) fn reduce_lan_address(&mut self, address: Option<IpAddr>) {
+        self.system_proxy.lan_address_in_flight = false;
+        self.system_proxy.lan_address = address;
     }
 
     pub(super) fn reduce_system_proxy(

@@ -483,6 +483,7 @@ impl App {
             Job::Reconnect => self.workers.reconnect(),
             Job::OpenNetwork => self.workers.open_network(),
             Job::SyncSystemProxy(wish) => self.workers.sync_system_proxy(wish),
+            Job::ReadLanAddress => self.workers.read_lan_address(),
             Job::JoinServiceGroup => self.workers.join_service_group(),
             Job::SetInterfaceScale(percent) => self.workers.set_interface_scale(percent),
             Job::SetLanguage(language) => self.workers.set_language(language),
@@ -773,6 +774,12 @@ impl App {
             self.dispatch(job);
         }
         if let Some(job) = self.state.take_system_proxy() {
+            self.dispatch(job);
+        }
+        if let Some(job) = self.state.take_local_proxy_apply() {
+            self.dispatch(job);
+        }
+        if let Some(job) = self.state.take_lan_address() {
             self.dispatch(job);
         }
         if let Some(job) = self.state.take_lockdown_lan() {

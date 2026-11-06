@@ -150,6 +150,7 @@ pub(crate) enum WorkerEvent {
         wish: SystemProxyWish,
         outcome: SystemProxyOutcome,
     },
+    LanAddress(Option<std::net::IpAddr>),
     JoinServiceGroup(ServiceGroupResult),
     SetInterfaceScale(Result<(), SettingsError>),
     SetLanguage(Result<(), SettingsError>),

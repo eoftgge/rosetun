@@ -1031,6 +1031,21 @@ mod tests {
     }
 
     #[test]
+    fn an_apply_request_takes_the_mode_from_the_config_not_the_session() {
+        let mut config = selected_config();
+        let running = config.settings.clone();
+        config.settings.connection_mode = rosetun_config::ConnectionMode::SystemProxy;
+        config.settings.local_proxy.port = 20808;
+        config.settings.local_proxy.share_on_lan = true;
+        let request = ConnectRequest::for_apply(&config, Some(&running), Vec::new()).unwrap();
+        assert_eq!(
+            request.settings.connection_mode,
+            rosetun_config::ConnectionMode::SystemProxy
+        );
+        assert_eq!(request.settings.local_proxy, config.settings.local_proxy);
+    }
+
+    #[test]
     fn apply_request_keeps_running_protection_but_new_other_settings() {
         let mut config = selected_config();
         config.settings.dns.server_name = "dns.example.com".to_owned();

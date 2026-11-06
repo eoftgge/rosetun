@@ -310,6 +310,34 @@ pub(crate) fn state_style(state: &ConnectionState) -> (String, Color32) {
     }
 }
 
+pub(crate) fn proxy_kill_switch_dialog(
+    ctx: &egui::Context,
+    state: &State,
+    actions: &mut Vec<Action>,
+) {
+    let choice = widgets::confirm_modal(
+        ctx,
+        widgets::ConfirmModal {
+            id: "proxy_kill_switch",
+            title: tr!("kill-switch-proxy-confirm-title"),
+            cancel: tr!("cancel"),
+            confirm: tr!("kill-switch-proxy-confirm"),
+            busy: state.operations.kill_switch,
+            confirm_enabled: !state.operations.kill_switch,
+            width: widgets::DialogWidth::Standard,
+        },
+        |ui| {
+            ui.add_space(theme::space::M);
+            ui.add(egui::Label::new(tr!("kill-switch-proxy-warning")).wrap());
+        },
+    );
+    match choice {
+        widgets::ModalChoice::Cancel => actions.push(Action::CancelProxyKillSwitch),
+        widgets::ModalChoice::Confirm => actions.push(Action::ConfirmProxyKillSwitch),
+        widgets::ModalChoice::None => {}
+    }
+}
+
 pub(crate) fn protection_dialog(ctx: &egui::Context, state: &State, actions: &mut Vec<Action>) {
     let choice = widgets::confirm_modal(
         ctx,

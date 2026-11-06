@@ -2,7 +2,7 @@
 //! system resolver cannot get out (see `rosetun-dns`), so the client asks the
 //! network's DNS servers itself; otherwise it uses the system resolver.
 
-use std::net::{SocketAddr, ToSocketAddrs};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs, UdpSocket};
 use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::time::Duration;
 
@@ -56,6 +56,19 @@ fn direct() -> bool {
 /// An agent whose lookups follow `follow_service_status`, decided per request.
 pub(crate) fn agent(config: Config) -> ureq::Agent {
     ureq::Agent::with_parts(config, DefaultConnector::default(), Lookup)
+}
+
+/// This computer's address on the network it reaches the outside through, for
+/// other devices to find its proxy. A datagram socket picks it from the routes;
+/// connecting one sends nothing.
+pub fn lan_address() -> Option<IpAddr> {
+    let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).ok()?;
+    socket.connect((Ipv4Addr::new(192, 0, 2, 1), 9)).ok()?;
+    usable_lan_address(socket.local_addr().ok()?.ip())
+}
+
+fn usable_lan_address(address: IpAddr) -> Option<IpAddr> {
+    (!address.is_unspecified() && !address.is_loopback()).then_some(address)
 }
 
 /// The addresses of `host:port` for a TCP connection.
@@ -126,7 +139,15 @@ impl Resolver for Lookup {
 mod tests {
     use rosetun_config::{ConnectionState, Status};
 
-    use super::{direct_for, local_proxy_url};
+    use super::{direct_for, local_proxy_url, usable_lan_address};
+
+    #[test]
+    fn neither_loopback_nor_no_address_is_shown_to_other_devices() {
+        let usable = |text: &str| usable_lan_address(text.parse().unwrap());
+        assert_eq!(usable("0.0.0.0"), None);
+        assert_eq!(usable("127.0.0.1"), None);
+        assert_eq!(usable("192.168.1.5"), Some("192.168.1.5".parse().unwrap()));
+    }
 
     #[test]
     fn requests_use_the_local_proxy_only_while_its_session_is_up() {

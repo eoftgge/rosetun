@@ -21,6 +21,7 @@ pub(crate) enum SessionPart {
     Dns,
     Fragment,
     Protection,
+    LocalProxy,
 }
 
 enum ApplyFlow {
@@ -391,6 +392,10 @@ impl State {
             SessionPart::Dns => session.settings.dns != current.settings.dns,
             SessionPart::Fragment => session.settings.tls_fragment != current.settings.tls_fragment,
             SessionPart::Protection => session.settings.kill_switch != current.settings.kill_switch,
+            SessionPart::LocalProxy => {
+                session.settings.connection_mode != current.settings.connection_mode
+                    || session.settings.local_proxy != current.settings.local_proxy
+            }
         }
     }
 
@@ -431,6 +436,8 @@ impl State {
             || session.extra_nodes != current.extra_nodes
             || session.settings.dns != current.settings.dns
             || session.settings.tls_fragment != current.settings.tls_fragment
+            || session.settings.connection_mode != current.settings.connection_mode
+            || session.settings.local_proxy != current.settings.local_proxy
     }
 
     fn saving_config(&self) -> bool {

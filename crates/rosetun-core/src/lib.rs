@@ -38,7 +38,7 @@ pub use lists::{
     rename_list, send_prepared, text_entry_count, update_all_lists, update_list,
 };
 pub use ping::{PING_PARALLEL, PING_TIMEOUT, Ping, ping_all, tcp_ping};
-pub use resolve::follow_service_status;
+pub use resolve::{follow_service_status, lan_address};
 pub use rosetun_subscription::{
     ParseError, SkipReason, Skipped, UnsupportedTransport, parse_proxy_uri,
 };

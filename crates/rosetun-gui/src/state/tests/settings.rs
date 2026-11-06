@@ -1266,3 +1266,135 @@ fn unsaved_fragment_input_survives_a_config_reload_until_it_is_saved() {
     state.reduce(WorkerEvent::Setting(change, Ok(())));
     assert!(!state.settings.screen.fragment_dirty);
 }
+
+fn proxy_config(state: &mut State, generation: u64) {
+    let mut config = state.config.clone();
+    config.settings.connection_mode = rosetun_config::ConnectionMode::SystemProxy;
+    state.reduce(WorkerEvent::Config { generation, config });
+}
+
+#[test]
+fn turning_the_kill_switch_on_in_the_proxy_mode_asks_first() {
+    let mut state = connected_state_for_apply();
+    proxy_config(&mut state, 100);
+    assert!(state.act(Action::SetKillSwitch(true)).is_none());
+    assert!(state.proxy_kill_switch_confirmation);
+    assert!(!state.operations.kill_switch);
+
+    assert!(state.act(Action::CancelProxyKillSwitch).is_none());
+    assert!(!state.proxy_kill_switch_confirmation);
+
+    state.act(Action::SetKillSwitch(true));
+    assert!(matches!(
+        state.act(Action::ConfirmProxyKillSwitch),
+        Some(Job::SetKillSwitch(true))
+    ));
+    assert!(!state.proxy_kill_switch_confirmation);
+}
+
+#[test]
+fn the_kill_switch_of_the_tunnel_mode_and_turning_it_off_ask_nothing() {
+    let mut state = connected_state_for_apply();
+    assert!(matches!(
+        state.act(Action::SetKillSwitch(true)),
+        Some(Job::SetKillSwitch(true))
+    ));
+    assert!(!state.proxy_kill_switch_confirmation);
+
+    let mut state = connected_state_for_apply();
+    proxy_config(&mut state, 100);
+    assert!(matches!(
+        state.act(Action::SetKillSwitch(false)),
+        Some(Job::SetKillSwitch(false))
+    ));
+}
+
+#[test]
+fn a_change_of_mode_during_a_session_goes_in_through_apply() {
+    let mut state = connected_state_for_apply();
+    assert!(state.take_local_proxy_apply().is_none());
+    let job = state.act(Action::SetConnectionMode(
+        rosetun_config::ConnectionMode::SystemProxy,
+    ));
+    assert!(matches!(
+        job,
+        Some(Job::Setting(rosetun_core::SettingChange::ConnectionMode(_)))
+    ));
+    // Still saving: the new mode is not in the config yet.
+    assert!(state.take_local_proxy_apply().is_none());
+
+    state.operations.settings = None;
+    proxy_config(&mut state, 100);
+    let Some(Job::Apply(request)) = state.take_local_proxy_apply() else {
+        panic!("the session takes the new mode");
+    };
+    assert_eq!(
+        request.settings.connection_mode,
+        rosetun_config::ConnectionMode::SystemProxy
+    );
+    assert!(state.take_local_proxy_apply().is_none(), "only once");
+}
+
+#[test]
+fn a_change_of_mode_without_a_session_waits_for_the_next_connect() {
+    let mut state = State::default();
+    state.config_ready = true;
+    state.system_proxy.follow_session();
+    assert!(state.take_local_proxy_apply().is_none());
+    assert!(state.take_local_proxy_apply().is_none());
+}
+
+#[test]
+fn a_port_below_the_allowed_range_is_not_saved() {
+    let mut state = connected_state_for_apply();
+    assert!(state.act(Action::SetLocalProxyPort(80)).is_none());
+    assert!(matches!(
+        state.act(Action::SetLocalProxyPort(20808)),
+        Some(Job::Setting(rosetun_core::SettingChange::LocalProxyPort(
+            20808
+        )))
+    ));
+}
+
+#[test]
+fn the_captions_say_what_each_mode_does_with_the_rest() {
+    let mut state = connected_state_for_apply();
+    assert_eq!(
+        state.connection_mode_detail(),
+        tr!("connection-mode-tun-detail")
+    );
+    assert_eq!(state.kill_switch_detail(), tr!("kill-switch-detail"));
+
+    state.config.settings.connection_mode = rosetun_config::ConnectionMode::SystemProxy;
+    assert_eq!(
+        state.connection_mode_detail(),
+        tr!("connection-mode-proxy-detail")
+    );
+    assert_eq!(state.kill_switch_detail(), tr!("kill-switch-proxy-detail"));
+
+    state.config.settings.kill_switch = true;
+    assert_eq!(
+        state.connection_mode_detail(),
+        tr!("connection-mode-proxy-strict-detail")
+    );
+}
+
+#[test]
+fn the_address_for_other_devices_is_read_only_while_it_shows() {
+    let mut state = State::default();
+    assert!(state.take_lan_address().is_none());
+    state.config.settings.connection_mode = rosetun_config::ConnectionMode::SystemProxy;
+    assert!(state.take_lan_address().is_none());
+    state.config.settings.local_proxy.share_on_lan = true;
+    assert!(matches!(
+        state.take_lan_address(),
+        Some(Job::ReadLanAddress)
+    ));
+    assert!(state.take_lan_address().is_none(), "one read at a time");
+    state.reduce(WorkerEvent::LanAddress(Some("192.0.2.5".parse().unwrap())));
+    assert_eq!(
+        state.system_proxy.lan_address,
+        Some("192.0.2.5".parse().unwrap())
+    );
+    assert!(state.take_lan_address().is_none(), "not again right away");
+}

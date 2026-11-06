@@ -3,9 +3,9 @@ use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rosetun_config::{
-    AccentPreset, AppConfig, DnsSettings, ExitId, ExitTarget, LanguageSetting, ListId, ListSource,
-    NodeId, ProtectionCapabilities, RuleId, RuleMatcher, RuleSetId, RuleTarget, RuleTemplate,
-    Status, SubscriptionId, XrayUse,
+    AccentPreset, AppConfig, ConnectionMode, DnsSettings, ExitId, ExitTarget, LanguageSetting,
+    ListId, ListSource, NodeId, ProtectionCapabilities, RuleId, RuleMatcher, RuleSetId, RuleTarget,
+    RuleTemplate, Status, SubscriptionId, XrayUse,
 };
 use rosetun_core::{
     AddOptions, AppliedSnapshot, DnsPreset, NewExit, RuleDestination, RuleSetsSnapshot,
@@ -182,10 +182,11 @@ pub(crate) struct State {
     pub(crate) settings: SettingsState,
     pub(crate) operations: Operations,
     pub(crate) protection_confirmation: bool,
+    pub(crate) proxy_kill_switch_confirmation: bool,
     /// The Lockdown value waiting for the user's confirmation.
     pub(crate) lockdown_confirmation: Option<bool>,
     lockdown_lan_pending: bool,
-    system_proxy: system_proxy::SystemProxySync,
+    pub(crate) system_proxy: system_proxy::SystemProxySync,
     /// The Lockdown command in flight only brings its LAN access in line
     /// with the saved "Local network" value.
     lockdown_lan_sync: bool,
@@ -249,6 +250,7 @@ impl Default for State {
             settings: SettingsState::default(),
             operations: Operations::default(),
             protection_confirmation: false,
+            proxy_kill_switch_confirmation: false,
             lockdown_confirmation: None,
             lockdown_lan_pending: false,
             system_proxy: system_proxy::SystemProxySync::default(),
@@ -307,6 +309,9 @@ pub(crate) enum Action {
     SetConnectOnStart(bool),
     SetAutoReconnect(bool),
     SetAllowLan(bool),
+    SetConnectionMode(ConnectionMode),
+    SetLocalProxyPort(u16),
+    SetShareOnLan(bool),
     SetPrivateNetworks(bool),
     SetXray(XrayUse),
     SetTlsFragment(bool),
@@ -439,6 +444,8 @@ pub(crate) enum Action {
     MeasureDelay,
     SelectRuleSet(Option<RuleSetId>),
     SetKillSwitch(bool),
+    ConfirmProxyKillSwitch,
+    CancelProxyKillSwitch,
     RequestLockdown(bool),
     CancelLockdown,
     ConfirmLockdown,
@@ -472,6 +479,7 @@ pub(crate) enum Action {
 
 pub(crate) enum Job {
     SyncSystemProxy(SystemProxyWish),
+    ReadLanAddress,
     Connect(RequestInputs),
     CheckSystem {
         request: u64,
@@ -656,6 +664,7 @@ impl State {
             | WorkerEvent::Disconnect(_)
             | WorkerEvent::OpenNetwork(_)
             | WorkerEvent::SystemProxy { .. }
+            | WorkerEvent::LanAddress(_)
             | WorkerEvent::JoinServiceGroup(_)
             | WorkerEvent::SelectNode(_)
             | WorkerEvent::SelectRuleSet(_)
@@ -768,6 +777,8 @@ impl State {
             | Action::MeasureDelay
             | Action::SelectRuleSet(_)
             | Action::SetKillSwitch(_)
+            | Action::ConfirmProxyKillSwitch
+            | Action::CancelProxyKillSwitch
             | Action::RequestLockdown(_)
             | Action::CancelLockdown
             | Action::ConfirmLockdown) => return self.act_connection(action),
@@ -803,6 +814,9 @@ impl State {
             | Action::SetConnectOnStart(_)
             | Action::SetAutoReconnect(_)
             | Action::SetAllowLan(_)
+            | Action::SetConnectionMode(_)
+            | Action::SetLocalProxyPort(_)
+            | Action::SetShareOnLan(_)
             | Action::SetPrivateNetworks(_)
             | Action::SetXray(_)
             | Action::SetTlsFragment(_)

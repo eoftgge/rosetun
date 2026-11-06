@@ -62,7 +62,7 @@ fn protection_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>, 
                     return;
                 }
                 if !lockdown {
-                    widgets::row_detail(ui, &tr!("kill-switch-detail"), waits);
+                    widgets::row_detail(ui, &state.kill_switch_detail(), waits);
                     return;
                 }
                 ui.horizontal_wrapped(|ui| {

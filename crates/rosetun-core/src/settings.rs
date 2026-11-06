@@ -1,8 +1,8 @@
 use std::net::IpAddr;
 
 use rosetun_config::{
-    AccentPreset, DnsSettings, InterfaceSettings, LanguageSetting, QuitAction, Settings,
-    TlsFragment, XrayUse,
+    AccentPreset, ConnectionMode, DnsSettings, InterfaceSettings, LanguageSetting, QuitAction,
+    Settings, TlsFragment, XrayUse,
 };
 use url::Host;
 
@@ -60,6 +60,9 @@ pub enum SettingChange {
     Notifications(bool),
     AutoReconnect(bool),
     AllowLan(bool),
+    ConnectionMode(ConnectionMode),
+    LocalProxyPort(u16),
+    ShareOnLan(bool),
     /// "Private networks behind the router"; counts only with `AllowLan`.
     PrivateNetworks(bool),
     AutoUpdateSubscriptions(bool),
@@ -78,6 +81,11 @@ pub fn change_setting(store: &Store, change: SettingChange) -> Result<(), Settin
             SettingChange::Notifications(enabled) => config.interface.notifications = enabled,
             SettingChange::AutoReconnect(enabled) => config.settings.auto_reconnect = enabled,
             SettingChange::AllowLan(enabled) => config.settings.allow_lan = enabled,
+            SettingChange::ConnectionMode(mode) => config.settings.connection_mode = mode,
+            SettingChange::LocalProxyPort(port) => config.settings.local_proxy.port = port,
+            SettingChange::ShareOnLan(enabled) => {
+                config.settings.local_proxy.share_on_lan = enabled
+            }
             SettingChange::PrivateNetworks(enabled) => config.settings.private_networks = enabled,
             SettingChange::AutoUpdateSubscriptions(enabled) => {
                 config.interface.auto_update_subscriptions = enabled;
@@ -384,6 +392,18 @@ mod tests {
             enabled: true,
             ..TlsFragment::default()
         };
+        change_setting(
+            &store,
+            SettingChange::ConnectionMode(ConnectionMode::SystemProxy),
+        )
+        .unwrap();
+        change_setting(&store, SettingChange::LocalProxyPort(20808)).unwrap();
+        change_setting(&store, SettingChange::ShareOnLan(true)).unwrap();
+        let config = store.load().unwrap();
+        assert_eq!(config.settings.connection_mode, ConnectionMode::SystemProxy);
+        assert_eq!(config.settings.local_proxy.port, 20808);
+        assert!(config.settings.local_proxy.share_on_lan);
+
         change_setting(&store, SettingChange::TlsFragment(fragment)).unwrap();
         let config = store.load().unwrap();
         assert_eq!(config.settings.tls_fragment, fragment);

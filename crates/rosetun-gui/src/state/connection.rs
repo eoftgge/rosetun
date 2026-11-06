@@ -1,5 +1,5 @@
 use rosetun_config::{
-    ConnectStage, ConnectionState, Exit, FailureKind, Status, Transport, XrayUse,
+    ConnectStage, ConnectionMode, ConnectionState, Exit, FailureKind, Status, Transport, XrayUse,
 };
 use rosetun_core::AppliedSnapshot;
 use rosetun_ipc::{ClientError, ErrorCode, ExitOutcome, HelperError, ProbeOutcome, TunnelDelays};
@@ -700,6 +700,7 @@ impl State {
                 }
             }
             WorkerEvent::SystemProxy { wish, outcome } => self.reduce_system_proxy(wish, outcome),
+            WorkerEvent::LanAddress(address) => self.reduce_lan_address(address),
             WorkerEvent::OpenNetwork(result) => {
                 self.operations.helper = false;
                 match result {
@@ -887,11 +888,33 @@ impl State {
                     && !self.operations.helper
                     && !self.lockdown_active()
                 {
+                    // Here it cuts off every program that ignores the proxy,
+                    // connected or not: that is worth a question first.
+                    if enabled
+                        && self.config.settings.connection_mode == ConnectionMode::SystemProxy
+                    {
+                        self.proxy_kill_switch_confirmation = true;
+                        return None;
+                    }
                     self.operations.kill_switch = true;
                     self.operation_error = None;
                     return Some(Job::SetKillSwitch(enabled));
                 }
             }
+            Action::ConfirmProxyKillSwitch => {
+                self.proxy_kill_switch_confirmation = false;
+                if self.config_ready
+                    && !self.kill_switch_unavailable()
+                    && !self.operations.kill_switch
+                    && !self.operations.helper
+                    && !self.lockdown_active()
+                {
+                    self.operations.kill_switch = true;
+                    self.operation_error = None;
+                    return Some(Job::SetKillSwitch(true));
+                }
+            }
+            Action::CancelProxyKillSwitch => self.proxy_kill_switch_confirmation = false,
             Action::RequestLockdown(enabled) => {
                 if self.can_change_lockdown() && enabled != self.lockdown_active() {
                     self.operation_error = None;

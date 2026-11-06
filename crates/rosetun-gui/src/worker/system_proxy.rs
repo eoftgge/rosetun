@@ -77,6 +77,16 @@ impl WorkerDispatcher {
         });
     }
 
+    pub(crate) fn read_lan_address(&self) {
+        self.spawn_task("rosetun-lan-address", move |publisher| {
+            emit(
+                &publisher.tx,
+                &publisher.repaint,
+                WorkerEvent::LanAddress(rosetun_core::lan_address()),
+            );
+        });
+    }
+
     /// On the caller's thread: the GUI is about to exit, and a session ending
     /// may not leave it time for anything later.
     pub(crate) fn restore_system_proxy(&self) {
