@@ -1,0 +1,28 @@
+id	required	evidence	group	detail	title
+preflight.identity	yes	infrastructure	preflight	-	the guest is the designated test machine on the expected boot, x86_64, with systemd
+preflight.accounts	yes	infrastructure	preflight	-	group rosetun and two distinct ordinary accounts exist, both in the group, neither an administrator
+preflight.no-foreign-service	yes	infrastructure	preflight	-	no Rosetun unit, helper process, installed files or nftables table rosetun exist
+preflight.tools	yes	infrastructure	preflight	-	/usr/sbin/nft, curl with tftp, dig and cgroup v2 are present
+preflight.baseline	yes	infrastructure	preflight	-	without Rosetun the probe address answers HTTPS on the physical interface, UDP 53 leaves it, the guest's resolver answers, and the host node accepts TCP
+install.service	yes	real-service	install	-	the helper runs as the systemd unit in its own cgroup leaf and offers the kill switch
+proxy.through	yes	real-service	proxy	-	the proxy mode without the kill switch comes up without an adapter or a table, and HTTPS through the proxy answers
+proxy.around-open	yes	real-service	proxy	-	without the kill switch HTTPS to the probe address around the proxy goes out by itself
+proxy.loopback-only	yes	real-service	proxy	-	without sharing only 127.0.0.1 listens on the proxy's port
+proxy.port-busy	yes	real-service	proxy	-	a port another program holds fails the connect naming the port, before any table
+strict.through	yes	real-service	strict	-	with the kill switch the table is up without an adapter, and HTTPS through the proxy answers
+strict.around-blocked	yes	real-service	strict	-	with the kill switch HTTPS to the probe address around the proxy is refused
+strict.first-phase	yes	real-service	strict	-	the table of the proxy mode permits no tunnel: it stays in the first phase
+strict.engine-killed	yes	real-service	strict	-	sing-box killed with SIGKILL: the direct path stays refused, and the session comes back
+strict.disconnect	yes	real-service	strict	-	a disconnect removes the table and the direct path answers again
+mode.change	yes	real-service	mode	-	apply changes TUN to the proxy and back under the kill switch, with the direct path refused
+share.listens	yes	real-service	share	-	with sharing the proxy listens on the physical interface's private address and answers there
+share.peer-refused	yes	real-service	share	-	a peer namespace behind a veth link, which is no physical network, does not reach the proxy, and nothing listens on a wildcard
+share.off	yes	real-service	share	-	with sharing off nothing listens on the physical interface's address
+lockdown.share-closed	yes	real-service	lockdown	-	under Lockdown without its local network a shared proxy stays on loopback, and works there
+lockdown.share-open	yes	real-service	lockdown	-	under Lockdown with its local network the proxy is shared and the input chain takes the private ranges
+lockdown.off	yes	real-service	lockdown	-	Lockdown goes off after the session and the table goes with it
+desktop.set	yes	real-service	desktop	-	kioslaverc holds the local proxy in KIO's format, with other keys kept (the GUI's module; the stand has no KDE session)
+desktop.restore	yes	real-service	desktop	-	kioslaverc comes back as it was
+desktop.crash	yes	real-service	desktop	-	a process that exits without restoring leaves a record, and the next start restores from it
+desktop.foreign	yes	real-service	desktop	-	a setting changed by hand stays, and the record goes
+stop.removes-table	yes	real-service	stop	-	a normal stop of the service removes the table and the direct path answers

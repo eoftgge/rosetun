@@ -37,6 +37,14 @@ L3_START_REQUIRED=(guest/launch.sh guest/lib.sh guest/run-l3.sh guest/start.sh s
 l4_start_path_allowed() {
     [[ $1 =~ ^(guest/(launch|lib|run-l4|start)\.sh|scenarios-l4\.tsv|job\.env|artifacts/(rosetun-helper-privileged|rosetun|sing-box|rosetun-(helper|lockdown)\.service|request-(kill-switch|lan|dns-lock)\.json|provenance\.json))$ ]]
 }
+proxy_start_path_allowed() {
+    [[ $1 =~ ^(guest/(launch|lib|run-proxy|start)\.sh|scenarios-proxy\.tsv|job\.env|artifacts/(rosetun-helper-privileged|rosetun|desktop_proxy|sing-box|rosetun-(helper|lockdown)\.service|request-(kill-switch|lan|dns-lock|proxy|proxy-strict|proxy-share)\.json|provenance\.json))$ ]]
+}
+PROXY_START_REQUIRED=(guest/launch.sh guest/lib.sh guest/run-proxy.sh guest/start.sh scenarios-proxy.tsv job.env
+    artifacts/rosetun-helper-privileged artifacts/rosetun artifacts/desktop_proxy artifacts/sing-box
+    artifacts/rosetun-helper.service artifacts/rosetun-lockdown.service artifacts/request-kill-switch.json
+    artifacts/request-proxy.json artifacts/request-proxy-strict.json artifacts/request-proxy-share.json
+    artifacts/provenance.json)
 L4_START_REQUIRED=(guest/launch.sh guest/lib.sh guest/run-l4.sh guest/start.sh scenarios-l4.tsv job.env
     artifacts/rosetun-helper-privileged artifacts/rosetun artifacts/sing-box artifacts/rosetun-helper.service
     artifacts/rosetun-lockdown.service artifacts/request-kill-switch.json artifacts/request-lan.json
@@ -77,6 +85,8 @@ l2_start_main() {
         stage=l4 allowed=l4_start_path_allowed required=("${L4_START_REQUIRED[@]}")
     elif grep -q '  guest/run-l5\.sh$' "$run/manifest.sha256"; then
         stage=l5 allowed=l5_start_path_allowed required=("${L5_START_REQUIRED[@]}")
+    elif grep -q '  guest/run-proxy\.sh$' "$run/manifest.sha256"; then
+        stage=proxy allowed=proxy_start_path_allowed required=("${PROXY_START_REQUIRED[@]}")
     fi
     local line path paths=()
     while IFS= read -r line; do

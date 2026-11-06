@@ -40,9 +40,10 @@ param(
     [Parameter(ParameterSetName = 'Run', Mandatory)][switch]$Run,
     [Parameter(ParameterSetName = 'Run')][string]$Checkpoint,
     # L3: the real service with its nftables kill switch, against the host's test node.
+    # Proxy: the system proxy mode on the real service, with the L3 parameters.
     # L4: Lockdown on the real service, with two reboots of the guest. The
     # parameters marked "L3 only" apply to L4 as well.
-    [Parameter(ParameterSetName = 'Run')][ValidateSet('L2', 'L3', 'L4', 'L5')][string]$Stage = 'L2',
+    [Parameter(ParameterSetName = 'Run')][ValidateSet('L2', 'L3', 'L4', 'L5', 'Proxy')][string]$Stage = 'L2',
     # L3 only: the Windows sing-box.exe that runs the test node on the host.
     [Parameter(ParameterSetName = 'Run')][string]$SingBoxPath,
     # L3 only: the Linux sing-box binary installed in the guest (the version the
@@ -317,7 +318,7 @@ function Invoke-StandCollect {
 
     $recordedStage = [string](Get-RosetunLinuxMember -Object $record -Name 'stage')
     if ([string]::IsNullOrEmpty($recordedStage)) { $recordedStage = 'L2' }
-    if ($recordedStage -notin @('L2', 'L3', 'L4', 'L5')) { throw "The stage record names an unknown stage '$recordedStage'." }
+    if ($recordedStage -notin @('L2', 'L3', 'L4', 'L5', 'Proxy')) { throw "The stage record names an unknown stage '$recordedStage'." }
     $scenarios = @(Get-RosetunLinuxScenarios -Stage $recordedStage)
     $waitClock = [Diagnostics.Stopwatch]::StartNew()
     $lastLine = ''
@@ -414,7 +415,7 @@ if ($mode -eq 'Run') {
     $extraFiles = [ordered]@{}
     $extraJob = [ordered]@{}
     $nodeStarted = $false
-    if ($Stage -in @('L3', 'L4', 'L5')) {
+    if ($Stage -in @('L3', 'L4', 'L5', 'Proxy')) {
         # Everything that can fail fast, before the build. L5's package brings its own engines.
         if ($Stage -ne 'L5') {
             if (-not $SingBoxLinuxPath) { throw '-Stage L3 needs -SingBoxLinuxPath: the Linux sing-box binary for the guest (see the stand guide, L3).' }
@@ -446,7 +447,7 @@ if ($mode -eq 'Run') {
 
     try {
         $build = Invoke-StandBuild -RunId $newRunId -BuildStage $Stage
-        if ($Stage -in @('L3', 'L4', 'L5')) {
+        if ($Stage -in @('L3', 'L4', 'L5', 'Proxy')) {
             if (-not (Get-NetTCPConnection -LocalPort $nodePort -State Listen -ErrorAction SilentlyContinue)) {
                 Write-Step "Starting the test node on $($hostAddress):$nodePort"
                 $nodeArguments = @{ SingBoxPath = (Resolve-Path -LiteralPath $SingBoxPath).ProviderPath }
@@ -464,7 +465,13 @@ if ($mode -eq 'Run') {
                 $extraFiles['sing-box'] = (Resolve-Path -LiteralPath $SingBoxLinuxPath).ProviderPath
                 $extraFiles['rosetun-helper.service'] = Join-Path $RepoRoot 'packaging\linux\rosetun-helper.service'
             }
-            if ($Stage -eq 'L4') {
+            if ($Stage -eq 'Proxy') {
+                $proxyRequests = New-RosetunLinuxProxyRequests -KillSwitchRequestPath $extraFiles['request-kill-switch.json'] -OutDir $requestDir
+                foreach ($name in $proxyRequests.Keys) { $extraFiles[$name] = $proxyRequests[$name] }
+                $extraFiles.Remove('request-lan.json')
+                $extraFiles.Remove('request-dns-lock.json')
+            }
+            if ($Stage -in @('L4', 'Proxy')) {
                 $extraFiles['rosetun-lockdown.service'] = Join-Path $RepoRoot 'packaging\linux\rosetun-lockdown.service'
             }
         }
@@ -478,7 +485,7 @@ if ($mode -eq 'Run') {
         Write-Step "Waiting for the job (at most $(Format-RosetunLinuxElapsed ([TimeSpan]::FromSeconds($wait))))"
         $verdict = Invoke-StandCollect -RunId $newRunId -WaitSeconds $wait -Progress
         Write-Step "Result: $verdict"
-        if ($Stage -in @('L3', 'L4', 'L5')) {
+        if ($Stage -in @('L3', 'L4', 'L5', 'Proxy')) {
             # The restore below removes the guest's copy; the journal explains a failure.
             try {
                 $journal = Read-RosetunLinuxGuestFile -Target (Wait-StandTarget -TimeoutSeconds 60) -Path "$guestBase/$newRunId/report/helper-journal.txt"
@@ -492,7 +499,7 @@ if ($mode -eq 'Run') {
         }
     }
     finally {
-        if ($Stage -in @('L3', 'L4', 'L5')) {
+        if ($Stage -in @('L3', 'L4', 'L5', 'Proxy')) {
             # The service must never stay in a checkpoint or a running guest.
             if (Test-Path -LiteralPath (Join-Path $runLog 'stage.json')) {
                 Write-Step "Restoring checkpoint '$($stand.Checkpoint)' after the run"

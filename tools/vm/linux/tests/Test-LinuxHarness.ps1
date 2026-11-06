@@ -513,6 +513,13 @@ Assert-That 'the remake stops the VM before the checkpoint' (
 $odd = Get-RosetunLinuxRestoredStateProblem -VmName 'rosetun-linux-l2' -CheckpointName 'l2-clean' -State 'Paused'
 Assert-That 'any other state is refused too' ($null -ne $odd -and $odd -match "'Paused'")
 
+# --- the proxy stage: its own job and scenarios
+$proxyStage = Get-RosetunLinuxStageProfile 'Proxy'
+Assert-That 'the proxy stage runs its own job' ($proxyStage.Scripts -contains 'run-proxy.sh' -and $proxyStage.Scripts -notcontains 'run-l3.sh')
+Assert-That 'the proxy stage carries the desktop tool' ($proxyStage.Artifacts -contains 'desktop_proxy')
+$proxyScenarios = @(Get-RosetunLinuxScenarios -Stage Proxy)
+Assert-That 'the proxy scenarios cover the strict kill switch, sharing, Lockdown and the desktop' (@($proxyScenarios | Where-Object { $_.Id -in @('strict.around-blocked', 'share.peer-refused', 'lockdown.share-closed', 'desktop.crash') }).Count -eq 4)
+
 # --- L3: scenarios, requests, the stage's composition
 $l3 = @(Get-RosetunLinuxScenarios -Stage L3)
 Assert-That 'the L3 scenarios load' ($l3.Count -ge 15)

@@ -19,6 +19,7 @@ $script:StageProfiles = @{
     L2 = @{ Artifacts = $script:ArtifactNames; Scripts = @('launch.sh', 'lib.sh', 'run-l2.sh', 'start.sh'); Scenarios = 'scenarios.tsv' }
     L3 = @{ Artifacts = @('rosetun-helper-privileged', 'rosetun'); Scripts = @('launch.sh', 'lib.sh', 'run-l3.sh', 'start.sh'); Scenarios = 'scenarios-l3.tsv' }
     L4 = @{ Artifacts = @('rosetun-helper-privileged', 'rosetun'); Scripts = @('launch.sh', 'lib.sh', 'run-l4.sh', 'start.sh'); Scenarios = 'scenarios-l4.tsv'; Reboots = 2 }
+    Proxy = @{ Artifacts = @('rosetun-helper-privileged', 'rosetun', 'desktop_proxy'); Scripts = @('launch.sh', 'lib.sh', 'run-proxy.sh', 'start.sh'); Scenarios = 'scenarios-proxy.tsv' }
     L5 = @{ Artifacts = @('rosetun-old.deb', 'rosetun-new.deb'); Scripts = @('launch.sh', 'lib.sh', 'run-l5.sh', 'start.sh'); Scenarios = 'scenarios-l5.tsv'; Packages = $true }
 }
 # The L3 and L4 stages' requests, made from the owner's request on the host.
@@ -40,7 +41,7 @@ function Get-RosetunLinuxRoot {
 }
 
 function Get-RosetunLinuxStageProfile {
-    param([ValidateSet('L2', 'L3', 'L4', 'L5')][string]$Stage = 'L2')
+    param([ValidateSet('L2', 'L3', 'L4', 'L5', 'Proxy')][string]$Stage = 'L2')
     $script:StageProfiles[$Stage]
 }
 
@@ -691,7 +692,7 @@ function Invoke-RosetunLinuxBuild {
         [scriptblock]$Heartbeat,
         [int]$HeartbeatSeconds = 30,
         [int]$TimeoutSeconds = 3600,
-        [ValidateSet('L2', 'L3', 'L4', 'L5')][string]$Stage = 'L2'
+        [ValidateSet('L2', 'L3', 'L4', 'L5', 'Proxy')][string]$Stage = 'L2'
     )
     Assert-RosetunLinuxCleanSource -Source $Source
     if ($WslDistro -notmatch '^[A-Za-z0-9._-]+$') { throw "Unsafe WSL distribution name '$WslDistro'." }
@@ -705,6 +706,7 @@ function Invoke-RosetunLinuxBuild {
     $outWsl = ConvertTo-RosetunLinuxWslPath -WslDistro $WslDistro -Path $outRoot
     $arguments = @('-d', $WslDistro, '--cd', '~', '--exec', 'bash', "$repoWsl/tools/vm/linux/build-in-wsl.sh", $repoWsl, $Source.Sha, "$outWsl/$name")
     if ($Stage -in @('L3', 'L4')) { $arguments += '--l3' }
+    if ($Stage -eq 'Proxy') { $arguments += '--proxy' }
     if ($Stage -eq 'L5') { $arguments += '--deb' }
     $result = Invoke-RosetunLinuxProcess -FilePath (Find-RosetunLinuxWsl) -ArgumentList $arguments -TimeoutSeconds $TimeoutSeconds `
         -Heartbeat $Heartbeat -HeartbeatSeconds $HeartbeatSeconds -Environment $script:WslEnvironment
@@ -764,7 +766,7 @@ function Get-RosetunLinuxArtifacts {
     param(
         [Parameter(Mandatory)][string]$ArtifactDir,
         [Parameter(Mandatory)]$Source,
-        [ValidateSet('L2', 'L3', 'L4', 'L5')][string]$Stage = 'L2'
+        [ValidateSet('L2', 'L3', 'L4', 'L5', 'Proxy')][string]$Stage = 'L2'
     )
     if (-not (Test-Path -LiteralPath $ArtifactDir -PathType Container)) { throw "Artifact directory '$ArtifactDir' does not exist." }
     $provenancePath = Join-Path $ArtifactDir 'provenance.json'
@@ -816,7 +818,7 @@ function Get-RosetunLinuxArtifacts {
 # ------------------------------------------------------------------ scenarios and staging
 
 function Get-RosetunLinuxScenarios {
-    param([ValidateSet('L2', 'L3', 'L4', 'L5')][string]$Stage = 'L2', [string]$Path)
+    param([ValidateSet('L2', 'L3', 'L4', 'L5', 'Proxy')][string]$Stage = 'L2', [string]$Path)
     if (-not $Path) { $Path = Join-Path (Get-RosetunLinuxRoot) (Get-RosetunLinuxStageProfile $Stage).Scenarios }
     $lines = @(Get-Content -LiteralPath $Path | Where-Object { $_.Trim() -ne '' })
     if ($lines.Count -lt 2 -or $lines[0] -ne "id`trequired`tevidence`tgroup`tdetail`ttitle") {
@@ -887,7 +889,7 @@ function New-RosetunLinuxStage {
         [Parameter(Mandatory)][string]$RunId,
         [Parameter(Mandatory)][string]$ArtifactDir,
         [Parameter(Mandatory)][string]$JobEnv,
-        [ValidateSet('L2', 'L3', 'L4', 'L5')][string]$Stage = 'L2',
+        [ValidateSet('L2', 'L3', 'L4', 'L5', 'Proxy')][string]$Stage = 'L2',
         # Files staged under artifacts/ besides the build, by published name.
         [Collections.IDictionary]$Extra = [ordered]@{}
     )
@@ -956,6 +958,35 @@ function New-RosetunLinuxL3Requests {
             $request.settings | Add-Member -NotePropertyName $setting -NotePropertyValue $variants[$name][$setting] -Force
         }
         $request.settings | Add-Member -NotePropertyName auto_reconnect -NotePropertyValue $true -Force
+        $path = Join-Path $OutDir $name
+        [IO.File]::WriteAllText($path, ($request | ConvertTo-Json -Depth 32), [Text.UTF8Encoding]::new($false))
+        $paths[$name] = $path
+    }
+    $paths
+}
+
+# The requests of the proxy stage, next to the L3 ones it also uses: the proxy
+# mode alone, with the kill switch, and shared. Returns name -> path.
+function New-RosetunLinuxProxyRequests {
+    param(
+        [Parameter(Mandatory)][string]$KillSwitchRequestPath,
+        [Parameter(Mandatory)][string]$OutDir,
+        [ValidateRange(1024, 65535)][int]$ProxyPort = 10808
+    )
+    $variants = [ordered]@{
+        'request-proxy.json'        = @{ kill_switch = $false; share = $false }
+        'request-proxy-strict.json' = @{ kill_switch = $true; share = $false }
+        'request-proxy-share.json'  = @{ kill_switch = $false; share = $true }
+    }
+    $paths = [ordered]@{}
+    foreach ($name in $variants.Keys) {
+        $request = Get-Content -LiteralPath $KillSwitchRequestPath -Raw | ConvertFrom-Json
+        $request.settings | Add-Member -NotePropertyName connection_mode -NotePropertyValue 'system_proxy' -Force
+        $request.settings | Add-Member -NotePropertyName kill_switch -NotePropertyValue $variants[$name].kill_switch -Force
+        $request.settings | Add-Member -NotePropertyName local_proxy -Force -NotePropertyValue ([pscustomobject]@{
+                port = $ProxyPort
+                share_on_lan = $variants[$name].share
+            })
         $path = Join-Path $OutDir $name
         [IO.File]::WriteAllText($path, ($request | ConvertTo-Json -Depth 32), [Text.UTF8Encoding]::new($false))
         $paths[$name] = $path

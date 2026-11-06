@@ -3,10 +3,11 @@
 # Never run it as root and never cross-build from Windows: the stand accepts only
 # an x86-64 ELF made here, together with provenance.json describing the build.
 #
-#   tools/vm/linux/build-artifacts.sh [--l3 | --deb] OUTPUT_DIR
+#   tools/vm/linux/build-artifacts.sh [--l3 | --proxy | --deb] OUTPUT_DIR
 #
 # Without an option: the L2 artifacts (transport fixture and unit test binaries). With
 # --l3: the release helper and CLI that the L3 matrix installs as the real service.
+# --proxy: the same, and the tool that changes the desktop's proxy as the GUI does.
 # With --deb: the package twice, as the new version and as an older one to upgrade
 # from; it needs what installer/linux/build-deb.sh needs.
 # OUTPUT_DIR must not exist yet. Needs Rust 1.96.0 (the project MSRV) and a C linker.
@@ -19,12 +20,15 @@ stage=l2
 if [ "${1-}" = --l3 ]; then
     stage=l3
     shift
+elif [ "${1-}" = --proxy ]; then
+    stage=proxy
+    shift
 elif [ "${1-}" = --deb ]; then
     stage=l5
     shift
 fi
 out=${1-}
-[ -n "$out" ] || { echo "usage: build-artifacts.sh [--l3 | --deb] OUTPUT_DIR" >&2; exit 64; }
+[ -n "$out" ] || { echo "usage: build-artifacts.sh [--l3 | --proxy | --deb] OUTPUT_DIR" >&2; exit 64; }
 [ "$(id -u)" -ne 0 ] || { echo "build-artifacts.sh: do not build as root" >&2; exit 1; }
 [ "$(uname -s)" = Linux ] && [ "$(uname -m)" = x86_64 ] || { echo "build-artifacts.sh: needs an x86_64 Linux host" >&2; exit 1; }
 [ ! -e "$out" ] || { echo "build-artifacts.sh: $out already exists" >&2; exit 1; }
@@ -75,6 +79,17 @@ if [ "$stage" = l5 ]; then
     build_deb rosetun-old.deb --package-version 0.0.1~stand
     build_deb rosetun-new.deb
     provenance rosetun-old.deb rosetun-new.deb >"$out/provenance.json"
+elif [ "$stage" = proxy ]; then
+    cargo +1.96.0 build -q --locked --release -p rosetun-helper-privileged -p rosetun
+    cargo +1.96.0 build -q --locked --release -p rosetun-shell --example desktop_proxy
+    for name in rosetun-helper-privileged rosetun examples/desktop_proxy; do
+        [ -f "$target_dir/release/$name" ] || { echo "build-artifacts.sh: a build product was not found" >&2; exit 1; }
+    done
+    mkdir -p -- "$out"
+    install -m 0755 -- "$target_dir/release/rosetun-helper-privileged" "$out/rosetun-helper-privileged"
+    install -m 0755 -- "$target_dir/release/rosetun" "$out/rosetun"
+    install -m 0755 -- "$target_dir/release/examples/desktop_proxy" "$out/desktop_proxy"
+    provenance rosetun-helper-privileged rosetun desktop_proxy >"$out/provenance.json"
 elif [ "$stage" = l3 ]; then
     cargo +1.96.0 build -q --locked --release -p rosetun-helper-privileged -p rosetun
     for name in rosetun-helper-privileged rosetun; do

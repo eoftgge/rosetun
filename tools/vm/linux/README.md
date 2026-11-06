@@ -544,6 +544,21 @@ or crash, so a killed helper's socket never blocks the restart, `KillMode=mixed`
 (the helper's own cgroup leaves, for the kill switch). The comments in the unit
 file explain each line.
 
+## Proxy: the system proxy mode on the real service
+
+The same VM and parameters as L3, with `-Stage Proxy`:
+
+```powershell
+.\tools\vm\linux\Invoke-LinuxL2Matrix.ps1 -Run -Stage Proxy -SingBoxPath .\tools\sing-box.exe -SingBoxLinuxPath .\target\sing-box-linux\sing-box
+```
+
+`guest/run-proxy.sh` shares L3's scaffold and `scenarios-proxy.tsv` lists what it checks: HTTPS through `curl --proxy` and around it, with and without the strict kill switch; a port another program holds; an engine killed under the kill switch; `rosetun apply` between TUN and the proxy; Lockdown with and without its local network.
+
+Two things are checked differently from what a person would do, because the stand cannot do them:
+
+- **Sharing.** A shared proxy listens only on the private addresses of physical interfaces, and the peer namespace sits behind a veth link, which is not one. So the peer proves the refusal; the positive side is a request to the proxy on the physical interface's address from inside the guest, plus what `ss` shows. A phone on the same network is the owner's manual check.
+- **The desktop's settings.** The stand has no KDE session to run the GUI in, so `desktop_proxy` (`crates/rosetun-shell/examples/desktop_proxy.rs`), which uses the GUI's module, changes a `kioslaverc` of its own with `XDG_CURRENT_DESKTOP=KDE`. Exiting without restoring is what `kill -9` of the GUI leaves behind. It does not prove that Plasma reads the file: that is the owner's manual check in System Settings.
+
 ## L3: the kill switch on the real service
 
 A separate command on the same VM. It installs the real helper as the systemd
