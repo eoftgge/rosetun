@@ -53,7 +53,7 @@ Not tested.
 
 ## Install
 
-**Windows 11, x64;** Windows 10 is not tested. Download `{{setup}}` from this release. [Code signing policy](https://github.com/eoftgge/rosetun/blob/dev/CODE_SIGNING_POLICY.md): if SmartScreen says "Windows protected your PC", select **More info** and then **Run anyway**.
+**Windows 11, x64.** Windows 10 runs on one tester's computer; the failure tests have not run on it. Download `{{setup}}` from this release. [Code signing policy](https://github.com/eoftgge/rosetun/blob/dev/CODE_SIGNING_POLICY.md): if SmartScreen says "Windows protected your PC", select **More info** and then **Run anyway**.
 
 **Debian 13, amd64.** Download `{{deb}}`, then:
 
@@ -138,7 +138,7 @@ On Windows, the sing-box executable embeds Wintun {{wintun_version}}, distribute
 
 ### Установка
 
-**Windows 11, x64;** Windows 10 не проверялась. Скачайте `{{setup}}` из этого выпуска. [Политика подписи кода](https://github.com/eoftgge/rosetun/blob/dev/CODE_SIGNING_POLICY.md) (Code signing policy): если SmartScreen показывает «Windows protected your PC», нажмите **More info**, затем **Run anyway**.
+**Windows 11, x64.** Windows 10 работает на компьютере одного тестировщика; проверки отказов на ней не прогонялись. Скачайте `{{setup}}` из этого выпуска. [Политика подписи кода](https://github.com/eoftgge/rosetun/blob/dev/CODE_SIGNING_POLICY.md) (Code signing policy): если SmartScreen показывает «Windows protected your PC», нажмите **More info**, затем **Run anyway**.
 
 **Debian 13, amd64.** Скачайте `{{deb}}`, затем:
 

@@ -24,7 +24,7 @@ Rosetun is a VPN client for Windows and Linux. sing-box runs the tunnel, rules a
 
 ## Requirements
 
-**Windows:** Windows 11, x64. Windows 10 is not tested.
+**Windows:** Windows 11, x64. Windows 10 runs on one tester's computer; the failure tests have not run on it.
 
 **Linux:** Debian 13, amd64, with systemd and nftables (the package depends on them) and cgroup v2. polkit (`pkexec`, `polkitd`) is recommended: without it, the window cannot change Lockdown, and you run `sudo rosetun lockdown on` or `off` in a terminal. Linux is new in this beta.
 
@@ -169,13 +169,13 @@ The difference to remember: **on Windows a crash of the service opens the networ
 
 **Not tested:**
 
-- Windows 10;
+- Windows 10 in the failure tests: it is only known to run on one tester's computer;
 - other firewalls and antivirus programs with their own network filters, and firewalld on Linux (Rosetun's units start after it; `nftables.service` is covered);
 - sleep and hibernation with Lockdown on real hardware (Windows: only a virtual machine's sleep; Linux: not at all);
 - a power cut on Linux;
 - going back to 0.4;
 - on Linux, **Local network** from a program that does not pick the interface itself;
-- on Linux, the window, the tray and the polkit prompt: no matrix drives a desktop.
+- on Linux, the window, the tray and the polkit prompt in an automated run: no matrix drives a desktop. KDE Plasma was checked by hand, on Wayland and X11.
 
 Lockdown protects against accidental leaks: the VPN drops, the service stops, the computer boots. It does not protect against malware you run yourself. The kill switch stays the main protection.
 
