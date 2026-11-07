@@ -1,7 +1,5 @@
 English | [Русский](README.ru.md)
 
-
-Arch Linux: the `rosetun-bin` AUR recipe is prepared for 0.5.0; see [installation and safe updates](https://eoftgge.github.io/rosetun/en/docs/install/#arch-linux).
 <p align="center"><img src=".github/assets/banner.svg" alt="Rosetun: VPN client for Windows and Linux" width="100%"></p>
 
 <p align="center">
@@ -17,12 +15,13 @@ Arch Linux: the `rosetun-bin` AUR recipe is prepared for 0.5.0; see [installatio
 </p>
 
 <p align="center">
-  <a href="https://github.com/eoftgge/rosetun/releases"><img src=".github/assets/download.svg" alt="Download Rosetun for Windows" height="56"></a>
-  <a href="https://github.com/eoftgge/rosetun/releases"><img src=".github/assets/download-linux.svg" alt="Download Rosetun for Debian 13" height="56"></a>
+  <a href="https://github.com/eoftgge/rosetun/releases/latest"><img src=".github/assets/download.svg" alt="Download" height="56"></a>
 </p>
 
 Rosetun is a VPN client for Windows and Linux, built on sing-box and Xray.
 A system service protects against leaks independently of the engine.
+
+**Stable release: 0.5.0 · Windows and Linux.**
 
 **Young project:** one developer with AI coding agents, and few users yet. Report problems in [Issues](https://github.com/eoftgge/rosetun/issues).
 
@@ -30,7 +29,7 @@ A system service protects against leaks independently of the engine.
 
 - Kill switch and system DNS protection.
 - Experimental Lockdown: protection while disconnected too.
-- TUN and System proxy (since 0.5).
+- TUN and System proxy.
 - Rules by program, website, IP and list, with separate exits.
 - Provider subscriptions, QR codes and `rosetun://` links.
 - Local network access and automatic reconnect.
@@ -38,15 +37,22 @@ A system service protects against leaks independently of the engine.
 
 ## Install
 
-Windows 11 x64: download the installer above and run it. [Verify and install](https://eoftgge.github.io/rosetun/en/docs/install/).
+Choose a file from the release linked above:
 
-Linux amd64 (since the 0.5 preview): verified on Debian 13; expected on Ubuntu 24.04+, Linux Mint 22+ and Debian/Ubuntu derivatives with glibc >= 2.36, systemd, nftables and polkit. Arch: AUR recipe prepared, runtime check pending. Systems without systemd and Flatpak/Snap/AppImage are unsupported because a privileged host service is required. [Linux support](https://eoftgge.github.io/rosetun/en/docs/linux/). Download the `.deb` and run:
+- **Windows 11 x64:** run `rosetun-0.5.0-setup.exe`.
+- **Debian / Ubuntu / Linux Mint, amd64:** install `rosetun_0.5.0_amd64.deb`, join the service group and restart the computer:
 
 ```sh
-sudo apt install ./rosetun_<version>_amd64.deb
+sudo apt install ./rosetun_0.5.0_amd64.deb
+sudo usermod -aG rosetun "$USER"
+sudo reboot
 ```
 
-[Join the `rosetun` group and restart the computer](https://eoftgge.github.io/rosetun/en/docs/install/#debian-13).
+Debian 13 is verified. Ubuntu 24.04+, Linux Mint 22+ and compatible derivatives are expected to work; see [Linux support and requirements](https://eoftgge.github.io/rosetun/en/docs/linux/).
+
+**Arch Linux:** build the binary package from the recipe in this repository; AUR publication and runtime verification are pending. [Install and update safely](https://eoftgge.github.io/rosetun/en/docs/install/#arch-linux).
+
+[Verify downloads, update, remove and recover from Lockdown](https://eoftgge.github.io/rosetun/en/docs/install/).
 
 ## Documentation
 
@@ -54,15 +60,9 @@ sudo apt install ./rosetun_<version>_amd64.deb
 
 [Build from source](https://eoftgge.github.io/rosetun/en/docs/build/) · [Security](SECURITY.md).
 
-Stable release: 0.4 for Windows. The documentation labels 0.5 additions separately.
-
 ## Troubleshooting
 
 [Windows and Linux instructions, Lockdown recovery and logs](https://eoftgge.github.io/rosetun/en/docs/troubleshooting/).
-
-### Debian 13
-
-[Install, update and remove](https://eoftgge.github.io/rosetun/en/docs/install/#debian-13).
 
 ## Licenses
 

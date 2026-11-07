@@ -31,17 +31,20 @@ fi
 out=${1-}
 [ -n "$out" ] || { echo "usage: build-artifacts.sh [--l3 | --proxy | --deb] OUTPUT_DIR" >&2; exit 64; }
 [ "$(id -u)" -ne 0 ] || { echo "build-artifacts.sh: do not build as root" >&2; exit 1; }
-[ "$(uname -s)" = Linux ] && [ "$(uname -m)" = x86_64 ] || { echo "build-artifacts.sh: needs an x86_64 Linux host" >&2; exit 1; }
+if [ "$(uname -s)" != Linux ] || [ "$(uname -m)" != x86_64 ]; then
+    echo "build-artifacts.sh: needs an x86_64 Linux host" >&2
+    exit 1
+fi
 [ ! -e "$out" ] || { echo "build-artifacts.sh: $out already exists" >&2; exit 1; }
 
 repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd -P)
 cd -- "$repo"
 # shellcheck source=/dev/null
 . /etc/os-release
-[ "$ID" = debian ] && [ "$VERSION_ID" = 13 ] || {
+if [ "$ID" != debian ] || [ "$VERSION_ID" != 13 ]; then
     echo 'build-artifacts.sh: the stand requires Debian 13; release builds use Debian 12' >&2
     exit 1
-}
+fi
 
 if sha=$(git rev-parse HEAD 2>/dev/null) && [[ $sha =~ ^[0-9a-f]{40}$ ]]; then
     if [ -n "$(git status --porcelain=v1 -uall --no-renames)" ]; then dirty=true; else dirty=false; fi
@@ -79,7 +82,10 @@ if [ "$stage" = l5 ]; then
         local destination=$1 built
         shift
         built=$(bash installer/linux/build-deb.sh --stand-debian13 "$@" | sed -n 's/^Package: //p')
-        [ -n "$built" ] && [ -f "$built" ] || { echo "build-artifacts.sh: the package was not built" >&2; exit 1; }
+        if [ -z "$built" ] || [ ! -f "$built" ]; then
+            echo "build-artifacts.sh: the package was not built" >&2
+            exit 1
+        fi
         install -m 0644 -- "$built" "$out/$destination"
     }
     mkdir -p -- "$out"
@@ -123,7 +129,10 @@ else
     ipc_tests=$(find_exe lib rosetun_ipc true)
     helper_tests=$(find_exe bin rosetun-helper-privileged true)
     for file in "$fixture" "$ipc_tests" "$helper_tests"; do
-        [ -n "$file" ] && [ -f "$file" ] || { echo "build-artifacts.sh: a build product was not found" >&2; exit 1; }
+        if [ -z "$file" ] || [ ! -f "$file" ]; then
+            echo "build-artifacts.sh: a build product was not found" >&2
+            exit 1
+        fi
     done
 
     mkdir -p -- "$out"

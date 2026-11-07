@@ -30,10 +30,9 @@
         <main id="main" class="wrap">
             <div class="prose docs">
                 <h1>Ссылки для провайдеров</h1>
-                <!-- docs-version --><p class="note">Документация 0.5 · Windows и Linux.</p><!-- /docs-version -->
+                <!-- docs-version --><p class="note">Стабильный выпуск: 0.5.0 · Windows и Linux.</p><!-- /docs-version -->
                 <nav aria-label="На этой странице"><a href="#details">Ссылки для провайдеров</a></nav>
                 <section id="details">
-<p class="history">С 0.5: регистрация схемы в Debian и сокет Linux.</p>
 <p>Кнопка на странице провайдера может открыть Rosetun с заполненной подпиской: <code>rosetun://add/&lt;ссылка подписки&gt;</code>, ссылка как есть (<code>rosetun://add/https://example.com/sub</code>) или percent-кодированная (<code>rosetun://add/https%3A%2F%2Fexample.com%2Fsub</code>). Необязательное <code>#имя</code> в конце предлагает название подписки (<code>rosetun://add/https://example.com/sub#Example</code>). Rosetun только показывает окно <strong>Добавить подписку</strong> со ссылкой, названием и хостом провайдера; ничего не загружается и не добавляется, пока вы не нажмёте <strong>Добавить</strong>. Ссылка на уже добавленную подписку только показывает её.</p>
 <p>Установщик Windows регистрирует схему для всех пользователей. Пакет Debian регистрирует её через свой файл <code>.desktop</code> (<code>x-scheme-handler/rosetun</code>). Запущенный Rosetun получает ссылку от следующего запуска по каналу, который может открыть только ваша учётная запись: именованный канал на Windows, сокет в <code>$XDG_RUNTIME_DIR</code> на Linux.</p>
 <p>Подробнее для провайдеров, с заголовками ответа: <a href="https://eoftgge.github.io/rosetun/ru/providers/">страница на сайте</a>.</p>

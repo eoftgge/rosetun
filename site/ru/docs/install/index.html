@@ -30,9 +30,8 @@
         <main id="main" class="wrap">
             <div class="prose docs">
                 <h1>Установка</h1>
-                <!-- docs-version --><p class="note">Документация 0.5 · Windows и Linux.</p><!-- /docs-version -->
+                <!-- docs-version --><p class="note">Стабильный выпуск: 0.5.0 · Windows и Linux.</p><!-- /docs-version -->
                 <nav aria-label="На этой странице"><a href="#requirements">Требования</a><a href="#windows">Windows</a><a href="#debian-13">Debian 13</a><a href="#arch-linux">Arch Linux</a><a href="#verify-the-download">Проверка загрузки</a></nav>
-                <p class="history">С 0.5: Debian, удержание сети при обновлении, восстановление прокси при откате.</p>
 <h2 id="requirements">Требования</h2>
 <p><strong>Windows:</strong> Windows 11, x64. Windows 10 работает на компьютере одного тестировщика; проверки отказов на ней не прогонялись.</p>
 <p><strong>Linux:</strong> Debian 13, amd64, с systemd и nftables (пакет зависит от них) и cgroup v2. Рекомендуется polkit (<code>pkexec</code>, <code>polkitd</code>): без него окно не может менять Lockdown, и нужно выполнять <code>sudo rosetun lockdown on</code> или <code>off</code> в терминале. Linux поддерживается с 0.5.</p>
@@ -52,7 +51,7 @@
 </ol>
 <h2 id="debian-13">Debian / Ubuntu / Linux Mint</h2>
 <p><strong>Дистрибутивы (amd64, glibc 2.36 или новее):</strong> Debian 13 проверен системными матрицами. На Ubuntu 24.04+, Linux Mint 22+ и других производных Debian/Ubuntu с этой или более новой glibc, systemd, nftables и polkit должен работать тот же <code>.deb</code>; ручная проверка Ubuntu ещё впереди.</p>
-<p>Для Arch Linux подготовлен рецепт AUR <code>rosetun-bin</code> к стабильной 0.5.0; работа на Arch пока не проверена. См. <a href="../install/#arch-linux">установку и обновление</a>.</p>
+<p>Рецепт бинарного пакета Arch Linux <code>rosetun-bin</code> доступен в репозитории; публикация в AUR и проверка работы пока не выполнены. См. <a href="../install/#arch-linux">установку и обновление</a>.</p>
 <p>Системы без systemd и пакеты Flatpak, Snap и AppImage не поддерживаются: Rosetun нужны привилегированная системная служба и доступ к файрволу и TUN-устройству хоста.</p>
 <p>Скачайте <code>rosetun_&lt;версия&gt;_amd64.deb</code> со страницы <a href="https://github.com/eoftgge/rosetun/releases">Releases</a>, <a href="../install/#verify-the-download">проверьте его</a>, установите и добавьте себя в группу, которой доступна служба:</p>
 <pre><code>sudo apt install ./rosetun_&lt;версия&gt;_amd64.deb
@@ -62,12 +61,16 @@ sudo usermod -aG rosetun &quot;$USER&quot;</code></pre>
 <p><strong>Удаление:</strong> <code>sudo apt remove rosetun</code> сначала снимает Lockdown. Если снять не удалось, удаление останавливается и Rosetun остаётся, чтобы сеть можно было открыть.</p>
 <p><strong>Полное удаление:</strong> <code>sudo apt purge rosetun</code> удаляет ещё списки и состояние в <code>/var/lib/rosetun</code>. Настройки и запись автозапуска в домашней папке (<code>~/.config/rosetun</code>) и группа <code>rosetun</code> остаются.</p>
 <h2 id="arch-linux">Arch Linux</h2>
-<p>К стабильной 0.5.0 подготовлен пакет AUR <code>rosetun-bin</code>. Владелец опубликует его после появления архива выпуска. После публикации:</p>
-<pre><code>yay -S rosetun-bin
+<p>Рецепт <code>rosetun-bin</code> находится в репозитории Rosetun. Публикация в AUR пока отложена. После выхода 0.5.0 прочитайте рецепт и соберите пакет на Arch:</p>
+<pre><code>git clone --branch v0.5.0 https://github.com/eoftgge/rosetun.git
+cd rosetun
+bash tools/arch/update-pkgbuild.sh v0.5.0
+cd packaging/arch
+makepkg -si
 sudo systemctl enable --now rosetun-helper rosetun-lockdown
 sudo usermod -aG rosetun &quot;$USER&quot;
 sudo reboot</code></pre>
-<p>Без помощника AUR: <code>git clone https://aur.archlinux.org/rosetun-bin.git</code>, затем <code>cd rosetun-bin &amp;&amp; makepkg -si</code>. Сначала прочитайте рецепт. Пакет содержит закреплённые sing-box и Xray; пакеты движков Arch не нужны.</p>
+<p>Пакет устанавливает бинарники выпуска с закреплёнными sing-box и Xray. Пакеты движков Arch не нужны. После публикации рецепта в AUR тот же пакет можно будет установить через <code>yay -S rosetun-bin</code> или <code>git clone https://aur.archlinux.org/rosetun-bin.git</code> и <code>makepkg -si</code>.</p>
 <p><strong>Обновление:</strong> обновите пакет и выполните <code>sudo rosetun-helper-privileged --restart-for-upgrade</code>. Обычный <code>systemctl restart</code> при kill switch открывает сеть. Специальная команда сохраняет удержание до подключения или <code>rosetun open-network</code>. Службы включает пользователь, а не пакет.</p>
 <p><strong>Удаление:</strong> <code>sudo pacman -R rosetun-bin</code>. Хук транзакции снимает Lockdown до удаления файлов и прерывает удаление при ошибке. Для аварийного выхода: <code>sudo rosetun reset-firewall</code>. Настройки пользователя и группа остаются.</p>
 <p><strong>Статус проверки:</strong> Arch требует ручной проверки без матриц; автоматические системные проверки идут только на Debian 13. Проверка работы на Arch пока не выполнена.</p>

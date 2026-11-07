@@ -30,11 +30,10 @@
         <main id="main" class="wrap">
             <div class="prose docs">
                 <h1>TUN and System proxy</h1>
-                <!-- docs-version --><p class="note">Documentation 0.5 · Windows and Linux.</p><!-- /docs-version -->
+                <!-- docs-version --><p class="note">Stable release: 0.5.0 · Windows and Linux.</p><!-- /docs-version -->
                 <nav aria-label="On this page"><a href="#details">TUN and System proxy</a></nav>
                 <section id="details">
 <p>Changing the connection mode saves it for the next connection, including a connection from the tray or on startup. The current session keeps its mode. Select <strong>Reconnect now</strong> beside the pending note to use the saved mode immediately; protection stays in place during the restart.</p>
-<p class="history">Since 0.5: this connection mode and all proxy behavior below.</p>
 <p><strong>Connection mode</strong> (Settings → Connection) chooses how traffic reaches the VPN. <strong>TUN</strong>, the default, takes all of this computer&#x27;s traffic. <strong>System proxy</strong> starts a local proxy (HTTP and SOCKS5 on one port, 10808 unless you change it) and points your desktop&#x27;s proxy settings at it, for when TUN gets in the way of another VPN, an anti-cheat or an antivirus, or when you only need the browser.</p>
 <ul>
 <li><strong>What goes through the VPN:</strong> only programs that use the system proxy, which means browsers and most applications. Rules by site, address, list and program work as in TUN.</li>

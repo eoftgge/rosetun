@@ -30,9 +30,8 @@
         <main id="main" class="wrap">
             <div class="prose docs">
                 <h1>Install</h1>
-                <!-- docs-version --><p class="note">Documentation 0.5 · Windows and Linux.</p><!-- /docs-version -->
+                <!-- docs-version --><p class="note">Stable release: 0.5.0 · Windows and Linux.</p><!-- /docs-version -->
                 <nav aria-label="On this page"><a href="#requirements">Requirements</a><a href="#windows">Windows</a><a href="#debian-13">Debian 13</a><a href="#arch-linux">Arch Linux</a><a href="#verify-the-download">Verify the download</a></nav>
-                <p class="history">Since 0.5: Debian, update hold, proxy restoration on rollback.</p>
 <h2 id="requirements">Requirements</h2>
 <p><strong>Windows:</strong> Windows 11, x64. Windows 10 runs on one tester&#x27;s computer; the failure tests have not run on it.</p>
 <p><strong>Linux:</strong> Debian 13, amd64, with systemd and nftables (the package depends on them) and cgroup v2. polkit (<code>pkexec</code>, <code>polkitd</code>) is recommended: without it, the window cannot change Lockdown, and you run <code>sudo rosetun lockdown on</code> or <code>off</code> in a terminal. Linux is supported since 0.5.</p>
@@ -52,7 +51,7 @@
 </ol>
 <h2 id="debian-13">Debian / Ubuntu / Linux Mint</h2>
 <p><strong>Distributions (amd64, glibc 2.36 or newer):</strong> Debian 13 is verified by the system test matrices. Ubuntu 24.04+, Linux Mint 22+ and other Debian/Ubuntu derivatives with this glibc or newer, systemd, nftables and polkit are expected to work with the same <code>.deb</code>; manual Ubuntu verification is pending.</p>
-<p>Arch Linux uses the <code>rosetun-bin</code> AUR recipe prepared for stable 0.5.0; runtime verification is pending. See <a href="../install/#arch-linux">installation and updates</a>.</p>
+<p>The Arch Linux binary recipe <code>rosetun-bin</code> is available in the repository; AUR publication and runtime verification are pending. See <a href="../install/#arch-linux">installation and updates</a>.</p>
 <p>Systems without systemd and Flatpak, Snap and AppImage packages are unsupported: Rosetun needs a privileged system service and access to the host firewall and TUN device.</p>
 <p>Download <code>rosetun_&lt;version&gt;_amd64.deb</code> from <a href="https://github.com/eoftgge/rosetun/releases">Releases</a>, <a href="../install/#verify-the-download">verify it</a>, install it and add yourself to the group that may reach the service:</p>
 <pre><code>sudo apt install ./rosetun_&lt;version&gt;_amd64.deb
@@ -62,12 +61,16 @@ sudo usermod -aG rosetun &quot;$USER&quot;</code></pre>
 <p><strong>Remove:</strong> <code>sudo apt remove rosetun</code> takes Lockdown off first. If it cannot, the removal stops and Rosetun stays, so the network can still be opened.</p>
 <p><strong>Purge:</strong> <code>sudo apt purge rosetun</code> also removes the lists and state in <code>/var/lib/rosetun</code>. Your settings and autostart entry in your home folder (<code>~/.config/rosetun</code>) and the <code>rosetun</code> group stay.</p>
 <h2 id="arch-linux">Arch Linux</h2>
-<p>The planned AUR package for stable 0.5.0 is <code>rosetun-bin</code>. The owner publishes it after the release archive is available. Once published:</p>
-<pre><code>yay -S rosetun-bin
+<p>The <code>rosetun-bin</code> recipe is in the Rosetun repository. AUR publication is pending. After release 0.5.0 is published, review the recipe and build the package on Arch:</p>
+<pre><code>git clone --branch v0.5.0 https://github.com/eoftgge/rosetun.git
+cd rosetun
+bash tools/arch/update-pkgbuild.sh v0.5.0
+cd packaging/arch
+makepkg -si
 sudo systemctl enable --now rosetun-helper rosetun-lockdown
 sudo usermod -aG rosetun &quot;$USER&quot;
 sudo reboot</code></pre>
-<p>Without an AUR helper: <code>git clone https://aur.archlinux.org/rosetun-bin.git</code>, then <code>cd rosetun-bin &amp;&amp; makepkg -si</code>. Review the recipe first. The package includes its pinned sing-box and Xray; the Arch engine packages are not required.</p>
+<p>The package installs the release binaries with their pinned sing-box and Xray. The Arch engine packages are not required. Once the recipe is published in AUR, <code>yay -S rosetun-bin</code> or <code>git clone https://aur.archlinux.org/rosetun-bin.git</code> followed by <code>makepkg -si</code> will provide the same package.</p>
 <p><strong>Update:</strong> update the package, then run <code>sudo rosetun-helper-privileged --restart-for-upgrade</code>. A normal <code>systemctl restart</code> opens the network with the kill switch on. The upgrade command preserves the hold until you reconnect or run <code>rosetun open-network</code>. Services are enabled by you, never by the package.</p>
 <p><strong>Remove:</strong> <code>sudo pacman -R rosetun-bin</code>. A transaction hook resets Lockdown before deleting files and refuses removal if that fails. To recover first: <code>sudo rosetun reset-firewall</code>. User settings and the group stay.</p>
 <p><strong>Validation status:</strong> Arch requires manual verification without a VM matrix; automated system checks run only on Debian 13. Arch runtime verification is pending.</p>
