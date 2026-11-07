@@ -6,13 +6,13 @@
 
 ## What's new in 0.5
 
-Details are in the [README](https://github.com/eoftgge/rosetun/blob/dev/README.md).
+Details are in the [README](https://eoftgge.github.io/rosetun/en/docs/).
 
-- **Linux:** Debian 13, amd64, as a `.deb` package. Kill switch, DNS lock and Lockdown on nftables, engines without root, tray, notifications, autostart and `rosetun://` links. Checked by hand on GNOME, not yet on KDE Plasma; see [Requirements](https://github.com/eoftgge/rosetun/blob/dev/README.md#requirements).
-- **System proxy mode**, beside TUN: a local proxy your desktop's settings point at, with a strict kill switch and access from your network. See [TUN and System proxy](https://github.com/eoftgge/rosetun/blob/dev/README.md#tun-and-system-proxy).
+- **Linux:** Debian 13, amd64, as a `.deb` package. Kill switch, DNS lock and Lockdown on nftables, engines without root, tray, notifications, autostart and `rosetun://` links. Checked by hand on GNOME, not yet on KDE Plasma; see [Requirements](https://eoftgge.github.io/rosetun/en/docs/install/#requirements).
+- **System proxy mode**, beside TUN: a local proxy your desktop's settings point at, with a strict kill switch and access from your network. See [TUN and System proxy](https://eoftgge.github.io/rosetun/en/docs/modes/).
 - **The protection in place** shows in the window and in `rosetun status`, with what is missing and whether it stays if the service crashes.
-- **The network stays closed through an update** while the kill switch is on. See [Protection guarantees](https://github.com/eoftgge/rosetun/blob/dev/README.md#protection-guarantees).
-- **Local network** on Windows opens only your own network, each on its own adapter, and finding devices works. **Private networks behind the router** is the old, wider behaviour, as a separate setting. See [Local network](https://github.com/eoftgge/rosetun/blob/dev/README.md#local-network).
+- **The network stays closed through an update** while the kill switch is on. See [Protection guarantees](https://eoftgge.github.io/rosetun/en/docs/guarantees/).
+- **Local network** on Windows opens only your own network, each on its own adapter, and finding devices works. **Private networks behind the router** is the old, wider behaviour, as a separate setting. See [Local network](https://eoftgge.github.io/rosetun/en/docs/local-network/).
 - **Reconnect** in the tray and `rosetun reconnect` restart the tunnel without dropping protection.
 - **Your own HTTP, HTTPS and SOCKS5 proxies**, on a tab of the add dialog.
 - **TLS fragmentation** of the connection to the server, through Xray.
@@ -74,7 +74,7 @@ Compare the hash with this release's `SHA256SUMS.txt`, and verify the provenance
 
 ## Report a problem
 
-[Issues](https://github.com/eoftgge/rosetun/issues), with the steps and the error text. On Windows attach **Collect report**; on Linux see [Troubleshooting](https://github.com/eoftgge/rosetun/blob/dev/README.md#troubleshooting). Report a vulnerability privately through [Security](https://github.com/eoftgge/rosetun/security/advisories/new), without subscription links or credentials.
+[Issues](https://github.com/eoftgge/rosetun/issues), with the steps and the error text. On Windows attach **Collect report**; on Linux see [Troubleshooting](https://eoftgge.github.io/rosetun/en/docs/troubleshooting/). Report a vulnerability privately through [Security](https://github.com/eoftgge/rosetun/security/advisories/new), without subscription links or credentials.
 
 ## Included
 
@@ -92,13 +92,13 @@ On Windows, the sing-box executable embeds Wintun {{wintun_version}}, distribute
 
 ### Что нового в 0.5
 
-Подробности в [README](https://github.com/eoftgge/rosetun/blob/dev/README.ru.md).
+Подробности в [README](https://eoftgge.github.io/rosetun/ru/docs/).
 
-- **Linux:** Debian 13, amd64, пакетом `.deb`. Kill switch, замок DNS и Lockdown на nftables, ядра без root, трей, уведомления, автозапуск и ссылки `rosetun://`. Вручную проверено на GNOME, на KDE Plasma пока нет; см. [Требования](https://github.com/eoftgge/rosetun/blob/dev/README.ru.md#требования).
-- **Режим «Системный прокси»** рядом с TUN: локальный прокси, на который указывают настройки системы, со строгим kill switch и доступом из вашей сети. См. [TUN и системный прокси](https://github.com/eoftgge/rosetun/blob/dev/README.ru.md#tun-и-системный-прокси).
+- **Linux:** Debian 13, amd64, пакетом `.deb`. Kill switch, замок DNS и Lockdown на nftables, ядра без root, трей, уведомления, автозапуск и ссылки `rosetun://`. Вручную проверено на GNOME, на KDE Plasma пока нет; см. [Требования](https://eoftgge.github.io/rosetun/ru/docs/install/#requirements).
+- **Режим «Системный прокси»** рядом с TUN: локальный прокси, на который указывают настройки системы, со строгим kill switch и доступом из вашей сети. См. [TUN и системный прокси](https://eoftgge.github.io/rosetun/ru/docs/modes/).
 - **Действующая защита** видна в окне и в `rosetun status`, вместе с тем, чего не хватает и останется ли защита при падении службы.
-- **Сеть остаётся закрытой при обновлении**, если включён kill switch. См. [Гарантии защиты](https://github.com/eoftgge/rosetun/blob/dev/README.ru.md#гарантии-защиты).
-- **Локальная сеть** на Windows открывает только вашу сеть, каждую на своём адаптере, и поиск устройств работает. **Частные сети за роутером** это прежнее, более широкое поведение отдельной настройкой. См. [Локальная сеть](https://github.com/eoftgge/rosetun/blob/dev/README.ru.md#локальная-сеть).
+- **Сеть остаётся закрытой при обновлении**, если включён kill switch. См. [Гарантии защиты](https://eoftgge.github.io/rosetun/ru/docs/guarantees/).
+- **Локальная сеть** на Windows открывает только вашу сеть, каждую на своём адаптере, и поиск устройств работает. **Частные сети за роутером** это прежнее, более широкое поведение отдельной настройкой. См. [Локальная сеть](https://eoftgge.github.io/rosetun/ru/docs/local-network/).
 - **Переподключиться** в трее и `rosetun reconnect` перезапускают туннель, не снимая защиту.
 - **Собственные прокси HTTP, HTTPS и SOCKS5** на вкладке окна добавления.
 - **Фрагментация TLS** соединения с сервером, через Xray.
@@ -160,7 +160,7 @@ sudo usermod -aG rosetun "$USER"
 
 ### Сообщить о проблеме
 
-[Issues](https://github.com/eoftgge/rosetun/issues), с шагами и текстом ошибки. На Windows приложите **Собрать отчёт**; для Linux см. [Устранение неполадок](https://github.com/eoftgge/rosetun/blob/dev/README.ru.md#устранение-неполадок). Об уязвимостях сообщайте приватно через [Security](https://github.com/eoftgge/rosetun/security/advisories/new), без ссылок подписок и паролей.
+[Issues](https://github.com/eoftgge/rosetun/issues), с шагами и текстом ошибки. На Windows приложите **Собрать отчёт**; для Linux см. [Устранение неполадок](https://eoftgge.github.io/rosetun/ru/docs/troubleshooting/). Об уязвимостях сообщайте приватно через [Security](https://github.com/eoftgge/rosetun/security/advisories/new), без ссылок подписок и паролей.
 
 ### Состав
 
