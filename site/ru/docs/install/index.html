@@ -31,7 +31,7 @@
             <div class="prose docs">
                 <h1>Установка</h1>
                 <!-- docs-version --><p class="note">Документация 0.5 · Windows и Linux.</p><!-- /docs-version -->
-                <nav aria-label="На этой странице"><a href="#requirements">Требования</a><a href="#windows">Windows</a><a href="#debian-13">Debian 13</a><a href="#verify-the-download">Проверка загрузки</a></nav>
+                <nav aria-label="На этой странице"><a href="#requirements">Требования</a><a href="#windows">Windows</a><a href="#debian-13">Debian 13</a><a href="#arch-linux">Arch Linux</a><a href="#verify-the-download">Проверка загрузки</a></nav>
                 <p class="history">С 0.5: Debian, удержание сети при обновлении, восстановление прокси при откате.</p>
 <h2 id="requirements">Требования</h2>
 <p><strong>Windows:</strong> Windows 11, x64. Windows 10 работает на компьютере одного тестировщика; проверки отказов на ней не прогонялись.</p>
@@ -58,6 +58,16 @@ sudo usermod -aG rosetun &quot;$USER&quot;</code></pre>
 <p><strong>Обновление:</strong> установите новый пакет так же. Если kill switch включён, сеть на время обновления остаётся закрытой: открытое окно перезапустится само и подключится снова. Без окна <code>rosetun status</code> покажет <code>network: held closed</code>, <code>rosetun connect</code> подключит, а <code>rosetun open-network</code> откроет сеть. Lockdown остаётся включённым.</p>
 <p><strong>Удаление:</strong> <code>sudo apt remove rosetun</code> сначала снимает Lockdown. Если снять не удалось, удаление останавливается и Rosetun остаётся, чтобы сеть можно было открыть.</p>
 <p><strong>Полное удаление:</strong> <code>sudo apt purge rosetun</code> удаляет ещё списки и состояние в <code>/var/lib/rosetun</code>. Настройки и запись автозапуска в домашней папке (<code>~/.config/rosetun</code>) и группа <code>rosetun</code> остаются.</p>
+<h2 id="arch-linux">Arch Linux</h2>
+<p>К стабильной 0.5.0 подготовлен пакет AUR <code>rosetun-bin</code>. Владелец опубликует его после появления архива выпуска. После публикации:</p>
+<pre><code>yay -S rosetun-bin
+sudo systemctl enable --now rosetun-helper rosetun-lockdown
+sudo usermod -aG rosetun &quot;$USER&quot;
+sudo reboot</code></pre>
+<p>Без помощника AUR: <code>git clone https://aur.archlinux.org/rosetun-bin.git</code>, затем <code>cd rosetun-bin &amp;&amp; makepkg -si</code>. Сначала прочитайте рецепт. Пакет содержит закреплённые sing-box и Xray; пакеты движков Arch не нужны.</p>
+<p><strong>Обновление:</strong> обновите пакет и выполните <code>sudo rosetun-helper-privileged --restart-for-upgrade</code>. Обычный <code>systemctl restart</code> при kill switch открывает сеть. Специальная команда сохраняет удержание до подключения или <code>rosetun open-network</code>. Службы включает пользователь, а не пакет.</p>
+<p><strong>Удаление:</strong> <code>sudo pacman -R rosetun-bin</code>. Хук транзакции снимает Lockdown до удаления файлов и прерывает удаление при ошибке. Для аварийного выхода: <code>sudo rosetun reset-firewall</code>. Настройки пользователя и группа остаются.</p>
+<p><strong>Статус проверки:</strong> Arch требует ручной проверки без матриц; автоматические системные проверки идут только на Debian 13. Проверка работы на Arch пока не выполнена.</p>
 <h2 id="verify-the-download">Проверка загрузки</h2>
 <p>В <code>SHA256SUMS.txt</code> каждого выпуска есть установщик и пакет. Для выпуска, собранного по тегу, на GitHub есть ещё аттестация происхождения обоих файлов. Аттестация говорит, какой workflow собрал файл; это не подпись кода.</p>
 <p>Windows:</p>

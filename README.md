@@ -1,5 +1,7 @@
 English | [Русский](README.ru.md)
 
+
+Arch Linux: the `rosetun-bin` AUR recipe is prepared for 0.5.0; see [installation and safe updates](https://eoftgge.github.io/rosetun/en/docs/install/#arch-linux).
 <p align="center"><img src=".github/assets/banner.svg" alt="Rosetun: VPN client for Windows and Linux" width="100%"></p>
 
 <p align="center">
