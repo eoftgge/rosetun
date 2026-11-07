@@ -26,12 +26,12 @@
         <main id="main" class="wrap">
             <div class="prose docs">
                 <h1>Установка</h1>
-                <!-- docs-version --><p class="note">Стабильная версия для Windows: 0.4. Linux и перечисленные ниже изменения доступны с предварительной 0.5; стабильная 0.5 ещё не вышла. Точное поведение 0.4 описано в <a href="https://github.com/eoftgge/rosetun/blob/v0.4.0/README.ru.md">документации 0.4</a>.</p><!-- /docs-version -->
+                <!-- docs-version --><p class="note">Документация 0.5 · Windows и Linux.</p><!-- /docs-version -->
                 <nav aria-label="На этой странице"><a href="#requirements">Требования</a><a href="#windows">Windows</a><a href="#debian-13">Debian 13</a><a href="#verify-the-download">Проверка загрузки</a></nav>
                 <p class="history">С 0.5: Debian, удержание сети при обновлении, восстановление прокси при откате.</p>
 <h2 id="requirements">Требования</h2>
 <p><strong>Windows:</strong> Windows 11, x64. Windows 10 работает на компьютере одного тестировщика; проверки отказов на ней не прогонялись.</p>
-<p><strong>Linux:</strong> Debian 13, amd64, с systemd и nftables (пакет зависит от них) и cgroup v2. Рекомендуется polkit (<code>pkexec</code>, <code>polkitd</code>): без него окно не может менять Lockdown, и нужно выполнять <code>sudo rosetun lockdown on</code> или <code>off</code> в терминале. Linux в этой бете впервые.</p>
+<p><strong>Linux:</strong> Debian 13, amd64, с systemd и nftables (пакет зависит от них) и cgroup v2. Рекомендуется polkit (<code>pkexec</code>, <code>polkitd</code>): без него окно не может менять Lockdown, и нужно выполнять <code>sudo rosetun lockdown on</code> или <code>off</code> в терминале. Linux поддерживается с 0.5.</p>
 <h2 id="windows">Windows</h2>
 <p>Скачайте <code>rosetun-&lt;версия&gt;-setup.exe</code> на странице <a href="https://github.com/eoftgge/rosetun/releases">Releases</a>. Установщик пока не подписан: если SmartScreen показывает «Windows protected your PC», нажмите <strong>More info</strong>, затем <strong>Run anyway</strong>. См. <a href="https://github.com/eoftgge/rosetun/blob/master/CODE_SIGNING_POLICY.md">политику подписи кода</a> (на английском).</p>
 <p>Папку установки можно выбрать, но не внутри профиля пользователя и не там, где её могут менять обычные пользователи: служба работает с правами SYSTEM. При удалении настройки в <code>%APPDATA%\Rosetun</code> по умолчанию остаются; при желании можно удалить настройки, подписки и правила.</p>
@@ -62,7 +62,7 @@ gh attestation verify .\rosetun-&lt;версия&gt;-setup.exe --repo eoftgge/ro
 <p>Debian:</p>
 <pre><code>sha256sum --check --ignore-missing SHA256SUMS.txt
 gh attestation verify rosetun_&lt;версия&gt;_amd64.deb --repo eoftgge/rosetun</code></pre>
-<p>Файл беты называется <code>rosetun_0.5.0-beta.1_amd64.deb</code>; <code>dpkg</code> показывает его версию как <code>0.5.0~beta.1</code>.</p>
+<p>Для стабильной 0.5.0 пакет называется <code>rosetun_0.5.0_amd64.deb</code>; <code>dpkg</code> показывает версию <code>0.5.0</code>.</p>
                 <nav class="doc-pager" aria-label="Назад и вперёд"><a rel="prev" href="../">← Документация</a><a rel="next" href="../protection/">Подключение и защита →</a></nav>
             </div>
         </main>

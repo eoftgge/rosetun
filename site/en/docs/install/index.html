@@ -26,12 +26,12 @@
         <main id="main" class="wrap">
             <div class="prose docs">
                 <h1>Install</h1>
-                <!-- docs-version --><p class="note">Stable Windows reference: 0.4. Linux and additions listed below are preview features since 0.5; 0.5 is not stable yet. For the exact 0.4 behavior, see the <a href="https://github.com/eoftgge/rosetun/blob/v0.4.0/README.md">0.4 reference</a>.</p><!-- /docs-version -->
+                <!-- docs-version --><p class="note">Documentation 0.5 · Windows and Linux.</p><!-- /docs-version -->
                 <nav aria-label="On this page"><a href="#requirements">Requirements</a><a href="#windows">Windows</a><a href="#debian-13">Debian 13</a><a href="#verify-the-download">Verify the download</a></nav>
                 <p class="history">Since 0.5: Debian, update hold, proxy restoration on rollback.</p>
 <h2 id="requirements">Requirements</h2>
 <p><strong>Windows:</strong> Windows 11, x64. Windows 10 runs on one tester&#x27;s computer; the failure tests have not run on it.</p>
-<p><strong>Linux:</strong> Debian 13, amd64, with systemd and nftables (the package depends on them) and cgroup v2. polkit (<code>pkexec</code>, <code>polkitd</code>) is recommended: without it, the window cannot change Lockdown, and you run <code>sudo rosetun lockdown on</code> or <code>off</code> in a terminal. Linux is new in this beta.</p>
+<p><strong>Linux:</strong> Debian 13, amd64, with systemd and nftables (the package depends on them) and cgroup v2. polkit (<code>pkexec</code>, <code>polkitd</code>) is recommended: without it, the window cannot change Lockdown, and you run <code>sudo rosetun lockdown on</code> or <code>off</code> in a terminal. Linux is supported since 0.5.</p>
 <h2 id="windows">Windows</h2>
 <p>Download <code>rosetun-&lt;version&gt;-setup.exe</code> from <a href="https://github.com/eoftgge/rosetun/releases">Releases</a>. The installer is not code-signed yet; if SmartScreen says &quot;Windows protected your PC&quot;, select <strong>More info</strong> and then <strong>Run anyway</strong>. See the <a href="https://github.com/eoftgge/rosetun/blob/master/CODE_SIGNING_POLICY.md">code signing policy</a>.</p>
 <p>You can choose an installation folder, but not inside a user profile or where standard users can change it; the SYSTEM service requires a protected folder. Uninstalling keeps your configuration in <code>%APPDATA%\Rosetun</code> by default, or you can choose to delete your settings, subscriptions and rules.</p>
@@ -62,7 +62,7 @@ gh attestation verify .\rosetun-&lt;version&gt;-setup.exe --repo eoftgge/rosetun
 <p>Debian:</p>
 <pre><code>sha256sum --check --ignore-missing SHA256SUMS.txt
 gh attestation verify rosetun_&lt;version&gt;_amd64.deb --repo eoftgge/rosetun</code></pre>
-<p>The file of a beta is named <code>rosetun_0.5.0-beta.1_amd64.deb</code>; <code>dpkg</code> shows its version as <code>0.5.0~beta.1</code>.</p>
+<p>For stable 0.5.0, the package is <code>rosetun_0.5.0_amd64.deb</code>; <code>dpkg</code> shows version <code>0.5.0</code>.</p>
                 <nav class="doc-pager" aria-label="Previous and next"><a rel="prev" href="../">← Documentation</a><a rel="next" href="../protection/">Connection and protection →</a></nav>
             </div>
         </main>

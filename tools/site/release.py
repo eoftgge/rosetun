@@ -85,7 +85,13 @@ def render(source, output, values):
                 return f'<p class="note">{label}: {html.escape(values["VERSION"])} · {platforms}.</p>'
             text = DOC_VERSION.sub(stable_banner, text)
         else:
-            text = DOC_VERSION.sub(lambda match: match[1], text)
+            english = path.relative_to(output).parts[0] == 'en'
+            label = 'Stable release' if english else 'Стабильный выпуск'
+            baseline = 'Documentation: 0.5' if english else 'Документация: 0.5'
+            text = DOC_VERSION.sub(
+                lambda match: f'<p class="note">{label}: {html.escape(values["VERSION"])} · Windows. {baseline}.</p>',
+                text,
+            )
         if values['DEB_URL']:
             text = LINUX_SOON.sub('', text)
             text = LINUX_READY.sub(lambda match: match[1], text)

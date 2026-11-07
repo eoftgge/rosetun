@@ -59,12 +59,14 @@ moves forward. Text that depends on the stable release having a Debian package
 sits in `<!-- linux-ready ... -->` and `<!-- linux-soon -->...<!-- /linux-soon -->`
 markers: publication keeps one and drops the other.
 
-The latest stable release is the documentation baseline. Until 0.5 is stable,
-each documentation page lists its 0.5 additions and links to the immutable 0.4
-reference. The guarantee matrix and network inventory explicitly describe the
-0.5 preview. `<!-- docs-version -->...<!-- /docs-version -->` wraps the current
-stable/preview banner: release preparation replaces it with the actual stable
-version from 0.5 onward. Keep the individual "since 0.5" notes as history.
+The source documentation baseline is stable 0.5 for Windows and Linux. The
+0.4 reference remains in the documentation index history; individual "since 0.5"
+notes remain as history too. `<!-- docs-version -->...<!-- /docs-version -->`
+wraps the baseline banner. Publication fills it with the actual latest stable
+version and available platforms. If that release is still older than 0.5, the
+banner names both the older download and the 0.5 documentation baseline.
+The Linux fallback links to the release list; a stable Debian asset replaces
+it with the exact package link. Source pages do not promise an unpublished file.
 
 The same source validator runs locally and in Pages. It checks every HTML page,
 internal links and fragments, both language counterparts, documentation language

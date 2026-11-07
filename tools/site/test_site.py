@@ -43,9 +43,9 @@ class SiteChecks(unittest.TestCase):
                 check(output, rendered=True)
             return (output / 'en/index.html').read_text(encoding='utf-8')
 
-    def test_linux_stays_coming_soon_until_the_stable_release_has_a_package(self):
+    def test_linux_falls_back_to_releases_without_a_stable_package(self):
         page = self.rendered_front_page(self.release, self.sums)
-        self.assertIn('Linux: coming soon.', page)
+        self.assertIn('Debian 13 packages:', page)
         self.assertNotIn('linux-', page)
         self.assertNotIn('.deb', page)
 
@@ -101,7 +101,7 @@ class SiteChecks(unittest.TestCase):
             with self.assertRaises(AssertionError):
                 check(output, rendered=True)
 
-    def test_documentation_preview_banner_tracks_the_stable_version(self):
+    def test_documentation_banner_tracks_the_stable_version_and_keeps_the_baseline(self):
         for version, preview in (('0.4.0', True), ('0.5.0', False)):
             release = copy.deepcopy(self.release)
             release['tag_name'] = 'v' + version
@@ -113,7 +113,10 @@ class SiteChecks(unittest.TestCase):
                 render(Path('site'), output, replacements(release, self.sums.replace('1.2.3', version)))
                 for lang, warning in (('en', '0.5 is not stable yet'), ('ru', 'стабильная 0.5 ещё не вышла')):
                     page = (output / lang / 'docs/index.html').read_text(encoding='utf-8')
-                    self.assertEqual(warning in page, preview)
+                    self.assertNotIn(warning, page)
+                    self.assertIn(f'{version} · Windows', page)
+                    if preview:
+                        self.assertIn('Documentation: 0.5' if lang == 'en' else 'Документация: 0.5', page)
                     self.assertNotIn('docs-version', page)
                     self.assertIn(f'blob/v0.4.0/README{".ru" if lang == "ru" else ""}.md', page)
                     if not preview:
