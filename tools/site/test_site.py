@@ -4,6 +4,7 @@ from contextlib import redirect_stdout
 import copy
 import io
 from pathlib import Path
+import re
 import tempfile
 import unittest
 
@@ -154,6 +155,26 @@ class SiteChecks(unittest.TestCase):
                     self.assertNotIn('<!-- linux-', text)
                     if page.parent != output / lang / 'docs':
                         self.assertNotIn('blob/v0.4.0/', text)
+
+    def test_headers_reject_missing_or_reordered_navigation_items(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / 'site'
+            render(Path('site'), output, preview_values('0.5.0', True))
+            for lang in ('en', 'ru'):
+                for suffix in ('providers/index.html', 'docs/rules/index.html'):
+                    page = output / lang / suffix
+                    original = page.read_text(encoding='utf-8')
+                    nav = re.search(r'<nav aria-label="(?:Navigation|Навигация)">.*?</nav>',
+                                    original, re.DOTALL)[0]
+                    links = re.findall(r'<a\b.*?</a>', nav, re.DOTALL)
+                    swapped = (nav.replace(links[2], 'SWAPPED_SECTION')
+                               .replace(links[3], links[2]).replace('SWAPPED_SECTION', links[3]))
+                    for changed in (swapped, nav.replace(links[0], '')):
+                        with self.subTest(lang=lang, page=suffix, navigation=changed):
+                            page.write_text(original.replace(nav, changed), encoding='utf-8')
+                            with self.assertRaisesRegex(AssertionError, 'inconsistent header'):
+                                check(output, rendered=True)
+                    page.write_text(original, encoding='utf-8')
 
 
 if __name__ == '__main__':

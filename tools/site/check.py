@@ -7,6 +7,8 @@ import re
 from urllib.parse import unquote, urlsplit
 import xml.etree.ElementTree as ET
 
+from navigation import check_chrome
+
 
 class Document(HTMLParser):
     def __init__(self, path):
@@ -77,6 +79,8 @@ def check(directory, rendered=False):
     documents = {}
     for path in root.rglob('*.html'):
         source = path.read_text(encoding='utf-8')
+        if path.relative_to(root).parts[0] in {'en', 'ru'}:
+            check_chrome(path, root, source)
         if rendered:
             assert not re.search(r'@@[A-Z0-9_]+@@', source), f'{path}: unresolved release marker'
         assert '\u2014' not in source, f'{path}: em dash'

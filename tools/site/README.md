@@ -22,6 +22,13 @@ python tools/site/check.py target/site-preview --rendered
 python -m http.server 8000 --directory target/site-preview
 ```
 
+Every localized page shares one header and footer. The header order is Home,
+Documentation, For providers, Help, then the matching page in the other language.
+The current section is marked without moving or removing links. After adding a
+page or changing the shared navigation, run `python tools/site/navigation.py --write`.
+This updates the committed HTML; publication needs no extra generation step.
+The normal site check rejects headers and footers that differ from this template.
+
 The preview output directory must not already exist. Release preparation needs
 network access; source validation and tests do not. A missing stable release,
 asset or unique checksum stops publication. The checksum is copied, not a claim
