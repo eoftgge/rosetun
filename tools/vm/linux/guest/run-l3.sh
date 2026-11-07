@@ -938,6 +938,68 @@ scenario_crash() {
     check crash.five-kills "closed through five kills; then a connect works under rules with the current cgroups" five_kills
 }
 
+scenario_upgrade_restart() {
+    upgraded() {
+        disconnect || return 1
+        local watch=rosetun-l3-upgrade pid packets rc=0
+        "$NFT" -f - <<EOF
+ table inet $watch {
+     chain postrouting {
+         type filter hook postrouting priority 300; policy accept;
+         oifname "$PHYS" ip daddr $PROBE_ADDRESS counter
+     }
+ }
+EOF
+        if [ "$?" -ne 0 ]; then fail_reason="cannot install upgrade counter"; return 1; fi
+        # Prove the counter sees real direct traffic before relying on zero.
+        direct_https
+        packets=$("$NFT" list table inet "$watch" | sed -n 's/.*counter packets \([0-9]*\).*/\1/p')
+        "$NFT" delete table inet "$watch"
+        [ "${packets:-0}" -gt 0 ] || { fail_reason="upgrade counter saw no baseline traffic"; return 1; }
+        connect_with request-kill-switch.json || return 1
+        "$NFT" -f - <<EOF
+ table inet $watch {
+     chain postrouting {
+         type filter hook postrouting priority 300; policy accept;
+         oifname "$PHYS" ip daddr $PROBE_ADDRESS counter
+     }
+ }
+EOF
+        if [ "$?" -ne 0 ]; then fail_reason="cannot install upgrade counter"; return 1; fi
+        : >"$STATE/upgrade-watch"
+        (
+            while [ -e "$STATE/upgrade-watch" ]; do
+                direct_https
+                curl -s -o /dev/null --connect-timeout 1 --max-time 1 "https://$PROBE_ADDRESS/" </dev/null
+            done
+        ) &
+        pid=$!
+        # Atomic replacement matches pacman's unlink/extract behavior, avoiding
+        # ETXTBSY while the old helper and engine still have their inodes open.
+        for program in rosetun-helper-privileged rosetun sing-box; do
+            install -m 0755 -o root -g root "$ART/$program" "$PREFIX/$program.new" &&
+                mv -f "$PREFIX/$program.new" "$PREFIX/$program" || rc=1
+        done
+        if [ "$rc" -eq 0 ]; then
+            timeout "$UNIT_TIMEOUT_SECONDS" "$PREFIX/rosetun-helper-privileged" --restart-for-upgrade >"$REPORT/upgrade-restart.txt" 2>&1 || rc=1
+            # A repeated request must retain the hold as well.
+            timeout "$UNIT_TIMEOUT_SECONDS" "$PREFIX/rosetun-helper-privileged" --restart-for-upgrade >>"$REPORT/upgrade-restart.txt" 2>&1 || rc=1
+        fi
+        rm -f "$STATE/upgrade-watch"
+        wait "$pid" || true
+        packets=$("$NFT" list table inet "$watch" | sed -n 's/.*counter packets \([0-9]*\).*/\1/p')
+        "$NFT" delete table inet "$watch"
+        [ "$rc" -eq 0 ] || { fail_reason="file replacement or upgrade restart failed"; return 1; }
+        [ "${packets:-missing}" = 0 ] || { fail_reason="upgrade leaked $packets packets"; return 1; }
+        cli 15 status
+        printf '%s\n' "$CLI_OUT" | grep -q '^network: held closed' || { fail_reason="upgrade hold not reported"; return 1; }
+        connect_with request-kill-switch.json || return 1
+        expect_reached "HTTPS through the tunnel after upgrade" tunnel_https || return 1
+        disconnect
+    }
+    check upgrade.restart "no direct packets during file replacement and two upgrade restarts; reconnect works" upgraded
+}
+
 scenario_stop() {
     stopped() {
         connect_with request-kill-switch.json || return 1
@@ -996,6 +1058,8 @@ finalize() {
         journalctl -b -u rosetun-helper.service --no-pager -o short-monotonic 2>/dev/null | tail -n 400 |
             LC_ALL=C tr -c '\n -~' '?' | l2_atomic_write "$REPORT/helper-journal.txt" 0644
     fi
+    rm -f "$STATE/upgrade-watch"
+    "$NFT" delete table inet rosetun-l3-upgrade 2>/dev/null || true
     cleanup
     local cleanup_ms=$(($(l2_now_ms) - started_cleanup))
 
@@ -1083,6 +1147,7 @@ if preflight_ok; then
         scenario_ipv6
         scenario_peer
         scenario_crash
+        scenario_upgrade_restart
         scenario_stop
     fi
     skip_rest "an earlier step failed; see the first FAIL"

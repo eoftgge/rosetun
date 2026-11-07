@@ -33,3 +33,4 @@ crash.open-network	yes	real-service	crash	-	rosetun open-network from the first 
 crash.dns-lock-killed	yes	real-service	crash	-	the helper killed with SIGKILL during a DNS-lock session: systemd restarts it, it removes the table and says so, the network is not held and UDP 53 leaves the physical interface
 crash.five-kills	yes	real-service	crash	-	the helper killed five times in a row: the direct path stays refused every time, and after that a connect answers through the tunnel with rules naming the current cgroups
 stop.removes-table	yes	real-service	stop	-	systemctl stop during a kill-switch session removes the table and the direct path answers
+upgrade.restart	yes	real-service	upgrade	-	file replacement and repeated restart-for-upgrade keep zero packets on the physical interface, report the hold and allow reconnect

@@ -21,6 +21,8 @@ mod log_gate;
 mod process_job;
 #[cfg(target_os = "linux")]
 mod sd_notify;
+#[cfg(target_os = "linux")]
+mod restart_linux;
 mod server;
 #[cfg(windows)]
 mod service;
@@ -44,12 +46,9 @@ use tracing_subscriber::prelude::*;
 use crate::log_gate::VerboseGate;
 use crate::server::{Helper, Server};
 
-/// The package's `prerm` creates this file before it stops the service for an
-/// upgrade. systemd removes it with the runtime folder. Not in the engines' private
-/// folder, which the package does not know.
 #[cfg(target_os = "linux")]
-const UPGRADE_MARKER: &str = "/run/rosetun/upgrading";
-const USAGE: &str = "usage: rosetun-helper-privileged [--service | --install-service | --uninstall-service | --reset-firewall | --verify-install-dir <path> | --secure-install-dir <path> | --finalize-install-dir <path> | --hold-for-upgrade <path> | --restore-lockdown]";
+use crate::restart_linux::UPGRADE_MARKER;
+const USAGE: &str = "usage: rosetun-helper-privileged [--service | --install-service | --uninstall-service | --reset-firewall | --verify-install-dir <path> | --secure-install-dir <path> | --finalize-install-dir <path> | --hold-for-upgrade <path> | --restore-lockdown | --restart-for-upgrade]";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Mode {
@@ -67,6 +66,7 @@ enum Mode {
     HoldForUpgrade(std::path::PathBuf),
     /// Linux, at boot: Lockdown's set from its record, before any network.
     RestoreLockdown,
+    RestartForUpgrade,
 }
 
 fn parse_mode(args: impl IntoIterator<Item = OsString>) -> Result<Mode, String> {
@@ -77,6 +77,7 @@ fn parse_mode(args: impl IntoIterator<Item = OsString>) -> Result<Mode, String> 
         [arg] if arg == "--install-service" => Ok(Mode::InstallService),
         [arg] if arg == "--uninstall-service" => Ok(Mode::UninstallService),
         [arg] if arg == "--reset-firewall" => Ok(Mode::ResetFirewall),
+        [arg] if arg == "--restart-for-upgrade" => Ok(Mode::RestartForUpgrade),
         [arg] if arg == "--restore-lockdown" => Ok(Mode::RestoreLockdown),
         [arg, path] if arg == "--verify-install-dir" => Ok(Mode::VerifyInstallDir(path.into())),
         [arg, path] if arg == "--secure-install-dir" => Ok(Mode::SecureInstallDir(path.into())),
@@ -92,7 +93,7 @@ fn parse_mode(args: impl IntoIterator<Item = OsString>) -> Result<Mode, String> 
 fn runs_on_linux(mode: &Mode) -> bool {
     matches!(
         mode,
-        Mode::Console | Mode::Service | Mode::ResetFirewall | Mode::RestoreLockdown
+        Mode::Console | Mode::Service | Mode::ResetFirewall | Mode::RestoreLockdown | Mode::RestartForUpgrade
     )
 }
 
@@ -144,7 +145,7 @@ fn main() -> std::process::ExitCode {
     #[cfg(target_os = "linux")]
     if !runs_on_linux(&mode) {
         eprintln!(
-            "this command is Windows only; on Linux run the helper without arguments, with --service, --reset-firewall or --restore-lockdown"
+            "this command is Windows only; on Linux run the helper without arguments, with --service, --reset-firewall --restore-lockdown or --restart-for-upgrade"
         );
         return std::process::ExitCode::from(2);
     }
@@ -155,6 +156,13 @@ fn main() -> std::process::ExitCode {
     }
 
     match mode {
+        #[cfg(target_os = "linux")]
+        Mode::RestartForUpgrade => restart_linux::restart(),
+        #[cfg(windows)]
+        Mode::RestartForUpgrade => {
+            eprintln!("--restart-for-upgrade is Linux only");
+            std::process::ExitCode::from(2)
+        }
         #[cfg(target_os = "linux")]
         Mode::Console => run_linux(signals, false),
         #[cfg(target_os = "linux")]
