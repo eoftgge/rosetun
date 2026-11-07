@@ -8,7 +8,7 @@ import tempfile
 import unittest
 
 from check import check
-from release import RELEASES, render, replacements
+from release import RELEASES, preview_values, render, replacements
 
 
 class SiteChecks(unittest.TestCase):
@@ -116,6 +116,8 @@ class SiteChecks(unittest.TestCase):
                     self.assertEqual(warning in page, preview)
                     self.assertNotIn('docs-version', page)
                     self.assertIn(f'blob/v0.4.0/README{".ru" if lang == "ru" else ""}.md', page)
+                    if not preview:
+                        self.assertNotIn("0.4 reference</a>.</p>", page)
 
     def test_documentation_rejects_broken_navigation(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -133,6 +135,22 @@ class SiteChecks(unittest.TestCase):
                     page.write_text(original.replace(old, new), encoding='utf-8')
                     with self.assertRaises(AssertionError):
                         check(output, rendered=True)
+
+    def test_stable_05_preview_switches_every_documentation_banner_and_linux_copy(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / 'site'
+            render(Path('site'), output, preview_values('0.5.0', True))
+            with redirect_stdout(io.StringIO()):
+                check(output, rendered=True)
+            for lang in ('en', 'ru'):
+                for page in (output / lang / 'docs').rglob('*.html'):
+                    text = page.read_text(encoding='utf-8')
+                    self.assertIn('0.5.0 · Windows', text)
+                    self.assertNotIn('0.5 is not stable yet', text)
+                    self.assertNotIn('стабильная 0.5 ещё не вышла', text)
+                    self.assertNotIn('<!-- linux-', text)
+                    if page.parent != output / lang / 'docs':
+                        self.assertNotIn('blob/v0.4.0/', text)
 
 
 if __name__ == '__main__':

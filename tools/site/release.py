@@ -76,10 +76,13 @@ def render(source, output, values):
     for path in output.rglob('*.html'):
         text = path.read_text(encoding='utf-8')
         if tuple(map(int, values['VERSION'].split('.'))) >= (0, 5, 0):
-            label = 'Stable release' if path.relative_to(output).parts[0] == 'en' else 'Стабильный выпуск'
+            english = path.relative_to(output).parts[0] == 'en'
+            label = 'Stable release' if english else 'Стабильный выпуск'
+            platforms = 'Windows and Linux' if english else 'Windows и Linux'
+            if not values['DEB_URL']:
+                platforms = 'Windows'
             def stable_banner(match):
-                links = ' · '.join(re.findall(r'<a href="[^"]+">.*?</a>', match[1]))
-                return f'<p class="note">{label}: {html.escape(values["VERSION"])}. {links}</p>'
+                return f'<p class="note">{label}: {html.escape(values["VERSION"])} · {platforms}.</p>'
             text = DOC_VERSION.sub(stable_banner, text)
         else:
             text = DOC_VERSION.sub(lambda match: match[1], text)
@@ -106,10 +109,29 @@ def render(source, output, values):
         path.write_text(text, encoding='utf-8', newline='\n')
 
 
+def preview_values(version, linux):
+    """Use synthetic checksums only for a local, offline release preview."""
+    names = [f'rosetun-{version}-setup.exe', 'SHA256SUMS.txt']
+    if linux:
+        names.append(f'rosetun_{version}_amd64.deb')
+    release = dict(tag_name=f'v{version}', draft=False, prerelease=False, assets=[
+        dict(name=name, browser_download_url=f'{RELEASES}v{version}/{name}') for name in names
+    ])
+    return replacements(release, '\n'.join('0' * 64 + '  ' + name for name in names))
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--preview-version', help='offline preview with synthetic checksums; never publish')
+    parser.add_argument('--preview-deb', action='store_true', help='include a Debian package in the preview')
     args = parser.parse_args()
+    if args.preview_deb and not args.preview_version:
+        parser.error('--preview-deb requires --preview-version')
+    if args.preview_version:
+        render(Path('site'), args.output, preview_values(args.preview_version, args.preview_deb))
+        print('Local preview only: checksums are synthetic. Do not publish this directory.')
+        raise SystemExit(0)
     release = json.loads(fetch(f'{API}/releases/latest', api=True))
     # Validate asset URLs before making any release download request.
     stable_version = release['tag_name'].removeprefix('v')

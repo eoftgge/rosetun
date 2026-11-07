@@ -27,6 +27,20 @@ network access; source validation and tests do not. A missing stable release,
 asset or unique checksum stops publication. The checksum is copied, not a claim
 that the CI job downloaded and hashed the installer.
 
+Preview the site as it will read after stable 0.5, without network access:
+
+```sh
+python tools/site/release.py --preview-version 0.5.0 --preview-deb --output target/site-preview-0.5
+python tools/site/check.py target/site-preview-0.5 --rendered
+python -m http.server 8000 --directory target/site-preview-0.5
+```
+
+This preview uses synthetic checksums; do not publish its output. The Pages job
+continues to fetch the actual latest stable release and checksums. From 0.5,
+documentation banners name the stable version and its available platforms.
+The 0.4 reference lives in the documentation index history rather than every
+banner. Individual "since 0.5" notes stay as muted history, without a warning border.
+
 For a subdirectory preview, put the prepared copy under a directory named
 `rosetun` and serve its parent. Open `/rosetun/`. All local URLs are relative.
 Review at 360, 768 and 1280 CSS pixels, in both color schemes, with JavaScript

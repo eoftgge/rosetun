@@ -29,7 +29,8 @@
                 <!-- docs-version --><p class="note">Stable Windows reference: 0.4. Linux and additions listed below are preview features since 0.5; 0.5 is not stable yet. For the exact 0.4 behavior, see the <a href="https://github.com/eoftgge/rosetun/blob/v0.4.0/README.md">0.4 reference</a>.</p><!-- /docs-version -->
                 <nav aria-label="On this page"><a href="#details">Connection and protection</a></nav>
                 <section id="details">
-<p class="note">Since 0.5: protection status, Reconnect, update hold, Linux crash hold and firewall repair.</p>
+<p>In Settings → Connection, Lockdown is nested under Kill switch. While Lockdown is on, the parent stays on and cannot be turned off: <strong>On together with Lockdown</strong>. The <strong>Settings</strong> link in the Protection card opens this section.</p>
+<p class="history">Since 0.5: protection status, Reconnect, update hold, Linux crash hold and firewall repair.</p>
 <ul>
 <li>A <strong>Kill switch</strong> blocks traffic when the tunnel drops. A <strong>DNS lock</strong> keeps system DNS from leaving outside the tunnel when the kill switch is off. It depends on the firewall: if it cannot be set, Rosetun still connects and says so.</li>
 <li><em>Experimental:</em> <strong>Lockdown</strong> (Settings → Connection) closes the internet to everything outside the tunnel, also while disconnected, after a restart (from boot, before you sign in) and if the service stops or crashes. While it is on, the kill switch is always on. Incoming connections are blocked too, except from your network when <strong>Local network</strong> is on. Turning it on and off asks for confirmation and an administrator&#x27;s rights: UAC on Windows, polkit on Linux. <code>rosetun lockdown</code> needs a terminal opened as administrator, or <code>sudo</code>. The way out is under <a href="../troubleshooting/">Troubleshooting</a>.</li>

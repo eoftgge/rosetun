@@ -652,3 +652,8 @@ nav a:hover {
         animation: none;
     }
 }
+
+.history {
+    color: var(--muted);
+    font-size: 14px;
+}

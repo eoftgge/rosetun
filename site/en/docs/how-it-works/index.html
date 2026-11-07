@@ -28,7 +28,7 @@
                 <h1>How it works</h1>
                 <!-- docs-version --><p class="note">Stable Windows reference: 0.4. Linux and additions listed below are preview features since 0.5; 0.5 is not stable yet. For the exact 0.4 behavior, see the <a href="https://github.com/eoftgge/rosetun/blob/v0.4.0/README.md">0.4 reference</a>.</p><!-- /docs-version -->
                 <nav aria-label="On this page"><a href="#about-rosetun">About Rosetun</a><a href="#security">Security</a></nav>
-                <p class="note">Since 0.5: update hold, System proxy and all Linux architecture details.</p>
+                <p class="history">Since 0.5: update hold, System proxy and all Linux architecture details.</p>
 <pre class="diagram"><code>Windows
 GUI / CLI
     │ named pipe
@@ -53,6 +53,7 @@ Rosetun (root) ── nftables + cgroup
 <p><strong>Linux.</strong> The firewall is one nftables table, <code>inet rosetun</code>, written in one transaction. The service runs in a cgroup with two leaves, <code>helper</code> and <code>engines</code>, and the table permits by cgroup, not by program path or account. Engines run as <code>rosetun-engine</code>, which has no login, no home and no other group, with only <code>CAP_NET_ADMIN</code>, <code>CAP_NET_RAW</code> and <code>CAP_NET_BIND_SERVICE</code>. The service runs them only from root-owned files. A polkit rule lets that account set a link&#x27;s DNS in systemd-resolved, so system DNS follows the tunnel.</p>
 <p>The table outlives the service, so a crash leaves it in place, and the restarted service keeps the network closed. It does not outlive a restart of the computer: Lockdown&#x27;s record in <code>/var/lib/rosetun/lockdown</code> does, and <code>rosetun-lockdown.service</code> writes the table again before any network comes up. The app and the <code>rosetun</code> command get out under Lockdown only from their own systemd scopes.</p>
 <p><strong>What Lockdown leaves open.</strong> The engines get through only when the service starts them, and the Rosetun app and the <code>rosetun</code> command only over TCP and DNS and only while not connected, but a program running under your account can still go out through the <code>rosetun</code> command, among many other ways.</p>
+<p>Enabled rules by program additionally require <code>CAP_SYS_PTRACE</code> and <code>CAP_DAC_READ_SEARCH</code>; see the <a href="../rules/">Linux program rule limitations</a>. systemd restarts the service after a crash without a start rate limit. Package upgrades mark the stop as an upgrade before stopping the service, so the protection table stays in place for the new service.</p>
 <h2 id="about-rosetun">About Rosetun</h2>
 <p>Rosetun is a VPN client for Windows and Linux. sing-box runs the tunnel, rules and DNS; for VLESS + REALITY servers, Xray behind sing-box carries the connection to the server. A system service keeps the kill switch and the DNS lock in the firewall. Rules split traffic by program, website and IP address, and provider subscriptions supply the servers.</p>
 <p><strong>Young project:</strong> one developer maintains it with AI coding agents, and it has few users yet. Please report what breaks in <a href="https://github.com/eoftgge/rosetun/issues">Issues</a>.</p>
