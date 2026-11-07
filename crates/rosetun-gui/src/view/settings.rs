@@ -304,8 +304,14 @@ fn connection_mode(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
         if state.connection_mode_next_connect() {
             card.body(|ui| {
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new(tr!("next-connect")).small().color(theme::palette().text_muted));
-                    if widgets::link(ui, &tr!("reconnect-now"), state.can_reconnect() && editable).clicked() {
+                    ui.label(
+                        RichText::new(tr!("next-connect"))
+                            .small()
+                            .color(theme::palette().text_muted),
+                    );
+                    if widgets::link(ui, &tr!("reconnect-now"), state.can_reconnect() && editable)
+                        .clicked()
+                    {
                         actions.push(Action::ApplyConnectionMode);
                     }
                 });
@@ -2058,16 +2064,31 @@ mod pending_notice_tests {
                     });
                 };
                 let shown = screen.settle(&mut show);
-                let rect = shown.iter().find(|(text, _)| *text == tr!("reconnect-now")).unwrap().1;
+                let rect = shown
+                    .iter()
+                    .find(|(text, _)| *text == tr!("reconnect-now"))
+                    .unwrap()
+                    .1;
                 // Wrapped text includes the preceding caption's advance in its rectangle.
                 let pos = egui::pos2(rect.right() - theme::space::XS, rect.center().y);
                 let button = |pressed| egui::Event::PointerButton {
-                    pos, button: egui::PointerButton::Primary, pressed,
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
                     modifiers: egui::Modifiers::NONE,
                 };
-                screen.run(vec![egui::Event::PointerMoved(pos), button(true)], &mut show);
+                screen.run(
+                    vec![egui::Event::PointerMoved(pos), button(true)],
+                    &mut show,
+                );
                 screen.run(vec![button(false)], &mut show);
-                assert!(actions.iter().any(|action| matches!(action, Action::ApplyConnectionMode)), "{language:?}: {} actions", actions.len());
+                assert!(
+                    actions
+                        .iter()
+                        .any(|action| matches!(action, Action::ApplyConnectionMode)),
+                    "{language:?}: {} actions",
+                    actions.len()
+                );
             });
         }
     }

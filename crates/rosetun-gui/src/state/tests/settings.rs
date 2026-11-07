@@ -1328,7 +1328,10 @@ fn a_change_of_mode_waits_until_an_explicit_protected_apply() {
     assert!(state.take_local_proxy_apply().is_none());
     assert!(state.connection_mode_next_connect());
     assert!(state.apply_on_leave().is_none());
-    assert_eq!(state.apply_request().unwrap().settings.connection_mode, rosetun_config::ConnectionMode::Tun);
+    assert_eq!(
+        state.apply_request().unwrap().settings.connection_mode,
+        rosetun_config::ConnectionMode::Tun
+    );
     let Some(Job::Apply(request)) = state.act(Action::ApplyConnectionMode) else {
         panic!("explicit reconnect uses the protected apply path");
     };
@@ -1357,7 +1360,10 @@ fn the_protection_caption_uses_the_running_mode_after_a_saved_mode_change() {
     let mut state = connected_state_for_apply();
     state.status.protection.connection_mode = Some(rosetun_config::ConnectionMode::Tun);
     proxy_config(&mut state, 100);
-    assert_eq!(state.session_kill_switch_detail(), tr!("kill-switch-detail"));
+    assert_eq!(
+        state.session_kill_switch_detail(),
+        tr!("kill-switch-detail")
+    );
     assert_eq!(state.kill_switch_detail(), tr!("kill-switch-proxy-detail"));
 }
 
@@ -1422,4 +1428,3 @@ fn a_settings_caption_opens_the_screen_and_the_requested_section() {
     assert_eq!(state.screen, Screen::Settings);
     assert_eq!(state.settings.screen.section, SettingsSection::Connection);
 }
-
