@@ -601,11 +601,7 @@ Start-RosetunHelper
 $lanListener = Start-RosetunLanListener
 
 Set-RosetunIpv6Neighbor -Created $ipv6Neighbors
-$protocolSource = Get-Content -Raw -LiteralPath (Join-Path $RepoRoot 'crates\rosetun-ipc\src\protocol.rs')
-if (-not ($protocolSource -match 'pub const PROTOCOL_VERSION: u32 = (\d+);')) {
-    throw 'Could not read PROTOCOL_VERSION from rosetun-ipc.'
-}
-$protocolVersion = [int]$Matches[1]
+$protocolVersion = Get-RosetunProtocolVersion -RepoRoot $RepoRoot
 # Without a checkpoint restore the guest keeps logs of earlier runs, whose
 # leaks this run's log checks must not report.
 $runStartedUtcTicks = Invoke-RosetunGuest -ScriptBlock { [DateTime]::UtcNow.Ticks }

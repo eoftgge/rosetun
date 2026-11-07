@@ -43,8 +43,8 @@ $upgradeDir = Join-Path $guestDir 'upgrade'
 # Fixed forever in crates/rosetun-routing/src/platform/windows/lockdown.rs.
 $lockdownProviderKey = 'f12dbedd-f3c7-4a72-b0f8-20559c88b112'
 $holdProviderKey = '496d09fa-1d9a-451b-871f-35ba72197795'
-# The status fields read here exist from this protocol on.
-$protocolVersion = 16
+# Of the setup under test, built from this checkout: the status is read after the upgrade.
+$protocolVersion = Get-RosetunProtocolVersion -RepoRoot $RepoRoot
 
 function Test-Step {
     param(

@@ -1392,6 +1392,17 @@ function Get-RosetunLongTransferUrl {
     return $script:Config.LongTransferUrl
 }
 
+function Get-RosetunProtocolVersion {
+    # The version this checkout speaks. The service accepts only its own, so a matrix
+    # reads it instead of keeping a copy that goes stale.
+    param([Parameter(Mandatory)][string]$RepoRoot)
+    $source = Get-Content -Raw -LiteralPath (Join-Path $RepoRoot 'crates\rosetun-ipc\src\protocol.rs')
+    if ($source -notmatch 'pub const PROTOCOL_VERSION: u32 = (\d+);') {
+        throw 'Could not read PROTOCOL_VERSION from rosetun-ipc.'
+    }
+    [int]$Matches[1]
+}
+
 function Get-RosetunStatus {
     param([Parameter(Mandatory)][int]$ProtocolVersion)
 

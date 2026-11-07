@@ -75,6 +75,15 @@ foreach ($variant in $variants.Keys) {
     }
 }
 
+$repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..\..\..'))
+Assert-RosetunCheck 'the protocol version is read from the source' {
+    (Get-RosetunProtocolVersion -RepoRoot $repoRoot) -gt 0
+}
+Assert-RosetunCheck 'no matrix keeps its own protocol version' {
+    @(Get-ChildItem -Path (Join-Path $PSScriptRoot '..') -Filter '*.ps1' |
+        Select-String -Pattern '^\s*\$protocolVersion\s*=\s*\d').Count -eq 0
+}
+
 if ($failures -gt 0) {
     Write-Host "$failures check(s) failed" -ForegroundColor Red
     exit 1
