@@ -47,7 +47,9 @@ clone=$cache/src
 export CARGO_TARGET_DIR=$cache/target
 mkdir -p -- "$cache"
 [ -e "$clone" ] || git init -q -- "$clone"
-[ -d "$clone/.git" ] && [ ! -L "$clone" ] || die "$clone exists but is not the stand's clone; move it away"
+if [ ! -d "$clone/.git" ] || [ -L "$clone" ]; then
+    die "$clone exists but is not the stand's clone; move it away"
+fi
 cd -- "$clone"
 
 # The Windows checkout may look foreign-owned to WSL's git; trust only it, only here.

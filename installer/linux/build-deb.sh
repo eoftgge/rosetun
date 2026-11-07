@@ -72,8 +72,9 @@ cd -- "$repo"
 . /etc/os-release
 expected_version=12
 [ "$baseline" != debian13 ] || expected_version=13
-[ "$ID" = debian ] && [ "$VERSION_ID" = "$expected_version" ] ||
+if [ "$ID" != debian ] || [ "$VERSION_ID" != "$expected_version" ]; then
     die "build on Debian $expected_version; --stand-debian13 is only for the Debian 13 test stand"
+fi
 if $release && [ "$baseline" != debian12 ]; then
     die '--release requires the Debian 12 baseline'
 fi
