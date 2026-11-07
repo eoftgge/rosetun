@@ -215,6 +215,15 @@ pre {
     padding: 18px;
     border-radius: 8px;
 }
+pre.diagram {
+    white-space: pre;
+    overflow-wrap: normal;
+    overflow-x: auto;
+    max-width: 100%;
+}
+pre.diagram code {
+    overflow-wrap: normal;
+}
 code {
     font-family: Consolas, monospace;
     font-size: 0.9em;
