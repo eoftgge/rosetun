@@ -234,7 +234,13 @@ try {
         $process = Start-Process -FilePath 'powershell.exe' -PassThru -WindowStyle Hidden -ArgumentList @(
             '-NoProfile', '-Command',
             "`$l=[Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback,$port);`$l.Start();Start-Sleep 120")
-        Start-Sleep -Seconds 3
+        # A fixed wait lost on a cold guest: the service found the port free, and the
+        # engine then failed on it with no word of the port.
+        $deadline = (Get-Date).AddSeconds(45)
+        while ((Get-Date) -lt $deadline -and
+            -not (Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue)) {
+            Start-Sleep -Milliseconds 200
+        }
         $process.Id
     } -ArgumentList $ProxyPort
     try {
