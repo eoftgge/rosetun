@@ -450,7 +450,8 @@ checking, restore `l2-clean` again.
    systemctl status rosetun-helper
    ```
 
-   The kill switch needs `/usr/sbin/nft` (package `nftables`, installed above),
+   The kill switch needs a trusted executable at `/usr/bin/nft` or, as a
+   fallback, `/usr/sbin/nft` (package `nftables`, installed above),
    cgroup v2 and the unit's delegated cgroup. Check that the helper moved into
    its leaf and that engines have theirs:
 
