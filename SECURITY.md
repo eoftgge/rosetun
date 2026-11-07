@@ -39,7 +39,7 @@ Use [Security → Report a vulnerability](https://github.com/eoftgge/rosetun/sec
 
 ## Out of scope
 
-- Malware already running under your account or as administrator. Lockdown stops accidental leaks, not a program you run yourself (see [How it works](README.md#how-it-works)).
+- Malware already running under your account or as administrator. Lockdown stops accidental leaks, not a program you run yourself (see [How it works](https://eoftgge.github.io/rosetun/en/docs/how-it-works/)).
 - An administrator or root changing Rosetun, its service or its firewall rules.
 - What your VPN server or subscription provider can see by design: the traffic the server carries, and your real IP address when Rosetun updates a subscription without a connection.
 - Bugs in sing-box, Xray or Wintun themselves: please report them to those projects. Do report to us when the way Rosetun runs them opens a hole. In 0.4 one such case was fixed: while connected, sing-box's own firewall permit let any account on the computer start Rosetun's `sing-box.exe` and get around the tunnel.
@@ -82,7 +82,7 @@ Compare the file's SHA-256 with `SHA256SUMS.txt` in the release, and verify its 
 - пакет `.deb`: сценарий сопровождающего открывает сеть при обновлении, убирает путь выхода раньше Lockdown или оставляет файл, который могут менять другие; метка обновления в `/run/rosetun`, которую может поставить обычная учётная запись;
 - ссылки `rosetun://` через сокет в `$XDG_RUNTIME_DIR`: другая учётная запись передаёт ссылку вашему Rosetun, или обработчик `.desktop` запускает что-то кроме `rosetun-gui --open-url`.
 
-**Вне рамок:** вредоносная программа, уже запущенная под вашей учётной записью или от имени администратора (Lockdown защищает от случайных утечек, а не от программ, которые вы запустили сами, см. [Как это устроено](README.ru.md#как-это-устроено)); администратор или root, меняющий Rosetun, его службу или правила брандмауэра; то, что VPN-сервер или провайдер подписки видят по своей природе; ошибки самих sing-box, Xray и Wintun, о них сообщайте этим проектам. Но если уязвимость открывает именно то, как Rosetun их запускает, сообщайте нам: в 0.4 исправлен такой случай, когда во время подключения собственное разрешение sing-box в брандмауэре позволяло любой учётной записи на компьютере запустить `sing-box.exe` из Rosetun и выйти мимо туннеля.
+**Вне рамок:** вредоносная программа, уже запущенная под вашей учётной записью или от имени администратора (Lockdown защищает от случайных утечек, а не от программ, которые вы запустили сами, см. [Как это устроено](https://eoftgge.github.io/rosetun/ru/docs/how-it-works/)); администратор или root, меняющий Rosetun, его службу или правила брандмауэра; то, что VPN-сервер или провайдер подписки видят по своей природе; ошибки самих sing-box, Xray и Wintun, о них сообщайте этим проектам. Но если уязвимость открывает именно то, как Rosetun их запускает, сообщайте нам: в 0.4 исправлен такой случай, когда во время подключения собственное разрешение sing-box в брандмауэре позволяло любой учётной записи на компьютере запустить `sing-box.exe` из Rosetun и выйти мимо туннеля.
 
 **Как обрабатываются сообщения.** Сообщение подтверждается, исправление выходит в следующем выпуске или бете, после выхода исправленной версии публикуется GitHub security advisory, с упоминанием автора сообщения, если вы этого хотите. Проект молодой, его ведёт один разработчик, внешней проверки безопасности не было; срок ответа и исправления не гарантирован.
 
