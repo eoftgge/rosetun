@@ -783,6 +783,7 @@ mod tests {
         assert!(runs_on_linux(&mode(&["--service"])));
         assert!(runs_on_linux(&mode(&["--reset-firewall"])));
         assert!(runs_on_linux(&mode(&["--restore-lockdown"])));
+        assert!(runs_on_linux(&mode(&["--restart-for-upgrade"])));
         for args in [
             &["--install-service"][..],
             &["--uninstall-service"],

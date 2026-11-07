@@ -34,3 +34,4 @@ crash.dns-lock-killed	yes	real-service	crash	-	the helper killed with SIGKILL du
 crash.five-kills	yes	real-service	crash	-	the helper killed five times in a row: the direct path stays refused every time, and after that a connect answers through the tunnel with rules naming the current cgroups
 stop.removes-table	yes	real-service	stop	-	systemctl stop during a kill-switch session removes the table and the direct path answers
 upgrade.restart	yes	real-service	upgrade	-	file replacement and repeated restart-for-upgrade keep zero packets on the physical interface, report the hold and allow reconnect
+upgrade.unprotected	yes	real-service	upgrade	-	an idle upgrade restart reports no hold and direct HTTPS still answers

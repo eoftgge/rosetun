@@ -96,7 +96,7 @@ fn restart_inner() -> io::Result<bool> {
                 ) && client.helper_version() == env!("CARGO_PKG_VERSION")
                     && let Ok(status) = client.status()
                 {
-                    held = status.upgrade_hold || status.lockdown;
+                    held = status.protection.installed.blocks_all_traffic();
                     return Ok(());
                 }
                 if Instant::now() >= deadline {

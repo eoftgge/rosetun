@@ -998,6 +998,13 @@ EOF
         disconnect
     }
     check upgrade.restart "no direct packets during file replacement and two upgrade restarts; reconnect works" upgraded
+    idle_restart() {
+        disconnect || return 1
+        timeout "$UNIT_TIMEOUT_SECONDS" "$PREFIX/rosetun-helper-privileged" --restart-for-upgrade >"$REPORT/upgrade-idle.txt" 2>&1 || return 1
+        grep -q 'network was not held closed' "$REPORT/upgrade-idle.txt" || return 1
+        expect_reached "direct HTTPS after an idle upgrade restart" direct_https
+    }
+    check upgrade.unprotected "an unprotected restart keeps direct egress available" idle_restart
 }
 
 scenario_stop() {
