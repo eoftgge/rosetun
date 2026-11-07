@@ -112,7 +112,8 @@ pub(super) fn verify_below(top: &Path, binary: &Path, owner: u32) -> Result<(), 
     let Some((Component::Normal(_), folders)) = components.split_last() else {
         return Err(format!("{candidate} does not name a file"));
     };
-    let unsafe_folder = || format!("a folder above {candidate} is not owned by root alone or is missing");
+    let unsafe_folder =
+        || format!("a folder above {candidate} is not owned by root alone or is missing");
     let mut path = top.to_path_buf();
     let metadata = std::fs::symlink_metadata(&path).map_err(|_| unsafe_folder())?;
     if !metadata.is_dir() || !trusted(&metadata, owner) {
