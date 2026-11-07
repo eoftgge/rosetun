@@ -40,7 +40,7 @@ Rosetun: VPN-клиент для Windows и Linux на sing-box и Xray.
 
 Windows 11 x64: скачайте установщик выше и запустите. [Проверка загрузки и установка](https://eoftgge.github.io/rosetun/ru/docs/install/).
 
-Debian 13 amd64 (с предварительной 0.5): скачайте пакет и выполните:
+Linux amd64 (с предварительной 0.5): проверено на Debian 13; должно работать на Ubuntu 24.04+, Linux Mint 22+ и производных Debian/Ubuntu с glibc >= 2.36, systemd, nftables и polkit. Arch: рецепт AUR подготовлен, работа пока не проверена. Системы без systemd и Flatpak/Snap/AppImage не поддерживаются, поскольку нужна привилегированная служба хоста. [Поддержка Linux](https://eoftgge.github.io/rosetun/ru/docs/linux/). Скачайте `.deb` и выполните:
 
 ```sh
 sudo apt install ./rosetun_<версия>_amd64.deb

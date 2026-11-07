@@ -50,7 +50,10 @@
 <pre><code>Move-Item -Force &quot;$env:APPDATA\Rosetun\config.v7.json&quot; &quot;$env:APPDATA\Rosetun\config.json&quot;</code></pre></li>
 <li>Снова включите <strong>Запускать вместе с Windows</strong> и Lockdown, если они нужны.</li>
 </ol>
-<h2 id="debian-13">Debian 13</h2>
+<h2 id="debian-13">Debian / Ubuntu / Linux Mint</h2>
+<p><strong>Дистрибутивы (amd64, glibc 2.36 или новее):</strong> Debian 13 проверен системными матрицами. На Ubuntu 24.04+, Linux Mint 22+ и других производных Debian/Ubuntu с этой или более новой glibc, systemd, nftables и polkit должен работать тот же <code>.deb</code>; ручная проверка Ubuntu ещё впереди.</p>
+<p>Для Arch Linux подготовлен рецепт AUR <code>rosetun-bin</code> к стабильной 0.5.0; работа на Arch пока не проверена. См. <a href="../install/#arch-linux">установку и обновление</a>.</p>
+<p>Системы без systemd и пакеты Flatpak, Snap и AppImage не поддерживаются: Rosetun нужны привилегированная системная служба и доступ к файрволу и TUN-устройству хоста.</p>
 <p>Скачайте <code>rosetun_&lt;версия&gt;_amd64.deb</code> со страницы <a href="https://github.com/eoftgge/rosetun/releases">Releases</a>, <a href="../install/#verify-the-download">проверьте его</a>, установите и добавьте себя в группу, которой доступна служба:</p>
 <pre><code>sudo apt install ./rosetun_&lt;версия&gt;_amd64.deb
 sudo usermod -aG rosetun &quot;$USER&quot;</code></pre>

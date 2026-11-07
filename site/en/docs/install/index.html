@@ -50,7 +50,10 @@
 <pre><code>Move-Item -Force &quot;$env:APPDATA\Rosetun\config.v7.json&quot; &quot;$env:APPDATA\Rosetun\config.json&quot;</code></pre></li>
 <li>Turn on <strong>Start with Windows</strong> and Lockdown again if you use them.</li>
 </ol>
-<h2 id="debian-13">Debian 13</h2>
+<h2 id="debian-13">Debian / Ubuntu / Linux Mint</h2>
+<p><strong>Distributions (amd64, glibc 2.36 or newer):</strong> Debian 13 is verified by the system test matrices. Ubuntu 24.04+, Linux Mint 22+ and other Debian/Ubuntu derivatives with this glibc or newer, systemd, nftables and polkit are expected to work with the same <code>.deb</code>; manual Ubuntu verification is pending.</p>
+<p>Arch Linux uses the <code>rosetun-bin</code> AUR recipe prepared for stable 0.5.0; runtime verification is pending. See <a href="../install/#arch-linux">installation and updates</a>.</p>
+<p>Systems without systemd and Flatpak, Snap and AppImage packages are unsupported: Rosetun needs a privileged system service and access to the host firewall and TUN device.</p>
 <p>Download <code>rosetun_&lt;version&gt;_amd64.deb</code> from <a href="https://github.com/eoftgge/rosetun/releases">Releases</a>, <a href="../install/#verify-the-download">verify it</a>, install it and add yourself to the group that may reach the service:</p>
 <pre><code>sudo apt install ./rosetun_&lt;version&gt;_amd64.deb
 sudo usermod -aG rosetun &quot;$USER&quot;</code></pre>

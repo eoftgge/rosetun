@@ -40,7 +40,7 @@ A system service protects against leaks independently of the engine.
 
 Windows 11 x64: download the installer above and run it. [Verify and install](https://eoftgge.github.io/rosetun/en/docs/install/).
 
-Debian 13 amd64 (since the 0.5 preview): download the package and run:
+Linux amd64 (since the 0.5 preview): verified on Debian 13; expected on Ubuntu 24.04+, Linux Mint 22+ and Debian/Ubuntu derivatives with glibc >= 2.36, systemd, nftables and polkit. Arch: AUR recipe prepared, runtime check pending. Systems without systemd and Flatpak/Snap/AppImage are unsupported because a privileged host service is required. [Linux support](https://eoftgge.github.io/rosetun/en/docs/linux/). Download the `.deb` and run:
 
 ```sh
 sudo apt install ./rosetun_<version>_amd64.deb
