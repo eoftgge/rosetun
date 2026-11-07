@@ -34,7 +34,7 @@ network access; source validation and tests do not. A missing stable release,
 asset or unique checksum stops publication. The checksum is copied, not a claim
 that the CI job downloaded and hashed the installer.
 
-Preview the site as it will read after stable 0.5, without network access:
+Preview the stable 0.5.0 site without network access:
 
 ```sh
 python tools/site/release.py --preview-version 0.5.0 --preview-deb --output target/site-preview-0.5
@@ -46,7 +46,7 @@ This preview uses synthetic checksums; do not publish its output. The Pages job
 continues to fetch the actual latest stable release and checksums. From 0.5,
 documentation banners name the stable version and its available platforms.
 The 0.4 reference lives in the documentation index history rather than every
-banner. Individual "since 0.5" notes stay as muted history, without a warning border.
+banner. The current documentation describes 0.5 directly, without per-page "since 0.5" notices.
 
 For a subdirectory preview, put the prepared copy under a directory named
 `rosetun` and serve its parent. Open `/rosetun/`. All local URLs are relative.
@@ -66,9 +66,9 @@ moves forward. Text that depends on the stable release having a Debian package
 sits in `<!-- linux-ready ... -->` and `<!-- linux-soon -->...<!-- /linux-soon -->`
 markers: publication keeps one and drops the other.
 
-The source documentation baseline is stable 0.5 for Windows and Linux. The
-0.4 reference remains in the documentation index history; individual "since 0.5"
-notes remain as history too. `<!-- docs-version -->...<!-- /docs-version -->`
+The source pages name stable 0.5.0 for Windows and Linux. The
+0.4 reference remains in the documentation index history; per-page "since 0.5"
+notices have been removed. `<!-- docs-version -->...<!-- /docs-version -->`
 wraps the baseline banner. Publication fills it with the actual latest stable
 version and available platforms. If that release is still older than 0.5, the
 banner names both the older download and the 0.5 documentation baseline.

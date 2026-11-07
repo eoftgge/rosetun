@@ -30,10 +30,9 @@
         <main id="main" class="wrap">
             <div class="prose docs">
                 <h1>Links for providers</h1>
-                <!-- docs-version --><p class="note">Documentation 0.5 · Windows and Linux.</p><!-- /docs-version -->
+                <!-- docs-version --><p class="note">Stable release: 0.5.0 · Windows and Linux.</p><!-- /docs-version -->
                 <nav aria-label="On this page"><a href="#details">Links for providers</a></nav>
                 <section id="details">
-<p class="history">Since 0.5: Debian scheme registration and Linux socket.</p>
 <p>A button on a provider&#x27;s page can open Rosetun with a subscription filled in: <code>rosetun://add/&lt;subscription link&gt;</code>, with the link raw (<code>rosetun://add/https://example.com/sub</code>) or percent-encoded (<code>rosetun://add/https%3A%2F%2Fexample.com%2Fsub</code>). An optional <code>#name</code> at the end suggests the subscription&#x27;s name (<code>rosetun://add/https://example.com/sub#Example</code>). Rosetun only shows the <strong>Add subscription</strong> dialog with the link, its name and the provider&#x27;s host; nothing is downloaded or added until you click <strong>Add</strong>. A link to a subscription you already have only brings it into view.</p>
 <p>The Windows installer registers the scheme for all users. The Debian package registers it through its <code>.desktop</code> file (<code>x-scheme-handler/rosetun</code>). A running Rosetun takes the link from a later start through a channel only your account can open: a named pipe on Windows, a socket in <code>$XDG_RUNTIME_DIR</code> on Linux.</p>
 <p>More for providers, with response headers: <a href="https://eoftgge.github.io/rosetun/en/providers/">the site&#x27;s page</a>.</p>
