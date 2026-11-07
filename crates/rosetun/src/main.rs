@@ -124,7 +124,15 @@ fn main() -> ExitCode {
         Command::LockdownWithLan {
             allow_lan,
             private_networks,
-        } => with_helper(|client| lockdown(client, true, allow_lan, private_networks)),
+        } => {
+            let code = with_helper(|client| lockdown(client, true, allow_lan, private_networks));
+            if code == ExitCode::SUCCESS
+                && let Err(message) = save_lan(allow_lan, private_networks)
+            {
+                eprintln!("{LAN_NOT_SAVED}: {message}");
+            }
+            code
+        }
         Command::ResetFirewall => reset_firewall(),
         Command::Connect { request_path } => match prepare_list_request(request_path.as_deref()) {
             Ok(request) => with_helper(|client| connect(client, request)),
@@ -718,11 +726,36 @@ fn set_lan(enabled: bool) -> Result<(), String> {
 }
 
 /// The saved "Local network" and "Private networks behind the router".
+/// An administrator's connect makes Lockdown's local network follow the settings, so
+/// a choice made here that stayed out of them would last only until then.
+fn save_lan(allow_lan: bool, private_networks: bool) -> Result<(), String> {
+    let store = rosetun_core::Store::open_default().map_err(|error| error.to_string())?;
+    save_lan_to(&store, allow_lan, private_networks)
+}
+
+fn save_lan_to(
+    store: &rosetun_core::Store,
+    allow_lan: bool,
+    private_networks: bool,
+) -> Result<(), String> {
+    for change in [
+        rosetun_core::SettingChange::AllowLan(allow_lan),
+        rosetun_core::SettingChange::PrivateNetworks(private_networks),
+    ] {
+        rosetun_core::change_setting(store, change).map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
 fn saved_lan() -> Result<(bool, bool), String> {
     let store = rosetun_core::Store::open_default().map_err(|error| error.to_string())?;
     let config = store.load().map_err(|error| error.to_string())?;
     Ok((config.settings.allow_lan, config.settings.private_networks))
 }
+
+/// Lockdown has changed by then, so this is a warning and not a failure. A service or a
+/// script may run the command with no home folder and so no settings to save to.
+const LAN_NOT_SAVED: &str = "Lockdown changed, but the local network choice is not saved, and an administrator's next connect may undo it";
 
 fn lockdown(
     client: &mut HelperClient,
@@ -1011,8 +1044,8 @@ Options for sub add may appear in any order after the URL."
 mod tests {
     use super::{
         Command, LAN_KEPT_BY_LOCKDOWN, LOCKDOWN_DENIED, access_denied_message, apply_error_message,
-        lockdown_denied, parse_command_arguments, protection_lines, status_has_no_network,
-        temporary_rule_line, temporary_rules_status,
+        lockdown_denied, parse_command_arguments, protection_lines, save_lan_to,
+        status_has_no_network, temporary_rule_line, temporary_rules_status,
     };
     use rosetun_config::{
         ConnectionMode, ConnectionState, DomainMatch, FailureKind, InstalledProtection,
@@ -1057,6 +1090,24 @@ mod tests {
                 "if the service crashes: this goes with it"
             ]
         );
+    }
+
+    #[test]
+    fn the_local_network_chosen_for_lockdown_is_saved() {
+        let path = std::env::temp_dir().join(format!(
+            "rosetun-cli-lockdown-lan-{}.json",
+            std::process::id()
+        ));
+        let store = rosetun_core::Store::at(&path);
+        for (allow_lan, private_networks) in [(true, true), (true, false), (false, false)] {
+            save_lan_to(&store, allow_lan, private_networks).unwrap();
+            let settings = store.load().unwrap().settings;
+            assert_eq!(
+                (settings.allow_lan, settings.private_networks),
+                (allow_lan, private_networks)
+            );
+        }
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

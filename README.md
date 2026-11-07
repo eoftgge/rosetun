@@ -109,7 +109,7 @@ On Windows:
 
   `InterfaceAlias` must be your Ethernet or Wi-Fi adapter, not `rosetun0`, and `IPAddress` this computer's address on that network.
 
-With **Lockdown** on, the same networks are open while disconnected too, and devices on them can connect to this computer. `rosetun lockdown on --lan private` turns Lockdown on with private networks behind the router.
+With **Lockdown** on, the same networks are open while disconnected too, and devices on them can connect to this computer. `rosetun lockdown on --lan private` turns Lockdown on with private networks behind the router. `--lan` also saves the choice in the settings of whoever runs the command, so that account's next connect keeps it.
 
 ### Subscriptions and servers
 
