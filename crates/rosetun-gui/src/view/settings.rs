@@ -433,13 +433,17 @@ fn connection(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
         }
         let mut lockdown_on = lockdown;
         if card
-            .toggle(
+            .toggle_with(
                 tr!("lockdown"),
                 Some(&tr!("experimental")),
                 if state.lockdown_unavailable() {
                     tr!("lockdown-unavailable")
                 } else {
                     tr!("lockdown-detail")
+                },
+                widgets::RowOptions {
+                    nested: true,
+                    ..widgets::RowOptions::default()
                 },
                 &mut lockdown_on,
                 state.can_change_lockdown(),
