@@ -115,6 +115,7 @@ class SiteChecks(unittest.TestCase):
                     page = (output / lang / 'docs/index.html').read_text(encoding='utf-8')
                     self.assertEqual(warning in page, preview)
                     self.assertNotIn('docs-version', page)
+                    self.assertIn(f'blob/v0.4.0/README{".ru" if lang == "ru" else ""}.md', page)
 
     def test_documentation_rejects_broken_navigation(self):
         with tempfile.TemporaryDirectory() as directory:

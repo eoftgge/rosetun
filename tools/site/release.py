@@ -77,7 +77,10 @@ def render(source, output, values):
         text = path.read_text(encoding='utf-8')
         if tuple(map(int, values['VERSION'].split('.'))) >= (0, 5, 0):
             label = 'Stable release' if path.relative_to(output).parts[0] == 'en' else 'Стабильный выпуск'
-            text = DOC_VERSION.sub(f'<p class="note">{label}: {html.escape(values["VERSION"])}.</p>', text)
+            def stable_banner(match):
+                links = ' · '.join(re.findall(r'<a href="[^"]+">.*?</a>', match[1]))
+                return f'<p class="note">{label}: {html.escape(values["VERSION"])}. {links}</p>'
+            text = DOC_VERSION.sub(stable_banner, text)
         else:
             text = DOC_VERSION.sub(lambda match: match[1], text)
         if values['DEB_URL']:
