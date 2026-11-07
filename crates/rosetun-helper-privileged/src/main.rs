@@ -20,9 +20,9 @@ mod log_gate;
 #[cfg(windows)]
 mod process_job;
 #[cfg(target_os = "linux")]
-mod sd_notify;
-#[cfg(target_os = "linux")]
 mod restart_linux;
+#[cfg(target_os = "linux")]
+mod sd_notify;
 mod server;
 #[cfg(windows)]
 mod service;
@@ -93,7 +93,11 @@ fn parse_mode(args: impl IntoIterator<Item = OsString>) -> Result<Mode, String> 
 fn runs_on_linux(mode: &Mode) -> bool {
     matches!(
         mode,
-        Mode::Console | Mode::Service | Mode::ResetFirewall | Mode::RestoreLockdown | Mode::RestartForUpgrade
+        Mode::Console
+            | Mode::Service
+            | Mode::ResetFirewall
+            | Mode::RestoreLockdown
+            | Mode::RestartForUpgrade
     )
 }
 

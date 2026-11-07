@@ -90,10 +90,9 @@ fn restart_inner() -> io::Result<bool> {
         Step::Wait => {
             let deadline = Instant::now() + Duration::from_secs(15);
             loop {
-                if let Ok(mut client) = HelperClient::connect(
-                    &rosetun_ipc::default_endpoint(),
-                    "restart-for-upgrade",
-                ) && client.helper_version() == env!("CARGO_PKG_VERSION")
+                if let Ok(mut client) =
+                    HelperClient::connect(&rosetun_ipc::default_endpoint(), "restart-for-upgrade")
+                    && client.helper_version() == env!("CARGO_PKG_VERSION")
                     && let Ok(status) = client.status()
                 {
                     held = status.protection.installed.blocks_all_traffic();
@@ -130,10 +129,17 @@ mod tests {
     fn a_failed_step_prevents_every_later_step() {
         for failed in [Step::Mark, Step::Restart, Step::Wait] {
             let mut steps = Vec::new();
-            assert!(sequence(|step| {
-                steps.push(step);
-                if step == failed { Err(io::Error::other("failed")) } else { Ok(()) }
-            }).is_err());
+            assert!(
+                sequence(|step| {
+                    steps.push(step);
+                    if step == failed {
+                        Err(io::Error::other("failed"))
+                    } else {
+                        Ok(())
+                    }
+                })
+                .is_err()
+            );
             assert_eq!(steps.last(), Some(&failed));
         }
     }
