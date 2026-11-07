@@ -1310,7 +1310,7 @@ fn the_kill_switch_of_the_tunnel_mode_and_turning_it_off_ask_nothing() {
 }
 
 #[test]
-fn a_change_of_mode_during_a_session_goes_in_through_apply() {
+fn a_change_of_mode_waits_until_an_explicit_protected_apply() {
     let mut state = connected_state_for_apply();
     assert!(state.take_local_proxy_apply().is_none());
     let job = state.act(Action::SetConnectionMode(
@@ -1325,13 +1325,19 @@ fn a_change_of_mode_during_a_session_goes_in_through_apply() {
 
     state.operations.settings = None;
     proxy_config(&mut state, 100);
-    let Some(Job::Apply(request)) = state.take_local_proxy_apply() else {
-        panic!("the session takes the new mode");
+    assert!(state.take_local_proxy_apply().is_none());
+    assert!(state.connection_mode_next_connect());
+    assert!(state.apply_on_leave().is_none());
+    assert_eq!(state.apply_request().unwrap().settings.connection_mode, rosetun_config::ConnectionMode::Tun);
+    let Some(Job::Apply(request)) = state.act(Action::ApplyConnectionMode) else {
+        panic!("explicit reconnect uses the protected apply path");
     };
     assert_eq!(
         request.settings.connection_mode,
         rosetun_config::ConnectionMode::SystemProxy
     );
+    state.reduce(WorkerEvent::Apply(Ok(*request)));
+    assert!(!state.connection_mode_next_connect());
     assert!(state.take_local_proxy_apply().is_none(), "only once");
 }
 
@@ -1344,6 +1350,15 @@ fn a_change_of_mode_without_a_session_waits_for_the_next_connect() {
     state.system_proxy.follow_session();
     assert!(state.take_local_proxy_apply().is_none());
     assert!(state.take_local_proxy_apply().is_none());
+}
+
+#[test]
+fn the_protection_caption_uses_the_running_mode_after_a_saved_mode_change() {
+    let mut state = connected_state_for_apply();
+    state.status.protection.connection_mode = Some(rosetun_config::ConnectionMode::Tun);
+    proxy_config(&mut state, 100);
+    assert_eq!(state.session_kill_switch_detail(), tr!("kill-switch-detail"));
+    assert_eq!(state.kill_switch_detail(), tr!("kill-switch-proxy-detail"));
 }
 
 #[test]

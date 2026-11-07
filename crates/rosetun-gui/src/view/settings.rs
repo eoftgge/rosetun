@@ -254,7 +254,8 @@ fn connection_mode(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
     let editable = state.can_edit_settings();
     let mode = state.config.settings.connection_mode;
     let proxy = mode == ConnectionMode::SystemProxy;
-    let waits = state.waits_for_next_connect(SessionPart::LocalProxy);
+    let waits = !state.connection_mode_next_connect()
+        && state.waits_for_next_connect(SessionPart::LocalProxy);
     let reduce_motion = state.config.interface.reduce_motion;
     let id = egui::Id::unique("connection_mode");
     let rows_id = id.with("proxy_rows");
@@ -300,6 +301,16 @@ fn connection_mode(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
                 }
             },
         );
+        if state.connection_mode_next_connect() {
+            card.body(|ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new(tr!("next-connect")).small().color(theme::palette().text_muted));
+                    if widgets::link(ui, &tr!("reconnect-now"), state.can_reconnect() && editable).clicked() {
+                        actions.push(Action::ApplyConnectionMode);
+                    }
+                });
+            });
+        }
         // Closing rows stay on screen for a moment, and take no more input.
         let editable = editable && proxy;
         let form = &mut state.settings.screen;
@@ -2012,6 +2023,53 @@ mod pending_notice_tests {
     fn drawn(state: &State, size: egui::Vec2, nav: f32) -> Texts {
         let mut screen = TestScreen::new(size);
         screen.settle(|ui| page(ui, nav, |ui| connection(ui, state, &mut Vec::new())))
+    }
+
+    #[test]
+    fn lockdown_is_indented_inside_the_kill_switch_block() {
+        for language in LANGUAGES {
+            i18n::in_language(language, || {
+                let state = connected(ConnectionState::Disconnected);
+                let (size, nav) = WINDOWS[0];
+                let shown = drawn(&state, size, nav);
+                let rect = |title: String| shown.iter().find(|(text, _)| *text == title).unwrap().1;
+                let kill_switch = rect(tr!("kill-switch"));
+                let lockdown = rect(tr!("lockdown"));
+                assert!((lockdown.left() - kill_switch.left() - theme::space::XL).abs() <= 1.0);
+                assert_eq!(rect(tr!("allow-lan")).left(), kill_switch.left());
+                assert!(lockdown.top() > kill_switch.bottom());
+            });
+        }
+    }
+
+    #[test]
+    fn a_pending_mode_has_a_working_reconnect_link() {
+        for language in LANGUAGES {
+            i18n::in_language(language, || {
+                let mut state = connected(ConnectionState::Connected);
+                state.config.settings.connection_mode = ConnectionMode::SystemProxy;
+                assert!(state.can_reconnect());
+                assert!(state.can_edit_settings());
+                let mut actions = Vec::new();
+                let mut screen = TestScreen::new(WINDOWS[0].0);
+                let mut show = |ui: &mut egui::Ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        connection_mode(ui, &mut state, &mut actions);
+                    });
+                };
+                let shown = screen.settle(&mut show);
+                let rect = shown.iter().find(|(text, _)| *text == tr!("reconnect-now")).unwrap().1;
+                // Wrapped text includes the preceding caption's advance in its rectangle.
+                let pos = egui::pos2(rect.right() - theme::space::XS, rect.center().y);
+                let button = |pressed| egui::Event::PointerButton {
+                    pos, button: egui::PointerButton::Primary, pressed,
+                    modifiers: egui::Modifiers::NONE,
+                };
+                screen.run(vec![egui::Event::PointerMoved(pos), button(true)], &mut show);
+                screen.run(vec![button(false)], &mut show);
+                assert!(actions.iter().any(|action| matches!(action, Action::ApplyConnectionMode)), "{language:?}: {} actions", actions.len());
+            });
+        }
     }
 
     fn with_note(shown: &Texts) -> Vec<String> {

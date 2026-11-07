@@ -23,7 +23,7 @@ pub(crate) struct SystemProxySync {
     /// This desktop's settings cannot be changed: the user points programs at
     /// the proxy by hand.
     pub(crate) manual: bool,
-    /// A change of mode, port or sharing is saved, and the running session
+    /// A change of port or sharing is saved, and the running session
     /// should take it, once the save is through.
     session_follows: bool,
     /// The computer's address for other devices.
@@ -81,9 +81,7 @@ impl State {
         Some(Job::SyncSystemProxy(wish))
     }
 
-    /// A mode, port or sharing changed during a session goes in by itself, under
-    /// the standing protection. Nothing else in Settings restarts the tunnel, but
-    /// this is what the user just asked for, and it is what `Apply` is for.
+    /// Port and sharing changes follow the session under its standing protection.
     pub(crate) fn take_local_proxy_apply(&mut self) -> Option<Job> {
         if !self.system_proxy.session_follows {
             return None;
@@ -92,7 +90,10 @@ impl State {
             self.system_proxy.session_follows = false;
             return None;
         }
-        if !self.can_apply() || !self.pending_reconnect(super::SessionPart::LocalProxy) {
+        if self.connection_mode_next_connect()
+            || !self.can_apply()
+            || !self.pending_reconnect(super::SessionPart::LocalProxy)
+        {
             return None;
         }
         self.system_proxy.session_follows = false;
@@ -104,6 +105,14 @@ impl State {
         match self.config.settings.connection_mode {
             ConnectionMode::Tun => tr!("kill-switch-detail"),
             ConnectionMode::SystemProxy => tr!("kill-switch-proxy-detail"),
+        }
+    }
+
+    pub(crate) fn session_kill_switch_detail(&self) -> String {
+        match self.status.protection.connection_mode {
+            Some(ConnectionMode::Tun) => tr!("kill-switch-detail"),
+            Some(ConnectionMode::SystemProxy) => tr!("kill-switch-proxy-detail"),
+            None => self.kill_switch_detail(),
         }
     }
 

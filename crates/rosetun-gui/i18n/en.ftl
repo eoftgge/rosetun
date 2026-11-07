@@ -667,6 +667,7 @@ private-networks-hint = Traffic to private addresses outside your network goes a
 private-networks-needs-lan = Turn on Local network first.
 default-rules = Default · through VPN
 next-connect = Applies on the next connection
+reconnect-now = Reconnect now
 next-connect-note = Applies on the next connection.
 apply = Apply
 apply-now = Apply now

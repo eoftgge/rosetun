@@ -201,6 +201,10 @@ impl State {
         self.differs_from_session(|running, saved| running.auto_reconnect != saved.auto_reconnect)
     }
 
+    pub(crate) fn connection_mode_next_connect(&self) -> bool {
+        self.differs_from_session(|running, saved| running.connection_mode != saved.connection_mode)
+    }
+
     pub(crate) fn xray_next_connect(&self) -> bool {
         self.visible_status().is_some_and(|status| {
             matches!(
@@ -609,7 +613,6 @@ impl State {
             }
             Action::SetConnectionMode(mode) => {
                 if self.can_edit_settings() && self.config.settings.connection_mode != mode {
-                    self.system_proxy.follow_session();
                     return self.start_settings(Job::Setting(SettingChange::ConnectionMode(mode)));
                 }
             }

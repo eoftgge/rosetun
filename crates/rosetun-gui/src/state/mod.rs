@@ -310,6 +310,7 @@ pub(crate) enum Action {
     SetAutoReconnect(bool),
     SetAllowLan(bool),
     SetConnectionMode(ConnectionMode),
+    ApplyConnectionMode,
     SetLocalProxyPort(u16),
     SetShareOnLan(bool),
     SetPrivateNetworks(bool),
@@ -927,7 +928,7 @@ impl State {
             | Action::MoveRuleToTop(_)
             | Action::MoveSelectedRulesToTop
             | Action::MoveSelectedRulesToEnd) => return self.act_rules(action),
-            action @ (Action::Apply | Action::RestoreMyEdits) => {
+            action @ (Action::Apply | Action::ApplyConnectionMode | Action::RestoreMyEdits) => {
                 return self.act_session(action);
             }
             action @ (Action::UndoRules | Action::RedoRules | Action::RevertRules) => {

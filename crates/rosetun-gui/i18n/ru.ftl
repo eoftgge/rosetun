@@ -682,6 +682,7 @@ private-networks-hint = Трафик к частным адресам за пр�
 private-networks-needs-lan = Сначала включите «Локальную сеть».
 default-rules = По умолчанию · всё через VPN
 next-connect = Применится при следующем подключении
+reconnect-now = Переподключить сейчас
 next-connect-note = Применится при следующем подключении.
 apply = Применить
 apply-now = Применить сейчас

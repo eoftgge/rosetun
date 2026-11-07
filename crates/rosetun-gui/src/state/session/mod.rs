@@ -401,13 +401,16 @@ impl State {
 
     pub(in crate::state) fn apply_request(&self) -> Option<ConnectRequest> {
         let session = self.session.session_request.as_ref()?;
-        ConnectRequest::for_apply_with_exits(
+        let mut request = ConnectRequest::for_apply_with_exits(
             &self.config,
             Some(&session.settings),
             self.session.temporary_rules.clone(),
             self.request_inputs().context(),
         )
-        .ok()
+        .ok()?;
+        // Ordinary applies, including leaving Settings, keep the current session's mode.
+        request.settings.connection_mode = session.settings.connection_mode;
+        Some(request)
     }
 
     pub(crate) fn can_change_temporary(&self) -> bool {
@@ -436,7 +439,6 @@ impl State {
             || session.extra_nodes != current.extra_nodes
             || session.settings.dns != current.settings.dns
             || session.settings.tls_fragment != current.settings.tls_fragment
-            || session.settings.connection_mode != current.settings.connection_mode
             || session.settings.local_proxy != current.settings.local_proxy
     }
 
@@ -965,6 +967,18 @@ impl State {
                     );
                     self.session.keep_temporary = Some(id);
                     return self.start_rule_edit(job);
+                }
+            }
+            Action::ApplyConnectionMode => {
+                if self.can_reconnect()
+                    && self.config_ready
+                    && !self.saving_config()
+                    && self.connection_mode_next_connect()
+                    && let Some(mut request) = self.apply_request()
+                {
+                    request.settings.connection_mode = self.config.settings.connection_mode;
+                    self.start_apply(None);
+                    return Some(Job::Apply(Box::new(request)));
                 }
             }
             Action::Apply => {
