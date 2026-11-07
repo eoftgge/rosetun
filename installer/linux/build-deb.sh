@@ -164,6 +164,7 @@ unzip -q -o "$cache/$xray_archive" xray -d "$work"
 place 0755 "$work/xray" "$lib/xray"
 mkdir -p "$root/usr/bin"
 ln -s ../lib/rosetun/rosetun "$root/usr/bin/rosetun"
+ln -s ../lib/rosetun/rosetun-helper-privileged "$root/usr/bin/rosetun-helper-privileged"
 ln -s ../lib/rosetun/rosetun-gui "$root/usr/bin/rosetun-gui"
 # The GUI's "Licenses" button opens the folder beside its program.
 ln -s ../../share/doc/rosetun/licenses "$root/$lib/licenses"
@@ -269,3 +270,6 @@ printf 'Package: %s\nSHA-256: %s\n' "$package" "$(sha256_of "$package")"
 if [ -n "${GITHUB_OUTPUT:-}" ]; then
     printf 'deb=%s\n' "$package" >>"$GITHUB_OUTPUT"
 fi
+
+# Reuse this exact payload, including engines and generated license notices.
+bash "$repo/installer/linux/build-archive.sh" "$package" "$version"

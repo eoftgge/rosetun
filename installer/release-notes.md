@@ -70,6 +70,7 @@ Then restart the computer: logging out is not enough.
 Compare the hash with this release's `SHA256SUMS.txt`, and verify the provenance. An attestation says which workflow built the file; it is not a code signature.
 
 - Windows: `Get-FileHash .\{{setup}} -Algorithm SHA256` gives `{{sha256}}`. Then `gh attestation verify .\{{setup}} --repo eoftgge/rosetun`.
+- Linux archive: `{{linux_archive}}`, SHA-256 `{{linux_archive_sha256}}`; verify with `gh attestation verify {{linux_archive}} --repo eoftgge/rosetun`.
 - Debian: `sha256sum {{deb}}` gives `{{deb_sha256}}`. Then `gh attestation verify {{deb}} --repo eoftgge/rosetun`.
 
 ## Report a problem
@@ -156,6 +157,7 @@ sudo usermod -aG rosetun "$USER"
 Сравните хеш с `SHA256SUMS.txt` этого выпуска и проверьте происхождение. Аттестация говорит, какой workflow собрал файл; это не подпись кода.
 
 - Windows: `Get-FileHash .\{{setup}} -Algorithm SHA256` даёт `{{sha256}}`. Затем `gh attestation verify .\{{setup}} --repo eoftgge/rosetun`.
+- Linux archive: `{{linux_archive}}`, SHA-256 `{{linux_archive_sha256}}`; verify with `gh attestation verify {{linux_archive}} --repo eoftgge/rosetun`.
 - Debian: `sha256sum {{deb}}` даёт `{{deb_sha256}}`. Затем `gh attestation verify {{deb}} --repo eoftgge/rosetun`.
 
 ### Сообщить о проблеме
