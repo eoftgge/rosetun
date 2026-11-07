@@ -1,0 +1,29 @@
+post_install() {
+    cat <<'MESSAGE'
+Enable the services: sudo systemctl enable --now rosetun-helper rosetun-lockdown
+Join the service group: sudo usermod -aG rosetun "$USER"
+Restart the computer; logging out is not enough.
+MESSAGE
+}
+
+pre_upgrade() {
+    :
+}
+
+post_upgrade() {
+    cat <<'MESSAGE'
+Restart the service: sudo rosetun-helper-privileged --restart-for-upgrade
+A normal systemctl restart opens the network when the kill switch is on.
+Reconnect in Rosetun, or use rosetun open-network to release the upgrade hold.
+MESSAGE
+}
+
+pre_remove() {
+    # The AbortOnFail transaction hook has already reset the firewall.
+    # A scriptlet failure alone cannot prevent pacman from deleting files.
+    /usr/share/libalpm/scripts/rosetun-pre-remove
+}
+
+post_remove() {
+    echo 'Rosetun removed. User configuration and the rosetun group were kept.'
+}

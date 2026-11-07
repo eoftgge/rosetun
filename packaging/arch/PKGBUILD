@@ -1,0 +1,31 @@
+# Maintainer: eoftgge <eoftgge@users.noreply.github.com>
+pkgname=rosetun-bin
+pkgver=0.5.0
+pkgrel=1
+pkgdesc='VPN client with a kill switch and Lockdown, with pinned engines'
+arch=('x86_64')
+url='https://github.com/eoftgge/rosetun'
+license=('GPL-3.0-or-later' 'MPL-2.0' 'MIT' 'Apache-2.0' 'ISC'
+         'BSD-2-Clause' 'BSD-3-Clause' 'Zlib' 'Unicode-3.0' 'BSL-1.0'
+         'OFL-1.1' 'Ubuntu-font-1.0' 'CDLA-Permissive-2.0')
+depends=('glibc' 'gcc-libs' 'nftables' 'polkit' 'systemd' 'libglvnd'
+         'wayland' 'libx11' 'libxcb' 'libxcursor' 'libxi' 'libxkbcommon'
+         'libxkbcommon-x11' 'libxrender' 'hicolor-icon-theme')
+optdepends=('glib2: gsettings for GNOME proxy integration'
+            'gsettings-desktop-schemas: GNOME proxy settings schema')
+provides=('rosetun')
+conflicts=('rosetun')
+options=('!strip' '!debug')
+install=rosetun-bin.install
+_release=0.5.0
+source=("$url/releases/download/v$_release/rosetun-$_release-linux-amd64.tar.gz")
+# Fail closed until the owner imports the checksum of the published release.
+sha256sums=('NOT_RELEASED_RUN_tools/arch/update-pkgbuild.sh')
+
+package() {
+    cp -a "$srcdir/usr" "$pkgdir/"
+    install -Dm644 "$startdir/rosetun-remove.hook" \
+        "$pkgdir/usr/share/libalpm/hooks/10-rosetun-remove.hook"
+    install -Dm755 "$startdir/pre-remove.sh" \
+        "$pkgdir/usr/share/libalpm/scripts/rosetun-pre-remove"
+}

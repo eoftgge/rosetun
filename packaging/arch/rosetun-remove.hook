@@ -1,0 +1,10 @@
+[Trigger]
+Operation = Remove
+Type = Package
+Target = rosetun-bin
+
+[Action]
+Description = Release Rosetun Lockdown before removing its recovery command
+When = PreTransaction
+Exec = /usr/share/libalpm/scripts/rosetun-pre-remove
+AbortOnFail
