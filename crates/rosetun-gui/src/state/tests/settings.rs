@@ -1400,3 +1400,11 @@ fn the_address_for_other_devices_is_read_only_while_it_shows() {
     );
     assert!(state.take_lan_address().is_none(), "not again right away");
 }
+#[test]
+fn a_settings_caption_opens_the_screen_and_the_requested_section() {
+    let mut state = State::default();
+    state.act(Action::OpenSettingsSection(SettingsSection::Connection));
+    assert_eq!(state.screen, Screen::Settings);
+    assert_eq!(state.settings.screen.section, SettingsSection::Connection);
+}
+

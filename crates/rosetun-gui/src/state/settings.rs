@@ -522,6 +522,9 @@ impl State {
             }
             Action::OpenSettingsSection(section) => {
                 self.settings.screen.section = section;
+                if self.screen != Screen::Settings {
+                    return self.act_settings(Action::OpenSettings);
+                }
             }
             Action::OpenLanSettings => {
                 if self
