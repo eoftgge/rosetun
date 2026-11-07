@@ -8,6 +8,7 @@
 #
 # SOURCE_REPO is the Windows checkout as WSL sees it (/mnt/<drive>/...). COMMIT_SHA
 # must be its HEAD. The build itself is build-artifacts.sh of that very commit.
+# WSL must be Debian 13: this validates the stand, not the portable release ABI.
 
 set -eu
 export LC_ALL=C

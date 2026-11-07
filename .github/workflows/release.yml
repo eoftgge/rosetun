@@ -20,14 +20,17 @@ env:
 jobs:
   deb:
     runs-on: ubuntu-24.04
-    # Debian 13 itself rather than Ubuntu: dpkg-shlibdeps then reads the libraries
-    # of the system the package is for, and the stand's builds match this one.
-    container: debian:13@sha256:9c6e381421d0f48d1b8133e573f33c185ee16cbf505eda9c4a8a4791b25ea8a6
+    # Build and resolve dependencies on glibc 2.36, also usable on newer systems.
+    container: debian:12-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc
     steps:
       - name: Install build tools
         run: |
           apt-get update
-          apt-get install --yes --no-install-recommends ca-certificates curl dpkg-dev gcc git libc6-dev rustup unzip xz-utils
+          apt-get install --yes --no-install-recommends binutils ca-certificates curl dpkg-dev gcc git libc6-dev libegl1-mesa-dev libgl1-mesa-dev libstdc++6 libwayland-dev libx11-dev libx11-xcb-dev libxcb1-dev libxcursor-dev libxi-dev libxkbcommon-dev libxkbcommon-x11-dev libxrender-dev pkg-config python3 shellcheck unzip xz-utils
+          curl --fail --silent --show-error --location --proto '=https' \
+            -o /tmp/rustup-init https://static.rust-lang.org/rustup/archive/1.28.2/x86_64-unknown-linux-gnu/rustup-init
+          echo '20a06e644b0d9bd2fbdbfd52d42540bdde820ea7df86e92e533c073da0cdd43c  /tmp/rustup-init' | sha256sum --check
+          chmod 0755 /tmp/rustup-init
           useradd --create-home builder
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -39,10 +42,19 @@ jobs:
           chown -R builder:builder "$GITHUB_WORKSPACE"
           runuser -u builder -- env -i HOME=/home/builder PATH=/usr/local/bin:/usr/bin:/bin \
             RUST_TOOLCHAIN="$RUST_TOOLCHAIN" bash -euc '
-              rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
-              rustup default "$RUST_TOOLCHAIN"
-              cargo test --workspace --locked
+              /tmp/rustup-init -y --profile minimal --default-toolchain "$RUST_TOOLCHAIN" --component clippy,rustfmt --no-modify-path
+              export PATH="$HOME/.cargo/bin:$PATH"
+              cargo fmt --all --check
+              cargo clippy -q --workspace --all-targets --locked -- -D warnings
+              cargo test -q --workspace --locked
+              python3 -m unittest discover -s installer/linux -p "test_*.py"
+              shellcheck installer/linux/build-deb.sh installer/linux/build-archive.sh tools/vm/linux/build-artifacts.sh tools/vm/linux/build-in-wsl.sh
               installer/linux/build-deb.sh --release
+              sha256sum target/deb/rosetun_*_amd64.deb > /tmp/rosetun-deb.sha256
+              cargo clean -q --release
+              installer/linux/build-deb.sh --release
+              sha256sum --check /tmp/rosetun-deb.sha256
+              dpkg-deb --field target/deb/rosetun_*_amd64.deb Depends
             '
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -52,6 +64,26 @@ jobs:
             target/deb/rosetun-*-linux-amd64.tar.gz
           if-no-files-found: error
           retention-days: 1
+
+  linux-dependencies:
+    needs: deb
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        image:
+          - debian:12-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc
+          - debian:13@sha256:9c6e381421d0f48d1b8133e573f33c185ee16cbf505eda9c4a8a4791b25ea8a6
+          - ubuntu:24.04@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852
+    container: ${{ matrix.image }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: rosetun-deb
+          path: packages
+      - name: Resolve package dependencies without installing the service
+        run: |
+          apt-get update
+          apt-get --simulate install ./packages/rosetun_*_amd64.deb
 
   arch:
     needs: deb
@@ -75,7 +107,7 @@ jobs:
           runuser -u builder -- bash tools/arch/check-package.sh target/deb/rosetun-*-linux-amd64.tar.gz
 
   release:
-    needs: [deb, arch]
+    needs: [deb, linux-dependencies, arch]
     runs-on: windows-2025
     permissions:
       contents: write

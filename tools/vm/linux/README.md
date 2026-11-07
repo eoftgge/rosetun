@@ -1,5 +1,7 @@
 # Linux stand
 
+Builds here intentionally use Debian 13, including the WSL clone and L5 packages (`--stand-debian13`). They validate Debian 13 only. Portable releases are compiled and packaged on Debian 12 (glibc 2.36) in the pinned container in `.github/workflows/release.yml`; see `installer/README.md` for local Docker/Podman reproduction. Without a container engine in WSL, use release CI for portable artifacts.
+
 A Hyper-V test bench for Rosetun on Linux, in stages: the IPC transport (L2, described first), the kill switch (L3), Lockdown (L4), the package (L5) and the system proxy (Proxy). The owner runs
 it; nothing in it starts implicitly. It drives a **separate Debian 13 VM** over
 SSH. The Windows matrices (`../windows/Invoke-*Matrix.ps1`, PowerShell Direct) and the

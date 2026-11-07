@@ -1,5 +1,6 @@
 #!/bin/bash
-# Builds the Linux artifacts of the L2 stand inside Debian (WSL or the build VM).
+# Builds stand artifacts on Debian 13, not the Debian 12 release baseline.
+# These binaries validate Debian 13 only; use release CI for portable packages.
 # Never run it as root and never cross-build from Windows: the stand accepts only
 # an x86-64 ELF made here, together with provenance.json describing the build.
 #
@@ -35,6 +36,12 @@ out=${1-}
 
 repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd -P)
 cd -- "$repo"
+# shellcheck source=/dev/null
+. /etc/os-release
+[ "$ID" = debian ] && [ "$VERSION_ID" = 13 ] || {
+    echo 'build-artifacts.sh: the stand requires Debian 13; release builds use Debian 12' >&2
+    exit 1
+}
 
 if sha=$(git rev-parse HEAD 2>/dev/null) && [[ $sha =~ ^[0-9a-f]{40}$ ]]; then
     if [ -n "$(git status --porcelain=v1 -uall --no-renames)" ]; then dirty=true; else dirty=false; fi
@@ -55,7 +62,7 @@ provenance() {
     printf '  "toolchain": {"rustc": "%s", "cargo": "%s"},\n' \
         "$(rustc +1.96.0 --version | tr -d '"')" "$(cargo +1.96.0 --version | tr -d '"')"
     printf '  "built_on": {"os": "%s", "kernel": "%s", "arch": "%s"},\n' \
-        "$(. /etc/os-release && printf '%s' "${PRETTY_NAME-unknown}" | tr -d '"')" "$(uname -r | tr -d '"')" "$(uname -m)"
+        "$(printf '%s' "${PRETTY_NAME-unknown}" | tr -d '"')" "$(uname -r | tr -d '"')" "$(uname -m)"
     printf '  "artifacts": {\n'
     for name in "$@"; do
         printf '    "%s": {"sha256": "%s"}' "$name" "$(hash_of "$out/$name")"
@@ -71,7 +78,7 @@ if [ "$stage" = l5 ]; then
     build_deb() {
         local destination=$1 built
         shift
-        built=$(bash installer/linux/build-deb.sh "$@" | sed -n 's/^Package: //p')
+        built=$(bash installer/linux/build-deb.sh --stand-debian13 "$@" | sed -n 's/^Package: //p')
         [ -n "$built" ] && [ -f "$built" ] || { echo "build-artifacts.sh: the package was not built" >&2; exit 1; }
         install -m 0644 -- "$built" "$out/$destination"
     }

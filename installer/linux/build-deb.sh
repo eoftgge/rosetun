@@ -1,14 +1,15 @@
 #!/bin/bash
-# Builds rosetun_<version>_amd64.deb for Debian 13. Run it as an ordinary user
-# on Debian (or in Debian under WSL). dpkg-deb --root-owner-group gives root's
+# Builds rosetun_<version>_amd64.deb on Debian 12 (glibc 2.36). Run as an ordinary
+# user. dpkg-deb --root-owner-group gives root's
 # ownership without root or fakeroot, and the package has no build step that
 # would need debhelper or cargo-deb.
 #
-#   installer/linux/build-deb.sh [--release] [--package-version VERSION]
+#   installer/linux/build-deb.sh [--release] [--package-version VERSION] [--stand-debian13]
 #
 # --release            installs the pinned cargo-about when it is missing
 # --package-version    a Debian version instead of the one from Cargo.toml, for
 #                      the test stand's "previous" package
+# --stand-debian13     local stand only; not a portable release artifact
 #
 # The result is <target>/deb/rosetun_<version>_amd64.deb. The same commit, built
 # in the same folder, gives the same bytes: SOURCE_DATE_EPOCH is the commit's
@@ -29,7 +30,9 @@ ICON_SIZES=(16 22 24 32 48 64 96 128 256 512)
 MAINTAINER='eoftgge <eoftgge@users.noreply.github.com>'
 # Loaded with dlopen, so dpkg-shlibdeps cannot see them: the window on Wayland
 # and on X11, and OpenGL through EGL or GLX.
-GUI_LIBRARIES='libegl1, libgl1, libwayland-client0, libwayland-egl1, libx11-6, libx11-xcb1, libxcb1, libxcursor1, libxi6, libxkbcommon-x11-0, libxkbcommon0, libxrender1'
+# Conservative floors for dlopen libraries: the upstream versions in Debian 12.
+# These package names also exist on amd64 Ubuntu 24.04 after its t64 transition.
+GUI_LIBRARIES='libegl1 (>= 1.6.0), libgl1 (>= 1.6.0), libwayland-client0 (>= 1.21.0), libwayland-egl1 (>= 1.21.0), libx11-6 (>= 2:1.8.4), libx11-xcb1 (>= 2:1.8.4), libxcb1 (>= 1.15), libxcursor1 (>= 1:1.2.1), libxi6 (>= 2:1.8), libxkbcommon-x11-0 (>= 1.5.0), libxkbcommon0 (>= 1.5.0), libxrender1 (>= 1:0.9.10)'
 
 die() {
     printf 'build-deb.sh: %s\n' "$1" >&2
@@ -37,10 +40,12 @@ die() {
 }
 
 release=false
+baseline=debian12
 package_version=
 while [ $# -gt 0 ]; do
     case $1 in
     --release) release=true ;;
+    --stand-debian13) baseline=debian13 ;;
     --package-version)
         [ $# -ge 2 ] || die '--package-version needs a value'
         package_version=$2
@@ -54,13 +59,24 @@ done
 [ "$(id -u)" -ne 0 ] || die 'do not build as root'
 [ "$(uname -s)-$(uname -m)" = Linux-x86_64 ] || die 'needs x86_64 Linux'
 if [ -d "$HOME/.cargo/bin" ]; then PATH=$HOME/.cargo/bin:$PATH; fi
-for tool in cargo curl dpkg-deb dpkg-shlibdeps git gzip sha256sum tar unzip; do
+for tool in cargo curl dpkg-deb dpkg-shlibdeps git gzip objdump python3 sha256sum tar unzip; do
     command -v "$tool" >/dev/null 2>&1 || die "$tool is missing"
 done
 export RUSTUP_TOOLCHAIN=${RUSTUP_TOOLCHAIN:-1.96.0}
 
 repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)
 cd -- "$repo"
+
+# shlibdeps must read the same baseline libraries as the linker.
+# shellcheck source=/dev/null
+. /etc/os-release
+expected_version=12
+[ "$baseline" != debian13 ] || expected_version=13
+[ "$ID" = debian ] && [ "$VERSION_ID" = "$expected_version" ] ||
+    die "build on Debian $expected_version; --stand-debian13 is only for the Debian 13 test stand"
+if $release && [ "$baseline" != debian12 ]; then
+    die '--release requires the Debian 12 baseline'
+fi
 
 supported_version() {
     sed -n "s/^pub const $1: &str = \"\([^\"]*\)\";.*/\1/p" "$2"
@@ -136,6 +152,8 @@ export RUSTFLAGS="--remap-path-prefix=$repo=/rosetun --remap-path-prefix=${CARGO
 # The CLI in a run of its own: one run would give it the GUI's features.
 cargo build -q --release --locked -p rosetun-gui -p rosetun-helper-privileged
 cargo build -q --release --locked -p rosetun
+python3 installer/linux/check-abi.py --baseline "$baseline" \
+    "$target/release/rosetun-helper-privileged" "$target/release/rosetun" "$target/release/rosetun-gui"
 
 work=$(mktemp -d "$out/stage.XXXXXXXX")
 trap 'rm -rf -- "$work"' EXIT
@@ -223,7 +241,7 @@ sed -e "s/@SING_BOX_VERSION@/$SING_BOX_VERSION/" -e "s/@XRAY_VERSION@/$XRAY_VERS
 mkdir -p "$work/shlibs/debian"
 : >"$work/shlibs/debian/control"
 libraries=$(cd "$work/shlibs" && dpkg-shlibdeps -O \
-    -e"$root/$lib/rosetun-helper-privileged" -e"$root/$lib/rosetun-gui" -e"$root/$lib/rosetun" 2>/dev/null |
+    -e"$root/$lib/rosetun-helper-privileged" -e"$root/$lib/rosetun-gui" -e"$root/$lib/rosetun" |
     sed -n 's/^shlibs:Depends=//p')
 [ -n "$libraries" ] || die 'dpkg-shlibdeps found no libraries'
 
@@ -245,7 +263,7 @@ Version: $deb_version
 Architecture: amd64
 Maintainer: $MAINTAINER
 Installed-Size: $installed_kib
-Depends: nftables, systemd, init-system-helpers (>= 1.66), $libraries, $GUI_LIBRARIES
+Depends: nftables, systemd, init-system-helpers (>= 1.65.2), $libraries, $GUI_LIBRARIES
 Recommends: desktop-file-utils, hicolor-icon-theme, pkexec, polkitd
 Section: net
 Priority: optional
