@@ -23,7 +23,7 @@ if (-not $BuildDir) { $BuildDir = Join-Path $RepoRoot 'target\release' }
 Import-Module (Join-Path $PSScriptRoot 'RosetunVm.psm1') -Force
 
 $results = [System.Collections.Generic.List[object]]::new()
-$RequestNames = @('proxy-plain.json', 'proxy-strict.json', 'proxy-share.json', 'proxy-share-strict.json', 'tun-strict.json')
+$RequestNames = @('proxy-plain.json', 'proxy-strict.json', 'proxy-share.json', 'proxy-share-strict.json', 'proxy-share-lan.json', 'tun-strict.json')
 $DesktopTool = 'desktop_proxy.exe'
 $RecordName = 'desktop-proxy-matrix.json'
 
@@ -63,6 +63,7 @@ function New-RosetunProxyRequests {
             'proxy-strict.json'       = @{ mode = 'system_proxy'; kill = $true; share = $false }
             'proxy-share.json'        = @{ mode = 'system_proxy'; kill = $false; share = $true }
             'proxy-share-strict.json' = @{ mode = 'system_proxy'; kill = $true; share = $true }
+            'proxy-share-lan.json'    = @{ mode = 'system_proxy'; kill = $false; share = $true; lan = $true }
             'tun-strict.json'         = @{ mode = 'tun'; kill = $true; share = $false }
         }
         foreach ($name in $variants.Keys) {
@@ -72,6 +73,7 @@ function New-RosetunProxyRequests {
             $settings | Add-Member -NotePropertyName connection_mode -NotePropertyValue $variant.mode -Force
             $settings | Add-Member -NotePropertyName kill_switch -NotePropertyValue $variant.kill -Force
             $settings | Add-Member -NotePropertyName auto_reconnect -NotePropertyValue $true -Force
+            $settings | Add-Member -NotePropertyName allow_lan -NotePropertyValue ([bool]$variant.lan) -Force
             $settings | Add-Member -NotePropertyName local_proxy -Force -NotePropertyValue ([pscustomobject]@{
                     port = $port
                     share_on_lan = $variant.share
@@ -376,7 +378,9 @@ try {
 
         $lockdown = Invoke-RosetunCli -Quiet 'lockdown' 'on' '--lan' 'on'
         Test-Step 'lockdown' 'Lockdown takes its local network' -Note $lockdown.Output { $lockdown.ExitCode -eq 0 }
-        Test-Step 'lockdown' 'a shared proxy connects' { Connect-RosetunProxy 'proxy-share.json' }
+        # With "Local network" on too: an administrator's connect makes Lockdown's local
+        # network follow the request, and this matrix's CLI runs as one.
+        Test-Step 'lockdown' 'a shared proxy connects' { Connect-RosetunProxy 'proxy-share-lan.json' }
         Test-Step 'lockdown' 'with its local network the host gets in' {
             Test-RosetunHostThroughGuestProxy -GuestAddress $guestAddress -Port $ProxyPort -Url $ProbeUrl
         }
