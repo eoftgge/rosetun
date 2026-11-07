@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta name="description" content="Privacy and network access · Rosetun" />
+        <meta name="referrer" content="no-referrer" />
+        <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'" />
+        <title>Privacy and network access · Rosetun</title>
+        <link rel="stylesheet" href="../../../assets/site.css" />
+        <link rel="icon" href="../../../assets/rose.svg" type="image/svg+xml" />
+        <link rel="alternate" hreflang="ru" href="../../../ru/docs/privacy/" />
+        <link rel="alternate" hreflang="en" href="../../../en/docs/privacy/" />
+    </head>
+    <body>
+        <a class="skip" href="#main">Skip to content</a>
+        <header class="wrap">
+            <a class="brand" href="../../../en/"><img src="../../../assets/rose.svg" width="40" height="40" alt="" />Rosetun</a>
+            <nav aria-label="Navigation">
+                <a href="../../../en/docs/">Documentation</a>
+                <a href="../../../en/help/">Help</a>
+                <a href="../../../en/providers/">For providers</a>
+                <a href="../../../ru/docs/privacy/" lang="ru" hreflang="ru">Русский</a>
+            </nav>
+        </header>
+        <main id="main" class="wrap">
+            <div class="prose docs">
+                <h1>Privacy and network access</h1>
+                <!-- docs-version --><p class="note">Stable Windows reference: 0.4. Linux and additions listed below are preview features since 0.5; 0.5 is not stable yet. For the exact 0.4 behavior, see the <a href="https://github.com/eoftgge/rosetun/blob/v0.4.0/README.md">0.4 reference</a>.</p><!-- /docs-version -->
+                <nav aria-label="On this page"><a href="#details">Privacy and network access</a></nav>
+                <section id="details">
+<p class="note">Since 0.5: this network-access inventory includes System proxy, Linux and new requests; use the 0.4 reference above for that release.</p>
+<p>Rosetun makes these network requests:</p>
+<ul>
+<li>To the VPN server for the tunnel; <strong>TCP ping</strong> also makes a TCP connection attempt to each server being checked while the tunnel is down.</li>
+<li><strong>URL test</strong> and the delay on the connection screen send two HTTPS requests at once, to <code>https://cp.cloudflare.com/generate_204</code> and <code>https://www.gstatic.com/generate_204</code>, through the server being checked, the current server or each exit&#x27;s server. URL test connects directly to each server, outside the tunnel. While connecting and while connected, the service sends the same requests through the current server to check that it works; this cannot be turned off.</li>
+<li>To your subscription provider to fetch or update subscriptions, using <code>User-Agent: Rosetun/&lt;version&gt;</code> by default. Subscription URLs may contain credentials; an HTTP subscription sends its token without encryption. With <strong>Send device ID</strong> on, the default, the request also carries:
+<table>
+<tr><th>Header</th><th>Windows</th><th>Linux</th></tr>
+<tr><td><code>x-hwid</code></td><td>A SHA-256 hash, cut to 16 bytes, of <code>MachineGuid</code> and the subscription server&#x27;s host</td><td>The same, of <code>/etc/machine-id</code> and the host</td></tr>
+<tr><td><code>x-device-os</code></td><td><code>Windows</code></td><td><code>Linux</code></td></tr>
+<tr><td><code>x-ver-os</code></td><td>The version and build from the registry</td><td><code>PRETTY_NAME</code> from <code>os-release</code></td></tr>
+<tr><td><code>x-device-model</code></td><td>The computer&#x27;s model from the BIOS, or <code>PC</code></td><td>The model from <code>/sys/class/dmi/id/product_name</code>, or <code>PC</code></td></tr>
+</table>
+<p><code>MachineGuid</code> and <code>machine-id</code> themselves are not sent, and neither are your account name or your network adapters&#x27; addresses. Different subscription servers get different IDs, so they cannot match your device; subscriptions added before 0.4 keep their earlier ID, which is the same for all of them.</p></li>
+<li>To the addresses of lists, given by you or by a subscription, when a list is added or updated and with subscription updates (turn them off under <strong>Update subscriptions automatically</strong>). Rosetun sends <code>ETag</code> / <code>Last-Modified</code> from the previous download, so an unchanged list is not downloaded again. The request goes through the tunnel when connected.</li>
+<li>To the configured DNS-over-HTTPS resolver through the tunnel. The service also checks DNS by querying <code>example.com</code> during connection and random names beneath <code>example.com</code> while the tunnel is up.</li>
+<li>To <code>https://1.1.1.1/cdn-cgi/trace</code> for the public IP and country shown on the connection screen: through the current server when connected, and directly when disconnected, after a failed connection or when the service is unavailable. On Linux without rules by program it follows your rules, so a Direct rule for that address or a Direct default sends it directly and shows your own IP. The IP is hidden by default and is not written to the log. Exits make no requests of their own: their country comes from the server name.</li>
+<li>To <code>https://api.github.com/repos/eoftgge/rosetun/releases</code> for the release list at launch if it has never been checked or the last successful check was over a day ago, then once a day, and when you click <strong>Check now</strong>. When GitHub refuses it for its hourly limit (403 or 429), which happens behind a shared VPN address, Rosetun reads <code>https://github.com/eoftgge/rosetun/releases.atom</code> instead. The request goes through the tunnel when connected. Automatic checks are on by default; turn them off under <strong>Settings → About → Check for updates</strong>. The last successful check time, the version it found, any skipped version and the version the tray has announced are saved in the settings file. Nothing is downloaded or installed automatically.</li>
+<li><strong>System check</strong> sends an HTTP <code>HEAD</code> request to <code>http://cp.cloudflare.com/</code>, unencrypted, to compare your clock with its <code>Date</code> header. It runs when you click <strong>Check</strong>, by itself after a failed connection and in <strong>Collect report</strong>; it goes directly without a tunnel and through the tunnel when connected. Without a connection it also sends two DNS queries to <code>1.1.1.1</code>, one over UDP and one over TCP, for the service name <code>whoami.cloudflare</code>, and compares the answers to see whether the network replaces DNS; Cloudflare sees your IP address, as with any DNS query to it. While connected or while the kill switch holds after a failure it sends no DNS queries, and <strong>Collect report</strong> shows the last result without asking again.</li>
+<li>If DNS stalls, the watchdog sends HTTP <code>HEAD</code> requests to <code>1.1.1.1:80</code> and to <code>connectivitycheck.gstatic.com/generate_204</code> through the tunnel to distinguish a DNS failure from a lost path. The second name is resolved through the tunnel&#x27;s DNS when the connection starts.</li>
+<li>Before connecting, system DNS resolves the VPN server name; provider and ping hostnames may also be resolved by the operating system.</li>
+<li>When changing servers while connected, the new server&#x27;s name is resolved through the current tunnel.</li>
+</ul>
+<p><strong>Not sent:</strong> there is no telemetry and no Rosetun account. The application update check only reports a new version. Program icons come from this computer; on Windows a program on a network drive or path gets no icon, so showing one never connects to another computer. The engine&#x27;s control API and the link from sing-box to Xray use only local loopback.</p>
+<p><strong>In the proxy mode</strong> Rosetun&#x27;s own requests, such as subscription updates, go through the local proxy, so your provider sees the VPN&#x27;s address, as in TUN.</p>
+<p><strong>With Lockdown on and no connection</strong>, Rosetun itself (the app and the <code>rosetun</code> command) still reaches the internet directly: your subscription provider, list addresses, <code>cp.cloudflare.com</code> for <strong>System check</strong>, and the other requests above that go directly when disconnected (server checks, the public IP, the update check). Other programs do not. Your subscription provider then sees your real IP address, just as without Lockdown.</p>
+<p><strong>Logs</strong> stay on this computer.</p>
+<ul>
+<li>The service log is in <code>data\logs</code> under the installation folder on Windows, for administrators only, and in the system journal on Linux, for root and the journal&#x27;s readers (the groups <code>adm</code> and <code>systemd-journal</code> on Debian). <strong>Collect report</strong> receives it only for the Windows account that started the session.</li>
+<li>When <strong>Verbose log</strong> is off, destination addresses in engine messages are replaced with <code>[hidden]</code>. The VPN server&#x27;s name or address and the error&#x27;s cause can remain. Site addresses are logged only while the temporary <strong>Verbose log</strong> setting is on.</li>
+<li><strong>Local network</strong> writes the networks it opens to the service log, and a public network only as <code>public</code>.</li>
+</ul>
+</section>
+                <nav class="doc-pager" aria-label="Previous and next"><a rel="prev" href="../guarantees/">← Protection guarantees</a><a rel="next" href="../troubleshooting/">Troubleshooting →</a></nav>
+            </div>
+        </main>
+        <footer class="wrap"><span>Rosetun</span><a href="https://github.com/eoftgge/rosetun">GitHub</a><a href="../../../en/docs/licenses/">Licenses</a></footer>
+    </body>
+</html>

@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="ru">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta name="description" content="Подключение и защита · Rosetun" />
+        <meta name="referrer" content="no-referrer" />
+        <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'" />
+        <title>Подключение и защита · Rosetun</title>
+        <link rel="stylesheet" href="../../../assets/site.css" />
+        <link rel="icon" href="../../../assets/rose.svg" type="image/svg+xml" />
+        <link rel="alternate" hreflang="ru" href="../../../ru/docs/protection/" />
+        <link rel="alternate" hreflang="en" href="../../../en/docs/protection/" />
+    </head>
+    <body>
+        <a class="skip" href="#main">К содержимому</a>
+        <header class="wrap">
+            <a class="brand" href="../../../ru/"><img src="../../../assets/rose.svg" width="40" height="40" alt="" />Rosetun</a>
+            <nav aria-label="Навигация">
+                <a href="../../../ru/docs/">Документация</a>
+                <a href="../../../ru/help/">Помощь</a>
+                <a href="../../../ru/providers/">Для провайдеров</a>
+                <a href="../../../en/docs/protection/" lang="en" hreflang="en">English</a>
+            </nav>
+        </header>
+        <main id="main" class="wrap">
+            <div class="prose docs">
+                <h1>Подключение и защита</h1>
+                <!-- docs-version --><p class="note">Стабильная версия для Windows: 0.4. Linux и перечисленные ниже изменения доступны с предварительной 0.5; стабильная 0.5 ещё не вышла. Точное поведение 0.4 описано в <a href="https://github.com/eoftgge/rosetun/blob/v0.4.0/README.ru.md">документации 0.4</a>.</p><!-- /docs-version -->
+                <nav aria-label="На этой странице"><a href="#details">Подключение и защита</a></nav>
+                <section id="details">
+<p class="note">С 0.5: состояние защиты, «Переподключиться», удержание при обновлении, после сбоя и восстановление брандмауэра на Linux.</p>
+<ul>
+<li><strong>Kill switch</strong> блокирует трафик при потере туннеля. <strong>Замок DNS</strong> не выпускает системный DNS мимо туннеля, когда kill switch выключен. Он зависит от брандмауэра: если его не удалось поставить, Rosetun всё равно подключается и говорит об этом.</li>
+<li><em>Экспериментально:</em> <strong>Lockdown</strong> (Настройки → Подключение) закрывает интернет всему, что идёт мимо туннеля, и без подключения, и после перезагрузки (с загрузки, ещё до входа в систему), и если служба остановится или упадёт. Пока он включён, kill switch включён всегда. Входящие соединения тоже закрыты, кроме вашей сети при включённой <strong>Локальной сети</strong>. Включение и выключение требуют подтверждения и прав администратора: UAC на Windows, polkit на Linux. <code>rosetun lockdown</code> нужно запускать в терминале от имени администратора или через <code>sudo</code>. Выход описан в <a href="../troubleshooting/">Устранении неполадок</a>.</li>
+<li><strong>Действующая защита</strong> видна на экране подключения, в подсказке трея и в <code>rosetun status</code>. Команда также говорит, чего не хватает и останется ли защита при падении службы:
+<pre><code>protection: kill switch
+if the service crashes: this stays in place</code></pre></li>
+<li><strong>Сеть остаётся закрытой при обновлении</strong>, если включён kill switch, на обеих ОС, и <strong>после падения службы</strong> только на Linux. См. <a href="../guarantees/">Гарантии защиты</a>.</li>
+<li>На Linux служба каждые две секунды проверяет свою таблицу в брандмауэре и возвращает её, если другая программа её удалила или изменила. <code>rosetun status</code> говорит, когда это было или что вернуть не получается.</li>
+<li><strong>Переподключиться</strong> в меню трея или <code>rosetun reconnect</code> перезапускает туннель к тому же серверу под той же защитой.</li>
+<li>Сервер, правила и DNS можно менять при подключённом туннеле: Rosetun перезапускает его за секунду-две без отключения, а kill switch в это время блокирует трафик.</li>
+<li><strong>Переподключаться при обрыве:</strong> после сна, пропажи сети и падения ядра, со сторожем DNS при подключённом туннеле.</li>
+</ul>
+</section>
+                <nav class="doc-pager" aria-label="Назад и вперёд"><a rel="prev" href="../install/">← Установка</a><a rel="next" href="../modes/">TUN и системный прокси →</a></nav>
+            </div>
+        </main>
+        <footer class="wrap"><span>Rosetun</span><a href="https://github.com/eoftgge/rosetun">GitHub</a><a href="../../../ru/docs/licenses/">Лицензии</a></footer>
+    </body>
+</html>

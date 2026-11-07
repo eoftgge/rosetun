@@ -227,6 +227,19 @@ code {
 .prose {
     padding-block: 56px;
 }
+.docs table {
+    table-layout: fixed;
+}
+.docs th:first-child,
+.docs td:first-child {
+    width: auto;
+}
+.docs .doc-pager {
+    justify-content: space-between;
+    margin-top: 40px;
+    padding-top: 24px;
+    border-top: 1px solid var(--border);
+}
 .prose section {
     padding-block: 24px;
 }

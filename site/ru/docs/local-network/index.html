@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="ru">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta name="description" content="Локальная сеть · Rosetun" />
+        <meta name="referrer" content="no-referrer" />
+        <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'" />
+        <title>Локальная сеть · Rosetun</title>
+        <link rel="stylesheet" href="../../../assets/site.css" />
+        <link rel="icon" href="../../../assets/rose.svg" type="image/svg+xml" />
+        <link rel="alternate" hreflang="ru" href="../../../ru/docs/local-network/" />
+        <link rel="alternate" hreflang="en" href="../../../en/docs/local-network/" />
+    </head>
+    <body>
+        <a class="skip" href="#main">К содержимому</a>
+        <header class="wrap">
+            <a class="brand" href="../../../ru/"><img src="../../../assets/rose.svg" width="40" height="40" alt="" />Rosetun</a>
+            <nav aria-label="Навигация">
+                <a href="../../../ru/docs/">Документация</a>
+                <a href="../../../ru/help/">Помощь</a>
+                <a href="../../../ru/providers/">Для провайдеров</a>
+                <a href="../../../en/docs/local-network/" lang="en" hreflang="en">English</a>
+            </nav>
+        </header>
+        <main id="main" class="wrap">
+            <div class="prose docs">
+                <h1>Локальная сеть</h1>
+                <!-- docs-version --><p class="note">Стабильная версия для Windows: 0.4. Linux и перечисленные ниже изменения доступны с предварительной 0.5; стабильная 0.5 ещё не вышла. Точное поведение 0.4 описано в <a href="https://github.com/eoftgge/rosetun/blob/v0.4.0/README.ru.md">документации 0.4</a>.</p><!-- /docs-version -->
+                <nav aria-label="На этой странице"><a href="#details">Локальная сеть</a></nav>
+                <section id="details">
+<p class="note">С 0.5: сети своих адаптеров на Windows и «Частные сети за роутером»; всё поведение Linux.</p>
+<p><strong>Локальная сеть</strong> (Настройки → Подключение) пускает программы к устройствам в вашей сети мимо туннеля, в том числе при включённом kill switch: принтер, NAS, игровая приставка, USB по сети (например, VirtualHere) и стриминг игр (например, Sunshine и Moonlight). По умолчанию выключено; в общественных сетях выключайте. DNS роутера не используется: адреса ищутся через VPN.</p>
+<p><strong>На Windows</strong> открываются только сети, к которым подключены адаптеры самого компьютера, каждая только на своём адаптере, и адреса link-local (169.254.x.x). <strong>Частные сети за роутером</strong>, по умолчанию выключено, открывают ещё все частные диапазоны (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 и IPv6 fc00::/7) на любом адаптере.</p>
+<p><strong>На Linux</strong> брандмауэр открывает все частные диапазоны и адреса link-local на любом интерфейсе, это шире, чем на Windows: своего сегмента нет, а адреса VPN-серверов не вырезаются. <strong>Частные сети за роутером</strong> ещё и отправляют частные адреса мимо туннеля в правилах ядра.</p>
+<p>На Windows:</p>
+<ul>
+<li>Поиск устройств (mDNS, LLMNR, SSDP, широковещательные пакеты) работает у программ, которые отправляют запрос на каждый адаптер, как делают сама Windows и большинство библиотек поиска, и для широковещательных запросов на 255.255.255.255 у любых программ. Такой запрос программы, которая оставляет выбор адаптера Windows, уходит через предпочитаемый адаптер Windows. Если у виртуального адаптера (например, VirtualBox) метрика такая же или лучше, чем у настоящего, Windows может выбрать его; задайте виртуальному адаптеру большую метрику. При выключенной «Локальной сети» такой запрос идёт в туннель.</li>
+<li>Multicast (mDNS, SSDP) от программы, которая оставляет выбор адаптера Windows, идёт в туннель и до локальной сети не доходит. Маршрутами Rosetun этого изменить не может.</li>
+<li>Подключённая сеть шире /16 не открывается. Когда компьютер переходит в другую сеть, Rosetun за несколько секунд следует за ней коротким переподключением; kill switch при этом не снимается.</li>
+<li>Локальные адреса IPv6 закрыты, пока туннель несёт только IPv4. Обращайтесь к устройствам по адресам IPv4.</li>
+<li>Адреса самих VPN-серверов в открытое не входят, в том числе для частных сетей за роутером, а правило, которое отправляет такой адрес через VPN, по-прежнему важнее.</li>
+<li>Устройство в другой подсети, чем компьютер, не в вашей сети: поместите оба в одну подсеть или включите «Частные сети за роутером». Чтобы увидеть, куда Windows отправляет трафик к устройству, выполните в PowerShell (с адресом устройства):
+<pre><code>Find-NetRoute -RemoteIPAddress 192.0.2.10</code></pre>
+<p><code>InterfaceAlias</code> должен быть вашим адаптером Ethernet или Wi-Fi, а не <code>rosetun0</code>, а <code>IPAddress</code> адресом этого компьютера в той сети.</p></li>
+</ul>
+<p>При включённом <strong>Lockdown</strong> те же сети открыты и без подключения, и устройства из них могут подключаться к этому компьютеру. <code>rosetun lockdown on --lan private</code> включает Lockdown вместе с частными сетями за роутером. <code>--lan</code> также сохраняет выбор в настройках того, кто запустил команду, поэтому следующее подключение этой учётной записи его не сбросит.</p>
+</section>
+                <nav class="doc-pager" aria-label="Назад и вперёд"><a rel="prev" href="../rules/">← Правила</a><a rel="next" href="../subscriptions/">Подписки и серверы →</a></nav>
+            </div>
+        </main>
+        <footer class="wrap"><span>Rosetun</span><a href="https://github.com/eoftgge/rosetun">GitHub</a><a href="../../../ru/docs/licenses/">Лицензии</a></footer>
+    </body>
+</html>

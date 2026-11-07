@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta name="description" content="Troubleshooting · Rosetun" />
+        <meta name="referrer" content="no-referrer" />
+        <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'" />
+        <title>Troubleshooting · Rosetun</title>
+        <link rel="stylesheet" href="../../../assets/site.css" />
+        <link rel="icon" href="../../../assets/rose.svg" type="image/svg+xml" />
+        <link rel="alternate" hreflang="ru" href="../../../ru/docs/troubleshooting/" />
+        <link rel="alternate" hreflang="en" href="../../../en/docs/troubleshooting/" />
+    </head>
+    <body>
+        <a class="skip" href="#main">Skip to content</a>
+        <header class="wrap">
+            <a class="brand" href="../../../en/"><img src="../../../assets/rose.svg" width="40" height="40" alt="" />Rosetun</a>
+            <nav aria-label="Navigation">
+                <a href="../../../en/docs/">Documentation</a>
+                <a href="../../../en/help/">Help</a>
+                <a href="../../../en/providers/">For providers</a>
+                <a href="../../../ru/docs/troubleshooting/" lang="ru" hreflang="ru">Русский</a>
+            </nav>
+        </header>
+        <main id="main" class="wrap">
+            <div class="prose docs">
+                <h1>Troubleshooting</h1>
+                <!-- docs-version --><p class="note">Stable Windows reference: 0.4. Linux and additions listed below are preview features since 0.5; 0.5 is not stable yet. For the exact 0.4 behavior, see the <a href="https://github.com/eoftgge/rosetun/blob/v0.4.0/README.md">0.4 reference</a>.</p><!-- /docs-version -->
+                <nav aria-label="On this page"><a href="#details">Troubleshooting</a></nav>
+                <section id="details">
+<p class="note">Since 0.5: held network, Linux, System proxy and TLS fragmentation troubleshooting.</p>
+<ul>
+<li>Run <strong>System check</strong> (Settings → Service and log) first. It also runs by itself after a failed connection and shows the first finding under the error.</li>
+<li><strong>No network at all with Lockdown on, and Rosetun does not open.</strong> This removes Lockdown without the service. In a terminal opened as administrator on Windows:
+<pre><code>&amp; &#x27;C:\Program Files\Rosetun\rosetun.exe&#x27; reset-firewall</code></pre>
+<p>Use your own folder if you chose another. On Linux:</p>
+<pre><code>sudo rosetun reset-firewall</code></pre>
+<p>Uninstalling Rosetun removes Lockdown too.</p></li>
+<li><strong>The network is closed after an update or a crash</strong>, and <code>rosetun status</code> says <code>network: held closed</code>. Connect, or open it: <strong>Open network</strong> on the connection screen, or <code>rosetun open-network</code>. Without a working service, use <code>reset-firewall</code> as above.</li>
+<li><strong>A site does not open right after connecting:</strong> browsers keep their own DNS cache. Rosetun clears the Windows DNS cache when it connects and disconnects, but not theirs. Restart the browser.</li>
+<li><strong>Another VPN client</strong> in TUN mode can prevent the tunnel from starting. Disconnect it and retry. A program that changes traffic, such as zapret, can disrupt the connection to the server: exclude the server addresses in its settings.</li>
+<li><strong>Linux: No access to the Rosetun service.</strong> Your account is not in the <code>rosetun</code> group yet, or your session started before it joined. Press <strong>Add me</strong>, or run <code>sudo usermod -aG rosetun &quot;$USER&quot;</code>, and restart the computer.</li>
+<li><strong>Linux: Rosetun says another program changed the firewall rules.</strong> <code>nftables.service</code> and firewalld can start with <code>flush ruleset</code>, which removes Rosetun&#x27;s table. The service puts it back within seconds and <code>rosetun status</code> says when. If it says <code>firewall rules: cannot be checked or put back</code>, treat the network as unprotected and reconnect.</li>
+<li><strong>Linux: KDE programs do not use the proxy.</strong> Check that <code>~/.config/kioslaverc</code> has <code>ProxyType=1</code> under <code>[Proxy Settings]</code> and that <code>XDG_CURRENT_DESKTOP</code> contains <code>KDE</code>; otherwise Rosetun shows the address to enter yourself. KDE programs read the settings again by a signal and Chromium watches the file; restart other programs. The <code>rosetun</code> command never changes these settings.</li>
+<li><strong>Linux: Without a connection subscriptions do not update under Lockdown.</strong> Rosetun started outside your desktop session, as the window says. Restart it from the desktop.</li>
+<li><strong>TLS fragmentation</strong> works only for servers that Xray carries (VLESS, VMess, Trojan, Shadowsocks) and helps with some providers only. Hysteria2 and HTTP or SOCKS5 servers connect without it, and it is unavailable while <strong>Without Xray</strong> is selected.</li>
+<li><strong>No network connection</strong> means the system has no working network, so the server is not to blame. Connecting fails at once. While connected, a short network change does not break the session; with <strong>Reconnect automatically</strong> on, Rosetun waits for the network and reconnects when it returns, and the kill switch keeps the internet closed meanwhile.</li>
+<li><strong>Wi-Fi with a sign-in page</strong> (a hotel or a café) or <strong>a wrong clock</strong> with <strong>Lockdown</strong> on: the sign-in page cannot open and the system cannot set the time without the tunnel, and the tunnel cannot start without them. Turn Lockdown off for a moment, sign in or correct the clock, connect, and turn Lockdown on again.</li>
+<li><strong>Lockdown leaves virtual machines without network.</strong> Confirmed for Hyper-V on Windows, and most likely WSL2, Docker Desktop, Windows Sandbox and Mobile hotspot as well; on Linux, virtual machines and containers on this computer without a Rosetun connection. Turn Lockdown off while you need them.</li>
+<li><strong>Windows: the window fails to open or draws incorrectly after an update:</strong> quit Rosetun from the tray, then run <code>$env:ROSETUN_RENDERER=&#x27;glow&#x27;; &amp; &#x27;C:\Program Files\Rosetun\rosetun-gui.exe&#x27;</code> in PowerShell (adjust the path if needed). Use <strong>Collect report</strong> and send the report with a description of the problem.</li>
+<li><strong>Windows: setup stops because standard users can change a folder under <code>C:\Program Files\Rosetun</code>.</strong> This usually follows <strong>Continue</strong> in File Explorer, which gives your account permanent access to a protected Rosetun folder such as <code>data</code>. Uninstall Rosetun and install it again. To read the service log, use <strong>Collect report</strong> or an editor run as administrator instead.</li>
+</ul>
+<p><strong>Report a problem</strong> in <a href="https://github.com/eoftgge/rosetun/issues">Issues</a>, with the steps and the error text. On Windows attach <strong>Collect report</strong>. On Linux attach the output below and remove addresses, links and names first: unlike the report, these logs are not cleaned.</p>
+<pre><code>rosetun status
+sudo journalctl -u rosetun-helper -b --no-pager
+cat ~/.config/rosetun/rosetun-gui.log</code></pre>
+<p>Report a vulnerability privately: see <a href="https://github.com/eoftgge/rosetun/blob/master/SECURITY.md">SECURITY.md</a>.</p>
+</section>
+                <nav class="doc-pager" aria-label="Previous and next"><a rel="prev" href="../privacy/">← Privacy and network access</a><a rel="next" href="../how-it-works/">How it works →</a></nav>
+            </div>
+        </main>
+        <footer class="wrap"><span>Rosetun</span><a href="https://github.com/eoftgge/rosetun">GitHub</a><a href="../../../en/docs/licenses/">Licenses</a></footer>
+    </body>
+</html>

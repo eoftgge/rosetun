@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="ru">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta name="description" content="Ссылки для провайдеров · Rosetun" />
+        <meta name="referrer" content="no-referrer" />
+        <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'" />
+        <title>Ссылки для провайдеров · Rosetun</title>
+        <link rel="stylesheet" href="../../../assets/site.css" />
+        <link rel="icon" href="../../../assets/rose.svg" type="image/svg+xml" />
+        <link rel="alternate" hreflang="ru" href="../../../ru/docs/provider-links/" />
+        <link rel="alternate" hreflang="en" href="../../../en/docs/provider-links/" />
+    </head>
+    <body>
+        <a class="skip" href="#main">К содержимому</a>
+        <header class="wrap">
+            <a class="brand" href="../../../ru/"><img src="../../../assets/rose.svg" width="40" height="40" alt="" />Rosetun</a>
+            <nav aria-label="Навигация">
+                <a href="../../../ru/docs/">Документация</a>
+                <a href="../../../ru/help/">Помощь</a>
+                <a href="../../../ru/providers/">Для провайдеров</a>
+                <a href="../../../en/docs/provider-links/" lang="en" hreflang="en">English</a>
+            </nav>
+        </header>
+        <main id="main" class="wrap">
+            <div class="prose docs">
+                <h1>Ссылки для провайдеров</h1>
+                <!-- docs-version --><p class="note">Стабильная версия для Windows: 0.4. Linux и перечисленные ниже изменения доступны с предварительной 0.5; стабильная 0.5 ещё не вышла. Точное поведение 0.4 описано в <a href="https://github.com/eoftgge/rosetun/blob/v0.4.0/README.ru.md">документации 0.4</a>.</p><!-- /docs-version -->
+                <nav aria-label="На этой странице"><a href="#details">Ссылки для провайдеров</a></nav>
+                <section id="details">
+<p class="note">С 0.5: регистрация схемы в Debian и сокет Linux.</p>
+<p>Кнопка на странице провайдера может открыть Rosetun с заполненной подпиской: <code>rosetun://add/&lt;ссылка подписки&gt;</code>, ссылка как есть (<code>rosetun://add/https://example.com/sub</code>) или percent-кодированная (<code>rosetun://add/https%3A%2F%2Fexample.com%2Fsub</code>). Необязательное <code>#имя</code> в конце предлагает название подписки (<code>rosetun://add/https://example.com/sub#Example</code>). Rosetun только показывает окно <strong>Добавить подписку</strong> со ссылкой, названием и хостом провайдера; ничего не загружается и не добавляется, пока вы не нажмёте <strong>Добавить</strong>. Ссылка на уже добавленную подписку только показывает её.</p>
+<p>Установщик Windows регистрирует схему для всех пользователей. Пакет Debian регистрирует её через свой файл <code>.desktop</code> (<code>x-scheme-handler/rosetun</code>). Запущенный Rosetun получает ссылку от следующего запуска по каналу, который может открыть только ваша учётная запись: именованный канал на Windows, сокет в <code>$XDG_RUNTIME_DIR</code> на Linux.</p>
+<p>Подробнее для провайдеров, с заголовками ответа: <a href="https://eoftgge.github.io/rosetun/ru/providers/">страница на сайте</a>.</p>
+</section>
+                <nav class="doc-pager" aria-label="Назад и вперёд"><a rel="prev" href="../everyday/">← На каждый день</a><a rel="next" href="../licenses/">Лицензии →</a></nav>
+            </div>
+        </main>
+        <footer class="wrap"><span>Rosetun</span><a href="https://github.com/eoftgge/rosetun">GitHub</a><a href="../../../ru/docs/licenses/">Лицензии</a></footer>
+    </body>
+</html>

@@ -28,12 +28,14 @@
                 <p class="platform-label">WINDOWS <!-- linux-ready <span aria-hidden="true">·</span> LINUX  --><span aria-hidden="true">·</span> OPEN SOURCE</p>
             </div>
             <nav aria-label="Навигация">
+                <a href="docs/">Документация</a>
                 <a href="../ru/">Главная</a><a href="../ru/providers/">Для провайдеров</a
                 ><a href="../ru/help/">Помощь</a
                 ><a href="../en/" lang="en" hreflang="en">English</a>
             </nav>
         </header>
         <main id="main" class="wrap">
+            <!-- docs-version --><p class="note">Стабильный выпуск: 0.4 для Windows. Linux, системный прокси и удержание при обновлении доступны с предварительной 0.5. См. <a href="docs/">документацию</a>.</p><!-- /docs-version -->
             <section class="hero" aria-labelledby="hero-title">
                 <div class="masthead">
                     <img src="../assets/banner.svg" width="1280" height="400" alt="Rosetun" />
@@ -144,7 +146,7 @@
                     учётной записью. Без Lockdown падение службы снимает блокировку на Windows, а на
                     Linux kill switch остаётся. Lockdown экспериментальный: сторонние брандмауэры,
                     антивирусы, гибернация и сон на настоящем компьютере не проверены.
-                    <a href="https://github.com/eoftgge/rosetun/blob/master/README.ru.md"
+                    <a href="https://eoftgge.github.io/rosetun/ru/docs/privacy/"
                         >Сетевые обращения и модель защиты</a
                     >
                 </p>
@@ -208,7 +210,7 @@
                 <pre><code data-release-text="gh attestation verify .\@@INSTALLER@@ --repo eoftgge/rosetun">gh attestation verify .\rosetun-VERSION-setup.exe --repo eoftgge/rosetun</code></pre>
                 <p>
                     Пакет Debian тоже есть в SHA256SUMS.txt и имеет аттестацию:
-                    <a href="help/#debian">Debian 13</a>.
+                    <a href="docs/install/#debian-13">Debian 13</a>.
                 </p>
                 <p><a href="help/">Установка и первый запуск</a></p>
             </section>

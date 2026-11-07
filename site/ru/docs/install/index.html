@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="ru">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta name="description" content="Установка · Rosetun" />
+        <meta name="referrer" content="no-referrer" />
+        <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'" />
+        <title>Установка · Rosetun</title>
+        <link rel="stylesheet" href="../../../assets/site.css" />
+        <link rel="icon" href="../../../assets/rose.svg" type="image/svg+xml" />
+        <link rel="alternate" hreflang="ru" href="../../../ru/docs/install/" />
+        <link rel="alternate" hreflang="en" href="../../../en/docs/install/" />
+    </head>
+    <body>
+        <a class="skip" href="#main">К содержимому</a>
+        <header class="wrap">
+            <a class="brand" href="../../../ru/"><img src="../../../assets/rose.svg" width="40" height="40" alt="" />Rosetun</a>
+            <nav aria-label="Навигация">
+                <a href="../../../ru/docs/">Документация</a>
+                <a href="../../../ru/help/">Помощь</a>
+                <a href="../../../ru/providers/">Для провайдеров</a>
+                <a href="../../../en/docs/install/" lang="en" hreflang="en">English</a>
+            </nav>
+        </header>
+        <main id="main" class="wrap">
+            <div class="prose docs">
+                <h1>Установка</h1>
+                <!-- docs-version --><p class="note">Стабильная версия для Windows: 0.4. Linux и перечисленные ниже изменения доступны с предварительной 0.5; стабильная 0.5 ещё не вышла. Точное поведение 0.4 описано в <a href="https://github.com/eoftgge/rosetun/blob/v0.4.0/README.ru.md">документации 0.4</a>.</p><!-- /docs-version -->
+                <nav aria-label="На этой странице"><a href="#requirements">Требования</a><a href="#windows">Windows</a><a href="#debian-13">Debian 13</a><a href="#verify-the-download">Проверка загрузки</a></nav>
+                <p class="note">С 0.5: Debian, удержание сети при обновлении, восстановление прокси при откате.</p>
+<h2 id="requirements">Требования</h2>
+<p><strong>Windows:</strong> Windows 11, x64. Windows 10 работает на компьютере одного тестировщика; проверки отказов на ней не прогонялись.</p>
+<p><strong>Linux:</strong> Debian 13, amd64, с systemd и nftables (пакет зависит от них) и cgroup v2. Рекомендуется polkit (<code>pkexec</code>, <code>polkitd</code>): без него окно не может менять Lockdown, и нужно выполнять <code>sudo rosetun lockdown on</code> или <code>off</code> в терминале. Linux в этой бете впервые.</p>
+<h2 id="windows">Windows</h2>
+<p>Скачайте <code>rosetun-&lt;версия&gt;-setup.exe</code> на странице <a href="https://github.com/eoftgge/rosetun/releases">Releases</a>. Установщик пока не подписан: если SmartScreen показывает «Windows protected your PC», нажмите <strong>More info</strong>, затем <strong>Run anyway</strong>. См. <a href="https://github.com/eoftgge/rosetun/blob/master/CODE_SIGNING_POLICY.md">политику подписи кода</a> (на английском).</p>
+<p>Папку установки можно выбрать, но не внутри профиля пользователя и не там, где её могут менять обычные пользователи: служба работает с правами SYSTEM. При удалении настройки в <code>%APPDATA%\Rosetun</code> по умолчанию остаются; при желании можно удалить настройки, подписки и правила.</p>
+<p><strong>Обновление:</strong> запустите новый установщик поверх старой версии. Если включён kill switch, сеть на время обновления остаётся закрытой, а приложение запускается и подключается снова. Если подключиться не удалось, экран подключения предлагает <strong>Подключиться</strong> и <strong>Открыть сеть</strong>; то же делает <code>rosetun open-network</code>. Lockdown остаётся включённым.</p>
+<p><strong>Настройки:</strong> при изменении формата конфигурации Rosetun при первом сохранении оставляет рядом копию прежнего файла (например, <code>config.v7.json</code>); в ней те же ссылки подписок. Старая версия отказывается читать новый файл и не перезаписывает его.</p>
+<p><strong>Возврат на 0.4</strong> (не проверено):</p>
+<ol>
+<li>В 0.5 отключитесь, чтобы вернулись ваши настройки прокси. 0.4 о них ничего не знает.</li>
+<li>Удалите 0.5, сохранив настройки. Это снимает Lockdown, удержание после обновления и задачу запуска при входе, которую 0.4 снять не умеет.</li>
+<li>Установите 0.4.</li>
+<li>Закройте Rosetun и верните настройки в PowerShell. Если <code>config.v7.json</code> нет, файл всё ещё в формате 7, и этот шаг не нужен. Изменения, сделанные в 0.5, пропадут.
+<pre><code>Move-Item -Force &quot;$env:APPDATA\Rosetun\config.v7.json&quot; &quot;$env:APPDATA\Rosetun\config.json&quot;</code></pre></li>
+<li>Снова включите <strong>Запускать вместе с Windows</strong> и Lockdown, если они нужны.</li>
+</ol>
+<h2 id="debian-13">Debian 13</h2>
+<p>Скачайте <code>rosetun_&lt;версия&gt;_amd64.deb</code> со страницы <a href="https://github.com/eoftgge/rosetun/releases">Releases</a>, <a href="../install/#verify-the-download">проверьте его</a>, установите и добавьте себя в группу, которой доступна служба:</p>
+<pre><code>sudo apt install ./rosetun_&lt;версия&gt;_amd64.deb
+sudo usermod -aG rosetun &quot;$USER&quot;</code></pre>
+<p>Затем <strong>перезагрузите компьютер</strong>. Выхода из системы мало: пользовательский менеджер systemd может пережить выход и передавать запущенным программам старые группы. Если пропустить последнюю команду, окно предложит то же самое кнопкой <strong>Добавить меня</strong>.</p>
+<p><strong>Обновление:</strong> установите новый пакет так же. Если kill switch включён, сеть на время обновления остаётся закрытой: открытое окно перезапустится само и подключится снова. Без окна <code>rosetun status</code> покажет <code>network: held closed</code>, <code>rosetun connect</code> подключит, а <code>rosetun open-network</code> откроет сеть. Lockdown остаётся включённым.</p>
+<p><strong>Удаление:</strong> <code>sudo apt remove rosetun</code> сначала снимает Lockdown. Если снять не удалось, удаление останавливается и Rosetun остаётся, чтобы сеть можно было открыть.</p>
+<p><strong>Полное удаление:</strong> <code>sudo apt purge rosetun</code> удаляет ещё списки и состояние в <code>/var/lib/rosetun</code>. Настройки и запись автозапуска в домашней папке (<code>~/.config/rosetun</code>) и группа <code>rosetun</code> остаются.</p>
+<h2 id="verify-the-download">Проверка загрузки</h2>
+<p>В <code>SHA256SUMS.txt</code> каждого выпуска есть установщик и пакет. Для выпуска, собранного по тегу, на GitHub есть ещё аттестация происхождения обоих файлов. Аттестация говорит, какой workflow собрал файл; это не подпись кода.</p>
+<p>Windows:</p>
+<pre><code>Get-FileHash .\rosetun-&lt;версия&gt;-setup.exe -Algorithm SHA256
+gh attestation verify .\rosetun-&lt;версия&gt;-setup.exe --repo eoftgge/rosetun</code></pre>
+<p>Debian:</p>
+<pre><code>sha256sum --check --ignore-missing SHA256SUMS.txt
+gh attestation verify rosetun_&lt;версия&gt;_amd64.deb --repo eoftgge/rosetun</code></pre>
+<p>Файл беты называется <code>rosetun_0.5.0-beta.1_amd64.deb</code>; <code>dpkg</code> показывает его версию как <code>0.5.0~beta.1</code>.</p>
+                <nav class="doc-pager" aria-label="Назад и вперёд"><a rel="prev" href="../">← Документация</a><a rel="next" href="../protection/">Подключение и защита →</a></nav>
+            </div>
+        </main>
+        <footer class="wrap"><span>Rosetun</span><a href="https://github.com/eoftgge/rosetun">GitHub</a><a href="../../../ru/docs/licenses/">Лицензии</a></footer>
+    </body>
+</html>

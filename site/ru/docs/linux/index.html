@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="ru">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta name="description" content="Поддержка Linux · Rosetun" />
+        <meta name="referrer" content="no-referrer" />
+        <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'" />
+        <title>Поддержка Linux · Rosetun</title>
+        <link rel="stylesheet" href="../../../assets/site.css" />
+        <link rel="icon" href="../../../assets/rose.svg" type="image/svg+xml" />
+        <link rel="alternate" hreflang="ru" href="../../../ru/docs/linux/" />
+        <link rel="alternate" hreflang="en" href="../../../en/docs/linux/" />
+    </head>
+    <body>
+        <a class="skip" href="#main">К содержимому</a>
+        <header class="wrap">
+            <a class="brand" href="../../../ru/"><img src="../../../assets/rose.svg" width="40" height="40" alt="" />Rosetun</a>
+            <nav aria-label="Навигация">
+                <a href="../../../ru/docs/">Документация</a>
+                <a href="../../../ru/help/">Помощь</a>
+                <a href="../../../ru/providers/">Для провайдеров</a>
+                <a href="../../../en/docs/linux/" lang="en" hreflang="en">English</a>
+            </nav>
+        </header>
+        <main id="main" class="wrap">
+            <div class="prose docs">
+                <h1>Поддержка Linux</h1>
+                <!-- docs-version --><p class="note">Стабильная версия для Windows: 0.4. Linux и перечисленные ниже изменения доступны с предварительной 0.5; стабильная 0.5 ещё не вышла. Точное поведение 0.4 описано в <a href="https://github.com/eoftgge/rosetun/blob/v0.4.0/README.ru.md">документации 0.4</a>.</p><!-- /docs-version -->
+                <nav aria-label="На этой странице"><a href="#details">Поддержка Linux</a></nav>
+                <section id="details">
+<p class="note">С 0.5: вся поддержка Linux на этой странице.</p>
+<table>
+<tr><th>Рабочий стол</th><th>Трей</th><th>Настройки системного прокси</th></tr>
+<tr><td>KDE Plasma, Wayland и X11</td><td>Да</td><td>Меняет Rosetun (<code>kioslaverc</code>)</td></tr>
+<tr><td>GNOME</td><td>Только с расширением, которое даёт трей. Без трея закрытие окна закрывает программу</td><td>Меняет Rosetun (<code>gsettings</code>)</td></tr>
+<tr><td>Другие</td><td>Там, где отвечает хост трея; не проверено</td><td>Rosetun показывает адрес, который нужно указать самому</td></tr>
+</table>
+<p>Таблица говорит, что делает код. Вручную Rosetun проверен на GNOME, на KDE Plasma пока нет.</p>
+<p>Чего на Linux пока нет:</p>
+<ul>
+<li>диалогов выбора файла: QR-код читается только из буфера обмена, снимка экрана нет;</li>
+<li><strong>Собрать отчёт</strong> и кнопок, открывающих папку (см. <a href="../troubleshooting/">Устранение неполадок</a>);</li>
+<li>проверок системного прокси и перехвата пакетов в <strong>Проверке системы</strong>;</li>
+<li>запоминания положения окна.</li>
+</ul>
+</section>
+                <nav class="doc-pager" aria-label="Назад и вперёд"><a rel="prev" href="../build/">← Сборка из исходников</a><a rel="next" href="../everyday/">На каждый день →</a></nav>
+            </div>
+        </main>
+        <footer class="wrap"><span>Rosetun</span><a href="https://github.com/eoftgge/rosetun">GitHub</a><a href="../../../ru/docs/licenses/">Лицензии</a></footer>
+    </body>
+</html>

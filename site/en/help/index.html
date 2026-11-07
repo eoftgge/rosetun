@@ -3,16 +3,10 @@
     <head>
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <meta
-            name="description"
-            content="Help and FAQ. VPN client. Subscriptions, rules and connection protection."
-        />
+        <meta name="description" content="Help · Rosetun" />
         <meta name="referrer" content="no-referrer" />
-        <meta
-            http-equiv="Content-Security-Policy"
-            content="default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'"
-        />
-        <title>Help and FAQ · Rosetun</title>
+        <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'" />
+        <title>Help · Rosetun</title>
         <link rel="stylesheet" href="../../assets/site.css" />
         <link rel="icon" href="../../assets/rose.svg" type="image/svg+xml" />
         <link rel="alternate" hreflang="ru" href="../../ru/help/" />
@@ -21,287 +15,23 @@
     <body>
         <a class="skip" href="#main">Skip to content</a>
         <header class="wrap">
-            <div class="header-brand">
-                <a class="brand" href="../../en/"
-                    ><img src="../../assets/rose.svg" width="40" height="40" alt="" />Rosetun</a
-                >
-                <p class="platform-label">WINDOWS <!-- linux-ready <span aria-hidden="true">·</span> LINUX  --><span aria-hidden="true">·</span> OPEN SOURCE</p>
-            </div>
+            <a class="brand" href="../../en/"><img src="../../assets/rose.svg" width="40" height="40" alt="" />Rosetun</a>
             <nav aria-label="Navigation">
-                <a href="../../en/">Home</a><a href="../../en/providers/">For providers</a
-                ><a href="../../en/help/">Help</a
-                ><a href="../../ru/help/" lang="ru" hreflang="ru">Русский</a>
+                <a href="../../en/docs/">Documentation</a>
+                <a href="../../en/help/">Help</a>
+                <a href="../../en/providers/">For providers</a>
+                <a href="../../ru/help/" lang="ru" hreflang="ru">Русский</a>
             </nav>
         </header>
         <main id="main" class="wrap">
-            <div class="prose">
-                <p class="eyebrow">START HERE</p>
-                <h1>Help and FAQ</h1>
-                <section>
-                    <h2>Install and connect</h2>
-                    <ol>
-                        <li>
-                            <a href="../#verify">Download and verify the installer</a>. Windows 11
-                            x64 is required. Windows 10 runs on one tester's computer; the failure tests have not run on it.
-                        </li>
-                        <li>
-                            Run the installer and approve the administrator prompt. The installer is
-                            unsigned: if SmartScreen shows “Windows protected your PC”, after
-                            verifying the file choose “More info”, then “Run anyway”.
-                        </li>
-                        <li>
-                            Open Rosetun and add a subscription URL from your provider. Rosetun does
-                            not supply VPN servers.
-                        </li>
-                        <li>
-                            Select a server and connect. Rules choose what uses the VPN, connects
-                            directly or is blocked.
-                        </li>
-                    </ol>
-                    <p>
-                        Choose an installation folder outside user profiles that ordinary users
-                        cannot modify.
-                    </p>
-                </section>
-                <section id="debian">
-                    <h2>Debian 13</h2>
-                    <p>
-                        Linux is new in this beta: Debian 13, amd64. It was checked by hand on GNOME,
-                        not yet on KDE Plasma. Download the package from
-                        <a href="https://github.com/eoftgge/rosetun/releases">Releases</a> and verify
-                        it:
-                    </p>
-                    <pre><code>sha256sum --check --ignore-missing SHA256SUMS.txt
-gh attestation verify rosetun_VERSION_amd64.deb --repo eoftgge/rosetun</code></pre>
-                    <p>Install it and add yourself to the group that may reach the service:</p>
-                    <pre><code>sudo apt install ./rosetun_VERSION_amd64.deb
-sudo usermod -aG rosetun "$USER"</code></pre>
-                    <p>Then restart the computer: logging out is not enough.</p>
-                    <p>
-                        Linux has no file dialogs or Collect report yet. A rule by program gives the
-                        engine nearly root rights for that session.
-                        <a href="https://github.com/eoftgge/rosetun/blob/master/README.md#debian-13">Update, remove, purge</a>.
-                    </p>
-                </section>
-                <section id="system-proxy">
-                    <h2>System proxy</h2>
-                    <p>
-                        <strong>Connection mode</strong> in Settings → Connection chooses how
-                        traffic reaches the VPN. <strong>TUN</strong> takes all of this computer's
-                        traffic. <strong>System proxy</strong> starts a local proxy and points your
-                        desktop's proxy settings at it, for when TUN gets in the way of another
-                        VPN, an anti-cheat or an antivirus, or when you only need the browser.
-                    </p>
-                    <ul>
-                        <li>
-                            Only programs that use the system proxy go through the VPN: browsers and
-                            most applications. Games, many console programs and Windows services
-                            (WinHTTP stays as it is) do not, and without the kill switch they go
-                            direct, their DNS included.
-                        </li>
-                        <li>
-                            The <strong>kill switch</strong> here is strict: everything that does not
-                            use the proxy stays without network, while you are connected too.
-                        </li>
-                        <li>
-                            <strong>Access from the local network</strong> lets a phone or a TV on
-                            your network use the proxy. Settings shows the address to enter. Only your
-                            own networks get in; under Lockdown it also needs
-                            <strong>Local network</strong>.
-                        </li>
-                        <li>
-                            Your own proxy settings come back when you disconnect, quit or change the
-                            mode, and at the next start after a crash. If you changed them yourself
-                            meanwhile, they stay.
-                        </li>
-                        <li>
-                            On Linux the settings are changed on KDE Plasma and GNOME. On other
-                            desktops Rosetun shows the address to enter in your system settings. Point
-                            console programs at the proxy yourself.
-                        </li>
-                    </ul>
-                </section>
+            <div class="prose docs">
+                <h1>Help</h1>
+                <!-- docs-version --><p class="note">Stable Windows reference: 0.4. Linux and additions listed below are preview features since 0.5; 0.5 is not stable yet. For the exact 0.4 behavior, see the <a href="https://github.com/eoftgge/rosetun/blob/v0.4.0/README.md">0.4 reference</a>.</p><!-- /docs-version -->
+                <nav aria-label="On this page"><a href="#start">Get started</a><a href="#faq">FAQ</a></nav>
+                <h2 id="start">Get started</h2><p>Download and verify the installer. Install Rosetun, add your provider subscription, choose a server and connect. Rosetun does not supply servers.</p><h2 id="faq">FAQ</h2><ul><li><a href="../docs/install/">Install and update</a></li><li><a href="../docs/subscriptions/">How do I add a subscription?</a></li><li><a href="../docs/modes/">Which connection mode should I use?</a></li><li><a href="../docs/protection/">How do I check protection?</a></li><li><a href="../docs/troubleshooting/">No network or the app will not open?</a></li><li><a href="../docs/linux/">What works on Linux?</a></li><li><a href="../docs/privacy/">What data is sent?</a></li></ul>
 
-                <section id="lockdown">
-                    <h2>Lockdown and restoring network access</h2>
-                    <p>
-                        Lockdown is experimental. It blocks internet access outside the tunnel, even
-                        without a connection and after a restart. Turning it on or off in Settings →
-                        Connection requires confirmation and administrator rights: UAC on Windows,
-                        polkit on Linux. The kill switch stays on while Lockdown is enabled.
-                    </p>
-                    <p>
-                        If there is no network access and Rosetun will not open, open Windows
-                        Terminal as administrator and run this, with your own folder if you chose
-                        another:
-                    </p>
-                    <pre><code>&amp; 'C:\Program Files\Rosetun\rosetun.exe' reset-firewall</code></pre>
-                    <p>On Linux:</p>
-                    <pre><code>sudo rosetun reset-firewall</code></pre>
-                    <p>
-                        This removes Lockdown without a running service. Once Lockdown is removed,
-                        direct internet access becomes possible. Uninstalling Rosetun also removes
-                        Lockdown.
-                    </p>
-                    <p>
-                        For Wi-Fi with a sign-in page, temporarily turn off Lockdown, sign in or fix
-                        the clock, connect and enable Lockdown again. Lockdown cuts off Hyper-V
-                        networking; WSL2, Docker Desktop, Windows Sandbox and the mobile hotspot can
-                        also lose access, and on Linux virtual machines and containers. Turn off
-                        Lockdown while you need them.
-                    </p>
-                    <p>
-                        Windows 10, third-party firewalls, antivirus software, hibernation and sleep
-                        on real hardware are untested. The kill switch remains the primary
-                        protection. Lockdown does not protect against malware running under your
-                        account.
-                    </p>
-                </section>
-                <section id="guarantees">
-                    <h2>What stays closed</h2>
-                    <p>
-                        The window and <code>rosetun status</code> show the protection in place. The
-                        main difference between the systems: on Windows a crash of the service opens
-                        the network unless Lockdown is on; on Linux the kill switch keeps it closed
-                        until you connect or run <code>rosetun open-network</code>. An update keeps
-                        the network closed on both while the kill switch is on.
-                        <a href="https://github.com/eoftgge/rosetun/blob/master/README.md#protection-guarantees">The table for each event</a>.
-                    </p>
-                </section>
-                <section id="local-network">
-                    <h2>Local network</h2>
-                    <p>
-                        <strong>Local network</strong> in Settings → Connection lets programs reach
-                        devices on your network past the tunnel. On Windows it opens only your own
-                        network, and <strong>Private networks behind the router</strong> adds the other
-                        private ranges. On Linux the firewall opens every private range.
-                        <a href="https://github.com/eoftgge/rosetun/blob/master/README.md#local-network">Details and limits</a>.
-                    </p>
-                </section>
-                <section id="privacy">
-                    <h2>Privacy</h2>
-                    <p>
-                        There is no telemetry and no account. Rosetun contacts your provider, servers,
-                        DNS, lists, GitHub and network check services. The device ID sent to a provider
-                        is a hash for that provider's host, not your system's ID.
-                        <a href="https://github.com/eoftgge/rosetun/blob/master/README.md#privacy-and-network-access">Every request and what it carries</a>.
-                    </p>
-                </section>
-                <section>
-                    <h2>Frequently asked questions</h2>
-                    <details>
-                        <summary>A website will not open after connecting</summary>
-                        <p>Restart the browser: it has its own DNS cache, separate from the system's.</p>
-                    </details>
-                    <details>
-                        <summary>Another VPN or zapret interferes with the connection</summary>
-                        <p>
-                            Disconnect the other VPN in TUN mode and retry. If you use zapret,
-                            exclude your VPN server addresses in its settings.
-                        </p>
-                    </details>
-                    <details>
-                        <summary>The network is closed after an update or a crash</summary>
-                        <p>
-                            Connect, or open it with Open network on the connection screen or
-                            <code>rosetun open-network</code>. Without a working service, use
-                            <code>reset-firewall</code> as above.
-                        </p>
-                    </details>
-                    <details>
-                        <summary>Linux: no access to the Rosetun service</summary>
-                        <p>
-                            Press Add me, or run <code>sudo usermod -aG rosetun "$USER"</code>, and
-                            restart the computer. Logging out is not enough.
-                        </p>
-                    </details>
-                    <details>
-                        <summary>Linux: KDE programs do not use the proxy</summary>
-                        <p>
-                            Check that <code>~/.config/kioslaverc</code> has
-                            <code>ProxyType=1</code> and that <code>XDG_CURRENT_DESKTOP</code> contains
-                            <code>KDE</code>; otherwise enter the address Rosetun shows yourself.
-                            Restart programs that are not KDE's or Chromium.
-                        </p>
-                    </details>
-                    <details>
-                        <summary>Where do I start troubleshooting?</summary>
-                        <p>
-                            Open Settings → Service and logs → System check. It checks the clock,
-                            other VPNs and DNS substitution, and on Windows the system proxy and
-                            packet interception. It runs automatically after a failed connection. It
-                            changes nothing but does make network requests.
-                        </p>
-                    </details>
-                    <details>
-                        <summary>What does “No network connection” mean?</summary>
-                        <p>
-                            Check the system's network. With reconnect on disconnect enabled, Rosetun
-                            waits for the network to return while the kill switch blocks traffic as
-                            long as the service is running.
-                        </p>
-                    </details>
-                    <details>
-                        <summary>The installer reports access to a protected folder</summary>
-                        <p>
-                            If ordinary users can modify the Rosetun folder, uninstall and install
-                            again. Do not grant access to the service folder through the “Continue”
-                            button in Explorer.
-                        </p>
-                    </details>
-                </section>
-                <section>
-                    <h2>Collect a report</h2>
-                    <p>
-                        On Windows, in Settings → Service and logs, select “Collect report”. The text file
-                        contains versions, settings without secrets, connection state, system checks
-                        and logs. The system check makes network requests.
-                    </p>
-                    <p>
-                        Rosetun removes IP addresses, URLs, domains, email addresses, keys,
-                        passwords, server, subscription, list and rule set names, and your Windows
-                        account name. Review the file yourself before sharing.
-                    </p>
-                    <p>
-                        Linux has no such report yet. Attach <code>rosetun status</code> and the logs
-                        <a href="https://github.com/eoftgge/rosetun/blob/master/README.md#troubleshooting">listed in the README</a>,
-                        and remove addresses, links and names by hand first.
-                    </p>
-                    <p>
-                        In <a href="https://github.com/eoftgge/rosetun/issues">Issues</a>, attach
-                        the report, steps to reproduce, expected behavior and error text. Do not
-                        attach subscription URLs or configurations containing secrets. Report
-                        vulnerabilities privately using the footer link.
-                    </p>
-                </section>
-                <section>
-                    <h2>Update or uninstall</h2>
-                    <p>
-                        Rosetun offers new versions but never downloads or installs them itself.
-                        Download the new installer or package from Releases, verify it and run it. With
-                        the kill switch on, the network stays closed through the update. When the
-                        settings format changes, Rosetun keeps a copy of the previous file alongside
-                        it; this copy also contains subscription URLs.
-                    </p>
-                    <p>
-                        On Windows, uninstall Rosetun through Windows apps. Settings in
-                        <code>%APPDATA%\Rosetun</code> are kept by default; the uninstaller can
-                        remove settings, subscriptions and rules.
-                    </p>
-                    <p>
-                        <a
-                            href="https://github.com/eoftgge/rosetun/blob/master/README.md#troubleshooting"
-                            >Details in the README</a
-                        >
-                    </p>
-                </section>
             </div>
         </main>
-        <footer class="wrap">
-            <span>Rosetun</span><a href="https://github.com/eoftgge/rosetun">GitHub</a
-            ><a href="https://github.com/eoftgge/rosetun/blob/master/LICENSE">GPL-3.0-or-later</a
-            ><a href="https://github.com/eoftgge/rosetun/security/policy">Report a vulnerability</a
-            ><a href="../../ru/help/" lang="ru" hreflang="ru">Русский</a>
-        </footer>
+        <footer class="wrap"><span>Rosetun</span><a href="https://github.com/eoftgge/rosetun">GitHub</a><a href="../../en/docs/licenses/">Licenses</a></footer>
     </body>
 </html>

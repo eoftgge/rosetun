@@ -17,6 +17,7 @@ MARKERS = {'VERSION', 'INSTALLER', 'DOWNLOAD_URL', 'CHECKSUM_URL', 'SHA256_LINE'
 LINUX_MARKERS = {'DEB', 'DEB_URL'}
 LINUX_READY = re.compile(r'<!-- linux-ready (.*?) -->', re.DOTALL)
 LINUX_SOON = re.compile(r'<!-- linux-soon -->(.*?)<!-- /linux-soon -->', re.DOTALL)
+DOC_VERSION = re.compile(r'<!-- docs-version -->(.*?)<!-- /docs-version -->', re.DOTALL)
 
 
 def fetch(url, api=False):
@@ -74,6 +75,11 @@ def render(source, output, values):
     shutil.copytree(source, output)
     for path in output.rglob('*.html'):
         text = path.read_text(encoding='utf-8')
+        if tuple(map(int, values['VERSION'].split('.'))) >= (0, 5, 0):
+            label = 'Stable release' if path.relative_to(output).parts[0] == 'en' else 'Стабильный выпуск'
+            text = DOC_VERSION.sub(f'<p class="note">{label}: {html.escape(values["VERSION"])}.</p>', text)
+        else:
+            text = DOC_VERSION.sub(lambda match: match[1], text)
         if values['DEB_URL']:
             text = LINUX_SOON.sub('', text)
             text = LINUX_READY.sub(lambda match: match[1], text)

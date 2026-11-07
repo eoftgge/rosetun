@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta name="description" content="Protection guarantees · Rosetun" />
+        <meta name="referrer" content="no-referrer" />
+        <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'" />
+        <title>Protection guarantees · Rosetun</title>
+        <link rel="stylesheet" href="../../../assets/site.css" />
+        <link rel="icon" href="../../../assets/rose.svg" type="image/svg+xml" />
+        <link rel="alternate" hreflang="ru" href="../../../ru/docs/guarantees/" />
+        <link rel="alternate" hreflang="en" href="../../../en/docs/guarantees/" />
+    </head>
+    <body>
+        <a class="skip" href="#main">Skip to content</a>
+        <header class="wrap">
+            <a class="brand" href="../../../en/"><img src="../../../assets/rose.svg" width="40" height="40" alt="" />Rosetun</a>
+            <nav aria-label="Navigation">
+                <a href="../../../en/docs/">Documentation</a>
+                <a href="../../../en/help/">Help</a>
+                <a href="../../../en/providers/">For providers</a>
+                <a href="../../../ru/docs/guarantees/" lang="ru" hreflang="ru">Русский</a>
+            </nav>
+        </header>
+        <main id="main" class="wrap">
+            <div class="prose docs">
+                <h1>Protection guarantees</h1>
+                <!-- docs-version --><p class="note">Stable Windows reference: 0.4. Linux and additions listed below are preview features since 0.5; 0.5 is not stable yet. For the exact 0.4 behavior, see the <a href="https://github.com/eoftgge/rosetun/blob/v0.4.0/README.md">0.4 reference</a>.</p><!-- /docs-version -->
+                <nav aria-label="On this page"><a href="#details">Overview</a><a href="#windows">Windows</a><a href="#linux">Linux</a></nav>
+                <section id="details">
+<p class="note">Since 0.5: this matrix, including update hold, System proxy and Linux. It does not describe the 0.4 release.</p>
+<p>What stays closed outside the tunnel at each moment:</p>
+<ul>
+<li><strong>open:</strong> Rosetun closes nothing. While connected in TUN, programs&#x27; traffic still goes into the tunnel; nothing stops it from going around if the tunnel fails.</li>
+<li><strong>DNS closed:</strong> system DNS cannot leave outside the tunnel; everything else is open.</li>
+<li><strong>closed:</strong> nothing leaves outside the tunnel. In the proxy mode, nothing but the engine and loopback.</li>
+<li><strong>held:</strong> closed, and it stays closed until you connect or run <code>rosetun open-network</code>.</li>
+<li><strong>*</strong> read from the code: no matrix scenario covers this cell. Every other cell has a scenario in <a href="https://github.com/eoftgge/rosetun/blob/master/tools/README.md"><code>tools/vm</code></a>; a release&#x27;s notes say which matrices were run for it.</li>
+</ul>
+<p>&quot;No protection&quot; means the kill switch is off and the DNS lock is not in place: the firewall refused it, or the tunnel has no DNS of its own. On Windows sing-box closes port 53 outside the tunnel by itself while it runs, so system DNS can leave only while it restarts, or after the service stops. On Linux a program that picks the physical interface itself can also send DNS past the tunnel while connected.</p>
+<h2 id="windows">Windows</h2>
+<table>
+<tr><th>Event</th><th>No protection</th><th>DNS lock</th><th>Kill switch</th><th>Lockdown</th><th>Proxy</th><th>Proxy, kill switch</th></tr>
+<tr><td>Disconnected</td><td>open</td><td>open</td><td>open</td><td>closed</td><td>open</td><td>open*</td></tr>
+<tr><td>Connected</td><td>open</td><td>DNS closed</td><td>closed</td><td>closed</td><td>open</td><td>closed</td></tr>
+<tr><td>Engine restart</td><td>open</td><td>DNS closed</td><td>closed</td><td>closed*</td><td>open*</td><td>closed</td></tr>
+<tr><td>Service crash</td><td>open*</td><td>open</td><td>open</td><td>closed</td><td>open*</td><td>open*</td></tr>
+<tr><td>Service stopped</td><td>open*</td><td>open*</td><td>open</td><td>closed</td><td>open*</td><td>open*</td></tr>
+<tr><td>Update</td><td>open*</td><td>open</td><td>held</td><td>closed</td><td>open*</td><td>held*</td></tr>
+<tr><td>Restart of the computer</td><td>open*</td><td>open*</td><td>open*</td><td>closed</td><td>open*</td><td>open*</td></tr>
+</table>
+<h2 id="linux">Linux</h2>
+<table>
+<tr><th>Event</th><th>No protection</th><th>DNS lock</th><th>Kill switch</th><th>Lockdown</th><th>Proxy</th><th>Proxy, kill switch</th></tr>
+<tr><td>Disconnected</td><td>open</td><td>open</td><td>open</td><td>closed</td><td>open</td><td>open</td></tr>
+<tr><td>Connected</td><td>open</td><td>DNS closed</td><td>closed</td><td>closed</td><td>open</td><td>closed</td></tr>
+<tr><td>Engine restart</td><td>open</td><td>DNS closed*</td><td>closed</td><td>closed*</td><td>open*</td><td>closed</td></tr>
+<tr><td>Service crash</td><td>open*</td><td>DNS closed until the service restarts, then open</td><td>held</td><td>closed</td><td>open*</td><td>held*</td></tr>
+<tr><td>Service stopped</td><td>open*</td><td>open*</td><td>open</td><td>closed</td><td>open*</td><td>open</td></tr>
+<tr><td>Update</td><td>open*</td><td>DNS closed until the new service starts, then open*</td><td>held</td><td>closed</td><td>open*</td><td>held*</td></tr>
+<tr><td>Restart of the computer</td><td>open*</td><td>open*</td><td>open*</td><td>closed</td><td>open*</td><td>open*</td></tr>
+</table>
+<p>The difference to remember: <strong>on Windows a crash of the service opens the network</strong>, because the firewall removes a session&#x27;s filters with its process, and only Lockdown stays. On Linux the firewall table outlives the service, so a kill switch holds the network closed after a crash. A restart of the computer opens both, except under Lockdown. On Windows a hold from an update is Lockdown&#x27;s persistent set, so by the code it also lasts through a restart (no scenario covers it); on Linux it does not.</p>
+<p><strong>Not tested:</strong></p>
+<ul>
+<li>Windows 10 in the failure tests: it is only known to run on one tester&#x27;s computer;</li>
+<li>other firewalls and antivirus programs with their own network filters, and firewalld on Linux (Rosetun&#x27;s units start after it; <code>nftables.service</code> is covered);</li>
+<li>sleep and hibernation with Lockdown on real hardware (Windows: only a virtual machine&#x27;s sleep; Linux: not at all);</li>
+<li>a power cut on Linux;</li>
+<li>going back to 0.4;</li>
+<li>on Linux, <strong>Local network</strong> from a program that does not pick the interface itself;</li>
+<li>on Linux, the window, the tray and the polkit prompt in an automated run: no matrix drives a desktop. GNOME was checked by hand; KDE Plasma was not, on Wayland or X11.</li>
+</ul>
+<p>Lockdown protects against accidental leaks: the VPN drops, the service stops, the computer boots. It does not protect against malware you run yourself. The kill switch stays the main protection.</p>
+</section>
+                <nav class="doc-pager" aria-label="Previous and next"><a rel="prev" href="../subscriptions/">← Subscriptions and servers</a><a rel="next" href="../privacy/">Privacy and network access →</a></nav>
+            </div>
+        </main>
+        <footer class="wrap"><span>Rosetun</span><a href="https://github.com/eoftgge/rosetun">GitHub</a><a href="../../../en/docs/licenses/">Licenses</a></footer>
+    </body>
+</html>

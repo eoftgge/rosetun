@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="ru">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta name="description" content="Устранение неполадок · Rosetun" />
+        <meta name="referrer" content="no-referrer" />
+        <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'" />
+        <title>Устранение неполадок · Rosetun</title>
+        <link rel="stylesheet" href="../../../assets/site.css" />
+        <link rel="icon" href="../../../assets/rose.svg" type="image/svg+xml" />
+        <link rel="alternate" hreflang="ru" href="../../../ru/docs/troubleshooting/" />
+        <link rel="alternate" hreflang="en" href="../../../en/docs/troubleshooting/" />
+    </head>
+    <body>
+        <a class="skip" href="#main">К содержимому</a>
+        <header class="wrap">
+            <a class="brand" href="../../../ru/"><img src="../../../assets/rose.svg" width="40" height="40" alt="" />Rosetun</a>
+            <nav aria-label="Навигация">
+                <a href="../../../ru/docs/">Документация</a>
+                <a href="../../../ru/help/">Помощь</a>
+                <a href="../../../ru/providers/">Для провайдеров</a>
+                <a href="../../../en/docs/troubleshooting/" lang="en" hreflang="en">English</a>
+            </nav>
+        </header>
+        <main id="main" class="wrap">
+            <div class="prose docs">
+                <h1>Устранение неполадок</h1>
+                <!-- docs-version --><p class="note">Стабильная версия для Windows: 0.4. Linux и перечисленные ниже изменения доступны с предварительной 0.5; стабильная 0.5 ещё не вышла. Точное поведение 0.4 описано в <a href="https://github.com/eoftgge/rosetun/blob/v0.4.0/README.ru.md">документации 0.4</a>.</p><!-- /docs-version -->
+                <nav aria-label="На этой странице"><a href="#details">Устранение неполадок</a></nav>
+                <section id="details">
+<p class="note">С 0.5: удержание сети, Linux, системный прокси и фрагментация TLS.</p>
+<ul>
+<li>Сначала запустите <strong>Проверку системы</strong> (Настройки → Служба и журнал). После неудачного подключения она запускается сама и показывает первую находку под ошибкой.</li>
+<li><strong>Нет сети совсем при включённом Lockdown, а Rosetun не открывается.</strong> Эта команда снимает Lockdown без службы. На Windows в терминале от имени администратора:
+<pre><code>&amp; &#x27;C:\Program Files\Rosetun\rosetun.exe&#x27; reset-firewall</code></pre>
+<p>Если вы выбрали другую папку, укажите её. На Linux:</p>
+<pre><code>sudo rosetun reset-firewall</code></pre>
+<p>Удаление Rosetun тоже снимает Lockdown.</p></li>
+<li><strong>Сеть закрыта после обновления или сбоя</strong>, и <code>rosetun status</code> показывает <code>network: held closed</code>. Подключитесь или откройте её: <strong>Открыть сеть</strong> на экране подключения или <code>rosetun open-network</code>. Если служба не работает, используйте <code>reset-firewall</code>, как выше.</li>
+<li><strong>Сайт не открывается сразу после подключения:</strong> у браузера свой кэш DNS. При подключении и отключении Rosetun очищает кэш DNS Windows, но не браузерный. Перезапустите браузер.</li>
+<li><strong>Другой VPN-клиент</strong> в режиме TUN может мешать запуску туннеля. Отключите его и повторите подключение. Программа изменения трафика (например, zapret) может ломать соединение с сервером: исключите адреса серверов в её настройках.</li>
+<li><strong>Linux: нет доступа к службе Rosetun.</strong> Вашей учётной записи ещё нет в группе <code>rosetun</code>, или сеанс начался до вступления в неё. Нажмите <strong>Добавить меня</strong> или выполните <code>sudo usermod -aG rosetun &quot;$USER&quot;</code> и перезагрузите компьютер.</li>
+<li><strong>Linux: Rosetun говорит, что другая программа изменила правила брандмауэра.</strong> <code>nftables.service</code> и firewalld могут начинать с <code>flush ruleset</code>, а это удаляет таблицу Rosetun. Служба возвращает её за секунды, и <code>rosetun status</code> говорит когда. Если там <code>firewall rules: cannot be checked or put back</code>, считайте сеть незащищённой и переподключитесь.</li>
+<li><strong>Linux: программы KDE не используют прокси.</strong> Проверьте, что в <code>~/.config/kioslaverc</code> в разделе <code>[Proxy Settings]</code> стоит <code>ProxyType=1</code>, а <code>XDG_CURRENT_DESKTOP</code> содержит <code>KDE</code>; иначе Rosetun показывает адрес, который нужно указать самому. Программы KDE перечитывают настройки по сигналу, Chromium следит за файлом, остальные программы перезапустите. Команда <code>rosetun</code> эти настройки никогда не меняет.</li>
+<li><strong>Linux: без подключения подписки под Lockdown не обновляются.</strong> Rosetun запущен вне сеанса рабочего стола, окно об этом говорит. Запустите его заново с рабочего стола.</li>
+<li><strong>Фрагментация TLS</strong> работает только для серверов, которые ведёт Xray (VLESS, VMess, Trojan, Shadowsocks), и помогает не у всех операторов. Hysteria2 и серверы HTTP или SOCKS5 подключаются без неё, а при выборе <strong>Без Xray</strong> она недоступна.</li>
+<li><strong>Нет подключения к сети</strong> значит, что у системы нет работающей сети, и сервер тут ни при чём. Подключение сразу заканчивается этим сообщением. Во время подключения короткая смена сети не обрывает сеанс; при включённом <strong>Переподключаться при обрыве</strong> Rosetun ждёт сеть и подключается, когда она вернётся, а kill switch всё это время держит интернет закрытым.</li>
+<li><strong>Wi-Fi со входом через страницу</strong> (гостиница, кафе) или <strong>неверные часы</strong> при включённом <strong>Lockdown</strong>: без туннеля страница входа не откроется, а система не сможет выставить время, и без них не поднимется туннель. Выключите Lockdown на время, войдите или поправьте часы, подключитесь и включите Lockdown снова.</li>
+<li><strong>Lockdown оставляет без сети виртуальные машины.</strong> Подтверждено для Hyper-V на Windows, и, скорее всего, то же с WSL2, Docker Desktop, «Песочницей Windows» и мобильным хот-спотом; на Linux виртуальные машины и контейнеры на этом компьютере остаются без сети, пока нет подключения Rosetun. Выключите Lockdown, пока они нужны.</li>
+<li><strong>Windows: окно не открывается или рисуется с ошибками после обновления:</strong> закройте Rosetun через трей и запустите из PowerShell: <code>$env:ROSETUN_RENDERER=&#x27;glow&#x27;; &amp; &#x27;C:\Program Files\Rosetun\rosetun-gui.exe&#x27;</code> (при необходимости исправьте путь). Нажмите <strong>Собрать отчёт</strong> и пришлите отчёт с описанием проблемы.</li>
+<li><strong>Windows: установка останавливается из-за того, что папку в <code>C:\Program Files\Rosetun</code> могут менять обычные пользователи.</strong> Обычно это бывает после кнопки <strong>Продолжить</strong> в Проводнике: она навсегда даёт вашей учётной записи доступ к защищённой папке Rosetun, например <code>data</code>. Удалите Rosetun и установите заново. Журнал службы берите через <strong>Собрать отчёт</strong> или из редактора, запущенного от имени администратора.</li>
+</ul>
+<p><strong>Сообщить о проблеме</strong> можно в <a href="https://github.com/eoftgge/rosetun/issues">Issues</a>, с шагами и текстом ошибки. На Windows приложите <strong>Собрать отчёт</strong>. На Linux приложите вывод команд ниже, сначала убрав адреса, ссылки и имена: в отличие от отчёта, эти журналы не очищены.</p>
+<pre><code>rosetun status
+sudo journalctl -u rosetun-helper -b --no-pager
+cat ~/.config/rosetun/rosetun-gui.log</code></pre>
+<p>Об уязвимостях сообщайте приватно: см. <a href="https://github.com/eoftgge/rosetun/blob/master/SECURITY.md">SECURITY.md</a>.</p>
+</section>
+                <nav class="doc-pager" aria-label="Назад и вперёд"><a rel="prev" href="../privacy/">← Приватность и сетевые обращения</a><a rel="next" href="../how-it-works/">Как это устроено →</a></nav>
+            </div>
+        </main>
+        <footer class="wrap"><span>Rosetun</span><a href="https://github.com/eoftgge/rosetun">GitHub</a><a href="../../../ru/docs/licenses/">Лицензии</a></footer>
+    </body>
+</html>

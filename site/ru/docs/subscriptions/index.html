@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="ru">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta name="description" content="Подписки и серверы · Rosetun" />
+        <meta name="referrer" content="no-referrer" />
+        <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'" />
+        <title>Подписки и серверы · Rosetun</title>
+        <link rel="stylesheet" href="../../../assets/site.css" />
+        <link rel="icon" href="../../../assets/rose.svg" type="image/svg+xml" />
+        <link rel="alternate" hreflang="ru" href="../../../ru/docs/subscriptions/" />
+        <link rel="alternate" hreflang="en" href="../../../en/docs/subscriptions/" />
+    </head>
+    <body>
+        <a class="skip" href="#main">К содержимому</a>
+        <header class="wrap">
+            <a class="brand" href="../../../ru/"><img src="../../../assets/rose.svg" width="40" height="40" alt="" />Rosetun</a>
+            <nav aria-label="Навигация">
+                <a href="../../../ru/docs/">Документация</a>
+                <a href="../../../ru/help/">Помощь</a>
+                <a href="../../../ru/providers/">Для провайдеров</a>
+                <a href="../../../en/docs/subscriptions/" lang="en" hreflang="en">English</a>
+            </nav>
+        </header>
+        <main id="main" class="wrap">
+            <div class="prose docs">
+                <h1>Подписки и серверы</h1>
+                <!-- docs-version --><p class="note">Стабильная версия для Windows: 0.4. Linux и перечисленные ниже изменения доступны с предварительной 0.5; стабильная 0.5 ещё не вышла. Точное поведение 0.4 описано в <a href="https://github.com/eoftgge/rosetun/blob/v0.4.0/README.ru.md">документации 0.4</a>.</p><!-- /docs-version -->
+                <nav aria-label="На этой странице"><a href="#details">Подписки и серверы</a></nav>
+                <section id="details">
+<p class="note">С 0.5: собственные прокси HTTP/HTTPS/SOCKS5 и фрагментация TLS.</p>
+<ul>
+<li>Подписки провайдеров: списки ссылок в обычном виде или в base64, Xray JSON и sing-box JSON. Подписку можно добавить по ссылке, по QR-коду (из файла, из буфера обмена или с части экрана на Windows, из буфера обмена на Linux) или ссылкой <code>rosetun://</code> со страницы провайдера.</li>
+<li>Собственные прокси HTTP, HTTPS и SOCKS5 на вкладке <strong>Прокси</strong> окна добавления.</li>
+<li><strong>Отправлять ID устройства</strong> (HWID) включено по умолчанию: панели с лимитом устройств без него отвечают «подписка не найдена». Выключается для каждой подписки в окне добавления (<code>--no-hwid</code> в CLI). См. <a href="../privacy/">Приватность и сетевые обращения</a>.</li>
+<li>Серверы VLESS, VMess, Trojan, Shadowsocks и Hysteria2 (обфускация Salamander и смена портов); транспорты TCP, WebSocket, gRPC и HTTPUpgrade для протоколов на TCP, а также XHTTP (SplitHTTP) через Xray; режимы без шифрования транспорта, TLS и Reality. Hysteria2 работает по QUIC поверх UDP. Пока не поддерживаются, такие серверы пропускаются: XHTTP с отдельным сервером загрузки, транспорты mKCP, QUIC и HTTP/2, шифрование VLESS, плагины Shadowsocks и другие протоколы.</li>
+<li><strong>Подключение через Xray</strong> (Настройки → Дополнительно): <strong>Автоматически</strong> (по умолчанию): Xray для серверов VLESS с REALITY и для XHTTP, sing-box для остальных; <strong>Без Xray</strong>: sing-box сам соединяется со всеми серверами; <strong>Xray для всех серверов</strong>: через Xray идут все поддерживаемые серверы, кроме Hysteria2. В списке серверов отмечены те, что идут через Xray.</li>
+<li><strong>Фрагментация TLS</strong> (Настройки → Дополнительно): дробит первые пакеты к серверу, что помогает, если оператор режет подключение по первому пакету. Серверы, которые ведёт Xray, при включённой настройке идут через него; на экране подключения видно, применяется ли она к текущему серверу.</li>
+<li><strong>DNS через туннель</strong> с настраиваемым DNS-over-HTTPS-резолвером.</li>
+<li><strong>Проверки серверов:</strong> пинг TCP (время соединения) и проверка URL с запросом через каждый сервер, в том числе при подключённом туннеле, через ту же цепочку, что и подключение.</li>
+</ul>
+</section>
+                <nav class="doc-pager" aria-label="Назад и вперёд"><a rel="prev" href="../local-network/">← Локальная сеть</a><a rel="next" href="../guarantees/">Гарантии защиты →</a></nav>
+            </div>
+        </main>
+        <footer class="wrap"><span>Rosetun</span><a href="https://github.com/eoftgge/rosetun">GitHub</a><a href="../../../ru/docs/licenses/">Лицензии</a></footer>
+    </body>
+</html>

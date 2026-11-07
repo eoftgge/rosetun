@@ -89,6 +89,7 @@ class SiteChecks(unittest.TestCase):
             css.write_text(original_css + 'body{background:url(https://example.com/image.png)}', encoding='utf-8')
             with self.assertRaises(AssertionError):
                 check(output, rendered=True)
+
             css.write_text(original_css, encoding='utf-8')
             svg = output / 'assets/rose.svg'
             original_svg = svg.read_text(encoding='utf-8')
@@ -99,6 +100,38 @@ class SiteChecks(unittest.TestCase):
             page.unlink()
             with self.assertRaises(AssertionError):
                 check(output, rendered=True)
+
+    def test_documentation_preview_banner_tracks_the_stable_version(self):
+        for version, preview in (('0.4.0', True), ('0.5.0', False)):
+            release = copy.deepcopy(self.release)
+            release['tag_name'] = 'v' + version
+            for asset in release['assets']:
+                asset['name'] = asset['name'].replace('1.2.3', version)
+                asset['browser_download_url'] = asset['browser_download_url'].replace('1.2.3', version)
+            with tempfile.TemporaryDirectory() as directory:
+                output = Path(directory) / 'site'
+                render(Path('site'), output, replacements(release, self.sums.replace('1.2.3', version)))
+                for lang, warning in (('en', '0.5 is not stable yet'), ('ru', 'стабильная 0.5 ещё не вышла')):
+                    page = (output / lang / 'docs/index.html').read_text(encoding='utf-8')
+                    self.assertEqual(warning in page, preview)
+                    self.assertNotIn('docs-version', page)
+
+    def test_documentation_rejects_broken_navigation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / 'site'
+            render(Path('site'), output, replacements(self.release, self.sums))
+            page = output / 'en/docs/install/index.html'
+            original = page.read_text(encoding='utf-8')
+            for old, new in (
+                ('rel="next"', 'rel="other"'),
+                ('../../../ru/docs/install/', '../../../ru/docs/rules/'),
+                ('aria-label="On this page"', 'aria-label="Other"'),
+                ('../../../assets/rose.svg', 'https://example.com/rose.svg'),
+            ):
+                with self.subTest(old=old):
+                    page.write_text(original.replace(old, new), encoding='utf-8')
+                    with self.assertRaises(AssertionError):
+                        check(output, rendered=True)
 
 
 if __name__ == '__main__':

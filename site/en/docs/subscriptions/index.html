@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta name="description" content="Subscriptions and servers · Rosetun" />
+        <meta name="referrer" content="no-referrer" />
+        <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'" />
+        <title>Subscriptions and servers · Rosetun</title>
+        <link rel="stylesheet" href="../../../assets/site.css" />
+        <link rel="icon" href="../../../assets/rose.svg" type="image/svg+xml" />
+        <link rel="alternate" hreflang="ru" href="../../../ru/docs/subscriptions/" />
+        <link rel="alternate" hreflang="en" href="../../../en/docs/subscriptions/" />
+    </head>
+    <body>
+        <a class="skip" href="#main">Skip to content</a>
+        <header class="wrap">
+            <a class="brand" href="../../../en/"><img src="../../../assets/rose.svg" width="40" height="40" alt="" />Rosetun</a>
+            <nav aria-label="Navigation">
+                <a href="../../../en/docs/">Documentation</a>
+                <a href="../../../en/help/">Help</a>
+                <a href="../../../en/providers/">For providers</a>
+                <a href="../../../ru/docs/subscriptions/" lang="ru" hreflang="ru">Русский</a>
+            </nav>
+        </header>
+        <main id="main" class="wrap">
+            <div class="prose docs">
+                <h1>Subscriptions and servers</h1>
+                <!-- docs-version --><p class="note">Stable Windows reference: 0.4. Linux and additions listed below are preview features since 0.5; 0.5 is not stable yet. For the exact 0.4 behavior, see the <a href="https://github.com/eoftgge/rosetun/blob/v0.4.0/README.md">0.4 reference</a>.</p><!-- /docs-version -->
+                <nav aria-label="On this page"><a href="#details">Subscriptions and servers</a></nav>
+                <section id="details">
+<p class="note">Since 0.5: external HTTP/HTTPS/SOCKS5 proxies and TLS fragmentation.</p>
+<ul>
+<li>Provider subscriptions in plain or base64-encoded link lists, Xray JSON and sing-box JSON. Add one from its link, from a QR code (an image file, the clipboard or a part of the screen on Windows, the clipboard on Linux) or from a provider&#x27;s <code>rosetun://</code> link.</li>
+<li>HTTP, HTTPS and SOCKS5 proxies of your own, on the <strong>Proxy</strong> tab of the add dialog.</li>
+<li><strong>Send device ID</strong> (HWID) is on by default: panels that limit devices answer &quot;subscription not found&quot; without it. Turn it off for a subscription in the add dialog (<code>--no-hwid</code> in the CLI). See <a href="../privacy/">Privacy and network access</a>.</li>
+<li>VLESS, VMess, Trojan, Shadowsocks and Hysteria2 nodes (Salamander obfuscation and port hopping); TCP, WebSocket, gRPC and HTTPUpgrade transports for TCP-based nodes, and XHTTP (SplitHTTP) through Xray; plain, TLS and Reality security modes. Hysteria2 uses QUIC over UDP. Not supported yet, so such servers are skipped: XHTTP with a separate download server, mKCP, QUIC and HTTP/2 transports, VLESS encryption, Shadowsocks plugins and other protocols.</li>
+<li><strong>Connection through Xray</strong> (Settings → Advanced): <strong>Automatically</strong> (default) uses Xray for VLESS servers with REALITY and for XHTTP, and sing-box for the rest; <strong>Without Xray</strong> connects to every server with sing-box alone; <strong>Xray for all servers</strong> sends every supported server except Hysteria2 through Xray. The server list marks servers that go through Xray.</li>
+<li><strong>TLS fragmentation</strong> (Settings → Advanced): splits the first packets to the server, which helps when a provider cuts the connection by its first packet. Servers that Xray carries go through Xray while it is on; the connection screen says whether it applies to the current server.</li>
+<li><strong>DNS through the tunnel</strong> via a configurable DNS-over-HTTPS resolver.</li>
+<li><strong>Server checks:</strong> a TCP ping and a URL test that sends a request through each server, even while connected, through the same chain as the connection.</li>
+</ul>
+</section>
+                <nav class="doc-pager" aria-label="Previous and next"><a rel="prev" href="../local-network/">← Local network</a><a rel="next" href="../guarantees/">Protection guarantees →</a></nav>
+            </div>
+        </main>
+        <footer class="wrap"><span>Rosetun</span><a href="https://github.com/eoftgge/rosetun">GitHub</a><a href="../../../en/docs/licenses/">Licenses</a></footer>
+    </body>
+</html>

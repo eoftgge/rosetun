@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="ru">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta name="description" content="Как это устроено · Rosetun" />
+        <meta name="referrer" content="no-referrer" />
+        <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'" />
+        <title>Как это устроено · Rosetun</title>
+        <link rel="stylesheet" href="../../../assets/site.css" />
+        <link rel="icon" href="../../../assets/rose.svg" type="image/svg+xml" />
+        <link rel="alternate" hreflang="ru" href="../../../ru/docs/how-it-works/" />
+        <link rel="alternate" hreflang="en" href="../../../en/docs/how-it-works/" />
+    </head>
+    <body>
+        <a class="skip" href="#main">К содержимому</a>
+        <header class="wrap">
+            <a class="brand" href="../../../ru/"><img src="../../../assets/rose.svg" width="40" height="40" alt="" />Rosetun</a>
+            <nav aria-label="Навигация">
+                <a href="../../../ru/docs/">Документация</a>
+                <a href="../../../ru/help/">Помощь</a>
+                <a href="../../../ru/providers/">Для провайдеров</a>
+                <a href="../../../en/docs/how-it-works/" lang="en" hreflang="en">English</a>
+            </nav>
+        </header>
+        <main id="main" class="wrap">
+            <div class="prose docs">
+                <h1>Как это устроено</h1>
+                <!-- docs-version --><p class="note">Стабильная версия для Windows: 0.4. Linux и перечисленные ниже изменения доступны с предварительной 0.5; стабильная 0.5 ещё не вышла. Точное поведение 0.4 описано в <a href="https://github.com/eoftgge/rosetun/blob/v0.4.0/README.ru.md">документации 0.4</a>.</p><!-- /docs-version -->
+                <nav aria-label="На этой странице"><a href="#о-rosetun">О Rosetun</a><a href="#безопасность">Безопасность</a></nav>
+                <p class="note">С 0.5: удержание при обновлении, системный прокси и все подробности устройства Linux.</p>
+<pre><code>Windows
+GUI, CLI (пользователь) ──именованный канал──► Служба Rosetun (SYSTEM) ──► sing-box.exe ──► TUN
+                                                    │                           │
+                                                    │                           └──loopback──► xray.exe (часть серверов)
+                                                    └── WFP: kill switch, замок DNS, Lockdown
+
+Linux
+GUI, CLI (группа rosetun) ──сокет──► rosetun-helper (root) ──► sing-box (rosetun-engine) ──► TUN
+                                     │                            │
+                                     │                            └──loopback──► xray (rosetun-engine)
+                                     └── nftables + cgroup: kill switch, замок DNS, Lockdown</code></pre>
+<p>Служба (<code>rosetun-helper-privileged</code>) запускает sing-box, который держит туннель, правила и DNS. Для серверов, которые идут через Xray, sing-box передаёт соединение по loopback в Xray; его тоже запускает служба, и он соединяется с сервером. Защитой владеет служба, поэтому закрытие окна её не снимает. В режиме прокси TUN нет: ядро слушает как локальный прокси.</p>
+<p><strong>Windows.</strong> Kill switch и замок DNS это фильтры WFP в динамическом сеансе службы, поэтому Windows снимает их, если служба остановилась или упала (fail-open). Это нужно, чтобы компьютер не остался без сети навсегда. Служба запускает sing-box из своей копии <code>data\engines\sing-box.exe</code>, которую могут открыть только SYSTEM и администраторы. Во время подключения sing-box ставит в брандмауэре разрешение для своего исполняемого файла, которое блокировки Rosetun не перебивают, поэтому никакая другая учётная запись не должна запускать этот файл. Копия обновляется и сверяется по SHA-256 при запуске службы; если сделать её нельзя, подключение не удаётся, а установленный <code>sing-box.exe</code> не запускается.</p>
+<p>При включённом <strong>Lockdown</strong> Rosetun держит ещё и постоянные фильтры WFP в своём подуровне, которые закрывают всё мимо туннеля. Windows сохраняет их при падении службы и перезагрузке, а служба фильтрации (BFE) восстанавливает их при загрузке; время до её запуска закрывают фильтры загрузки (fail-closed). Снимаются они только выключением Lockdown, командой <code>rosetun reset-firewall</code> или удалением Rosetun. Удержание после обновления это тот же набор с меткой.</p>
+<p><strong>Linux.</strong> Брандмауэр это одна таблица nftables, <code>inet rosetun</code>, записанная одной транзакцией. Служба работает в cgroup с двумя листьями, <code>helper</code> и <code>engines</code>, и таблица разрешает по cgroup, а не по пути к программе или учётной записи. Ядра работают под <code>rosetun-engine</code>, у которой нет входа, домашней папки и других групп, и только с <code>CAP_NET_ADMIN</code>, <code>CAP_NET_RAW</code> и <code>CAP_NET_BIND_SERVICE</code>. Служба запускает их только из файлов, принадлежащих root. Правило polkit разрешает этой учётной записи задавать DNS интерфейса в systemd-resolved, чтобы системный DNS шёл за туннелем.</p>
+<p>Таблица переживает службу, поэтому падение оставляет её на месте, а перезапущенная служба держит сеть закрытой. Перезагрузку компьютера она не переживает: это делает запись Lockdown в <code>/var/lib/rosetun/lockdown</code>, а <code>rosetun-lockdown.service</code> снова записывает таблицу до появления любой сети. Приложение и команда <code>rosetun</code> выходят под Lockdown только из своих областей systemd (scope).</p>
+<p><strong>Что Lockdown оставляет открытым.</strong> Ядра проходят, только когда их запускает служба, а приложение Rosetun и команда <code>rosetun</code> только по TCP и DNS и только без подключения, но программа под вашей учётной записью всё равно может выйти через команду <code>rosetun</code>, как и многими другими путями.</p>
+<h2 id="о-rosetun">О Rosetun</h2>
+<p>Rosetun: VPN-клиент для Windows и Linux. sing-box держит туннель, правила и DNS; для серверов VLESS + REALITY соединение с сервером ведёт Xray за sing-box. Системная служба держит kill switch и замок DNS в брандмауэре. Правила разделяют трафик по программам, сайтам и IP-адресам, а подписки провайдеров поставляют серверы.</p>
+<p><strong>Молодой проект:</strong> его ведёт один разработчик с помощью ИИ-агентов, пользователей пока мало. Сообщайте о проблемах в <a href="https://github.com/eoftgge/rosetun/issues">Issues</a>.</p>
+<h2 id="безопасность">Безопасность</h2>
+<p>Об уязвимостях сообщайте приватно, см. <a href="https://github.com/eoftgge/rosetun/blob/master/SECURITY.md">SECURITY.md</a>.</p>
+                <nav class="doc-pager" aria-label="Назад и вперёд"><a rel="prev" href="../troubleshooting/">← Устранение неполадок</a><a rel="next" href="../build/">Сборка из исходников →</a></nav>
+            </div>
+        </main>
+        <footer class="wrap"><span>Rosetun</span><a href="https://github.com/eoftgge/rosetun">GitHub</a><a href="../../../ru/docs/licenses/">Лицензии</a></footer>
+    </body>
+</html>

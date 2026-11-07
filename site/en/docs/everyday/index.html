@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta name="description" content="Everyday use · Rosetun" />
+        <meta name="referrer" content="no-referrer" />
+        <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'" />
+        <title>Everyday use · Rosetun</title>
+        <link rel="stylesheet" href="../../../assets/site.css" />
+        <link rel="icon" href="../../../assets/rose.svg" type="image/svg+xml" />
+        <link rel="alternate" hreflang="ru" href="../../../ru/docs/everyday/" />
+        <link rel="alternate" hreflang="en" href="../../../en/docs/everyday/" />
+    </head>
+    <body>
+        <a class="skip" href="#main">Skip to content</a>
+        <header class="wrap">
+            <a class="brand" href="../../../en/"><img src="../../../assets/rose.svg" width="40" height="40" alt="" />Rosetun</a>
+            <nav aria-label="Navigation">
+                <a href="../../../en/docs/">Documentation</a>
+                <a href="../../../en/help/">Help</a>
+                <a href="../../../en/providers/">For providers</a>
+                <a href="../../../ru/docs/everyday/" lang="ru" hreflang="ru">Русский</a>
+            </nav>
+        </header>
+        <main id="main" class="wrap">
+            <div class="prose docs">
+                <h1>Everyday use</h1>
+                <!-- docs-version --><p class="note">Stable Windows reference: 0.4. Linux and additions listed below are preview features since 0.5; 0.5 is not stable yet. For the exact 0.4 behavior, see the <a href="https://github.com/eoftgge/rosetun/blob/v0.4.0/README.md">0.4 reference</a>.</p><!-- /docs-version -->
+                <nav aria-label="On this page"><a href="#details">Everyday use</a></nav>
+                <section id="details">
+<p class="note">Since 0.5: scheduled sign-in task on Windows, names and input in other scripts, and all Linux behavior.</p>
+<ul>
+<li><strong>Start at sign-in:</strong> on Windows a scheduled task, on Linux an autostart entry in your home folder. The option is in Settings.</li>
+<li>The <strong>tray icon</strong> shows the state by shape: the rose is in colour only while connected; otherwise it is grey with a badge for connecting, traffic blocked, a failed connection and the service not running. Its menu shows the state, connects or disconnects, reconnects, switches between your five most recent servers and opens the window.</li>
+<li><strong>Notifications</strong> say when the VPN drops, comes back or cannot connect; they name no server, since they can show on the lock screen. Turn them off in Settings › General.</li>
+<li><strong>Quitting</strong> Rosetun while connected asks whether to disconnect or keep the VPN, which the service holds without the window; the answer can be remembered (Settings › General › <strong>When quitting Rosetun</strong>).</li>
+<li><strong>New versions</strong> are offered on the connection screen, in the tray menu and by one notification per version, until you update or skip that version. Nothing is downloaded or installed by itself.</li>
+<li>English and Russian interfaces, six colour themes and <strong>Reduce motion</strong>. Server names and your own input can be in other scripts, drawn with system fonts: the Windows fonts folder, or fontconfig on Linux. Right-to-left text shows without shaping.</li>
+<li><strong>System check</strong> (Settings → Service and log) looks for a wrong clock, other VPN clients or their adapters and a network that replaces DNS answers, and on Windows for a system proxy and for Zapret or WinDivert intercepting packets. It runs by itself after a failed connection and changes nothing.</li>
+<li><strong>Collect report</strong> (Settings → Service and log, Windows) saves one text file for a bug report: versions, settings without secrets, the connection state, the system check and the logs. IP addresses, links, domains, email addresses, keys and passwords, server, subscription, list and rule set names, and your account name are removed.</li>
+<li>Command line: <code>rosetun status</code>, <code>temporary</code>, <code>connect</code>, <code>apply</code>, <code>probe</code>, <code>delay</code>, <code>exits</code>, <code>select</code>, <code>sub add|update|list|remove</code>, <code>nodes</code>, <code>config</code>, <code>connections</code>, <code>connections close</code>, <code>xray auto|off|always</code>, <code>lan on|off</code>, <code>lockdown on|off</code>, <code>reconnect</code>, <code>open-network</code>, <code>reset-firewall</code>, <code>disconnect</code>, <code>shutdown</code>.</li>
+</ul>
+</section>
+                <nav class="doc-pager" aria-label="Previous and next"><a rel="prev" href="../linux/">← Linux support</a><a rel="next" href="../provider-links/">Links for providers →</a></nav>
+            </div>
+        </main>
+        <footer class="wrap"><span>Rosetun</span><a href="https://github.com/eoftgge/rosetun">GitHub</a><a href="../../../en/docs/licenses/">Licenses</a></footer>
+    </body>
+</html>

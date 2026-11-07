@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta name="description" content="TUN and System proxy · Rosetun" />
+        <meta name="referrer" content="no-referrer" />
+        <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'" />
+        <title>TUN and System proxy · Rosetun</title>
+        <link rel="stylesheet" href="../../../assets/site.css" />
+        <link rel="icon" href="../../../assets/rose.svg" type="image/svg+xml" />
+        <link rel="alternate" hreflang="ru" href="../../../ru/docs/modes/" />
+        <link rel="alternate" hreflang="en" href="../../../en/docs/modes/" />
+    </head>
+    <body>
+        <a class="skip" href="#main">Skip to content</a>
+        <header class="wrap">
+            <a class="brand" href="../../../en/"><img src="../../../assets/rose.svg" width="40" height="40" alt="" />Rosetun</a>
+            <nav aria-label="Navigation">
+                <a href="../../../en/docs/">Documentation</a>
+                <a href="../../../en/help/">Help</a>
+                <a href="../../../en/providers/">For providers</a>
+                <a href="../../../ru/docs/modes/" lang="ru" hreflang="ru">Русский</a>
+            </nav>
+        </header>
+        <main id="main" class="wrap">
+            <div class="prose docs">
+                <h1>TUN and System proxy</h1>
+                <!-- docs-version --><p class="note">Stable Windows reference: 0.4. Linux and additions listed below are preview features since 0.5; 0.5 is not stable yet. For the exact 0.4 behavior, see the <a href="https://github.com/eoftgge/rosetun/blob/v0.4.0/README.md">0.4 reference</a>.</p><!-- /docs-version -->
+                <nav aria-label="On this page"><a href="#details">TUN and System proxy</a></nav>
+                <section id="details">
+<p class="note">Since 0.5: this connection mode and all proxy behavior below.</p>
+<p><strong>Connection mode</strong> (Settings → Connection) chooses how traffic reaches the VPN. <strong>TUN</strong>, the default, takes all of this computer&#x27;s traffic. <strong>System proxy</strong> starts a local proxy (HTTP and SOCKS5 on one port, 10808 unless you change it) and points your desktop&#x27;s proxy settings at it, for when TUN gets in the way of another VPN, an anti-cheat or an antivirus, or when you only need the browser.</p>
+<ul>
+<li><strong>What goes through the VPN:</strong> only programs that use the system proxy, which means browsers and most applications. Rules by site, address, list and program work as in TUN.</li>
+<li><strong>What does not:</strong> programs that ignore the system proxy, such as games, many console programs and Windows services (WinHTTP is left as it is). Without the kill switch they go direct, and so does their DNS: this mode has no DNS lock, since it has no adapter. Point console programs at the proxy yourself (<code>curl -x http://127.0.0.1:10808 ...</code>); Rosetun does not set <code>http_proxy</code> and other variables, which running programs would not read anyway.</li>
+<li><strong>Kill switch</strong> here is strict: only Rosetun&#x27;s engine and this computer&#x27;s loopback reach the network, while you are connected too, so everything that does not use the proxy stays without network. Off by default, and it asks before it goes on.</li>
+<li><strong>Access from the local network</strong> (off by default) lets a phone or a TV on your network use the proxy: Settings shows the address to enter. On Windows only the networks this computer&#x27;s adapters are connected to get in, without the VPN servers&#x27; own addresses, for as long as the session lasts. On Linux the proxy listens only on the private addresses of physical interfaces. Under <strong>Lockdown</strong> it needs <strong>Local network</strong> too, and otherwise stays closed to other devices.</li>
+<li><strong>Your own settings come back:</strong> what you had before, an automatic configuration script or a proxy of your own included, is saved next to the configuration and restored when you disconnect, quit or change the mode, and at the next start after a crash or a power cut. If you changed the proxy yourself meanwhile, Rosetun leaves your change alone.</li>
+<li>The <code>rosetun</code> command starts the proxy but does not change the desktop&#x27;s settings: only the app does that.</li>
+</ul>
+</section>
+                <nav class="doc-pager" aria-label="Previous and next"><a rel="prev" href="../protection/">← Connection and protection</a><a rel="next" href="../rules/">Rules →</a></nav>
+            </div>
+        </main>
+        <footer class="wrap"><span>Rosetun</span><a href="https://github.com/eoftgge/rosetun">GitHub</a><a href="../../../en/docs/licenses/">Licenses</a></footer>
+    </body>
+</html>

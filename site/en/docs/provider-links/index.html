@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta name="description" content="Links for providers · Rosetun" />
+        <meta name="referrer" content="no-referrer" />
+        <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'" />
+        <title>Links for providers · Rosetun</title>
+        <link rel="stylesheet" href="../../../assets/site.css" />
+        <link rel="icon" href="../../../assets/rose.svg" type="image/svg+xml" />
+        <link rel="alternate" hreflang="ru" href="../../../ru/docs/provider-links/" />
+        <link rel="alternate" hreflang="en" href="../../../en/docs/provider-links/" />
+    </head>
+    <body>
+        <a class="skip" href="#main">Skip to content</a>
+        <header class="wrap">
+            <a class="brand" href="../../../en/"><img src="../../../assets/rose.svg" width="40" height="40" alt="" />Rosetun</a>
+            <nav aria-label="Navigation">
+                <a href="../../../en/docs/">Documentation</a>
+                <a href="../../../en/help/">Help</a>
+                <a href="../../../en/providers/">For providers</a>
+                <a href="../../../ru/docs/provider-links/" lang="ru" hreflang="ru">Русский</a>
+            </nav>
+        </header>
+        <main id="main" class="wrap">
+            <div class="prose docs">
+                <h1>Links for providers</h1>
+                <!-- docs-version --><p class="note">Stable Windows reference: 0.4. Linux and additions listed below are preview features since 0.5; 0.5 is not stable yet. For the exact 0.4 behavior, see the <a href="https://github.com/eoftgge/rosetun/blob/v0.4.0/README.md">0.4 reference</a>.</p><!-- /docs-version -->
+                <nav aria-label="On this page"><a href="#details">Links for providers</a></nav>
+                <section id="details">
+<p class="note">Since 0.5: Debian scheme registration and Linux socket.</p>
+<p>A button on a provider&#x27;s page can open Rosetun with a subscription filled in: <code>rosetun://add/&lt;subscription link&gt;</code>, with the link raw (<code>rosetun://add/https://example.com/sub</code>) or percent-encoded (<code>rosetun://add/https%3A%2F%2Fexample.com%2Fsub</code>). An optional <code>#name</code> at the end suggests the subscription&#x27;s name (<code>rosetun://add/https://example.com/sub#Example</code>). Rosetun only shows the <strong>Add subscription</strong> dialog with the link, its name and the provider&#x27;s host; nothing is downloaded or added until you click <strong>Add</strong>. A link to a subscription you already have only brings it into view.</p>
+<p>The Windows installer registers the scheme for all users. The Debian package registers it through its <code>.desktop</code> file (<code>x-scheme-handler/rosetun</code>). A running Rosetun takes the link from a later start through a channel only your account can open: a named pipe on Windows, a socket in <code>$XDG_RUNTIME_DIR</code> on Linux.</p>
+<p>More for providers, with response headers: <a href="https://eoftgge.github.io/rosetun/en/providers/">the site&#x27;s page</a>.</p>
+</section>
+                <nav class="doc-pager" aria-label="Previous and next"><a rel="prev" href="../everyday/">← Everyday use</a><a rel="next" href="../licenses/">Licenses →</a></nav>
+            </div>
+        </main>
+        <footer class="wrap"><span>Rosetun</span><a href="https://github.com/eoftgge/rosetun">GitHub</a><a href="../../../en/docs/licenses/">Licenses</a></footer>
+    </body>
+</html>

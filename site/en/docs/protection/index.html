@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta name="description" content="Connection and protection · Rosetun" />
+        <meta name="referrer" content="no-referrer" />
+        <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'" />
+        <title>Connection and protection · Rosetun</title>
+        <link rel="stylesheet" href="../../../assets/site.css" />
+        <link rel="icon" href="../../../assets/rose.svg" type="image/svg+xml" />
+        <link rel="alternate" hreflang="ru" href="../../../ru/docs/protection/" />
+        <link rel="alternate" hreflang="en" href="../../../en/docs/protection/" />
+    </head>
+    <body>
+        <a class="skip" href="#main">Skip to content</a>
+        <header class="wrap">
+            <a class="brand" href="../../../en/"><img src="../../../assets/rose.svg" width="40" height="40" alt="" />Rosetun</a>
+            <nav aria-label="Navigation">
+                <a href="../../../en/docs/">Documentation</a>
+                <a href="../../../en/help/">Help</a>
+                <a href="../../../en/providers/">For providers</a>
+                <a href="../../../ru/docs/protection/" lang="ru" hreflang="ru">Русский</a>
+            </nav>
+        </header>
+        <main id="main" class="wrap">
+            <div class="prose docs">
+                <h1>Connection and protection</h1>
+                <!-- docs-version --><p class="note">Stable Windows reference: 0.4. Linux and additions listed below are preview features since 0.5; 0.5 is not stable yet. For the exact 0.4 behavior, see the <a href="https://github.com/eoftgge/rosetun/blob/v0.4.0/README.md">0.4 reference</a>.</p><!-- /docs-version -->
+                <nav aria-label="On this page"><a href="#details">Connection and protection</a></nav>
+                <section id="details">
+<p class="note">Since 0.5: protection status, Reconnect, update hold, Linux crash hold and firewall repair.</p>
+<ul>
+<li>A <strong>Kill switch</strong> blocks traffic when the tunnel drops. A <strong>DNS lock</strong> keeps system DNS from leaving outside the tunnel when the kill switch is off. It depends on the firewall: if it cannot be set, Rosetun still connects and says so.</li>
+<li><em>Experimental:</em> <strong>Lockdown</strong> (Settings → Connection) closes the internet to everything outside the tunnel, also while disconnected, after a restart (from boot, before you sign in) and if the service stops or crashes. While it is on, the kill switch is always on. Incoming connections are blocked too, except from your network when <strong>Local network</strong> is on. Turning it on and off asks for confirmation and an administrator&#x27;s rights: UAC on Windows, polkit on Linux. <code>rosetun lockdown</code> needs a terminal opened as administrator, or <code>sudo</code>. The way out is under <a href="../troubleshooting/">Troubleshooting</a>.</li>
+<li><strong>The protection in place</strong> shows on the connection screen, in the tray tooltip and in <code>rosetun status</code>, which also says what is missing and whether it stays if the service crashes:
+<pre><code>protection: kill switch
+if the service crashes: this stays in place</code></pre></li>
+<li><strong>The network stays closed through an update</strong>, with the kill switch on, on both systems, and <strong>after a service crash</strong> on Linux only. See <a href="../guarantees/">Protection guarantees</a>.</li>
+<li>On Linux the service checks its firewall table every two seconds and puts it back if another program removed or changed it. <code>rosetun status</code> says when it did, or that it cannot.</li>
+<li><strong>Reconnect</strong> in the tray menu or <code>rosetun reconnect</code> restarts the tunnel to the same server under the same protection.</li>
+<li>Change the server, rules or DNS while connected: Rosetun restarts the tunnel in a second or two without disconnecting, and the kill switch keeps traffic blocked meanwhile.</li>
+<li><strong>Reconnect automatically</strong> after sleep, a network outage or an engine failure, with a DNS watchdog while connected.</li>
+</ul>
+</section>
+                <nav class="doc-pager" aria-label="Previous and next"><a rel="prev" href="../install/">← Install</a><a rel="next" href="../modes/">TUN and System proxy →</a></nav>
+            </div>
+        </main>
+        <footer class="wrap"><span>Rosetun</span><a href="https://github.com/eoftgge/rosetun">GitHub</a><a href="../../../en/docs/licenses/">Licenses</a></footer>
+    </body>
+</html>

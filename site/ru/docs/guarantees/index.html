@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="ru">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta name="description" content="Гарантии защиты · Rosetun" />
+        <meta name="referrer" content="no-referrer" />
+        <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'" />
+        <title>Гарантии защиты · Rosetun</title>
+        <link rel="stylesheet" href="../../../assets/site.css" />
+        <link rel="icon" href="../../../assets/rose.svg" type="image/svg+xml" />
+        <link rel="alternate" hreflang="ru" href="../../../ru/docs/guarantees/" />
+        <link rel="alternate" hreflang="en" href="../../../en/docs/guarantees/" />
+    </head>
+    <body>
+        <a class="skip" href="#main">К содержимому</a>
+        <header class="wrap">
+            <a class="brand" href="../../../ru/"><img src="../../../assets/rose.svg" width="40" height="40" alt="" />Rosetun</a>
+            <nav aria-label="Навигация">
+                <a href="../../../ru/docs/">Документация</a>
+                <a href="../../../ru/help/">Помощь</a>
+                <a href="../../../ru/providers/">Для провайдеров</a>
+                <a href="../../../en/docs/guarantees/" lang="en" hreflang="en">English</a>
+            </nav>
+        </header>
+        <main id="main" class="wrap">
+            <div class="prose docs">
+                <h1>Гарантии защиты</h1>
+                <!-- docs-version --><p class="note">Стабильная версия для Windows: 0.4. Linux и перечисленные ниже изменения доступны с предварительной 0.5; стабильная 0.5 ещё не вышла. Точное поведение 0.4 описано в <a href="https://github.com/eoftgge/rosetun/blob/v0.4.0/README.ru.md">документации 0.4</a>.</p><!-- /docs-version -->
+                <nav aria-label="На этой странице"><a href="#details">Обзор</a><a href="#windows">Windows</a><a href="#linux">Linux</a></nav>
+                <section id="details">
+<p class="note">С 0.5: эта матрица, включая удержание при обновлении, системный прокси и Linux. Она не описывает выпуск 0.4.</p>
+<p>Что остаётся закрытым мимо туннеля в каждый момент:</p>
+<ul>
+<li><strong>открыто:</strong> Rosetun ничего не закрывает. При подключении в TUN трафик программ всё равно идёт в туннель; но если туннель откажет, ничто не мешает ему пойти мимо.</li>
+<li><strong>DNS закрыт:</strong> системный DNS не выходит мимо туннеля, всё остальное открыто.</li>
+<li><strong>закрыто:</strong> мимо туннеля не выходит ничего. В режиме прокси ничего, кроме ядра и loopback.</li>
+<li><strong>удержание:</strong> закрыто, и остаётся закрытым, пока вы не подключитесь или не выполните <code>rosetun open-network</code>.</li>
+<li><strong>*</strong> прочитано из кода: сценария матрицы для этой клетки нет. У всех остальных клеток есть сценарий в <a href="https://github.com/eoftgge/rosetun/blob/master/tools/README.md"><code>tools/vm</code></a>; какие матрицы прогонялись для выпуска, сказано в его заметках.</li>
+</ul>
+<p>«Без защиты» значит, что kill switch выключен, а замка DNS нет: брандмауэр его не принял или у туннеля нет своего DNS. На Windows sing-box сам закрывает порт 53 мимо туннеля, пока работает, поэтому системный DNS может выйти только на время его перезапуска или после остановки службы. На Linux программа, которая сама выбирает физический интерфейс, может отправить DNS мимо туннеля и при подключении.</p>
+<h2 id="windows">Windows</h2>
+<table>
+<tr><th>Событие</th><th>Без защиты</th><th>Замок DNS</th><th>Kill switch</th><th>Lockdown</th><th>Прокси</th><th>Прокси, kill switch</th></tr>
+<tr><td>Отключено</td><td>открыто</td><td>открыто</td><td>открыто</td><td>закрыто</td><td>открыто</td><td>открыто*</td></tr>
+<tr><td>Подключено</td><td>открыто</td><td>DNS закрыт</td><td>закрыто</td><td>закрыто</td><td>открыто</td><td>закрыто</td></tr>
+<tr><td>Перезапуск ядра</td><td>открыто</td><td>DNS закрыт</td><td>закрыто</td><td>закрыто*</td><td>открыто*</td><td>закрыто</td></tr>
+<tr><td>Падение службы</td><td>открыто*</td><td>открыто</td><td>открыто</td><td>закрыто</td><td>открыто*</td><td>открыто*</td></tr>
+<tr><td>Остановка службы</td><td>открыто*</td><td>открыто*</td><td>открыто</td><td>закрыто</td><td>открыто*</td><td>открыто*</td></tr>
+<tr><td>Обновление</td><td>открыто*</td><td>открыто</td><td>удержание</td><td>закрыто</td><td>открыто*</td><td>удержание*</td></tr>
+<tr><td>Перезагрузка компьютера</td><td>открыто*</td><td>открыто*</td><td>открыто*</td><td>закрыто</td><td>открыто*</td><td>открыто*</td></tr>
+</table>
+<h2 id="linux">Linux</h2>
+<table>
+<tr><th>Событие</th><th>Без защиты</th><th>Замок DNS</th><th>Kill switch</th><th>Lockdown</th><th>Прокси</th><th>Прокси, kill switch</th></tr>
+<tr><td>Отключено</td><td>открыто</td><td>открыто</td><td>открыто</td><td>закрыто</td><td>открыто</td><td>открыто</td></tr>
+<tr><td>Подключено</td><td>открыто</td><td>DNS закрыт</td><td>закрыто</td><td>закрыто</td><td>открыто</td><td>закрыто</td></tr>
+<tr><td>Перезапуск ядра</td><td>открыто</td><td>DNS закрыт*</td><td>закрыто</td><td>закрыто*</td><td>открыто*</td><td>закрыто</td></tr>
+<tr><td>Падение службы</td><td>открыто*</td><td>DNS закрыт, пока служба не перезапустится, затем открыто</td><td>удержание</td><td>закрыто</td><td>открыто*</td><td>удержание*</td></tr>
+<tr><td>Остановка службы</td><td>открыто*</td><td>открыто*</td><td>открыто</td><td>закрыто</td><td>открыто*</td><td>открыто</td></tr>
+<tr><td>Обновление</td><td>открыто*</td><td>DNS закрыт, пока не запустится новая служба, затем открыто*</td><td>удержание</td><td>закрыто</td><td>открыто*</td><td>удержание*</td></tr>
+<tr><td>Перезагрузка компьютера</td><td>открыто*</td><td>открыто*</td><td>открыто*</td><td>закрыто</td><td>открыто*</td><td>открыто*</td></tr>
+</table>
+<p>Главное отличие: <strong>на Windows падение службы открывает сеть</strong>, потому что брандмауэр снимает фильтры сеанса вместе с процессом, и остаётся только Lockdown. На Linux таблица брандмауэра переживает службу, поэтому kill switch держит сеть закрытой и после падения. Перезагрузка компьютера открывает сеть на обеих ОС, кроме Lockdown. На Windows удержание после обновления сделано постоянным набором Lockdown, поэтому по коду оно переживает и перезагрузку (сценария для этого нет); на Linux нет.</p>
+<p><strong>Не проверено:</strong></p>
+<ul>
+<li>Windows 10 в проверках отказов: известно только, что она работает на компьютере одного тестировщика;</li>
+<li>другие брандмауэры и антивирусы со своими сетевыми фильтрами и firewalld на Linux (службы Rosetun запускаются после него; <code>nftables.service</code> проверен);</li>
+<li>сон и гибернация с Lockdown на настоящем компьютере (Windows: только сон виртуальной машины; Linux: вообще нет);</li>
+<li>отключение питания на Linux;</li>
+<li>возврат на 0.4;</li>
+<li>на Linux <strong>Локальная сеть</strong> из программы, которая сама не выбирает интерфейс;</li>
+<li>на Linux окно, трей и запрос polkit в автоматическом прогоне: рабочим столом матрицы не управляют. GNOME проверен вручную; KDE Plasma нет, ни на Wayland, ни на X11.</li>
+</ul>
+<p>Lockdown защищает от случайных утечек: VPN упал, служба остановилась, компьютер загружается. От вредоносной программы, которую вы запустили сами, он не защищает. Основная защита по-прежнему kill switch.</p>
+</section>
+                <nav class="doc-pager" aria-label="Назад и вперёд"><a rel="prev" href="../subscriptions/">← Подписки и серверы</a><a rel="next" href="../privacy/">Приватность и сетевые обращения →</a></nav>
+            </div>
+        </main>
+        <footer class="wrap"><span>Rosetun</span><a href="https://github.com/eoftgge/rosetun">GitHub</a><a href="../../../ru/docs/licenses/">Лицензии</a></footer>
+    </body>
+</html>

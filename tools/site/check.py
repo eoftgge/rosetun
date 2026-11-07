@@ -16,9 +16,17 @@ class Document(HTMLParser):
         self.links = []
         self.alternates = {}
         self.lang = None
+        self.pager = set()
+        self.language_links = {}
+        self.toc_links = []
+        self.in_toc = False
 
     def handle_starttag(self, tag, attrs):
         attrs = dict(attrs)
+        if tag == 'nav':
+            self.in_toc = attrs.get('aria-label') in {'On this page', 'На этой странице'}
+        if tag == 'a' and self.in_toc:
+            self.toc_links.append(attrs.get('href', ''))
         if tag == 'html':
             self.lang = attrs.get('lang')
         if 'id' in attrs:
@@ -32,6 +40,10 @@ class Document(HTMLParser):
         )
         if tag == 'link' and attrs.get('rel') == 'alternate':
             self.alternates[attrs.get('hreflang')] = attrs.get('href')
+        if tag == 'a' and attrs.get('rel') in {'prev', 'next'}:
+            self.pager.add(attrs['rel'])
+        if tag == 'a' and attrs.get('hreflang'):
+            self.language_links[attrs['hreflang']] = attrs.get('href')
         for key in ('href', 'src', 'poster', 'data'):
             if key in attrs:
                 self.links.append((attrs[key], tag != 'a'))
@@ -39,6 +51,10 @@ class Document(HTMLParser):
             match = re.fullmatch(r'0;\s*url=(.+)', attrs.get('content', ''))
             assert match, f'{self.path}: unexpected redirect'
             self.links.append((match[1], True))
+
+    def handle_endtag(self, tag):
+        if tag == 'nav':
+            self.in_toc = False
 
 
 def local_target(root, source, url, resource=False):
@@ -79,6 +95,16 @@ def check(directory, rendered=False):
             assert counterpart in documents, f'{path}: missing translation {lang}'
             actual, _ = local_target(root, path, doc.alternates[lang])
             assert actual == counterpart, f'{path}: incorrect alternate {lang}'
+        if 'docs' in relative.parts:
+            other = 'ru' if doc.lang == 'en' else 'en'
+            assert other in doc.language_links, f'{path}: missing language switch'
+            actual, _ = local_target(root, path, doc.language_links[other])
+            assert actual == root / other / suffix, f'{path}: incorrect language switch'
+            assert doc.toc_links and all(url.startswith('#') and url != '#main' for url in doc.toc_links), (
+                f'{path}: missing table of contents'
+            )
+            if len(relative.parts) > 3:
+                assert doc.pager == {'prev', 'next'}, f'{path}: missing documentation pager'
         for url, resource in doc.links:
             if not rendered and re.fullmatch(r'@@(?:DOWNLOAD_URL|CHECKSUM_URL)@@', url):
                 continue

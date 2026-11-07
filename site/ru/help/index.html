@@ -3,303 +3,35 @@
     <head>
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <meta
-            name="description"
-            content="Помощь и FAQ. VPN-клиент. Подписки, правила и защита соединения."
-        />
+        <meta name="description" content="Помощь · Rosetun" />
         <meta name="referrer" content="no-referrer" />
-        <meta
-            http-equiv="Content-Security-Policy"
-            content="default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'"
-        />
-        <title>Помощь и FAQ · Rosetun</title>
+        <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'" />
+        <title>Помощь · Rosetun</title>
         <link rel="stylesheet" href="../../assets/site.css" />
         <link rel="icon" href="../../assets/rose.svg" type="image/svg+xml" />
         <link rel="alternate" hreflang="ru" href="../../ru/help/" />
         <link rel="alternate" hreflang="en" href="../../en/help/" />
     </head>
     <body>
-        <a class="skip" href="#main">К содержанию</a>
+        <a class="skip" href="#main">К содержимому</a>
         <header class="wrap">
-            <div class="header-brand">
-                <a class="brand" href="../../ru/"
-                    ><img src="../../assets/rose.svg" width="40" height="40" alt="" />Rosetun</a
-                >
-                <p class="platform-label">WINDOWS <!-- linux-ready <span aria-hidden="true">·</span> LINUX  --><span aria-hidden="true">·</span> OPEN SOURCE</p>
-            </div>
+            <a class="brand" href="../../ru/"><img src="../../assets/rose.svg" width="40" height="40" alt="" />Rosetun</a>
             <nav aria-label="Навигация">
-                <a href="../../ru/">Главная</a><a href="../../ru/providers/">Для провайдеров</a
-                ><a href="../../ru/help/">Помощь</a
-                ><a href="../../en/help/" lang="en" hreflang="en">English</a>
+                <a href="../../ru/docs/">Документация</a>
+                <a href="../../ru/help/">Помощь</a>
+                <a href="../../ru/providers/">Для провайдеров</a>
+                <a href="../../en/help/" lang="en" hreflang="en">English</a>
             </nav>
         </header>
         <main id="main" class="wrap">
-            <div class="prose">
-                <p class="eyebrow">НАЧНИТЕ ЗДЕСЬ</p>
-                <h1>Помощь и FAQ</h1>
-                <section>
-                    <h2>Установка и первое подключение</h2>
-                    <ol>
-                        <li>
-                            <a href="../#verify">Скачайте и проверьте установщик</a>. Нужна Windows
-                            11 x64. Windows 10 работает на компьютере одного тестировщика; проверки отказов на ней не прогонялись.
-                        </li>
-                        <li>
-                            Запустите установщик и подтвердите запрос администратора. Установщик
-                            пока не подписан: если SmartScreen показывает «Windows protected your
-                            PC», после проверки файла выберите «More info», затем «Run anyway».
-                        </li>
-                        <li>
-                            Откройте Rosetun и добавьте ссылку подписки от своего провайдера. Сам
-                            Rosetun не выдаёт VPN-серверы.
-                        </li>
-                        <li>
-                            Выберите сервер и подключитесь. Правила задают, что идёт через VPN,
-                            напрямую или блокируется.
-                        </li>
-                    </ol>
-                    <p>
-                        Папку установки можно выбрать вне профиля пользователя, в месте, которое не
-                        могут менять обычные пользователи.
-                    </p>
-                </section>
-                <section id="debian">
-                    <h2>Debian 13</h2>
-                    <p>
-                        Linux в этой бете впервые: Debian 13, amd64. Вручную проверен на GNOME, на KDE
-                        Plasma пока нет. Скачайте пакет на странице
-                        <a href="https://github.com/eoftgge/rosetun/releases">Releases</a> и проверьте
-                        его:
-                    </p>
-                    <pre><code>sha256sum --check --ignore-missing SHA256SUMS.txt
-gh attestation verify rosetun_ВЕРСИЯ_amd64.deb --repo eoftgge/rosetun</code></pre>
-                    <p>Установите его и добавьте себя в группу, которой доступна служба:</p>
-                    <pre><code>sudo apt install ./rosetun_ВЕРСИЯ_amd64.deb
-sudo usermod -aG rosetun "$USER"</code></pre>
-                    <p>Затем перезагрузите компьютер: выхода из системы мало.</p>
-                    <p>
-                        На Linux пока нет диалогов выбора файла и «Собрать отчёт». Правило по программе
-                        даёт ядру на этот сеанс права почти как у root.
-                        <a href="https://github.com/eoftgge/rosetun/blob/master/README.ru.md#debian-13">Обновление и удаление</a>.
-                    </p>
-                </section>
-                <section id="system-proxy">
-                    <h2>Системный прокси</h2>
-                    <p>
-                        <strong>Режим подключения</strong> в разделе «Настройки → Подключение»
-                        выбирает, как трафик попадает в VPN. <strong>TUN</strong> берёт весь трафик
-                        компьютера. <strong>Системный прокси</strong> поднимает локальный прокси и
-                        указывает на него в системных настройках: когда TUN мешает другому VPN,
-                        античиту или антивирусу или когда нужен только браузер.
-                    </p>
-                    <ul>
-                        <li>
-                            Через VPN идут только программы, которые используют системный прокси:
-                            браузеры и большинство приложений. Игры, многие консольные программы и
-                            службы Windows (WinHTTP не меняется) не идут, и без kill switch выходят
-                            напрямую, вместе со своим DNS.
-                        </li>
-                        <li>
-                            <strong>Kill switch</strong> здесь строгий: всё, что не использует прокси,
-                            остаётся без сети, в том числе при подключении.
-                        </li>
-                        <li>
-                            <strong>Доступ из локальной сети</strong> пускает к прокси телефон или
-                            телевизор в вашей сети. Адрес для них показан в настройках. Проходят только
-                            ваши собственные сети; при Lockdown нужна ещё и
-                            <strong>Локальная сеть</strong>.
-                        </li>
-                        <li>
-                            Ваши настройки прокси возвращаются при отключении, выходе и смене режима,
-                            а после падения при следующем запуске. Если вы сами их поменяли за это
-                            время, они остаются.
-                        </li>
-                        <li>
-                            На Linux настройки меняются в KDE Plasma и GNOME. В других средах Rosetun
-                            показывает адрес, который нужно указать в настройках системы. Консольным
-                            программам прокси указывается вручную.
-                        </li>
-                    </ul>
-                </section>
+            <div class="prose docs">
+                <h1>Помощь</h1>
+                <!-- docs-version --><p class="note">Стабильная версия для Windows: 0.4. Linux и перечисленные ниже изменения доступны с предварительной 0.5; стабильная 0.5 ещё не вышла. Точное поведение 0.4 описано в <a href="https://github.com/eoftgge/rosetun/blob/v0.4.0/README.ru.md">документации 0.4</a>.</p><!-- /docs-version -->
+                <nav aria-label="На этой странице"><a href="#start">Начало работы</a><a href="#faq">Частые вопросы</a></nav>
+                <h2 id="start">Начало работы</h2><p>Скачайте и проверьте установщик. Установите Rosetun, добавьте подписку провайдера, выберите сервер и подключитесь. Rosetun не предоставляет серверы.</p><h2 id="faq">Частые вопросы</h2><ul><li><a href="../docs/install/">Установка и обновление</a></li><li><a href="../docs/subscriptions/">Как добавить подписку?</a></li><li><a href="../docs/modes/">Как выбрать режим подключения?</a></li><li><a href="../docs/protection/">Как проверить защиту?</a></li><li><a href="../docs/troubleshooting/">Нет сети или приложение не открывается?</a></li><li><a href="../docs/linux/">Что доступно на Linux?</a></li><li><a href="../docs/privacy/">Какие данные отправляются?</a></li></ul>
 
-                <section id="lockdown">
-                    <h2>Lockdown и восстановление сети</h2>
-                    <p>
-                        Lockdown экспериментальный. Он закрывает интернет мимо туннеля даже без
-                        подключения и после перезагрузки. Включение и выключение в разделе «Настройки →
-                        Подключение» требуют подтверждения и прав администратора: UAC на Windows,
-                        polkit на Linux. Пока Lockdown включён, kill switch тоже включён.
-                    </p>
-                    <p>
-                        Если сети нет совсем, а Rosetun не открывается, откройте Терминал Windows от
-                        имени администратора и выполните, указав свою папку, если выбрали другую:
-                    </p>
-                    <pre><code>&amp; 'C:\Program Files\Rosetun\rosetun.exe' reset-firewall</code></pre>
-                    <p>На Linux:</p>
-                    <pre><code>sudo rosetun reset-firewall</code></pre>
-                    <p>
-                        Команда снимает Lockdown без работающей службы. После снятия Lockdown
-                        интернет сможет работать напрямую. Удаление Rosetun тоже снимает Lockdown.
-                    </p>
-                    <p>
-                        Для Wi-Fi со страницей входа временно выключите Lockdown, войдите в сеть или
-                        исправьте часы, подключитесь и включите Lockdown снова. Lockdown оставляет
-                        Hyper-V без сети; WSL2, Docker Desktop, Песочница Windows и мобильный
-                        хот-спот тоже могут потерять доступ, а на Linux виртуальные машины и
-                        контейнеры. Выключайте Lockdown, пока они нужны.
-                    </p>
-                    <p>
-                        Windows 10, сторонние брандмауэры и антивирусы, гибернация и сон на настоящем
-                        компьютере не проверены. Основная защита: kill switch. Lockdown не защищает
-                        от вредоносных программ под вашей учётной записью.
-                    </p>
-                </section>
-                <section id="guarantees">
-                    <h2>Что остаётся закрытым</h2>
-                    <p>
-                        Окно и <code>rosetun status</code> показывают действующую защиту. Главное
-                        отличие систем: на Windows падение службы открывает сеть, если Lockdown не
-                        включён; на Linux kill switch держит её закрытой, пока вы не подключитесь или
-                        не выполните <code>rosetun open-network</code>. При обновлении сеть остаётся
-                        закрытой на обеих, если включён kill switch.
-                        <a href="https://github.com/eoftgge/rosetun/blob/master/README.ru.md#гарантии-защиты">Таблица по событиям</a>.
-                    </p>
-                </section>
-                <section id="local-network">
-                    <h2>Локальная сеть</h2>
-                    <p>
-                        <strong>Локальная сеть</strong> в разделе «Настройки → Подключение» пускает
-                        программы к устройствам в вашей сети мимо туннеля. На Windows открывается только
-                        ваша сеть, а <strong>Частные сети за роутером</strong> добавляют остальные
-                        частные диапазоны. На Linux брандмауэр открывает все частные диапазоны.
-                        <a href="https://github.com/eoftgge/rosetun/blob/master/README.ru.md#локальная-сеть">Подробности и ограничения</a>.
-                    </p>
-                </section>
-                <section id="privacy">
-                    <h2>Приватность</h2>
-                    <p>
-                        Телеметрии и учётных записей нет. Rosetun обращается к провайдеру, серверам,
-                        DNS, спискам, GitHub и сервисам проверки сети. ID устройства для провайдера это
-                        хеш для его хоста, а не системный идентификатор.
-                        <a href="https://github.com/eoftgge/rosetun/blob/master/README.ru.md#приватность-и-сетевые-обращения">Все запросы и что в них</a>.
-                    </p>
-                </section>
-                <section>
-                    <h2>Частые вопросы</h2>
-                    <details>
-                        <summary>Сайт не открывается после подключения</summary>
-                        <p>Перезапустите браузер: у него свой DNS-кэш, отдельный от системного.</p>
-                    </details>
-                    <details>
-                        <summary>Другой VPN или zapret мешает подключиться</summary>
-                        <p>
-                            Отключите другой VPN в режиме TUN и повторите подключение. Если
-                            используете zapret, исключите адреса VPN-серверов в его настройках.
-                        </p>
-                    </details>
-                    <details>
-                        <summary>Сеть закрыта после обновления или сбоя</summary>
-                        <p>
-                            Подключитесь или откройте её: «Открыть сеть» на экране подключения или
-                            <code>rosetun open-network</code>. Если служба не работает, используйте
-                            <code>reset-firewall</code>, как выше.
-                        </p>
-                    </details>
-                    <details>
-                        <summary>Linux: нет доступа к службе Rosetun</summary>
-                        <p>
-                            Нажмите «Добавить меня» или выполните
-                            <code>sudo usermod -aG rosetun "$USER"</code> и перезагрузите компьютер.
-                            Выхода из системы мало.
-                        </p>
-                    </details>
-                    <details>
-                        <summary>Linux: программы KDE не используют прокси</summary>
-                        <p>
-                            Проверьте, что в <code>~/.config/kioslaverc</code> стоит
-                            <code>ProxyType=1</code>, а <code>XDG_CURRENT_DESKTOP</code> содержит
-                            <code>KDE</code>; иначе укажите сами адрес, который показывает Rosetun.
-                            Программы не из KDE и не Chromium перезапустите.
-                        </p>
-                    </details>
-                    <details>
-                        <summary>С чего начать проверку?</summary>
-                        <p>
-                            Откройте «Настройки → Служба и журнал → Проверка системы». Она ищет
-                            неверные часы, другие VPN и подмену DNS, а на Windows ещё системный прокси
-                            и перехват пакетов. После неудачного подключения запускается сама.
-                            Проверка ничего не меняет, но делает сетевые запросы.
-                        </p>
-                    </details>
-                    <details>
-                        <summary>Что значит «Нет подключения к сети»?</summary>
-                        <p>
-                            Проверьте сеть системы. При включённом «Переподключаться при обрыве»
-                            Rosetun ждёт восстановления сети, а kill switch держит трафик закрытым,
-                            пока работает служба.
-                        </p>
-                    </details>
-                    <details>
-                        <summary>Установщик сообщает о доступе к защищённой папке</summary>
-                        <p>
-                            Если обычным пользователям разрешено менять папку Rosetun, удалите
-                            приложение и установите заново. Не выдавайте доступ к папке службы через
-                            кнопку «Продолжить» в Проводнике.
-                        </p>
-                    </details>
-                </section>
-                <section>
-                    <h2>Собрать отчёт</h2>
-                    <p>
-                        На Windows в «Настройки → Служба и журнал» нажмите «Собрать отчёт». Текстовый файл
-                        содержит версии, настройки без секретов, состояние подключения, проверку
-                        системы и журналы. Проверка системы обращается в сеть.
-                    </p>
-                    <p>
-                        Rosetun вычищает IP-адреса, ссылки, домены, почту, ключи, пароли, имена
-                        серверов, подписок, списков, наборов правил и учётной записи Windows. Перед
-                        отправкой просмотрите файл сами.
-                    </p>
-                    <p>
-                        На Linux такого отчёта пока нет. Приложите <code>rosetun status</code> и журналы,
-                        <a href="https://github.com/eoftgge/rosetun/blob/master/README.ru.md#устранение-неполадок">указанные в README</a>,
-                        сначала убрав адреса, ссылки и имена вручную.
-                    </p>
-                    <p>
-                        В <a href="https://github.com/eoftgge/rosetun/issues">Issues</a> приложите
-                        отчёт, шаги воспроизведения, ожидаемый результат и текст ошибки. Не
-                        прикладывайте ссылку подписки или конфигурацию с секретами. Об уязвимости
-                        сообщайте приватно через ссылку в подвале.
-                    </p>
-                </section>
-                <section>
-                    <h2>Обновление и удаление</h2>
-                    <p>
-                        Rosetun предлагает новые версии, но ничего не скачивает и не устанавливает
-                        сам. Скачайте новый установщик или пакет из Releases, проверьте файл и
-                        запустите его. Если включён kill switch, сеть при обновлении остаётся закрытой.
-                        При обновлении формата настроек рядом сохраняется копия прежнего файла; она
-                        тоже содержит ссылки подписок.
-                    </p>
-                    <p>
-                        На Windows удалите Rosetun через приложения Windows. Настройки в
-                        <code>%APPDATA%\Rosetun</code> по умолчанию остаются; в удалении можно
-                        выбрать очистку настроек, подписок и правил.
-                    </p>
-                    <p>
-                        <a
-                            href="https://github.com/eoftgge/rosetun/blob/master/README.ru.md#устранение-неполадок"
-                            >Подробности в README</a
-                        >
-                    </p>
-                </section>
             </div>
         </main>
-        <footer class="wrap">
-            <span>Rosetun</span><a href="https://github.com/eoftgge/rosetun">GitHub</a
-            ><a href="https://github.com/eoftgge/rosetun/blob/master/LICENSE">GPL-3.0-or-later</a
-            ><a href="https://github.com/eoftgge/rosetun/security/policy">Сообщить об уязвимости</a
-            ><a href="../../en/help/" lang="en" hreflang="en">English</a>
-        </footer>
+        <footer class="wrap"><span>Rosetun</span><a href="https://github.com/eoftgge/rosetun">GitHub</a><a href="../../ru/docs/licenses/">Лицензии</a></footer>
     </body>
 </html>

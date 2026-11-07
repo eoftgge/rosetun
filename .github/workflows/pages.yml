@@ -30,7 +30,7 @@ jobs:
         with:
           ref: ${{ (github.event_name == 'workflow_run' || github.event_name == 'release') && 'master' || github.ref }}
           persist-credentials: false
-      - name: Check source
+      - name: Check site and bilingual documentation
         run: |
           python3 tools/site/check.py site
           python3 -m unittest discover -s tools/site -p 'test_*.py'

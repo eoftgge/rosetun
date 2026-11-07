@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="ru">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta name="description" content="Правила · Rosetun" />
+        <meta name="referrer" content="no-referrer" />
+        <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'" />
+        <title>Правила · Rosetun</title>
+        <link rel="stylesheet" href="../../../assets/site.css" />
+        <link rel="icon" href="../../../assets/rose.svg" type="image/svg+xml" />
+        <link rel="alternate" hreflang="ru" href="../../../ru/docs/rules/" />
+        <link rel="alternate" hreflang="en" href="../../../en/docs/rules/" />
+    </head>
+    <body>
+        <a class="skip" href="#main">К содержимому</a>
+        <header class="wrap">
+            <a class="brand" href="../../../ru/"><img src="../../../assets/rose.svg" width="40" height="40" alt="" />Rosetun</a>
+            <nav aria-label="Навигация">
+                <a href="../../../ru/docs/">Документация</a>
+                <a href="../../../ru/help/">Помощь</a>
+                <a href="../../../ru/providers/">Для провайдеров</a>
+                <a href="../../../en/docs/rules/" lang="en" hreflang="en">English</a>
+            </nav>
+        </header>
+        <main id="main" class="wrap">
+            <div class="prose docs">
+                <h1>Правила</h1>
+                <!-- docs-version --><p class="note">Стабильная версия для Windows: 0.4. Linux и перечисленные ниже изменения доступны с предварительной 0.5; стабильная 0.5 ещё не вышла. Точное поведение 0.4 описано в <a href="https://github.com/eoftgge/rosetun/blob/v0.4.0/README.ru.md">документации 0.4</a>.</p><!-- /docs-version -->
+                <nav aria-label="На этой странице"><a href="#программы-на-linux">Программы на Linux</a></nav>
+                <p class="note">С 0.5: отмена, возврат к применённым правилам, Del, правила по программам на Linux и их цена для защиты. Предупреждение ниже относится только к Linux.</p>
+<ul>
+<li><strong>Правила маршрутизации</strong> для программ, сайтов, IP-адресов и подсетей и списков, <strong>Быстрые шаблоны</strong> и действия <strong>Через VPN</strong>, <strong>Напрямую</strong> и <strong>Блокировать</strong>.</li>
+<li><strong>Направления:</strong> правило может вести свой трафик через другую страну или конкретный узел, а остальное идёт через сервер с главного экрана. Выбор страны или узла в правиле создаёт направление во вкладке <strong>Направления</strong>; там можно сменить его узел и включить запасной: любой узел той же страны. Если узел направления пропал, его правила блокируют трафик и никогда не идут напрямую.</li>
+<li><strong>Списки:</strong> GeoIP и GeoSite (файлы Xray <code>.dat</code>, наборы правил sing-box) и свои текстовые списки из файла или по ссылке. Список по ссылке скачивается заново, только если он изменился (<code>ETag</code> / <code>Last-Modified</code>).</li>
+<li><strong>Отмена:</strong> Ctrl+Z отменяет изменения во вкладке «Правила» по шагам, <strong>Вернуть</strong> возвращает правила, применённые к подключению, а Del удаляет выделенное правило без вопроса.</li>
+<li><strong>Временные правила:</strong> добавьте правило только до отключения; оно применяется сразу и никогда не сохраняется.</li>
+<li><strong>Соединения</strong> на вкладке «Трафик»: при подключении видно, куда программы соединяются прямо сейчас, по программам, каким маршрутом пошло каждое соединение и почему (какое правило, список или правило по умолчанию). Оттуда же можно создать правило или закрыть соединение. Список хранится только в памяти, только для учётной записи, которая подключилась, и очищается при отключении; на диск и в журнал он не попадает.</li>
+</ul>
+<h2 id="программы-на-linux">Программы на Linux</h2>
+<p><strong>Правила по программам на Linux</strong> имеют цену. Чтобы найти программу соединения, sing-box читает процессы всех учётных записей, поэтому сеанс с включённым правилом по программе даёт своему ядру <code>CAP_SYS_PTRACE</code> и <code>CAP_DAC_READ_SEARCH</code>: почти root для того, кто захватит ядро. Без такого правила у ядра нет ни того, ни другого. Там, где служба не может их дать (например, вне своего юнита systemd), подключение с таким правилом отклоняется с указанием причины.</p>
+<p>Известная ошибка sing-box на Linux: соединение иногда приписывается не той программе (<a href="https://github.com/SagerNet/sing-box/issues/4501">SagerNet/sing-box#4501</a>, открыта; на Windows не относится). Поэтому правило «Напрямую» для программы может изредка пропустить мимо туннеля чужое соединение, и при включённом kill switch тоже: ядру kill switch выход разрешает. Соединение, программа которого не найдена, не подходит ни под одно правило по программе и идёт по следующим правилам. Если это важно, используйте правила по сайтам и IP, а по умолчанию оставьте «Через VPN» без правил «Напрямую» по программам.</p>
+                <nav class="doc-pager" aria-label="Назад и вперёд"><a rel="prev" href="../modes/">← TUN и системный прокси</a><a rel="next" href="../local-network/">Локальная сеть →</a></nav>
+            </div>
+        </main>
+        <footer class="wrap"><span>Rosetun</span><a href="https://github.com/eoftgge/rosetun">GitHub</a><a href="../../../ru/docs/licenses/">Лицензии</a></footer>
+    </body>
+</html>

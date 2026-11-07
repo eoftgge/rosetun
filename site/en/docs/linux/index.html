@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta name="description" content="Linux support · Rosetun" />
+        <meta name="referrer" content="no-referrer" />
+        <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'" />
+        <title>Linux support · Rosetun</title>
+        <link rel="stylesheet" href="../../../assets/site.css" />
+        <link rel="icon" href="../../../assets/rose.svg" type="image/svg+xml" />
+        <link rel="alternate" hreflang="ru" href="../../../ru/docs/linux/" />
+        <link rel="alternate" hreflang="en" href="../../../en/docs/linux/" />
+    </head>
+    <body>
+        <a class="skip" href="#main">Skip to content</a>
+        <header class="wrap">
+            <a class="brand" href="../../../en/"><img src="../../../assets/rose.svg" width="40" height="40" alt="" />Rosetun</a>
+            <nav aria-label="Navigation">
+                <a href="../../../en/docs/">Documentation</a>
+                <a href="../../../en/help/">Help</a>
+                <a href="../../../en/providers/">For providers</a>
+                <a href="../../../ru/docs/linux/" lang="ru" hreflang="ru">Русский</a>
+            </nav>
+        </header>
+        <main id="main" class="wrap">
+            <div class="prose docs">
+                <h1>Linux support</h1>
+                <!-- docs-version --><p class="note">Stable Windows reference: 0.4. Linux and additions listed below are preview features since 0.5; 0.5 is not stable yet. For the exact 0.4 behavior, see the <a href="https://github.com/eoftgge/rosetun/blob/v0.4.0/README.md">0.4 reference</a>.</p><!-- /docs-version -->
+                <nav aria-label="On this page"><a href="#details">Linux support</a></nav>
+                <section id="details">
+<p class="note">Since 0.5: all Linux support on this page.</p>
+<table>
+<tr><th>Desktop</th><th>Tray</th><th>System proxy settings</th></tr>
+<tr><td>KDE Plasma, Wayland and X11</td><td>Yes</td><td>Changed by Rosetun (<code>kioslaverc</code>)</td></tr>
+<tr><td>GNOME</td><td>Only with an extension that provides a tray. Without a tray, closing the window closes the program</td><td>Changed by Rosetun (<code>gsettings</code>)</td></tr>
+<tr><td>Others</td><td>Where a tray host answers; not tested</td><td>Rosetun shows the address to enter yourself</td></tr>
+</table>
+<p>The table says what the code does. Rosetun was checked by hand on GNOME, and not yet on KDE Plasma.</p>
+<p>Linux does not have these yet:</p>
+<ul>
+<li>file dialogs: a QR code is read from the clipboard only, and there is no screen capture;</li>
+<li><strong>Collect report</strong> and the buttons that open a folder (see <a href="../troubleshooting/">Troubleshooting</a>);</li>
+<li>the system proxy and packet interception checks in <strong>System check</strong>;</li>
+<li>a remembered window position.</li>
+</ul>
+</section>
+                <nav class="doc-pager" aria-label="Previous and next"><a rel="prev" href="../build/">← Build from source</a><a rel="next" href="../everyday/">Everyday use →</a></nav>
+            </div>
+        </main>
+        <footer class="wrap"><span>Rosetun</span><a href="https://github.com/eoftgge/rosetun">GitHub</a><a href="../../../en/docs/licenses/">Licenses</a></footer>
+    </body>
+</html>
