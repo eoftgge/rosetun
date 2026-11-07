@@ -2,6 +2,7 @@
 
 use std::fs::OpenOptions;
 use std::io;
+use std::os::fd::AsRawFd;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::process::{Command, ExitCode, Stdio};
 use std::time::{Duration, Instant};
@@ -54,7 +55,6 @@ fn restart_inner() -> io::Result<bool> {
         .mode(0o600)
         .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
         .open("/run/rosetun-upgrade.lock")?;
-    use std::os::fd::AsRawFd;
     // SAFETY: lock owns a live descriptor for the duration of the operation.
     if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
         return Err(io::Error::last_os_error());

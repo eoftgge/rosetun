@@ -942,7 +942,7 @@ scenario_upgrade_restart() {
     upgraded() {
         disconnect || return 1
         local watch=rosetun-l3-upgrade pid packets rc=0
-        "$NFT" -f - <<EOF
+        if ! "$NFT" -f - <<EOF
  table inet $watch {
      chain postrouting {
          type filter hook postrouting priority 300; policy accept;
@@ -950,14 +950,14 @@ scenario_upgrade_restart() {
      }
  }
 EOF
-        if [ "$?" -ne 0 ]; then fail_reason="cannot install upgrade counter"; return 1; fi
+        then fail_reason="cannot install upgrade counter"; return 1; fi
         # Prove the counter sees real direct traffic before relying on zero.
         direct_https
         packets=$("$NFT" list table inet "$watch" | sed -n 's/.*counter packets \([0-9]*\).*/\1/p')
         "$NFT" delete table inet "$watch"
         [ "${packets:-0}" -gt 0 ] || { fail_reason="upgrade counter saw no baseline traffic"; return 1; }
         connect_with request-kill-switch.json || return 1
-        "$NFT" -f - <<EOF
+        if ! "$NFT" -f - <<EOF
  table inet $watch {
      chain postrouting {
          type filter hook postrouting priority 300; policy accept;
@@ -965,7 +965,7 @@ EOF
      }
  }
 EOF
-        if [ "$?" -ne 0 ]; then fail_reason="cannot install upgrade counter"; return 1; fi
+        then fail_reason="cannot install upgrade counter"; return 1; fi
         : >"$STATE/upgrade-watch"
         (
             while [ -e "$STATE/upgrade-watch" ]; do
