@@ -309,8 +309,12 @@ fn connection_mode(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
                             .small()
                             .color(theme::palette().text_muted),
                     );
-                    if widgets::link(ui, &tr!("reconnect-now"), state.can_reconnect() && editable)
-                        .clicked()
+                    if widgets::link(
+                        ui,
+                        &tr!("reconnect-now"),
+                        state.can_change_temporary() && editable,
+                    )
+                    .clicked()
                     {
                         actions.push(Action::ApplyConnectionMode);
                     }

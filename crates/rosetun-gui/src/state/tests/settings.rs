@@ -1368,6 +1368,15 @@ fn the_protection_caption_uses_the_running_mode_after_a_saved_mode_change() {
 }
 
 #[test]
+fn changing_mode_waits_until_temporary_rules_are_loaded() {
+    let mut state = connected_state_for_apply();
+    proxy_config(&mut state, 100);
+    state.session.temporary_rules_loaded = false;
+    assert!(state.act(Action::ApplyConnectionMode).is_none());
+    assert!(!state.operations.helper);
+}
+
+#[test]
 fn a_port_below_the_allowed_range_is_not_saved() {
     let mut state = connected_state_for_apply();
     assert!(state.act(Action::SetLocalProxyPort(80)).is_none());

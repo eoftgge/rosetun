@@ -970,7 +970,7 @@ impl State {
                 }
             }
             Action::ApplyConnectionMode => {
-                if self.can_reconnect()
+                if self.can_change_temporary()
                     && self.config_ready
                     && !self.saving_config()
                     && self.connection_mode_next_connect()
