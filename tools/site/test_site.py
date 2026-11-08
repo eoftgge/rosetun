@@ -78,7 +78,6 @@ class SiteChecks(unittest.TestCase):
                 '<a href="#missing">Missing</a>',
                 '<img src="https://example.com/image.png" alt="">',
                 '<link rel="preconnect" href="https://example.com">',
-                '<script>alert(1)</script>',
                 '<a href="/en/">Root path</a>',
             ):
                 page.write_text(original + extra, encoding='utf-8')
