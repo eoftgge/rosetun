@@ -8,10 +8,8 @@
             content="Rosetun. VPN-клиент. Подписки, правила и защита соединения."
         />
         <meta name="referrer" content="no-referrer" />
-        <meta
-            http-equiv="Content-Security-Policy"
-            content="default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'"
-        />
+        <meta http-equiv="Content-Security-Policy"
+              content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; base-uri 'self'; object-src 'none'; form-action 'self'">
         <title>Rosetun</title>
         <link rel="stylesheet" href="../assets/site.css" />
         <link rel="icon" href="../assets/rose.svg" type="image/svg+xml" />
@@ -151,36 +149,66 @@
                     >
                 </p>
             </section>
+
             <section>
                 <h2>Знакомство с интерфейсом</h2>
-                <p>Скриншоты появятся после подготовки примеров без личных данных.</p>
+                <p>Основные возможности Rosetun в одном интерфейсе.</p>
+
                 <div class="screens">
                     <figure>
-                        <div class="placeholder" aria-hidden="true"><span>01</span></div>
-                        <figcaption>
-                            Подключение и защита<small>Здесь будет скриншот</small>
-                        </figcaption>
+                        <a href="../assets/screens/main.webp" class="screenshot">
+                            <img src="../assets/screens/main.webp"
+                                 alt="Rosetun: подключение и защита"
+                                 loading="lazy">
+                        </a>
+                        <figcaption>Подключение и защита</figcaption>
                     </figure>
+
                     <figure>
-                        <div class="placeholder" aria-hidden="true"><span>02</span></div>
-                        <figcaption>
-                            Правила и направления<small>Здесь будет скриншот</small>
-                        </figcaption>
+                        <a href="../assets/screens/traffic.webp" class="screenshot">
+                            <img src="../assets/screens/traffic.webp"
+                                 alt="Rosetun: трафик и соединения"
+                                 loading="lazy">
+                        </a>
+                        <figcaption>Трафик и соединения</figcaption>
                     </figure>
+
                     <figure>
-                        <div class="placeholder" aria-hidden="true"><span>03</span></div>
-                        <figcaption>
-                            Подписки и серверы<small>Здесь будет скриншот</small>
-                        </figcaption>
+                        <a href="../assets/screens/rules.webp" class="screenshot">
+                            <img src="../assets/screens/rules.webp"
+                                 alt="Rosetun: правила маршрутизации"
+                                 loading="lazy">
+                        </a>
+                        <figcaption>Правила</figcaption>
                     </figure>
+
                     <figure>
-                        <div class="placeholder" aria-hidden="true"><span>04</span></div>
-                        <figcaption>
-                            Трафик и соединения<small>Здесь будет скриншот</small>
-                        </figcaption>
+                        <a href="../assets/screens/exits.webp" class="screenshot">
+                            <img src="../assets/screens/exits.webp"
+                                 alt="Rosetun: направления"
+                                 loading="lazy">
+                        </a>
+                        <figcaption>Направления</figcaption>
+                    </figure>
+
+                    <figure>
+                        <a href="../assets/screens/settings.webp" class="screenshot">
+                            <img src="../assets/screens/settings.webp"
+                                 alt="Rosetun: настройки защиты"
+                                 loading="lazy">
+                        </a>
+                        <figcaption>Настройки защиты</figcaption>
                     </figure>
                 </div>
             </section>
+
+            <dialog id="image-lightbox" class="image-lightbox"
+                    aria-label="Просмотр скриншота">
+                <button type="button" class="lightbox-close"
+                        aria-label="Закрыть">&times;</button>
+                <img alt="">
+            </dialog>
+
             <section id="verify" class="verification">
                 <p class="release-detail">
                     <span data-release-text="Версия @@VERSION@@"
@@ -223,5 +251,7 @@
             <a href="https://github.com/eoftgge/rosetun/security/policy">Сообщить об уязвимости</a>
             <a href="../en/" lang="en" hreflang="en">English</a>
         </footer>
+
+        <script src="../assets/script.js" defer></script>
     </body>
 </html>
