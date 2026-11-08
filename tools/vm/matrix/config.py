@@ -54,7 +54,7 @@ def make_plan(suite, profile_name, profile):
 
 
 def validate_plan(plan):
-    if isinstance(plan, dict) and plan.get("schema") == "rosetun.windows-list.plan.v1":
+    if isinstance(plan, dict) and plan.get("schema") in ("rosetun.windows-list.plan.v1", "rosetun.windows-list.plan.v2"):
         from .windows_list import validate_plan as validate_windows_plan
         return validate_windows_plan(plan)
     fields = {"schema", "suite", "profile", "policy", "planned_reboots", "catalog", "catalog_digest"}

@@ -192,7 +192,7 @@ request contents, node configuration, exception text or legacy free-form notes.
 
 | File | Contract |
 | --- | --- |
-| `plan.json` | `rosetun.windows-list.plan.v1`: suite, profile, mode policy, identity (`run_id`, `vm_id`, `boot_id`), ordered catalog snapshot |
+| `plan.json` | `rosetun.windows-list.plan.v2`: `catalog_digest`, suite, profile, mode policy, identity (`run_id`, `vm_id`, `boot_id`), ordered catalog snapshot |
 | `events.jsonl` | Each newline-terminated `rosetun.windows-list.event.v1` contains run ID, sequence starting at 1, stable check ID, result and safe reason code; appended immediately |
 | `report.json` | `rosetun.windows-list.report.v1`: initial identity, final boot, exact journal checks, counts (`total`, `pass`, `fail`, `skip`), cleanup status and safe infrastructure errors |
 | `status.json` | `rosetun.windows-list.status.v1`: same identity, `state: finished`, final event count; written after cleanup handling and report finalization |
@@ -213,12 +213,35 @@ Infrastructure failures are separate `{reason: infrastructure-error, place:
 execution|cleanup|export}` entries. Mandatory skips block exploratory acceptance.
 
 Cleanup is PASS only with read-back confirmation that the guest list directory is
-absent and the tunnel state is Disconnected. Existing destructive cleanup is
-unchanged. A cleanup exception is ERROR. If the matrix starts and stops a host
-node, its existing stop helper can silently decline to stop; the recorder leaves
-cleanup UNVERIFIED even if the call returns. This conservatively blocks acceptance
-and gives the reporting invocation a nonzero exit. `-KeepNode` deliberately leaves
-the host node outside cleanup. No checkpoint restoration is claimed.
+absent and the tunnel state is Disconnected, plus confirmed termination of any
+host node owned by this run and included in cleanup. The start helper captures
+PID and UTC creation ticks directly from the created process; its existing boolean
+return contract is unchanged. The stop helper retains its listener checks and
+also checks this identity before stopping. After the stop attempt, a separate
+process check confirms exit (including PID reuse), reports a still-live original
+process as ERROR, and leaves unavailable identity/state UNVERIFIED. A missing
+listener or successful stop return alone proves nothing. Guest cleanup ERROR is
+never promoted to PASS. Reused foreign nodes are left alone. `-KeepNode` explicitly
+retains a newly started node outside the cleanup scope; it is not needed to work
+around unverified stopping. No checkpoint restoration is claimed.
+
+Windows plan.v2 stores SHA-256 of the saved ordered catalog array, covering all
+six fields (`id`, `required`, `evidence`, `group`, `detail`, `title`). The canonical
+representation is compact JSON: fixed ordinal key order `detail,evidence,group,id,
+required,title`, lowercase booleans, no whitespace or final newline, UTF-8 without
+BOM. Strings use Python `ensure_ascii=True` escaping: quote and backslash escaped,
+short escapes for backspace/tab/LF/form feed/CR, other controls and all code units
+above ASCII 126 as lowercase `\uXXXX` (non-BMP characters as UTF-16 surrogate
+pairs). Slash is unescaped; Unicode is not normalized. Scenario order is significant.
+PowerShell implements this encoding explicitly without Python at runtime; ordinary
+`ConvertTo-Json` is used only for artifact serialization, not canonical hashing.
+The reader requires the stored digest and verifies it against the saved snapshot;
+it never substitutes the current `list-checks.json`. Missing, malformed or changed
+digests are rejected. Windows plan.v1 is explicitly rejected with an instruction to
+record a new run; it cannot be upgraded into verified evidence by filling in a hash.
+Linux plan.v1 and Linux reports keep their existing contract. The digest detects
+accidental changes; anyone who edits the snapshot can recompute it. It does not
+establish trusted provenance or authenticate any test result.
 
 The adapter validates schemas/types, saved identities, final boot, catalog order,
 unique IDs, contiguous sequences, full coverage, reason codes, journal/report
@@ -245,6 +268,7 @@ Autonomous checks, without Hyper-V, services, network tests or admin rights:
 python -B -m unittest discover -s tools/vm/matrix/tests -q
 pwsh -NoProfile -File tools/vm/windows/tests/Test-RosetunListResults.ps1 -Directory target/synthetic-list-001
 pwsh -NoProfile -File tools/vm/windows/tests/Test-RosetunScriptArguments.ps1
+pwsh -NoProfile -File tools/vm/windows/tests/Test-RosetunListCleanup.ps1
 ```
 
 Python integration tests execute the real PowerShell recorder in temporary
@@ -259,8 +283,9 @@ Manual checks for the owner:
    checks in the same order; retain the host transcript and all four artifacts.
 2. Run the Python report command. Expect complete exploratory acceptance when
    all 11 checks pass and cleanup is confirmed, with release false and invariant
-   UNVERIFIED. With `-UseHostNode`, expect unaccepted cleanup UNVERIFIED unless
-   the node was already running or was intentionally kept with `-KeepNode`.
+   UNVERIFIED. With `-UseHostNode` and without `-KeepNode`, also confirm that
+   the created process has ended and cleanup is PASS. An unavailable process
+   check must block acceptance with UNVERIFIED; a live original process means ERROR.
 3. In a disposable run, interrupt between checks. The absence of completion must
    block acceptance; already appended failures must remain visible. Compare a
    separate invocation without `-ResultDirectory` with the previous table and

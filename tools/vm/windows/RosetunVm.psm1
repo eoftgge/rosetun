@@ -283,9 +283,11 @@ function Start-RosetunTestNode {
         [string]$BindInterface,
         [switch]$CloudflareBlocked,
         # A second plain node for rules that leave through another server.
-        [switch]$ExitNode
+        [switch]$ExitNode,
+        [ref]$ProcessIdentity
     )
 
+    if ($ProcessIdentity) { $ProcessIdentity.Value = $null }
     $config = Get-Content -Path (Join-Path $PSScriptRoot 'test-node.json') -Raw | ConvertFrom-Json
     $tcpPort = Get-RosetunTestNodePort -CloudflareBlocked:$CloudflareBlocked -ExitNode:$ExitNode
     $udpPort = ($config.inbounds | Where-Object { $_.type -eq 'hysteria2' }).listen_port
@@ -363,6 +365,12 @@ function Start-RosetunTestNode {
 
     $node = Start-Process -FilePath $SingBoxPath -ArgumentList 'run', '--disable-color', '-c', $configPath `
         -WindowStyle Hidden -PassThru
+    if ($ProcessIdentity) {
+        # Capture from Start-Process itself, never infer ownership from a listener.
+        $ProcessIdentity.Value = [pscustomobject]@{ Id = $node.Id; CreationTicks = $null }
+        try { $ProcessIdentity.Value.CreationTicks = $node.StartTime.ToUniversalTime().Ticks }
+        catch { Write-Warning 'Test node creation time is unavailable.' }
+    }
     $deadline = (Get-Date).AddSeconds(15)
     while ($true) {
         $tcpListening = @(Get-NetTCPConnection -LocalPort $tcpPort -State Listen -ErrorAction SilentlyContinue)
@@ -427,7 +435,7 @@ function Get-RosetunTestNodeConnections {
 }
 
 function Stop-RosetunTestNode {
-    param([switch]$CloudflareBlocked, [switch]$ExitNode)
+    param([switch]$CloudflareBlocked, [switch]$ExitNode, $ProcessIdentity)
 
     $config = Get-Content -Path (Join-Path $PSScriptRoot 'test-node.json') -Raw | ConvertFrom-Json
     $tcpPort = Get-RosetunTestNodePort -CloudflareBlocked:$CloudflareBlocked -ExitNode:$ExitNode
@@ -468,6 +476,13 @@ function Stop-RosetunTestNode {
         @($udpListening | Where-Object { $_.OwningProcess -ne $node.Id }).Count -gt 0) {
         Write-Warning "Test node port ownership changed; nothing stopped."
         return
+    }
+    if ($PSBoundParameters.ContainsKey('ProcessIdentity')) {
+        if ($null -eq $ProcessIdentity -or $null -eq $ProcessIdentity.CreationTicks) { return }
+        # Bind the Process object to a handle before checking its creation time.
+        $null = $node.Handle
+        if ($node.Id -ne $ProcessIdentity.Id -or
+            $node.StartTime.ToUniversalTime().Ticks -ne $ProcessIdentity.CreationTicks) { return }
     }
     Stop-Process -InputObject $node -Force
 }

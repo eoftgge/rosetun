@@ -61,6 +61,19 @@ function Test-Step {
     }
 }
 
+function Complete-ListNodeCleanup {
+    param([string]$GuestCleanup, [bool]$Started, $ProcessIdentity, [bool]$Keep)
+    # Reused nodes and deliberately retained nodes are outside this run's cleanup scope.
+    if ($Keep -or (-not $Started -and $null -eq $ProcessIdentity)) { return $GuestCleanup }
+    $stopFailed = $false
+    try { Stop-RosetunTestNode -ProcessIdentity $ProcessIdentity }
+    catch { $stopFailed = $true; Write-Warning "Could not stop the test node: $_" }
+    $nodeCleanup = Get-RosetunListNodeCleanup $ProcessIdentity
+    if ($GuestCleanup -eq 'ERROR' -or $nodeCleanup -eq 'ERROR' -or $stopFailed) { return 'ERROR' }
+    if ($GuestCleanup -eq 'PASS' -and $nodeCleanup -eq 'PASS') { return 'PASS' }
+    return 'UNVERIFIED'
+}
+
 function Invoke-ListCli {
     param(
         [Parameter(Mandatory)][string]$ConfigPath,
@@ -85,6 +98,7 @@ function Invoke-ListCli {
 }
 
 $nodeStartedByMatrix = $false
+$nodeIdentity = $null
 try {
 if ($Build) {
     & cargo build -q --release --manifest-path (Join-Path $RepoRoot 'Cargo.toml')
@@ -97,10 +111,10 @@ if ($Build) {
 
 if ($UseHostNode) {
     if ($NodeBindInterface) {
-        $nodeStartedByMatrix = Start-RosetunTestNode -SingBoxPath $SingBoxPath -BindInterface $NodeBindInterface
+        $nodeStartedByMatrix = Start-RosetunTestNode -ProcessIdentity ([ref]$nodeIdentity) -SingBoxPath $SingBoxPath -BindInterface $NodeBindInterface
     }
     else {
-        $nodeStartedByMatrix = Start-RosetunTestNode -SingBoxPath $SingBoxPath
+        $nodeStartedByMatrix = Start-RosetunTestNode -ProcessIdentity ([ref]$nodeIdentity) -SingBoxPath $SingBoxPath
     }
 }
 
@@ -253,14 +267,14 @@ catch {
     throw
 }
 finally {
-    if ($nodeStartedByMatrix -and -not $KeepNode) {
+    if ($recorder) {
+        $cleanup = Complete-ListNodeCleanup -GuestCleanup $cleanup -Started $nodeStartedByMatrix `
+            -ProcessIdentity $nodeIdentity -Keep ([bool]$KeepNode)
+        if ($cleanup -eq 'ERROR') { Add-RosetunListError -Recorder $recorder -Place cleanup }
+    }
+    elseif ($nodeStartedByMatrix -and -not $KeepNode) {
         try { Stop-RosetunTestNode }
-        catch {
-            if ($recorder) { $cleanup = 'ERROR'; Add-RosetunListError -Recorder $recorder -Place cleanup }
-            Write-Warning "Could not stop the test node: $_"
-        }
-        # Stop-RosetunTestNode can return without stopping a process.
-        if ($recorder -and $cleanup -ne 'ERROR') { $cleanup = 'UNVERIFIED' }
+        catch { Write-Warning "Could not stop the test node: $_" }
     }
     if ($recorder) {
         try {

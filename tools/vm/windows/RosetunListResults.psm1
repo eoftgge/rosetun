@@ -2,6 +2,65 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+function ConvertTo-RosetunListCanonicalString {
+    param([AllowEmptyString()][string]$Value)
+    $text = [Text.StringBuilder]::new()
+    $null = $text.Append('"')
+    foreach ($unit in $Value.ToCharArray()) {
+        $code = [int]$unit
+        $escaped = switch ($code) {
+            8 { '\b' }; 9 { '\t' }; 10 { '\n' }; 12 { '\f' }; 13 { '\r' }
+            34 { '\"' }; 92 { '\\' }
+            default {
+                if ($code -lt 32 -or $code -gt 126) { '\u' + $code.ToString('x4') }
+                else { [string]$unit }
+            }
+        }
+        $null = $text.Append($escaped)
+    }
+    $null = $text.Append('"')
+    return $text.ToString()
+}
+
+function Get-RosetunListCatalogDigest {
+    param([object[]]$Rows)
+    # Fixed ordinal key order for the six-field catalog contract, with no whitespace.
+    $items = foreach ($row in $Rows) {
+        $fields = foreach ($key in @('detail', 'evidence', 'group', 'id', 'required', 'title')) {
+            $value = if ($key -eq 'required') {
+                if ($row.required -isnot [bool]) { throw 'Catalog required must be boolean.' }
+                if ($row.required) { 'true' } else { 'false' }
+            } else { ConvertTo-RosetunListCanonicalString $row.$key }
+            '"' + $key + '":' + $value
+        }
+        '{' + ($fields -join ',') + '}'
+    }
+    $bytes = [Text.Encoding]::UTF8.GetBytes('[' + ($items -join ',') + ']')
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { return ([BitConverter]::ToString($sha.ComputeHash($bytes))).Replace('-', '').ToLowerInvariant() }
+    finally { $sha.Dispose() }
+}
+
+function Get-RosetunListNodeCleanup {
+    param($ProcessIdentity)
+    if ($null -eq $ProcessIdentity -or $null -eq $ProcessIdentity.CreationTicks) { return 'UNVERIFIED' }
+    try {
+        $process = Get-Process -Id $ProcessIdentity.Id -ErrorAction Stop
+        $null = $process.Handle
+        if ($process.StartTime.ToUniversalTime().Ticks -ne $ProcessIdentity.CreationTicks) {
+            # PID reuse proves that the original process ended, not ownership of the replacement.
+            return 'PASS'
+        }
+        if ($process.WaitForExit(5000)) { return 'PASS' }
+        return 'ERROR'
+    }
+    catch [Microsoft.PowerShell.Commands.ProcessCommandException] {
+        if ($_.FullyQualifiedErrorId -like 'NoProcessFoundForGivenId*') { return 'PASS' }
+        return 'UNVERIFIED'
+    }
+    catch { return 'UNVERIFIED' }
+}
+
 function Write-RosetunListJson {
     param($Recorder, [string]$Name, $Value)
     $temporary = Join-Path $Recorder.Directory ($Name + '.tmp')
@@ -19,12 +78,12 @@ function New-RosetunListResults {
         [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$VmId,
         [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$BootId
     )
-    $rows = @(Get-Content -LiteralPath (Join-Path $PSScriptRoot 'list-checks.json') -Raw | ConvertFrom-Json)
+    $rows = @(Get-Content -LiteralPath (Join-Path $PSScriptRoot 'list-checks.json') -Encoding UTF8 -Raw | ConvertFrom-Json | ForEach-Object { $_ })
     # New-Item without Force refuses an existing run directory, even an empty one.
     $null = New-Item -Path $Directory -ItemType Directory -ErrorAction Stop
     $identity = @{ run_id = [guid]::NewGuid().ToString(); vm_id = $VmId; boot_id = $BootId }
-    $plan = @{ schema = 'rosetun.windows-list.plan.v1'; suite = 'windows-list'; profile = 'exploratory'
-        policy = @{ mode = 'exploratory' }; identity = $identity; catalog = $rows }
+    $plan = @{ schema = 'rosetun.windows-list.plan.v2'; suite = 'windows-list'; profile = 'exploratory'
+        policy = @{ mode = 'exploratory' }; identity = $identity; catalog = $rows; catalog_digest = Get-RosetunListCatalogDigest $rows }
     $recorder = [pscustomobject]@{ Directory = [IO.Path]::GetFullPath($Directory); Plan = $plan
         Events = [Collections.Generic.List[object]]::new(); Errors = [Collections.Generic.List[object]]::new()
         Broken = $false; Finished = $false }
@@ -82,4 +141,4 @@ function Complete-RosetunListResults {
     if ($Recorder.Broken) { throw 'List result export failed.' }
 }
 
-Export-ModuleMember -Function New-RosetunListResults, Add-RosetunListResult, Add-RosetunListError, Complete-RosetunListResults
+Export-ModuleMember -Function New-RosetunListResults, Add-RosetunListResult, Add-RosetunListError, Complete-RosetunListResults, Get-RosetunListNodeCleanup, Get-RosetunListCatalogDigest
