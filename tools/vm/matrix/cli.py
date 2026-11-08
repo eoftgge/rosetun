@@ -28,7 +28,8 @@ def main(argv=None):
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("doctor", help="inspect local prerequisites without executing binaries")
     plan = commands.add_parser("plan", help="write a deterministic catalog snapshot to stdout")
-    plan.add_argument("suite", choices=[*SUITES, "windows-list"])
+    plan.add_argument("suite", choices=[*SUITES, "windows-list", "windows-proxy"])
+    plan.add_argument("--without-host-node", action="store_true", help="plan the limited Windows Proxy variant")
     plan.add_argument("--config", required=True)
     plan.add_argument("--profile", required=True)
     report = commands.add_parser("report", help="assess saved report.json and adjacent status.json")
@@ -40,7 +41,14 @@ def main(argv=None):
             result = doctor()
             code = 0 if result["ready"] else 1
         elif args.command == "plan":
-            result = make_plan(args.suite, args.profile, load_profile(args.config, args.profile))
+            profile = load_profile(args.config, args.profile)
+            if args.without_host_node and args.suite != 'windows-proxy':
+                raise ValueError('coverage option requires Windows Proxy')
+            if args.suite == 'windows-proxy':
+                from .windows_proxy import make_plan as proxy_plan
+                result = proxy_plan(args.profile, profile, use_host_node=not args.without_host_node)
+            else:
+                result = make_plan(args.suite, args.profile, profile)
             code = 0
         else:
             result = assess_files(args.report_path, args.plan)

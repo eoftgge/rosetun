@@ -10,6 +10,7 @@ param(
     [string]$NodeBindInterface,
     [switch]$KeepNode,
     [switch]$Build,
+    [string]$ResultDirectory,
     # The local proxy's port in every request of this matrix.
     [int]$ProxyPort = 10808,
     # Answers through the proxy; a name, so the engine has to resolve it.
@@ -22,6 +23,17 @@ $RepoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..\..'))
 if (-not $BuildDir) { $BuildDir = Join-Path $RepoRoot 'target\release' }
 Import-Module (Join-Path $PSScriptRoot 'RosetunVm.psm1') -Force
 
+$recorder = $null
+$nodeIdentity = $null
+$nodeStartedByMatrix = $false
+$runError = $false
+$components = @{}
+if ($ResultDirectory) {
+    Import-Module (Join-Path $PSScriptRoot 'RosetunProxyResults.psm1') -Force
+    $recorder = New-RosetunProxyResults -Directory $ResultDirectory `
+        -VmId ((Get-VM -Name (Get-RosetunVmName) -ErrorAction Stop).Id.ToString()) `
+        -BootId (Get-RosetunGuestBootTime) -UseHostNode ([bool]$UseHostNode) -KeepNode ([bool]$KeepNode) -ProxyPort $ProxyPort
+}
 $results = [System.Collections.Generic.List[object]]::new()
 $RequestNames = @('proxy-plain.json', 'proxy-strict.json', 'proxy-share.json', 'proxy-share-strict.json', 'proxy-share-lan.json', 'tun-strict.json')
 $DesktopTool = 'desktop_proxy.exe'
@@ -29,17 +41,21 @@ $RecordName = 'desktop-proxy-matrix.json'
 
 function Test-Step {
     param(
+        [Parameter(Mandatory)][string]$Id,
         [Parameter(Mandatory)][string]$Scenario,
         [Parameter(Mandatory)][string]$Expectation,
         [Parameter(Mandatory)][scriptblock]$Condition,
         [string]$Note = ''
     )
+    if ($recorder) { $Note = '' }
+    $reason = 'condition-false'
     try {
         $passed = [bool](& $Condition)
     }
     catch {
+        $reason = 'condition-exception'
         $passed = $false
-        $Note = "$_"
+        $Note = if ($recorder) { 'condition-exception' } else { "$_" }
     }
     $results.Add([pscustomobject]@{
         Result = if ($passed) { 'PASS' } else { 'FAIL' }
@@ -50,6 +66,70 @@ function Test-Step {
     if (-not $passed) {
         Write-Host "FAIL  $Scenario - $Expectation ($Note)" -ForegroundColor Red
     }
+    if ($recorder) {
+        Add-RosetunListResult $recorder $Id $(if ($passed) { 'PASS' } else { 'FAIL' }) $(if ($passed) { 'checked' } else { $reason })
+    }
+}
+
+function Restore-RosetunProxyDesktop {
+    param($Original, $Expected)
+    try {
+        $current = Get-RosetunGuestDesktopProxy
+        if (-not (Compare-RosetunProxySettings $current $Expected)) { return 'UNVERIFIED' }
+        Set-RosetunGuestDesktopProxy -Enabled $Original.Enabled -Server $Original.Server -Script $Original.Script
+        if (Compare-RosetunProxySettings (Get-RosetunGuestDesktopProxy) $Original) { return 'PASS' }
+        return 'ERROR'
+    }
+    catch { Add-RosetunListError $recorder cleanup; return 'UNVERIFIED' }
+}
+
+function Complete-RosetunProxyCleanup {
+    param($Components)
+    foreach ($name in @('node', 'lan', 'watch', 'listener', 'connection', 'lockdown', 'desktop', 'files')) {
+        if (-not $Components.ContainsKey($name)) { $Components[$name] = 'NOT_CREATED' }
+    }
+    # Read back only resources already targeted by the legacy cleanup.
+    foreach ($name in @('lan', 'watch', 'listener', 'connection', 'files')) {
+        if ($Components[$name] -ne 'UNVERIFIED') { continue }
+        try {
+            $confirmed = switch ($name) {
+                'lan' {
+                    if (Get-Variable lanDevice -Scope Script -ErrorAction SilentlyContinue) {
+                        @(Get-NetIPAddress -ErrorAction Stop | Where-Object { $_.IPAddress -eq $script:lanDevice.Address }).Count -eq 0 -and
+                        @(Get-NetFirewallRule -ErrorAction Stop | Where-Object { $_.Name -eq $script:lanDevice.RuleName }).Count -eq 0 -and
+                        -not $script:lanDevice.Listener.Server.IsBound
+                    } else { $null }
+                }
+                'watch' {
+                    Invoke-RosetunGuest -ScriptBlock {
+                        param($dir)
+                        -not (Test-Path -LiteralPath (Join-Path $dir 'rosetun-egress-watch.txt') -ErrorAction Stop) -and
+                        @(Get-ScheduledTask -ErrorAction Stop | Where-Object { $_.TaskName -eq 'RosetunEgressWatch' }).Count -eq 0 -and
+                        @(Get-CimInstance Win32_Process -Filter "Name = 'curl.exe' OR Name = 'cmd.exe'" -ErrorAction Stop |
+                            Where-Object { $_.CommandLine -like '*rosetun-egress-probe=*' }).Count -eq 0
+                    } -ArgumentList (Get-RosetunGuestDir)
+                }
+                'listener' {
+                    if (Get-Variable holder -ErrorAction SilentlyContinue) {
+                        Invoke-RosetunGuest -ScriptBlock {
+                            param($processId)
+                            @(Get-Process -ErrorAction Stop | Where-Object { $_.Id -eq $processId }).Count -eq 0
+                        } -ArgumentList $holder
+                    } else { $null }
+                }
+                'connection' { (Get-RosetunState) -eq 'Disconnected' }
+                'files' {
+                    Invoke-RosetunGuest -ScriptBlock {
+                        param($dir, [string[]]$names)
+                        @($names | Where-Object { Test-Path -LiteralPath (Join-Path $dir $_) -ErrorAction Stop }).Count -eq 0
+                    } -ArgumentList (Get-RosetunGuestDir), (@($RequestNames) + @($RecordName, $DesktopTool))
+                }
+            }
+            if ($null -ne $confirmed) { $Components[$name] = if ($confirmed -eq $true) { 'PASS' } else { 'ERROR' } }
+        }
+        catch { $Components[$name] = 'UNVERIFIED'; Add-RosetunListError $recorder cleanup }
+    }
+    # Lockdown off has no independent read-back in this runner. Do not infer PASS from CLI exit.
 }
 
 function New-RosetunProxyRequests {
@@ -142,12 +222,13 @@ function Set-RosetunGuestDesktopProxy {
             Remove-ItemProperty -Path $key -Name AutoConfigURL -ErrorAction SilentlyContinue
         }
     } -ArgumentList $Enabled, $Server, $Script
+    if ($recorder) { $script:desktopExpected = [pscustomobject]@{ Enabled = $Enabled; Server = $Server; Script = $Script } }
 }
 
 function Invoke-RosetunGuestDesktopTool {
     # The module the GUI uses, for a guest where the GUI cannot run.
     param([Parameter(Mandatory)][string[]]$Arguments)
-    Invoke-RosetunGuest -ScriptBlock {
+    $answer = Invoke-RosetunGuest -ScriptBlock {
         param($dir, $tool, $record, [string[]]$toolArgs)
         $path = Join-Path $dir $tool
         $recordPath = Join-Path $dir $record
@@ -157,6 +238,11 @@ function Invoke-RosetunGuestDesktopTool {
         $global:LASTEXITCODE = 0
         [pscustomobject]@{ ExitCode = $code; Output = ($output -join ' ') }
     } -ArgumentList (Get-RosetunGuestDir), $DesktopTool, $RecordName, $Arguments
+    if ($recorder -and $answer.ExitCode -eq 0) {
+        if ($Arguments[0] -eq 'set') { $script:desktopExpected = [pscustomobject]@{ Enabled = 1; Server = "127.0.0.1:$ProxyPort"; Script = '' } }
+        elseif ($answer.Output -match 'Restored' -and (Get-Variable own -ErrorAction SilentlyContinue)) { $script:desktopExpected = $own }
+    }
+    return $answer
 }
 
 function Test-RosetunGuestRecord {
@@ -197,13 +283,15 @@ try {
     }
     if ($UseHostNode) {
         if ($NodeBindInterface) {
-            $nodeStartedByMatrix = Start-RosetunTestNode -SingBoxPath $SingBoxPath -BindInterface $NodeBindInterface
+            $nodeStartedByMatrix = Start-RosetunTestNode -ProcessIdentity ([ref]$nodeIdentity) -SingBoxPath $SingBoxPath -BindInterface $NodeBindInterface
         }
         else {
-            $nodeStartedByMatrix = Start-RosetunTestNode -SingBoxPath $SingBoxPath
+            $nodeStartedByMatrix = Start-RosetunTestNode -ProcessIdentity ([ref]$nodeIdentity) -SingBoxPath $SingBoxPath
         }
     }
 
+    $components.connection = 'UNVERIFIED'
+    $components.files = 'UNVERIFIED'
     Stop-RosetunHelper
     Publish-Rosetun -BuildDir $BuildDir -SingBoxPath $SingBoxPath -RequestPath $RequestPath -UseHostNode:$UseHostNode
     Copy-Item -ToSession (Connect-RosetunVm) -Force `
@@ -213,22 +301,24 @@ try {
     Start-RosetunHelper
     New-RosetunProxyRequests -Port $ProxyPort
     $guestAddress = @(Get-RosetunGuestIpv4)[0]
+    $components.lan = 'UNVERIFIED'
     $script:lanDevice = Start-RosetunLanDevice
 
     # The proxy carries what is sent to it; what is not stays outside the VPN.
-    Test-Step 'plain' 'the proxy mode connects without a kill switch' { Connect-RosetunProxy 'proxy-plain.json' }
-    Test-Step 'plain' 'no adapter comes up' { -not (Test-RosetunTunAdapter) }
-    Test-Step 'plain' 'a request through the proxy goes through the VPN' {
+    Test-Step -Id 'plain.connect' 'plain' 'the proxy mode connects without a kill switch' { Connect-RosetunProxy 'proxy-plain.json' }
+    Test-Step -Id 'plain.adapter' 'plain' 'no adapter comes up' { -not (Test-RosetunTunAdapter) }
+    Test-Step -Id 'plain.proxy' 'plain' 'a request through the proxy goes through the VPN' {
         Test-RosetunProxyCarries -Url $ProbeUrl -Port $ProxyPort
     }
-    Test-Step 'plain' 'a request around the proxy goes out by itself' { Test-RosetunDirectEgress }
-    Test-Step 'plain' 'other devices do not reach an unshared proxy' {
+    Test-Step -Id 'plain.direct' 'plain' 'a request around the proxy goes out by itself' { Test-RosetunDirectEgress }
+    Test-Step -Id 'plain.unshared' 'plain' 'other devices do not reach an unshared proxy' {
         -not (Test-RosetunHostThroughGuestProxy -GuestAddress $guestAddress -Port $ProxyPort -Url $ProbeUrl)
     }
 
     # The port is checked before the engine and any protection start.
     Disconnect-RosetunTunnel | Out-Null
     Wait-RosetunState 'Disconnected' | Out-Null
+    $components.listener = 'UNVERIFIED'
     $holder = Invoke-RosetunGuest -ScriptBlock {
         param($port)
         $process = Start-Process -FilePath 'powershell.exe' -PassThru -WindowStyle Hidden -ArgumentList @(
@@ -245,117 +335,129 @@ try {
     } -ArgumentList $ProxyPort
     try {
         $busy = Connect-RosetunTunnel -RequestName 'proxy-strict.json' -Quiet
-        Test-Step 'busy port' 'the connect fails naming the port' -Note $busy.Output {
+        Test-Step -Id 'busy.reject' 'busy port' 'the connect fails naming the port' -Note $busy.Output {
             $busy.ExitCode -ne 0 -and $busy.Output -match "\b$ProxyPort\b"
         }
-        Test-Step 'busy port' 'no engine started and no filter stayed' { -not (Test-RosetunEngineRunning) }
-        Test-Step 'busy port' 'the network stays open' { Test-RosetunDirectEgress }
+        Test-Step -Id 'busy.engine' 'busy port' 'no engine started and no filter stayed' { -not (Test-RosetunEngineRunning) }
+        Test-Step -Id 'busy.direct' 'busy port' 'the network stays open' { Test-RosetunDirectEgress }
     }
     finally {
-        Invoke-RosetunGuest -ScriptBlock {
-            param($id)
-            Stop-Process -Id $id -Force -ErrorAction SilentlyContinue
-        } -ArgumentList $holder
+        try {
+            Invoke-RosetunGuest -ScriptBlock {
+                param($id)
+                Stop-Process -Id $id -Force -ErrorAction SilentlyContinue
+            } -ArgumentList $holder
+        }
+        catch { if ($recorder) { $components.listener = 'ERROR'; Add-RosetunListError $recorder cleanup }; throw }
     }
     Wait-RosetunState 'Failed' | Out-Null
     Disconnect-RosetunTunnel | Out-Null
 
     # The strict kill switch: the first phase for as long as the session lasts.
-    Test-Step 'strict' 'the proxy mode connects with the kill switch' { Connect-RosetunProxy 'proxy-strict.json' }
-    Test-Step 'strict' 'a request through the proxy goes through the VPN' {
+    Test-Step -Id 'strict.connect' 'strict' 'the proxy mode connects with the kill switch' { Connect-RosetunProxy 'proxy-strict.json' }
+    Test-Step -Id 'strict.proxy' 'strict' 'a request through the proxy goes through the VPN' {
         Test-RosetunProxyCarries -Url $ProbeUrl -Port $ProxyPort
     }
-    Test-Step 'strict' 'a request around the proxy is blocked' { -not (Test-RosetunDirectEgress) }
-    Test-Step 'strict' 'DNS around the proxy is blocked' { -not (Test-RosetunDirectDns) }
+    Test-Step -Id 'strict.direct' 'strict' 'a request around the proxy is blocked' { -not (Test-RosetunDirectEgress) }
+    Test-Step -Id 'strict.dns' 'strict' 'DNS around the proxy is blocked' { -not (Test-RosetunDirectDns) }
 
     # The engine dies: its restart must not open anything.
+    $components.watch = 'UNVERIFIED'
     Start-RosetunEgressWatch
     $egressWatchActive = $true
     try {
         Stop-RosetunEngine
-        Test-Step 'strict' 'a killed engine comes back' { Wait-RosetunState 'Connected' }
+        Test-Step -Id 'strict.restart' 'strict' 'a killed engine comes back' { Wait-RosetunState 'Connected' }
     }
     finally {
-        $watch = Stop-RosetunEgressWatch
+        try { $watch = Stop-RosetunEgressWatch }
+        catch { if ($recorder) { $components.watch = 'ERROR'; Add-RosetunListError $recorder cleanup }; throw }
         $egressWatchActive = $false
     }
-    Test-Step 'strict' "nothing leaves directly while it restarts ($($watch.Probes) probes)" {
+    Test-Step -Id 'strict.watch' 'strict' "nothing leaves directly while it restarts ($($watch.Probes) probes)" {
         $watch.Probes -gt 0 -and $watch.Leaks -eq 0
     }
 
     # The mode changes under the standing kill switch, both ways.
-    Test-Step 'mode change' 'TUN with the kill switch connects' { Connect-RosetunProxy 'tun-strict.json' }
+    Test-Step -Id 'mode.tun' 'mode change' 'TUN with the kill switch connects' { Connect-RosetunProxy 'tun-strict.json' }
+    $components.watch = 'UNVERIFIED'
     Start-RosetunEgressWatch
     $egressWatchActive = $true
     try {
         $toProxy = Invoke-RosetunApply -RequestName 'proxy-strict.json'
-        Test-Step 'mode change' 'TUN to the proxy applies' -Note $toProxy.Output { $toProxy.ExitCode -eq 0 }
-        Test-Step 'mode change' 'the adapter is gone' {
+        Test-Step -Id 'mode.to-proxy' 'mode change' 'TUN to the proxy applies' -Note $toProxy.Output { $toProxy.ExitCode -eq 0 }
+        Test-Step -Id 'mode.adapter-gone' 'mode change' 'the adapter is gone' {
             Wait-RosetunCondition { -not (Test-RosetunTunAdapter) }
         }
-        Test-Step 'mode change' 'the proxy carries traffic' { Test-RosetunProxyCarries -Url $ProbeUrl -Port $ProxyPort }
+        Test-Step -Id 'mode.proxy' 'mode change' 'the proxy carries traffic' { Test-RosetunProxyCarries -Url $ProbeUrl -Port $ProxyPort }
         $toTun = Invoke-RosetunApply -RequestName 'tun-strict.json'
-        Test-Step 'mode change' 'the proxy back to TUN applies' -Note $toTun.Output { $toTun.ExitCode -eq 0 }
-        Test-Step 'mode change' 'the adapter is back and carries traffic' { Test-RosetunTunnelEgress }
+        Test-Step -Id 'mode.to-tun' 'mode change' 'the proxy back to TUN applies' -Note $toTun.Output { $toTun.ExitCode -eq 0 }
+        Test-Step -Id 'mode.tunnel' 'mode change' 'the adapter is back and carries traffic' { Test-RosetunTunnelEgress }
     }
     finally {
-        $watch = Stop-RosetunEgressWatch
+        try { $watch = Stop-RosetunEgressWatch }
+        catch { if ($recorder) { $components.watch = 'ERROR'; Add-RosetunListError $recorder cleanup }; throw }
         $egressWatchActive = $false
     }
-    Test-Step 'mode change' "nothing leaves directly during the changes ($($watch.Probes) probes)" {
+    Test-Step -Id 'mode.watch' 'mode change' "nothing leaves directly during the changes ($($watch.Probes) probes)" {
         $watch.Probes -gt 0 -and $watch.Leaks -eq 0
     }
 
     # Other devices on the guest's network, and no one else.
     foreach ($requestName in @('proxy-share.json', 'proxy-share-strict.json')) {
-        Test-Step 'sharing' "$requestName connects" { Connect-RosetunProxy $requestName }
-        Test-Step 'sharing' "$requestName`: the host on the guest's network uses the proxy" {
+        $variant = if ($requestName -eq 'proxy-share.json') { 'plain' } else { 'strict' }
+        Test-Step -Id "sharing.$variant.connect" 'sharing' "$requestName connects" { Connect-RosetunProxy $requestName }
+        Test-Step -Id "sharing.$variant.host" 'sharing' "$requestName`: the host on the guest's network uses the proxy" {
             Test-RosetunHostThroughGuestProxy -GuestAddress $guestAddress -Port $ProxyPort -Url $ProbeUrl
         }
         if ($UseHostNode) {
-            Test-Step 'sharing' "$requestName`: the VPN server's own address does not get in" {
+            Test-Step -Id "sharing.$variant.server" 'sharing' "$requestName`: the VPN server's own address does not get in" {
                 -not (Test-RosetunHostThroughGuestProxy -GuestAddress $guestAddress -Port $ProxyPort -Url $ProbeUrl -FromServer)
             }
         }
-        Test-Step 'sharing' "$requestName`: the proxy still answers on loopback" {
+        if (-not $UseHostNode -and $recorder) {
+            Add-RosetunListResult $recorder "sharing.$variant.server" SKIP host-node-disabled
+        }
+        Test-Step -Id "sharing.$variant.loopback" 'sharing' "$requestName`: the proxy still answers on loopback" {
             Test-RosetunProxyCarries -Url $ProbeUrl -Port $ProxyPort
         }
     }
-    Test-Step 'sharing' 'with the switch off the host does not get in' {
+    Test-Step -Id 'sharing.off' 'sharing' 'with the switch off the host does not get in' {
         Connect-RosetunProxy 'proxy-plain.json'
         -not (Test-RosetunHostThroughGuestProxy -GuestAddress $guestAddress -Port $ProxyPort -Url $ProbeUrl)
     }
     Disconnect-RosetunTunnel | Out-Null
     Wait-RosetunState 'Disconnected' | Out-Null
-    Test-Step 'sharing' 'after a disconnect the host does not get in' {
+    Test-Step -Id 'sharing.disconnected' 'sharing' 'after a disconnect the host does not get in' {
         -not (Test-RosetunHostThroughGuestProxy -GuestAddress $guestAddress -Port $ProxyPort -Url $ProbeUrl)
     }
 
     # The desktop's settings, through the module the GUI uses.
+    $components.desktop = 'UNVERIFIED'
     $original = Get-RosetunGuestDesktopProxy
     $script:desktopChanged = $true
     Set-RosetunGuestDesktopProxy -Enabled 0 -Server '' -Script 'http://proxy.example.com/wpad.dat'
     $own = Get-RosetunGuestDesktopProxy
     $set = Invoke-RosetunGuestDesktopTool @('set', "$ProxyPort")
-    Test-Step 'desktop' 'the settings point at the local proxy' -Note $set.Output {
+    Test-Step -Id 'desktop.set' 'desktop' 'the settings point at the local proxy' -Note $set.Output {
         $now = Get-RosetunGuestDesktopProxy
         $set.ExitCode -eq 0 -and $now.Enabled -eq 1 -and $now.Server -eq "127.0.0.1:$ProxyPort" -and -not $now.Script
     }
-    Test-Step 'desktop' 'the record of the user''s settings is there' { Test-RosetunGuestRecord }
+    Test-Step -Id 'desktop.record' 'desktop' 'the record of the user''s settings is there' { Test-RosetunGuestRecord }
     $back = Invoke-RosetunGuestDesktopTool @('restore')
-    Test-Step 'desktop' 'after a disconnect the settings are back, script included' -Note $back.Output {
+    Test-Step -Id 'desktop.restore' 'desktop' 'after a disconnect the settings are back, script included' -Note $back.Output {
         $now = Get-RosetunGuestDesktopProxy
         $back.Output -match 'Restored' -and $now.Enabled -eq $own.Enabled -and $now.Script -eq $own.Script
     }
-    Test-Step 'desktop' 'the record is gone' { -not (Test-RosetunGuestRecord) }
+    Test-Step -Id 'desktop.record-gone' 'desktop' 'the record is gone' { -not (Test-RosetunGuestRecord) }
 
     # The tool exits without restoring: what killing the GUI leaves behind.
     Invoke-RosetunGuestDesktopTool @('set', "$ProxyPort") | Out-Null
-    Test-Step 'crash' 'the proxy and the record outlive the process' {
+    Test-Step -Id 'crash.persist' 'crash' 'the proxy and the record outlive the process' {
         (Get-RosetunGuestDesktopProxy).Server -eq "127.0.0.1:$ProxyPort" -and (Test-RosetunGuestRecord)
     }
     $back = Invoke-RosetunGuestDesktopTool @('restore')
-    Test-Step 'crash' 'the next start restores them' -Note $back.Output {
+    Test-Step -Id 'crash.restore' 'crash' 'the next start restores them' -Note $back.Output {
         $back.Output -match 'Restored' -and (Get-RosetunGuestDesktopProxy).Script -eq $own.Script
     }
 
@@ -363,54 +465,69 @@ try {
     Invoke-RosetunGuestDesktopTool @('set', "$ProxyPort") | Out-Null
     Set-RosetunGuestDesktopProxy -Enabled 1 -Server 'proxy.example.com:3128' -Script ''
     $back = Invoke-RosetunGuestDesktopTool @('restore')
-    Test-Step 'foreign' 'settings changed since stay as they are' -Note $back.Output {
+    Test-Step -Id 'foreign.preserve' 'foreign' 'settings changed since stay as they are' -Note $back.Output {
         $now = Get-RosetunGuestDesktopProxy
         $back.Output -match 'LeftAsTheyAre' -and $now.Server -eq 'proxy.example.com:3128' -and
             -not (Test-RosetunGuestRecord)
     }
 
     # Lockdown keeps its rules: closed inbound without its "Local network".
+    $components.lockdown = 'UNVERIFIED'
     $lockdown = Invoke-RosetunCli -Quiet 'lockdown' 'on' '--lan' 'off'
-    Test-Step 'lockdown' 'Lockdown goes on without its local network' -Note $lockdown.Output { $lockdown.ExitCode -eq 0 }
+    Test-Step -Id 'lockdown.on' 'lockdown' 'Lockdown goes on without its local network' -Note $lockdown.Output { $lockdown.ExitCode -eq 0 }
     try {
-        Test-Step 'lockdown' 'a shared proxy connects under it' { Connect-RosetunProxy 'proxy-share.json' }
-        Test-Step 'lockdown' 'the proxy carries traffic' { Test-RosetunProxyCarries -Url $ProbeUrl -Port $ProxyPort }
-        Test-Step 'lockdown' 'a request around the proxy is blocked' { -not (Test-RosetunDirectEgress) }
-        Test-Step 'lockdown' 'the host does not get in' {
+        Test-Step -Id 'lockdown.connect' 'lockdown' 'a shared proxy connects under it' { Connect-RosetunProxy 'proxy-share.json' }
+        Test-Step -Id 'lockdown.proxy' 'lockdown' 'the proxy carries traffic' { Test-RosetunProxyCarries -Url $ProbeUrl -Port $ProxyPort }
+        Test-Step -Id 'lockdown.direct' 'lockdown' 'a request around the proxy is blocked' { -not (Test-RosetunDirectEgress) }
+        Test-Step -Id 'lockdown.host-blocked' 'lockdown' 'the host does not get in' {
             -not (Test-RosetunHostThroughGuestProxy -GuestAddress $guestAddress -Port $ProxyPort -Url $ProbeUrl)
         }
         Disconnect-RosetunTunnel | Out-Null
         Wait-RosetunState 'Disconnected' | Out-Null
 
         $lockdown = Invoke-RosetunCli -Quiet 'lockdown' 'on' '--lan' 'on'
-        Test-Step 'lockdown' 'Lockdown takes its local network' -Note $lockdown.Output { $lockdown.ExitCode -eq 0 }
+        Test-Step -Id 'lockdown.lan-on' 'lockdown' 'Lockdown takes its local network' -Note $lockdown.Output { $lockdown.ExitCode -eq 0 }
         # With "Local network" on too: an administrator's connect makes Lockdown's local
         # network follow the request, and this matrix's CLI runs as one.
-        Test-Step 'lockdown' 'a shared proxy connects' { Connect-RosetunProxy 'proxy-share-lan.json' }
-        Test-Step 'lockdown' 'with its local network the host gets in' {
+        Test-Step -Id 'lockdown.lan-connect' 'lockdown' 'a shared proxy connects' { Connect-RosetunProxy 'proxy-share-lan.json' }
+        Test-Step -Id 'lockdown.host-allowed' 'lockdown' 'with its local network the host gets in' {
             Test-RosetunHostThroughGuestProxy -GuestAddress $guestAddress -Port $ProxyPort -Url $ProbeUrl
         }
     }
     finally {
         Disconnect-RosetunTunnel | Out-Null
         Wait-RosetunState 'Disconnected' | Out-Null
-        Invoke-RosetunCli -Quiet 'lockdown' 'off' | Out-Null
+        $lockdownOff = Invoke-RosetunCli -Quiet 'lockdown' 'off'
+        if ($recorder -and $lockdownOff.ExitCode -ne 0) { $components.lockdown = 'ERROR'; Add-RosetunListError $recorder cleanup }
     }
+}
+catch {
+    $runError = $true
+    if ($recorder) { throw 'Proxy matrix infrastructure error.' }
+    throw
 }
 finally {
     if (Get-Variable -Name lanDevice -Scope Script -ValueOnly -ErrorAction SilentlyContinue) {
         try { Stop-RosetunLanDevice $script:lanDevice }
-        catch { Write-Warning "Could not remove the temporary LAN device: $_" }
+        catch { if ($recorder) { $components.lan = 'ERROR'; Add-RosetunListError $recorder cleanup }; Write-Warning $(if ($recorder) { 'Proxy cleanup infrastructure error.' } else { "Could not remove the temporary LAN device: $_" }) }
     }
     if (Get-Variable -Name egressWatchActive -ValueOnly -ErrorAction SilentlyContinue) {
         try { Stop-RosetunEgressWatch | Out-Null }
-        catch { Write-Warning "Could not stop the egress watch: $_" }
+        catch { if ($recorder) { $components.watch = 'ERROR'; Add-RosetunListError $recorder cleanup }; Write-Warning $(if ($recorder) { 'Proxy cleanup infrastructure error.' } else { "Could not stop the egress watch: $_" }) }
     }
+    $cleanupPart = 'connection'
     try {
         Disconnect-RosetunTunnel | Out-Null
+        $cleanupPart = 'desktop'
         if (Get-Variable -Name desktopChanged -Scope Script -ValueOnly -ErrorAction SilentlyContinue) {
-            Set-RosetunGuestDesktopProxy -Enabled $original.Enabled -Server $original.Server -Script $original.Script
+            if (-not $recorder) {
+                Set-RosetunGuestDesktopProxy -Enabled $original.Enabled -Server $original.Server -Script $original.Script
+            }
+            else {
+                $components.desktop = Restore-RosetunProxyDesktop -Original $original -Expected $(if (Get-Variable desktopExpected -ErrorAction SilentlyContinue) { $desktopExpected } else { $null })
+            }
         }
+        $cleanupPart = 'files'
         Invoke-RosetunGuest -ScriptBlock {
             param($dir, [string[]]$names)
             foreach ($name in $names) {
@@ -418,13 +535,25 @@ finally {
             }
         } -ArgumentList (Get-RosetunGuestDir), (@($RequestNames) + @($RecordName, $DesktopTool))
     }
-    catch { Write-Warning "Could not clean the guest: $_" }
-    if ((Get-Variable -Name nodeStartedByMatrix -ValueOnly -ErrorAction SilentlyContinue) -and -not $KeepNode) {
-        try { Stop-RosetunTestNode }
-        catch { Write-Warning "Could not stop the test node: $_" }
+    catch { if ($recorder) { $components[$cleanupPart] = 'ERROR'; Add-RosetunListError $recorder cleanup }; Write-Warning $(if ($recorder) { 'Proxy cleanup infrastructure error.' } else { "Could not clean the guest: $_" }) }
+    if (($nodeStartedByMatrix -or $null -ne $nodeIdentity) -and -not $KeepNode) {
+        try { Stop-RosetunTestNode -ProcessIdentity $nodeIdentity }
+        catch { if ($recorder) { $components.node = 'ERROR'; Add-RosetunListError $recorder cleanup }; Write-Warning $(if ($recorder) { 'Proxy cleanup infrastructure error.' } else { "Could not stop the test node: $_" }) }
+    }
+    if ($recorder) {
+        if ($null -ne $nodeIdentity -or $nodeStartedByMatrix) {
+            if (-not $components.ContainsKey('node')) { $components.node = if ($KeepNode) { 'RETAINED' } else { Get-RosetunListNodeCleanup $nodeIdentity } }
+        }
+        else { $components.node = 'NOT_CREATED' }
+        Complete-RosetunProxyCleanup -Components $components
+        $endBoot = ''
+        try { $endBoot = Get-RosetunGuestBootTime } catch { Add-RosetunListError $recorder execution }
+        if ($endBoot -ne $recorder.Plan.identity.boot_id) { Add-RosetunListError $recorder execution }
+        Complete-RosetunListResults $recorder (Get-RosetunProxyCleanupStatus $components) $endBoot $runError -Components $components
     }
 }
 
 $results | Format-Table -AutoSize
+if ($recorder -and ((Get-RosetunProxyCleanupStatus $components) -ne 'PASS' -or $recorder.Errors.Count -gt 0)) { exit 1 }
 if ($results.Result -contains 'FAIL') { exit 1 }
 exit 0

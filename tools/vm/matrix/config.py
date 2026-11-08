@@ -36,6 +36,9 @@ def load_profile(path, name):
 
 def make_plan(suite, profile_name, profile):
     validate_profile(profile)
+    if suite == "windows-proxy":
+        from .windows_proxy import make_plan as windows_plan
+        return windows_plan(profile_name, profile)
     if suite == "windows-list":
         from .windows_list import make_plan as windows_plan
         return windows_plan(profile_name, profile)
@@ -57,6 +60,9 @@ def validate_plan(plan):
     if isinstance(plan, dict) and plan.get("schema") in ("rosetun.windows-list.plan.v1", "rosetun.windows-list.plan.v2"):
         from .windows_list import validate_plan as validate_windows_plan
         return validate_windows_plan(plan)
+    if isinstance(plan, dict) and plan.get("schema") == "rosetun.windows-proxy.plan.v1":
+        from .windows_proxy import validate_plan as proxy_plan
+        return proxy_plan(plan)
     fields = {"schema", "suite", "profile", "policy", "planned_reboots", "catalog", "catalog_digest"}
     if not isinstance(plan, dict) or set(plan) != fields or plan["schema"] != PLAN_SCHEMA:
         raise ValueError("unsupported plan schema or fields")

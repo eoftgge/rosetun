@@ -1,4 +1,4 @@
-# Opt-in recorder for the List matrix only. No VM operations belong here.
+# Shared opt-in List/Proxy journal primitives. No VM operations belong here.
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
@@ -76,17 +76,23 @@ function New-RosetunListResults {
     param(
         [Parameter(Mandatory)][string]$Directory,
         [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$VmId,
-        [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$BootId
+        [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$BootId,
+        [ValidateSet('windows-list', 'windows-proxy')][string]$Suite = 'windows-list',
+        [object[]]$Catalog, $Parameters
     )
-    $rows = @(Get-Content -LiteralPath (Join-Path $PSScriptRoot 'list-checks.json') -Encoding UTF8 -Raw | ConvertFrom-Json | ForEach-Object { $_ })
+    $rows = if ($Suite -eq 'windows-proxy') { $Catalog } else {
+        @(Get-Content -LiteralPath (Join-Path $PSScriptRoot 'list-checks.json') -Encoding UTF8 -Raw | ConvertFrom-Json | ForEach-Object { $_ })
+    }
+    $prefix = 'rosetun.' + $Suite + '.'
     # Resolve relative paths through PowerShell before handing them to filesystem APIs.
     $Directory = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Directory)
     # New-Item without Force refuses an existing run directory, even an empty one.
     $runDirectory = New-Item -Path $Directory -ItemType Directory -ErrorAction Stop
     $identity = @{ run_id = [guid]::NewGuid().ToString(); vm_id = $VmId; boot_id = $BootId }
-    $plan = @{ schema = 'rosetun.windows-list.plan.v2'; suite = 'windows-list'; profile = 'exploratory'
+    $plan = @{ schema = $prefix + $(if ($Suite -eq 'windows-list') { 'plan.v2' } else { 'plan.v1' }); suite = $Suite; profile = 'exploratory'
         policy = @{ mode = 'exploratory' }; identity = $identity; catalog = $rows; catalog_digest = Get-RosetunListCatalogDigest $rows }
-    $recorder = [pscustomobject]@{ Directory = $runDirectory.FullName; Plan = $plan
+    if ($Suite -eq 'windows-proxy') { $plan.parameters = $Parameters }
+    $recorder = [pscustomobject]@{ Directory = $runDirectory.FullName; Plan = $plan; Prefix = $prefix
         Events = [Collections.Generic.List[object]]::new(); Errors = [Collections.Generic.List[object]]::new()
         Broken = $false; Finished = $false }
     Write-RosetunListJson $recorder 'plan.json' $plan
@@ -96,12 +102,12 @@ function New-RosetunListResults {
 
 function Add-RosetunListResult {
     param($Recorder, [string]$Id, [ValidateSet('PASS', 'FAIL', 'SKIP')][string]$Result,
-        [ValidateSet('checked', 'condition-false', 'condition-exception', 'srs-compile-failed', 'interrupted')][string]$Reason)
+        [ValidateSet('checked', 'condition-false', 'condition-exception', 'srs-compile-failed', 'interrupted', 'host-node-disabled')][string]$Reason)
     if ($Recorder.Finished -or $Id -notin $Recorder.Plan.catalog.id -or $Id -in @($Recorder.Events | ForEach-Object { $_.id })) {
         $Recorder.Broken = $true
         throw 'Invalid List result transition.'
     }
-    $event = @{ schema = 'rosetun.windows-list.event.v1'; run_id = $Recorder.Plan.identity.run_id
+    $event = @{ schema = $Recorder.Prefix + 'event.v1'; run_id = $Recorder.Plan.identity.run_id
         sequence = $Recorder.Events.Count + 1; id = $Id; result = $Result; reason = $Reason }
     $Recorder.Events.Add($event)
     try {
@@ -118,25 +124,27 @@ function Add-RosetunListError {
 
 function Complete-RosetunListResults {
     param($Recorder, [ValidateSet('PASS', 'ERROR', 'UNVERIFIED')][string]$Cleanup,
-        [string]$EndBootId, [bool]$Aborted = $false)
+        [string]$EndBootId, [bool]$Aborted = $false, $Components)
     if ($Recorder.Finished) { throw 'List results already finalized.' }
     if ($Aborted) { Add-RosetunListError $Recorder execution }
     if ($Recorder.Broken) { Add-RosetunListError $Recorder export }
     foreach ($row in $Recorder.Plan.catalog) {
         if ($row.id -notin @($Recorder.Events | ForEach-Object { $_.id })) {
-            Add-RosetunListResult $Recorder $row.id SKIP interrupted
+            $reason = if ($Recorder.Plan.suite -eq 'windows-proxy' -and $row.detail -eq 'host-node' -and -not $Recorder.Plan.parameters.use_host_node) { 'host-node-disabled' } else { 'interrupted' }
+            Add-RosetunListResult $Recorder $row.id SKIP $reason
         }
     }
     $summary = @{ total = $Recorder.Events.Count }
     foreach ($name in @('PASS', 'FAIL', 'SKIP')) {
         $summary[$name.ToLowerInvariant()] = @($Recorder.Events | Where-Object { $_.result -eq $name }).Count
     }
-    $report = @{ schema = 'rosetun.windows-list.report.v1'; identity = $Recorder.Plan.identity
+    $report = @{ schema = $Recorder.Prefix + 'report.v1'; identity = $Recorder.Plan.identity
         boot_id_at_end = $EndBootId; checks = $Recorder.Events.ToArray(); summary = $summary
         cleanup = @{ status = $Cleanup }; errors = $Recorder.Errors.ToArray() }
+    if ($Recorder.Plan.suite -eq 'windows-proxy') { $report.cleanup.components = $Components }
     Write-RosetunListJson $Recorder 'report.json' $report
     Write-RosetunListJson $Recorder 'status.json' @{
-        schema = 'rosetun.windows-list.status.v1'; identity = $Recorder.Plan.identity
+        schema = $Recorder.Prefix + 'status.v1'; identity = $Recorder.Plan.identity
         state = 'finished'; event_count = $Recorder.Events.Count
     }
     $Recorder.Finished = $true

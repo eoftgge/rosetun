@@ -118,3 +118,114 @@ original process is ERROR. PASS requires confirmed guest cleanup and termination
 of the owned node. Reused nodes and nodes explicitly retained by `-KeepNode`
 remain outside this run's cleanup scope. `-KeepNode` is for deliberate retention;
 it is no longer necessary to bypass unverified stopping.
+
+### Structured Windows Proxy results
+
+Reporting is opt-in. Without `-ResultDirectory` the legacy checks, ordering, table
+and exit behavior remain available. The owner runs these commands on Hyper-V
+with prebuilt artifacts and host Lockdown disabled:
+
+```powershell
+.\tools\vm\windows\Invoke-ProxyMatrix.ps1 -SingBoxPath .\tools\sing-box.exe -RequestPath .\tools\vm\windows\request-local.json -UseHostNode -ResultDirectory .\target\proxy-with-node
+.\tools\vm\windows\Invoke-ProxyMatrix.ps1 -SingBoxPath .\tools\sing-box.exe -RequestPath .\tools\vm\windows\request-local.json -ResultDirectory .\target\proxy-without-node
+python -B -m tools.vm.matrix report target/proxy-with-node/report.json --plan target/proxy-with-node/plan.json
+```
+
+Use a new result directory for each run; an existing directory is refused.
+Relative paths use the PowerShell location, including when it differs from the
+process working directory. The plan is saved before the first guest mutation.
+See [the foundation contract](../matrix/README.md#structured-windows-proxy-contract)
+for schemas and read-only planning commands.
+
+The catalog has 46 assertions in execution order. `UseHostNode` requires both
+`sharing.*.server` assertions and corroborates proxy requests with node connection
+counts. Without it those two assertions remain in the report with
+`host-node-disabled` SKIP; proxy requests then supply curl evidence alone.
+Acceptance for that variant reports `selected-variant` coverage. It never claims
+coverage of every Proxy variant. Required flags are frozen before execution;
+an interruption uses `interrupted`, including between sharing iterations.
+
+Cleanup reports `node`, `lan`, `watch`, `listener`, `connection`, `lockdown`,
+`desktop`, and `files` separately. Errors dominate unknown states, which dominate
+PASS. `NOT_CREATED` means no resource was acquired; `RETAINED` is allowed only
+for the owned node with `KeepNode`. Reused nodes are outside ownership. Owned
+node cleanup uses PID plus creation time. Read-back checks LAN address, firewall
+rule and listener; watch task, probe file and curl/cmd processes; occupied-port process;
+disconnected state; and absence of request variants, record and desktop tool.
+Read-back failures leave UNVERIFIED. Partial acquisition without a returned
+resource identity also remains UNVERIFIED. No broader cleanup is attempted.
+
+Desktop values are compared only in memory. Restoration requires equality with
+the last known settings written by the matrix, then equality with the original
+snapshot after restoration. Read denial or foreign changes leave UNVERIFIED and
+never authorize overwriting those changes. Interrupted desktop operations may
+therefore need owner recovery. Cleanup does not publish the settings or errors.
+
+**Current limitation:** Lockdown cleanup remains UNVERIFIED: this runner has no
+independent read-back proving removal after `lockdown off`. Consequently a real
+run reaching Lockdown cannot currently obtain exploratory acceptance, even if
+all assertions pass. Confirm this component manually; do not edit the saved
+report to manufacture acceptance. Autonomous all-PASS fixtures test assessment
+policy and serialization, not actual cleanup or protection. Curl and egress
+watch are not independent packet capture; invariants remain UNVERIFIED and
+release acceptance is always false.
+
+Owner verification: compare both runs' 46 rows and the two conditional SKIPs;
+inspect every cleanup component, desktop restoration, Lockdown off, node
+ownership/reuse and KeepNode; interrupt a disposable run between sharing
+iterations and inspect the finalized journal. Send back the four structured
+artifacts and sanitized discrepancies. Independent packet evidence and manual
+Hyper-V verification remain necessary for security acceptance.
+
+The table maps each existing assertion to its explicit ID. Sharing expands in
+request order: `plain` means `proxy-share.json`, `strict` means
+`proxy-share-strict.json`. Probe counts only affect display text.
+
+| Stable ID | Existing expectation |
+|---|---|
+| `plain.connect` | the proxy mode connects without a kill switch |
+| `plain.adapter` | no adapter comes up |
+| `plain.proxy` | a request through the proxy goes through the VPN |
+| `plain.direct` | a request around the proxy goes out by itself |
+| `plain.unshared` | other devices do not reach an unshared proxy |
+| `busy.reject` | the connect fails naming the port |
+| `busy.engine` | no engine started and no filter stayed |
+| `busy.direct` | the network stays open |
+| `strict.connect` | the proxy mode connects with the kill switch |
+| `strict.proxy` | a request through the proxy goes through the VPN |
+| `strict.direct` | a request around the proxy is blocked |
+| `strict.dns` | DNS around the proxy is blocked |
+| `strict.restart` | a killed engine comes back |
+| `strict.watch` | nothing leaves directly while it restarts (<probe count> probes) |
+| `mode.tun` | TUN with the kill switch connects |
+| `mode.to-proxy` | TUN to the proxy applies |
+| `mode.adapter-gone` | the adapter is gone |
+| `mode.proxy` | the proxy carries traffic |
+| `mode.to-tun` | the proxy back to TUN applies |
+| `mode.tunnel` | the adapter is back and carries traffic |
+| `mode.watch` | nothing leaves directly during the changes (<probe count> probes) |
+| `sharing.plain.connect` | proxy-share.json connects |
+| `sharing.strict.connect` | proxy-share-strict.json connects |
+| `sharing.plain.host` | proxy-share.json: the host on the guest's network uses the proxy |
+| `sharing.strict.host` | proxy-share-strict.json: the host on the guest's network uses the proxy |
+| `sharing.plain.server` | proxy-share.json: the VPN server's own address does not get in |
+| `sharing.strict.server` | proxy-share-strict.json: the VPN server's own address does not get in |
+| `sharing.plain.loopback` | proxy-share.json: the proxy still answers on loopback |
+| `sharing.strict.loopback` | proxy-share-strict.json: the proxy still answers on loopback |
+| `sharing.off` | with the switch off the host does not get in |
+| `sharing.disconnected` | after a disconnect the host does not get in |
+| `desktop.set` | the settings point at the local proxy |
+| `desktop.record` | the record of the user's settings is there |
+| `desktop.restore` | after a disconnect the settings are back, script included |
+| `desktop.record-gone` | the record is gone |
+| `crash.persist` | the proxy and the record outlive the process |
+| `crash.restore` | the next start restores them |
+| `foreign.preserve` | settings changed since stay as they are |
+| `lockdown.on` | Lockdown goes on without its local network |
+| `lockdown.connect` | a shared proxy connects under it |
+| `lockdown.proxy` | the proxy carries traffic |
+| `lockdown.direct` | a request around the proxy is blocked |
+| `lockdown.host-blocked` | the host does not get in |
+| `lockdown.lan-on` | Lockdown takes its local network |
+| `lockdown.lan-connect` | a shared proxy connects |
+| `lockdown.host-allowed` | with its local network the host gets in |

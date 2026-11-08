@@ -294,3 +294,48 @@ Manual checks for the owner:
    separate invocation without `-ResultDirectory` with the previous table and
    normal exit behavior. Send back the transcript, exit codes and artifact folder
    if behavior differs; do not include credential or request files.
+
+### Structured Windows Proxy contract
+
+`windows-proxy` is a distinct suite. It uses `rosetun.windows-proxy.plan.v1`,
+`event.v1`, `report.v1`, and `status.v1`. List plan.v2 and Linux plan.v1 retain
+their existing contracts. The Windows assessment journal/identity machinery is
+shared; coverage and cleanup policy are suite specific.
+
+```powershell
+python -B -m tools.vm.matrix plan windows-proxy --config tools/vm/matrix/example.toml --profile exploratory
+python -B -m tools.vm.matrix plan windows-proxy --without-host-node --config tools/vm/matrix/example.toml --profile exploratory
+python -B -m tools.vm.matrix report target/proxy-with-node/report.json --plan target/proxy-with-node/plan.json
+python -B -m unittest discover -s tools/vm/matrix/tests -q
+```
+
+The plan holds ordered six-field catalog rows, their canonical SHA-256 digest,
+run/VM/initial boot identity, profile/mode, and parameters `use_host_node`,
+`keep_node`, `proxy_port`. Offline plans have null identity and cannot accept a
+run. Use the producer's saved plan for assessment. Assessment never reloads the
+current catalog. Events contain only schema, run ID, sequence, stable ID,
+result and safe reason code. PASS uses `checked`; FAIL uses `condition-false` or
+`condition-exception`; SKIP uses `host-node-disabled` or `interrupted`.
+
+Reports contain initial identity, final boot identity, exact journal events,
+summary counts, safe infrastructure errors, and cleanup `{status, components}`.
+The eight component keys and limitations are described in
+[the runner guide](../windows/README.md#structured-windows-proxy-results).
+`status.json` is the completion marker written atomically after `report.json`;
+each contains its suite schema and original identity. Writes refuse overwrite;
+write errors block success. A FAIL in either report or journal survives other
+artifact corruption, invalid saved plans, cleanup errors and missing completion.
+No credentials, request contents, node addresses, desktop settings or arbitrary
+exceptions belong in these artifacts.
+
+Exploratory acceptance requires all required checks for the saved variant,
+valid conditional SKIPs, artifact agreement, unchanged guest boot, no
+infrastructure errors and confirmed component cleanup. Limited coverage is
+reported separately as `selected-variant`; full execution FAIL remains FAIL.
+Independent security evidence is not implemented: invariants are UNVERIFIED
+and release acceptance is false.
+
+Autonomous tests extract actual PowerShell AST functions and call sites, inspect
+the sharing loop variants and exercise the real recorder under PowerShell 7 and
+Windows PowerShell where available. Guest/host operations are replaced for
+cleanup tests. No VM module is imported and no matrix body is executed.
