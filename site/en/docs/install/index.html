@@ -30,13 +30,13 @@
         <main id="main" class="wrap">
             <div class="prose docs">
                 <h1>Install</h1>
-                <!-- docs-version --><p class="note">Stable release: 0.5.1 · Windows and Linux.</p><!-- /docs-version -->
+                <!-- docs-version --><p class="note">Stable release: see downloads.</p><!-- /docs-version -->
                 <nav aria-label="On this page"><a href="#requirements">Requirements</a><a href="#windows">Windows</a><a href="#debian-13">Debian 13</a><a href="#arch-linux">Arch Linux</a><a href="#verify-the-download">Verify the download</a></nav>
 <h2 id="requirements">Requirements</h2>
 <p><strong>Windows:</strong> Windows 11, x64. Windows 10 runs on one tester&#x27;s computer; the failure tests have not run on it.</p>
 <p><strong>Linux:</strong> Debian 13, amd64, with systemd and nftables (the package depends on them) and cgroup v2. polkit (<code>pkexec</code>, <code>polkitd</code>) is recommended: without it, the window cannot change Lockdown, and you run <code>sudo rosetun lockdown on</code> or <code>off</code> in a terminal. Linux is supported since 0.5.</p>
 <h2 id="windows">Windows</h2>
-<p>Download <code>rosetun-&lt;version&gt;-setup.exe</code> from <a href="https://github.com/eoftgge/rosetun/releases">Releases</a>. The installer is not code-signed yet; if SmartScreen says &quot;Windows protected your PC&quot;, select <strong>More info</strong> and then <strong>Run anyway</strong>. See the <a href="https://github.com/eoftgge/rosetun/blob/master/CODE_SIGNING_POLICY.md">code signing policy</a>.</p>
+<p>Download <code data-release-text="@@INSTALLER@@">rosetun-&lt;version&gt;-setup.exe</code> from <a href="https://github.com/eoftgge/rosetun/releases" data-release-href="@@DOWNLOAD_URL@@">Releases</a>. The installer is not code-signed yet; if SmartScreen says &quot;Windows protected your PC&quot;, select <strong>More info</strong> and then <strong>Run anyway</strong>. See the <a href="https://github.com/eoftgge/rosetun/blob/master/CODE_SIGNING_POLICY.md">code signing policy</a>.</p>
 <p>You can choose an installation folder, but not inside a user profile or where standard users can change it; the SYSTEM service requires a protected folder. Uninstalling keeps your configuration in <code>%APPDATA%\Rosetun</code> by default, or you can choose to delete your settings, subscriptions and rules.</p>
 <p><strong>Update:</strong> run the new installer over the old version. With the kill switch on, the network stays closed through the update, and the app starts and connects again. If it cannot connect, the connection screen offers <strong>Connect</strong> and <strong>Open network</strong>; <code>rosetun open-network</code> does the same. Lockdown stays on.</p>
 <p><strong>Settings:</strong> when the configuration format changes, Rosetun keeps a copy of the previous file beside it at the first save (such as <code>config.v7.json</code>); the copy contains the same subscription URLs. An older version refuses a newer file and does not overwrite it.</p>
@@ -49,22 +49,31 @@
 <pre><code>Move-Item -Force &quot;$env:APPDATA\Rosetun\config.v7.json&quot; &quot;$env:APPDATA\Rosetun\config.json&quot;</code></pre></li>
 <li>Turn on <strong>Start with Windows</strong> and Lockdown again if you use them.</li>
 </ol>
+<!-- linux-soon --><p>No Debian package is available in this release. See GitHub Releases.</p><!-- /linux-soon -->
 <h2 id="debian-13">Debian / Ubuntu / Linux Mint</h2>
 <p><strong>Distributions (amd64, glibc 2.36 or newer):</strong> Debian 13 is verified by the system test matrices. Ubuntu 24.04+, Linux Mint 22+ and other Debian/Ubuntu derivatives with this glibc or newer, systemd, nftables and polkit are expected to work with the same <code>.deb</code>; manual Ubuntu verification is pending.</p>
 <p>The Arch Linux binary recipe <code>rosetun-bin</code> is available in the repository; AUR publication and runtime verification are pending. See <a href="../install/#arch-linux">installation and updates</a>.</p>
 <p>Systems without systemd and Flatpak, Snap and AppImage packages are unsupported: Rosetun needs a privileged system service and access to the host firewall and TUN device.</p>
-<p>Download <code>rosetun_&lt;version&gt;_amd64.deb</code> from <a href="https://github.com/eoftgge/rosetun/releases">Releases</a>, <a href="../install/#verify-the-download">verify it</a>, install it and add yourself to the group that may reach the service:</p>
-<pre><code>sudo apt install ./rosetun_&lt;version&gt;_amd64.deb
-sudo usermod -aG rosetun &quot;$USER&quot;</code></pre>
+<!-- linux-ready <p>Download <code data-release-text="@@DEB@@">rosetun_&lt;version&gt;_amd64.deb</code> from <a href="https://github.com/eoftgge/rosetun/releases" data-release-href="@@DEB_URL@@">Releases</a>, <a href="../install/#verify-the-download">verify it</a>, install it and add yourself to the group that may reach the service:</p>
+<pre><code data-release-text="sudo apt install ./@@DEB@@
+sudo usermod -aG rosetun &quot;$USER&quot;">sudo apt install ./rosetun_&lt;version&gt;_amd64.deb
+sudo usermod -aG rosetun &quot;$USER&quot;</code></pre> -->
 <p>Then <strong>restart the computer</strong>. Logging out is not enough: your systemd user manager can outlive the logout and pass its old groups on to the programs it starts. If you skip the last command, the window offers the same with <strong>Add me</strong>.</p>
 <p><strong>Update:</strong> install the new package the same way. With the kill switch on, the network stays closed through the update: a running window restarts itself and connects again. Without a window, <code>rosetun status</code> says <code>network: held closed</code>, <code>rosetun connect</code> connects and <code>rosetun open-network</code> opens it. Lockdown stays on.</p>
 <p><strong>Remove:</strong> <code>sudo apt remove rosetun</code> takes Lockdown off first. If it cannot, the removal stops and Rosetun stays, so the network can still be opened.</p>
 <p><strong>Purge:</strong> <code>sudo apt purge rosetun</code> also removes the lists and state in <code>/var/lib/rosetun</code>. Your settings and autostart entry in your home folder (<code>~/.config/rosetun</code>) and the <code>rosetun</code> group stay.</p>
 <h2 id="arch-linux">Arch Linux</h2>
-<p>The <code>rosetun-bin</code> recipe is in the Rosetun repository. AUR publication is pending. After release 0.5.1 is published, review the recipe and build the package on Arch:</p>
-<pre><code>git clone --branch v0.5.1 https://github.com/eoftgge/rosetun.git
+<p>The <code>rosetun-bin</code> recipe is in the Rosetun repository. AUR publication is pending. Review the recipe for the release and build the package on Arch:</p>
+<pre><code data-release-text="git clone --branch v@@VERSION@@ https://github.com/eoftgge/rosetun.git
 cd rosetun
-bash tools/arch/update-pkgbuild.sh v0.5.1
+bash tools/arch/update-pkgbuild.sh v@@VERSION@@
+cd packaging/arch
+makepkg -si
+sudo systemctl enable --now rosetun-helper rosetun-lockdown
+sudo usermod -aG rosetun &quot;$USER&quot;
+sudo reboot">git clone --branch vVERSION https://github.com/eoftgge/rosetun.git
+cd rosetun
+bash tools/arch/update-pkgbuild.sh vVERSION
 cd packaging/arch
 makepkg -si
 sudo systemctl enable --now rosetun-helper rosetun-lockdown
@@ -77,12 +86,13 @@ sudo reboot</code></pre>
 <h2 id="verify-the-download">Verify the download</h2>
 <p><code>SHA256SUMS.txt</code> in each release lists the installer and the package. For a release built from a tag, GitHub also holds a build provenance attestation for both. An attestation says which workflow built the file; it is not a code signature.</p>
 <p>Windows:</p>
-<pre><code>Get-FileHash .\rosetun-&lt;version&gt;-setup.exe -Algorithm SHA256
+<pre><code data-release-text="Get-FileHash .\@@INSTALLER@@ -Algorithm SHA256
+gh attestation verify .\@@INSTALLER@@ --repo eoftgge/rosetun">Get-FileHash .\rosetun-&lt;version&gt;-setup.exe -Algorithm SHA256
 gh attestation verify .\rosetun-&lt;version&gt;-setup.exe --repo eoftgge/rosetun</code></pre>
-<p>Debian:</p>
-<pre><code>sha256sum --check --ignore-missing SHA256SUMS.txt
-gh attestation verify rosetun_&lt;version&gt;_amd64.deb --repo eoftgge/rosetun</code></pre>
-<p>For stable 0.5.1, the package is <code>rosetun_0.5.1_amd64.deb</code>; <code>dpkg</code> shows version <code>0.5.1</code>.</p>
+<!-- linux-ready <p>Debian:</p>
+<pre><code data-release-text="sha256sum --check --ignore-missing SHA256SUMS.txt
+gh attestation verify @@DEB@@ --repo eoftgge/rosetun">sha256sum --check --ignore-missing SHA256SUMS.txt
+gh attestation verify rosetun_&lt;version&gt;_amd64.deb --repo eoftgge/rosetun</code></pre> -->
                 <nav class="doc-pager" aria-label="Previous and next"><a rel="prev" href="../">← Documentation</a><a rel="next" href="../protection/">Connection and protection →</a></nav>
             </div>
         </main>

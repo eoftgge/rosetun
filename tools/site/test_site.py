@@ -3,16 +3,97 @@
 from contextlib import redirect_stdout
 import copy
 import io
+import json
 from pathlib import Path
 import re
 import tempfile
 import unittest
+from unittest.mock import call, patch
 
 from check import check
-from release import RELEASES, preview_values, render, replacements
+from release import API, RELEASES, preview_values, published_values, render, replacements, workspace_version
 
 
 class SiteChecks(unittest.TestCase):
+    def test_cargo_version_updates_both_languages_without_editing_pages(self):
+        for version in ('2.7.19', '3.12.4'):
+            with self.subTest(version=version), tempfile.TemporaryDirectory() as directory:
+                manifest = Path(directory) / 'Cargo.toml'
+                manifest.write_text(f'[workspace.package]\nversion = "{version}"\n', encoding='utf-8')
+                names = (f'rosetun-{version}-setup.exe', f'rosetun_{version}_amd64.deb', 'SHA256SUMS.txt')
+                release = dict(tag_name=f'v{version}', draft=False, prerelease=False, assets=[
+                    dict(name=name, browser_download_url=f'{RELEASES}v{version}/{name}') for name in names
+                ])
+                sums = '\n'.join('a' * 64 + '  ' + name for name in names[:2])
+                with patch('release.fetch', side_effect=[json.dumps(release).encode(), sums.encode()]) as fetch:
+                    values = published_values(manifest)
+                self.assertEqual(fetch.call_args_list, [
+                    call(f'{API}/releases/tags/v{version}', api=True),
+                    call(f'{RELEASES}v{version}/SHA256SUMS.txt'),
+                ])
+                output = Path(directory) / 'site'
+                render(Path('site'), output, values)
+                with redirect_stdout(io.StringIO()):
+                    check(output, rendered=True)
+                for lang in ('en', 'ru'):
+                    for page in (output / lang).rglob('*.html'):
+                        source = Path('site') / page.relative_to(output)
+                        text = page.read_text(encoding='utf-8')
+                        if '<!-- docs-version -->' in source.read_text(encoding='utf-8'):
+                            self.assertIn(f'{version} · Windows', text)
+                        self.assertNotIn('0.5.1', text)
+                        self.assertNotIn('data-release-', text)
+                        self.assertNotIn('@@', text)
+                    install = (output / lang / 'docs/install/index.html').read_text(encoding='utf-8')
+                    for command in (
+                        f'sudo apt install ./rosetun_{version}_amd64.deb',
+                        f'git clone --branch v{version} https://github.com/eoftgge/rosetun.git',
+                        f'bash tools/arch/update-pkgbuild.sh v{version}',
+                        f'Get-FileHash .\\rosetun-{version}-setup.exe -Algorithm SHA256',
+                        f'gh attestation verify .\\rosetun-{version}-setup.exe',
+                        f'gh attestation verify rosetun_{version}_amd64.deb',
+                    ):
+                        self.assertIn(command, install)
+                    for name in names[:2]:
+                        self.assertIn(f'href="{RELEASES}v{version}/{name}"', install)
+                    history = (output / lang / 'docs/index.html').read_text(encoding='utf-8')
+                    self.assertIn('blob/v0.4.0/', history)
+
+    def test_workspace_publication_rejects_previews_and_a_different_release(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = Path(directory) / 'Cargo.toml'
+            manifest.write_text('[workspace.package]\nversion = "2.7.19-beta.1"\n', encoding='utf-8')
+            with self.assertRaisesRegex(ValueError, 'stable workspace version'):
+                workspace_version(manifest)
+            manifest.write_text('[workspace.package]\nversion = "2.7.19"\n', encoding='utf-8')
+            with patch('release.fetch', return_value=json.dumps(self.release).encode()) as fetch:
+                with self.assertRaisesRegex(ValueError, 'does not match'):
+                    published_values(manifest)
+                self.assertEqual(fetch.call_count, 1)
+
+    def test_a_page_can_use_one_marker_but_unknown_markers_are_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / 'source'
+            source.mkdir()
+            page = source / 'index.html'
+            page.write_text('<code data-release-text="@@VERSION@@">release</code>', encoding='utf-8')
+            output = Path(directory) / 'valid'
+            render(source, output, preview_values('2.7.19', False))
+            self.assertEqual((output / 'index.html').read_text(encoding='utf-8'), '<code>2.7.19</code>')
+            page.write_text('@@VERSOIN@@', encoding='utf-8')
+            with self.assertRaisesRegex(ValueError, 'unknown release markers'):
+                render(source, Path(directory) / 'invalid', preview_values('2.7.19', False))
+
+    def test_install_commands_do_not_advertise_a_missing_debian_package(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / 'site'
+            render(Path('site'), output, preview_values('2.7.19', False))
+            for lang in ('en', 'ru'):
+                page = (output / lang / 'docs/install/index.html').read_text(encoding='utf-8')
+                self.assertNotIn('sudo apt install ./', page)
+                self.assertNotIn('gh attestation verify rosetun_', page)
+                self.assertNotIn('rosetun_2.7.19_amd64.deb', page)
+
     def setUp(self):
         self.release = dict(tag_name='v1.2.3', draft=False, prerelease=False, assets=[
             dict(name=name, browser_download_url=f'{RELEASES}v1.2.3/{name}')
