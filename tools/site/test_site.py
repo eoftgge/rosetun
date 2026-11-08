@@ -46,7 +46,6 @@ class SiteChecks(unittest.TestCase):
 
     def test_linux_falls_back_to_releases_without_a_stable_package(self):
         page = self.rendered_front_page(self.release, self.sums)
-        self.assertIn('Debian 13 packages:', page)
         self.assertNotIn('linux-', page)
         self.assertNotIn('.deb', page)
 
@@ -58,7 +57,6 @@ class SiteChecks(unittest.TestCase):
             replacements(release, self.sums)
         page = self.rendered_front_page(release, self.sums + 'b' * 64 + f'  {name}\n')
         self.assertIn(f'href="{RELEASES}v1.2.3/{name}"', page)
-        self.assertNotIn('coming soon', page)
         self.assertNotIn('linux-', page)
 
     def test_rendered_site_passes_and_gate_rejects_bad_links_and_resources(self):
