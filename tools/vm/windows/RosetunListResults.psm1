@@ -79,12 +79,14 @@ function New-RosetunListResults {
         [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$BootId
     )
     $rows = @(Get-Content -LiteralPath (Join-Path $PSScriptRoot 'list-checks.json') -Encoding UTF8 -Raw | ConvertFrom-Json | ForEach-Object { $_ })
+    # Resolve relative paths through PowerShell before handing them to filesystem APIs.
+    $Directory = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Directory)
     # New-Item without Force refuses an existing run directory, even an empty one.
-    $null = New-Item -Path $Directory -ItemType Directory -ErrorAction Stop
+    $runDirectory = New-Item -Path $Directory -ItemType Directory -ErrorAction Stop
     $identity = @{ run_id = [guid]::NewGuid().ToString(); vm_id = $VmId; boot_id = $BootId }
     $plan = @{ schema = 'rosetun.windows-list.plan.v2'; suite = 'windows-list'; profile = 'exploratory'
         policy = @{ mode = 'exploratory' }; identity = $identity; catalog = $rows; catalog_digest = Get-RosetunListCatalogDigest $rows }
-    $recorder = [pscustomobject]@{ Directory = [IO.Path]::GetFullPath($Directory); Plan = $plan
+    $recorder = [pscustomobject]@{ Directory = $runDirectory.FullName; Plan = $plan
         Events = [Collections.Generic.List[object]]::new(); Errors = [Collections.Generic.List[object]]::new()
         Broken = $false; Finished = $false }
     Write-RosetunListJson $recorder 'plan.json' $plan

@@ -184,7 +184,10 @@ owner on the configured Hyper-V host, using already built artifacts:
 python -B -m tools.vm.matrix report target/list-run-001/report.json --plan target/list-run-001/plan.json
 ```
 
-The directory must not exist. The recorder generates a GUID run ID, captures the
+The directory must not exist. Relative result paths resolve against the current
+PowerShell location. The recorder retains the absolute directory for all artifacts,
+independently of the process working directory or later location changes.
+The recorder generates a GUID run ID, captures the
 Hyper-V VM GUID and guest initial UTC boot time independently, and saves the plan
 before building, starting a host node or modifying the guest. Identity reads may
 open the existing PowerShell Direct session. It does not record credentials,

@@ -90,6 +90,20 @@ class WindowsListTests(unittest.TestCase):
                                 capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_relative_paths_use_powershell_location(self):
+        script = ROOT / 'tools/vm/windows/tests/Test-RosetunListPaths.ps1'
+        for executable in ('pwsh', 'powershell'):
+            if not shutil.which(executable):
+                continue
+            with self.subTest(executable=executable):
+                base = Path(self.temp.name) / executable
+                result = subprocess.run([executable, '-NoProfile', '-File', str(script),
+                                         '-Directory', str(base)], capture_output=True, text=True,
+                                        encoding='utf-8', errors='replace', timeout=30)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.directory = base / 'ps location/nested/run [literal]'
+                self.assertTrue(self.judge()['acceptance']['accepted'])
+
     def test_failure_abort_srs_cleanup_and_fail_preservation(self):
         for case in ('fail', 'abort', 'srs', 'cleanup', 'fail-abort'):
             with self.subTest(case=case):
