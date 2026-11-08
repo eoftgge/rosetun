@@ -98,3 +98,8 @@ To compare with another sing-box version, download its `sing-box-<version>-windo
 (Get-FileHash .\tools\sing-box-1.14.1.exe -Algorithm SHA256).Hash
 .\tools\vm\windows\Invoke-PowerCutConnectProbe.ps1 -SingBoxPath .\tools\sing-box-1.14.1.exe -RequestPath .\tools\vm\windows\request-local.json -UseHostNode -Build *>&1 | Tee-Object -FilePath .\target\power-cut-probe-1.14.1.txt
 ```
+
+
+List Matrix optionally saves structured results with `-ResultDirectory <new-directory>`.
+The default invocation remains unchanged. See the [format, offline validation,
+autonomous tests and owner checks](../matrix/README.md#windows-list-artifacts).

@@ -17,7 +17,8 @@ Python version and required local source files. Optional QEMU discovery uses
 PATH lookup only; it does not execute the binary. `qualified: false` means that
 neither binary presence nor these diagnostics prove backend capability.
 
-Supported suites: `linux-l2`, `linux-l3`, `linux-l4`, `linux-l5`, `linux-proxy`.
+Supported suites: `linux-l2`, `linux-l3`, `linux-l4`, `linux-l5`, `linux-proxy`,
+and `windows-list`.
 Their catalogs remain in [../linux](../linux/README.md).
 
 ## Configuration and plans
@@ -66,8 +67,8 @@ Keep the plan and staging record under the owner's control.
 
 ## Input and assessment schemas
 
-The only input report format in this stage is existing Linux JSON with integer
-`schema: 1`. There is no new runner or native execution-report format. Existing
+The Linux adapter reads existing Linux JSON with integer
+`schema: 1`. Windows List uses the separate format below. Existing
 execution statuses are exactly `PASS`, `FAIL`, `SKIP`, `ERROR`; adding
 `UNVERIFIED` to that old input schema would silently change its contract and is
 therefore rejected. The new assessment vocabulary includes all five statuses.
@@ -169,3 +170,99 @@ strict JSON, separate invariant UNVERIFIED, FAIL preservation after errors,
 snapshot-only assessment, unchanged raw files, and CLI exit codes from the
 repository root. Process timeouts, artifact validation and other execution-side
 harness tests are outside this package and are not reimplemented here.
+
+
+## Windows List artifacts
+
+Only [Invoke-ListMatrix.ps1](../windows/Invoke-ListMatrix.ps1) supports opt-in
+`-ResultDirectory <new-directory>`. Without it the existing invocation, checks,
+output and exit behavior remain. It never runs through Python. Example for the
+owner on the configured Hyper-V host, using already built artifacts:
+
+```powershell
+.\tools\vm\windows\Invoke-ListMatrix.ps1 -SingBoxPath .\tools\sing-box.exe -RequestPath .\tools\vm\windows\request-local.json -ResultDirectory .\target\list-run-001
+python -B -m tools.vm.matrix report target/list-run-001/report.json --plan target/list-run-001/plan.json
+```
+
+The directory must not exist. The recorder generates a GUID run ID, captures the
+Hyper-V VM GUID and guest initial UTC boot time independently, and saves the plan
+before building, starting a host node or modifying the guest. Identity reads may
+open the existing PowerShell Direct session. It does not record credentials,
+request contents, node configuration, exception text or legacy free-form notes.
+
+| File | Contract |
+| --- | --- |
+| `plan.json` | `rosetun.windows-list.plan.v1`: suite, profile, mode policy, identity (`run_id`, `vm_id`, `boot_id`), ordered catalog snapshot |
+| `events.jsonl` | Each newline-terminated `rosetun.windows-list.event.v1` contains run ID, sequence starting at 1, stable check ID, result and safe reason code; appended immediately |
+| `report.json` | `rosetun.windows-list.report.v1`: initial identity, final boot, exact journal checks, counts (`total`, `pass`, `fail`, `skip`), cleanup status and safe infrastructure errors |
+| `status.json` | `rosetun.windows-list.status.v1`: same identity, `state: finished`, final event count; written after cleanup handling and report finalization |
+
+Final report and status use temporary files and same-directory rename. A failed
+write aborts with a nonzero exit; no completion is inferred from report presence.
+An abrupt interruption may leave only the plan and a journal prefix. Keep those
+files: observed FAIL remains in assessment even with missing/corrupt report,
+status or subsequent journal records. These files are local evidence, not signed
+attestation; retain the original plan independently under owner control.
+
+[list-checks.json](../windows/list-checks.json) declares all 11 existing checks;
+ID literals also occur at each Test-Step call. All checks are required. After SRS
+compilation FAIL, its four dependent checks get SKIP / `srs-compile-failed`.
+After an infrastructure exception, remaining checks get SKIP / `interrupted`.
+An exception inside Test-Step still means legacy FAIL / `condition-exception`.
+Infrastructure failures are separate `{reason: infrastructure-error, place:
+execution|cleanup|export}` entries. Mandatory skips block exploratory acceptance.
+
+Cleanup is PASS only with read-back confirmation that the guest list directory is
+absent and the tunnel state is Disconnected. Existing destructive cleanup is
+unchanged. A cleanup exception is ERROR. If the matrix starts and stops a host
+node, its existing stop helper can silently decline to stop; the recorder leaves
+cleanup UNVERIFIED even if the call returns. This conservatively blocks acceptance
+and gives the reporting invocation a nonzero exit. `-KeepNode` deliberately leaves
+the host node outside cleanup. No checkpoint restoration is claimed.
+
+The adapter validates schemas/types, saved identities, final boot, catalog order,
+unique IDs, contiguous sequences, full coverage, reason codes, journal/report
+agreement, counts, cleanup and completion. It uses only the saved plan, never the
+current catalog. Execution FAIL is retained separately from validation ERROR.
+Invariants stay UNVERIFIED and release acceptance always stays false. Exploratory
+can accept only a complete, valid run with every required check PASS and confirmed
+cleanup. Existing checks and their network results are not independent security
+evidence.
+
+An inspection-only plan can be generated with:
+
+```powershell
+python -B -m tools.vm.matrix plan windows-list --config tools/vm/matrix/example.toml --profile exploratory
+```
+
+This has null identity and cannot accept a run; use the recorder's saved plan for
+assessment. Windows profiles contain only `mode`; Linux identity profiles and
+saved v1 plans retain their existing contract.
+
+Autonomous checks, without Hyper-V, services, network tests or admin rights:
+
+```powershell
+python -B -m unittest discover -s tools/vm/matrix/tests -q
+pwsh -NoProfile -File tools/vm/windows/tests/Test-RosetunListResults.ps1 -Directory target/synthetic-list-001
+pwsh -NoProfile -File tools/vm/windows/tests/Test-RosetunScriptArguments.ps1
+```
+
+Python integration tests execute the real PowerShell recorder in temporary
+folders, extract only Test-Step from the matrix AST, and assess its serialized
+files. PowerShell 7 must be available for these tests; otherwise integration is
+explicitly skipped. Synthetic reports never qualify Hyper-V behavior.
+
+Manual checks for the owner:
+
+1. With host Lockdown off and the configured VM available, run the invocation
+   above in a new directory. Confirm the familiar table still lists the same
+   checks in the same order; retain the host transcript and all four artifacts.
+2. Run the Python report command. Expect complete exploratory acceptance when
+   all 11 checks pass and cleanup is confirmed, with release false and invariant
+   UNVERIFIED. With `-UseHostNode`, expect unaccepted cleanup UNVERIFIED unless
+   the node was already running or was intentionally kept with `-KeepNode`.
+3. In a disposable run, interrupt between checks. The absence of completion must
+   block acceptance; already appended failures must remain visible. Compare a
+   separate invocation without `-ResultDirectory` with the previous table and
+   normal exit behavior. Send back the transcript, exit codes and artifact folder
+   if behavior differs; do not include credential or request files.

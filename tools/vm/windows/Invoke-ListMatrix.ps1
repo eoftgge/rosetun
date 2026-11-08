@@ -8,7 +8,8 @@ param(
     [switch]$UseHostNode,
     [string]$NodeBindInterface,
     [switch]$KeepNode,
-    [switch]$Build
+    [switch]$Build,
+    [string]$ResultDirectory
 )
 
 Set-StrictMode -Version Latest
@@ -17,20 +18,33 @@ $RepoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..\..'))
 if (-not $BuildDir) { $BuildDir = Join-Path $RepoRoot 'target\release' }
 Import-Module (Join-Path $PSScriptRoot 'RosetunVm.psm1') -Force
 
+$recorder = $null
+if ($ResultDirectory) {
+    Import-Module (Join-Path $PSScriptRoot 'RosetunListResults.psm1') -Force
+    $vmId = (Get-VM -Name (Get-RosetunVmName) -ErrorAction Stop).Id.ToString()
+    $bootId = Get-RosetunGuestBootTime
+    $recorder = New-RosetunListResults -Directory $ResultDirectory -VmId $vmId -BootId $bootId
+}
+$cleanup = 'UNVERIFIED'
+$runError = $false
+
 $results = [System.Collections.Generic.List[object]]::new()
 
 function Test-Step {
     param(
+        [Parameter(Mandatory)][string]$Id,
         [Parameter(Mandatory)][string]$Scenario,
         [Parameter(Mandatory)][string]$Expectation,
         [Parameter(Mandatory)][scriptblock]$Condition,
         [string]$Note = ''
     )
+    $reason = 'condition-false'
     try {
         $passed = [bool](& $Condition)
     }
     catch {
         $passed = $false
+        $reason = 'condition-exception'
         $Note = "$_"
     }
     $results.Add([pscustomobject]@{
@@ -41,6 +55,9 @@ function Test-Step {
     })
     if (-not $passed) {
         Write-Host "FAIL  $Scenario - $Expectation ($Note)" -ForegroundColor Red
+    }
+    if ($recorder) {
+        Add-RosetunListResult -Recorder $recorder -Id $Id -Result $(if ($passed) { 'PASS' } else { 'FAIL' }) -Reason $(if ($passed) { 'checked' } else { $reason })
     }
 }
 
@@ -95,8 +112,8 @@ Start-RosetunHelper
 $guestDir = Get-RosetunGuestDir
 $configPath = Join-Path $guestDir 'list-matrix\config.json'
 try {
-    Test-Step 'baseline' 'direct egress works before connect' { Test-RosetunDirectEgress }
-    Test-Step 'baseline' 'direct DNS works before connect' { Test-RosetunDirectDns }
+    Test-Step 'baseline' 'direct egress works before connect' -Id 'baseline.egress' { Test-RosetunDirectEgress }
+    Test-Step 'baseline' 'direct DNS works before connect' -Id 'baseline.dns' { Test-RosetunDirectDns }
 
     $configPath = Invoke-RosetunGuest -ScriptBlock {
         param($dir)
@@ -147,17 +164,17 @@ try {
     } -ArgumentList $guestDir
 
     $connect = Invoke-ListCli -ConfigPath $configPath -Action connect
-    Test-Step 'text block' 'connect uploads the list' -Note "exit $($connect.ExitCode)" {
+    Test-Step 'text block' 'connect uploads the list' -Id 'text.connect' -Note "exit $($connect.ExitCode)" {
         $connect.ExitCode -eq 0 -and (Wait-RosetunState 'Connected')
     }
     $opened = Wait-RosetunTunnelEgress -Url 'https://example.org' -SkipRevocationCheck
-    Test-Step 'text block' 'example.org opens through the tunnel' -Note "curl $($opened.CurlExit)" {
+    Test-Step 'text block' 'example.org opens through the tunnel' -Id 'text.tunnel' -Note "curl $($opened.CurlExit)" {
         $opened.Ok
     }
-    Test-Step 'text block' 'example.com is blocked' {
+    Test-Step 'text block' 'example.com is blocked' -Id 'text.block' {
         -not (Test-RosetunTunnelEgress -Url 'https://example.com' -SkipRevocationCheck)
     }
-    Test-Step 'text block' 'physical egress remains blocked' {
+    Test-Step 'text block' 'physical egress remains blocked' -Id 'text.physical' {
         -not (Test-RosetunDirectEgress)
     }
 
@@ -183,42 +200,83 @@ try {
         }
         [pscustomobject]@{ ExitCode = $exitCode; Output = ($output -join "`n") }
     } -ArgumentList $guestDir, $configPath
-    Test-Step 'binary direct' 'sing-box compiles a local SRS' -Note "exit $($compiled.ExitCode)" {
+    Test-Step 'binary direct' 'sing-box compiles a local SRS' -Id 'binary.compile' -Note "exit $($compiled.ExitCode)" {
         $compiled.ExitCode -eq 0
     }
 
     if ($compiled.ExitCode -eq 0) {
         $apply = Invoke-ListCli -ConfigPath $configPath -Action apply
-        Test-Step 'binary direct' 'apply uploads the compiled list' -Note "exit $($apply.ExitCode)" {
+        Test-Step 'binary direct' 'apply uploads the compiled list' -Id 'binary.apply' -Note "exit $($apply.ExitCode)" {
             $apply.ExitCode -eq 0 -and (Wait-RosetunState 'Connected')
         }
         $opened = Wait-RosetunTunnelEgress -Url 'https://example.com' -SkipRevocationCheck
-        Test-Step 'binary direct' 'example.com opens with the direct rule' -Note "curl $($opened.CurlExit)" {
+        Test-Step 'binary direct' 'example.com opens with the direct rule' -Id 'binary.direct' -Note "curl $($opened.CurlExit)" {
             $opened.Ok
         }
-        Test-Step 'binary direct' 'unmatched example.org follows the block default' {
+        Test-Step 'binary direct' 'unmatched example.org follows the block default' -Id 'binary.default' {
             -not (Test-RosetunTunnelEgress -Url 'https://example.org' -SkipRevocationCheck)
         }
-        Test-Step 'binary direct' 'physical egress remains blocked' {
+        Test-Step 'binary direct' 'physical egress remains blocked' -Id 'binary.physical' {
             -not (Test-RosetunDirectEgress)
+        }
+    }
+    elseif ($recorder) {
+        foreach ($id in @('binary.apply', 'binary.direct', 'binary.default', 'binary.physical')) {
+            Add-RosetunListResult -Recorder $recorder -Id $id -Result SKIP -Reason srs-compile-failed
         }
     }
 }
 finally {
-    Disconnect-RosetunTunnel | Out-Null
-    Invoke-RosetunGuest -ScriptBlock {
-        param($configPath)
-        Remove-Item -Path (Split-Path -Parent $configPath) -Recurse -Force -ErrorAction SilentlyContinue
-    } -ArgumentList $configPath
+    try {
+        Disconnect-RosetunTunnel | Out-Null
+        Invoke-RosetunGuest -ScriptBlock {
+            param($configPath)
+            Remove-Item -Path (Split-Path -Parent $configPath) -Recurse -Force -ErrorAction SilentlyContinue
+        } -ArgumentList $configPath
+        if ($recorder) {
+            $removed = Invoke-RosetunGuest -ScriptBlock {
+                param($path)
+                -not (Test-Path -LiteralPath (Split-Path -Parent $path) -ErrorAction Stop)
+            } -ArgumentList $configPath
+            if ($removed -and (Get-RosetunState) -eq 'Disconnected') { $cleanup = 'PASS' }
+        }
+    }
+    catch {
+        $cleanup = 'ERROR'
+        if ($recorder) { Add-RosetunListError -Recorder $recorder -Place cleanup }
+        throw
+    }
 }
+}
+catch {
+    $runError = $true
+    throw
 }
 finally {
     if ($nodeStartedByMatrix -and -not $KeepNode) {
         try { Stop-RosetunTestNode }
-        catch { Write-Warning "Could not stop the test node: $_" }
+        catch {
+            if ($recorder) { $cleanup = 'ERROR'; Add-RosetunListError -Recorder $recorder -Place cleanup }
+            Write-Warning "Could not stop the test node: $_"
+        }
+        # Stop-RosetunTestNode can return without stopping a process.
+        if ($recorder -and $cleanup -ne 'ERROR') { $cleanup = 'UNVERIFIED' }
+    }
+    if ($recorder) {
+        try {
+            $endBoot = ''
+            try { $endBoot = Get-RosetunGuestBootTime }
+            catch { Add-RosetunListError -Recorder $recorder -Place execution }
+            if ($endBoot -ne $recorder.Plan.identity.boot_id) {
+                Add-RosetunListError -Recorder $recorder -Place execution
+            }
+            Complete-RosetunListResults -Recorder $recorder -Cleanup $cleanup -EndBootId $endBoot -Aborted $runError
+        }
+        catch { throw 'List result export failed.' }
     }
 }
 
 $results | Format-Table -AutoSize
+if ($recorder -and ($cleanup -ne 'PASS' -or $recorder.Errors.Count -gt 0)) { exit 1 }
 if ($results.Result -contains 'FAIL') { exit 1 }
 exit 0

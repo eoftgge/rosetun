@@ -1,0 +1,90 @@
+[
+  {
+    "id": "baseline.egress",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "baseline",
+    "detail": "-",
+    "title": "direct egress works before connect"
+  },
+  {
+    "id": "baseline.dns",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "baseline",
+    "detail": "-",
+    "title": "direct DNS works before connect"
+  },
+  {
+    "id": "text.connect",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "text block",
+    "detail": "-",
+    "title": "connect uploads the list"
+  },
+  {
+    "id": "text.tunnel",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "text block",
+    "detail": "-",
+    "title": "example.org opens through the tunnel"
+  },
+  {
+    "id": "text.block",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "text block",
+    "detail": "-",
+    "title": "example.com is blocked"
+  },
+  {
+    "id": "text.physical",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "text block",
+    "detail": "-",
+    "title": "physical egress remains blocked"
+  },
+  {
+    "id": "binary.compile",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "binary direct",
+    "detail": "-",
+    "title": "sing-box compiles a local SRS"
+  },
+  {
+    "id": "binary.apply",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "binary direct",
+    "detail": "binary.compile",
+    "title": "apply uploads the compiled list"
+  },
+  {
+    "id": "binary.direct",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "binary direct",
+    "detail": "binary.compile",
+    "title": "example.com opens with the direct rule"
+  },
+  {
+    "id": "binary.default",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "binary direct",
+    "detail": "binary.compile",
+    "title": "unmatched example.org follows the block default"
+  },
+  {
+    "id": "binary.physical",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "binary direct",
+    "detail": "binary.compile",
+    "title": "physical egress remains blocked"
+  }
+]

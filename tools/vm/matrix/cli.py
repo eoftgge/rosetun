@@ -24,11 +24,11 @@ def doctor():
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="Plan and assess saved Linux matrices without running VMs")
+    parser = argparse.ArgumentParser(description="Plan and assess saved matrix results without running VMs")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("doctor", help="inspect local prerequisites without executing binaries")
     plan = commands.add_parser("plan", help="write a deterministic catalog snapshot to stdout")
-    plan.add_argument("suite", choices=SUITES)
+    plan.add_argument("suite", choices=[*SUITES, "windows-list"])
     plan.add_argument("--config", required=True)
     plan.add_argument("--profile", required=True)
     report = commands.add_parser("report", help="assess saved report.json and adjacent status.json")

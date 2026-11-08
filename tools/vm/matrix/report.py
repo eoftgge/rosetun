@@ -173,6 +173,9 @@ def assess(report, status, plan):
 
 def assess_files(report_path, plan_path):
     plan, plan_hash = read_json(plan_path)
+    if isinstance(plan, dict) and plan.get("schema") == "rosetun.windows-list.plan.v1":
+        from .windows_list import assess_files as assess_windows_files
+        return assess_windows_files(report_path, plan_path)
     validate_plan(plan)
     report, report_hash = read_json(report_path)
     status_path = Path(report_path).with_name("status.json")
