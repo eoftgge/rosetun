@@ -39,11 +39,11 @@ A system service protects against leaks independently of the engine.
 
 Choose a file from the release linked above:
 
-- **Windows 11 x64:** run `rosetun-0.5.0-setup.exe`.
-- **Debian / Ubuntu / Linux Mint, amd64:** install `rosetun_0.5.0_amd64.deb`, join the service group and restart the computer:
+- **Windows 11 x64:** run `rosetun-0.5.1-setup.exe`.
+- **Debian / Ubuntu / Linux Mint, amd64:** install `rosetun_0.5.1_amd64.deb`, join the service group and restart the computer:
 
 ```sh
-sudo apt install ./rosetun_0.5.0_amd64.deb
+sudo apt install ./rosetun_0.5.1_amd64.deb
 sudo usermod -aG rosetun "$USER"
 sudo reboot
 ```
