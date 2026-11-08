@@ -21,7 +21,7 @@ English | [Русский](README.ru.md)
 Rosetun is a VPN client for Windows and Linux, built on sing-box and Xray.
 A system service protects against leaks independently of the engine.
 
-**Stable release: 0.5.0 · Windows and Linux.**
+**Stable release: 0.5.1 · Windows and Linux.**
 
 **Young project:** one developer with AI coding agents, and few users yet. Report problems in [Issues](https://github.com/eoftgge/rosetun/issues).
 

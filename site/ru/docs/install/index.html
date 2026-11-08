@@ -30,7 +30,7 @@
         <main id="main" class="wrap">
             <div class="prose docs">
                 <h1>Установка</h1>
-                <!-- docs-version --><p class="note">Стабильный выпуск: 0.5.0 · Windows и Linux.</p><!-- /docs-version -->
+                <!-- docs-version --><p class="note">Стабильный выпуск: 0.5.1 · Windows и Linux.</p><!-- /docs-version -->
                 <nav aria-label="На этой странице"><a href="#requirements">Требования</a><a href="#windows">Windows</a><a href="#debian-13">Debian 13</a><a href="#arch-linux">Arch Linux</a><a href="#verify-the-download">Проверка загрузки</a></nav>
 <h2 id="requirements">Требования</h2>
 <p><strong>Windows:</strong> Windows 11, x64. Windows 10 работает на компьютере одного тестировщика; проверки отказов на ней не прогонялись.</p>
@@ -61,10 +61,10 @@ sudo usermod -aG rosetun &quot;$USER&quot;</code></pre>
 <p><strong>Удаление:</strong> <code>sudo apt remove rosetun</code> сначала снимает Lockdown. Если снять не удалось, удаление останавливается и Rosetun остаётся, чтобы сеть можно было открыть.</p>
 <p><strong>Полное удаление:</strong> <code>sudo apt purge rosetun</code> удаляет ещё списки и состояние в <code>/var/lib/rosetun</code>. Настройки и запись автозапуска в домашней папке (<code>~/.config/rosetun</code>) и группа <code>rosetun</code> остаются.</p>
 <h2 id="arch-linux">Arch Linux</h2>
-<p>Рецепт <code>rosetun-bin</code> находится в репозитории Rosetun. Публикация в AUR пока отложена. После выхода 0.5.0 прочитайте рецепт и соберите пакет на Arch:</p>
-<pre><code>git clone --branch v0.5.0 https://github.com/eoftgge/rosetun.git
+<p>Рецепт <code>rosetun-bin</code> находится в репозитории Rosetun. Публикация в AUR пока отложена. После выхода 0.5.1 прочитайте рецепт и соберите пакет на Arch:</p>
+<pre><code>git clone --branch v0.5.1 https://github.com/eoftgge/rosetun.git
 cd rosetun
-bash tools/arch/update-pkgbuild.sh v0.5.0
+bash tools/arch/update-pkgbuild.sh v0.5.1
 cd packaging/arch
 makepkg -si
 sudo systemctl enable --now rosetun-helper rosetun-lockdown
@@ -82,7 +82,7 @@ gh attestation verify .\rosetun-&lt;версия&gt;-setup.exe --repo eoftgge/ro
 <p>Debian:</p>
 <pre><code>sha256sum --check --ignore-missing SHA256SUMS.txt
 gh attestation verify rosetun_&lt;версия&gt;_amd64.deb --repo eoftgge/rosetun</code></pre>
-<p>Для стабильной 0.5.0 пакет называется <code>rosetun_0.5.0_amd64.deb</code>; <code>dpkg</code> показывает версию <code>0.5.0</code>.</p>
+<p>Для стабильной 0.5.1 пакет называется <code>rosetun_0.5.1_amd64.deb</code>; <code>dpkg</code> показывает версию <code>0.5.1</code>.</p>
                 <nav class="doc-pager" aria-label="Назад и вперёд"><a rel="prev" href="../">← Документация</a><a rel="next" href="../protection/">Подключение и защита →</a></nav>
             </div>
         </main>
