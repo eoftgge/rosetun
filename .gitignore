@@ -1,9 +1,19 @@
+# Rust target and matrix
 /target
+
+# Code editor
 /.idea
 /.zed
+
+# Tools for maintainer
 /tools/vm/logs/
 /tools/vm/windows/logs/
 /tools/vm/linux/logs/
 /tools/vm/linux/stand.local.psd1
 /tools/docs/
+
+# Binary
 *.exe
+
+# Temporary directory
+/temp
