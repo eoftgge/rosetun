@@ -1,10 +1,130 @@
 # VM matrix foundation
 
 Python 3.11+ and the standard library are sufficient. Run commands from the
-repository root. This package only reads local files and writes JSON to stdout.
+repository root. The CLI only reads local files and writes JSON to stdout.
 It does not run scenarios, install dependencies, start services or create VMs.
 The existing Bash/PowerShell matrices remain the execution tools, Hyper-V remains
 the control stand, and QEMU is the intended future backend.
+
+## Local stand leases and resource records
+
+`resources.py` adds a preparation-only internal API; it never executes a matrix.
+Choose an **absolute local state directory** explicitly. All workers that can
+touch the same stand must use the same directory and the same case-sensitive
+stand ID. Different state directories do not coordinate. Network filesystems
+are unsupported; POSIX callers must ensure the selected filesystem is local.
+Windows requires a fixed local drive and rejects UNC paths and mapped network
+drives. Symlink/reparse ancestors are rejected.
+
+```text
+<state-directory>/
+  locks/<sha256-of-stand-id>.lock
+  runs/<run-id>/
+    manifest.json
+    <registered run-local files>
+    .manifest-<random>   # possible evidence of an interrupted write
+```
+
+`StandLease(state_directory, stand_id)` is a context manager. It holds a
+nonblocking OS lock on an open handle (`msvcrt.locking` on Windows,
+`fcntl.flock` on POSIX). Another contender receives `stand is already leased`.
+Lock files are permanent: never unlink, replace, rotate or truncate them outside
+the held lease. PID metadata is diagnostic only; no age or PID test releases a
+lease. Ordinary exit and process death release the OS lock, but do not establish
+resource cleanup. Instances are single-use: re-entry raises, repeated release is
+harmless. Mutations require the original live lease. Use this API serially from
+one controlling thread; concurrent writers within a lease are unsupported.
+A fork child cannot mutate records through an inherited lease. Releasing its
+inherited handle does not unlock the parent's lease. Mutations also check that
+the lock path still refers to the held file; replacement fails closed. This does
+not authorize lock rotation or defend against malicious concurrent replacement.
+
+After locking, every previous run of that stand blocks new preparation. Invalid
+manifests block all stands because their ownership cannot be established. Even
+an empty prepared run remains unresolved: this stage has no verified cleanup
+state. It is intentionally conservative. Keep records until independent manual
+verification permits archiving them outside `runs/`; never delete a lock file.
+
+Example of preparation through the internal API (not a VM invocation):
+
+```python
+from tools.vm.matrix.resources import StandLease, create_run
+
+with StandLease(state_directory, "local-qemu-a") as lease:
+    run = create_run(lease)  # random run ID; exclusive directory creation
+    run.register({"id": "overlay", "kind": "file", "path": "disks/root.qcow2"})
+    # A future provider creates the file only after durable registration.
+```
+
+The manifest schema is `rosetun.matrix.resources.v1`, with exactly `schema`,
+`run_id`, `stand_id`, `owner_token`, `state`, `resources`, `reasons`. Identity
+fields stay fixed across updates; the in-memory run identity is frozen and its
+representation omits the token. Owner tokens are random 256-bit ownership
+identifiers, **not cryptographic protection against another process of the same
+user**. The environment, state directory and cooperating worker are trusted;
+this is not a defense against concurrent malicious filesystem replacement or
+hard-link attacks. Keep the state directory private to the worker. Never copy
+tokens to logs or reports.
+
+States are `preparing`, `prepared`, `error`, `quarantined`; `create_run` writes
+`prepared`, meaning only that the ledger exists. `register` durably adds an
+entry. `mark("error"|"quarantined", reason_code)` records identifier-only
+reasons and preserves files. Failed runs cannot return to `prepared`.
+`read_manifest` validates identity against optional independently held expected
+IDs/token. Manifests and lock files must be regular files. Unknown fields,
+duplicate JSON keys, schemas, invalid types and
+malformed/partial JSON fail closed. Updates use a same-directory exclusive
+temporary file, flush/fsync and atomic replace (plus directory fsync on POSIX).
+An interrupted write may leave the previous manifest and temporary evidence;
+an interruption before the first manifest leaves an invalid directory. Power
+loss durability still depends on the OS/filesystem. No manifest is a scenario
+PASS, report or completion marker; existing Linux/List/Proxy schemas are unchanged.
+
+File entries contain exactly `id`, `kind: "file"`, `path`. Paths use portable
+relative slash-separated components inside the run directory. Absolute,
+drive-relative, UNC, `..`, backslash, alternate streams, Windows device names
+and symlink/reparse traversal are rejected, including existing final targets.
+The manifest and temporary-manifest namespace are reserved case-insensitively.
+Tildes are rejected to exclude Windows 8.3 aliases; DOS device variants are
+rejected on every OS. Case-only file aliases cannot be separate ledger entries.
+Register intent
+before creation; a registered file may be absent and is never presumed cleaned.
+
+Process entries contain exactly `id`, `kind: "process"`, positive integer `pid`,
+`platform` (`windows` or `posix`), `boot_id`, `start_id`, `executable`.
+The next provider must capture these directly from the created process:
+host boot identity, OS creation identity (Windows creation FILETIME or Linux
+`/proc/<pid>/stat` start ticks), and executable identity/path. PID alone is never
+sufficient. This stage stores and validates fields only; it does not discover,
+verify, adopt or terminate any process.
+
+Read-only inspection requires an explicit directory and creates nothing when
+it is absent:
+
+```powershell
+python -B -m tools.vm.matrix runs --state-directory D:\local-matrix-state
+python -B -m tools.vm.matrix recover --state-directory D:\local-matrix-state
+```
+
+`recover` is always a dry-run plan. Both commands omit owner tokens. Invalid
+entries are reported as quarantined with unknown identity, without guessing
+ownership from directory names or exposing raw parser errors. Exit 0 means
+inspection completed, never successful execution or cleanup; inspect problems
+and reasons. Input/path errors return 2. Quarantine retains evidence; it neither
+stops processes nor removes files, directories or network objects.
+
+Before any future deletion, QEMU Provider must independently confirm the held
+stand lease, original run identity/token, manifest validity, file containment
+with current symlink/reparse checks, and exact resource ownership. Before any
+PID action it must compare boot and creation identity against the live process,
+handle PID reuse and unavailable observations conservatively, and confirm the
+original process has exited before removing dependent files/control endpoints.
+Unknown state must remain quarantined. QMP/QGA, overlays, endpoints, network
+objects and cleanup implementation belong to later stages.
+
+Autonomous resource tests use temporary directories and bounded harmless child
+processes. The platform-specific test for another OS is explicitly skipped;
+passing these tests does not qualify that OS or QEMU.
 
 ```powershell
 python -B -m tools.vm.matrix doctor

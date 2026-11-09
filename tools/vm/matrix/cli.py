@@ -9,6 +9,7 @@ import sys
 from .catalog import LINUX_ROOT, SUITES
 from .config import load_profile, make_plan
 from .report import ASSESSMENT_SCHEMA, assess_files
+from .resources import inspect_runs, recovery_plan
 
 
 def doctor():
@@ -35,9 +36,16 @@ def main(argv=None):
     report = commands.add_parser("report", help="assess saved report.json and adjacent status.json")
     report.add_argument("report_path")
     report.add_argument("--plan", required=True)
+    for name in ("runs", "recover"):
+        command = commands.add_parser(name, help="read local resource records (no cleanup)")
+        command.add_argument("--state-directory", required=True)
     args = parser.parse_args(argv)
     try:
-        if args.command == "doctor":
+        if args.command in ("runs", "recover"):
+            result = (recovery_plan(args.state_directory) if args.command == "recover" else
+                      {"schema": "rosetun.matrix.runs.v1", "runs": inspect_runs(args.state_directory)})
+            code = 0
+        elif args.command == "doctor":
             result = doctor()
             code = 0 if result["ready"] else 1
         elif args.command == "plan":
@@ -54,6 +62,9 @@ def main(argv=None):
             result = assess_files(args.report_path, args.plan)
             code = 2 if result["validation"]["status"] == "ERROR" else 0 if result["acceptance"]["accepted"] else 1
     except (OSError, ValueError, RecursionError):
+        if args.command in ("runs", "recover"):
+            print(json.dumps({"error": "resource state is unreadable or invalid", "cleanup_executed": False}))
+            return 2
         # Parser and OS exceptions may include input data or local account paths.
         result = {"schema": ASSESSMENT_SCHEMA, "validation": {"status": "ERROR",
                   "problems": ["input is unreadable or violates the documented schema"]},

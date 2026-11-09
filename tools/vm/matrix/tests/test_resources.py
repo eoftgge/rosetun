@@ -1,0 +1,372 @@
+"""Autonomous local ledger tests; children only hold locks or exit."""
+
+import json
+from dataclasses import FrozenInstanceError
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import time
+import unittest
+from unittest.mock import patch
+
+from tools.vm.matrix.resources import (
+    StandLease, create_run, inspect_runs, read_manifest, recovery_plan, resource_path,
+)
+
+ROOT = Path(__file__).resolve().parents[4]
+CHILD = """
+import os, sys
+from pathlib import Path
+from tools.vm.matrix.resources import StandLease
+try:
+    with StandLease(Path(sys.argv[1]), sys.argv[2]):
+        print('locked', flush=True)
+        if sys.argv[3] == 'crash':
+            os._exit(17)
+        if sys.argv[3] == 'hold':
+            Path(sys.argv[4]).write_text('ready')
+            sys.stdin.readline()
+except ValueError:
+    print('refused', flush=True)
+    sys.exit(3)
+"""
+
+
+class ResourceTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name) / "state"
+
+    def child(self, stand="stand-a", mode="exit"):
+        return subprocess.run([sys.executable, "-B", "-c", CHILD, str(self.root), stand, mode],
+                              cwd=ROOT, capture_output=True, text=True, timeout=10)
+
+    def write(self, run, data):
+        (run.directory / "manifest.json").write_text(json.dumps(data), encoding="utf-8")
+
+    def test_exclusive_directory_and_no_test_completion(self):
+        with StandLease(self.root, "stand-a") as lease:
+            run = create_run(lease, "run-a")
+            original = (run.directory / "manifest.json").read_bytes()
+            with self.assertRaises(FileExistsError):
+                create_run(lease, "run-a")
+            self.assertEqual(original, (run.directory / "manifest.json").read_bytes())
+            self.assertEqual(["manifest.json"], [p.name for p in run.directory.iterdir()])
+            self.assertEqual("prepared", read_manifest(run.directory)["state"])
+
+    def test_competing_process_and_independent_stands(self):
+        with StandLease(self.root, "stand-a"):
+            self.assertEqual(3, self.child().returncode)
+            self.assertEqual(0, self.child("stand-b").returncode)
+            with self.assertRaises(ValueError):
+                StandLease(self.root, "stand-a").acquire()
+        self.assertEqual(0, self.child().returncode)
+
+    def test_simultaneous_contenders_have_exactly_one_owner(self):
+        gate = Path(self.temp.name) / "gate"
+        code = """
+import sys, time
+from pathlib import Path
+from tools.vm.matrix.resources import StandLease
+gate, marker = Path(sys.argv[2]), Path(sys.argv[3])
+deadline = time.monotonic() + 5
+while not gate.exists():
+    if time.monotonic() >= deadline:
+        sys.exit(22)
+    time.sleep(0.01)
+try:
+    with StandLease(sys.argv[1], 'stand-a'):
+        marker.write_text('locked')
+        sys.stdin.readline()
+except ValueError:
+    marker.write_text('refused')
+"""
+        children = []
+        markers = [Path(self.temp.name) / f"result-{index}" for index in range(2)]
+        try:
+            for marker in markers:
+                children.append(subprocess.Popen(
+                    [sys.executable, "-B", "-c", code, str(self.root), str(gate), str(marker)],
+                    cwd=ROOT, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE))
+            gate.write_text("start", encoding="utf-8")
+            deadline = time.monotonic() + 5
+            while not all(marker.exists() for marker in markers) and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertTrue(all(marker.exists() for marker in markers), "contenders timed out")
+            self.assertEqual(["locked", "refused"], sorted(marker.read_text() for marker in markers))
+        finally:
+            for child in children:
+                if child.poll() is None:
+                    child.kill()
+                child.communicate(timeout=10)
+
+    def test_process_exit_releases_os_lock(self):
+        for mode, code in (("exit", 0), ("crash", 17)):
+            with self.subTest(mode=mode):
+                self.assertEqual(code, self.child(mode=mode).returncode)
+                with StandLease(self.root, "stand-a"):
+                    pass
+
+    def test_killed_owner_releases_os_lock(self):
+        ready = Path(self.temp.name) / "ready"
+        child = subprocess.Popen([sys.executable, "-B", "-c", CHILD, str(self.root), "stand-a", "hold", str(ready)],
+                                 cwd=ROOT, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                 stderr=subprocess.PIPE, text=True)
+        try:
+            deadline = time.monotonic() + 5
+            while not ready.exists() and child.poll() is None and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertTrue(ready.exists(), "holder did not become ready within timeout")
+            self.assertEqual(3, self.child().returncode)
+        finally:
+            if child.poll() is None:
+                child.kill()
+            child.communicate(timeout=10)
+        with StandLease(self.root, "stand-a"):
+            pass
+
+    def test_abrupt_preparation_retains_ledger_and_blocks_reuse(self):
+        code = """
+import os, sys
+from tools.vm.matrix.resources import StandLease, create_run
+with StandLease(sys.argv[1], 'stand-a') as lease:
+    run = create_run(lease, 'interrupted')
+    run.register({'id': 'overlay', 'kind': 'file', 'path': 'disk'})
+    (run.directory / 'disk').write_bytes(b'evidence')
+    os._exit(17)
+"""
+        result = subprocess.run([sys.executable, "-B", "-c", code, str(self.root)], cwd=ROOT,
+                                capture_output=True, timeout=10)
+        self.assertEqual(17, result.returncode)
+        self.assertEqual(b"evidence", (self.root / "runs/interrupted/disk").read_bytes())
+        self.assertEqual(3, self.child().returncode)
+
+    def test_reentry_and_double_release(self):
+        lease = StandLease(self.root, "stand-a")
+        lease.acquire()
+        with self.assertRaises(ValueError):
+            lease.acquire()
+        lease.release()
+        lease.release()
+        with self.assertRaises(ValueError):
+            lease.acquire()
+
+    def test_stale_metadata_does_not_authorize_unfinished_resources(self):
+        with StandLease(self.root, "stand-a") as lease:
+            run = create_run(lease)
+            run.register({"id": "overlay", "kind": "file", "path": "disk.qcow2"})
+        for lock in (self.root / "locks").iterdir():
+            lock.write_text('{"pid": 99999999}', encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "unresolved"):
+            StandLease(self.root, "stand-a").acquire()
+        with StandLease(self.root, "stand-b"):
+            pass
+        with self.assertRaises(ValueError):
+            run.mark("quarantined", "interrupted")
+
+    def test_identity_mismatch_and_immutable_updates(self):
+        with StandLease(self.root, "stand-a") as lease:
+            run = create_run(lease)
+            data = read_manifest(run.directory)
+            with self.assertRaises(FrozenInstanceError):
+                run._identity = ("foreign", "foreign", "0" * 64)
+            self.assertNotIn(data["owner_token"], repr(run))
+            for expected in ({"run_id": "foreign"}, {"stand_id": "foreign"}, {"owner_token": "0" * 64}):
+                with self.assertRaises(ValueError):
+                    read_manifest(run.directory, **expected)
+            run.register({"id": "qemu", "kind": "process", "pid": 123,
+                          "platform": "windows", "boot_id": "boot-a",
+                          "start_id": "creation-filetime-123", "executable": "qemu-system-x86_64"})
+            run.mark("quarantined", "interrupted")
+            after = read_manifest(run.directory)
+            for key in ("run_id", "stand_id", "owner_token"):
+                self.assertEqual(data[key], after[key])
+            with self.assertRaises(ValueError):
+                run.mark("prepared")
+            data["owner_token"] = "0" * 64
+            self.write(run, data)
+            with self.assertRaises(ValueError):
+                run.register({"id": "file", "kind": "file", "path": "x"})
+
+    def test_strict_schema_types_and_duplicate_json(self):
+        with StandLease(self.root, "stand-a") as lease:
+            run = create_run(lease)
+            original = read_manifest(run.directory)
+            variants = [{"schema": "future"}, {"schema": True}, {"extra": 1},
+                        {"run_id": []}, {"run_id": "foreign"}, {"stand_id": False}, {"owner_token": 1},
+                        {"state": []}, {"resources": {}}, {"reasons": "bad"},
+                        {"reasons": [1]}, {"state": "quarantined"},
+                        {"resources": [{"kind": "file", "id": "a", "path": 7}]},
+                        {"resources": [{"kind": "file", "id": "a", "path": "x", "extra": True}]},
+                        {"resources": [{"kind": "unknown", "id": "a"}]},
+                        {"resources": [{"kind": "process", "id": "a", "pid": True,
+                                        "platform": "windows", "boot_id": "a", "start_id": "b", "executable": "c"}]}]
+            for changes in variants:
+                with self.subTest(changes=changes):
+                    self.write(run, {**original, **changes})
+                    with self.assertRaises(ValueError):
+                        read_manifest(run.directory)
+            for raw in ('{', '{"owner_token":"hidden",', '{"schema":1,"schema":2}', 'NaN'):
+                (run.directory / "manifest.json").write_text(raw, encoding="utf-8")
+                with self.assertRaises(ValueError):
+                    read_manifest(run.directory)
+        with self.assertRaises(ValueError):
+            StandLease(self.root, "stand-b").acquire()
+        self.assertIsNone(inspect_runs(self.root)[0]["stand_id"])
+
+    def test_missing_manifest_is_not_assigned_from_directory_name(self):
+        (self.root / "runs" / "looks-like-stand-a").mkdir(parents=True)
+        self.assertIsNone(inspect_runs(self.root)[0]["run_id"])
+        self.assertIsNone(inspect_runs(self.root)[0]["stand_id"])
+        with self.assertRaisesRegex(ValueError, "unresolved"):
+            StandLease(self.root, "stand-b").acquire()
+
+    def test_portable_path_restrictions(self):
+        bad = ("../outside", "a/../../x", "/tmp/x", "C:/x", "C:x", "\\\\server\\share",
+               "//server/share", "a\\..\\x", "a//b", "./x", "a/../x", "x:stream",
+               "NUL", "con.txt", "CON .txt", "COM¹.log", "LPT²", "CONIN$", "CONOUT$",
+               "a. /x", "a./x", "manifest.json", ".manifest-x", "MANIFEST.JSON",
+               ".MANIFEST-TEMP/x", "MANIFE~1.JSO", "longna~1/file")
+        for path in bad:
+            with self.subTest(path=path), self.assertRaises(ValueError):
+                resource_path(self.root, path)
+
+    def test_case_aliases_are_not_two_owned_files(self):
+        with StandLease(self.root, "stand-a") as lease:
+            run = create_run(lease)
+            run.register({"id": "first", "kind": "file", "path": "Disks/Root.qcow2"})
+            with self.assertRaisesRegex(ValueError, "duplicate"):
+                run.register({"id": "second", "kind": "file", "path": "disks/root.qcow2"})
+            data = read_manifest(run.directory)
+            data["resources"].append({"id": "second", "kind": "file", "path": "disks/root.qcow2"})
+            self.write(run, data)
+            with self.assertRaisesRegex(ValueError, "duplicate"):
+                read_manifest(run.directory)
+
+    def test_first_manifest_failure_retains_unknown_directory(self):
+        with StandLease(self.root, "stand-a") as lease:
+            with patch("tools.vm.matrix.resources.os.replace", side_effect=OSError("interrupted")):
+                with self.assertRaises(OSError):
+                    create_run(lease, "interrupted")
+        directory = self.root / "runs/interrupted"
+        self.assertTrue(directory.is_dir())
+        self.assertTrue(list(directory.glob(".manifest-*")))
+        self.assertIsNone(inspect_runs(self.root)[0]["stand_id"])
+        with self.assertRaisesRegex(ValueError, "unresolved"):
+            StandLease(self.root, "stand-a").acquire()
+
+    def test_dos_run_ids_are_rejected(self):
+        with StandLease(self.root, "stand-a") as lease:
+            for run_id in ("CON", "nul", "LPT1"):
+                with self.subTest(run_id=run_id), self.assertRaises(ValueError):
+                    create_run(lease, run_id)
+
+    @unittest.skipUnless(os.name == "posix", "FIFO fixture requires POSIX; untested on this OS")
+    def test_fifo_manifest_is_quarantined_without_reading_it(self):
+        directory = self.root / "runs/fifo"
+        directory.mkdir(parents=True)
+        os.mkfifo(directory / "manifest.json")
+        result = subprocess.run([sys.executable, "-B", "-m", "tools.vm.matrix", "recover",
+                                 "--state-directory", str(self.root)], cwd=ROOT,
+                                capture_output=True, text=True, timeout=10)
+        self.assertEqual(0, result.returncode)
+        self.assertEqual("quarantined", json.loads(result.stdout)["runs"][0]["state"])
+
+    @unittest.skipUnless(hasattr(os, "fork"), "fork ownership requires POSIX; untested on this OS")
+    def test_fork_child_cannot_use_or_unlock_parent_lease(self):
+        code = """
+import os, subprocess, sys
+from tools.vm.matrix.resources import StandLease, create_run
+with StandLease(sys.argv[1], 'stand-a') as lease:
+    child = os.fork()
+    if child == 0:
+        try:
+            create_run(lease, 'child')
+        except ValueError:
+            lease.release()
+            os._exit(0)
+        os._exit(21)
+    _, status = os.waitpid(child, 0)
+    assert os.waitstatus_to_exitcode(status) == 0
+    code = 'from tools.vm.matrix.resources import StandLease; import sys; StandLease(sys.argv[1], "stand-a").acquire()'
+    result = subprocess.run([sys.executable, '-B', '-c', code, sys.argv[1]], capture_output=True, timeout=5)
+    assert result.returncode != 0 and b'already leased' in result.stderr
+"""
+        result = subprocess.run([sys.executable, "-B", "-c", code, str(self.root)], cwd=ROOT,
+                                capture_output=True, text=True, timeout=10)
+        self.assertEqual(0, result.returncode, result.stderr)
+
+    @unittest.skipUnless(os.name == "posix", "open-file replacement fixture requires POSIX")
+    def test_replaced_lock_blocks_mutation(self):
+        with StandLease(self.root, "stand-a") as lease:
+            run = create_run(lease)
+            replacement = self.root / "replacement"
+            replacement.write_bytes(b"")
+            os.replace(replacement, lease._lock_path)
+            with self.assertRaisesRegex(ValueError, "replaced"):
+                run.mark("quarantined", "interrupted")
+
+    def test_symlink_escape(self):
+        with StandLease(self.root, "stand-a") as lease:
+            run = create_run(lease)
+            outside = Path(self.temp.name) / "outside"
+            outside.mkdir()
+            try:
+                (run.directory / "escape").symlink_to(outside, target_is_directory=True)
+            except (OSError, NotImplementedError):
+                self.skipTest("OS/account cannot create symlink fixture; untested")
+            with self.assertRaises(ValueError):
+                run.register({"id": "escape", "kind": "file", "path": "escape/file"})
+            with self.assertRaises(ValueError):
+                StandLease(run.directory / "escape" / "state", "stand-b")
+
+    def test_quarantine_preserves_files_and_inspection_is_read_only(self):
+        with StandLease(self.root, "stand-a") as lease:
+            run = create_run(lease)
+            run.register({"id": "overlay", "kind": "file", "path": "disk"})
+            (run.directory / "disk").write_bytes(b"evidence")
+            run.mark("error", "preparation-failed")
+            run.mark("quarantined", "interrupted")
+        before = {p.relative_to(self.root): p.read_bytes() for p in self.root.rglob("*") if p.is_file()}
+        self.assertTrue(recovery_plan(self.root)["dry_run"])
+        self.assertEqual("quarantined", inspect_runs(self.root)[0]["state"])
+        after = {p.relative_to(self.root): p.read_bytes() for p in self.root.rglob("*") if p.is_file()}
+        self.assertEqual(before, after)
+        for command in ("runs", "recover"):
+            result = subprocess.run([sys.executable, "-B", "-m", "tools.vm.matrix", command,
+                                     "--state-directory", str(self.root)], cwd=ROOT,
+                                    capture_output=True, text=True, timeout=10)
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertNotIn(read_manifest(run.directory)["owner_token"], result.stdout)
+        self.assertEqual(before, {p.relative_to(self.root): p.read_bytes()
+                                 for p in self.root.rglob("*") if p.is_file()})
+        missing = self.root / "missing"
+        self.assertEqual([], inspect_runs(missing))
+        self.assertEqual([], recovery_plan(missing)["runs"])
+        self.assertFalse(missing.exists())
+        result = subprocess.run([sys.executable, "-B", "-m", "tools.vm.matrix", "recover",
+                                 "--state-directory", str(missing)], cwd=ROOT,
+                                capture_output=True, text=True, timeout=10)
+        self.assertEqual(0, result.returncode)
+        self.assertFalse(missing.exists())
+
+    def test_failed_atomic_replace_preserves_previous_manifest(self):
+        with StandLease(self.root, "stand-a") as lease:
+            run = create_run(lease)
+            before = (run.directory / "manifest.json").read_bytes()
+            with patch("tools.vm.matrix.resources.os.replace", side_effect=OSError("interrupted")):
+                with self.assertRaises(OSError):
+                    run.mark("quarantined", "interrupted")
+            self.assertEqual(before, (run.directory / "manifest.json").read_bytes())
+            self.assertTrue(list(run.directory.glob(".manifest-*")))
+
+    @unittest.skipUnless(os.name == "posix", "POSIX adapter untested on this OS")
+    def test_posix_adapter(self):
+        self.test_competing_process_and_independent_stands()
+
+    @unittest.skipUnless(os.name == "nt", "Windows adapter untested on this OS")
+    def test_windows_adapter(self):
+        self.test_competing_process_and_independent_stands()
