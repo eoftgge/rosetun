@@ -6,6 +6,123 @@ It does not run scenarios, install dependencies, start services or create VMs.
 The existing Bash/PowerShell matrices remain the execution tools, Hyper-V remains
 the control stand, and QEMU is the intended future backend.
 
+## QEMU disk and launch preparation (stage 3b)
+
+`images.py` and `qemu.py` provide an internal preparation API, separate from the
+reporting TOML profiles. There is no VM run command. `prepare(run, image, config)`
+requires an empty `PreparedRun` created under its original live `StandLease`.
+It can execute **qemu-img only**, using explicit argv without a shell. Supplying
+`executor=` replaces external commands for offline tests. Nothing invokes QEMU.
+
+`ImageDescriptor` has exactly the constructor fields `schema`
+(`rosetun.matrix.image.v1`), `identifier`, `guest_os` (`linux`), `architecture`
+(`x86_64`), absolute local `path`, physical `size_bytes`, lowercase `sha256`,
+`format` (`qcow2`) and `profile` (`bios-i440fx-v1`). Obtain the expected size and
+digest independently from the trusted image provenance. No image is downloaded.
+The base must be a regular file outside the run directory, without symlink or
+reparse ancestors. Keep it offline and immutable throughout preparation and any
+future lifecycle. The API checks bytes before and after image operations; it does
+not protect against a malicious concurrent writer or establish image provenance.
+
+`QemuConfig` fields are `schema` (`rosetun.matrix.qemu.v1`), absolute local
+`executable`, `image_executable`, `bios`, a versioned `machine` matching
+`pc-i440fx-N.N`, `accelerator` (`kvm`), `cpu` (`host`), `memory_mib` (256..65536,
+default 1024), and `vcpus` (1..64, default 1). The three paths must name regular
+files. The owner supplies a SeaBIOS binary and an available machine type from the
+chosen installation; this profile does not qualify UEFI or Secure Boot. There
+are no writable firmware variables. Other architectures, firmware profiles and
+accelerators, including TCG fallback, are rejected. Preparing fixtures on Windows
+does not imply that KVM can run there. No host-capability probe is implemented.
+Spaces and Unicode paths are supported. Commas and control characters are
+rejected before external commands, including in the state directory. Traversal,
+UNC/network paths on Windows, and symlink/reparse ancestors are rejected using
+the ledger's local-path rules. POSIX filesystem locality remains the caller's duty.
+Windows alternate data streams, reserved device names and trailing dot/space
+aliases are also rejected. Size mismatches are rejected before hashing; the
+hash read is capped at the declared size plus one byte and checks file identity
+and timestamps for changes during the read.
+
+Preparation proceeds serially:
+
+1. Register `preparation.jsonl` and `launch-plan.json` before dangerous operations.
+   Validate contracts, paths, base size and SHA-256.
+2. Run structured `qemu-img info --output=json --backing-chain -f qcow2`.
+   Require one qcow2 base, complete format-specific data, no backing image,
+   external data file, encryption, dirty/corrupt flag or internal snapshots.
+3. Register `root.qcow2` before `qemu-img create -f qcow2 -F qcow2 -b BASE OVERLAY`.
+   Refuse any existing destination. Run directories and UUIDs are unique.
+4. Inspect the overlay chain with the same info command. Require exactly the
+   overlay and verified base, explicit qcow2 backing format, exact absolute
+   backing filenames, matching virtual sizes and no auxiliary storage.
+   Recheck base bytes before saving the plan.
+5. Save the plan with exclusive creation and fsync. It records the validated
+   inputs, UUID and deterministic argv for those inputs. Disk attachment uses
+   JSON `-blockdev`, an explicitly read-only base with null backing, and only
+   the run overlay as the writable guest disk. Networking is `-nic none` with
+   `-nodefaults`; display, monitor, serial and parallel are disabled. No directory
+   sharing, physical disk, passthrough device or public listener is configured.
+
+The executor caps each output pipe at 256 KiB and uses a 30-second command timeout,
+with bounded kill/reap and pipe-reader joins during teardown. Pipe read errors
+also block success. The builder is private to the verified preparation path;
+there is no independent public API that treats an arbitrary disk path as verified.
+Nonzero exit codes, missing executables, invalid/empty/duplicate-key JSON,
+non-UTF-8 JSON, NaN/Infinity, incomplete metadata and unexpected chains block preparation. Diagnostics retain
+stage, exact command argv and limits, verified image summaries, return code,
+byte counts and safe failure codes, never raw command output, exception strings
+or owner tokens. A failure records `error`, or
+`quarantined` when an overlay/partial file exists. Files are retained in place;
+quarantine does not move or delete them. Diagnostics and plan paths are already
+registered, because failed runs cannot register new resources. If ownership or
+the lease is lost, further writes stop; the last durable intent remains for
+independent recovery. An interrupted plan write may leave partial evidence.
+Failure-state updates and failure diagnostics are attempted independently, so
+one unavailable evidence file does not prevent retaining the other. Interrupts
+retain partial files and propagate after recording the failure when possible.
+
+Never retry in the same run or automatically archive unresolved runs. The stand
+remains blocked by the existing ledger recovery policy. This stage adds no
+`released` state or cleanup. A saved plan has `executed: false` and
+`kvm_qualified: false`; it is neither scenario PASS nor proof of a real qcow2,
+successful boot or security-matrix coverage. Next: QEMU process lifecycle and
+QMP, designed together with resource completion and recovery. QGA, guest runners
+and network laboratories are outside this stage.
+
+Options were checked against the official [qemu-img reference](https://www.qemu.org/docs/master/tools/qemu-img.html),
+[invocation reference](https://www.qemu.org/docs/master/system/invocation.html), and
+[ImageInfo/QCOW2 QAPI reference](https://www.qemu.org/docs/master/interop/qemu-storage-daemon-qmp-ref.html).
+These are moving **master** documents, not a compatibility promise for an
+installed release. No QEMU version has been qualified here. Before real use, the
+owner must pin the QEMU/qemu-img build, BIOS artifact and machine type, compare
+the matching release documentation, and verify its actual JSON fields, JSON
+blockdev syntax, options and KVM availability. The strict metadata reader can
+reject releases with different or incomplete observations; do not bypass it.
+
+Offline verification (temporary text fixtures and fake command executor):
+
+```powershell
+python -B -m unittest tools.vm.matrix.tests.test_qemu tools.vm.matrix.tests.test_qemu_executor tools.vm.matrix.tests.test_resources tools.vm.matrix.tests.test_matrix -q
+```
+
+Owner qualification, on a disposable Linux x86-64/KVM host only:
+
+1. Record `/absolute/path/qemu-system-x86_64 --version`,
+   `/absolute/path/qemu-img --version`,
+   `/absolute/path/qemu-system-x86_64 -machine help` and
+   `/absolute/path/qemu-system-x86_64 -accel help`. Pin the artifacts and select
+   an explicitly supported versioned i440fx machine. These probes do not prove
+   successful KVM execution.
+2. Independently verify the trusted base size/digest and the selected SeaBIOS
+   artifact. In a private fresh state directory, construct `ImageDescriptor`
+   and `QemuConfig` with those exact paths, then call `prepare(create_run(lease),
+   image, config)` inside `with StandLease(state_directory, "local-qemu-a") as lease:`.
+   Expect three qemu-img calls, preserved base bytes, a two-image chain and a
+   preparation-only launch plan. Inspect `manifest.json` privately; never share
+   its token. Keep `preparation.jsonl` and `launch-plan.json` for discrepancies.
+3. Qualify a failed create on disposable fixtures and verify evidence retention
+   and blocked reuse. Do not execute the saved QEMU argv in this stage. Boot,
+   process stop/crash handling and QMP acceptance belong to the next stage.
+
 ## Local stand leases and resource records
 
 `resources.py` adds a preparation-only internal API; it never executes a matrix.
