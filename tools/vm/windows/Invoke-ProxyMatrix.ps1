@@ -83,6 +83,140 @@ function Restore-RosetunProxyDesktop {
     catch { Add-RosetunListError $recorder cleanup; return 'UNVERIFIED' }
 }
 
+function Get-RosetunProxyLockdownCleanup {
+    # PASS covers CLI off and the active WFP dump only. Boot-time filters hidden
+    # after BFE startup are outside this observation, as in the Lockdown matrix.
+    $state = 'UNVERIFIED'
+    try {
+        $status = Invoke-RosetunCli -Quiet 'status'
+        if ($status.ExitCode -is [int] -and $status.ExitCode -eq 0 -and $status.Output -is [string]) {
+            $lines = @([regex]::Matches($status.Output, '(?m)^lockdown: (on|off)\r?$'))
+            if ($lines.Count -eq 1 -and @([regex]::Matches($status.Output, '(?m)^lockdown:')).Count -eq 1) { $state = if ($lines[0].Groups[1].Value -eq 'off') { 'PASS' } else { 'ERROR' } }
+        }
+    }
+    catch { }
+    $objects = 'UNVERIFIED'
+    try {
+        $observation = @(Invoke-RosetunGuest -ScriptBlock {
+            $path = Join-Path $env:TEMP ("rosetun-wfp-$([guid]::NewGuid().ToString('N')).xml")
+            try {
+                & netsh.exe wfp show state "file=$path" *> $null
+                if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $path)) { return 'UNVERIFIED' }
+                $settings = [Xml.XmlReaderSettings]::new()
+                $settings.DtdProcessing = [Xml.DtdProcessing]::Prohibit
+                $settings.ConformanceLevel = [Xml.ConformanceLevel]::Fragment
+                $settings.XmlResolver = $null
+                $reader = [Xml.XmlReader]::Create($path, $settings)
+                try {
+                    $xml = [Xml.XmlDocument]::new()
+                    $xml.XmlResolver = $null
+                    # netsh may append firewallState after wfpstate. Parse the
+                    # entire stream, rather than truncating at a closing tag.
+                    $roots = [Collections.Generic.List[Xml.XmlNode]]::new()
+                    $declaration = $false
+                    while (-not $reader.EOF) {
+                        if ($reader.ReadState -eq [Xml.ReadState]::Initial) { $null = $reader.Read(); continue }
+                        if ($reader.NodeType -eq [Xml.XmlNodeType]::Element) {
+                            $roots.Add($xml.ReadNode($reader))
+                            if ($roots.Count -gt 2) { return 'UNVERIFIED' }
+                            continue
+                        }
+                        if ($reader.NodeType -eq [Xml.XmlNodeType]::XmlDeclaration) {
+                            if ($declaration -or $roots.Count -ne 0) { return 'UNVERIFIED' }
+                            $declaration = $true
+                        }
+                        elseif ($reader.NodeType -notin @([Xml.XmlNodeType]::Whitespace, [Xml.XmlNodeType]::SignificantWhitespace, [Xml.XmlNodeType]::Comment)) { return 'UNVERIFIED' }
+                        $null = $reader.Read()
+                    }
+                    if ($roots.Count -eq 0 -or $roots[0].Name -cne 'wfpstate') { return 'UNVERIFIED' }
+                    if ($roots.Count -eq 2) {
+                        $tail = $roots[1]
+                        # Only the observed empty metadata collection is supported.
+                        # Populated or unfamiliar metadata remains UNVERIFIED.
+                        if ($tail.Name -cne 'firewallState' -or $tail.Attributes.Count -ne 0) { return 'UNVERIFIED' }
+                        $children = @($tail.SelectNodes('*'))
+                        if ($children.Count -ne 1 -or $children[0].Name -cne 'dynamicKeywordAddresses' -or
+                            $children[0].Attributes.Count -ne 0 -or @($children[0].SelectNodes('*')).Count -ne 0 -or
+                            -not [string]::IsNullOrWhiteSpace($tail.InnerText)) { return 'UNVERIFIED' }
+                    }
+                    $null = $xml.AppendChild($roots[0])
+                }
+                finally { $reader.Dispose() }
+                if ($xml.DocumentElement.LocalName -cne 'wfpstate') { return 'UNVERIFIED' }
+                if (@($xml.SelectNodes('//*[namespace-uri() != ""]')).Count -ne 0) { return 'UNVERIFIED' }
+                # Include the provider and sublayer references on filters, so all
+                # LAN slots and program permits are covered, not only fixed filter IDs.
+                $lockdownKeys = @(
+                    'f12dbedd-f3c7-4a72-b0f8-20559c88b112', 'f829a64d-c373-4d92-9d66-e1c680f3794f',
+                    '57bf2a6e-57db-4d99-bed7-ecbd2c63aa75', 'e599db5e-6aeb-4e4d-aa51-4314f1b3076c',
+                    '98419911-30f0-4f71-9178-263b40bc7f6e', 'cb0f8c4b-4967-4626-a493-a4e32369e6f5',
+                    'f6a5849d-943f-4d77-917c-8811e9a70000', 'e0222624-bc2f-43a6-8058-b939a77ddd4b',
+                    '982cc554-9f41-4c9a-833f-87cc5149725f', '729b156a-c411-4f01-b7d9-a789c94e992b',
+                    '05b9da42-ea8e-4b28-a2b8-2404db01e0d1')
+                foreach ($node in @($xml.SelectNodes('/wfpstate//providerKey | /wfpstate//subLayerKey | /wfpstate//filterKey'))) {
+                    $key = [guid]::Empty
+                    if ([guid]::TryParse($node.InnerText, [ref]$key) -and $key.ToString() -in $lockdownKeys) { return 'ERROR' }
+                }
+                # State dumps group filters by layer. Missing collections or
+                # inconsistent declared counts cannot prove absence.
+                $collections = @(@('/wfpstate/providers', 'providerKey', 'PROVIDER'),
+                    @('/wfpstate/subLayers', 'subLayerKey', 'SUBLAYER'),
+                    @('/wfpstate/layers', 'layer/layerKey', 'LAYER'))
+                $layers = @($xml.SelectNodes('/wfpstate/layers/item'))
+                if ($layers.Count -eq 0) { return 'UNVERIFIED' }
+                foreach ($layer in $layers) {
+                    if (@($layer.SelectNodes('filters')).Count -ne 1) { return 'UNVERIFIED' }
+                }
+                $collections += ,@('/wfpstate/layers/item/filters', 'filterKey', 'FILTER')
+                foreach ($collection in $collections) {
+                    $containers = @($xml.SelectNodes($collection[0]))
+                    if ($containers.Count -eq 0) { return 'UNVERIFIED' }
+                    if ($collection[2] -ne 'FILTER' -and $containers.Count -ne 1) { return 'UNVERIFIED' }
+                    foreach ($container in $containers) {
+                        $items = @($container.SelectNodes('*'))
+                        $count = 0
+                        if ($container.HasAttribute('numItems') -and
+                            (-not [int]::TryParse($container.GetAttribute('numItems'), [ref]$count) -or $count -ne $items.Count)) { return 'UNVERIFIED' }
+                        foreach ($item in $items) {
+                            if ($item.LocalName -cne 'item') { return 'UNVERIFIED' }
+                            $keys = @($item.SelectNodes($collection[1]))
+                            $key = [guid]::Empty
+                            if ($keys.Count -ne 1 -or @($keys[0].SelectNodes('*')).Count -ne 0) { return 'UNVERIFIED' }
+                            if (-not [guid]::TryParse($keys[0].InnerText, [ref]$key) -and
+                                $keys[0].InnerText -cnotmatch ('^FWPM_' + $collection[2] + '_[A-Z0-9_]+$')) { return 'UNVERIFIED' }
+                        }
+                    }
+                }
+                foreach ($filter in @($xml.SelectNodes('/wfpstate/layers/item/filters/item'))) {
+                    foreach ($reference in @(@('providerKey', 'PROVIDER'), @('subLayerKey', 'SUBLAYER'))) {
+                        $keys = @($filter.SelectNodes($reference[0]))
+                        # A provider is optional; the sublayer must be unambiguous.
+                        if ($keys.Count -gt 1 -or ($reference[1] -eq 'SUBLAYER' -and $keys.Count -ne 1)) { return 'UNVERIFIED' }
+                        if ($keys.Count -eq 0) { continue }
+                        if (@($keys[0].SelectNodes('*')).Count -ne 0) { return 'UNVERIFIED' }
+                        $value = $keys[0].InnerText
+                        if ($reference[1] -eq 'PROVIDER' -and [string]::IsNullOrWhiteSpace($value)) { continue }
+                        $key = [guid]::Empty
+                        if (-not [guid]::TryParse($value, [ref]$key) -and
+                            $value -cnotmatch ('^FWPM_' + $reference[1] + '_[A-Z0-9_]+$')) { return 'UNVERIFIED' }
+                    }
+                }
+                return 'PASS'
+            }
+            catch { return 'UNVERIFIED' }
+            finally {
+                Remove-Item -LiteralPath $path -ErrorAction SilentlyContinue
+                $global:LASTEXITCODE = 0
+            }
+        })
+        if ($observation.Count -eq 1 -and $observation[0] -is [string] -and $observation[0] -in @('PASS', 'ERROR', 'UNVERIFIED')) { $objects = $observation[0] }
+    }
+    catch { }
+    if ($state -eq 'ERROR' -or $objects -eq 'ERROR') { return 'ERROR' }
+    if ($state -eq 'PASS' -and $objects -eq 'PASS') { return 'PASS' }
+    return 'UNVERIFIED'
+}
+
 function Complete-RosetunProxyCleanup {
     param($Components)
     foreach ($name in @('node', 'lan', 'watch', 'listener', 'connection', 'lockdown', 'desktop', 'files')) {
@@ -129,7 +263,7 @@ function Complete-RosetunProxyCleanup {
         }
         catch { $Components[$name] = 'UNVERIFIED'; Add-RosetunListError $recorder cleanup }
     }
-    # Lockdown off has no independent read-back in this runner. Do not infer PASS from CLI exit.
+    if ($Components.lockdown -eq 'UNVERIFIED') { $Components.lockdown = Get-RosetunProxyLockdownCleanup }
 }
 
 function New-RosetunProxyRequests {
@@ -497,8 +631,11 @@ try {
     finally {
         Disconnect-RosetunTunnel | Out-Null
         Wait-RosetunState 'Disconnected' | Out-Null
-        $lockdownOff = Invoke-RosetunCli -Quiet 'lockdown' 'off'
-        if ($recorder -and $lockdownOff.ExitCode -ne 0) { $components.lockdown = 'ERROR'; Add-RosetunListError $recorder cleanup }
+        try {
+            $lockdownOff = Invoke-RosetunCli -Quiet 'lockdown' 'off'
+            if ($recorder -and $lockdownOff.ExitCode -ne 0) { $components.lockdown = 'ERROR'; Add-RosetunListError $recorder cleanup }
+        }
+        catch { if ($recorder) { $components.lockdown = 'ERROR'; Add-RosetunListError $recorder cleanup }; throw }
     }
 }
 catch {

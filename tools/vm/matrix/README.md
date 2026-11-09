@@ -339,3 +339,37 @@ Autonomous tests extract actual PowerShell AST functions and call sites, inspect
 the sharing loop variants and exercise the real recorder under PowerShell 7 and
 Windows PowerShell where available. Guest/host operations are replaced for
 cleanup tests. No VM module is imported and no matrix body is executed.
+
+Proxy cleanup Lockdown now verifies a successful CLI off-status observation and
+absence of Lockdown objects/references in a successfully parsed active WFP dump.
+The dump must contain providers, sublayers, layers and per-layer filter collections;
+missing or malformed observations remain UNVERIFIED. Existing ERROR and
+NOT_CREATED are preserved. Active-dump cleanup PASS cannot prove absence of
+boot-time filters hidden after BFE startup, and does not change the invariant or
+release policy. See the runner guide for this evidence boundary.
+
+The real finalization integration test is also run by the foundation suite:
+
+```powershell
+pwsh -NoProfile -File tools/vm/windows/tests/Test-RosetunProxyFinalization.ps1 -Directory target/synthetic-proxy-finalize-001
+```
+
+It executes the actual nested/outer finally AST with external operations replaced,
+checks both coverage variants, remaining Lockdown, failed off commands, malformed
+or unavailable observations, prior errors, a phase not started, failures inside
+the nested phase and export errors. Its positive case obtains component PASS
+through the cleanup path instead of assigning PASS in the serialization fixture.
+Python assesses the resulting saved artifacts. This is infrastructure validation;
+the owner must still run both Proxy variants on Hyper-V using new result directories
+and check cleanup.components.lockdown, desktop restoration and resource ownership. Send back
+plan.json, events.jsonl, report.json and status.json with sanitized discrepancies.
+
+The Windows Proxy WFP reader accepts a complete `wfpstate` fragment optionally
+followed by the observed `firewallState` fragment containing one empty
+`dynamicKeywordAddresses` element. It parses every fragment, including the
+trailer, with DTDs disabled. It never strips arbitrary text after `</wfpstate>`.
+Unknown/populated trailers, duplicate WFP roots, malformed XML and extra content
+remain UNVERIFIED. Regression cases exercise the real reader and finally path,
+including the two-fragment format under Windows PowerShell 5.1. This changes only
+read-back format handling; all CLI-status, active-object and acceptance checks
+remain in force.

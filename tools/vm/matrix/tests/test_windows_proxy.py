@@ -51,6 +51,50 @@ class ProxyProducerTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertNotIn('SECRET', result.stdout + result.stderr)
 
+    def test_real_finalization_and_lockdown_observation(self):
+        expected = {
+            'firewall-tail': 'PASS', 'firewall-tail-objects': 'ERROR',
+            'unknown-tail': 'UNVERIFIED', 'duplicate-wfp': 'UNVERIFIED',
+            'truncated-tail': 'UNVERIFIED', 'extra-root': 'UNVERIFIED',
+            'trailing-text': 'UNVERIFIED', 'tail-dtd': 'UNVERIFIED',
+            'tail-declaration': 'UNVERIFIED', 'tail-populated': 'UNVERIFIED',
+            'tail-namespace': 'UNVERIFIED', 'tail-attribute': 'UNVERIFIED',
+            'success': 'PASS', 'no-host': 'PASS', 'clean-filter': 'PASS',
+            'on': 'ERROR', 'objects': 'ERROR', 'off-fails': 'ERROR',
+            'off-throws': 'ERROR', 'prior-error': 'ERROR', 'fail-cleanup': 'ERROR',
+            'read-denied': 'UNVERIFIED', 'status-throws': 'UNVERIFIED',
+            'missing-file': 'UNVERIFIED', 'status-empty': 'UNVERIFIED',
+            'status-bad': 'UNVERIFIED', 'status-conflict': 'UNVERIFIED',
+            'status-fails': 'UNVERIFIED', 'count-mismatch': 'UNVERIFIED',
+            'bad-envelope': 'UNVERIFIED', 'dump-fails': 'UNVERIFIED',
+            'empty-dump': 'UNVERIFIED', 'bad-xml': 'UNVERIFIED',
+            'missing-section': 'UNVERIFIED', 'bad-item': 'UNVERIFIED',
+            'dtd': 'UNVERIFIED', 'bad-reference': 'UNVERIFIED',
+            'duplicate-reference': 'UNVERIFIED', 'bad-sublayer': 'UNVERIFIED',
+            'missing-sublayer': 'UNVERIFIED', 'namespaced-reference': 'UNVERIFIED',
+            'not-started': 'NOT_CREATED', 'fail-export': None,
+            'fail-infrastructure': 'UNVERIFIED', 'fail-lockdown-body': 'PASS',
+        }
+        for case, cleanup in expected.items():
+            with self.subTest(case=case):
+                self.directory = self.directory.parent / case
+                result = subprocess.run(['pwsh', '-NoProfile', '-File',
+                    str(ROOT / 'tools/vm/windows/tests/Test-RosetunProxyFinalization.ps1'),
+                    '-Directory', str(self.directory), '-Case', case], capture_output=True,
+                    text=True, encoding='utf-8', errors='replace', timeout=30)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                value = self.judge()
+                if cleanup is not None:
+                    self.assertEqual(self.load('report.json')['cleanup']['components']['lockdown'], cleanup)
+                self.assertEqual(value['acceptance']['accepted'], case in ('success', 'no-host', 'clean-filter', 'firewall-tail'), value)
+                self.assertFalse(value['acceptance']['release'])
+                self.assertEqual(value['invariant']['status'], 'UNVERIFIED')
+                if case.startswith('fail-'):
+                    self.assertEqual(value['execution']['status'], 'FAIL', value)
+                for file in self.directory.glob('*.json*'):
+                    if file.is_file():
+                        self.assertNotIn('SECRET', file.read_text(encoding='utf-8-sig'))
+
     def test_full_variants_serialization(self):
         for case in ('success', 'no-host'):
             with self.subTest(case=case):
@@ -71,6 +115,12 @@ class ProxyProducerTests(unittest.TestCase):
         result = subprocess.run(['powershell', '-NoProfile', '-File', str(ROOT / 'tools/vm/windows/tests/Test-RosetunProxyResults.ps1'),
             '-Directory', 'run', '-Location', str(self.directory.parent)], cwd=ROOT,
             capture_output=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(self.judge()['acceptance']['accepted'])
+        self.directory = self.directory.parent / 'finalize-windows-powershell'
+        result = subprocess.run(['powershell', '-NoProfile', '-File',
+            str(ROOT / 'tools/vm/windows/tests/Test-RosetunProxyFinalization.ps1'),
+            '-Directory', str(self.directory), '-Case', 'firewall-tail'], cwd=ROOT, capture_output=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertTrue(self.judge()['acceptance']['accepted'])
 
