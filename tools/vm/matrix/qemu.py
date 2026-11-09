@@ -1,4 +1,4 @@
-"""Preparation only. No QEMU process lifecycle or automatic cleanup."""
+"""Disk preparation and launch plans; execution is isolated in lifecycle.py."""
 
 from dataclasses import dataclass, asdict
 import json

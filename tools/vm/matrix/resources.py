@@ -14,7 +14,8 @@ import uuid
 from .report import read_json
 
 SCHEMA = "rosetun.matrix.resources.v1"
-STATES = ("preparing", "prepared", "error", "quarantined")
+STATES = ("preparing", "prepared", "starting", "running", "stopping", "exited",
+          "error", "quarantined")
 DEVICES = {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$",
            *(f"{prefix}{i}" for prefix in ("COM", "LPT") for i in "0123456789¹²³")}
 
@@ -171,7 +172,9 @@ def inspect_runs(state_directory):
         try:
             data = read_manifest(directory)
             record = {key: data[key] for key in ("run_id", "stand_id", "state", "resources", "reasons")}
-            record["problems"] = ["preparation-is-not-execution", "resource-state-unverified"]
+            record["problems"] = ["resource-state-unverified", "no-scenario-or-security-evidence"]
+            if data["state"] in ("preparing", "prepared"):
+                record["problems"].append("preparation-is-not-execution")
             result.append(record)
         except (OSError, ValueError, RecursionError):
             # Never print raw JSON, exception text or an untrusted directory name.
@@ -212,6 +215,7 @@ class StandLease:
         self._used = False
         self._pid = None
         self._lock_path = None
+        self._active = set()
 
     def _check_live(self):
         if self._stream is None or self._pid != os.getpid():
@@ -261,6 +265,8 @@ class StandLease:
         return self
 
     def release(self):
+        if self._pid == os.getpid() and self._active:
+            raise ValueError("stand lease has an unconfirmed VM exit")
         if self._stream is not None:
             stream, self._stream = self._stream, None
             try:
@@ -295,7 +301,7 @@ class PreparedRun:
 
     def register(self, resource):
         data = self._read()
-        if data["state"] not in ("preparing", "prepared"):
+        if data["state"] not in ("preparing", "prepared", "starting"):
             raise ValueError("run is no longer accepting resources")
         _resource(resource, self.directory)
         if any(entry["id"] == resource["id"] or
@@ -310,8 +316,14 @@ class PreparedRun:
         data = self._read()
         if state not in STATES or state == "preparing":
             raise ValueError("invalid state transition")
-        if data["state"] in ("error", "quarantined") and state == "prepared":
-            raise ValueError("failed run cannot become prepared")
+        transitions = {
+            "preparing": ("prepared",), "prepared": ("prepared", "starting"),
+            "starting": ("running", "stopping", "exited"),
+            "running": ("stopping", "exited"), "stopping": ("exited",),
+            "exited": (), "error": (), "quarantined": ("stopping", "exited"),
+        }
+        if state not in ("error", "quarantined") and state not in transitions[data["state"]]:
+            raise ValueError("invalid run state transition")
         if state in ("error", "quarantined"):
             _identifier(reason)
             data["reasons"].append(reason)

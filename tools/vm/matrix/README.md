@@ -4,7 +4,77 @@ Python 3.11+ and the standard library are sufficient. Run commands from the
 repository root. The CLI only reads local files and writes JSON to stdout.
 It does not run scenarios, install dependencies, start services or create VMs.
 The existing Bash/PowerShell matrices remain the execution tools, Hyper-V remains
-the control stand, and QEMU is the intended future backend.
+the control stand. The internal QEMU backend below is not qualified on real VMs.
+
+## Bounded QEMU lifecycle (stage 3c)
+
+`lifecycle.start(run, timeout=5)` launches one prepared VM under the original
+live `StandLease`, only on Linux x86-64 with accessible `/dev/kvm`. There is no
+execution CLI. Windows supports offline tests only. KVM, the pinned BIOS/i440fx
+profile and disabled networking are mandatory; there is no accelerator fallback.
+
+Startup strictly reconstructs the saved plan, verifies base bytes again, and
+rechecks the two-image chain with bounded qemu-img info before creating a child.
+Keep the entire state directory, image, binaries and BIOS private and immutable
+to other writers. These local records are not authenticated against tampering.
+The child starts with `-S`. QMP uses a connected inherited Unix socket pair via
+`-chardev socket,id=control,fd=N -mon chardev=control,mode=control`; it has no
+filesystem endpoint or TCP listener. Only that descriptor is inherited. Standard
+input/output/error go to DEVNULL, avoiding unbounded child logs or pipe waits.
+The original launch plan remains unchanged and preparation-only.
+
+Startup saves the child's PID, host boot identity, Linux process start ticks and
+executable in the manifest. It negotiates QMP capabilities and checks query-uuid,
+query-kvm and initial prelaunch status before returning a `Vm`. This is monitor
+readiness, not guest boot readiness or KVM/image qualification. `running` in the
+manifest means an owned QMP-ready process; `vm.status()` reports the CPU state.
+
+The returned handle provides `status()`, `pause()`, `resume()`, `reset()`,
+`powerdown()` and `close()`. Pause/resume require query-status read-back. Reset
+and ACPI powerdown record requests only: neither confirms reboot or shutdown.
+Use calls serially from the original lease-owning process. QMP allows only these
+commands and startup identity queries, uses matched integer IDs, accepts bounded
+interleaved events and fragmented frames, rejects malformed/duplicate-key JSON,
+and invalidates the channel on errors. Each exchange has an absolute timeout,
+64 KiB frame limit, 256 KiB byte budget and at most 128 messages. Timeout is a
+finite positive number no greater than 60 seconds.
+
+`close()` tries QMP quit, then bounded wait, terminate/wait and kill/wait on the
+original Popen child. It never attaches to a PID from disk or signals a process
+group. A quit reply, EOF or SHUTDOWN event alone is insufficient. Only reaping
+the child permits the `exited` state and removal of the lease release guard.
+The guard blocks explicit release and context-manager exit while a child exit is
+unconfirmed. A startup failure raises `LifecycleError` with `.vm`; retain that
+handle and retry `.vm.close()` if needed. Closing an exited handle is idempotent.
+Evidence errors quarantine the run; loss of ownership stops further actions.
+An abrupt controller crash releases its OS lock but leaves unresolved evidence
+blocking stand reuse. Recovery remains read-only and never kills or deletes.
+
+The registered `lifecycle.jsonl` retains only bounded command intents and safe
+outcomes, never QMP payloads, raw exceptions or ownership tokens. All files,
+including the overlay, remain after exit. An exited manifest is not resource
+cleanup, scenario PASS, security evidence or authorization to reuse the stand.
+
+Offline check (all external processes and sockets in lifecycle tests are faked):
+
+```powershell
+python -B -m unittest tools.vm.matrix.tests.test_lifecycle -q
+```
+
+Manual qualification on a disposable Linux x86-64/KVM host, after pinning trusted
+QEMU/qemu-img, BIOS and base image artifacts: prepare a fresh run as below, then
+inside the same lease execute `with start(run) as vm:` (import `start` from
+`tools.vm.matrix.lifecycle`). Check `vm.status()` is prelaunch, `vm.resume()` is
+running, `vm.pause()` is paused, and context exit leaves the original child
+reaped and manifest exited. Verify base digest unchanged, overlay retained and
+no network interface or QMP listener. Separately qualify QMP disconnect, early
+child exit and forced-stop failures on disposable runs; retain sanitized
+`lifecycle.jsonl`, launch plan and observations on discrepancy, without manifest
+owner tokens. These checks have not been performed by the agent.
+
+Protocol choices follow the official [QMP specification](https://www.qemu.org/docs/master/interop/qmp-spec.html)
+and [QEMU invocation reference](https://www.qemu.org/docs/master/system/invocation.html).
+Matching installed-version validation and real-host qualification remain required.
 
 ## QEMU disk and launch preparation (stage 3b)
 
@@ -84,9 +154,9 @@ Never retry in the same run or automatically archive unresolved runs. The stand
 remains blocked by the existing ledger recovery policy. This stage adds no
 `released` state or cleanup. A saved plan has `executed: false` and
 `kvm_qualified: false`; it is neither scenario PASS nor proof of a real qcow2,
-successful boot or security-matrix coverage. Next: QEMU process lifecycle and
-QMP, designed together with resource completion and recovery. QGA, guest runners
-and network laboratories are outside this stage.
+successful boot or security-matrix coverage. The separate lifecycle API above
+adds execution without automatic resource cleanup. QGA, guest runners and
+network laboratories remain outside scope.
 
 Options were checked against the official [qemu-img reference](https://www.qemu.org/docs/master/tools/qemu-img.html),
 [invocation reference](https://www.qemu.org/docs/master/system/invocation.html), and
@@ -120,8 +190,8 @@ Owner qualification, on a disposable Linux x86-64/KVM host only:
    preparation-only launch plan. Inspect `manifest.json` privately; never share
    its token. Keep `preparation.jsonl` and `launch-plan.json` for discrepancies.
 3. Qualify a failed create on disposable fixtures and verify evidence retention
-   and blocked reuse. Do not execute the saved QEMU argv in this stage. Boot,
-   process stop/crash handling and QMP acceptance belong to the next stage.
+   and blocked reuse. Use only the lifecycle API above for execution under the
+   original lease, never the saved preparation argv directly.
 
 ## Local stand leases and resource records
 
@@ -183,7 +253,8 @@ this is not a defense against concurrent malicious filesystem replacement or
 hard-link attacks. Keep the state directory private to the worker. Never copy
 tokens to logs or reports.
 
-States are `preparing`, `prepared`, `error`, `quarantined`; `create_run` writes
+States are `preparing`, `prepared`, `starting`, `running`, `stopping`, `exited`,
+`error`, `quarantined`; `create_run` writes
 `prepared`, meaning only that the ledger exists. `register` durably adds an
 entry. `mark("error"|"quarantined", reason_code)` records identifier-only
 reasons and preserves files. Failed runs cannot return to `prepared`.
