@@ -123,6 +123,30 @@ def image_chain(output, expected_paths, virtual_size=None):
             elif isinstance(value, list):
                 for item in value:
                     check_aux(item)
+        # QEMU 8+ describes the qcow2 container's own file node as a child.
+        # Accept only that exact leaf, never an additional storage graph.
+        if 'children' in info:
+            children = info['children']
+            if (type(children) is not list or len(children) != 1
+                    or type(children[0]) is not dict or set(children[0]) != {'name', 'info'}
+                    or children[0]['name'] != 'file'):
+                raise ValueError("unexpected image children")
+            leaf = children[0]['info']
+            required = {'children', 'virtual-size', 'filename', 'format',
+                        'format-specific', 'dirty-flag'}
+            if (type(leaf) is not dict or not required <= set(leaf)
+                    or set(leaf) - required - {'actual-size'}
+                    or leaf['children'] != [] or leaf['format'] != 'file'
+                    or leaf['filename'] != str(path) or leaf['dirty-flag'] is not False
+                    or type(leaf['virtual-size']) is not int
+                    or leaf['virtual-size'] <= 0
+                    # QEMU reports file length rounded up to a 512-byte sector.
+                    or leaf['virtual-size'] != ((local_file(path).stat().st_size + 511) // 512) * 512
+                    or leaf['format-specific'] != {'type': 'file', 'data': {}}):
+                raise ValueError("unexpected image file child")
+            if 'actual-size' in leaf and (type(leaf['actual-size']) is not int or leaf['actual-size'] < 0):
+                raise ValueError("invalid child allocation size")
+            info = {key: value for key, value in info.items() if key != 'children'}
         check_aux(info)
         backing_keys = {key for key in info if 'backing' in key}
         if index + 1 < len(chain):

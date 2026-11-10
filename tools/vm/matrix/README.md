@@ -70,7 +70,16 @@ reaped and manifest exited. Verify base digest unchanged, overlay retained and
 no network interface or QMP listener. Separately qualify QMP disconnect, early
 child exit and forced-stop failures on disposable runs; retain sanitized
 `lifecycle.jsonl`, launch plan and observations on discrepancy, without manifest
-owner tokens. These checks have not been performed by the agent.
+owner tokens.
+
+A local owner-authorized check on Debian 13 under WSL2, QEMU/qemu-img 10.0.13,
+SeaBIOS 1.16.3 and `pc-i440fx-10.0` passed on an empty synthetic qcow2 disk:
+prelaunch, resume/pause, reset/powerdown requests, QMP disconnect, early child
+exit, and bounded forced kill. All four owned children were reaped; base bytes
+were unchanged, overlays retained, live lease release refused and no owned TCP
+or listening Unix socket observed. KVM was confirmed enabled through QMP; TCG
+was not used. This checks process/monitor lifecycle only. No guest OS was booted,
+and no real image, security behavior or production stand is qualified by it.
 
 Protocol choices follow the official [QMP specification](https://www.qemu.org/docs/master/interop/qmp-spec.html)
 and [QEMU invocation reference](https://www.qemu.org/docs/master/system/invocation.html).
@@ -137,7 +146,12 @@ with bounded kill/reap and pipe-reader joins during teardown. Pipe read errors
 also block success. The builder is private to the verified preparation path;
 there is no independent public API that treats an arbitrary disk path as verified.
 Nonzero exit codes, missing executables, invalid/empty/duplicate-key JSON,
-non-UTF-8 JSON, NaN/Infinity, incomplete metadata and unexpected chains block preparation. Diagnostics retain
+non-UTF-8 JSON, NaN/Infinity, incomplete metadata and unexpected chains block preparation.
+QEMU's optional `children` field is accepted only for exactly one `file` child
+whose filename is the same container, whose size matches that file rounded to
+512 bytes, and whose own children are empty. Its format-specific data must be
+an empty `file` record with a clean flag; unknown fields, auxiliary files,
+backing children and deeper graphs remain rejected. Diagnostics retain
 stage, exact command argv and limits, verified image summaries, return code,
 byte counts and safe failure codes, never raw command output, exception strings
 or owner tokens. A failure records `error`, or

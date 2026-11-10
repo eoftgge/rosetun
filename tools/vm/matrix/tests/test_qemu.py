@@ -445,5 +445,39 @@ class PreparationTests(unittest.TestCase):
         self.assertEqual([], self.calls)
 
 
+class ImageChildTests(unittest.TestCase):
+    def test_only_the_same_container_file_leaf_is_accepted(self):
+        import copy
+        from tools.vm.matrix.images import image_chain
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'base.qcow2'
+            path.write_bytes(b'synthetic')
+            leaf = {'children': [], 'virtual-size': 512,
+                    'filename': str(path), 'format': 'file', 'actual-size': 4096,
+                    'format-specific': {'type': 'file', 'data': {}}, 'dirty-flag': False}
+            info = {'format': 'qcow2', 'filename': str(path), 'virtual-size': 1048576,
+                    'format-specific': {'type': 'qcow2', 'data': {'compat': '1.1', 'refcount-bits': 16}},
+                    'children': [{'name': 'file', 'info': leaf}]}
+            self.assertEqual(1048576, image_chain(json.dumps([info]).encode(), [path]))
+            mutations = [lambda x: x.update(children=[]),
+                         lambda x: x['children'].append(copy.deepcopy(x['children'][0])),
+                         lambda x: x['children'][0].update(name='data-file'),
+                         lambda x: x['children'][0]['info'].update(filename='/external'),
+                         lambda x: x['children'][0]['info'].update(format='qcow2'),
+                         lambda x: x['children'][0]['info'].update(children=[{}]),
+                         lambda x: x['children'][0]['info'].update({'virtual-size': True}),
+                         lambda x: x['children'][0]['info'].update({'virtual-size': 1}),
+                         lambda x: x['children'][0]['info'].update({'actual-size': True}),
+                         lambda x: x['children'][0]['info'].update({'dirty-flag': True}),
+                         lambda x: x['children'][0]['info'].update({'data-file': '/external'}),
+                         lambda x: x['children'][0]['info'].update({'backing-filename': '/external'}),
+                         lambda x: x['format-specific']['data'].update(children=[])]
+            for index, mutate in enumerate(mutations):
+                value = copy.deepcopy(info)
+                mutate(value)
+                with self.subTest(index=index), self.assertRaises(ValueError):
+                    image_chain(json.dumps([value]).encode(), [path])
+
+
 if __name__ == '__main__':
     unittest.main()
