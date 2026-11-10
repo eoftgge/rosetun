@@ -4,7 +4,8 @@ Python 3.11+ and the standard library are sufficient. Run commands from the
 repository root. The CLI only reads local files and writes JSON to stdout.
 It does not run scenarios, install dependencies, start services or create VMs.
 The existing Bash/PowerShell matrices remain the execution tools, Hyper-V remains
-the control stand. The internal QEMU backend below is not qualified on real VMs.
+the control stand. Internal QEMU qualification coverage is recorded below; it
+does not establish network protection or scenario/release acceptance.
 
 ## Optional Linux QGA observation (stage 4a)
 
@@ -88,7 +89,8 @@ the agent is generally broader than the fixed path this controller exposes.
 QGA usually runs privileged inside the guest: trust the image, agent and local
 controller. Record image origin, distro/kernel/agent versions, preparation steps,
 size and SHA-256 in owner evidence and retain the matching image descriptor.
-No image is provisioned, downloaded or modified by this stage.
+The stage 4a API does not provision, download or modify a base image. The manual
+qualification fixture below was prepared separately with owner authorization.
 The released [agent configuration](https://github.com/qemu/qemu/blob/v10.0.0/docs/interop/qemu-ga.rst)
 and [RPC schema](https://github.com/qemu/qemu/blob/v10.0.0/qga/qapi-schema.json)
 define the port, allowlist and synchronization requirements.
@@ -101,20 +103,69 @@ synchronization failed as expected while QMP still reported running; forced
 kill/reap and closure of both child endpoints, both parent streams and adapters
 were confirmed. No image, disk or guest network was used. This checks device
 parameters and channel independence only. Real qemu-ga, Linux guest boot_id,
-reset/reobservation, guest-service stop and firewall/Lockdown remain UNRUN.
+reset/reobservation, guest-service stop and firewall/Lockdown were UNRUN at that
+point; the subsequent real-guest results follow below.
 Completion is covered by offline lifecycle tests, not this diskless experiment.
 Installed-library synthetic peers also exercise successful QGA RPCs and a
 confirmed read rejection followed by file-close; they do not run qemu-ga.
 
-Owner qualification still required:
+Real Linux guest qualification on 2026-11-11 used the same QEMU/qemu.qmp/KVM
+versions, Debian 13 nocloud build `20261103-2651`, kernel
+`6.12.115+deb13.1-amd64`, systemd `257.13-1~deb13u1` and guest-agent package
+`1:10.0.13+ds-0+deb13u1`. The official
+[Debian Cloud image](https://cloud.debian.org/images/cloud/trixie/latest/debian-13-nocloud-amd64.qcow2)
+was downloaded and checked against its published HTTPS SHA512SUMS. Its copy was
+prepared offline using chroot apt with service starts suppressed, the six-RPC
+allowlist above, fixed locale/timezone/hostname and a disabled interactive
+first-boot wizard. No host packages were installed; downloads, guest packages,
+images, caches and evidence were stored on D:.
+
+The prepared compressed qcow2 is 476774400 bytes, SHA-256
+`f4a05e7aba2c889437f6bce798926a381b7ebf257178e75d140493f817b74de8`.
+This is an isolated qualification image with root serial autologin, not a
+production guest image. Only the qualification launcher adds an independent
+fd-backed ISA serial console to the production launch arguments; it adds no
+NIC, SSH transport, QGA guest-exec or custom guest agent. The existing
+`prepare/start/observe_guest/reset/hard_off` APIs and completion validator run
+against real children and real qemu-ga, without fake RPC responses.
+
+Two final scenarios passed:
+
+- Boot, probe and repeated boot_id observation: agent version/capabilities were
+  accepted, and the QGA UUID matched `/proc/sys/kernel/random/boot_id` read via
+  the independent serial console. Only loopback appeared in the guest.
+- Agent stop via the serial console: systemd confirmed inactive; subsequent
+  QGA observation failed, QMP still confirmed running, and hard_off reaped the
+  owned child. Both scenarios confirmed controls closed, valid completion,
+  stand lease reuse and unchanged base-image bytes. Owner tokens were absent
+  from launch arguments, observations and completion reports.
+
+The boot scenario also confirmed RESET and invalidation: the API returned
+`qga-unavailable-recovery-unsupported`, and the prior observation remained
+cleared. The serial console independently observed a different boot_id after
+reset. **QGA did not observe or confirm that new boot**; same-VM QGA recovery
+remains unsupported. Initial provisioning and serial-harness failures are
+retained with the local evidence; the final rerun passed after correcting the
+interactive first-boot setup and console buffering/CR-LF handling.
+
+Local evidence and the prepared image are retained under the git-ignored
+`tools/vm/logs/qga-4a-qualification-20261111/`: `provenance.json`,
+`image-descriptor.json`, `qualification-results.json`, preparation/qualification
+scripts, serial logs and per-run lifecycle/completion files. Private resource
+manifests contain owner tokens and must not be published. No Rosetun scenario,
+controller-loss durability or firewall/Lockdown qualification was performed.
+Firewall and Lockdown settings were not changed.
+
+Owner checks for another image/build (active firewall/Lockdown remains UNRUN):
 
 1. On an independently prepared image/stand, use `prepare(run, image,
    QemuConfig(..., qga=True))`, `vm = start(run)`, `vm.resume()`, then
    `vm.observe_guest()`. Check version, capabilities and boot_id in the journal.
 2. Run `vm.reset()` and try `vm.observe_guest()` again. Stage 4a must report an
    explicit unsupported recovery error, with `guest_observation is None`.
-   Same-VM reset followed by a new valid, different boot_id is still UNRUN and
-   requires a later safe resynchronization implementation; do not mark it passed.
+   Same-VM QGA observation of a new valid, different boot_id requires a later
+   safe resynchronization implementation; the independent console observation
+   above does not qualify that QGA capability.
 3. In a separate fresh run, stop qemu-ga from an independently available guest
    console. `vm.observe_guest()` must fail while `vm.status()` still works;
    `vm.hard_off()` must reap the child and close both controls. Retain journals,
@@ -222,8 +273,8 @@ new runs and corrupted proof remained blocking. The expected shutdown timeout
 remained an operation error. TCG was not used. These are local integration
 results for the pinned synthetic fixtures, not real-image or security evidence.
 
-Remaining owner qualification includes real guest ACPI behavior, actual guest
-readiness/boot identity, controller crash, hardware/storage failures and a wider
+Remaining owner qualification includes real guest ACPI behavior, Rosetun
+readiness, controller crash, hardware/storage failures and a wider
 QEMU/kernel/platform combination. None is inferred from the synthetic results.
 Owner qualification on an isolated Linux/KVM host:
 
