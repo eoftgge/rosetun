@@ -1,4 +1,4 @@
-"""Bounded, serialized Linux QGA observation; no guest execution or reconnect.
+"""Bounded, serialized Linux QGA client session; no guest execution.
 
 Only the initial delimited sync is framed here. All subsequent RPC framing and
 IDs belong to public qemu.qmp. Any uncertain exchange poisons this session.
@@ -31,7 +31,7 @@ def _timeout(value):
 
 
 class Qga:
-    def __init__(self, stream, *, client_factory=None, relay_factory=ByteRelay):
+    def __init__(self, stream, *, client_factory=None, relay_factory=ByteRelay, sync_id=None):
         self.stream = stream
         self.client_factory = client_factory
         self.relay_factory = relay_factory
@@ -41,6 +41,8 @@ class Qga:
         self.info = None
         self.calls = 0
         self.rpc_error = ()
+        self.sync_id = sync_id
+        self.deadline = None
 
     def connect(self, timeout):
         """Synchronize once, then hand the clean stream to the library."""
@@ -57,8 +59,11 @@ class Qga:
                 self.rpc_error = ExecuteError
                 factory = QMPClient
             deadline = time.monotonic() + timeout
-            sync_id = secrets.randbits(63)
-            self.stream.settimeout(timeout)
+            if self.deadline is not None:
+                deadline = min(deadline, self.deadline)
+            sync_id = self.sync_id if self.sync_id is not None else secrets.randbits(63)
+            self.sync_id = sync_id
+            self.stream.settimeout(_timeout(deadline - time.monotonic()))
             self.stream.sendall(b'\xff' + json.dumps({
                 'execute': 'guest-sync-delimited', 'arguments': {'id': sync_id}}).encode() + b'\n')
             buffer = bytearray()
@@ -118,7 +123,12 @@ class Qga:
     def _rpc(self, name, timeout, arguments=None):
         timeout = _timeout(timeout)
         if not self.valid or self.closed:
-            raise QgaError('qga-unavailable-recovery-unsupported')
+            raise QgaError('qga-unavailable-explicit-recovery-required')
+        if self.deadline is not None:
+            timeout = min(timeout, self.deadline - time.monotonic())
+            if timeout <= 0:
+                self.invalidate()
+                raise QgaError('qga-operation-timeout')
         # Reserve the final RPC for closing a known guest file handle. A local
         # budget rejection does not make the stream's last result uncertain.
         if self.calls >= 128 or (self.calls >= 127 and name != 'guest-file-close'):
@@ -205,18 +215,21 @@ class Qga:
         if self.closed:
             return
         self.invalidate()
+        disconnected = True
         try:
             if self.client is not None:
                 try:
                     self.loop.run_until_complete(asyncio.wait_for(self.client.disconnect(), 1))
                 except Exception:
-                    pass
+                    # A failed exchange can be re-raised by disconnect after
+                    # reaching IDLE. Only that public state confirms quiescence.
+                    state = getattr(self.client, 'runstate', None)
+                    disconnected = getattr(state, 'name', None) == 'IDLE'
         finally:
             if self.relay is not None:
                 self.relay.close()
-            else:
-                self.stream.close()
-            if self.loop is not None:
+            self.stream.close()
+            if self.loop is not None and not self.loop.is_closed():
                 tasks = asyncio.all_tasks(self.loop)
                 for task in tasks:
                     task.cancel()
@@ -224,5 +237,7 @@ class Qga:
                     _, pending = self.loop.run_until_complete(asyncio.wait(tasks, timeout=1))
                     if pending:
                         raise QgaError('qga-close-unconfirmed')
+                if not disconnected:
+                    raise QgaError('qga-disconnect-unconfirmed')
                 self.loop.close()
             self.closed = True

@@ -71,6 +71,34 @@ class Client:
 
 
 class AdapterTests(unittest.TestCase):
+    @unittest.skipUnless(hasattr(socket, 'AF_UNIX'), 'Unix sockets unavailable')
+    def test_sequential_relays_close_duplicates_without_shutting_down_vm_endpoint(self):
+        parent, guest = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+        copies = []
+        try:
+            guest.settimeout(2)
+            for _ in range(2):
+                stream = parent.dup()
+                copies.append(stream)
+                relay = ByteRelay(stream)
+                try:
+                    relay.client.settimeout(2)
+                    guest.sendall(b'reply')
+                    self.assertEqual(b'reply', relay.client.recv(5))
+                    relay.client.sendall(b'command')
+                    self.assertEqual(b'command', guest.recv(7))
+                finally:
+                    relay.close()
+                self.assertFalse(relay.thread.is_alive())
+                self.assertEqual(-1, stream.fileno())
+                self.assertGreaterEqual(parent.fileno(), 0)
+            parent.close()
+            self.assertEqual(b'', guest.recv(1))
+        finally:
+            parent.close()
+            guest.close()
+        self.assertTrue(all(stream.fileno() == -1 for stream in copies))
+
     def adapter(self):
         adapter = Qmp(object(), client_factory=Client, relay_factory=Relay)
         self.addCleanup(adapter.close)

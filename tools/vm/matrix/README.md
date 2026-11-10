@@ -7,7 +7,7 @@ The existing Bash/PowerShell matrices remain the execution tools, Hyper-V remain
 the control stand. Internal QEMU qualification coverage is recorded below; it
 does not establish network protection or scenario/release acceptance.
 
-## Optional Linux QGA observation (stage 4a)
+## Optional Linux QGA observation (stages 4a and 4b.1)
 
 Set `QemuConfig(..., qga=True)` explicitly before `prepare`. Omitted/false keeps
 legacy launch plans unchanged. `start` creates a second private connected Unix
@@ -65,12 +65,10 @@ is the latest successful observation, cleared before a failed attempt or reset.
 Ping establishes agent availability only, never Rosetun or whole-OS readiness.
 Boot ID is an in-guest observation, not cryptographic attestation.
 
-Reset invalidates QGA even when RESET confirmation fails. Safe resynchronization
-after reset and reconnect after a closed socket pair are **unsupported** here;
-subsequent observations explicitly fail. RESET or a successful historical ping
-cannot confirm a new boot, and the old boot ID cannot do so either. Observing
-a new boot in the same VM after reset remains an unimplemented qualification
-step. QGA loss cannot block QMP control or killing/reaping the owned child.
+Reset invalidates QGA even when RESET confirmation fails. Subsequent
+`observe_guest()` calls explicitly fail until `recover_guest()` creates a new
+session. RESET, sync and ping cannot confirm a new boot. See stage 4b.1 below.
+QGA loss cannot block QMP control or killing/reaping the owned child.
 QGA close failure blocks completion and stand reuse; completion verification
 requires the last QGA closure entry after the final child reap and before
 completion for opt-in plans. Pending launch socket ends remain owned by the VM
@@ -144,7 +142,7 @@ The boot scenario also confirmed RESET and invalidation: the API returned
 `qga-unavailable-recovery-unsupported`, and the prior observation remained
 cleared. The serial console independently observed a different boot_id after
 reset. **QGA did not observe or confirm that new boot**; same-VM QGA recovery
-remains unsupported. Initial provisioning and serial-harness failures are
+was unsupported in stage 4a. Initial provisioning and serial-harness failures are
 retained with the local evidence; the final rerun passed after correcting the
 interactive first-boot setup and console buffering/CR-LF handling.
 
@@ -156,23 +154,123 @@ manifests contain owner tokens and must not be published. No Rosetun scenario,
 controller-loss durability or firewall/Lockdown qualification was performed.
 Firewall and Lockdown settings were not changed.
 
-Owner checks for another image/build (active firewall/Lockdown remains UNRUN):
+Stage 4a results above are historical; they do not qualify the stage 4b.1
+implementation below. The separate stage 4b.1 qualification is recorded below.
 
-1. On an independently prepared image/stand, use `prepare(run, image,
-   QemuConfig(..., qga=True))`, `vm = start(run)`, `vm.resume()`, then
-   `vm.observe_guest()`. Check version, capabilities and boot_id in the journal.
-2. Run `vm.reset()` and try `vm.observe_guest()` again. Stage 4a must report an
-   explicit unsupported recovery error, with `guest_observation is None`.
-   Same-VM QGA observation of a new valid, different boot_id requires a later
-   safe resynchronization implementation; the independent console observation
-   above does not qualify that QGA capability.
-3. In a separate fresh run, stop qemu-ga from an independently available guest
-   console. `vm.observe_guest()` must fail while `vm.status()` still works;
-   `vm.hard_off()` must reap the child and close both controls. Retain journals,
-   completion, versions and sanitized failure details.
-4. Separately qualify under active firewall/Lockdown. This is **UNRUN**; adding
-   a virtio channel proves neither agent operation under Lockdown nor protection.
-   Add no management network/firewall exception.
+### Explicit recovery with the original live controller (stage 4b.1)
+
+`vm.recover_guest()` closes the old client, creates a fresh session, performs
+`guest-sync-delimited`, validates capabilities and reads boot_id again. It is
+allowed only for the active owned VM under its original live StandLease and
+process. `observe_guest()` never recovers implicitly. Controller crash recovery,
+attachment to another process and autonomous guest jobs are unsupported.
+
+VM retains the original connected QGA endpoint without reading it. Every Qga
+owns a separate `dup()`; ByteRelay owns that duplicate and an internal socketpair.
+QMPClient receives only the relay's client socket through its public API.
+Disconnect closes the library stream; relay close stops and joins its worker
+and closes every endpoint. Pending asyncio tasks must stop before the loop can
+close. An uncertain disconnect or relay closure blocks replacement. VM final
+close closes the session and retained endpoint before recording aggregate QGA
+closure for completion; any endpoint error blocks completion and stand reuse.
+QMP ownership and configurations without QGA retain their existing behavior.
+
+Duplicates share input/output queues and OS blocking flags: they are not separate
+channels. There is at most one reader, guarded against overlapping observe,
+recover, reset and close calls. Each sync explicitly restores timeout mode after
+the prior relay's nonblocking mode. No shutdown is used on the VM endpoint;
+library disconnect operates only on its isolated relay socketpair. See the
+[pinned protocol source](https://gitlab.com/qemu-project/python-qemu-qmp/-/blob/v0.0.6/qemu/qmp/protocol.py).
+All lifecycle calls still require serialization by the caller.
+
+There are at most four recovery attempts, including failed replacements, and
+32 observation/replacement records total per VM. At most five sessions each
+allow 128 RPCs, 64 KiB sync input and 1 MiB per relay direction; recovery never
+resets the VM counters. Each observation/recovery has one deadline for sync,
+probe and file operations (at most 60 seconds); old-session teardown additionally
+has bounded disconnect, worker-join and task-cancellation waits of one second
+each. Time spent closing the old session consumes the recovery deadline.
+Every replacement uses a fresh session UUID and distinct 63-bit sync ID within
+the VM. Stale replies, partial JSON and old sync IDs are discarded before the
+new library reader starts. The protocol relies on the agent processing its
+ordered stream; it does not authenticate a malicious guest.
+
+After timeout the old operation remains uncertain and is never replayed.
+Recovery makes a new observation, which may open a new boot_id handle; it does
+not prove that a previously lost guest handle was closed. Agent restart may
+retain the same boot_id. `previous_boot_id` preserves the last successful
+observation; `reset_boot_id` preserves the baseline at reset. Current
+`guest_observation` is cleared on reset or failure. `boot_comparison` is same,
+changed, or unknown if no baseline existed. Only changed relative to an observed
+pre-reset ID sets `new_boot_confirmed`; a same ID keeps reset confirmation
+pending. Availability and boot identity do not establish application readiness
+or scenario PASS. Journals record operation, attempt, reason, old/new session,
+boot IDs and comparison, excluding the owner token. Failed recovery leaves QGA
+unavailable while QMP and owned-child hard_off remain available.
+
+Real Linux recovery qualification on 2026-11-11 (local time) passed on the
+same prepared Debian 13 base and QEMU 10.0.13 / pc-i440fx-10.0 / KVM stand as
+stage 4a, using qemu.qmp 0.0.6 and Python 3.13.5 in Debian WSL2. No packages
+were installed. The qualification launcher adds only the independent fd-backed
+ISA serial console used in stage 4a; QGA clients, duplicates, relay, library,
+VM process and completion checks are real.
+
+Confirmed in one original live controller and lease:
+
+- Initial QGA boot_id matched the independent serial console. The guest had
+  loopback only, with `-nic none` and no added network or firewall exception.
+- RESET invalidated observation; explicit recovery returned a new session and
+  a different QGA boot_id matching the console, with `new_boot_confirmed=True`.
+- Agent stop through the console caused QGA timeout with live QMP. Agent restart
+  followed by explicit recovery returned a new session and the same boot_id,
+  without rebooting Linux.
+- A further recovery with the agent stopped failed explicitly; QMP still
+  reported running and hard_off reaped the child. All four session duplicates,
+  reader loops/relay workers and the retained VM endpoint were confirmed closed.
+- Completion validated; another lease/run started and completed on the same
+  stand. Both runs have verified completion. The base remained 476774400 bytes,
+  SHA-256 `f4a05e7aba2c889437f6bce798926a381b7ebf257178e75d140493f817b74de8`.
+  Owner tokens were absent from argv, public journals and completion reports.
+
+Linux offline checks passed: all 69 targeted QGA/QMP/lifecycle/recovery tests
+ran without skips, including the installed-library sequential-session peer;
+all 181 foundation tests passed with 18 platform-specific skips. Local evidence
+is retained in git-ignored `tools/vm/logs/qga-4b1-qualification-20261111/`:
+`qualify.py`, `qualification-results.json`, serial log and per-run state.
+The results record the initial HEAD and SHA-256 of each production control
+module under test. Manifests remain private because they contain owner tokens.
+This qualification proves neither closure of an unknown guest handle nor
+controller-crash recovery, autonomous jobs, Rosetun scenario acceptance or
+firewall/Lockdown protection. Those capabilities remain unqualified.
+
+Owner repeat qualification on another prepared Linux image/build:
+
+1. Record exact QEMU, qemu.qmp, kernel and agent versions, image descriptor and
+   base SHA-256. Prepare with `QemuConfig(..., qga=True)`, then `vm = start(run)`,
+   `vm.resume()`, `first = vm.observe_guest()`. Compare boot_id with an independent
+   serial console and retain the observation journal.
+2. Run `vm.reset()`, then explicitly `row = vm.recover_guest()` once the agent
+   is available (each failure consumes one of four attempts). Require a different
+   QGA boot_id and `row['new_boot_confirmed'] is True`; confirm it via console.
+   A same ID or unknown comparison does not qualify a new boot.
+3. Via the independent console run `systemctl stop qemu-guest-agent`; require
+   `vm.observe_guest()` to fail and `vm.status()` to remain available. Start the
+   service with `systemctl start qemu-guest-agent`. Add no management network.
+4. Run `row = vm.recover_guest()` without rebooting the OS. Require a new session
+   ID, successful capabilities/boot observation and the same boot_id as step 2.
+5. Stop the agent again, require `vm.recover_guest()` to fail explicitly, then
+   check `vm.status()` and run `vm.hard_off()`. Require child reap and all host
+   controls closed. Unknown guest handles must remain reported as uncertain.
+6. Validate `completion_verified(run.directory, run._read())`, release the lease,
+   acquire a new StandLease and create another run. Recheck base size/SHA-256.
+   Retain sanitized journals, completion and provenance; report exact failing
+   operation and observed IDs on mismatch. Firewall/Lockdown and Rosetun scenario
+   acceptance require separate qualification and receive no PASS here.
+
+Before designing the next stage (autonomous guest job and retained results),
+read `tools/vm/linux/guest/launch.sh` and `tools/vm/linux/guest/start.sh`: staged
+file validation and systemd launch already exist. Do not duplicate them without
+an explicit justification.
 
 Offline fake adapter tests and the optional installed-library synthetic peer test
 are not tests of real qemu-ga. No security scenario gets PASS from agent
@@ -385,7 +483,8 @@ remains blocked by the existing ledger recovery policy. This stage adds no
 `kvm_qualified: false`; it is neither scenario PASS nor proof of a real qcow2,
 successful boot or security-matrix coverage. The separate lifecycle API above
 adds execution without automatic resource cleanup; stage 4a above adds optional
-QGA observation. Guest runners and network laboratories remain outside scope.
+QGA observation and stage 4b.1 adds explicit live-controller session recovery.
+Guest runners and network laboratories remain outside scope.
 
 Options were checked against the official [qemu-img reference](https://www.qemu.org/docs/master/tools/qemu-img.html),
 [invocation reference](https://www.qemu.org/docs/master/system/invocation.html), and

@@ -13,6 +13,10 @@ import platform
 import socket
 import subprocess
 import sys
+import secrets
+import threading
+import time
+from functools import wraps
 from datetime import datetime, timezone
 
 from .qmp_adapter import Qmp
@@ -64,13 +68,34 @@ def _identity(process, executable):
             'boot_id': boot, 'start_id': start, 'executable': executable}
 
 
+def _guest_serialized(method):
+    @wraps(method)
+    def call(self, *args, **kwargs):
+        if not self._guest_lock.acquire(blocking=False):
+            raise LifecycleError('qga-operation-in-progress', self)
+        try:
+            return method(self, *args, **kwargs)
+        finally:
+            self._guest_lock.release()
+    return call
+
+
 class Vm:
     def __init__(self, run, timeout):
         self.run = run
+        self._owner_run = run
         self.timeout = timeout
         self.process = None
         self.qmp = None
         self.qga = None
+        self.qga_endpoint = None
+        self._guest_lock = threading.Lock()
+        self.qga_recoveries = 0
+        self._sync_seed = secrets.randbits(63)
+        self.last_boot_id = None
+        self.reset_boot_id = None
+        self.reset_pending = False
+        self.qga_reason = 'initial'
         self.launch_sockets = []
         self.guest_observation = None
         self.qga_observations = 0
@@ -84,6 +109,8 @@ class Vm:
         self.operation_errors = []
 
     def _check(self):
+        if self.run is not self._owner_run:
+            raise LifecycleError('vm-owner-mismatch', self)
         self.run._read()
         if self.completed or self not in self.run._lease._active:
             raise LifecycleError('vm-is-not-active')
@@ -108,7 +135,75 @@ class Vm:
             self.evidence_failed = True
             raise LifecycleError('lifecycle-evidence-write-failed', self) from None
 
+    def _new_qga(self):
+        if self.qga is not None and not self.qga.closed:
+            raise LifecycleError('qga-old-session-not-closed', self)
+        stream = self.qga_endpoint.dup()
+        self.launch_sockets.append(stream)
+        self.qga = Qga(stream, sync_id=(self._sync_seed + self.qga_recoveries) % 2**63)
+        self.launch_sockets.remove(stream)
+
+    @_guest_serialized
     def observe_guest(self):
+        return self._observe_guest()
+
+    @_guest_serialized
+    def recover_guest(self):
+        """Replace a confirmed closed client under the original live lease."""
+        self._check()
+        if self.qga_endpoint is None:
+            raise LifecycleError('qga-not-configured', self)
+        if self.process is None or self.process.poll() is not None or self.exited:
+            raise LifecycleError('vm-child-has-exited', self)
+        if self.qga_recoveries >= 4:
+            raise LifecycleError('qga-recovery-limit', self)
+        if self.qga_observations >= 32:
+            raise LifecycleError('qga-observation-limit', self)
+        self.qga_recoveries += 1
+        self.guest_observation = None
+        old = self.qga.session_id
+        deadline = time.monotonic() + self.timeout
+        try:
+            self.qga.close()
+            if not self.qga.closed:
+                raise LifecycleError('qga-close-unconfirmed', self)
+            self._check()
+            self._new_qga()
+        except (OSError, ValueError):
+            self.qga.invalidate()
+            self.qga_observations += 1
+            self._guest_row(dict(self._observation_row(), operation='recovery',
+                                 old_session_id=old, reason=self.qga_reason,
+                                 new_session_id=None,
+                                 recovery_attempt=self.qga_recoveries,
+                                 result='qga-session-replacement-failed'))
+            raise LifecycleError('qga-session-replacement-failed', self) from None
+        return self._observe_guest(deadline=deadline, old_session_id=old)
+
+    def _observation_row(self):
+        return {'run_id': self.run._identity[0], 'vm_uuid': self.vm_uuid,
+                'qga_session_id': self.qga.session_id,
+                'sync_id': self.qga.sync_id,
+                'utc': datetime.now(timezone.utc).isoformat(), 'result': 'error',
+                'agent': None, 'boot_id': None, 'previous_boot_id': self.last_boot_id,
+                'reset_boot_id': self.reset_boot_id, 'reset_pending': self.reset_pending,
+                'boot_comparison': 'unobserved', 'new_boot_confirmed': False}
+
+    def _guest_row(self, row):
+        try:
+            self.run._read()
+            if self.run._identity[2] in json.dumps(row):
+                raise ValueError('owner-token-in-observation')
+            with resource_path(self.run.directory, 'qga-observations.jsonl').open(
+                    'a', encoding='utf-8', newline='\n') as stream:
+                stream.write(json.dumps(row, sort_keys=True) + '\n')
+                stream.flush()
+                os.fsync(stream.fileno())
+        except (OSError, ValueError):
+            self.evidence_failed = True
+            raise LifecycleError('qga-evidence-write-failed', self) from None
+
+    def _observe_guest(self, *, deadline=None, old_session_id=None):
         """Observe agent availability and Linux boot identity, never OS readiness."""
         self._check()
         self.guest_observation = None
@@ -117,36 +212,42 @@ class Vm:
         if self.qga_observations >= 32:
             raise LifecycleError('qga-observation-limit', self)
         self.qga_observations += 1
-        row = {'run_id': self.run._identity[0], 'vm_uuid': self.vm_uuid,
-               'qga_session_id': self.qga.session_id,
-               'utc': datetime.now(timezone.utc).isoformat(), 'result': 'error',
-               'agent': None, 'boot_id': None}
+        row = dict(self._observation_row(), operation='recovery' if old_session_id else 'observe',
+                   old_session_id=old_session_id, reason=self.qga_reason,
+                   new_session_id=self.qga.session_id if old_session_id else None,
+                   recovery_attempt=self.qga_recoveries)
+        self.qga.deadline = deadline if deadline is not None else time.monotonic() + self.timeout
         try:
             if not self.qga.attempted:
-                self.qga.connect(self.timeout)
+                remaining = self.qga.deadline - time.monotonic()
+                self.qga.connect(_limit(remaining))
             row['agent'] = self.qga.probe(self.timeout)
             # Guest supplied strings must never publish the local owner token.
             if self.run._identity[2] in json.dumps(row):
                 row['agent'] = None
                 raise LifecycleError('invalid-qga-observation')
             row['boot_id'] = self.qga.read_boot_id(self.timeout)
+            baseline = self.reset_boot_id if self.reset_pending else self.last_boot_id
+            row['boot_comparison'] = ('unknown' if baseline is None else
+                                      'same' if baseline == row['boot_id'] else 'changed')
+            row['new_boot_confirmed'] = self.reset_pending and row['boot_comparison'] == 'changed'
+            self.last_boot_id = row['boot_id']
+            if row['new_boot_confirmed']:
+                self.reset_pending = False
             row['result'] = 'observed'
+            row['sync_id'] = self.qga.sync_id
+            self.qga_reason = 'explicit'
         except QgaError as error:
             row['result'] = str(error)
+            self.qga_reason = str(error)
             raise LifecycleError(str(error), self) from None
         except (OSError, ValueError):
+            self.qga_reason = row['result'] = 'guest-observation-failed'
             raise LifecycleError('guest-observation-failed', self) from None
         finally:
-            try:
-                self.run._read()
-                with resource_path(self.run.directory, 'qga-observations.jsonl').open(
-                        'a', encoding='utf-8', newline='\n') as stream:
-                    stream.write(json.dumps(row, sort_keys=True) + '\n')
-                    stream.flush()
-                    os.fsync(stream.fileno())
-            except (OSError, ValueError):
-                self.evidence_failed = True
-                raise LifecycleError('qga-evidence-write-failed', self) from None
+            if row['result'] != 'observed':
+                self.qga.invalidate()
+            self._guest_row(row)
         self.guest_observation = row
         return row
 
@@ -187,10 +288,14 @@ class Vm:
     def resume(self):
         return self._control('cont', 'running')
 
+    @_guest_serialized
     def reset(self):
         """Confirm RESET, not guest boot readiness or a new guest boot ID."""
         self._check()
         self.guest_observation = None
+        self.reset_boot_id = self.last_boot_id
+        self.reset_pending = True
+        self.qga_reason = 'reset'
         if self.qga is not None:
             self.qga.invalidate()
         self._event('reset', 'intent')
@@ -233,6 +338,7 @@ class Vm:
         """Kill/reap the owned process; no ACPI and no physical disk power-loss claim."""
         return self.close(hard=True)
 
+    @_guest_serialized
     def close(self, *, hard=False):
         if self.completed:
             return
@@ -285,6 +391,9 @@ class Vm:
                 self.qmp.close()
             if self.qga is not None:
                 self.qga.close()
+            if self.qga_endpoint is not None:
+                self.qga_endpoint.close()
+            if self.qga is not None:
                 self._event('qga', 'closed')
             if self.stderr is not None:
                 self.stderr.close()
@@ -321,7 +430,7 @@ class Vm:
             # controls are closed. Quarantined ledger still blocks a new lease.
             if self.exited:
                 controls_closed = True
-                for control in (*self.launch_sockets, self.qmp, self.qga, self.stderr):
+                for control in (*self.launch_sockets, self.qmp, self.qga, self.qga_endpoint, self.stderr):
                     if control is not None:
                         try:
                             control.close()
@@ -402,8 +511,9 @@ def start(run, *, timeout=5, executor=execute):
         if config.qga:
             qga_parent, qga_child = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
             vm.launch_sockets.extend((qga_parent, qga_child))
-            vm.qga = Qga(qga_parent)
+            vm.qga_endpoint = qga_parent
             vm.launch_sockets.remove(qga_parent)
+            vm._new_qga()
             argv += ['-chardev', f'socket,id=guestagent,fd={qga_child.fileno()}',
                      '-device', 'virtio-serial-pci,id=guestserial',
                      '-device', 'virtserialport,bus=guestserial.0,chardev=guestagent,name=org.qemu.guest_agent.0']

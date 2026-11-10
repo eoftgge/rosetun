@@ -29,6 +29,8 @@ class Stream:
         self.data = bytearray(data)
         self.closed = False
         self.sent = []
+    def dup(self):
+        return Stream(bytes(self.data))
     def settimeout(self, timeout):
         assert 0 < timeout <= 60
     def sendall(self, data):

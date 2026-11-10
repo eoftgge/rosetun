@@ -19,6 +19,9 @@ class Stream:
         self.sent = []
         self.closed = False
 
+    def dup(self):
+        return Stream(self.chunks)
+
     def settimeout(self, timeout):
         assert 0 < timeout <= 60
 
@@ -287,6 +290,7 @@ class LifecycleTests(unittest.TestCase):
         vm.qga = Mock()
         vm.qga.attempted = True
         vm.qga.session_id = 'synthetic-session'
+        vm.qga.sync_id = None
         vm.qga.probe.return_value = {'version': self.run._identity[2], 'required_commands': []}
         with self.assertRaises(lifecycle.LifecycleError):
             vm.observe_guest()
