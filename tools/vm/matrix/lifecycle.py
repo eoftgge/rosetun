@@ -484,7 +484,7 @@ def start(run, *, timeout=5, executor=execute):
         image.verify_bytes()
     except (KeyError, TypeError, OSError, ValueError):
         raise LifecycleError('prelaunch-validation-failed') from None
-    for name in (('qemu-stderr.log', 'completion.json', 'qga-observations.jsonl')
+    for name in (('qemu-stderr.log', 'completion.json', 'qga-observations.jsonl', 'job-evidence.jsonl')
                  if config.qga else ('qemu-stderr.log', 'completion.json')):
         run.register({'id': name.split('.')[0], 'kind': 'file', 'path': name})
     journal = resource_path(run.directory, 'lifecycle.jsonl')
@@ -519,6 +519,7 @@ def start(run, *, timeout=5, executor=execute):
                      '-device', 'virtserialport,bus=guestserial.0,chardev=guestagent,name=org.qemu.guest_agent.0']
             descriptors.append(qga_child.fileno())
             resource_path(run.directory, 'qga-observations.jsonl').touch(exist_ok=False)
+            resource_path(run.directory, 'job-evidence.jsonl').touch(exist_ok=False)
         run._read()
         vm.process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                       stderr=subprocess.PIPE, shell=False, close_fds=True, bufsize=0,

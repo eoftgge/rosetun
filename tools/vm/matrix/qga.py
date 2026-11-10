@@ -1,4 +1,4 @@
-"""Bounded, serialized Linux QGA client session; no guest execution.
+"""Bounded, serialized Linux QGA client session.
 
 Only the initial delimited sync is framed here. All subsequent RPC framing and
 IDs belong to public qemu.qmp. Any uncertain exchange poisons this session.
@@ -43,6 +43,7 @@ class Qga:
         self.rpc_error = ()
         self.sync_id = sync_id
         self.deadline = None
+        self.jobs_enabled = False
 
     def connect(self, timeout):
         """Synchronize once, then hand the clean stream to the library."""
@@ -151,12 +152,13 @@ class Qga:
                     or type(entry.get('success-response')) is not bool):
                 raise QgaError('invalid-qga-capability')
             commands[entry['name']] = entry
+        required = REQUIRED + (('guest-exec', 'guest-exec-status') if self.jobs_enabled else ())
         if any(name not in commands or not commands[name]['enabled']
-               or not commands[name]['success-response'] for name in REQUIRED):
+               or not commands[name]['success-response'] for name in required):
             raise QgaError('qga-required-rpc-unsupported')
         if self._rpc('guest-ping', timeout) != {}:
             raise QgaError('invalid-qga-ping')
-        self.info = {'version': info['version'], 'required_commands': list(REQUIRED)}
+        self.info = {'version': info['version'], 'required_commands': list(required)}
         return dict(self.info)
 
     def read_boot_id(self, timeout):

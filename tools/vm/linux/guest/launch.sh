@@ -124,11 +124,14 @@ l2_launch_main() {
     fi
     local run="$base/$run_id"
     [ ! -e "$run" ] && [ ! -L "$run" ] || l2_launch_die "$run already exists; a run id is used once"
-    install -d -m 0755 -o root -g root -- "$run" || l2_launch_die "cannot create $run"
+    mkdir -m 0755 -- "$run" || l2_launch_die "cannot exclusively create $run"
 
     local path source_file
     for path in "${L2_LAUNCH_PATHS[@]}"; do
         source_file="$stage/$path"
+        if [[ $path == */* ]]; then
+            [ -d "$stage/${path%/*}" ] && [ ! -L "$stage/${path%/*}" ] || l2_launch_die "staged parent is missing or a symlink"
+        fi
         [ -f "$source_file" ] && [ ! -L "$source_file" ] || l2_launch_die "staged file $path is missing or a symlink"
         if [[ $path == */* ]]; then
             install -d -m 0755 -o root -g root -- "$run/${path%/*}" || l2_launch_die "cannot create a folder for $path"

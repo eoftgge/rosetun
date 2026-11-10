@@ -1010,3 +1010,198 @@ remain UNVERIFIED. Regression cases exercise the real reader and finally path,
 including the two-fragment format under Windows PowerShell 5.1. This changes only
 read-back format handling; all CLI-status, active-object and acceptance checks
 remain in force.
+# Autonomous infrastructure smoke over QGA (stage 4b.2)
+
+This opt-in path is an infrastructure diagnostic, not a Rosetun scenario or VPN
+protection evidence. It uses the original live Python controller and its lease.
+It does not implement package delivery or controller crash recovery. Existing
+matrix profiles and result assessment remain separate.
+
+The owner must install the reviewed `../linux/guest/launch.sh` at exactly
+`/usr/local/libexec/rosetun-l2/launch`, executable and root-owned, with root-owned
+parents without group/other write or symlinks. Compare its SHA-256 with the
+reviewed source before qualification. The launcher checks its installed file and
+directory; this API assumes the owner has established that trust anchor and the
+guest image is trusted. QGA runs as root, without sudo or `SUDO_UID`. Only root's
+home `/root` is supported by this API. Do not add an SSH/sudo rule for this smoke.
+
+In addition to observation's existing RPCs, explicitly enable `guest-exec` and
+`guest-exec-status` in the guest agent's allowlist. These are privileged general
+execution capabilities at the agent boundary; the Python facade restricts them
+to the installed launcher, validated arguments and the returned PID. The agent
+allowlist itself does not restrict executable paths. No write-file RPC is used.
+Observation alone still requires only its original RPC set. The supported real
+guest baseline is qemu-ga 10.0.13 with host qemu.qmp 0.0.6; check agent capabilities
+at runtime. See the [QGA reference](https://www.qemu.org/docs/master/interop/qemu-ga-ref.html#command-guest-exec):
+`guest-exec` returns a launcher PID; `guest-exec-status` reaps its metadata on exit.
+Neither indicates the outcome of the independent systemd job. Output capture is
+disabled, and no shell command string, stdin payload, environment injection or
+arbitrary executable is accepted.
+
+Owner preparation (inside the guest, out of band): create a new mode-0700
+`/root/rosetun-l2-stage/GUEST_RUN_ID`, under a root-owned parent without group/other
+write. Copy the reviewed scripts as regular files with LF endings. The exact
+package is:
+
+```text
+guest/launch.sh
+guest/start.sh
+guest/lib.sh
+guest/run-smoke.sh
+job.env
+manifest.sha256
+```
+
+No artifacts directory, binaries, scenarios or other files belong in this
+package. `run-smoke.sh` in the manifest explicitly selects smoke; `PROFILE` must
+also be `infra-smoke-v1`. Unknown profiles are rejected. Do not use the legacy
+PowerShell `New-RosetunLinuxJobEnv`, `New-RosetunLinuxStage` or
+`Start-RosetunLinuxJob` for this package: those remain the legacy matrix/SSH path.
+Reuse is confined to the verified guest launcher, start dispatcher and strict
+environment reader. Smoke has its own strict durable writer and result contract.
+
+`job.env` has exactly one occurrence of each of these keys (no quoting):
+
+```text
+PROFILE=infra-smoke-v1
+HOST_RUN_ID=the_exact_python_prepared_run_id
+RUN_ID=20261111T010203Z-0123abcd
+VM_UUID=12345678-1234-4234-8234-123456789abd
+EXPECTED_BOOT_ID=12345678-1234-4234-8234-123456789abc
+JOB_ID=smoke
+DELAY_SECONDS=20
+```
+
+Replace example identities with the exact live VM UUID, observed Linux boot ID,
+Python run ID and a fresh legacy guest run ID. The host ID uses the existing
+Python identifier grammar (up to 96 characters); the separate guest ID retains
+`YYYYMMDDTHHMMSSZ-xxxxxxxx`. No truncation or implicit conversion occurs: the
+facade records this explicit mapping and verifies both identities on collection.
+VM UUID is compared to Linux DMI product_uuid, boot ID to `/proc`.
+Delay is an integer 0..30 seconds; job runtime is capped at 45 seconds, followed
+by a 5-second control-group stop limit and ExecStopPost finalization.
+
+From the staged directory, the owner generates the manifest over exactly the
+five payload files, then obtains the digest of the manifest itself:
+
+```sh
+sha256sum guest/launch.sh guest/start.sh guest/lib.sh guest/run-smoke.sh job.env >manifest.sha256
+sha256sum manifest.sha256
+```
+
+Supply that digest and the exact guest run ID to the host. No code here copies
+the package into the guest. The launcher verifies the manifest, copies into
+`/var/lib/rosetun-l2/GUEST_RUN_ID`, verifies the protected copies and starts the
+verified `start.sh`. Exclusive run-directory creation rejects repeated launcher
+invocations, including concurrent ones; a second atomic job claim also remains
+after execution. Failed/partial run directories are retained and never restarted
+under the same identity. This is not an exactly-once guarantee across crashes.
+
+API in the original live process, after `vm.observe_guest()`:
+
+```python
+from tools.vm.matrix.jobs import SmokeJob
+
+job = SmokeJob(vm, enabled=True, guest_run_id=guest_run_id,
+               manifest_sha256=owner_verified_manifest_digest)
+job.submit()       # exactly one attempt for this live Vm
+job.inspect()      # saved started marker; may raise JobError(UNVERIFIED)
+# After channel loss, retain vm, job and the lease:
+vm.recover_guest() # explicit; never hidden inside submit/collect
+result = job.collect()
+```
+
+`submit()` records intent before execution. An exchange timeout leaves submission
+`unknown` and poisons the QGA session; it never retries. Keep the same `job`
+object and recover explicitly before inspecting saved state. A new facade for
+that Vm is rejected. Absence/open errors, lost replies, missing terminal data,
+identity/digest mismatch, malformed JSON/base64/count/EOF, oversized content and
+artifact hash mismatch raise an error with verification `UNVERIFIED`. Unknown
+does not mean absent and never permits resubmission. A known handle is closed
+when the channel permits; unconfirmed open/close states remain in host evidence.
+There is no reconnect-to-job API after controller loss.
+
+The contract separates `submission`, `launcher`, `job` and `verification`.
+`VERIFIED` means the saved terminal record and required artifact agree with this
+attempt's identities; check `job == 'succeeded'` separately. `error` and `timeout`
+are valid terminal failures. The security invariants stay `UNVERIFIED` and release
+gate stays false even for a successful diagnostic or successful VM completion.
+
+Reads are restricted to `report/smoke-started.json`, `smoke-terminal.json` and
+`smoke-artifact.txt` under this fixed guest run directory. Each file is capped at
+4096 bytes; strict JSON schemas and artifact SHA-256 are checked. Guest writes
+use a same-directory temporary file, file sync, rename and directory sync;
+terminal failures are finalized by ExecStopPost if the main process cannot write.
+Unit stdout/stderr are discarded, files have an 8192-byte systemd limit, and the
+actual diagnostic artifact is one fixed short line. Results are never removed
+on collection. Host evidence (including bounded raw collected bytes) is retained
+in pre-registered `job-evidence.jsonl`, capped at 256 KiB, separately from
+lifecycle, completion and legacy reports. Evidence failure blocks trustworthy
+completion. Limits per job: 180-second total deadline from facade creation,
+10 seconds per API operation, 5 seconds per RPC, 64 RPCs and 12 explicit polls.
+Existing QGA session limits (128 RPCs) and recovery limits are unchanged. These
+budgets include known-handle close reservations; exhaustion cannot imply success.
+
+Offline checks: `python -m unittest discover -s tools/vm/matrix/tests`, plus
+`bash tools/vm/linux/tests/selftest-lib.sh` and
+`bash tools/vm/linux/tests/selftest-smoke.sh` on Linux. The latter uses private
+temporary copies and substituted system commands, never real systemd services.
+Linux shell checks on other hosts are UNRUN, not qualification evidence.
+
+Real-guest qualification on 2026-11-11 (local time) passed on the existing
+Debian 13/WSL2 KVM stand: QEMU 10.0.13, pc-i440fx-10.0, qemu.qmp 0.0.6,
+Python 3.13.5, guest kernel 6.12.115+deb13.1-amd64, systemd 257.13-1~deb13u1
+and qemu-ga 1:10.0.13+ds-0+deb13u1. Two independent writable overlays reused the
+prepared base above. Only the qualification harness added the independent serial
+console and prepared the reviewed package/installed launcher out of band before
+submit; production code performed no guest writes through QGA. Only the two job
+RPCs were added to the guest allowlist. No NIC, SSH, firewall exception, dependency
+installation or base-image modification was used.
+
+Confirmed with real QGA, systemd, original live controller and lease:
+
+- Saved started marker, followed by agent stop and a QGA observation timeout
+  while QMP remained running. The autonomous job completed during channel loss.
+  Agent restart and explicit `recover_guest()` returned a new session with the
+  same boot ID; `collect()` verified the saved successful terminal and artifact.
+- Both facade duplicate submit and a second installed-launcher invocation were
+  rejected. Each unit journal recorded one start, with `NRestarts=0` observed
+  while active. No second autonomous job was started.
+- Deliberately absent and truncated terminal files were rejected as UNVERIFIED;
+  restoring the original terminal allowed verified collection without resubmit.
+- A separately reviewed qualification variant changed only the diagnostic sleep
+  to a bounded 60 seconds, exceeding the unchanged 45-second unit runtime limit.
+  systemd stopped it and ExecStopPost saved a verified `timeout` terminal.
+  Successful VM completion retained that failed job outcome.
+- Both children were reaped, all sessions/relay workers and retained endpoints
+  closed, and completion verified. A third run acquired the same stand and
+  started/completed successfully. Base size and SHA-256 remained 476774400 bytes,
+  `f4a05e7aba2c889437f6bce798926a381b7ebf257178e75d140493f817b74de8`.
+
+Linux offline checks passed: 194 foundation tests with 18 platform skips,
+31 targeted tests without skips, legacy shell self-test 122 checks and the new
+smoke shell self-test. Qualification initially exposed a test-only dynamic shell
+variable collision in the fake `mktemp`; its fixture scope was corrected before
+the real runs. Local evidence is retained in git-ignored
+`tools/vm/logs/qga-4b2-qualification-20261111/`: `qualify.py`,
+`qualification-results.json`, source/package hashes, serial logs, offline test
+log and per-run state/evidence/completion files. Owner tokens remain private and
+were checked absent from public journals, argv and qualification results.
+Lost `guest-exec` response behavior remains covered by offline tests; this real
+qualification does not establish closure of unknown guest handles, reboot or
+controller-crash durability, Rosetun scenarios or VPN protection.
+
+Owner repeat qualification plan:
+
+1. Prepare and review the package, submit, confirm the saved started marker.
+2. Lose the QGA session while keeping the VM, controller and lease alive.
+3. Explicitly recover QGA, collect and validate the saved terminal/artifact.
+4. Confirm one unit invocation/claim and that duplicate submit cannot run again.
+5. Qualify a timeout (a reviewed test package with bounded work exceeding 45s)
+   and incomplete terminal data; confirm timeout/error versus UNVERIFIED.
+6. Close the VM, verify completion and lease reuse, and inspect retained job
+   evidence separately from completion.
+
+Transient units and the current transport do not establish persistence across
+reboot, hard-off or controller crash. Package delivery is the next stage; Linux
+L2 migration follows it. Neither is implemented here.

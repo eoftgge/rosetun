@@ -73,6 +73,13 @@ class Client:
 
 
 class QgaTests(unittest.TestCase):
+    def test_job_commands_are_required_only_after_explicit_opt_in(self):
+        adapter = self.adapter()
+        self.assertEqual(list(REQUIRED), adapter.probe(1)['required_commands'])
+        adapter.jobs_enabled = True
+        with self.assertRaisesRegex(QgaError, 'required-rpc-unsupported'):
+            adapter.probe(1)
+
     def adapter(self, prefix=b'', suffix=b''):
         stream = Stream(prefix + b'\xff{"return":123}\n' + suffix)
         adapter = Qga(stream, client_factory=Client, relay_factory=Relay)
