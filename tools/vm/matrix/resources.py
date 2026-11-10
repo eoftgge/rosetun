@@ -11,7 +11,7 @@ import stat
 import tempfile
 import uuid
 
-from .report import read_json
+from .report import read_json, _unique_object, _invalid_constant
 
 SCHEMA = "rosetun.matrix.resources.v1"
 STATES = ("preparing", "prepared", "starting", "running", "stopping", "exited",
@@ -173,6 +173,9 @@ def inspect_runs(state_directory):
             data = read_manifest(directory)
             record = {key: data[key] for key in ("run_id", "stand_id", "state", "resources", "reasons")}
             record["problems"] = ["resource-state-unverified", "no-scenario-or-security-evidence"]
+            record['completion_verified'] = completion_verified(directory, data)
+            if record['completion_verified']:
+                record['problems'].remove('resource-state-unverified')
             if data["state"] in ("preparing", "prepared"):
                 record["problems"].append("preparation-is-not-execution")
             result.append(record)
@@ -255,7 +258,8 @@ class StandLease:
         try:
             self._check_live()
             # Old metadata never authorizes reuse, even after the OS lock is free.
-            if any(run["stand_id"] in (None, self._stand) for run in inspect_runs(self._root)):
+            if any(run["stand_id"] in (None, self._stand) and not run.get('completion_verified', False)
+                   for run in inspect_runs(self._root)):
                 raise ValueError("stand has unresolved runs; inspect the recovery plan")
             stream.write(json.dumps({"stand_id": self._stand, "pid": os.getpid()}).encode())
             stream.truncate()
@@ -331,6 +335,94 @@ class PreparedRun:
             raise ValueError("prepared state cannot have a failure reason")
         data["state"] = state
         _atomic_manifest(self.directory, data)
+
+    def _complete(self, exits, vm_uuid):
+        data = self._read()
+        processes = [r for r in data['resources'] if r['kind'] == 'process']
+        if (data['state'] != 'exited' or not processes
+                or [e['resource'] for e in exits] != processes
+                or any(type(e['returncode']) is not int for e in exits)):
+            raise ValueError('completion-process-evidence-mismatch')
+        journal = resource_path(self.directory, 'lifecycle.jsonl')
+        proof = {'schema': 'rosetun.matrix.completion.v1', 'run_id': data['run_id'],
+                 'stand_id': data['stand_id'], 'owner_digest': hashlib.sha256(data['owner_token'].encode()).hexdigest(),
+                 'vm_uuid': vm_uuid, 'resources': data['resources'], 'exits': exits,
+                 'controls_closed': True, 'retained_artifacts': True,
+                 'journal_sha256': hashlib.sha256(journal.read_bytes()).hexdigest()}
+        path = resource_path(self.directory, 'completion.json')
+        with path.open('x', encoding='utf-8', newline='\n') as stream:
+            json.dump(proof, stream, sort_keys=True)
+            stream.flush()
+            os.fsync(stream.fileno())
+        if os.name == 'posix':
+            fd = os.open(self.directory, os.O_RDONLY)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+        if not completion_verified(self.directory, self._read()):
+            raise ValueError('completion-readback-failed')
+
+
+def completion_verified(directory, data):
+    """Consistency evidence only; a malicious local owner can forge these files."""
+    if data['state'] != 'exited':
+        return False
+    try:
+        path = resource_path(directory, 'completion.json')
+        _regular_file(path)
+        if path.stat().st_size > 256 * 1024:
+            return False
+        proof, _ = read_json(path)
+        _keys(proof, 'schema run_id stand_id owner_digest vm_uuid resources exits controls_closed retained_artifacts journal_sha256')
+        uuid.UUID(proof['vm_uuid'])
+        if (proof['schema'] != 'rosetun.matrix.completion.v1'
+                or proof['run_id'] != data['run_id'] or proof['stand_id'] != data['stand_id']
+                or proof['owner_digest'] != hashlib.sha256(data['owner_token'].encode()).hexdigest()
+                or proof['resources'] != data['resources'] or proof['controls_closed'] is not True
+                or proof['retained_artifacts'] is not True):
+            return False
+        processes = [r for r in data['resources'] if r['kind'] == 'process']
+        if not processes or type(proof['exits']) is not list:
+            return False
+        for item in proof['exits']:
+            _keys(item, 'resource returncode')
+            if type(item['returncode']) is not int:
+                return False
+        if [e['resource'] for e in proof['exits']] != processes:
+            return False
+        files = {r['path'] for r in data['resources'] if r['kind'] == 'file'}
+        if not {'completion.json', 'lifecycle.jsonl', 'qemu-stderr.log', 'launch-plan.json',
+                'preparation.jsonl', 'root.qcow2'} <= files:
+            return False
+        for name in files:
+            _regular_file(resource_path(directory, name))
+        journal = resource_path(directory, 'lifecycle.jsonl')
+        if journal.stat().st_size > 256 * 1024:
+            return False
+        raw = journal.read_bytes()
+        if not raw.endswith(b'\n') or hashlib.sha256(raw).hexdigest() != proof['journal_sha256']:
+            return False
+        rows = [json.loads(line, object_pairs_hook=_unique_object, parse_constant=_invalid_constant)
+                for line in raw.splitlines()]
+        from datetime import datetime
+        for row in rows:
+            _keys(row, 'schema sequence action result utc run_id stand_id vm_uuid')
+            if row['schema'] != 'rosetun.matrix.lifecycle.v2' or datetime.fromisoformat(row['utc']).tzinfo is None:
+                return False
+        plan_path = resource_path(directory, 'launch-plan.json')
+        if plan_path.stat().st_size > 256 * 1024:
+            return False
+        plan, _ = read_json(plan_path)
+        if proof['vm_uuid'] != plan['uuid']:
+            return False
+        if not rows or rows[-1]['action'] != 'completion' or rows[-1]['result'] != 'controls-closed-child-reaped':
+            return False
+        return all(row['run_id'] == data['run_id'] and row['stand_id'] == data['stand_id']
+                   and row['vm_uuid'] == proof['vm_uuid'] and row['sequence'] == index
+                   for index, row in enumerate(rows, 1))
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, RecursionError):
+        return False
 
 
 def create_run(lease, run_id=None):

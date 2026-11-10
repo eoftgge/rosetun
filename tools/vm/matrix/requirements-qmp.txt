@@ -1,0 +1,2 @@
+# Optional execution-only dependency. Do not install for CLI/offline fake tests.
+qemu.qmp==0.0.6

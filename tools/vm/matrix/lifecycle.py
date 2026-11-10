@@ -13,7 +13,10 @@ import platform
 import socket
 import subprocess
 import sys
-import time
+from datetime import datetime, timezone
+
+from .qmp_adapter import Qmp
+from .diagnostics import StderrSink
 
 from .images import ImageDescriptor, image_chain, local_file
 from .qemu import QemuConfig, CommandResult, _launch_plan, execute, OUTPUT_LIMIT
@@ -39,88 +42,6 @@ def _json(data):
                           parse_constant=_invalid_constant)
     except (UnicodeError, ValueError, RecursionError):
         raise LifecycleError('invalid-qmp-json') from None
-
-
-class Qmp:
-    """One in-flight command; bounded framing, events, bytes and absolute deadline."""
-
-    def __init__(self, stream):
-        self.stream = stream
-        self.buffer = bytearray()
-        self.sequence = 0
-        self.valid = True
-
-    def close(self):
-        self.valid = False
-        self.stream.close()
-
-    def _message(self, deadline, budget):
-        while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise LifecycleError('qmp-timeout')
-            if b'\n' in self.buffer:
-                line, _, tail = self.buffer.partition(b'\n')
-                self.buffer = bytearray(tail)
-                budget[0] -= len(line) + 1
-                if budget[0] < 0:
-                    raise LifecycleError('qmp-output-limit')
-                value = _json(line)
-                if type(value) is not dict:
-                    raise LifecycleError('invalid-qmp-message')
-                return value
-            if len(self.buffer) >= min(65536, budget[0]):
-                raise LifecycleError('qmp-output-limit')
-            self.stream.settimeout(remaining)
-            block = self.stream.recv(min(4096, 65536 - len(self.buffer)))
-            if not block:
-                raise LifecycleError('qmp-disconnected')
-            self.buffer.extend(block)
-
-    def handshake(self, timeout):
-        deadline = time.monotonic() + _limit(timeout)
-        try:
-            greeting = self._message(deadline, [OUTPUT_LIMIT]).get('QMP')
-            if (type(greeting) is not dict or type(greeting.get('version')) is not dict
-                    or type(greeting.get('capabilities')) is not list):
-                raise LifecycleError('invalid-qmp-greeting')
-            return self._command('qmp_capabilities', deadline)
-        except (OSError, ValueError):
-            self.close()
-            raise LifecycleError('qmp-handshake-failed') from None
-
-    def command(self, name, timeout):
-        if name not in ('query-status', 'query-uuid', 'query-kvm', 'stop', 'cont',
-                        'system_reset', 'system_powerdown', 'quit'):
-            raise LifecycleError('unsupported-qmp-command')
-        try:
-            return self._command(name, time.monotonic() + _limit(timeout))
-        except (OSError, ValueError):
-            self.close()
-            raise LifecycleError('qmp-command-failed') from None
-
-    def _command(self, name, deadline):
-        if not self.valid:
-            raise LifecycleError('qmp-unavailable')
-        self.sequence += 1
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise LifecycleError('qmp-timeout')
-        self.stream.settimeout(remaining)
-        self.stream.sendall(json.dumps({'execute': name, 'id': self.sequence}).encode() + b'\r\n')
-        budget = [OUTPUT_LIMIT]
-        for _ in range(128):
-            message = self._message(deadline, budget)
-            if 'event' in message:
-                if type(message['event']) is not str or any(k in message for k in ('id', 'return', 'error')):
-                    raise LifecycleError('invalid-qmp-event')
-                continue
-            if type(message.get('id')) is not int or message['id'] != self.sequence:
-                raise LifecycleError('qmp-response-id-mismatch')
-            if 'error' in message or 'return' not in message:
-                raise LifecycleError('qmp-command-error')
-            return message['return']
-        raise LifecycleError('qmp-message-limit')
 
 
 def _host():
@@ -150,28 +71,44 @@ class Vm:
         self.qmp = None
         self.exited = False
         self.events = 0
+        self.vm_uuid = None
+        self.stderr = None
+        self.evidence_failed = False
+        self.completed = False
+        self.controls_closed = False
+        self.operation_errors = []
 
     def _check(self):
         self.run._read()
-        if self.exited or self not in self.run._lease._active:
+        if self.completed or self not in self.run._lease._active:
             raise LifecycleError('vm-is-not-active')
 
     def _event(self, action, result):
-        self.run._read()
-        if self.events >= 128:
-            raise LifecycleError('lifecycle-journal-limit')
-        self.events += 1
-        with resource_path(self.run.directory, 'lifecycle.jsonl').open(
-                'a', encoding='utf-8', newline='\n') as stream:
-            stream.write(json.dumps({'sequence': self.events, 'action': action,
-                                     'result': result}, sort_keys=True) + '\n')
-            stream.flush()
-            os.fsync(stream.fileno())
+        try:
+            self.run._read()
+            if self.events >= 128:
+                raise ValueError('lifecycle-journal-limit')
+            self.events += 1
+            row = {'schema': 'rosetun.matrix.lifecycle.v2',
+                   'sequence': self.events, 'action': action, 'result': result,
+                   'utc': datetime.now(timezone.utc).isoformat(),
+                   'run_id': self.run._identity[0], 'stand_id': self.run._identity[1],
+                   'vm_uuid': self.vm_uuid}
+            with resource_path(self.run.directory, 'lifecycle.jsonl').open(
+                    'a', encoding='utf-8', newline='\n') as stream:
+                stream.write(json.dumps(row, sort_keys=True) + '\n')
+                stream.flush()
+                os.fsync(stream.fileno())
+        except (OSError, ValueError):
+            self.evidence_failed = True
+            raise LifecycleError('lifecycle-evidence-write-failed', self) from None
 
     def status(self):
         self._check()
         if self.process.poll() is not None:
             raise LifecycleError('vm-child-has-exited')
+        if self.stderr is not None and (self.stderr.overflow or self.stderr.error):
+            raise LifecycleError('stderr-limit-or-error', self)
         value = self.qmp.command('query-status', self.timeout)
         if (type(value) is not dict or type(value.get('running')) is not bool
                 or type(value.get('status')) is not str):
@@ -183,12 +120,19 @@ class Vm:
         if self.process.poll() is not None:
             raise LifecycleError('vm-child-has-exited')
         self._event(name, 'intent')
-        self.qmp.command(name, self.timeout)
-        value = self.status()
-        if expected is not None and value['status'] != expected:
-            raise LifecycleError('qmp-state-not-confirmed')
-        self._event(name, 'confirmed' if expected else 'requested')
-        return value
+        try:
+            self.qmp.command(name, self.timeout)
+            self._event(name, 'command-accepted')
+            value = self.status()
+            if expected is not None and (value['status'] != expected
+                    or value['running'] is not (expected == 'running')):
+                raise LifecycleError('qmp-state-not-confirmed')
+            self._event(name, 'confirmed' if expected else 'requested')
+            return value
+        except (OSError, ValueError):
+            self.operation_errors.append(name + '-unconfirmed')
+            self._event(name, 'error')
+            raise LifecycleError('control-operation-unconfirmed', self) from None
 
     def pause(self):
         return self._control('stop', 'paused')
@@ -197,36 +141,84 @@ class Vm:
         return self._control('cont', 'running')
 
     def reset(self):
-        return self._control('system_reset')
+        """Confirm RESET, not guest boot readiness or a new guest boot ID."""
+        self._check()
+        self._event('reset', 'intent')
+        try:
+            self.qmp.command('system_reset', self.timeout, event='RESET')
+            self._event('reset', 'command-accepted')
+            self._event('reset', 'RESET-observed')
+            self._event('reset', 'confirmed')
+            return self.status()
+        except (OSError, ValueError):
+            self.operation_errors.append('reset-unconfirmed')
+            if getattr(self.qmp, 'last_command_accepted', False):
+                self._event('reset', 'command-accepted-event-unconfirmed')
+            self._event('reset', 'error')
+            raise LifecycleError('reset-unconfirmed', self) from None
 
     def powerdown(self):
-        """Request ACPI shutdown; this does not confirm guest shutdown or exit."""
+        """Compatibility API: request ACPI only, without confirming shutdown."""
         return self._control('system_powerdown')
 
-    def close(self):
-        """Try QMP quit, then terminate/kill only the original owned child."""
-        if self.exited:
+    def request_shutdown(self, *, timeout=None):
+        """ACPI request plus bounded child-exit observation. Timeout stays an error."""
+        timeout = self.timeout if timeout is None else _limit(timeout)
+        self._check()
+        self._event('shutdown', 'intent')
+        try:
+            self.qmp.command('system_powerdown', timeout)
+            self._event('shutdown', 'command-accepted')
+            self.process.wait(timeout=timeout)
+            self._event('shutdown', 'child-exit-observed')
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            self.operation_errors.append('shutdown-unconfirmed')
+            self._event('shutdown', 'error')
+            raise LifecycleError('shutdown-unconfirmed', self) from None
+        self._event('shutdown', 'confirmed')
+        self.close()
+        return self.process.returncode
+
+    def hard_off(self):
+        """Kill/reap the owned process; no ACPI and no physical disk power-loss claim."""
+        return self.close(hard=True)
+
+    def close(self, *, hard=False):
+        if self.completed:
             return
         self._check()
         try:
-            self.run.mark('stopping')
-            self._event('close', 'intent')
-        except (OSError, ValueError):
-            # Evidence failure must not strand an otherwise owned live child.
-            pass
+            self._close(hard)
+        except KeyboardInterrupt:
+            # Preserve interruption after a second bounded teardown attempt.
+            self.operation_errors.append('close-interrupted')
+            try:
+                self._event('close', 'interrupted')
+            except (OSError, ValueError):
+                pass
+            self._close(True)
+            raise
+
+    def _close(self, hard):
         try:
-            if self.process is not None:
-                if self.process.poll() is None and self.qmp is not None:
+            try:
+                if self.run._read()['state'] != 'stopping':
+                    self.run.mark('stopping')
+                self._event('hard-off' if hard else 'close', 'intent')
+            except (OSError, ValueError):
+                self.evidence_failed = True
+            if self.process is not None and not self.exited:
+                if not hard and self.process.poll() is None and self.qmp is not None:
                     try:
                         self.qmp.command('quit', self.timeout)
                     except (OSError, ValueError):
                         pass
-                for signal in (None, 'terminate', 'kill'):
+                for action in (('kill',) if hard else (None, 'terminate', 'kill')):
                     if self.process.poll() is not None:
                         break
-                    if signal:
+                    if action:
                         self.run._read()
-                        getattr(self.process, signal)()
+                        getattr(self.process, action)()
                     try:
                         self.process.wait(timeout=self.timeout)
                     except subprocess.TimeoutExpired:
@@ -235,18 +227,52 @@ class Vm:
                     raise LifecycleError('vm-exit-unconfirmed', self)
                 self.process.wait(timeout=self.timeout)
             self.exited = True
-            self.run._lease._active.discard(self)
-            self.run.mark('exited')
-            self._event('close', 'child-exit-confirmed')
-        except (OSError, ValueError, subprocess.TimeoutExpired):
-            try:
-                self.run.mark('quarantined', 'vm-exit-or-evidence-unconfirmed')
-            except (OSError, ValueError):
-                pass
-            raise LifecycleError('vm-exit-or-evidence-unconfirmed', self) from None
-        finally:
+            self._event('exit', 'child-reaped')
             if self.qmp is not None:
                 self.qmp.close()
+            if self.stderr is not None:
+                self.stderr.close()
+                if self.stderr.overflow:
+                    self._event('stderr', 'truncated')
+            self.controls_closed = True
+            if self.evidence_failed:
+                raise LifecycleError('completion-evidence-unavailable', self)
+            manifest = self.run._read()
+            processes = [r for r in manifest['resources'] if r['kind'] == 'process']
+            if self.process is None or len(processes) != 1 or processes[0]['pid'] != self.process.pid:
+                raise LifecycleError('completion-process-identity-missing', self)
+            self._event('hard-off' if hard else 'close', 'confirmed')
+            self.run.mark('exited')
+            self._event('completion', 'controls-closed-child-reaped')
+            self.run._complete([{'resource': processes[0], 'returncode': self.process.returncode}], self.vm_uuid)
+            self.completed = True
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            reason = ('vm-exit-unconfirmed' if not self.exited else
+                      'vm-control-close-unconfirmed' if not self.controls_closed else
+                      'completion-evidence-unconfirmed')
+            self.operation_errors.append(reason)
+            try:
+                self._event('close', reason)
+            except (OSError, ValueError):
+                pass
+            try:
+                self.run.mark('quarantined', reason)
+            except (OSError, ValueError):
+                pass
+            raise LifecycleError(reason, self) from None
+        finally:
+            # A reaped child permits dropping the in-memory guard only after
+            # controls are closed. Quarantined ledger still blocks a new lease.
+            if self.exited:
+                controls_closed = True
+                for control in (self.qmp, self.stderr):
+                    if control is not None:
+                        try:
+                            control.close()
+                        except (OSError, ValueError):
+                            controls_closed = False
+                if controls_closed:
+                    self.run._lease._active.discard(self)
 
     def __enter__(self):
         return self
@@ -293,26 +319,32 @@ def start(run, *, timeout=5, executor=execute):
         image.verify_bytes()
     except (KeyError, TypeError, OSError, ValueError):
         raise LifecycleError('prelaunch-validation-failed') from None
+    for name in ('qemu-stderr.log', 'completion.json'):
+        run.register({'id': name.split('.')[0], 'kind': 'file', 'path': name})
     journal = resource_path(run.directory, 'lifecycle.jsonl')
     run.register({'id': 'lifecycle', 'kind': 'file', 'path': 'lifecycle.jsonl'})
     with journal.open('x', encoding='utf-8'):
         pass
     vm = Vm(run, timeout)
+    vm.vm_uuid = plan['uuid']
     run._lease._active.add(vm)
     child = None
+    parent = None
     try:
         run.mark('starting')
         vm._event('start', 'intent')
+        vm.stderr = StderrSink(resource_path(run.directory, 'qemu-stderr.log'), run._identity[2])
         parent, child = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
         vm.qmp = Qmp(parent)
         argv = [*plan['argv'], '-S', '-chardev', f'socket,id=control,fd={child.fileno()}',
                 '-mon', 'chardev=control,mode=control']
         run._read()
         vm.process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                      stderr=subprocess.DEVNULL, shell=False, close_fds=True,
+                                      stderr=subprocess.PIPE, shell=False, close_fds=True, bufsize=0,
                                       pass_fds=(child.fileno(),), start_new_session=True)
         child.close()
         child = None
+        vm.stderr.start(vm.process.stderr)
         run.register(_identity(vm.process, config.executable))
         vm.qmp.handshake(timeout)
         if vm.qmp.command('query-uuid', timeout) != {'UUID': plan['uuid']}:
@@ -328,6 +360,10 @@ def start(run, *, timeout=5, executor=execute):
     except BaseException as error:
         try:
             vm.close()
+        except BaseException:
+            pass
+        try:
+            vm._event('start', 'interrupted' if not isinstance(error, Exception) else 'error')
         except (OSError, ValueError):
             pass
         try:
@@ -340,3 +376,5 @@ def start(run, *, timeout=5, executor=execute):
     finally:
         if child is not None:
             child.close()
+        if parent is not None and vm.qmp is None:
+            parent.close()

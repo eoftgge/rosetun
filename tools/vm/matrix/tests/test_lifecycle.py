@@ -1,6 +1,7 @@
 """Offline lifecycle tests: fake children and scripted QMP, no QEMU processes."""
 
 import json
+import io
 import subprocess
 import unittest
 from unittest.mock import patch
@@ -42,45 +43,11 @@ def line(value):
     return json.dumps(value).encode() + b'\r\n'
 
 
-class QmpTests(unittest.TestCase):
-    def test_fragmented_greeting_and_events_before_response(self):
-        greeting = line({'QMP': {'version': {}, 'capabilities': []}})
-        stream = Stream([greeting[:5], greeting[5:],
-                         line({'return': {}, 'id': 1}),
-                         line({'event': 'STOP'}) + line({'return': {}, 'id': 2})])
-        qmp = lifecycle.Qmp(stream)
-        qmp.handshake(1)
-        self.assertEqual({}, qmp.command('stop', 1))
-        self.assertEqual(['qmp_capabilities', 'stop'], [m['execute'] for m in stream.sent])
-
-    def test_invalid_replies_invalidate_connection_and_hide_peer_data(self):
-        for response in (b'', b'[]\n', b'{"id":1,"id":1}\n', b'NaN\n', b'\xff\n',
-                         line({'return': {}, 'id': 2}),
-                         line({'error': {'desc': 'SECRET'}, 'id': 1}),
-                         b'x' * 65537, line({'event': 'STOP'}) * 129):
-            with self.subTest(response=response[:40]):
-                stream = Stream([response])
-                qmp = lifecycle.Qmp(stream)
-                with self.assertRaisesRegex(lifecycle.LifecycleError, '^qmp-command-failed$'):
-                    qmp.command('stop', 0.1)
-                self.assertTrue(stream.closed)
-                self.assertFalse(qmp.valid)
-
-    def test_timeout_and_arbitrary_commands_are_rejected(self):
-        qmp = lifecycle.Qmp(Stream())
-        for timeout in (0, -1, True, float('nan'), float('inf'), 61):
-            with self.assertRaises(ValueError):
-                lifecycle.start(None, timeout=timeout)
-        with self.assertRaises(ValueError):
-            qmp.command('human-monitor-command', 1)
-        with self.assertRaises(ValueError):
-            qmp.command('query-status', 0.01)
-
-
 class Child:
     pid = 12345
 
     def __init__(self):
+        self.stderr = io.BytesIO(b'synthetic diagnostic')
         self.returncode = None
         self.signals = []
         self.stubborn = False
@@ -113,7 +80,7 @@ class Control:
     def handshake(self, timeout):
         pass
 
-    def command(self, name, timeout):
+    def command(self, name, timeout, *, event=None):
         self.commands.append(name)
         if name == 'query-uuid':
             return {'UUID': 'wrong' if self.bad_uuid else self.plan['uuid']}
@@ -264,7 +231,7 @@ class LifecycleTests(unittest.TestCase):
             self.assertTrue(kwargs['close_fds'])
             self.assertTrue(kwargs['start_new_session'])
             self.assertEqual(subprocess.DEVNULL, kwargs['stdout'])
-            self.assertEqual(subprocess.DEVNULL, kwargs['stderr'])
+            self.assertEqual(subprocess.PIPE, kwargs['stderr'])
         finally:
             vm.close()
 
@@ -274,6 +241,140 @@ class LifecycleTests(unittest.TestCase):
         with self.assertRaises(lifecycle.LifecycleError):
             self.start()
         lifecycle.subprocess.Popen.assert_not_called()
+
+    def test_shutdown_confirmed_child_exit_and_reuse(self):
+        from tools.vm.matrix.resources import StandLease, create_run, inspect_runs
+        vm = self.start()
+        original = self.control.command
+        def shutdown(name, timeout, **kwargs):
+            if name == 'system_powerdown':
+                self.child.returncode = 0
+            return original(name, timeout, **kwargs)
+        self.control.command = shutdown
+        self.assertEqual(0, vm.request_shutdown())
+        self.assertTrue(vm.completed)
+        self.fixture.lease.release()
+        self.assertTrue(inspect_runs(self.fixture.root / 'state')[0]['completion_verified'])
+        with StandLease(self.fixture.root / 'state', 'stand') as lease:
+            create_run(lease)
+
+    def test_shutdown_timeout_remains_error_after_successful_close(self):
+        vm = self.start()
+        with self.assertRaisesRegex(lifecycle.LifecycleError, 'shutdown-unconfirmed'):
+            vm.request_shutdown(timeout=0.01)
+        vm.close()
+        self.assertTrue(vm.completed)
+        self.assertIn('shutdown-unconfirmed', vm.operation_errors)
+        records = (self.run.directory / 'lifecycle.jsonl').read_text()
+        self.assertIn('"action": "shutdown",', records)
+        self.assertIn('"result": "error"', records)
+
+    def test_hard_off_never_sends_acpi_or_quit(self):
+        vm = self.start()
+        self.control.commands.clear()
+        vm.hard_off()
+        self.assertEqual([], self.control.commands)
+        self.assertEqual(['kill'], self.child.signals)
+        self.assertTrue(vm.completed)
+
+    def test_missing_reset_event_stays_an_operation_error(self):
+        vm = self.start()
+        original = self.control.command
+        def missing(name, timeout, **kwargs):
+            if name == 'system_reset':
+                self.control.last_command_accepted = True
+                raise TimeoutError('SECRET')
+            return original(name, timeout, **kwargs)
+        self.control.command = missing
+        with self.assertRaisesRegex(lifecycle.LifecycleError, 'reset-unconfirmed'):
+            vm.reset()
+        vm.close()
+        self.assertIn('reset-unconfirmed', vm.operation_errors)
+        self.assertNotIn('SECRET', (self.run.directory / 'lifecycle.jsonl').read_text())
+
+    def test_pid_persistence_failure_kills_child_and_blocks_reuse(self):
+        from tools.vm.matrix.resources import PreparedRun, StandLease
+        original = PreparedRun.register
+        def register(run, resource):
+            if resource['kind'] == 'process':
+                raise OSError('PID storage failed')
+            return original(run, resource)
+        with patch.object(PreparedRun, 'register', register), self.assertRaises(lifecycle.LifecycleError):
+            self.start()
+        self.assertIsNotNone(self.child.poll())
+        self.fixture.lease.release()
+        with self.assertRaises(ValueError):
+            StandLease(self.fixture.root / 'state', 'stand').acquire()
+
+    def test_completion_write_failure_blocks_new_lease_and_retains_foreign_file(self):
+        from pathlib import Path
+        from tools.vm.matrix.resources import StandLease
+        vm = self.start()
+        foreign = self.fixture.root / 'foreign.txt'
+        foreign.write_text('retain')
+        original = Path.open
+        def fail(path, *args, **kwargs):
+            if path.name == 'completion.json':
+                raise OSError('evidence unavailable')
+            return original(path, *args, **kwargs)
+        with patch.object(Path, 'open', fail), self.assertRaises(lifecycle.LifecycleError):
+            vm.close()
+        self.assertTrue(vm.exited)
+        self.assertEqual('retain', foreign.read_text())
+        self.fixture.lease.release()
+        with self.assertRaises(ValueError):
+            StandLease(self.fixture.root / 'state', 'stand').acquire()
+
+    def test_keyboard_interrupt_startup_reaps_child(self):
+        with patch.object(lifecycle, '_identity', side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt):
+                self.start()
+        self.assertIsNotNone(self.child.poll())
+
+    def test_keyboard_interrupt_close_preserved_after_hard_teardown(self):
+        vm = self.start()
+        original = self.child.wait
+        first = True
+        def interrupt(timeout):
+            nonlocal first
+            if first:
+                first = False
+                raise KeyboardInterrupt
+            return original(timeout)
+        self.child.wait = interrupt
+        with self.assertRaises(KeyboardInterrupt):
+            vm.close()
+        self.assertIsNotNone(self.child.poll())
+        self.assertTrue(vm.completed)
+
+    def test_legacy_exited_and_corrupt_completion_block_reuse(self):
+        from tools.vm.matrix.resources import StandLease
+        vm = self.start()
+        vm.close()
+        completion = self.run.directory / 'completion.json'
+        data = json.loads(completion.read_text())
+        data['schema'] = 'unknown'
+        completion.write_text(json.dumps(data))
+        self.fixture.lease.release()
+        with self.assertRaises(ValueError):
+            StandLease(self.fixture.root / 'state', 'stand').acquire()
+
+    def test_legacy_exited_without_proof_and_truncated_journal_are_blocking(self):
+        from tools.vm.matrix.resources import completion_verified
+        vm = self.start()
+        vm.close()
+        manifest = self.run._read()
+        self.assertTrue(completion_verified(self.run.directory, manifest))
+        journal = self.run.directory / 'lifecycle.jsonl'
+        original = journal.read_bytes()
+        journal.write_bytes(original[:-1])
+        self.assertFalse(completion_verified(self.run.directory, manifest))
+        journal.write_bytes(original)
+        # Removing only our own proof simulates an old exited ledger. No disk or
+        # unrelated file is removed by the lifecycle/recovery implementation.
+        proof = self.run.directory / 'completion.json'
+        proof.rename(self.run.directory / 'completion.saved')
+        self.assertFalse(completion_verified(self.run.directory, manifest))
 
     def test_real_host_gate_rejects_windows(self):
         with patch.object(lifecycle.sys, 'platform', 'win32'):

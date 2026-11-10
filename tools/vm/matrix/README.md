@@ -6,71 +6,117 @@ It does not run scenarios, install dependencies, start services or create VMs.
 The existing Bash/PowerShell matrices remain the execution tools, Hyper-V remains
 the control stand. The internal QEMU backend below is not qualified on real VMs.
 
-## Bounded QEMU lifecycle (stage 3c)
+## Bounded QEMU lifecycle (stage 3c.1)
 
-`lifecycle.start(run, timeout=5)` launches one prepared VM under the original
-live `StandLease`, only on Linux x86-64 with accessible `/dev/kvm`. There is no
-execution CLI. Windows supports offline tests only. KVM, the pinned BIOS/i440fx
-profile and disabled networking are mandatory; there is no accelerator fallback.
+Execution is an internal Python API on Linux x86-64/KVM only, BIOS/i440fx,
+network disabled. The CLI remains read-only and requires only Python 3.11+.
+Execution optionally requires **qemu.qmp==0.0.6**, pinned in
+`requirements-qmp.txt`. Nothing installs it automatically. Fake adapter tests
+and CLI imports work without it. The upstream library requires Python >=3.8,
+has no mandatory runtime dependencies, uses asyncio internally and marks its
+0.0.x API alpha: upgrades require a new API review and integration qualification.
+Its [public library code](https://gitlab.com/qemu-project/python-qemu-qmp/-/blob/v0.0.6/qemu/qmp/__init__.py)
+is LGPL-2.0-or-later; distribution metadata also lists GPLv2 for bundled tools.
+This adapter does not import legacy/deprecated interfaces or copy upstream code.
 
-Startup strictly reconstructs the saved plan, verifies base bytes again, and
-rechecks the two-image chain with bounded qemu-img info before creating a child.
-Keep the entire state directory, image, binaries and BIOS private and immutable
-to other writers. These local records are not authenticated against tampering.
-The child starts with `-S`. QMP uses a connected inherited Unix socket pair via
-`-chardev socket,id=control,fd=N -mon chardev=control,mode=control`; it has no
-filesystem endpoint or TCP listener. Only that descriptor is inherited. Standard
-input/output/error go to DEVNULL, avoiding unbounded child logs or pipe waits.
-The original launch plan remains unchanged and preparation-only.
+`qmp_adapter.Qmp` uses public `QMPClient.connect(connected_socket)`, `execute`,
+`listener`, the extensible `EventListener.accept` hook and `disconnect`. JSON framing, request IDs and
+protocol negotiation belong to the library. A private connected Unix socket pair
+is retained; a bounded byte-only relay adds no listener. The relay caps each
+buffer at 64 KiB and each direction at 1 MiB per session; exceeding the budget
+closes the channel. QMP has a 64 KiB read limit, at most 128 commands and 128
+observed events per session. The library forbids removing its default listener;
+its public accept hook counts all events and declines default retention, keeping
+that history empty. Operation listeners are temporary. Buffered replies are
+forwarded before a peer's EOF is propagated.
+The synchronous facade owns one event loop: call it serially outside another
+running event loop. Timeout arguments are finite, positive and <=60 seconds.
+Cancellation/disconnect and relay shutdown are bounded; failure to confirm control
+closure blocks completion. Package exceptions become safe reason codes.
 
-Startup saves the child's PID, host boot identity, Linux process start ticks and
-executable in the manifest. It negotiates QMP capabilities and checks query-uuid,
-query-kvm and initial prelaunch status before returning a `Vm`. This is monitor
-readiness, not guest boot readiness or KVM/image qualification. `running` in the
-manifest means an owned QMP-ready process; `vm.status()` reports the CPU state.
+`start(run, timeout=5)` revalidates the saved plan, base and image chain, starts
+an owned child with `-S`, records Linux process identity and checks UUID, KVM and
+prelaunch status. This is monitor readiness, never guest readiness. There is no
+TCG, WHPX or HVF fallback. `status`, `pause` and `resume` retain their API;
+pause/resume confirm query-status. Operation semantics:
 
-The returned handle provides `status()`, `pause()`, `resume()`, `reset()`,
-`powerdown()` and `close()`. Pause/resume require query-status read-back. Reset
-and ACPI powerdown record requests only: neither confirms reboot or shutdown.
-Use calls serially from the original lease-owning process. QMP allows only these
-commands and startup identity queries, uses matched integer IDs, accepts bounded
-interleaved events and fragmented frames, rejects malformed/duplicate-key JSON,
-and invalidates the channel on errors. Each exchange has an absolute timeout,
-64 KiB frame limit, 256 KiB byte budget and at most 128 messages. Timeout is a
-finite positive number no greater than 60 seconds.
+- `reset()` subscribes before sending system_reset and requires RESET as well as
+  the command response. It does not establish guest boot or a new guest boot ID.
+- `request_shutdown(timeout=...)` sends ACPI and waits a bounded time for the own
+  child to exit and be reaped, then closes controls and saves completion. A timeout
+  raises and remains an operation error even if later `close()` succeeds.
+- `powerdown()` preserves its old request-only meaning. Migrate callers requiring
+  exit confirmation to `request_shutdown`; a reply is not guest shutdown.
+- `hard_off()` sends no ACPI or quit; it kills/reaps only the original Popen child.
+  This is not physical power removal from the host disk subsystem.
+- `close()` attempts QMP quit, bounded wait, terminate/wait and kill/wait. QMP EOF,
+  a reply and a SHUTDOWN event cannot substitute for child wait/reap. Completed
+  close is idempotent. Interruptions propagate after bounded teardown attempts.
 
-`close()` tries QMP quit, then bounded wait, terminate/wait and kill/wait on the
-original Popen child. It never attaches to a PID from disk or signals a process
-group. A quit reply, EOF or SHUTDOWN event alone is insufficient. Only reaping
-the child permits the `exited` state and removal of the lease release guard.
-The guard blocks explicit release and context-manager exit while a child exit is
-unconfirmed. A startup failure raises `LifecycleError` with `.vm`; retain that
-handle and retry `.vm.close()` if needed. Closing an exited handle is idempotent.
-Evidence errors quarantine the run; loss of ownership stops further actions.
-An abrupt controller crash releases its OS lock but leaves unresolved evidence
-blocking stand reuse. Recovery remains read-only and never kills or deletes.
+Before spawn the ledger registers `qemu-stderr.log`, `lifecycle.jsonl` and
+`completion.json`. stderr uses an unbuffered pipe and bounded reader: 256 KiB of
+input is retained, further data is drained/discarded with an overflow flag. Its
+working memory is one 4096-byte read plus a token-sized redaction tail. Owner tokens
+are redacted across chunk boundaries. Overflow/read errors fail observed operations;
+reader close/join cannot wait indefinitely. Raw stderr is local evidence and is
+never automatically included in public reports. Other secrets may still occur
+in external output: sanitize it independently before sharing.
 
-The registered `lifecycle.jsonl` retains only bounded command intents and safe
-outcomes, never QMP payloads, raw exceptions or ownership tokens. All files,
-including the overlay, remain after exit. An exited manifest is not resource
-cleanup, scenario PASS, security evidence or authorization to reuse the stand.
+The versioned lifecycle JSONL records UTC, run/stand/VM identity, sequence,
+intents, command acceptance, event/process observations and operation outcomes.
+Operation errors survive teardown; evidence-write failures independently quarantine
+resources. Exit confirmation is separate from successful evidence persistence.
 
-Offline check (all external processes and sockets in lifecycle tests are faked):
+A new StandLease can reuse a stand only when every prior run on it has a valid
+`rosetun.matrix.completion.v1` contract written by the original owner under its
+live lease. Validation requires exited state, full resource/identity agreement,
+return codes for every registered process, closed controls, retained regular files,
+and a digest of a complete identity-matched v2 lifecycle journal ending in
+completion. The saved plan UUID must agree. A bare exited state, old ledger,
+missing/partial/unknown completion, starting/running/stopping, quarantine or invalid
+manifest blocks reuse. Invalid manifests with no established owner block all stands.
+These local consistency checks cannot defeat malicious edits by the file owner.
+No PID from a manifest is signalled, no age-based release or automatic recovery
+is implemented, and no files are deleted. Failed/unconfirmed exits retain the
+in-memory lease guard; reaped children with failed evidence leave blocking ledger.
 
-```powershell
-python -B -m unittest tools.vm.matrix.tests.test_lifecycle -q
-```
+Offline validation uses fake public adapters and fake children. When the pinned
+package and Unix sockets are available, an additional test exercises the actual
+library against a synthetic peer, including RESET before the command reply and
+absence of default event retention; otherwise that test is explicitly skipped.
 
-Manual qualification on a disposable Linux x86-64/KVM host, after pinning trusted
-QEMU/qemu-img, BIOS and base image artifacts: prepare a fresh run as below, then
-inside the same lease execute `with start(run) as vm:` (import `start` from
-`tools.vm.matrix.lifecycle`). Check `vm.status()` is prelaunch, `vm.resume()` is
-running, `vm.pause()` is paused, and context exit leaves the original child
-reaped and manifest exited. Verify base digest unchanged, overlay retained and
-no network interface or QMP listener. Separately qualify QMP disconnect, early
-child exit and forced-stop failures on disposable runs; retain sanitized
-`lifecycle.jsonl`, launch plan and observations on discrepancy, without manifest
-owner tokens.
+Stage 3c.1 was manually checked on Debian 13/WSL2, Python 3.13.5,
+qemu.qmp 0.0.6, QEMU/qemu-img 10.0.13, SeaBIOS 1.16.3 and `pc-i440fx-10.0` on
+KVM. Seven scenarios passed: RESET confirmation, shutdown timeout followed by
+close, ACPI shutdown using a synthetic real-mode boot sector, hard-off without
+ACPI, QMP disconnect, stderr overflow/token redaction, and completion/reuse.
+The boot sector only enables/polls the PM1 power-button bit and requests S5;
+it is not a Linux guest, guest runner or transport. The stderr overflow case
+injects bytes into the owned stderr pipe from the host; it does not claim that
+QEMU generated those bytes. All seven children were reaped, controls/reader
+threads closed, bases unchanged, overlays retained and no owned listeners seen.
+New leases/runs succeeded after verified completion; deliberately incomplete
+new runs and corrupted proof remained blocking. The expected shutdown timeout
+remained an operation error. TCG was not used. These are local integration
+results for the pinned synthetic fixtures, not real-image or security evidence.
+
+Remaining owner qualification includes real guest ACPI behavior, actual guest
+readiness/boot identity, controller crash, hardware/storage failures and a wider
+QEMU/kernel/platform combination. None is inferred from the synthetic results.
+Owner qualification on an isolated Linux/KVM host:
+
+1. Independently provision the pinned library, trusted QEMU/BIOS and image; keep
+   state private. Prepare a new run and start under the same original lease.
+2. Confirm prelaunch, resume/pause, RESET before/after command reply, normal ACPI
+   shutdown, shutdown timeout followed by close, hard-off and QMP disconnect.
+   Verify command/event/child-exit observations separately, including stderr limits.
+3. Confirm child reap, closed controls and complete evidence; acquire a fresh lease
+   and create a new run while old disks/logs remain. Missing/corrupt completion,
+   evidence-write failures and an unconfirmed child must block reuse. Keep private
+   manifests; share only sanitized journals, diagnostics and observed discrepancies.
+
+The following result is **historical, before stage 3c.1** and does not qualify
+this new adapter, shutdown/reset semantics or completion/reuse contract:
 
 A local owner-authorized check on Debian 13 under WSL2, QEMU/qemu-img 10.0.13,
 SeaBIOS 1.16.3 and `pc-i440fx-10.0` passed on an empty synthetic qcow2 disk:
@@ -81,17 +127,13 @@ or listening Unix socket observed. KVM was confirmed enabled through QMP; TCG
 was not used. This checks process/monitor lifecycle only. No guest OS was booted,
 and no real image, security behavior or production stand is qualified by it.
 
-Protocol choices follow the official [QMP specification](https://www.qemu.org/docs/master/interop/qmp-spec.html)
-and [QEMU invocation reference](https://www.qemu.org/docs/master/system/invocation.html).
-Matching installed-version validation and real-host qualification remain required.
-
 ## QEMU disk and launch preparation (stage 3b)
 
 `images.py` and `qemu.py` provide an internal preparation API, separate from the
 reporting TOML profiles. There is no VM run command. `prepare(run, image, config)`
 requires an empty `PreparedRun` created under its original live `StandLease`.
 It can execute **qemu-img only**, using explicit argv without a shell. Supplying
-`executor=` replaces external commands for offline tests. Nothing invokes QEMU.
+`executor=` replaces external commands for offline tests. The preparation API never invokes QEMU; lifecycle execution is separate.
 
 `ImageDescriptor` has exactly the constructor fields `schema`
 (`rosetun.matrix.image.v1`), `identifier`, `guest_os` (`linux`), `architecture`
@@ -209,7 +251,7 @@ Owner qualification, on a disposable Linux x86-64/KVM host only:
 
 ## Local stand leases and resource records
 
-`resources.py` adds a preparation-only internal API; it never executes a matrix.
+`resources.py` supplies ownership, manifests and completion validation; it never executes a matrix.
 Choose an **absolute local state directory** explicitly. All workers that can
 touch the same stand must use the same directory and the same case-sensitive
 stand ID. Different state directories do not coordinate. Network filesystems
@@ -240,10 +282,9 @@ inherited handle does not unlock the parent's lease. Mutations also check that
 the lock path still refers to the held file; replacement fails closed. This does
 not authorize lock rotation or defend against malicious concurrent replacement.
 
-After locking, every previous run of that stand blocks new preparation. Invalid
+After locking, every prior run without a validated completion contract blocks new preparation. Invalid
 manifests block all stands because their ownership cannot be established. Even
-an empty prepared run remains unresolved: this stage has no verified cleanup
-state. It is intentionally conservative. Keep records until independent manual
+an empty prepared run remains unresolved. Retained files are not deleted by completion. It is intentionally conservative. Keep records until independent manual
 verification permits archiving them outside `runs/`; never delete a lock file.
 
 Example of preparation through the internal API (not a VM invocation):
@@ -321,8 +362,9 @@ with current symlink/reparse checks, and exact resource ownership. Before any
 PID action it must compare boot and creation identity against the live process,
 handle PID reuse and unavailable observations conservatively, and confirm the
 original process has exited before removing dependent files/control endpoints.
-Unknown state must remain quarantined. QMP/QGA, overlays, endpoints, network
-objects and cleanup implementation belong to later stages.
+Unknown state must remain quarantined. Disk preparation and bounded QMP lifecycle
+are implemented above. Guest transport, network objects and deletion/automatic
+recovery remain outside scope.
 
 Autonomous resource tests use temporary directories and bounded harmless child
 processes. The platform-specific test for another OS is explicitly skipped;
@@ -460,8 +502,9 @@ sensitive diagnostic data. CLI input errors produce a smaller assessment with
 `transport-fixture`, `real-service`, `real-package` and other existing categories
 remain exactly what the TSV declares. They are not external packet capture.
 No evidence is not evidence of no leak. PCAP analysis, cryptographic attestation,
-an evidence store, QEMU execution, QMP/QGA, guest agents, network labs and scenario
-migration are not implemented. Unit tests do not qualify any OS/backend or prove
+an authenticated evidence store, QGA, guest agents, network labs and scenario
+migration are not implemented. QEMU preparation and bounded QMP lifecycle have a
+separate internal API described above. Unit tests do not qualify any OS/backend or prove
 network protection.
 
 Exit codes: `0` for successful doctor/plan or accepted exploratory assessment;
