@@ -18,7 +18,7 @@ trim_trailing_whitespace = false
 # Inno Setup reads a script without a BOM as ANSI, so the Russian messages
 # would turn into mojibake in the installer.
 [*.iss]
-charset = utf-8-bom
+charset = utf-8
 
 # Byte-compared fixtures and upstream license texts stay exactly as they are.
 [{crates/*/tests/fixtures/**,installer/third-party/**,crates/rosetun-gui/assets/fonts/*.txt}]
