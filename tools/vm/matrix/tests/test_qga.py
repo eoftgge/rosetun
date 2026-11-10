@@ -73,6 +73,17 @@ class Client:
 
 
 class QgaTests(unittest.TestCase):
+    def test_staging_capabilities_require_separate_opt_in(self):
+        adapter = self.adapter()
+        adapter.jobs_enabled = True
+        adapter.client.responses['guest-info']['supported_commands'] += [
+            dict(name=name, enabled=True, **{'success-response': True})
+            for name in ('guest-exec', 'guest-exec-status')]
+        adapter.probe(1)
+        adapter.staging_enabled = True
+        with self.assertRaisesRegex(QgaError, 'required-rpc-unsupported'):
+            adapter.probe(1)
+
     def test_job_commands_are_required_only_after_explicit_opt_in(self):
         adapter = self.adapter()
         self.assertEqual(list(REQUIRED), adapter.probe(1)['required_commands'])

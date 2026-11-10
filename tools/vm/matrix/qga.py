@@ -44,6 +44,7 @@ class Qga:
         self.sync_id = sync_id
         self.deadline = None
         self.jobs_enabled = False
+        self.staging_enabled = False
 
     def connect(self, timeout):
         """Synchronize once, then hand the clean stream to the library."""
@@ -153,6 +154,10 @@ class Qga:
                 raise QgaError('invalid-qga-capability')
             commands[entry['name']] = entry
         required = REQUIRED + (('guest-exec', 'guest-exec-status') if self.jobs_enabled else ())
+        if self.staging_enabled:
+            required += ('guest-file-write',)
+            if not self.jobs_enabled:
+                required += ('guest-exec', 'guest-exec-status')
         if any(name not in commands or not commands[name]['enabled']
                or not commands[name]['success-response'] for name in required):
             raise QgaError('qga-required-rpc-unsupported')

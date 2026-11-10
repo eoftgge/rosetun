@@ -1010,7 +1010,190 @@ remain UNVERIFIED. Regression cases exercise the real reader and finally path,
 including the two-fragment format under Windows PowerShell 5.1. This changes only
 read-back format handling; all CLI-status, active-object and acceptance checks
 remain in force.
-# Autonomous infrastructure smoke over QGA (stage 4b.2)
+# Bounded smoke delivery over QGA (stage 4b.3)
+
+Delivery qualification **passed on 2026-11-11** on the Debian 13/WSL2 KVM stand
+described below. Historical 4b.2 qualification remains separate and covers only
+the manual pre-staged path.
+No Linux L2 payload or Rust binary delivery is implemented here.
+
+The original live controller can build, stage, then use the existing job API:
+
+```python
+from pathlib import Path
+from tools.vm.matrix.staging import SmokePackage
+
+vm.observe_guest()
+package = SmokePackage.build(
+    vm, enabled=True, checkout=Path('/absolute/reviewed/rosetun'),
+    guest_run_id='20261111T010203Z-0123abcd',
+    attempt_id='0123456789abcdef0123456789abcdef', delay_seconds=20)
+package.stage()                 # create, bounded writes, finalize, verify receipt
+job = package.smoke_job(enabled=True)
+job.submit()
+# Wait externally for the autonomous job, retaining these objects and the lease.
+result = job.collect()
+```
+
+Use fresh guest and attempt IDs, not the example values. Only `infra-smoke-v1`
+is supported. The fixed manifest order is `guest/launch.sh`, `guest/start.sh`,
+`guest/lib.sh`, `guest/run-smoke.sh`, `job.env`; every line is lowercase SHA-256,
+two ASCII spaces, path, LF. The manifest does not hash itself. Source scripts
+must be regular UTF-8 files with LF and a final LF; CRLF is rejected rather than
+silently converted. Source metadata and open-file identity are checked around
+bounded reads, with symlink/reparse checks on all parents. `job.env` uses ASCII
+and LF, generated in the key order documented below from the live observation;
+delay is integer 0..30. There is no arbitrary input-path list.
+
+The immutable in-memory snapshot supplies all writes. The exact six package
+files and `digest.sha256` are retained under the run's `smoke-package/`, alongside
+bounded `staging.jsonl` with identities, counters, handle uncertainty and the raw
+verified receipt. These eight fixed files are reserved before VM startup for a
+QGA-enabled run, initially empty. Registration during `running` remains forbidden.
+One build/delivery attempt is allowed per live Vm; a failed attempt requires a
+new run and fresh IDs, preserving the old evidence. No cleanup is performed.
+
+Before preparing the trusted base image, the owner must separately review and
+install `../linux/guest/stage-smoke.py` as the executable root-owned regular file
+`/usr/local/libexec/rosetun-l2/stage-smoke` (mode 0755), alongside the existing
+reviewed `launch`. Compare SHA-256 of installed bytes with reviewed source and
+record both hashes with image identity. All parents must be root-owned without
+group/other write or symlinks. Create `/root/rosetun-l2-stage` as a root-owned
+mode-0700 directory out of band. The image must already provide `/usr/bin/python3`
+with its standard library and Linux libc `renameat2`; no dependency is installed
+by the controller. The separate helper keeps the old three-argument launcher and
+legacy profile dispatch unchanged, and never executes or imports delivered code.
+It receives only `create|finalize HOST GUEST VM_UUID BOOT_ID ATTEMPT DIGEST`.
+Neither helper nor launcher is established through QGA delivery. Do not add a
+sudoers or SSH rule for the helper.
+
+Staging explicitly probes `guest-file-write`, `guest-exec`, `guest-exec-status`
+in addition to the observation RPCs. QGA runs as root. Its write and execution
+allowlist privileges are general at the agent boundary; this controller limits
+them to the fixed helper, the six snapshot paths and the existing launcher.
+Observation and direct manual `SmokeJob` do not require write RPC capability.
+No shell strings, archives, network, daemon or shared directory are used.
+
+The helper exclusively creates `.attempt-ATTEMPT/package/guest` under the fixed
+root, reserves the six empty payload files as mode 0600, and records immutable
+attempt identity. QGA write opens retain these private modes; qemu-ga's default
+creation mode may otherwise be 0666. All guest directories/files must
+be root-owned, without symlinks or group/other write; directories are private,
+and files must have one link. Finalization checks the exact tree, byte sizes,
+canonical manifest, every hash and exact smoke environment against the supplied
+identity and current DMI UUID/boot ID. It fsyncs payload files and directories,
+then uses `renameat2(RENAME_NOREPLACE)` to atomically publish
+`/root/rosetun-l2-stage/GUEST`. Even an empty existing destination is refused.
+It syncs both rename parents, writes `ready.json` exclusively in the attempt
+directory, fsyncs that receipt and directories. Receipt schema
+`rosetun.smoke-stage.v1` binds host/guest run IDs, VM UUID, boot ID, attempt ID,
+manifest SHA-256 and state `ready`. A helper exit code alone does not authorize
+launch. Only a matching receipt does; the VM identity/observation is checked
+again when constructing and submitting the job, using exactly its guest ID/digest.
+Staged submit also reads the live boot ID again before invoking the launcher.
+
+Limits are 24 KiB per script/file, 1 KiB for the guest environment, 64 KiB for
+the entire six-file package, 8192 raw bytes per write, 4096 bytes per receipt,
+96 KiB base64 payload sent, 48 staging RPCs across all sessions, a 180-second
+deadline from build, 5 seconds per RPC and four status polls per helper call,
+with up to one second between status polls.
+For the maximum package, six files require at most 13 blocks (sum of rounded
+sizes), fewer than 87,424 base64 bytes, 12 open/close RPCs, 10 helper exec/status
+RPCs, two probe RPCs and three receipt RPCs: at most 40 staging RPCs. Remaining
+eight slots permit bounded inspection after uncertainty (each explicit recovery
+is charged six slots: sync, probe and boot read). Existing session limit
+128 and job limit 64 are unchanged; delivery starts only with at most 16 session
+RPCs already used, leaving the full delivery and job budgets. Repeated job polls
+or other observation operations can still exhaust a session and require explicit
+recovery. Recovery never resets attempt counters or its deadline. Local evidence
+is capped at 64 KiB. No `guest-file-flush` is used as a durability claim.
+
+Confirmed short writes are rejected, as are zero progress, invalid counts and
+EOF. Known handles are closed in `finally` when the channel and close reservation
+permit. Lost open/write/close/finalize replies retain `unknown` and handle status;
+there is no automatic retry, resume, overwrite, deletion or launcher call.
+After explicit `vm.recover_guest()`, `package.check_receipt()` may inspect only
+the saved receipt. It cannot repeat create, write or finalize. Unknown/foreign
+receipts, a changed boot or expired budget block launch. A crash between publish
+and receipt creation leaves an unusable retained package. Controller crash
+recovery remains outside scope. For all outcomes, security invariants remain
+UNVERIFIED and release gate false.
+
+Offline checks: `python -m unittest discover -s tools/vm/matrix/tests` includes
+fake QGA delivery/recovery tests and guest helper tests using temporary trees
+and substituted privileged operations. Existing Linux shell self-tests remain
+separate: `bash tools/vm/linux/tests/selftest-lib.sh` and `selftest-smoke.sh`.
+Native Windows tests do not establish Linux publication/sync or guest behavior.
+
+Real stage 4b.3 qualification used QEMU/qemu-ga 10.0.13, pc-i440fx-10.0,
+qemu.qmp 0.0.6 and host Python 3.13.5. The guest was Debian 13, kernel
+6.12.115+deb13.1-amd64 and systemd 257.13-1~deb13u1. The owner authorized real
+qualification separately from implementation. Five fresh writable overlays
+covered the following cases, with the original live controller and lease:
+
+- The independent console installed only the reviewed trust anchors and enabled
+  the write/exec RPCs. The controller delivered all 34,185 package bytes via QGA,
+  checked the ready receipt, and used existing submit/collect successfully. Every
+  published file's SHA-256 matched an independent console observation. Delivery
+  used 31 slots and the job used 13 RPCs. Duplicate stage, submit and launcher
+  invocations were refused; the unit journal showed exactly one start.
+- Corrupting a delivered script before finalization caused rejection with no
+  receipt or launcher execution. Partial files remained. Creating a destination
+  with a foreign sentinel likewise caused rejection without replacement or
+  deletion of that sentinel.
+- Stopping qemu-ga after the first confirmed file write and before the next
+  write caused a real exchange timeout with live QMP. No write retry or job
+  launch occurred. Explicit agent restart/recovery preserved the same boot ID;
+  receipt inspection alone was permitted and rejected the missing receipt.
+  Partial data and unconfirmed handle evidence remained.
+- Stopping qemu-ga after guest finalization but before its status reply was
+  received left delivery unknown. Explicit recovery checked only the saved
+  receipt, then permitted one successful smoke job. The attempt used 36 slots
+  including recovery and receipt inspection; no create/write/finalize was
+  repeated. This tests loss of finalization status, not a lost initial exec PID.
+- All five VM children were reaped, local sessions/endpoints/relay workers
+  closed, completion verified and the stand reused. Three earlier diagnostic
+  overlays were also retained with verified completion. Base size/SHA-256 stayed
+  476,774,400 bytes and
+  `f4a05e7aba2c889437f6bce798926a381b7ebf257178e75d140493f817b74de8`.
+
+Qualification exposed qemu-ga's 0666 creation mode and overly short helper poll
+intervals; private file reservation and one-second poll spacing fixed these
+without changing trust checks or RPC limits. Regression tests cover both.
+Linux offline checks passed, including the full Python suite and both shell
+self-tests (legacy 122/122). Evidence is retained under git-ignored
+`tools/vm/logs/qga-4b3-qualification-20261111/`: qualification harness/results,
+source and installed-anchor hashes, console logs, offline logs and per-run
+staging/job/completion evidence. Owner tokens were checked absent from public
+journals, argv and results. No dependencies, guest network, SSH rule, builds or
+base-image changes were used. Unknown guest-handle closure, power-loss durability,
+controller crash recovery, Linux L2 and VPN security remain unqualified. Security
+invariants stay UNVERIFIED and release gate false.
+
+Owner repeat qualification on another prepared stand:
+
+1. Record base identity and reviewed installed launcher/helper hashes via the
+   independent console. Start a disposable prepared overlay with QGA, enable
+   the additional RPCs, observe boot and execute the API above. Do not copy a
+   package manually for each run. Require a verified receipt, successful saved
+   smoke result, closed handles and verified VM completion, with release false.
+2. On a new run/IDs, stop before finalization using an independently reviewed
+   qualification harness and corrupt a delivered file through the console.
+   Finalization must refuse it without a receipt or launcher execution; preserve
+   all guest partial files and host staging evidence.
+3. On another new run/IDs, interrupt the agent channel during a write. Require
+   unknown delivery, no second write attempt and no job start. Restart the agent,
+   call explicit recovery and inspect only the receipt. Missing receipt must
+   block launch; retain all partial evidence and finish the owned VM normally.
+4. Interrupt the response to finalization after guest publication. After recovery,
+   require exact receipt agreement before constructing the job; confirm one job
+   start and refusal of duplicate stage/submit. Existing targets, foreign files
+   and partial attempts must remain intact. Verify child reap, descriptor closure,
+   completion evidence, lease reuse and unchanged base hash. Save commands,
+   versions, host/guest evidence and console observations; report discrepancies
+   with staging/job journals and completion, keeping owner tokens private.
+
+# Autonomous infrastructure smoke over QGA (stage 4b.2, manual pre-staged path)
 
 This opt-in path is an infrastructure diagnostic, not a Rosetun scenario or VPN
 protection evidence. It uses the original live Python controller and its lease.

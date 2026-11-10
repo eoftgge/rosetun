@@ -1,6 +1,6 @@
-"""One pre-staged infrastructure smoke job, owned by the original live Vm.
+"""One infrastructure smoke job, owned by the original live Vm.
 
-There is no package delivery, remote shell, controller restart or retry API.
+Delivery is a separate staging facade; there is no remote shell or retry API.
 """
 
 import base64
@@ -125,6 +125,12 @@ class SmokeJob:
     @_guest_serialized
     def submit(self):
         # _guest_serialized expects the Vm lock, exposed below on this facade.
+        package = getattr(self.vm, '_smoke_package', None)
+        if package is not None:
+            package._begin()
+            if (not package.receipt_verified or package.state != 'ready' or
+                    any(self.identity[k] != package.identity[k] for k in self.identity if k != 'job_id')):
+                raise JobError('staging-not-ready-for-this-job')
         if self.submission != 'not-submitted':
             raise JobError('job-already-attempted-inspect-only')
         self._begin()
@@ -133,6 +139,13 @@ class SmokeJob:
         before = qga.calls
         qga.probe(5)
         self.calls += qga.calls - before
+        if package is not None:
+            before = qga.calls
+            try:
+                if qga.read_boot_id(5) != self.identity['boot_id']:
+                    raise JobError('staging-boot-changed-before-submit')
+            finally:
+                self.calls += qga.calls - before
         self.submission = 'unknown'
         self.session = qga.session_id
         self._evidence('submit-intent')

@@ -1,6 +1,6 @@
 # Linux stand
 
-The separate opt-in [QGA infrastructure smoke](../matrix/README.md#autonomous-infrastructure-smoke-over-qga-stage-4b2)
+The separate opt-in [QGA infrastructure smoke delivery](../matrix/README.md#bounded-smoke-delivery-over-qga-stage-4b3)
 reuses the verified guest launcher and start dispatcher with its own exact package
 and result schema. It does not use the SSH matrix commands below or qualify VPN
 protection. Package preparation and real-guest qualification are owner tasks.

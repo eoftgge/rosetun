@@ -487,6 +487,16 @@ def start(run, *, timeout=5, executor=execute):
     for name in (('qemu-stderr.log', 'completion.json', 'qga-observations.jsonl', 'job-evidence.jsonl')
                  if config.qga else ('qemu-stderr.log', 'completion.json')):
         run.register({'id': name.split('.')[0], 'kind': 'file', 'path': name})
+    if config.qga:
+        # Reserve one fixed smoke package before running; registration stays closed.
+        for index, name in enumerate(('guest/launch.sh', 'guest/start.sh', 'guest/lib.sh',
+                                      'guest/run-smoke.sh', 'job.env', 'manifest.sha256',
+                                      'digest.sha256', 'staging.jsonl')):
+            path = resource_path(run.directory, 'smoke-package/' + name)
+            run.register({'id': 'smoke-stage-' + str(index), 'kind': 'file',
+                          'path': 'smoke-package/' + name})
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.touch(exist_ok=False)
     journal = resource_path(run.directory, 'lifecycle.jsonl')
     run.register({'id': 'lifecycle', 'kind': 'file', 'path': 'lifecycle.jsonl'})
     with journal.open('x', encoding='utf-8'):
