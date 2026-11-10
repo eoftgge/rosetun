@@ -86,6 +86,19 @@ class PreparationTests(unittest.TestCase):
         for path in self.run.directory.glob('*.jsonl'):
             self.assertNotIn(token, path.read_text())
 
+    def test_qga_is_explicit_and_legacy_plan_shape_is_preserved(self):
+        old = _launch_plan(self.config, self.image, self.run.directory / 'root.qcow2',
+                           '12345678-1234-4234-8234-123456789abc')
+        self.assertNotIn('qga', old['config'])
+        self.assertFalse(any('guestagent' in a or 'virtserial' in a for a in old['argv']))
+        new = _launch_plan(replace(self.config, qga=True), self.image,
+                           self.run.directory / 'root.qcow2', old['uuid'])
+        self.assertTrue(new['config']['qga'])
+        self.assertEqual(old['argv'], new['argv'])
+        for invalid in (1, 'true', None):
+            with self.assertRaises(ValueError):
+                replace(self.config, qga=invalid).validate()
+
     def test_success_sequence_plan_is_deterministic_and_preparation_only(self):
         plan = self.prepare()
         self.assertEqual(3, len(self.calls))

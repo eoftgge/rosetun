@@ -20,7 +20,15 @@ class ByteRelay:
         self.stop = threading.Event()
         self.failed = False
         self.thread = threading.Thread(target=self._run, daemon=True)
-        self.thread.start()
+        try:
+            self.thread.start()
+        except BaseException:
+            for endpoint in (self.client, self.peer):
+                try:
+                    endpoint.close()
+                except (OSError, ValueError):
+                    pass
+            raise
 
     def _run(self):
         sockets = [self.stream, self.peer]
@@ -57,13 +65,29 @@ class ByteRelay:
             self.failed = True
         finally:
             for stream in sockets:
-                stream.close()
+                try:
+                    stream.close()
+                except (OSError, ValueError):
+                    self.failed = True
 
     def close(self):
         self.stop.set()
-        self.client.close()
+        errors = False
+        try:
+            self.client.close()
+        except (OSError, ValueError):
+            errors = True
         self.thread.join(timeout=1)
         if self.thread.is_alive():
+            raise ValueError('qmp-relay-close-unconfirmed')
+        # A stopped worker alone does not confirm closure: its finally may have
+        # encountered an endpoint error. Retry every endpoint under this owner.
+        for stream in (self.stream, self.peer):
+            try:
+                stream.close()
+            except (OSError, ValueError):
+                errors = True
+        if errors:
             raise ValueError('qmp-relay-close-unconfirmed')
 
 

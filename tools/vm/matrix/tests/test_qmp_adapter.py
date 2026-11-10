@@ -124,6 +124,34 @@ class AdapterTests(unittest.TestCase):
         self.assertTrue(relay.failed)
         self.assertTrue(relay.stream.closed and relay.peer.closed)
 
+    def test_relay_close_failure_attempts_every_endpoint_and_blocks_confirmation(self):
+        from unittest.mock import Mock
+        relay = ByteRelay.__new__(ByteRelay)
+        relay.stop = threading.Event()
+        relay.client, relay.stream, relay.peer = Mock(), Mock(), Mock()
+        relay.thread = Mock()
+        relay.thread.is_alive.return_value = False
+        relay.stream.close.side_effect = OSError('cannot confirm close')
+        with self.assertRaisesRegex(ValueError, 'relay-close-unconfirmed'):
+            relay.close()
+        relay.client.close.assert_called_once()
+        relay.peer.close.assert_called_once()
+        relay.stream.close.side_effect = None
+        relay.close()
+
+    def test_relay_thread_start_failure_closes_new_pair(self):
+        from unittest.mock import Mock
+        client, peer, external = Mock(), Mock(), Mock()
+        with patch('socket.AF_UNIX', 1, create=True), patch(
+                'socket.socketpair', return_value=(client, peer)), patch(
+                'threading.Thread.start', side_effect=RuntimeError('thread unavailable')):
+            with self.assertRaises(RuntimeError):
+                ByteRelay(external)
+        client.close.assert_called_once()
+        peer.close.assert_called_once()
+        # Construction did not transfer the caller's stream to a worker.
+        external.close.assert_not_called()
+
     def test_byte_relay_flushes_a_reply_before_peer_eof(self):
         class Stream:
             def __init__(self):

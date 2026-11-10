@@ -10,6 +10,7 @@ from tools.vm.matrix import lifecycle
 from tools.vm.matrix.tests import test_qemu
 
 REAL_HOST = lifecycle._host
+REAL_SOCKETPAIR = lifecycle.socket.socketpair
 
 
 class Stream:
@@ -128,6 +129,177 @@ class LifecycleTests(unittest.TestCase):
             self.assertEqual(0.01, timeout)
             return self.fixture.fake(argv, timeout=30, output_limit=output_limit)
         return lifecycle.start(self.run, timeout=0.01, executor=info)
+
+    def enable_qga(self):
+        from dataclasses import replace
+        from tools.vm.matrix.qemu import _launch_plan
+        self.fixture.config = replace(self.fixture.config, qga=True)
+        self.plan = _launch_plan(self.fixture.config, self.fixture.image,
+                                 self.run.directory / 'root.qcow2', self.plan['uuid'])
+        (self.run.directory / 'launch-plan.json').write_text(json.dumps(self.plan))
+
+    def test_qga_is_separate_and_completion_requires_its_close(self):
+        from tools.vm.matrix.resources import completion_verified
+        from tools.vm.matrix.tests.test_qga import Client, Relay, Stream as AgentStream
+        from tools.vm.matrix.qga import Qga
+        self.enable_qga()
+        monitor_parent, monitor_child = Stream(), Stream()
+        agent_parent = AgentStream(b'\xff{"return":123}\n')
+        agent_child = Stream()
+        agent_child.fileno = lambda: 43
+        agent = Qga(agent_parent, client_factory=Client, relay_factory=Relay)
+        self.addCleanup(agent.close)
+        with patch.object(lifecycle.socket, 'socketpair', side_effect=[
+                (monitor_parent, monitor_child), (agent_parent, agent_child)]), patch.object(
+                lifecycle, 'Qga', return_value=agent), patch.object(
+                lifecycle.subprocess, 'Popen', return_value=self.child) as popen:
+            vm = self.start()
+        self.assertEqual((42, 43), popen.call_args.kwargs['pass_fds'])
+        argv = popen.call_args.args[0]
+        self.assertIn('socket,id=guestagent,fd=43', argv)
+        self.assertIn('virtio-serial-pci,id=guestserial', argv)
+        self.assertIn('virtserialport,bus=guestserial.0,chardev=guestagent,name=org.qemu.guest_agent.0', argv)
+        self.assertTrue(monitor_child.closed)
+        self.assertTrue(agent_child.closed)
+        self.assertFalse(agent_parent.closed)
+        self.assertNotIn(self.run._identity[2], json.dumps(argv))
+        vm.timeout = 1
+        with patch('secrets.randbits', return_value=123), patch(
+                'socket.socketpair', REAL_SOCKETPAIR):
+            row = vm.observe_guest()
+        self.assertEqual('observed', row['result'])
+        self.assertEqual(self.plan['uuid'], row['vm_uuid'])
+        vm.reset()
+        self.assertIsNone(vm.guest_observation)
+        with self.assertRaises(lifecycle.LifecycleError):
+            vm.observe_guest()
+        self.assertEqual('running', vm.resume()['status'])
+        with patch.object(agent, 'close', side_effect=ValueError('close failed')):
+            with self.assertRaisesRegex(lifecycle.LifecycleError, 'control-close-unconfirmed'):
+                vm.hard_off()
+        self.assertTrue(vm.exited)
+        self.assertFalse(vm.completed)
+        self.assertFalse(completion_verified(self.run.directory, self.run._read()))
+        vm.hard_off()
+        self.assertTrue(agent_parent.closed)
+        self.assertTrue(vm.completed)
+        self.assertTrue(completion_verified(self.run.directory, self.run._read()))
+        # Even a consistently rehashed journal must carry QGA closure evidence.
+        import hashlib
+        journal_path = self.run.directory / 'lifecycle.jsonl'
+        rows = [json.loads(line) for line in journal_path.read_text().splitlines()]
+        for row in rows:
+            if row['action'] == 'qga':
+                row['result'] = 'unconfirmed'
+        raw = ''.join(json.dumps(row) + '\n' for row in rows).encode()
+        journal_path.write_bytes(raw)
+        proof_path = self.run.directory / 'completion.json'
+        proof = json.loads(proof_path.read_text())
+        proof['journal_sha256'] = hashlib.sha256(raw).hexdigest()
+        proof_path.write_text(json.dumps(proof))
+        self.assertFalse(completion_verified(self.run.directory, self.run._read()))
+        journal = (self.run.directory / 'qga-observations.jsonl').read_text()
+        self.assertNotIn(self.run._identity[2], journal)
+        self.assertNotIn(self.run._identity[2].encode(), b''.join(agent_parent.sent))
+
+    def test_qga_parent_and_child_close_when_spawn_fails(self):
+        from tools.vm.matrix.tests.test_qga import Stream as AgentStream
+        self.enable_qga()
+        agent_parent, agent_child = AgentStream(b''), Stream()
+        with patch.object(lifecycle.socket, 'socketpair', side_effect=[
+                (Stream(), Stream()), (agent_parent, agent_child)]), patch.object(
+                lifecycle.subprocess, 'Popen', side_effect=OSError('spawn failed')):
+            with self.assertRaises(lifecycle.LifecycleError):
+                self.start()
+        self.assertTrue(agent_parent.closed)
+        self.assertTrue(agent_child.closed)
+
+    def test_completion_rejects_qga_close_before_final_reap_and_later_failure(self):
+        import hashlib
+        from tools.vm.matrix.resources import completion_verified
+        from unittest.mock import Mock
+        self.enable_qga()
+        with patch.object(lifecycle, 'Qga', return_value=Mock()):
+            vm = self.start()
+        vm.hard_off()
+        manifest = self.run._read()
+        journal = self.run.directory / 'lifecycle.jsonl'
+        proof_path = self.run.directory / 'completion.json'
+        original = [json.loads(line) for line in journal.read_text().splitlines()]
+        self.assertTrue(completion_verified(self.run.directory, manifest))
+        for mode in ('before-reap', 'later-failure'):
+            rows = json.loads(json.dumps(original))
+            closed = next(row for row in rows if row['action'] == 'qga')
+            if mode == 'before-reap':
+                rows.remove(closed)
+                index = next(i for i, row in enumerate(rows) if row['action'] == 'exit')
+                rows.insert(index, closed)
+            else:
+                row = dict(closed, result='unconfirmed')
+                rows.insert(-1, row)
+            for index, row in enumerate(rows, 1):
+                row['sequence'] = index
+            raw = ''.join(json.dumps(row) + '\n' for row in rows).encode()
+            journal.write_bytes(raw)
+            proof = json.loads(proof_path.read_text())
+            proof['journal_sha256'] = hashlib.sha256(raw).hexdigest()
+            proof_path.write_text(json.dumps(proof))
+            self.assertFalse(completion_verified(self.run.directory, manifest), mode)
+
+    def test_pending_launch_endpoint_blocks_otherwise_complete_vm(self):
+        vm = self.start()
+        endpoint = Stream()
+        vm.launch_sockets.append(endpoint)
+        with patch.object(endpoint, 'close', side_effect=OSError('close failed')):
+            with self.assertRaisesRegex(lifecycle.LifecycleError, 'control-close-unconfirmed'):
+                vm.hard_off()
+        self.assertTrue(vm.exited)
+        self.assertFalse(vm.completed)
+        self.assertFalse((self.run.directory / 'completion.json').exists())
+        vm.hard_off()
+        self.assertTrue(endpoint.closed)
+        self.assertTrue(vm.completed)
+
+    def test_failed_child_endpoint_close_blocks_completion_and_retains_vm_handle(self):
+        from tools.vm.matrix.tests.test_qga import Stream as AgentStream
+        self.enable_qga()
+        agent_parent, agent_child = AgentStream(b''), Stream()
+        with patch.object(agent_child, 'close', side_effect=OSError('close failed')), patch.object(
+                lifecycle.socket, 'socketpair', side_effect=[
+                    (Stream(), Stream()), (agent_parent, agent_child)]):
+            with self.assertRaises(lifecycle.LifecycleError) as caught:
+                self.start()
+        vm = caught.exception.vm
+        self.assertIsNotNone(vm)
+        self.assertTrue(vm.exited)
+        self.assertFalse(vm.completed)
+        self.assertIn(agent_child, vm.launch_sockets)
+        self.assertFalse((self.run.directory / 'completion.json').exists())
+        self.assertTrue(agent_parent.closed)
+        # Retry may close descriptors, but cannot erase the failed evidence.
+        with self.assertRaises(lifecycle.LifecycleError):
+            vm.hard_off()
+        self.assertTrue(agent_child.closed)
+
+    def test_lost_qga_does_not_prevent_qmp_quit(self):
+        from unittest.mock import Mock
+        vm = self.start()
+        vm.qga = Mock()
+        vm.qga.attempted = True
+        vm.qga.session_id = 'synthetic-session'
+        vm.qga.probe.return_value = {'version': self.run._identity[2], 'required_commands': []}
+        with self.assertRaises(lifecycle.LifecycleError):
+            vm.observe_guest()
+        vm.qga.read_boot_id.assert_not_called()
+        self.assertNotIn(self.run._identity[2],
+                         (self.run.directory / 'qga-observations.jsonl').read_text())
+        vm.qga.probe.side_effect = ValueError('lost agent')
+        with self.assertRaises(lifecycle.LifecycleError):
+            vm.observe_guest()
+        self.assertIsNone(vm.guest_observation)
+        vm.close()
+        self.assertIn('quit', self.control.commands)
+        self.assertTrue(vm.completed)
 
     def test_controls_confirm_states_and_lease_is_held_until_child_exit(self):
         vm = self.start()

@@ -99,6 +99,7 @@ class QemuConfig:
     cpu: str = 'host'
     memory_mib: int = 1024
     vcpus: int = 1
+    qga: bool = False
 
     def validate(self):
         if (self.schema != 'rosetun.matrix.qemu.v1' or self.accelerator != 'kvm'
@@ -109,6 +110,8 @@ class QemuConfig:
             raise ValueError("memory out of range")
         if type(self.vcpus) is not int or not 1 <= self.vcpus <= 64:
             raise ValueError("vCPU count out of range")
+        if type(self.qga) is not bool:
+            raise ValueError('invalid QGA option')
         for path in (self.executable, self.image_executable, self.bios):
             local_file(path)
 
@@ -130,9 +133,12 @@ def _launch_plan(config, image, overlay, vm_uuid):
             '-display', 'none', '-monitor', 'none', '-serial', 'none',
             '-parallel', 'none', '-blockdev', json.dumps(disk, sort_keys=True),
             '-device', 'virtio-blk-pci,drive=root']
+    configuration = asdict(config)
+    if not config.qga:
+        configuration.pop('qga')
     return {'schema': 'rosetun.matrix.qemu-launch.v1', 'executed': False,
             'kvm_qualified': False, 'firmware_profile': image.profile,
-            'uuid': vm_uuid, 'image': image.record(), 'config': asdict(config), 'argv': argv}
+            'uuid': vm_uuid, 'image': image.record(), 'config': configuration, 'argv': argv}
 
 
 def prepare(run, image, config, *, executor=execute):

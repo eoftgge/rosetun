@@ -16,6 +16,7 @@ import sys
 from datetime import datetime, timezone
 
 from .qmp_adapter import Qmp
+from .qga import Qga, QgaError
 from .diagnostics import StderrSink
 
 from .images import ImageDescriptor, image_chain, local_file
@@ -69,6 +70,10 @@ class Vm:
         self.timeout = timeout
         self.process = None
         self.qmp = None
+        self.qga = None
+        self.launch_sockets = []
+        self.guest_observation = None
+        self.qga_observations = 0
         self.exited = False
         self.events = 0
         self.vm_uuid = None
@@ -102,6 +107,48 @@ class Vm:
         except (OSError, ValueError):
             self.evidence_failed = True
             raise LifecycleError('lifecycle-evidence-write-failed', self) from None
+
+    def observe_guest(self):
+        """Observe agent availability and Linux boot identity, never OS readiness."""
+        self._check()
+        self.guest_observation = None
+        if self.qga is None:
+            raise LifecycleError('qga-not-configured', self)
+        if self.qga_observations >= 32:
+            raise LifecycleError('qga-observation-limit', self)
+        self.qga_observations += 1
+        row = {'run_id': self.run._identity[0], 'vm_uuid': self.vm_uuid,
+               'qga_session_id': self.qga.session_id,
+               'utc': datetime.now(timezone.utc).isoformat(), 'result': 'error',
+               'agent': None, 'boot_id': None}
+        try:
+            if not self.qga.attempted:
+                self.qga.connect(self.timeout)
+            row['agent'] = self.qga.probe(self.timeout)
+            # Guest supplied strings must never publish the local owner token.
+            if self.run._identity[2] in json.dumps(row):
+                row['agent'] = None
+                raise LifecycleError('invalid-qga-observation')
+            row['boot_id'] = self.qga.read_boot_id(self.timeout)
+            row['result'] = 'observed'
+        except QgaError as error:
+            row['result'] = str(error)
+            raise LifecycleError(str(error), self) from None
+        except (OSError, ValueError):
+            raise LifecycleError('guest-observation-failed', self) from None
+        finally:
+            try:
+                self.run._read()
+                with resource_path(self.run.directory, 'qga-observations.jsonl').open(
+                        'a', encoding='utf-8', newline='\n') as stream:
+                    stream.write(json.dumps(row, sort_keys=True) + '\n')
+                    stream.flush()
+                    os.fsync(stream.fileno())
+            except (OSError, ValueError):
+                self.evidence_failed = True
+                raise LifecycleError('qga-evidence-write-failed', self) from None
+        self.guest_observation = row
+        return row
 
     def status(self):
         self._check()
@@ -143,6 +190,9 @@ class Vm:
     def reset(self):
         """Confirm RESET, not guest boot readiness or a new guest boot ID."""
         self._check()
+        self.guest_observation = None
+        if self.qga is not None:
+            self.qga.invalidate()
         self._event('reset', 'intent')
         try:
             self.qmp.command('system_reset', self.timeout, event='RESET')
@@ -228,8 +278,14 @@ class Vm:
                 self.process.wait(timeout=self.timeout)
             self.exited = True
             self._event('exit', 'child-reaped')
+            for stream in list(self.launch_sockets):
+                stream.close()
+                self.launch_sockets.remove(stream)
             if self.qmp is not None:
                 self.qmp.close()
+            if self.qga is not None:
+                self.qga.close()
+                self._event('qga', 'closed')
             if self.stderr is not None:
                 self.stderr.close()
                 if self.stderr.overflow:
@@ -265,7 +321,7 @@ class Vm:
             # controls are closed. Quarantined ledger still blocks a new lease.
             if self.exited:
                 controls_closed = True
-                for control in (self.qmp, self.stderr):
+                for control in (*self.launch_sockets, self.qmp, self.qga, self.stderr):
                     if control is not None:
                         try:
                             control.close()
@@ -319,7 +375,8 @@ def start(run, *, timeout=5, executor=execute):
         image.verify_bytes()
     except (KeyError, TypeError, OSError, ValueError):
         raise LifecycleError('prelaunch-validation-failed') from None
-    for name in ('qemu-stderr.log', 'completion.json'):
+    for name in (('qemu-stderr.log', 'completion.json', 'qga-observations.jsonl')
+                 if config.qga else ('qemu-stderr.log', 'completion.json')):
         run.register({'id': name.split('.')[0], 'kind': 'file', 'path': name})
     journal = resource_path(run.directory, 'lifecycle.jsonl')
     run.register({'id': 'lifecycle', 'kind': 'file', 'path': 'lifecycle.jsonl'})
@@ -330,20 +387,39 @@ def start(run, *, timeout=5, executor=execute):
     run._lease._active.add(vm)
     child = None
     parent = None
+    qga_parent = qga_child = None
     try:
         run.mark('starting')
         vm._event('start', 'intent')
         vm.stderr = StderrSink(resource_path(run.directory, 'qemu-stderr.log'), run._identity[2])
         parent, child = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+        vm.launch_sockets.extend((parent, child))
         vm.qmp = Qmp(parent)
+        vm.launch_sockets.remove(parent)
         argv = [*plan['argv'], '-S', '-chardev', f'socket,id=control,fd={child.fileno()}',
                 '-mon', 'chardev=control,mode=control']
+        descriptors = [child.fileno()]
+        if config.qga:
+            qga_parent, qga_child = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+            vm.launch_sockets.extend((qga_parent, qga_child))
+            vm.qga = Qga(qga_parent)
+            vm.launch_sockets.remove(qga_parent)
+            argv += ['-chardev', f'socket,id=guestagent,fd={qga_child.fileno()}',
+                     '-device', 'virtio-serial-pci,id=guestserial',
+                     '-device', 'virtserialport,bus=guestserial.0,chardev=guestagent,name=org.qemu.guest_agent.0']
+            descriptors.append(qga_child.fileno())
+            resource_path(run.directory, 'qga-observations.jsonl').touch(exist_ok=False)
         run._read()
         vm.process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                       stderr=subprocess.PIPE, shell=False, close_fds=True, bufsize=0,
-                                      pass_fds=(child.fileno(),), start_new_session=True)
+                                      pass_fds=tuple(descriptors), start_new_session=True)
         child.close()
+        vm.launch_sockets.remove(child)
         child = None
+        if qga_child is not None:
+            qga_child.close()
+            vm.launch_sockets.remove(qga_child)
+            qga_child = None
         vm.stderr.start(vm.process.stderr)
         run.register(_identity(vm.process, config.executable))
         vm.qmp.handshake(timeout)
@@ -374,7 +450,17 @@ def start(run, *, timeout=5, executor=execute):
             raise
         raise LifecycleError('vm-start-failed', vm) from None
     finally:
-        if child is not None:
-            child.close()
-        if parent is not None and vm.qmp is None:
-            parent.close()
+        pending = [child, qga_child]
+        if vm.qmp is None:
+            pending.append(parent)
+        if vm.qga is None:
+            pending.append(qga_parent)
+        for stream in pending:
+            if stream is not None:
+                try:
+                    stream.close()
+                except (OSError, ValueError):
+                    # Keep the original LifecycleError and its VM handle. The
+                    # VM retains failed endpoints and cannot confirm completion.
+                    vm.evidence_failed = True
+                    vm.operation_errors.append('launch-socket-close-unconfirmed')

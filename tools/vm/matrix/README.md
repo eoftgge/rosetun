@@ -6,6 +6,128 @@ It does not run scenarios, install dependencies, start services or create VMs.
 The existing Bash/PowerShell matrices remain the execution tools, Hyper-V remains
 the control stand. The internal QEMU backend below is not qualified on real VMs.
 
+## Optional Linux QGA observation (stage 4a)
+
+Set `QemuConfig(..., qga=True)` explicitly before `prepare`. Omitted/false keeps
+legacy launch plans unchanged. `start` creates a second private connected Unix
+socket pair and adds `-chardev socket,id=guestagent,fd=<child-fd>`,
+`-device virtio-serial-pci,id=guestserial` and
+`-device virtserialport,bus=guestserial.0,chardev=guestagent,name=org.qemu.guest_agent.0`.
+Only the two child descriptors are inherited; parent copies of child ends close
+immediately after spawn. QMP and QGA own separate streams and states. No TCP
+listener or guest network is added (`-nic none` remains). `start` confirms QMP
+only and does not wait for the agent in the initially paused VM.
+
+Source compatibility review used released QEMU 9.2.0/10.0.0 protocol schemas,
+with the 10.0.0 [socket backend](https://github.com/qemu/qemu/blob/v10.0.0/chardev/char-socket.c),
+[serial bus](https://github.com/qemu/qemu/blob/v10.0.0/hw/char/virtio-serial-bus.c),
+[PCI device](https://github.com/qemu/qemu/blob/v10.0.0/hw/virtio/virtio-serial-pci.c)
+and [port device](https://github.com/qemu/qemu/blob/v10.0.0/hw/char/virtio-console.c).
+These define fd-backed connected sockets, the controller/bus and named chardev
+port. This is source review, not runtime qualification of an installed build.
+The owner must pin and qualify the exact QEMU/qemu-img, versioned machine, BIOS,
+kernel and agent package; the earlier synthetic QMP qualification of 10.0.13
+is not QGA qualification. Other releases need another compatibility review.
+
+`qga.Qga` exposes `connect(timeout)`, `probe(timeout)`, `read_boot_id(timeout)`
+and `close()`. Only the fixed boot ID path is exposed. The released
+[qemu.qmp 0.0.6 public API](https://gitlab.com/qemu-project/python-qemu-qmp/-/blob/v0.0.6/qemu/qmp/qmp_client.py)
+provides `await_greeting=False` and `negotiate=False` specifically for QGA.
+The adapter never sends a monitor greeting or qmp_capabilities. The library does
+not implement the QGA sentinel synchronization. A narrow preflight sends 0xFF
+and guest-sync-delimited with a random 63-bit ID, discards stale bytes, resets its
+partial parser on each sentinel, and accepts only the matching integer response.
+It reads one byte at a time to avoid consuming the following library data;
+this phase has one deadline and a 64 KiB total budget. Regular JSON framing,
+request IDs and RPC errors then belong to the library, over the existing bounded
+byte relay (64 KiB buffers, 1 MiB per direction). No library internals are used.
+
+All calls are serialized outside an existing asyncio loop. Each RPC timeout is
+finite and at most 60 seconds; a session permits at most 128 RPCs. Probe validates
+`guest-info` types and all required commands, including enabled and
+success-response flags, before ping or file access. Read uses mode `r`, validates
+an integer handle, strict base64, byte count, boolean EOF, a 64-byte total bound
+and canonical nonzero Linux UUID. It closes a known handle in finally when the
+stream remains usable. After any uncertain exchange (including timeout) the
+session is poisoned: no late reply is consumed by another operation and no
+operation is automatically retried. Confirmed RPC rejections remain distinct from uncertain exchanges, so a rejected
+read still attempts file-close. The 128th RPC is reserved for a known handle
+close; local budget exhaustion cannot consume that slot. A timed-out open/read/close can leave an
+unconfirmed guest handle until the agent/guest is restarted. Completion confirms
+host controls closed and child reaped; it does not prove guest handle closure.
+
+`Vm.observe_guest()` connects once, probes and reads boot_id. It records run ID,
+VM UUID, QGA session ID, UTC, result, agent version/required capabilities and boot
+ID in bounded `qga-observations.jsonl` (at most 32 observations). Owner tokens
+are neither sent to the guest nor written to this journal. `guest_observation`
+is the latest successful observation, cleared before a failed attempt or reset.
+Ping establishes agent availability only, never Rosetun or whole-OS readiness.
+Boot ID is an in-guest observation, not cryptographic attestation.
+
+Reset invalidates QGA even when RESET confirmation fails. Safe resynchronization
+after reset and reconnect after a closed socket pair are **unsupported** here;
+subsequent observations explicitly fail. RESET or a successful historical ping
+cannot confirm a new boot, and the old boot ID cannot do so either. Observing
+a new boot in the same VM after reset remains an unimplemented qualification
+step. QGA loss cannot block QMP control or killing/reaping the owned child.
+QGA close failure blocks completion and stand reuse; completion verification
+requires the last QGA closure entry after the final child reap and before
+completion for opt-in plans. Pending launch socket ends remain owned by the VM
+until their closure is confirmed, including startup error paths. The shared byte
+relay checks every owned endpoint after its worker stops; a stopped thread alone
+is insufficient closure evidence. Thread-start failure closes the newly created
+relay socket pair.
+
+The owner supplies a minimal prepared Linux x86-64 BIOS image with kernel
+`CONFIG_VIRTIO_CONSOLE`/virtio-console support, installed qemu-guest-agent and an
+enabled service using virtio-serial at
+`/dev/virtio-ports/org.qemu.guest_agent.0`. Its RPC allowlist must include exactly
+the operations required here: `guest-sync-delimited`, `guest-ping`, `guest-info`,
+`guest-file-open`, `guest-file-read`, `guest-file-close`. File-open permission in
+the agent is generally broader than the fixed path this controller exposes.
+QGA usually runs privileged inside the guest: trust the image, agent and local
+controller. Record image origin, distro/kernel/agent versions, preparation steps,
+size and SHA-256 in owner evidence and retain the matching image descriptor.
+No image is provisioned, downloaded or modified by this stage.
+The released [agent configuration](https://github.com/qemu/qemu/blob/v10.0.0/docs/interop/qemu-ga.rst)
+and [RPC schema](https://github.com/qemu/qemu/blob/v10.0.0/qga/qapi-schema.json)
+define the port, allowlist and synchronization requirements.
+
+Partial owner-authorized qualification on 2026-11-11: Debian 13/WSL2,
+qemu.qmp 0.0.6 from an existing environment, QEMU 10.0.13 and
+`pc-i440fx-10.0`, with KVM accessible as root. A diskless VM accepted the exact
+two fd-backed channels and virtio devices above. With no guest OS/agent, QGA
+synchronization failed as expected while QMP still reported running; forced
+kill/reap and closure of both child endpoints, both parent streams and adapters
+were confirmed. No image, disk or guest network was used. This checks device
+parameters and channel independence only. Real qemu-ga, Linux guest boot_id,
+reset/reobservation, guest-service stop and firewall/Lockdown remain UNRUN.
+Completion is covered by offline lifecycle tests, not this diskless experiment.
+Installed-library synthetic peers also exercise successful QGA RPCs and a
+confirmed read rejection followed by file-close; they do not run qemu-ga.
+
+Owner qualification still required:
+
+1. On an independently prepared image/stand, use `prepare(run, image,
+   QemuConfig(..., qga=True))`, `vm = start(run)`, `vm.resume()`, then
+   `vm.observe_guest()`. Check version, capabilities and boot_id in the journal.
+2. Run `vm.reset()` and try `vm.observe_guest()` again. Stage 4a must report an
+   explicit unsupported recovery error, with `guest_observation is None`.
+   Same-VM reset followed by a new valid, different boot_id is still UNRUN and
+   requires a later safe resynchronization implementation; do not mark it passed.
+3. In a separate fresh run, stop qemu-ga from an independently available guest
+   console. `vm.observe_guest()` must fail while `vm.status()` still works;
+   `vm.hard_off()` must reap the child and close both controls. Retain journals,
+   completion, versions and sanitized failure details.
+4. Separately qualify under active firewall/Lockdown. This is **UNRUN**; adding
+   a virtio channel proves neither agent operation under Lockdown nor protection.
+   Add no management network/firewall exception.
+
+Offline fake adapter tests and the optional installed-library synthetic peer test
+are not tests of real qemu-ga. No security scenario gets PASS from agent
+availability. Stage 4b (autonomous guest jobs and retained results after controller
+loss) is not implemented; this stage makes no controller-loss durability claim.
+
 ## Bounded QEMU lifecycle (stage 3c.1)
 
 Execution is an internal Python API on Linux x86-64/KVM only, BIOS/i440fx,
@@ -211,8 +333,8 @@ remains blocked by the existing ledger recovery policy. This stage adds no
 `released` state or cleanup. A saved plan has `executed: false` and
 `kvm_qualified: false`; it is neither scenario PASS nor proof of a real qcow2,
 successful boot or security-matrix coverage. The separate lifecycle API above
-adds execution without automatic resource cleanup. QGA, guest runners and
-network laboratories remain outside scope.
+adds execution without automatic resource cleanup; stage 4a above adds optional
+QGA observation. Guest runners and network laboratories remain outside scope.
 
 Options were checked against the official [qemu-img reference](https://www.qemu.org/docs/master/tools/qemu-img.html),
 [invocation reference](https://www.qemu.org/docs/master/system/invocation.html), and
@@ -502,9 +624,9 @@ sensitive diagnostic data. CLI input errors produce a smaller assessment with
 `transport-fixture`, `real-service`, `real-package` and other existing categories
 remain exactly what the TSV declares. They are not external packet capture.
 No evidence is not evidence of no leak. PCAP analysis, cryptographic attestation,
-an authenticated evidence store, QGA, guest agents, network labs and scenario
-migration are not implemented. QEMU preparation and bounded QMP lifecycle have a
-separate internal API described above. Unit tests do not qualify any OS/backend or prove
+an authenticated evidence store, autonomous guest jobs, network labs and scenario
+migration are not implemented. QEMU preparation, bounded QMP lifecycle and minimal
+QGA observation have a separate internal API described above. Unit tests do not qualify any OS/backend or prove
 network protection.
 
 Exit codes: `0` for successful doctor/plan or accepted exploratory assessment;

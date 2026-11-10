@@ -414,6 +414,18 @@ def completion_verified(directory, data):
         if plan_path.stat().st_size > 256 * 1024:
             return False
         plan, _ = read_json(plan_path)
+        qga = plan.get('config', {}).get('qga', False)
+        if type(qga) is not bool:
+            return False
+        if qga:
+            closures = [index for index, row in enumerate(rows)
+                        if row['action'] == 'qga']
+            exits = [index for index, row in enumerate(rows)
+                     if row['action'] == 'exit' and row['result'] == 'child-reaped']
+            if ('qga-observations.jsonl' not in files or not closures or not exits
+                    or rows[closures[-1]]['result'] != 'closed'
+                    or not exits[-1] < closures[-1] < len(rows) - 1):
+                return False
         if proof['vm_uuid'] != plan['uuid']:
             return False
         if not rows or rows[-1]['action'] != 'completion' or rows[-1]['result'] != 'controls-closed-child-reaped':
