@@ -2009,3 +2009,208 @@ unconfirmed teardown, controller restart and other images/tool builds remain
 UNRUN here. Existing API qualifications and offline rejection/budget tests remain
 separate evidence. This qualifies the recorded exploratory L2 cases only;
 network security invariants remain UNVERIFIED and release gate remains false.
+
+## Isolated two-VM lab smoke (stage 6a)
+
+This separate infrastructure path does not run Rosetun, sing-box, Kill Switch
+scenarios or `run-l3.sh`. Linux L3 has **not** been migrated. All security
+invariants remain **UNVERIFIED**, release gate **false**, even with smoke exit 0.
+
+```text
+test VM                     lab VM (router + observer)
+192.0.2.2/24     Ethernet    192.0.2.1/24
+2001:db8:6a:1::2/64 <------> 2001:db8:6a:1::1/64
+                            |
+                  rt-route 203.0.113.1/24, 2001:db8:6a:2::1/64
+                            | veth (inside disposable lab VM only)
+                  rtlab namespace / rt-target
+                            203.0.113.2/24, 2001:db8:6a:2::2/64
+                            HTTP :8080, UDP echo :9000, DNS UDP/TCP :53
+```
+
+One profile, eight probes: HTTP, UDP nonce echo, authoritative DNS over UDP and
+TCP, each over IPv4 and routed IPv6. DNS answers only the current run's exact
+`<run>.<nonce>.lab.test` A questions, with the fixed documentation A answer;
+RD/RA are clear and no resolver or recursion is used. Each probe has a fresh
+96-bit nonce and 128-bit run ID, also present in HTTP/UDP payloads. Neither an
+old packet nor an empty capture qualifies anything. The controller checks the
+actual answer, target log, and pcap request/response addresses, family, transport,
+service port and matching client port. IPv6 neighbor pings cannot substitute.
+Unsupported fragmentation/segmentation or missing payload evidence fails closed
+as infrastructure UNVERIFIED; this is not a general TCP reassembly tool.
+
+`lab.py::lab_smoke` and CLI `lab-smoke` use a separate `lab.v1` configuration,
+never an assessment profile. Copy `lab.example.toml` and replace paths, image
+sizes and SHA256 placeholders with owner-verified values. Python 3.11+, Linux
+x86_64 KVM, QEMU/qemu-img **10.0.13**, SeaBIOS, `pc-i440fx-10.0` and the existing
+`qemu.qmp==0.0.6` are required. No build/install/download is performed.
+
+```sh
+python -m tools.vm.matrix lab-smoke --config /srv/lab.toml --dry-run
+# Owner only, after preparing the images and checking isolation:
+python -m tools.vm.matrix lab-smoke --config /srv/lab.toml
+```
+
+Dry-run reads configuration and local prerequisites only, without creating a
+lease, files, subprocesses or sockets. It does not qualify the binaries or images.
+Execution verifies binary versions and base-image integrity, takes one lab lease,
+creates two separate run/manifest/writable overlays and fresh UUIDs, then starts
+both VM processes through the existing lifecycle. The identity ledger explicitly
+links both members, role and endpoint before endpoint creation. MACs are
+`00:00:5e:00:53:61` (test) and `00:00:5e:00:53:62` (lab); devices are `test-wire`
+and `lab-wire`. Guests select by unique MAC and role, never an eth0 assumption.
+
+The sole data channel is a connected `AF_UNIX/SOCK_STREAM` socketpair passed to
+QEMU as `-netdev stream,id=labwire,addr.type=fd,addr.str=<fd>,server=off` and
+`virtio-net-pci`. There is no listener, reconnect, user NAT, hostfwd, TAP, bridge,
+host route or host namespace. `-nodefaults -nic none` remains, preventing an
+implicit second NIC. QMP and QGA use separate inherited control socketpairs.
+Controller copies of the network descriptors close before guest probes.
+No Ethernet forwarding is implemented in Python.
+
+Exact upstream support was checked against QEMU **v10.0.13**:
+[NetdevStreamOptions](https://github.com/qemu/qemu/blob/v10.0.13/qapi/net.json),
+[stream client](https://github.com/qemu/qemu/blob/v10.0.13/net/stream.c), and
+[socket_connect FD branch](https://github.com/qemu/qemu/blob/v10.0.13/util/qemu-sockets.c).
+These netdev fields use SocketAddress, independently of chardev syntax.
+The recorded descriptor/channel qualification is described below.
+
+The second VM is authorized only by a LabPair bound to the two original runs
+and their original live lease; arbitrary second starts remain forbidden. Existing
+single-VM L2 plans and networking behavior are unchanged. Each VM has its own
+completion proof. The lab summary is successful only after both verified VM
+completions and channel close, without errors and with qualified evidence.
+Failure starting the second VM closes the owned first VM with bounded hard-off;
+failed child/control/channel closure cannot produce lab success. Unresolved
+ledgers block reuse even after the controller exits. Artifacts are retained;
+there is no controller-crash recovery, automatic cleanup or PID attachment.
+
+Prepared image contract (provisioned separately from `lab-smoke`):
+
+- Both images are disposable, trusted, BIOS Linux x86_64 with root qemu-ga over
+  virtio-serial, Python 3, iproute2 at `/usr/sbin/ip`, procfs/sysfs and permission
+  for guest-exec/status and bounded guest-file reads. Install
+  `linux/guest/lab-entry.py` as `/usr/local/libexec/rosetun-lab/entry`, executable,
+  and `matrix/lab_protocol.py` beside it as `lab_protocol.py`. Files and their
+  parent directories must be root owned and not writable by ordinary users.
+  Use the exact reviewed controller/helper bytes. No SSH or firewall management
+  exceptions are needed. Guest root/QGA are trusted management surfaces.
+- `/etc/rosetun-lab-role` contains exactly `test` or `lab`. No network manager,
+  DHCP, SLAAC, external DNS, VPN, Rosetun, extra NICs or default external routes.
+  Disable cloud-init networking and socket activation of unwanted network
+  services; disabling only a service's enablement does not prevent reactivation.
+  On lab, mask networkd and its socket so they cannot remove helper-owned static
+  addresses. On test, use one MAC-matched static network profile with priority
+  over distribution defaults. Disable SSH services/sockets in both images.
+  Both images have IPv6 enabled. Firewall policy must permit the fixture paths;
+  the helper does not flush existing firewall policy to hide a provisioning error.
+- Test image: preconfigure addresses shown above, link up, and **only** static
+  routes `203.0.113.0/24 via 192.0.2.1` and
+  `2001:db8:6a:2::/64 via 2001:db8:6a:1::1`. Disable DAD for deterministic static
+  provisioning, or let it finish before image readiness. Test helper only probes;
+  it does not mutate routes or services.
+- Lab image: initially unaddressed data NIC; no `rtlab`, `rt-route`, `rt-target`
+  or `/run/rosetun-lab` claim. Root needs CAP_NET_ADMIN, CAP_SYS_ADMIN (setns),
+  CAP_NET_RAW, namespace/veth support and writable forwarding sysctls. The helper
+  checks DMI UUID, observed boot ID, fixed role, unique MAC and one-shot run claim
+  before changing addresses, forwarding, routes or services **inside lab only**.
+  Services are Python stdlib, with no package downloads. No host mutations.
+
+Capture uses AF_PACKET on the lab ingress interface, outside test VM, recording
+Ethernet pcap plus controlled target logs. The observer is independent of test VM;
+**the lab VM itself remains trusted**, so this is not independence from lab root.
+The controller saves/reads back `capture.pcap`, `targets.json`, `health.json` under
+the lab run and records SHA256. Summary separately records VM/QGA readiness,
+IPv4/IPv6/services, observer, evidence completeness and both completions. Exit 2
+is infrastructure failure/UNVERIFIED, never 'no leaks'; interrupted runs use 130.
+
+Fixed limits: capture 60 seconds, 128 KiB total pcap, 2048-byte full frames
+(no silent truncation), kernel receive buffer requested 256 KiB; logs/health and
+helper JSON each 32 KiB, eight accepted target requests, socket I/O 1 second
+(server) / 2 seconds (client), guest command timeout 5 seconds, boot wait 120
+seconds per VM, guest facade 90 seconds, 40 status polls at 0.5 seconds per call,
+file reads 16 KiB and the unchanged QGA 128-RPC ceiling. Normal VM close retains
+the existing bounded lifecycle behavior. Kernel PACKET_STATISTICS drops, write
+errors, overflow, capture deadline, incomplete files, missing required traffic and
+nonzero helper status all prevent qualification. TCP handling is deliberately
+small and can reject short/split requests as infrastructure failure.
+
+Owner repeat qualification:
+
+1. Review image/helper hashes, role markers, static routes, disabled managers,
+   no external interfaces/routes and no installed VPN software. Run the dry-run
+   command above, then the ordinary smoke command on the isolated prepared stand.
+   Expect eight exact answers, bidirectional evidence for each, all infrastructure
+   dimensions PASS, two verified completions, closed channel, exit 0, release false.
+2. Independently read the saved pcap (e.g. owner's installed Wireshark), JSON logs,
+   SHA256 and both completion proofs. Confirm routed IPv6 target rather than
+   link-local traffic; compare read-only base hashes before/after.
+3. On fresh overlays, use the owner's guest console to remove a target address
+   while capture is active (target unavailable), terminate the observer process,
+   and separately disconnect `test-wire` with QMP `set_link` during readiness.
+   Every case must yield exit 2, qualified false and UNVERIFIED, with teardown
+   evidence retained. An answering target without matching capture cannot qualify.
+   No missing-packet case is a protection/blocking PASS.
+4. Interrupt, inspect retained ledgers with `runs`/`recover`, and verify both VM
+   exits before reusing the stand. Diagnose blocked reuse; never delete a ledger
+   merely to bypass uncertain completion. Return both run directories, stdout,
+   stderr and summary if any expected result differs.
+
+Future legacy mapping (not applied to `run-l3.sh` or PowerShell): HOST_ADDRESS
+will mean the lab VM's internal `192.0.2.1`, NODE_PORT a future VPN fixture port
+(**not** HTTP :8080), PROBE_ADDRESS routed `203.0.113.2` (IPv6 counterpart above),
+DNS_PROBE_ADDRESS routed `203.0.113.2:53`. Existing peer `198.51.100.1/.2` stays
+reserved, with no overlap. HTTPS with validated certificate trust, VPN endpoints,
+DHCP/SLAAC, interface changes and transfer of every old L3 check with distinct new
+evidence are next-stage work. HTTP smoke cannot satisfy legacy HTTPS/VPN checks.
+
+### Recorded real infrastructure qualification
+
+Real stage 6a qualification passed on 2026-11-11 on the existing Debian 13/WSL2
+KVM stand: QEMU/qemu-img 10.0.13, SeaBIOS, `pc-i440fx-10.0`, Python 3.13.5 and
+qemu.qmp 0.0.6. Controller and installed production helper bytes correspond to
+signed implementation `2b7cbb3`. No builds, package installation, image downloads,
+host network interfaces/routes/namespaces or external network connections were
+used. Two new, separate flattened images were provisioned from the existing
+verified L2 base using serial in disposable VMs without a NIC. The source base
+remained unchanged. Provisioning completion and helper SHA256 were checked.
+
+| Case | Observed result | Completion |
+| --- | --- | --- |
+| Ordinary direct `lab-smoke` CLI | Exit 0, eight exact answers, both families/services/observer/evidence PASS | Both verified |
+| Target addresses removed inside lab namespace after capture readiness | Exit 2, qualification false, no protection PASS | Both verified |
+| Observer process stopped after capture readiness | Exit 2, qualification false | Both verified |
+| Lab data interface down after capture readiness | Exit 2, qualification false; QGA management remains available | Both verified |
+| Another ordinary direct CLI on the same stand/ledger | Exit 0, eight answers and all infrastructure dimensions PASS | Both verified |
+| Second QEMU child spawn refused with a real first VM running | Exit 2, first child boundedly stopped; no fabricated second completion | First verified; second run quarantined |
+
+The three network faults used an additional preinstalled fixed qualification
+entry `/usr/local/libexec/rosetun-lab/qualify-fault`, with three allowlisted
+actions and VM/boot/run/role checks. Diagnostic QGA calls never execute a shell.
+The controller's production probes, replies, qualification and close operations
+were retained. The spawn-refusal harness raises an OS error at the second Popen;
+the first process and its teardown are real. That case uses its own stand/ledger:
+its unresolved member blocks reuse, while the ordinary stand remains reusable.
+
+Both positive captures were read back, parsed and matched to the saved nonces,
+responses and target logs; record lengths, complete frames, SHA256, routed IPv6,
+zero drops, absent DHCP and both VM completion proofs were checked. All eleven
+VM processes actually started in these six cases were reaped with verified
+completion; no QEMU remained. Ten completions belong to the ordinary stand,
+one to the dedicated spawn-refusal stand. Image/source integrity and ordinary
+lease reuse were checked independently. Linux offline regression: **307 tests,
+18 skips, OK**. Artifacts, prepared image descriptors/configuration and diagnostic
+fixtures remain in `tools/vm/logs/lab-6a-qualification-20261111/` locally.
+
+Earlier provisioning/diagnostic attempts remain separate, unqualified evidence:
+inherited network activation produced DHCP, and extra serial fault instrumentation
+failed QGA readiness before injection. Corrected prepared images disable that
+activation; fixed-entry injection avoids the extra console. Unresolved experimental
+ledgers were retained, without invented completion or automatic recovery.
+
+UNRUN: real capture overflow/write failures or kernel drops, arbitrary transport
+faults and unconfirmed termination, controller restart, other images/tool builds,
+VPN and HTTPS fixtures, and all existing L3 protection scenarios. Offline rejection
+tests cover the documented limits; they do not make these real cases qualified.
+This record qualifies infrastructure only. Linux L3 remains unmigrated, security
+invariants remain **UNVERIFIED**, release gate remains **false**.
