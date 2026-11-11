@@ -523,6 +523,69 @@ class LifecycleTests(unittest.TestCase):
         self.assertIsNotNone(self.child.poll())
         self.assertTrue(vm.completed)
 
+    def exhaust_ordinary_journal(self, vm):
+        from tools.vm.matrix.lifecycle import ORDINARY_ROWS
+        while True:
+            before = list(self.control.commands)
+            try:
+                vm.pause() if vm.status()['running'] else vm.resume()
+            except lifecycle.LifecycleError as error:
+                self.assertEqual('lifecycle-journal-limit', str(error))
+                self.assertIsNone(error.vm)
+                return before
+            self.assertLessEqual(vm.events, ORDINARY_ROWS)
+
+    def test_ordinary_journal_limit_refuses_cleanly_and_close_still_completes(self):
+        from tools.vm.matrix.resources import completion_verified
+        vm = self.start()
+        before = self.exhaust_ordinary_journal(vm)
+        # The refused operation sent nothing; its only trace is the status poll above.
+        self.assertEqual(before + ['query-status'], self.control.commands)
+        self.assertFalse(vm.evidence_failed)
+        self.assertEqual([], vm.operation_errors)
+        for operation in (vm.pause, vm.resume, vm.reset, vm.request_shutdown):
+            with self.assertRaisesRegex(lifecycle.LifecycleError, 'lifecycle-journal-limit'):
+                operation()
+        self.assertEqual(before + ['query-status'], self.control.commands)
+        self.assertEqual([], vm.operation_errors)
+        self.assertFalse(vm.evidence_failed)
+        vm.close()
+        self.assertTrue(vm.exited and vm.completed)
+        self.assertIn('quit', self.control.commands)
+        manifest = self.run._read()
+        self.assertEqual('exited', manifest['state'])
+        self.assertTrue(completion_verified(self.run.directory, manifest))
+        self.assertLessEqual(vm.events, lifecycle.JOURNAL_LIMIT)
+
+    def test_interrupted_close_after_exhausted_ordinary_journal_still_completes(self):
+        from tools.vm.matrix.resources import completion_verified
+        vm = self.start()
+        self.exhaust_ordinary_journal(vm)
+        used = vm.events
+        original = self.child.wait
+        first = True
+        def interrupt(timeout):
+            nonlocal first
+            if first:
+                first = False
+                raise KeyboardInterrupt
+            return original(timeout)
+        self.child.wait = interrupt
+        with self.assertRaises(KeyboardInterrupt):
+            vm.close()
+        self.assertTrue(vm.completed)
+        self.assertTrue(completion_verified(self.run.directory, self.run._read()))
+        self.assertGreater(vm.events, used)
+        self.assertLessEqual(vm.events, lifecycle.JOURNAL_LIMIT)
+
+    def test_failed_start_rows_fit_the_teardown_reserve(self):
+        self.control.bad_uuid = True
+        with self.assertRaises(lifecycle.LifecycleError) as caught:
+            self.start()
+        vm = caught.exception.vm
+        self.assertTrue(vm.exited)
+        self.assertLessEqual(vm.events, lifecycle.TEARDOWN_ROWS)
+
     def test_legacy_exited_and_corrupt_completion_block_reuse(self):
         from tools.vm.matrix.resources import StandLease
         vm = self.start()

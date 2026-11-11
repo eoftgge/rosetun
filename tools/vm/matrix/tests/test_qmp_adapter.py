@@ -133,6 +133,18 @@ class AdapterTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             adapter._event(Message())
 
+    def test_quit_keeps_the_last_command_after_ordinary_commands_are_exhausted(self):
+        adapter = self.adapter()
+        for _ in range(127):
+            adapter.command('query-status', 0.1)
+        for name in ('query-status', 'stop', 'system_powerdown'):
+            with self.assertRaisesRegex(ValueError, 'qmp-command-limit'):
+                adapter.command(name, 0.1)
+        self.assertTrue(adapter.valid)
+        self.assertEqual({}, adapter.command('quit', 0.1))
+        with self.assertRaisesRegex(ValueError, 'qmp-command-limit'):
+            adapter.command('quit', 0.1)
+
     def test_byte_relay_overflow_closes_only_owned_sockets(self):
         class Stream:
             closed = False

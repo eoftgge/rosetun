@@ -29,6 +29,21 @@ from .report import _unique_object, _invalid_constant
 from .resources import resource_path, execution_resources
 
 
+JOURNAL_LIMIT = 128
+# Rows the teardown path may still need once ordinary operations have stopped.
+# Every attempt consumes a sequence number, even when its write fails, so the
+# count is of attempts. One `_close` writes intent, exit, qga, stderr,
+# confirmed and completion (6) and one failure row on top (7). A
+# KeyboardInterrupt adds the `close interrupted` row and a second `_close(True)`
+# after a first one that got as far as 7: 7 + 1 + 7 = 15. A failed start adds
+# `start intent` and `start error` around that, plus a failed `qmp-ready-paused`
+# attempt: 3 more, 18 in all. Start runs on an empty journal, so those 3 rows
+# only add margin. Further close retries by a caller are not covered; a
+# refused retry ends quarantined, as before.
+TEARDOWN_ROWS = 18
+ORDINARY_ROWS = JOURNAL_LIMIT - TEARDOWN_ROWS
+
+
 class LifecycleError(ValueError):
     def __init__(self, reason, vm=None):
         super().__init__(reason)
@@ -115,10 +130,19 @@ class Vm:
         if self.completed or self not in self.run._lease._active:
             raise LifecycleError('vm-is-not-active')
 
-    def _event(self, action, result):
+    def _reserve(self, rows):
+        """Refuse an ordinary operation whose rows would eat into the teardown reserve.
+
+        Called before the operation's first row and before any command, so the
+        refusal leaves no trace: it is neither evidence loss nor an operation error.
+        """
+        if self.events + rows > ORDINARY_ROWS:
+            raise LifecycleError('lifecycle-journal-limit')
+
+    def _event(self, action, result, *, teardown=False):
         try:
             self.run._read()
-            if self.events >= 128:
+            if self.events >= (JOURNAL_LIMIT if teardown else ORDINARY_ROWS):
                 raise ValueError('lifecycle-journal-limit')
             self.events += 1
             row = {'schema': 'rosetun.matrix.lifecycle.v2',
@@ -293,6 +317,7 @@ class Vm:
         self._check()
         if self.process.poll() is not None:
             raise LifecycleError('vm-child-has-exited')
+        self._reserve(4)  # intent, command-accepted, confirmed or requested, error
         self._event(name, 'intent')
         try:
             self.qmp.command(name, self.timeout)
@@ -318,6 +343,9 @@ class Vm:
     def reset(self):
         """Confirm RESET, not guest boot readiness or a new guest boot ID."""
         self._check()
+        # intent, command-accepted, RESET-observed, confirmed, then on failure
+        # command-accepted-event-unconfirmed and error.
+        self._reserve(6)
         self.guest_observation = None
         self.reset_boot_id = self.last_boot_id
         self.reset_pending = True
@@ -346,6 +374,7 @@ class Vm:
         """ACPI request plus bounded child-exit observation. Timeout stays an error."""
         timeout = self.timeout if timeout is None else _limit(timeout)
         self._check()
+        self._reserve(4)  # intent, command-accepted, child-exit-observed, confirmed
         self._event('shutdown', 'intent')
         try:
             self.qmp.command('system_powerdown', timeout)
@@ -375,7 +404,7 @@ class Vm:
             # Preserve interruption after a second bounded teardown attempt.
             self.operation_errors.append('close-interrupted')
             try:
-                self._event('close', 'interrupted')
+                self._event('close', 'interrupted', teardown=True)
             except (OSError, ValueError):
                 pass
             self._close(True)
@@ -386,7 +415,7 @@ class Vm:
             try:
                 if self.run._read()['state'] != 'stopping':
                     self.run.mark('stopping')
-                self._event('hard-off' if hard else 'close', 'intent')
+                self._event('hard-off' if hard else 'close', 'intent', teardown=True)
             except (OSError, ValueError):
                 self.evidence_failed = True
             if self.process is not None and not self.exited:
@@ -409,7 +438,7 @@ class Vm:
                     raise LifecycleError('vm-exit-unconfirmed', self)
                 self.process.wait(timeout=self.timeout)
             self.exited = True
-            self._event('exit', 'child-reaped')
+            self._event('exit', 'child-reaped', teardown=True)
             for stream in list(self.launch_sockets):
                 stream.close()
                 self.launch_sockets.remove(stream)
@@ -420,11 +449,11 @@ class Vm:
             if self.qga_endpoint is not None:
                 self.qga_endpoint.close()
             if self.qga is not None:
-                self._event('qga', 'closed')
+                self._event('qga', 'closed', teardown=True)
             if self.stderr is not None:
                 self.stderr.close()
                 if self.stderr.overflow:
-                    self._event('stderr', 'truncated')
+                    self._event('stderr', 'truncated', teardown=True)
             self.controls_closed = True
             if self.evidence_failed:
                 raise LifecycleError('completion-evidence-unavailable', self)
@@ -432,9 +461,9 @@ class Vm:
             processes = [r for r in manifest['resources'] if r['kind'] == 'process']
             if self.process is None or len(processes) != 1 or processes[0]['pid'] != self.process.pid:
                 raise LifecycleError('completion-process-identity-missing', self)
-            self._event('hard-off' if hard else 'close', 'confirmed')
+            self._event('hard-off' if hard else 'close', 'confirmed', teardown=True)
             self.run.mark('exited')
-            self._event('completion', 'controls-closed-child-reaped')
+            self._event('completion', 'controls-closed-child-reaped', teardown=True)
             self.run._complete([{'resource': processes[0], 'returncode': self.process.returncode}], self.vm_uuid)
             self.completed = True
         except (OSError, ValueError, subprocess.TimeoutExpired):
@@ -443,7 +472,7 @@ class Vm:
                       'completion-evidence-unconfirmed')
             self.operation_errors.append(reason)
             try:
-                self._event('close', reason)
+                self._event('close', reason, teardown=True)
             except (OSError, ValueError):
                 pass
             try:
@@ -562,7 +591,7 @@ def start(run, *, timeout=5, executor=execute, lab=None):
     qga_parent = qga_child = None
     try:
         run.mark('starting')
-        vm._event('start', 'intent')
+        vm._event('start', 'intent', teardown=True)
         vm.stderr = StderrSink(resource_path(run.directory, 'qemu-stderr.log'), run._identity[2])
         parent, child = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
         vm.launch_sockets.extend((parent, child))
@@ -611,7 +640,7 @@ def start(run, *, timeout=5, executor=execute, lab=None):
         if vm.status()['status'] != 'prelaunch':
             raise LifecycleError('qmp-initial-state-mismatch')
         run.mark('running')
-        vm._event('start', 'qmp-ready-paused')
+        vm._event('start', 'qmp-ready-paused', teardown=True)
         return vm
     except BaseException as error:
         try:
@@ -620,7 +649,8 @@ def start(run, *, timeout=5, executor=execute, lab=None):
             pass
         try:
             if not vm.completed:
-                vm._event('start', 'interrupted' if not isinstance(error, Exception) else 'error')
+                vm._event('start', 'interrupted' if not isinstance(error, Exception) else 'error',
+                      teardown=True)
         except (OSError, ValueError):
             pass
         try:

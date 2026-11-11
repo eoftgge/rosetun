@@ -138,9 +138,11 @@ class Qmp:
                         'system_reset', 'system_powerdown', 'quit'):
             raise ValueError('unsupported-qmp-command')
         self.last_command_accepted = False
-        self.calls += 1
-        if self.calls > 128:
+        # The last of the 128 calls belongs to quit, so that an exhausted budget
+        # cannot push teardown onto signals alone.
+        if self.calls >= 128 or (self.calls >= 127 and name != 'quit'):
             raise ValueError('qmp-command-limit')
+        self.calls += 1
 
         async def execute():
             if event is None:
