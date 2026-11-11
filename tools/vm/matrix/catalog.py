@@ -43,8 +43,12 @@ def validate_snapshot(rows):
 
 
 def read_catalog(path):
-    lines = [line for line in Path(path).read_text(encoding="utf-8-sig").splitlines()
-             if line.strip()]
+    return parse_catalog(Path(path).read_text(encoding="utf-8-sig"))
+
+
+def parse_catalog(text):
+    """Parse a retained TSV snapshot using the same contract as file input."""
+    lines = [line for line in text.splitlines() if line.strip()]
     if not lines or lines[0].split("\t") != list(FIELDS):
         raise ValueError("unexpected catalog header")
     rows = []

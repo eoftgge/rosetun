@@ -488,6 +488,13 @@ def start(run, *, timeout=5, executor=execute):
                  if config.qga else ('qemu-stderr.log', 'completion.json')):
         run.register({'id': name.split('.')[0], 'kind': 'file', 'path': name})
     if config.qga:
+        from .linux_l2 import EVIDENCE_FILES
+        for index, name in enumerate(EVIDENCE_FILES):
+            relative = 'linux-l2/' + name
+            run.register({'id': 'linux-l2-' + str(index), 'kind': 'file', 'path': relative})
+            path = resource_path(run.directory, relative)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.touch(exist_ok=False)
         # Reserve one fixed smoke package before running; registration stays closed.
         for index, name in enumerate(('guest/launch.sh', 'guest/start.sh', 'guest/lib.sh',
                                       'guest/run-smoke.sh', 'job.env', 'manifest.sha256',

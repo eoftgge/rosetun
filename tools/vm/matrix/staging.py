@@ -72,7 +72,8 @@ class SmokePackage:
         vm._check()
         if (vm.run._read()['state'] != 'running' or vm.qga is None or
                 getattr(vm, '_smoke_package', None) is not None or
-                getattr(vm, '_smoke_job', None) is not None):
+                getattr(vm, '_smoke_job', None) is not None or
+                getattr(vm, '_linux_l2_job', None) is not None):
             raise JobError('one-staging-attempt-per-live-vm')
         if type(guest) is not str or not re.fullmatch(r'[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}', guest):
             raise JobError('invalid-guest-run-id')

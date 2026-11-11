@@ -157,7 +157,7 @@ scenario_preflight() {
         bios=$(tr 'A-F' 'a-f' </sys/class/dmi/id/product_uuid 2>/dev/null)
         [ -n "$bios" ] || { fail_reason="product_uuid is unreadable"; return 1; }
         if [ "$bios" != "${BIOS_GUID,,}" ] && [ "$bios" != "$(l2_guid_swap "$BIOS_GUID")" ]; then
-            fail_reason="the guest BIOS GUID does not belong to the selected Hyper-V VM"
+            fail_reason="the guest BIOS GUID does not belong to the selected VM"
             return 1
         fi
     }

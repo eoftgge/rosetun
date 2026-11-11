@@ -73,6 +73,20 @@ class Client:
 
 
 class QgaTests(unittest.TestCase):
+    def test_operation_budget_can_only_reduce_session_limit_and_reserves_close(self):
+        adapter = self.adapter()
+        adapter.probe(1)
+        adapter._operation_limit = adapter.calls + 2
+        with self.assertRaisesRegex(QgaError, 'command-limit'):
+            adapter.read_boot_id(1)
+        self.assertEqual(['guest-file-open', 'guest-file-close'],
+                         [name for name, _ in adapter.client.commands[-2:]])
+        self.assertTrue(adapter.valid)
+        adapter._operation_limit = 10000
+        adapter.calls = 127
+        with self.assertRaisesRegex(QgaError, 'command-limit'):
+            adapter._rpc('guest-ping', 1)
+
     def test_staging_capabilities_require_separate_opt_in(self):
         adapter = self.adapter()
         adapter.jobs_enabled = True

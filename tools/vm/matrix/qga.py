@@ -45,6 +45,7 @@ class Qga:
         self.deadline = None
         self.jobs_enabled = False
         self.staging_enabled = False
+        self._operation_limit = 128
 
     def connect(self, timeout):
         """Synchronize once, then hand the clean stream to the library."""
@@ -133,7 +134,8 @@ class Qga:
                 raise QgaError('qga-operation-timeout')
         # Reserve the final RPC for closing a known guest file handle. A local
         # budget rejection does not make the stream's last result uncertain.
-        if self.calls >= 128 or (self.calls >= 127 and name != 'guest-file-close'):
+        limit = min(128, self._operation_limit)
+        if self.calls >= limit or (self.calls >= limit - 1 and name != 'guest-file-close'):
             raise QgaError('qga-command-limit')
         self.calls += 1
         return self._run(self.client.execute(name, arguments), timeout)

@@ -36,7 +36,7 @@ class SmokeJob:
         vm._check()
         if enabled is not True or vm.qga is None:
             raise JobError('job-rpc-explicit-opt-in-required')
-        if getattr(vm, '_smoke_job', None) is not None:
+        if getattr(vm, '_smoke_job', None) is not None or getattr(vm, '_linux_l2_job', None) is not None:
             raise JobError('one-job-per-live-vm')
         if (type(guest_run_id) is not str or
                 not re.fullmatch(r'[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}', guest_run_id)):
@@ -63,7 +63,7 @@ class SmokeJob:
         if not vm._guest_lock.acquire(blocking=False):
             raise JobError('job-operation-in-progress')
         try:
-            if getattr(vm, '_smoke_job', None) is not None:
+            if getattr(vm, '_smoke_job', None) is not None or getattr(vm, '_linux_l2_job', None) is not None:
                 raise JobError('one-job-per-live-vm')
             vm._smoke_job = self
         finally:
