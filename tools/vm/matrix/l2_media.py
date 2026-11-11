@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 
 from . import linux_l2 as l2
+from .evidence import append_row
 from .images import local_file
 from .qemu import execute, CommandResult
 from .resources import resource_path, execution_resources
@@ -86,13 +87,8 @@ def attach_media(run, *, directory, checkout, xorriso, executor=execute):
             run.register(dict(id='l2-media-' + str(i), kind='file', path=name))
             registered = True
             path.parent.mkdir(parents=True, exist_ok=True)
-        log = resource_path(run.directory, 'l2-media.jsonl')
         def event(**row):
-            run._read()
-            with log.open('a', encoding='ascii') as stream:
-                stream.write(json.dumps(row, sort_keys=True) + '\n')
-                stream.flush()
-                os.fsync(stream.fileno())
+            append_row(run, 'l2-media.jsonl', row, require_registered=True)
         def command(args, timeout):
             argv = [str(xorriso), '-no_rc', *args]
             event(argv=argv, timeout=timeout, output_limit=65536, state='intent')

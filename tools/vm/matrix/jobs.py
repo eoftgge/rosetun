@@ -6,14 +6,14 @@ Delivery is a separate staging facade; there is no remote shell or retry API.
 import base64
 import hashlib
 import json
-import os
 import re
 import time
 import uuid
 
+from .evidence import append_row
 from .lifecycle import _guest_serialized
 from .report import _unique_object, _invalid_constant
-from .resources import _identifier, resource_path
+from .resources import _identifier
 
 LAUNCHER = '/usr/local/libexec/rosetun-l2/launch'
 SCHEMA = 'rosetun.infra-smoke.v1'
@@ -77,30 +77,12 @@ class SmokeJob:
     def _evidence(self, operation, **extra):
         vm = self.vm
         try:
-            manifest = vm.run._read()
-            if not any(r.get('kind') == 'file' and r.get('path') == 'job-evidence.jsonl'
-                       for r in manifest['resources']):
-                raise JobError('job-evidence-not-registered')
             row = dict(schema='rosetun.job-evidence.v1', identity=self.identity,
                        operation=operation, submission=self.submission, launcher=self.launcher,
                        job=self.job, verification=self.verification, calls=self.calls,
                        polls=self.polls, handles=self.handles, **extra)
-            encoded = json.dumps(row, sort_keys=True)
-            if vm.run._identity[2] in encoded:
-                raise JobError('invalid-job-evidence')
-            path = resource_path(vm.run.directory, 'job-evidence.jsonl')
-            if path.stat().st_size + len(encoded.encode()) + 1 > 256 * 1024:
-                raise JobError('job-evidence-size-limit')
-            with path.open('a', encoding='utf-8') as stream:
-                stream.write(encoded + '\n')
-                stream.flush()
-                os.fsync(stream.fileno())
-            if os.name == 'posix':
-                fd = os.open(vm.run.directory, os.O_RDONLY)
-                try:
-                    os.fsync(fd)
-                finally:
-                    os.close(fd)
+            append_row(vm.run, 'job-evidence.jsonl', row, forbid=vm.run._identity[2],
+                       max_bytes=256 * 1024, require_registered=True, sync_parent=True)
         except (OSError, ValueError):
             vm.evidence_failed = True
             raise JobError('job-evidence-write-failed') from None

@@ -10,6 +10,7 @@ import time
 
 from .jobs import SmokeJob, JobError, _uuid
 from .lifecycle import _guest_serialized
+from .evidence import append_row
 from .resources import _identifier, _regular_file, resource_path
 from .report import _unique_object, _invalid_constant
 
@@ -140,24 +141,11 @@ class SmokePackage:
 
     def _evidence(self, operation, **extra):
         try:
-            self.vm.run._read()
-            path = resource_path(self.vm.run.directory, 'smoke-package/staging.jsonl')
-            _regular_file(path)
             row = dict(identity=self.identity, operation=operation, state=self.state,
                        calls=self.calls, wire_bytes=self.wire_bytes, handles=self.handles, **extra)
-            raw = (json.dumps(row, sort_keys=True) + '\n').encode('ascii')
-            if self.vm.run._identity[2].encode() in raw or path.stat().st_size + len(raw) > 65536:
-                raise JobError('staging-evidence-limit')
-            with path.open('ab') as stream:
-                stream.write(raw)
-                stream.flush()
-                os.fsync(stream.fileno())
-            if os.name == 'posix':
-                fd = os.open(path.parent, os.O_RDONLY)
-                try:
-                    os.fsync(fd)
-                finally:
-                    os.close(fd)
+            append_row(self.vm.run, 'smoke-package/staging.jsonl', row,
+                       forbid=self.vm.run._identity[2], max_bytes=65536, require_regular=True,
+                       sync_parent=True)
         except (OSError, ValueError):
             self.vm.evidence_failed = True
             raise JobError('staging-evidence-failed') from None

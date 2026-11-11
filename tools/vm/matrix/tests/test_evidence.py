@@ -8,11 +8,73 @@ from unittest.mock import patch
 
 from tools.vm.matrix import evidence
 from tools.vm.matrix.resources import StandLease, create_run
+from tools.vm.matrix.tests import test_jobs, test_l2_media, test_qemu, test_staging
 
 
 def old_row(value):
     """The formula every journal used before the shared writer existed."""
     return (json.dumps(value, sort_keys=True) + '\n').encode()
+
+
+def fixture_of(case, fixture):
+    fixture.setUp()
+    case.addCleanup(fixture.doCleanups)
+    return fixture
+
+
+class JournalBytesTests(unittest.TestCase):
+    """Each journal keeps the bytes its module wrote before the shared writer."""
+
+    def assert_old_formula(self, path, *, last=()):
+        raw = path.read_bytes()
+        rows = [json.loads(line) for line in raw.splitlines()]
+        self.assertGreaterEqual(len(rows), 2)
+        self.assertEqual(b''.join(old_row(row) for row in rows), raw)
+        if last:
+            self.assertEqual(list(last), rows[-len(last):])
+        return rows
+
+    def test_lifecycle_and_job_journals(self):
+        fixture = fixture_of(self, test_jobs.JobsTests())
+        vm, directory = fixture.vm, fixture.vm.run.directory
+        vm._event('probe', 'one')
+        vm._event('probe', 'two')
+        rows = self.assert_old_formula(directory / 'lifecycle.jsonl')
+        self.assertEqual([('probe', 'one'), ('probe', 'two')],
+                         [(r['action'], r['result']) for r in rows[-2:]])
+        first, second = {'b': 1, 'a': 'é'}, {'z': [1, 2], 'a': None}
+        vm._guest_row(first)
+        vm._guest_row(second)
+        self.assert_old_formula(directory / 'qga-observations.jsonl', last=(first, second))
+        fixture.job._evidence('first', extra=1)
+        fixture.job._evidence('second', extra=2)
+        rows = self.assert_old_formula(directory / 'job-evidence.jsonl')
+        self.assertEqual(['first', 'second'], [r['operation'] for r in rows[-2:]])
+
+    def test_staging_journal(self):
+        fixture = fixture_of(self, test_staging.StagingTests())
+        package = fixture.build(delay_seconds=1)
+        package._evidence('first')
+        package._evidence('second')
+        path = fixture.vm.run.directory / 'smoke-package' / 'staging.jsonl'
+        self.assert_old_formula(path)
+        self.assertTrue(path.read_bytes().isascii())
+
+    def test_import_journal(self):
+        fixture = fixture_of(self, test_l2_media.ImportTests())
+        fixture.obj._evidence('first')
+        fixture.obj._evidence('second')
+        self.assert_old_formula(fixture.vm.run.directory / 'l2-import.jsonl')
+
+    def test_preparation_journal(self):
+        fixture = fixture_of(self, test_qemu.PreparationTests())
+        fixture.prepare()
+        self.assert_old_formula(fixture.run.directory / 'preparation.jsonl')
+
+    def test_media_journal(self):
+        fixture = fixture_of(self, test_l2_media.MediaTests())
+        fixture.build()
+        self.assert_old_formula(fixture.run.directory / 'l2-media.jsonl')
 
 
 class EvidenceTests(unittest.TestCase):

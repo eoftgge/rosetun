@@ -7,6 +7,7 @@ import re
 import time
 
 from . import linux_l2 as l2
+from .evidence import append_row
 from .jobs import JobError, _uuid
 from .lifecycle import _guest_serialized
 from .resources import _identifier, resource_path
@@ -84,17 +85,10 @@ class L2Import:
 
     def _evidence(self, operation, **extra):
         try:
-            self.vm.run._read()
-            path = resource_path(self.vm.run.directory, 'l2-import.jsonl')
             row = dict(operation=operation, identity=self.identity, state=self.state,
                        calls=self.calls, handles=self.handles, **extra)
-            if path.exists() and path.stat().st_size > 128 * 1024:
-                raise JobError('l2-import-evidence-limit')
-            with path.open('a', encoding='ascii') as stream:
-                import os
-                stream.write(json.dumps(row, sort_keys=True) + '\n')
-                stream.flush()
-                os.fsync(stream.fileno())
+            append_row(self.vm.run, 'l2-import.jsonl', row, max_bytes=128 * 1024,
+                       limit_check='before')
         except BaseException:
             self.receipt_verified = False
             self.state = 'unknown'

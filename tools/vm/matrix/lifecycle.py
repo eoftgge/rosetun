@@ -26,6 +26,7 @@ from .diagnostics import StderrSink
 from .images import ImageDescriptor, image_chain, local_file
 from .qemu import QemuConfig, CommandResult, _launch_plan, execute, OUTPUT_LIMIT
 from .report import _unique_object, _invalid_constant
+from .evidence import append_row
 from .resources import resource_path, execution_resources
 
 
@@ -150,11 +151,7 @@ class Vm:
                    'utc': datetime.now(timezone.utc).isoformat(),
                    'run_id': self.run._identity[0], 'stand_id': self.run._identity[1],
                    'vm_uuid': self.vm_uuid}
-            with resource_path(self.run.directory, 'lifecycle.jsonl').open(
-                    'a', encoding='utf-8', newline='\n') as stream:
-                stream.write(json.dumps(row, sort_keys=True) + '\n')
-                stream.flush()
-                os.fsync(stream.fileno())
+            append_row(self.run, 'lifecycle.jsonl', row)
         except (OSError, ValueError):
             self.evidence_failed = True
             raise LifecycleError('lifecycle-evidence-write-failed', self) from None
@@ -241,14 +238,7 @@ class Vm:
 
     def _guest_row(self, row):
         try:
-            self.run._read()
-            if self.run._identity[2] in json.dumps(row):
-                raise ValueError('owner-token-in-observation')
-            with resource_path(self.run.directory, 'qga-observations.jsonl').open(
-                    'a', encoding='utf-8', newline='\n') as stream:
-                stream.write(json.dumps(row, sort_keys=True) + '\n')
-                stream.flush()
-                os.fsync(stream.fileno())
+            append_row(self.run, 'qga-observations.jsonl', row, forbid=self.run._identity[2])
         except (OSError, ValueError):
             self.evidence_failed = True
             raise LifecycleError('qga-evidence-write-failed', self) from None

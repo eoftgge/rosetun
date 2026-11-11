@@ -10,6 +10,7 @@ import threading
 import uuid
 
 from .images import image_chain, local_file
+from .evidence import append_row
 from .resources import resource_path, execution_resources
 
 OUTPUT_LIMIT = 256 * 1024
@@ -177,13 +178,8 @@ def prepare(run, image, config, *, executor=execute):
         run.register({'id': name.split('.')[0], 'kind': 'file', 'path': name})
 
     def event(value, *, initial=False):
-        run._read()
-        path = resource_path(run.directory, diagnostics)
         # No external output, exception strings or ownership records are logged.
-        with path.open('x' if initial else 'a', encoding='utf-8', newline='\n') as stream:
-            stream.write(json.dumps(value, sort_keys=True) + '\n')
-            stream.flush()
-            os.fsync(stream.fileno())
+        append_row(run, diagnostics, value, create=initial)
 
     stage = 'validate'
     overlay = resource_path(run.directory, overlay_path)
