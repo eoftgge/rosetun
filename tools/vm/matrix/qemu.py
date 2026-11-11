@@ -179,7 +179,7 @@ def prepare(run, image, config, *, executor=execute):
 
     def event(value, *, initial=False):
         # No external output, exception strings or ownership records are logged.
-        append_row(run, diagnostics, value, create=initial)
+        append_row(run, diagnostics, value, create=initial, forbid=run._identity[2])
 
     stage = 'validate'
     overlay = resource_path(run.directory, overlay_path)

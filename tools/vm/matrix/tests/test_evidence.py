@@ -8,7 +8,11 @@ from unittest.mock import patch
 
 from tools.vm.matrix import evidence
 from tools.vm.matrix.resources import StandLease, create_run
-from tools.vm.matrix.tests import test_jobs, test_l2_media, test_qemu, test_staging
+from tools.vm.matrix import lifecycle, qemu
+from tools.vm.matrix.jobs import JobError
+from tools.vm.matrix.qemu import CommandResult
+from tools.vm.matrix.tests import (test_jobs, test_l2_media, test_lifecycle, test_linux_l2,
+                                   test_qemu, test_staging)
 
 
 def old_row(value):
@@ -75,6 +79,97 @@ class JournalBytesTests(unittest.TestCase):
         fixture = fixture_of(self, test_l2_media.MediaTests())
         fixture.build()
         self.assert_old_formula(fixture.run.directory / 'l2-media.jsonl')
+
+
+class OwnerTokenTests(unittest.TestCase):
+    """No journal or evidence file takes a row that carries the run's owner token."""
+
+    def assert_absent(self, directory, token):
+        for path in directory.rglob('*'):
+            if path.is_file() and path.name != 'manifest.json':
+                self.assertNotIn(token.encode(), path.read_bytes(), path.name)
+
+    def test_lifecycle_and_guest_observation_journals(self):
+        fixture = fixture_of(self, test_jobs.JobsTests())
+        vm = fixture.vm
+        token = vm.run._identity[2]
+        before = (vm.run.directory / 'lifecycle.jsonl').read_bytes()
+        with self.assertRaisesRegex(lifecycle.LifecycleError, 'lifecycle-evidence-write-failed'):
+            vm._event('probe', token)
+        self.assertTrue(vm.evidence_failed)
+        self.assertEqual(before, (vm.run.directory / 'lifecycle.jsonl').read_bytes())
+        vm.evidence_failed = False
+        with self.assertRaisesRegex(lifecycle.LifecycleError, 'qga-evidence-write-failed'):
+            vm._guest_row({'leak': token})
+        self.assertTrue(vm.evidence_failed)
+        vm.evidence_failed = False
+        with self.assertRaisesRegex(JobError, 'job-evidence-write-failed'):
+            fixture.job._evidence('leak', leak=token)
+        self.assertTrue(vm.evidence_failed)
+        self.assert_absent(vm.run.directory, token)
+
+    def test_staging_journal(self):
+        fixture = fixture_of(self, test_staging.StagingTests())
+        package = fixture.build(delay_seconds=1)
+        token = fixture.vm.run._identity[2]
+        with self.assertRaisesRegex(JobError, 'staging-evidence-failed'):
+            package._evidence('leak', leak=token)
+        self.assertTrue(fixture.vm.evidence_failed)
+        self.assert_absent(fixture.vm.run.directory, token)
+
+    def test_import_journal(self):
+        fixture = fixture_of(self, test_l2_media.ImportTests())
+        token = fixture.vm.run._identity[2]
+        with self.assertRaisesRegex(ValueError, 'owner-token-in-evidence'):
+            fixture.obj._evidence('leak', leak=token)
+        self.assertEqual('unknown', fixture.obj.state)
+        self.assertTrue(fixture.vm.evidence_failed)
+        self.assert_absent(fixture.vm.run.directory, token)
+
+    def test_linux_l2_evidence_files(self):
+        fixture = fixture_of(self, test_linux_l2.ExecutionTests())
+        token = fixture.vm.run._identity[2]
+        with self.assertRaisesRegex(JobError, 'l2-evidence-write-failed'):
+            fixture.job._save('plan.json', token.encode())
+        self.assertTrue(fixture.vm.evidence_failed)
+        self.assert_absent(fixture.vm.run.directory, token)
+
+    def test_preparation_journal(self):
+        fixture = fixture_of(self, test_qemu.PreparationTests())
+        token = fixture.run._identity[2]
+        leaking = fixture.root / (token + '.qcow2')
+        leaking.write_bytes(fixture.original)
+        image = fixture.image.__class__(**{**fixture.image.record(), 'path': str(leaking)})
+        # The input check would stop this run first; bypass it to reach the journal.
+        with patch.object(qemu, 'asdict', return_value={}), \
+                patch.object(type(image), 'record', return_value={}), \
+                self.assertRaises(ValueError):
+            fixture.prepare(image=image)
+        self.assert_absent(fixture.run.directory, token)
+        self.assertEqual(['preparation-failed'], fixture.run._read()['reasons'])
+
+    def test_media_journal(self):
+        fixture = fixture_of(self, test_l2_media.MediaTests())
+        token = fixture.run._identity[2]
+        def leaking(argv, **limits):
+            return CommandResult(0, b'xorriso 1.5.6\n' + token.encode())
+        with self.assertRaises(ValueError):
+            fixture.build(leaking)
+        self.assertEqual('quarantined', fixture.run._read()['state'])
+        self.assert_absent(fixture.run.directory, token)
+
+    def test_completion_proof(self):
+        fixture = fixture_of(self, test_lifecycle.LifecycleTests())
+        vm = fixture.start()
+        run = vm.run
+        self.addCleanup(vm.stderr.file.close)
+        self.addCleanup(run._lease._active.discard, vm)
+        run.mark('exited')
+        exits = [dict(resource=r, returncode=0) for r in run._read()['resources']
+                 if r['kind'] == 'process']
+        with self.assertRaisesRegex(ValueError, 'owner-token-in-evidence'):
+            run._complete(exits, run._identity[2])
+        self.assertFalse((run.directory / 'completion.json').exists())
 
 
 class EvidenceTests(unittest.TestCase):

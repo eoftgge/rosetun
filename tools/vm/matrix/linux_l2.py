@@ -252,7 +252,8 @@ class LinuxL2Job:
     def _save(self, name, data):
         relative = 'linux-l2/' + name
         try:
-            write_file(self.vm.run, relative, data, mode='overwrite', require_registered=True)
+            write_file(self.vm.run, relative, data, mode='overwrite', require_registered=True,
+                       forbid=self.vm.run._identity[2])
         except (OSError, ValueError):
             self.vm.evidence_failed = True
             raise JobError('l2-evidence-write-failed') from None

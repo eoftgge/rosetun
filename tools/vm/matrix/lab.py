@@ -269,7 +269,9 @@ def lab_smoke(config, *, adapters=None, clock=time.monotonic, sleep=time.sleep):
         for name, limit in (('capture.pcap', CAPTURE_LIMIT), ('targets.json', LOG_LIMIT), ('health.json', LOG_LIMIT)):
             raw = lab.read(name, limit)
             try:
-                write_file(runs['lab'], name, raw, mode='overwrite', readback=True)
+                # A pcap is binary and guest-supplied; only the JSON files are checked.
+                forbid = None if name == 'capture.pcap' else runs['lab']._identity[2]
+                write_file(runs['lab'], name, raw, mode='overwrite', readback=True, forbid=forbid)
             except ReadbackError:
                 raise ValueError('lab-evidence-readback-failed') from None
             evidence[name] = raw

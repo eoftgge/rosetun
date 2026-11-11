@@ -81,7 +81,7 @@ def attach_media(run, *, directory, checkout, xorriso, executor=execute):
             registered = True
             path.parent.mkdir(parents=True, exist_ok=True)
         def event(**row):
-            append_row(run, 'l2-media.jsonl', row, require_registered=True)
+            append_row(run, 'l2-media.jsonl', row, require_registered=True, forbid=run._identity[2])
         def command(args, timeout):
             argv = [str(xorriso), '-no_rc', *args]
             event(argv=argv, timeout=timeout, output_limit=65536, state='intent')
@@ -124,7 +124,8 @@ def attach_media(run, *, directory, checkout, xorriso, executor=execute):
         if l2.validate_package(snapshot, checkout=checkout, immutable=True) != package:
             raise ValueError('l2-snapshot-mismatch')
         content = manifest(package['hashes'], CONTENT)
-        write_file(run, 'l2-snapshot/content.sha256', content, mode='create')
+        write_file(run, 'l2-snapshot/content.sha256', content, mode='create',
+                   forbid=run._identity[2])
         event(state='snapshot-verified', package=package, content_sha256=hashlib.sha256(content).hexdigest())
         iso = resource_path(run.directory, 'l2-media.iso')
         command(['-as', 'mkisofs', '-iso-level', '3', '-R', '-V', 'ROSETUN_L2',
@@ -134,17 +135,17 @@ def attach_media(run, *, directory, checkout, xorriso, executor=execute):
                       content_sha256=hashlib.sha256(content).hexdigest(), package=package)
         write_file(run, 'l2-media.json',
                    json.dumps(dict(record, tool_version=version), sort_keys=True).encode(),
-                   mode='create')
+                   mode='create', forbid=run._identity[2])
         # Preserve old plans byte-for-byte when this API is not invoked.
         from .qemu import QemuConfig, _launch_plan
         from .images import ImageDescriptor
         plan = _launch_plan(QemuConfig(**plan['config']), ImageDescriptor(**plan['image']),
                             resource_path(run.directory, 'root.qcow2'), plan['uuid'], media=record)
         write_file(run, 'launch-plan.json', json.dumps(plan, sort_keys=True).encode(),
-                   mode='replace', temporary='launch-plan.tmp')
+                   mode='replace', temporary='launch-plan.tmp', forbid=run._identity[2])
         event(state='ready', sha256=sha, size=size, content_sha256=record['content_sha256'])
         for name in ('l2-import.jsonl', 'l2-receipt.json', 'l2-package/job.env', 'l2-package/manifest.sha256'):
-            write_file(run, name, b'', mode='create')
+            write_file(run, name, b'', mode='create', forbid=run._identity[2])
         return record
     except BaseException as error:
         if registered:

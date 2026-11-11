@@ -529,7 +529,7 @@ class PreparedRun:
                  'controls_closed': True, 'retained_artifacts': True,
                  'journal_sha256': hashlib.sha256(journal.read_bytes()).hexdigest()}
         evidence.write_file(self, 'completion.json', json.dumps(proof, sort_keys=True).encode(),
-                            mode='create', sync_parent=True)
+                            mode='create', sync_parent=True, forbid=self._identity[2])
         if not completion_verified(self.directory, self._read()):
             raise ValueError('completion-readback-failed')
 

@@ -151,7 +151,7 @@ class Vm:
                    'utc': datetime.now(timezone.utc).isoformat(),
                    'run_id': self.run._identity[0], 'stand_id': self.run._identity[1],
                    'vm_uuid': self.vm_uuid}
-            append_row(self.run, 'lifecycle.jsonl', row)
+            append_row(self.run, 'lifecycle.jsonl', row, forbid=self.run._identity[2])
         except (OSError, ValueError):
             self.evidence_failed = True
             raise LifecycleError('lifecycle-evidence-write-failed', self) from None

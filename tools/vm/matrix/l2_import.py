@@ -87,8 +87,8 @@ class L2Import:
         try:
             row = dict(operation=operation, identity=self.identity, state=self.state,
                        calls=self.calls, handles=self.handles, **extra)
-            append_row(self.vm.run, 'l2-import.jsonl', row, max_bytes=128 * 1024,
-                       limit_check='before')
+            append_row(self.vm.run, 'l2-import.jsonl', row, forbid=self.vm.run._identity[2],
+                       max_bytes=128 * 1024, limit_check='before')
         except BaseException:
             self.receipt_verified = False
             self.state = 'unknown'
