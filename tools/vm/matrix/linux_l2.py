@@ -1,4 +1,4 @@
-"""Owner-prepared legacy L2 packages and one live QGA execution, without delivery."""
+"""Strict legacy L2 package validation and one live QGA execution."""
 
 import base64
 import hashlib
@@ -77,27 +77,28 @@ def source_identity(checkout):
                 source_dirty_digest=hashlib.sha256(status + b'\n--\n' + diff).hexdigest())
 
 
-def validate_package(directory, *, checkout):
+def validate_package(directory, *, checkout, immutable=False):
     """Stream hash existing binaries; reject any extra file, directory or link."""
     root, checkout = Path(directory), Path(checkout)
     for path in (root, checkout):
         if not path.is_absolute() or '..' in path.parts:
             raise JobError('l2-absolute-path-required')
         _no_links(path)
+    files = tuple(n for n in PAYLOAD if n != "job.env") if immutable else FILES
     found = set()
     for parent, dirs, names in os.walk(root, followlinks=False):
         for name in dirs + names:
             path = Path(parent) / name
             _no_links(path)
             found.add(path.relative_to(root).as_posix())
-    if found != set(FILES) | {'guest', 'artifacts'}:
+    if found != set(files) | {'guest', 'artifacts'}:
         raise JobError('l2-package-composition')
     hashes, sizes, headers = {}, {}, {}
-    for name in FILES:
+    for name in files:
         limit = 512 * 1024 * 1024 if name.startswith('artifacts/') and name != 'artifacts/provenance.json' else 256 * 1024
         hashes[name], sizes[name], headers[name] = _hash(root / name, limit)
     small = {}
-    for name in FILES:
+    for name in files:
         if name in tuple('artifacts/' + n for n in BINARIES):
             continue
         _regular_file(root / name)
@@ -106,7 +107,7 @@ def validate_package(directory, *, checkout):
         if len(raw) != sizes[name] or hashlib.sha256(raw).hexdigest() != hashes[name]:
             raise JobError('l2-package-file-changed')
         small[name] = raw
-    for name in ('manifest.sha256', 'job.env'):
+    for name in (() if immutable else ('manifest.sha256', 'job.env')):
         if b'\r' in small[name] or not small[name].endswith(b'\n'):
             raise JobError('l2-package-requires-lf')
     for name in SOURCES:
@@ -119,14 +120,15 @@ def validate_package(directory, *, checkout):
         raw = raw.replace(b'\r\n', b'\n').rstrip(b'\n') + b'\n'
         if hashlib.sha256(raw).hexdigest() != hashes[name]:
             raise JobError('l2-checkout-script-or-catalog-mismatch')
-    manifest = {}
-    for line in small['manifest.sha256'].decode('ascii').splitlines():
-        match = re.fullmatch(r'([0-9a-f]{64})  (.+)', line)
-        if not match or match[2] not in PAYLOAD or match[2] in manifest:
-            raise JobError('l2-invalid-manifest')
-        manifest[match[2]] = match[1]
-    if manifest != {name: hashes[name] for name in PAYLOAD}:
-        raise JobError('l2-manifest-mismatch')
+    if not immutable:
+        manifest = {}
+        for line in small['manifest.sha256'].decode('ascii').splitlines():
+            match = re.fullmatch(r'([0-9a-f]{64})  (.+)', line)
+            if not match or match[2] not in PAYLOAD or match[2] in manifest:
+                raise JobError('l2-invalid-manifest')
+            manifest[match[2]] = match[1]
+        if manifest != {name: hashes[name] for name in PAYLOAD}:
+            raise JobError('l2-manifest-mismatch')
     provenance = _json(small['artifacts/provenance.json'])
     if (type(provenance.get('schema')) is not int or provenance['schema'] != 1 or
             provenance.get('target') != 'x86_64-unknown-linux-gnu' or
@@ -146,8 +148,16 @@ def validate_package(directory, *, checkout):
         entry = artifacts.get(name) if type(artifacts) is dict else None
         if type(entry) is not dict or entry.get('sha256') != hashes['artifacts/' + name]:
             raise JobError('l2-provenance-artifact-hash')
+    env = {} if immutable else validate_env(small["job.env"])
+    rows = parse_catalog(small['scenarios.tsv'].decode('utf-8-sig'))
+    return dict(env=env, hashes=hashes, sizes=sizes, source=source, catalog=rows,
+                catalog_digest=digest(rows), provenance=provenance,
+                origin='recorded-checkout-match; not cryptographic proof of build origin')
+
+
+def validate_env(raw):
     env = {}
-    for line in small['job.env'].decode('ascii').splitlines():
+    for line in raw.decode('ascii').splitlines():
         match = re.fullmatch(r'([A-Z_]+)=([A-Za-z0-9._:@/+=-]+)', line)
         if not match or match[1] in env:
             raise JobError('l2-invalid-job-env')
@@ -168,10 +178,7 @@ def validate_package(directory, *, checkout):
     # Limit this first execution API to the legacy CLI's maximum job duration.
     if not 60 <= int(env['JOB_TIMEOUT_SECONDS']) <= 7200:
         raise JobError('l2-job-timeout-range')
-    rows = parse_catalog(small['scenarios.tsv'].decode('utf-8-sig'))
-    return dict(env=env, hashes=hashes, sizes=sizes, source=source, catalog=rows,
-                catalog_digest=digest(rows), provenance=provenance,
-                origin='recorded-checkout-match; not cryptographic proof of build origin')
+    return env
 
 
 class LinuxL2Job:
@@ -202,7 +209,14 @@ class LinuxL2Job:
         if (enabled is not True or vm.qga is None or
                 any(getattr(vm, k, None) is not None for k in ('_linux_l2_job', '_smoke_job', '_smoke_package'))):
             raise JobError('l2-opt-in-and-unused-vm-required')
+        delivery = getattr(vm, '_l2_import', None)
+        if delivery is not None:
+            delivery.require_ready()
+        elif getattr(vm, '_l2_media', None) is not None:
+            raise JobError('l2-media-requires-import-receipt')
         package = validate_package(directory, checkout=checkout)
+        if delivery is not None and package['hashes']['manifest.sha256'] != delivery.identity['manifest_sha256']:
+            raise JobError('l2-import-package-mismatch')
         env = package['env']
         observation = vm.guest_observation
         if (not observation or observation['result'] != 'observed' or vm.reset_pending or
@@ -286,6 +300,9 @@ class LinuxL2Job:
     def submit(self):
         if self.submission != 'not-submitted':
             raise JobError('l2-already-attempted-inspect-only')
+        delivery = getattr(self.vm, '_l2_import', None)
+        if delivery is not None:
+            delivery.require_ready()
         self._fresh_boot()
         self.submission = 'unknown'
         self.session = self.vm.qga.session_id

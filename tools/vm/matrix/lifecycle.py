@@ -459,6 +459,9 @@ def start(run, *, timeout=5, executor=execute):
     _host()
     expected = {'preparation': 'preparation.jsonl', 'launch-plan': 'launch-plan.json',
                 'overlay': 'root.qcow2'}
+    if any(r['id'].startswith('l2-media-') for r in manifest['resources']):
+        from .l2_media import RESOURCES
+        expected.update({'l2-media-' + str(i): n for i, n in enumerate(RESOURCES)})
     if {r['id']: r.get('path') for r in manifest['resources']} != expected:
         raise LifecycleError('incomplete-preparation-resources')
     plan_path = local_file(resource_path(run.directory, 'launch-plan.json'))
@@ -472,7 +475,15 @@ def start(run, *, timeout=5, executor=execute):
         config = QemuConfig(**plan['config'])
         overlay = local_file(resource_path(run.directory, 'root.qcow2'))
         image.validate(run.directory)
-        if plan != _launch_plan(config, image, overlay, plan['uuid']):
+        media = plan.get('l2_media')
+        if (media is not None) != any(r['id'].startswith('l2-media-') for r in manifest['resources']):
+            raise LifecycleError('l2-media-preparation-incomplete')
+        if media is not None:
+            from .l2_media import verify_media
+            if media['path'] != str(resource_path(run.directory, 'l2-media.iso')):
+                raise LifecycleError('l2-media-path-mismatch')
+            verify_media(media)
+        if plan != _launch_plan(config, image, overlay, plan['uuid'], media=media):
             raise LifecycleError('launch-plan-mismatch')
         result = executor([config.image_executable, 'info', '--output=json', '--backing-chain',
                            '-f', 'qcow2', str(overlay)], timeout=timeout, output_limit=OUTPUT_LIMIT)
@@ -510,6 +521,7 @@ def start(run, *, timeout=5, executor=execute):
         pass
     vm = Vm(run, timeout)
     vm.vm_uuid = plan['uuid']
+    vm._l2_media = media
     run._lease._active.add(vm)
     child = None
     parent = None
@@ -538,6 +550,8 @@ def start(run, *, timeout=5, executor=execute):
             resource_path(run.directory, 'qga-observations.jsonl').touch(exist_ok=False)
             resource_path(run.directory, 'job-evidence.jsonl').touch(exist_ok=False)
         run._read()
+        if media is not None:
+            verify_media(media)
         vm.process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                       stderr=subprocess.PIPE, shell=False, close_fds=True, bufsize=0,
                                       pass_fds=tuple(descriptors), start_new_session=True)

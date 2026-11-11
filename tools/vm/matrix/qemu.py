@@ -76,6 +76,10 @@ def execute(argv, *, timeout, output_limit):
         if read_error.is_set():
             raise CommandError("command-output-read-failed")
         return CommandResult(process.returncode, bytes(buffers[0]), bytes(buffers[1]))
+    except CommandError as error:
+        # Callers may retain bounded partial diagnostics for failed preparation.
+        error.stdout, error.stderr = bytes(buffers[0][:output_limit]), bytes(buffers[1][:output_limit])
+        raise
     finally:
         try:
             if process.poll() is None:
@@ -116,7 +120,7 @@ class QemuConfig:
             local_file(path)
 
 
-def _launch_plan(config, image, overlay, vm_uuid):
+def _launch_plan(config, image, overlay, vm_uuid, *, media=None):
     """Build only after prepare has verified the owned overlay and image chain."""
     config.validate()
     uuid.UUID(vm_uuid)
@@ -133,12 +137,24 @@ def _launch_plan(config, image, overlay, vm_uuid):
             '-display', 'none', '-monitor', 'none', '-serial', 'none',
             '-parallel', 'none', '-blockdev', json.dumps(disk, sort_keys=True),
             '-device', 'virtio-blk-pci,drive=root']
+    if media is not None:
+        from .l2_media import SERIAL
+        if not config.qga or config.machine != 'pc-i440fx-10.0':
+            raise ValueError('unsupported-l2-media-configuration')
+        argv[argv.index('virtio-blk-pci,drive=root')] = 'virtio-blk-pci,drive=root,bootindex=1'
+        argv += ['-blockdev', json.dumps(dict(driver='raw', **{'node-name': 'l2media',
+                 'read-only': True, 'file': dict(driver='file', filename=media['path'],
+                                               **{'read-only': True})}), sort_keys=True),
+                 '-device', 'virtio-blk-pci,drive=l2media,id=l2media,serial=' + SERIAL]
     configuration = asdict(config)
     if not config.qga:
         configuration.pop('qga')
-    return {'schema': 'rosetun.matrix.qemu-launch.v1', 'executed': False,
+    result = {'schema': 'rosetun.matrix.qemu-launch.v1', 'executed': False,
             'kvm_qualified': False, 'firmware_profile': image.profile,
             'uuid': vm_uuid, 'image': image.record(), 'config': configuration, 'argv': argv}
+    if media is not None:
+        result['l2_media'] = media
+    return result
 
 
 def prepare(run, image, config, *, executor=execute):
