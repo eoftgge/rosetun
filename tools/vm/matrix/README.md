@@ -12,7 +12,8 @@ network protection or scenario/release acceptance.
 `linux_l2.LinuxL2Job` runs the existing L2 Bash checks through the installed
 launcher and QGA. It requires an original live `Vm` with QGA enabled, its live
 lease and an independently observed Linux boot. It does not build or deliver
-artifacts. The CLI remains read-only; this is an explicit Python API.
+artifacts. This pre-staged Python API remains available alongside the stage 5c
+execution CLI described at the end of this document.
 
 The owner prepares a disposable Linux x86-64/systemd image with qemu-guest-agent,
 the installed `/usr/local/libexec/rosetun-l2/launch` matching the selected checkout,
@@ -1829,3 +1830,182 @@ confirm; no power-loss durability is claimed. Controller restart, other images
 or tool builds, full legacy host-orchestration parity and network protection
 remain unqualified. Security invariants stay **UNVERIFIED**; release gate stays
 closed.
+
+## Stage 5c: one-command exploratory Linux L2
+
+The sequential controller reuses disk preparation, immutable ISO delivery,
+receipt gating, LinuxL2Job and its existing assessment. Stage 5a/5b qualification
+above remains evidence for those recorded APIs/configurations. **Real one-command
+qualification passed on 2026-11-11 for the configuration and cases below.** No L3 or
+network lab is included. Security invariants remain UNVERIFIED; release gate false.
+
+Copy [execution.example.toml](execution.example.toml) to an owner configuration.
+Replace the image size/hash placeholders with the independently verified trusted
+prepared image descriptor. Supply absolute installed QEMU/qemu-img/BIOS/xorriso
+paths, a state directory and stand ID, the exact immutable L2 content directory,
+and the source checkout matching its existing artifacts/provenance. The image
+must already contain the trusted launcher/import helper, stand marker, group,
+two ordinary test accounts, Python, QGA and the stage 5b prerequisites above.
+Nothing builds, installs, downloads, provisions accounts or deletes evidence.
+
+`rosetun.matrix.execution.v1` is separate from assessment profile schema 1.
+Every table rejects unknown/missing fields. Only exploratory, Linux x86_64/KVM,
+BIOS i440fx `pc-i440fx-10.0`, host CPU and QGA are supported. The descriptor
+and QEMU fields retain their existing contracts. There is no configurable argv,
+shell command, Python adapter or expected boot ID. Scenario/unit timeouts accept
+10..86400 seconds, job 60..7200; defaults in the example are 30/180/900.
+Stage deadlines are elapsed seconds: preparation 600 by default (each external
+command also retains its existing lower limit), boot at most 300, import at most
+900; execution must equal job + 180. The controller checkout is recorded separately
+from `source_checkout`. A newer controller with the older verified artifact
+checkout, as in stage 5b, is supported; those two revisions need not match.
+
+```sh
+python -m tools.vm.matrix run linux-l2 --config /srv/linux-l2.toml --dry-run
+python -m tools.vm.matrix run linux-l2 --config /srv/linux-l2.toml
+```
+
+Dry-run hashes the base and immutable input, compares checkout scripts/catalog,
+checks paths/configuration and reads existing ledgers. It creates no directory,
+lease, run or file, invokes no external executable and needs no qemu.qmp package.
+It explicitly defers Git HEAD/status/diff provenance matching, executable version,
+qemu.qmp and KVM availability checks to execution. It does not qualify the backend.
+Read-only doctor/plan/report/runs/recover remain available without qemu.qmp.
+An explicit execution command selects the stand without interactive confirmation.
+
+stdout is one versioned `rosetun.matrix.execution-summary.v1` JSON object; stderr
+contains short stage progress, run ID and artifact directory. Exit codes:
+
+| Code | Meaning |
+| --- | --- |
+| 0 | Accepted exploratory L2 assessment, confirmed VM completion, no unresolved infrastructure error |
+| 1 | Collected L2 assessment rejected (including required FAIL/ERROR/SKIP or failed guest cleanup) with confirmed VM completion |
+| 2 | Configuration, delivery, infrastructure, telemetry, evidence or teardown failure |
+| 130 | KeyboardInterrupt, even if subsequent teardown succeeds |
+
+Code 0 never means release acceptance. Delivery and execution are distinct from
+VM completion. An uncertain exec is never repeated: only the original object
+may inspect its receipt/results after bounded channel recovery. Missing or foreign
+evidence cannot pass. Original and close failures are kept together by stage,
+exception kind and safe reason code; arbitrary exception text/stderr is omitted.
+
+Waiting deliberately favors a small auditable budget over low latency. Initial
+QGA startup has at most 20 observations, each capped at 10 seconds, spaced by up
+to 15 seconds, inside the boot deadline. Before any guest operation, failed initial
+channels may be closed/replaced; this does not consume post-operation recoveries.
+Import retains its 48-RPC, 24-status-poll, 900-second limits. A lost import response
+waits until at most 60 seconds before that deadline, then reads the receipt after
+one recovery. A missing receipt fails. The ordinary import path also refreshes
+the QGA session before receipt/job work. At most one additional recovery for
+unknown submit and one for failed collection are allowed: at most three of the
+existing four recovery slots, never another helper/launcher exec.
+
+After submit the controller waits the full **job timeout + 125 seconds without
+RPCs**, including the existing 120-second systemd stop/cleanup allowance and
+five seconds for final publication. First collection therefore occurs after
+1025 seconds for the default 900-second job, or 7325 for the maximum 7200-second
+job, even when L2 finishes early. One final collection may follow 15 seconds later. No status-only protocol
+or increased collect limit is needed. All reads remain under the job + 180 second
+deadline. A normal boot check costs five RPCs (info/ping/open/read/close), submit
+six, and collection with the maximum 256 KiB report costs at most 28: two boot
+checks (10), launcher status (1), two <=8 KiB status reads (6), report open + nine
+reads including the overflow/EOF probe + close (11). Thus submit plus two maximum
+collections needs at most **62 of 112 job RPCs**, independent of job duration.
+The refreshed QGA session uses five recovery-observation RPCs, eight receipt RPCs,
+then at most 62 job RPCs, totaling 75 of 128. Unusual short reads may exhaust the
+unchanged limits and fail explicitly. Recovery opens a new bounded session;
+it never resets the job/import counters or deadlines. Loss of telemetry cannot
+be converted to acceptance by teardown.
+
+RPC and elapsed-time budgets are simultaneous ceilings, not reserved successful
+latency. Each RPC is capped at five seconds and the absolute job deadline. The
+nominal 55-second collection window after job + 125 shrinks by submit/recovery
+time; a maximum report whose every RPC takes five seconds cannot fit and must
+fail within the unchanged deadline. No timeout or RPC allowance is silently raised.
+
+Artifacts remain under `<state_directory>/runs/<host_run_id>/`. Identity linkage
+is registered and fsynced before disk/media preparation. The summary is also
+registered and initially written before launch; completion requires its existence,
+not its final bytes. After close, the final summary replaces that placeholder
+atomically and records hashes/paths of available evidence, original assessment,
+delivery/execution states, completion and manual-recovery flag. It does not hash
+itself, publish the private owner token or embed raw stderr. Lifecycle journal
+bytes remain frozen after completion. A final summary write error yields code 2;
+the retained placeholder is not a successful result. No run directory is retried.
+
+```sh
+python -m tools.vm.matrix runs --state-directory /srv/rosetun-state
+python -m tools.vm.matrix recover --state-directory /srv/rosetun-state
+```
+
+Both commands only inspect records. A preparation failure before any VM has no
+fabricated completion; its unresolved ledger blocks reuse. An unconfirmed child
+exit/control closure retains the original lease while the controller lives,
+and the ledger blocks reuse after exit. Controller restart recovery, attaching
+to a process from its PID, cleaning old runs and repairing completion are not
+implemented. The owner must diagnose retained evidence/resources independently.
+Never delete a blocking record merely to obtain another lease.
+
+Owner repeat qualification plan:
+
+1. Record prepared image/helper/tool hashes and source identities, run the dry-run
+   command above, then the ordinary command directly, without a qualification
+   harness. Expect all existing L2 rows, the documented optional SKIP, cleanup PASS,
+   code 0, matching receipt hashes and verified completion. Save stdout/stderr.
+2. On a separate overlay, pre-create the guest import destination using the
+   owner's provisioning procedure. Run the same command. Expect import refusal,
+   code 2, retained destination/evidence and no launcher submission.
+3. On a separate run, stop/restart the guest agent during import or execution
+   through the owner's console. Confirm exactly one importer/launcher intent;
+   recovery reads saved evidence only. Absent/foreign evidence must give code 2.
+4. Interrupt a run with Ctrl-C. Expect code 130 and either confirmed completion
+   or an explicit manual-recovery requirement, with all overlay/ISO/logs retained.
+5. Use runs/recover to verify completion, compare base/ISO hashes and run another
+   ordinary command on the same stand. Only verified lifecycle completion permits
+   lease reuse; unresolved cases require owner diagnosis. Return the versioned
+   summary, assessments, receipt and completion if any expectation differs.
+
+Real stage 5c qualification passed on 2026-11-11 using the existing Debian 13/WSL2
+KVM stand, QEMU/qemu-img 10.0.13, SeaBIOS, `pc-i440fx-10.0`, xorriso 1.5.6,
+Python 3.13.5 and the existing qemu.qmp 0.0.6 environment. No artifacts were built,
+dependencies installed or images downloaded. The unchanged prepared stage 5b
+image and immutable L2 input were reused. Artifact provenance matches clean source
+`88d05d55f05c72cbc2a6a9ab0826486f8b3efa8a`; all controller Python bytes match
+signed implementation commit `3343866`. Initial HEAD was `4decec1`.
+
+All five cases used sequential leases of the same stand ID and existing ledger,
+with scenario/unit/job timeouts 30/180/180 and execution deadline 360 seconds:
+
+| Case | Observed result |
+| --- | --- |
+| Ordinary direct CLI, without a qualification harness | Exit 0, accepted L2 and verified completion |
+| Existing empty guest import destination | Exit 2, no verified receipt, no L2 submission, verified VM completion |
+| Lost real QGA report response and closed client | Retained 4096-byte prefix, channel recovery, second collection, exit 0 |
+| POSIX SIGINT during wait after real submit | Exit 130, original KeyboardInterrupt retained, verified VM completion |
+| Another ordinary CLI after the preceding cases | Exit 0 on the same stand, accepted L2 and verified completion |
+
+The three complete L2 reports each contain 33 PASS, the unchanged optional
+`missing-group.refusal` SKIP, zero FAIL/ERROR and cleanup PASS. Each case recorded
+exactly one importer intent; each eligible case recorded exactly one launcher
+intent. Ordinary runs used 26 job RPCs, recovered collection 37 of the existing
+112. No production adapters, clock, assessment or orchestrator were replaced.
+Separate diagnostic wrappers created the refusal condition, discarded a real
+report response after an initial short read, or sent SIGINT; ordinary cases
+invoked the CLI directly. This tests that specific channel loss, not all agent
+daemon failures or transport timings.
+
+All five new completion proofs, final summary readback, frozen lifecycle journals,
+base/ISO hashes, owner-token absence in public evidence and correspondence to the
+signed controller bytes were independently checked. All disks, media and evidence
+remain retained. Read-only runs/recover were also executed. Evidence and diagnostic
+scripts are under `tools/vm/logs/qga-5c-qualification-20261111/`; resource ledgers
+remain in the reused stage 5b state directory referenced by each summary.
+Full Linux offline tests passed: 288 tests, 18 platform skips with qemu.qmp;
+without that optional package, 288 tests passed with 22 skips.
+
+Real runs with the default 900-second or maximum 7200-second job timeout, maximum
+report size, new CLI lost-import/lost-submit timing, arbitrary daemon faults,
+unconfirmed teardown, controller restart and other images/tool builds remain
+UNRUN here. Existing API qualifications and offline rejection/budget tests remain
+separate evidence. This qualifies the recorded exploratory L2 cases only;
+network security invariants remain UNVERIFIED and release gate remains false.
