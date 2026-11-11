@@ -1,11 +1,215 @@
 # VM matrix foundation
 
-Python 3.11+ and the standard library are sufficient. Run commands from the
-repository root. The CLI only reads local files and writes JSON to stdout.
-It does not run scenarios, install dependencies, start services or create VMs.
-The existing Bash/PowerShell matrices remain the execution tools, Hyper-V remains
-the control stand. Internal QEMU qualification coverage is recorded below; it
-does not establish network protection or scenario/release acceptance.
+Python 3.11+ and the standard library are sufficient for offline work. Run
+commands from the repository root. The CLI reads local files and writes JSON
+to stdout. Explicit lifecycle/QGA Python APIs also support owner-controlled VM
+operations; the limited L2 execution path is described below. Existing legacy
+matrices remain supported. Internal QEMU qualification does not establish
+network protection or scenario/release acceptance.
+
+## Owner-prepared Linux L2 execution (stage 5a)
+
+`linux_l2.LinuxL2Job` runs the existing L2 Bash checks through the installed
+launcher and QGA. It requires an original live `Vm` with QGA enabled, its live
+lease and an independently observed Linux boot. It does not build or deliver
+artifacts. The CLI remains read-only; this is an explicit Python API.
+
+The owner prepares a disposable Linux x86-64/systemd image with qemu-guest-agent,
+the installed `/usr/local/libexec/rosetun-l2/launch` matching the selected checkout,
+the stand marker `/etc/rosetun-l2-stand-id`, group `rosetun` and two distinct
+ordinary non-admin accounts in that group. QGA runs as root and permits
+`guest-sync-delimited`, `guest-info`, `guest-ping`, `guest-file-open`,
+`guest-file-read`, `guest-file-close`, `guest-exec`, `guest-exec-status`.
+No SSH, WSL, Windows or Hyper-V is required for this orchestration. No network
+device, firewall exception, dependency installation or image modification is
+performed by this API. Image, agent, installed launcher and controller remain
+trusted; boot observation is not attestation.
+
+Before creating the job, the owner supplies already built Linux artifacts and
+places the verified complete package at
+`/root/rosetun-l2-stage/<guest-run-id>` in that VM, after observing its current
+boot. Choose a new legacy-format guest run ID for every job. Retain the same
+package on the controller at an explicit absolute local path. Its exact files are:
+
+```text
+guest/launch.sh
+guest/start.sh
+guest/lib.sh
+guest/run-l2.sh
+scenarios.tsv
+job.env
+artifacts/l2_transport_fixture
+artifacts/rosetun_helper_privileged_tests
+artifacts/rosetun_ipc_tests
+artifacts/provenance.json
+manifest.sha256
+```
+
+Only `guest` and `artifacts` directories are allowed. Files must be regular,
+without symlinks/reparse points, including ancestors. The manifest lists each
+payload file once with lowercase SHA-256 and two spaces; it excludes itself.
+Each binary is limited to 512 MiB and stream-hashed in 1 MiB blocks. Other files
+are limited to 256 KiB. Scripts and TSV must match the selected checkout's
+LF-normalized legacy staging bytes. ELF checks require little-endian x86-64
+executables/PIE. Provenance schema/target, artifact hashes, source SHA, boolean
+dirty state and legacy status/diff digest must match the selected checkout.
+This confirms agreement with recorded metadata, not cryptographic proof that
+those sources produced the binaries. The legacy dirty digest does not hash
+untracked file contents. The owner must independently trust artifact origin.
+
+`job.env` has exactly the nine legacy L2 fields: `RUN_ID`, `STAND_ID`,
+`EXPECTED_BOOT_ID`, `USER_A`, `USER_B`, `BIOS_GUID`,
+`SCENARIO_TIMEOUT_SECONDS`, `UNIT_TIMEOUT_SECONDS`, `JOB_TIMEOUT_SECONDS`.
+Use plain unquoted safe values, distinct account names and canonical nonzero
+UUIDs. `STAND_ID` must match the live stand lease. `BIOS_GUID` is the configured QEMU VM UUID; the guest retains the exact
+legacy DMI comparison (including its existing SMBIOS byte-order handling).
+The guest still checks the stand marker, actual DMI, boot, systemd, accounts,
+group, absence of foreign service/process and free endpoint. Host validation
+does not replace these checks. Scenario/unit timeouts are 10..86400 seconds;
+this API limits job timeout to the legacy CLI's 60..7200 seconds (default 900).
+
+With `vm` already started and observed by the owner:
+
+```python
+from tools.vm.matrix.linux_l2 import LinuxL2Job
+
+job = LinuxL2Job(vm, enabled=True,
+                 package_directory='/absolute/owner-package',
+                 checkout='/absolute/selected-checkout')
+job.submit()
+# After allowing the autonomous job to finish, explicitly collect:
+outcome = job.collect()
+# After a lost channel, on the same live controller only:
+# vm.recover_guest()
+# outcome = job.collect()  # Never submit again.
+```
+
+The constructor saves `linux-l2/plan.json` before submission: guest run ID as
+assessment `policy.run_id`, independent QGA boot ID as `policy.boot_id`, full
+catalog snapshot and digest. `package.json` and the shared `job-evidence.jsonl`
+retain the mapping **host run ID / guest run ID / stand ID / VM UUID / boot ID**,
+package hashes/sizes and provenance. `lifecycle.start` registers all fixed L2
+evidence files before entering running state. No running ledger registration is
+opened. A VM can own either a smoke job/package or one L2 job.
+
+Submission freshly probes QGA and reads boot ID, persists intent, then issues
+one `guest-exec` with the fixed launcher path and three validated arguments:
+guest ID, fixed stage directory and manifest digest. No shell command string
+is sent. An uncertain exec response leaves submission unknown; there is no
+automatic resubmit. The existing `start.sh` uses autonomous `systemd-run` with
+`ExecStopPost` cleanup/finalization. Controller crash recovery is not provided.
+
+Collection exposes only this run's `report/status.json` and `report/report.json`;
+there are no arbitrary paths or extra diagnostics. It first requires a finished
+status with matching guest run/boot, reads the report, then requires identical
+finished status bytes and another fresh QGA boot check. The legacy producer
+publishes report once under a finalization lock, then publishes finished status;
+a report appearing before finished is insufficient. A changed boot fails closed.
+Launcher status is polled only in its original QGA session; after recovery it
+remains unknown if its exit was not observed; a known exit result is preserved.
+Recovery does not reset job deadline or counters and never
+implicitly repeats an uncertain exec/open.
+
+Limits are separate from smoke: 32 KiB reads, 8 KiB per status, 256 KiB per report,
+at most ten report reads, four explicit collection attempts and 112 job RPCs
+(the last reserved for known-handle closure). The existing 128-RPC session and
+1 MiB relay limits remain unchanged and may stop collection earlier. Boot/probe
+RPCs count toward the job budget. The deadline is creation time plus configured
+job timeout plus 180 seconds for the existing 120-second systemd stop/cleanup
+and collection. Every RPC is at most five seconds and honors that absolute
+deadline. No waiting loop or automatic channel recovery is introduced; the
+owner chooses when to spend each of the four collection attempts. A known
+handle is closed in finally while the channel/deadline/budget permit; otherwise
+closure stays unconfirmed. No unknown open is retried within an attempt.
+
+Strict base64/count/EOF checks reject malformed reads, empty non-EOF progress,
+oversize and excessive block counts. Per-attempt `linux-l2/<n>/{status,report,
+status-after}.json` retain received raw bytes (including a single overflow
+detection byte), with SHA-256, size and complete/partial markers in the journal,
+before JSON parsing or assessment. Files from earlier attempts remain retained.
+The final `assessment.json` comes from the unchanged `report.assess()`;
+`report.assess_files()` can also read each saved report with the saved plan.
+Only complete, consistent pairs are assessed. Parsing, transport and boot errors
+leave assessment absent and verification UNVERIFIED.
+
+`snapshot()` separates submission, launcher, L2 terminal state, report validation,
+scenario assessment and overall `accepted`. A known launcher failure prevents
+overall acceptance even if assessment alone accepts its supplied report.
+Assessment retains guest cleanup, scenario execution and exploratory acceptance;
+FAIL, ERROR, mandatory SKIP, missing/duplicate scenarios, foreign run/boot,
+summary disagreement and unsuccessful cleanup cannot be accepted. VM completion
+is a separate lifecycle contract and cannot make a failed L2 successful.
+Security invariants stay UNVERIFIED and release gate stays false. L2 covers IPC,
+credentials, endpoint behavior and related unit tests; it proves no network leak
+absence, TUN, nftables or Lockdown behavior. L3/L4/L5/Proxy are not migrated.
+
+Offline tests use inert ELF headers, synthetic legacy reports and fake QGA.
+Run `python -B -m unittest tools.vm.matrix.tests.test_linux_l2 -q` and the existing
+matrix tests/legacy self-tests. Real L2 execution, report sizes on actual runs,
+agent loss/recovery during L2, guest cleanup and cross-path parity remain UNRUN.
+The existing smoke qualification does not qualify L2.
+
+Manual qualification by the owner:
+
+1. Independently verify artifact provenance and prepare the image/accounts/stand
+   marker/launcher above. Observe `vm.observe_guest()`, then manually place a
+   fresh package bound to its VM UUID and boot; retain the matching host package.
+2. Use the API above once; let the configured job finish and collect. Retain plan,
+   package, raw report/status, job/QGA journals and separate VM completion evidence.
+   Acceptance requires all 33 mandatory IDs with matching evidence and cleanup.
+3. On a separate fresh job, interrupt the agent channel, then explicitly call
+   `vm.recover_guest()` and `job.collect()`. Confirm same boot, one launcher
+   invocation, retained partial evidence and unchanged deadline. A changed boot
+   or unknown exec must never trigger resubmission.
+4. Compare saved legacy and Python-path runs by each ID below, required flag,
+   evidence, actual result/reason and cleanup, with matched checkout/artifacts and
+   equivalent clean stands. Send back all saved evidence and version/image data
+   for discrepancies. Equal PASS counts do not establish parity. No real
+   comparison has been performed, so parity is not claimed.
+
+Large artifact delivery remains manual and is the next stage; smoke delivery is
+unchanged. The scenario mapping below refers to the same unchanged `run-l2.sh`
+producer and TSV in both paths, not a second implementation of the checks.
+
+| Scenario ID (legacy = Python) | Required in both | Evidence in both | Producer in both |
+|---|---|---|---|
+| `preflight.identity` | yes | `infrastructure` | `run-l2.sh` |
+| `preflight.accounts` | yes | `infrastructure` | `run-l2.sh` |
+| `preflight.no-foreign-service` | yes | `infrastructure` | `run-l2.sh` |
+| `preflight.endpoint-free` | yes | `infrastructure` | `run-l2.sh` |
+| `credentials.endpoint-directory` | yes | `transport-fixture` | `run-l2.sh` |
+| `credentials.socket-mode` | yes | `transport-fixture` | `run-l2.sh` |
+| `credentials.owner-uid` | yes | `transport-fixture` | `run-l2.sh` |
+| `credentials.spoofed-hello` | yes | `transport-fixture` | `run-l2.sh` |
+| `credentials.endpoint-env-ignored` | yes | `transport-fixture` | `run-l2.sh` |
+| `credentials.other-uid` | yes | `transport-fixture` | `run-l2.sh` |
+| `credentials.root-uid` | yes | `transport-fixture` | `run-l2.sh` |
+| `credentials.clean-exit` | yes | `transport-fixture` | `run-l2.sh` |
+| `untrusted-server.client-refused` | yes | `transport-fixture` | `run-l2.sh` |
+| `untrusted-server.no-bytes-sent` | yes | `transport-fixture` | `run-l2.sh` |
+| `exclusivity.second-bind-refused` | yes | `transport-fixture` | `run-l2.sh` |
+| `exclusivity.inode-unchanged` | yes | `transport-fixture` | `run-l2.sh` |
+| `exclusivity.original-still-serves` | yes | `transport-fixture` | `run-l2.sh` |
+| `exclusivity.original-clean-exit` | yes | `transport-fixture` | `run-l2.sh` |
+| `stale.restart-refused` | yes | `transport-fixture` | `run-l2.sh` |
+| `stale.socket-preserved` | yes | `transport-fixture` | `run-l2.sh` |
+| `stale.verified-removal` | yes | `infrastructure` | `run-l2.sh` |
+| `occupied.regular-file-preserved` | yes | `transport-fixture` | `run-l2.sh` |
+| `occupied.symlink-preserved` | yes | `transport-fixture` | `run-l2.sh` |
+| `unit.server-shutdown-without-clients` | yes | `helper-unit-stub-backends` | `run-l2.sh` |
+| `unit.server-shutdown-full-client-limit` | yes | `helper-unit-stub-backends` | `run-l2.sh` |
+| `unit.server-shutdown-preserves-replacement` | yes | `helper-unit-stub-backends` | `run-l2.sh` |
+| `unit.helper-uid-policies` | yes | `helper-unit-stub-backends` | `run-l2.sh` |
+| `unit.helper-shutdown-non-admin` | yes | `helper-unit-stub-backends` | `run-l2.sh` |
+| `unit.ipc-untrusted-server-before-write` | yes | `ipc-unit-tests` | `run-l2.sh` |
+| `unit.ipc-drop-preserves-replacement` | yes | `ipc-unit-tests` | `run-l2.sh` |
+| `unit.ipc-drop-preserves-foreign-objects` | yes | `ipc-unit-tests` | `run-l2.sh` |
+| `unit.ipc-symlink-directories` | yes | `ipc-unit-tests` | `run-l2.sh` |
+| `unit.ipc-unsafe-directories` | yes | `ipc-unit-tests` | `run-l2.sh` |
+| `missing-group.refusal` | no | `not-run` | `run-l2.sh` |
+
+`missing-group.refusal` is optional because it requires a separate clean VM without group `rosetun`; the stand never removes or renames that group.
+
 
 ## Optional Linux QGA observation (stages 4a and 4b.1)
 
