@@ -1644,3 +1644,188 @@ Owner repeat qualification plan:
 Transient units and the current transport do not establish persistence across
 reboot, hard-off or controller crash. Package delivery is the next stage; Linux
 L2 migration follows it. Neither is implemented here.
+
+## Read-only L2 media delivery (stage 5b)
+
+This optional Python API delivers the existing L2 package without a network or
+manual guest copy. The stage 5a pre-staged API remains available. Historical 5a
+results do not qualify media delivery. Release gate stays closed; network
+security invariants remain **UNVERIFIED**.
+
+The owner supplies a trusted installed **xorriso 1.5.6** executable by absolute
+path. Absence or a different reported version fails preflight; nothing is
+installed automatically. Its `-no_rc -as mkisofs -iso-level 3 -R -V ... -o ...`
+interface writes ISO9660 with Rock Ridge names and ordinary files only. See the
+[upstream xorrisofs manual](https://www.gnu.org/software/xorriso/man_1_xorrisofs.html)
+and [xorriso manual](https://www.gnu.org/software/xorriso/man_1_xorriso.html).
+`-no_rc` disables startup files. Metadata is not normalized: **no byte reproducibility
+claim** is made. Tool diagnostics/version, exact input hashes/sizes, source status,
+provenance, retained snapshot, content manifest and ISO digest/size are recorded.
+
+Only Linux/KVM, `pc-i440fx-10.0`, the owner-pinned QEMU 10.0.13 / SeaBIOS stand
+is supported for this path. Review uses the released 10.0 device interface:
+[virtio block serial/read-only support](https://github.com/qemu/qemu/blob/v10.0.0/hw/block/virtio-blk.c),
+[raw/read-only block options](https://github.com/qemu/qemu/blob/v10.0.0/qapi/block-core.json),
+and [bootindex semantics](https://github.com/qemu/qemu/blob/v10.0.0/docs/system/bootindex.rst).
+An explicit raw read-only block graph is attached to a separate virtio-blk-pci
+with serial `rosetun-l2-media`. Root alone gets bootindex=1; no hotplug is used.
+Old plans without the option keep their previous argv. The ISO's size/hash is
+checked again immediately before spawn. Firmware and exact patched QEMU build
+need separate owner qualification outside the recorded configuration below.
+
+The prepared image must already contain the matching trusted launcher, stand
+marker, group, ordinary test accounts and root QGA described in stage 5a. The
+owner installs `tools/vm/linux/guest/stage-l2.py` as root:root mode 0755 at
+`/usr/local/libexec/rosetun-l2/stage-l2`, with trusted root-owned parent directories,
+and creates `/root/rosetun-l2-stage` root:root mode 0700. Python 3, Linux
+`renameat2(RENAME_NOREPLACE)`, virtio_blk/sysfs, ISO9660 support, and trusted
+`/usr/bin/mount` and `/usr/bin/umount` are required. Import never creates accounts,
+a stand marker or system configuration. No code is executed from the ISO.
+
+Prepare an **exact local immutable input tree**, using already built artifacts:
+`guest/{launch,start,lib,run-l2}.sh`, `scenarios.tsv`, and
+`artifacts/{l2_transport_fixture,rosetun_helper_privileged_tests,rosetun_ipc_tests,provenance.json}`.
+Scripts/catalog must match the chosen checkout with LF normalization; no extra
+files/directories, links, `job.env`, or run manifest are accepted. Binary ELF,
+provenance, source status/diff and catalog checks reuse `validate_package`.
+No Cargo or WSL is invoked. `content.sha256` is generated in the owned snapshot.
+
+```python
+from tools.vm.matrix.qemu import prepare
+from tools.vm.matrix.lifecycle import start
+from tools.vm.matrix.l2_media import attach_media
+from tools.vm.matrix.l2_import import L2Import
+
+# run is an empty owned PreparedRun under the held StandLease;
+# config has qga=True and the pinned machine; image is independently pinned.
+prepare(run, image, config)
+attach_media(run, directory='/srv/l2-input', checkout='/srv/rosetun',
+             xorriso='/usr/bin/xorriso')
+vm = start(run)                 # initially paused
+vm.resume()
+vm.observe_guest()             # boot ID is first learned here
+attempt = L2Import(vm, enabled=True, guest_run_id='20261111T010203Z-0123abcd',
+                   import_id='0123456789abcdef0123456789abcdef',
+                   user_a='l2a', user_b='l2b')
+attempt.stage()                 # one guest-exec, bounded status polling
+# Explicitly refresh the finite QGA session budget before the existing L2 job.
+vm.recover_guest()
+attempt.check_receipt()         # reads saved evidence, does not repeat import
+job = attempt.linux_l2_job(checkout='/srv/rosetun', enabled=True)
+job.submit()
+# After the existing autonomous L2 unit finishes:
+result = job.collect()          # unchanged L2 assessment
+vm.hard_off()                  # retain all files; completion is not delivery proof
+```
+
+Trust boundary: the host controller, checkout/provenance matching, installed
+packager/QEMU, guest OS/QGA and installed helper are trusted, not attested.
+The helper enumerates sysfs by the fixed serial, requires exactly one whole
+virtio block device, read-only state and matching device numbers, then hashes
+the full expected ISO bytes. Neither serial nor volume label proves identity.
+It mounts only that device in a new attempt-owned directory with
+`ro,nodev,nosuid,noexec`, verifies the exact file tree/content manifest, streams
+copies, sets root ownership and explicit 0755/0644 modes in a private 0700 tree,
+generates only validated job.env values, rehashes the final package, fsyncs files
+and directories, and publishes without replacing even an empty destination.
+Only confirmed unmount allows the durable ready receipt. A mount timeout or
+unknown unmount retains the attempt and fails explicitly, without general cleanup.
+
+The receipt binds host/guest run, stand, VM UUID, boot, import ID, ISO digest/size,
+content manifest digest and final package manifest digest. The host independently
+computes the exact job.env and final manifest after observing boot and retains
+them locally. A receipt cannot introduce a new trusted manifest digest. Submit
+requires the matching receipt and another fresh QGA boot check.
+
+Limits: 512 MiB per ELF, 256 KiB per other input, 1600 MiB input aggregate,
+1700 MiB ISO. Inputs are hashed and copied with change detection; the external
+checkout is never the packager's source. Version preflight is 10 seconds; packaging
+300 seconds; each output pipe is capped at 64 KiB. Import has a separate
+900-second deadline, at most 24 status polls spaced 30 seconds apart, and 48
+import RPCs including receipt inspection. General QGA and smoke limits are
+unchanged. Slow imports may exhaust a QGA session; explicit `recover_guest()`
+starts a fresh channel, not a fresh import. All partial local/guest data is retained.
+
+After lost exec/status/receipt, keep the original `attempt` and `vm`. Never call
+`stage()` again and never construct another facade. Explicit `vm.recover_guest()`
+and `attempt.check_receipt()` may establish readiness from its saved receipt.
+Missing/foreign receipt, changed boot or unknown cleanup blocks L2. Controller
+crash recovery is out of scope. VM completion proves process/control closure,
+not delivery or a successful L2 result.
+
+Owner repeat qualification plan:
+
+1. Record prepared image/BIOS/QEMU/qemu-ga/kernel/xorriso versions, source identity,
+   base hash and the hashes of the three **real already built L2 binaries**.
+   Create the exact local input tree and execute the API above under a fresh
+   stand lease. Save ledger, preparation/import evidence, receipt and assessment.
+   No console package copy, shared folders, SSH or network delivery in this path.
+2. Confirm only the separate serial device is read-only, the root disk boots,
+   and guest receipt hashes equal host expectations. Run/collect all 34 existing
+   scenarios, preserving the existing optional SKIP behavior and cleanup checks.
+   On mismatch return status/report/assessment and retained import evidence.
+3. In a separate run, lose QGA during import. Verify submit stays blocked, no
+   repeated helper exec occurs, and explicit recovery inspects only the saved
+   receipt. Missing receipt or unknown unmount remains an explicit failure.
+4. In a separate run pre-create the guest destination, including an empty
+   directory. Verify it is never replaced and no ready receipt permits submit.
+5. Confirm base and ISO hashes are unchanged, all controls/children close, and
+   the stand can be leased again after verified lifecycle completion. Inspect
+   retained attempts/mounts as owner; completion alone is not delivery success.
+
+Real stage 5b qualification on 2026-11-11 passed separately from stage 5a.
+The owner authorized real VM/media qualification and installation of the missing
+host xorriso package and dependencies. No binaries were rebuilt. Controller and
+installed importer bytes match signed commit `14a3c17`; the three existing ELF
+artifacts and their unchanged provenance match the clean selected source
+`88d05d55f05c72cbc2a6a9ab0826486f8b3efa8a`. Source/provenance agreement remains
+recorded consistency evidence, not build-origin attestation.
+
+Environment: Debian 13/WSL2 KVM, Python 3.13.5, qemu.qmp 0.0.6,
+QEMU/qemu-img 10.0.13, xorriso 1.5.6, SeaBIOS and `pc-i440fx-10.0`.
+Guest: kernel 6.12.115+deb13.1-amd64, systemd 257.13-1~deb13u1,
+qemu-ga 1:10.0.13+ds-0+deb13u1. A separately prepared standalone image contains
+only the trusted installed helpers and image prerequisites. Serial provisioning
+installed those trust anchors before the delivery cases; it never supplied an
+L2 package. The production main path used only the ISO device for package bytes,
+with no NIC, SSH, 9p, virtiofs or shared folder.
+
+Four final cases passed on independent overlays under sequential leases of the
+same stand:
+
+- Normal ISO import, verified receipt, explicit QGA session recovery and receipt
+  inspection, followed by the existing LinuxL2Job submit/collect and assessment.
+- A qualification wrapper discarded the real import PID response and closed the
+  QGA session while import continued. Job creation and repeated stage were
+  refused. Explicit recovery read the saved receipt, then the existing L2 job
+  completed. Exactly one importer exec occurred, without retransferring files.
+- A pre-existing empty guest destination was retained; no receipt or job allowed.
+- A pre-existing nonempty destination retained its sentinel; no receipt or job
+  allowed. Failed imports did not become successful delivery on VM completion.
+
+Both complete L2 reports contain all 34 scenarios: 33 PASS, the unchanged
+`missing-group.refusal` SKIP requiring a separate groupless VM, zero FAIL/ERROR,
+and cleanup PASS. Successful import left no attempt mount. Duplicate submit
+was refused. Repeated leases, child/control completion and retained artifacts
+were checked. Diagnostic provisioning/console attempts are retained separately;
+no production checks were bypassed to turn them into successful cases.
+
+The original base remains 476774400 bytes with SHA-256
+`f4a05e7aba2c889437f6bce798926a381b7ebf257178e75d140493f817b74de8`.
+The separately prepared base is 1259470848 bytes with SHA-256
+`f971ba9e6810bafd452d4969c5611b23f670d5df2cdc4af3e9479a84135ebcfe`.
+Per-run ISO hashes and final receipts are retained for independent comparison.
+Linux offline checks passed: 265 tests, 18 platform skips; targeted L2/media/
+executor checks passed 41 tests without skips. Local evidence is retained in
+`tools/vm/logs/qga-5b-qualification-20261111/`, including the qualification harness,
+preflight/source hashes, both image descriptors, raw reports, receipts,
+per-run ledgers/completion and serial logs.
+
+This qualifies only the recorded delivery configuration and cases. Mount/unmount
+failure injection, malformed media and device ambiguity remain offline tests;
+real forced-unmount failure and arbitrary transport fault timing are UNRUN.
+Provisioning used sync and confirmed hard-off after guest shutdown did not
+confirm; no power-loss durability is claimed. Controller restart, other images
+or tool builds, full legacy host-orchestration parity and network protection
+remain unqualified. Security invariants stay **UNVERIFIED**; release gate stays
+closed.
