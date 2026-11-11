@@ -19,10 +19,16 @@ the recorded VM process with the host (`/proc/sys/kernel/random/boot_id` and
 the start time in `/proc/<pid>/stat`; Linux only):
 
 - `absent`: another boot, no such PID, or a different start time (a reused
-  PID). A run that recorded no process is `absent` too.
+  PID). A run that recorded no process is `absent` only if it could not have
+  started one: state `prepared` or `error`, or `quarantined` with no
+  `start intent` row in `lifecycle.jsonl` (no journal at all counts).
 - `alive`: the same process is still running.
 - `unknown`: the check could not be made (unreadable `/proc`, not Linux, a
-  Windows process record).
+  Windows process record). A run with no process record is `unknown` in every
+  other case (`starting`, `running`, `stopping`, `exited`, `quarantined` with
+  a `start intent` row, an unreadable or oversized journal): QEMU is recorded
+  only after it is spawned, so a controller that died in between leaves a
+  live QEMU and no record of it.
 
 `recover --state-directory D --run-id R --archive` moves one run with
 `absent` to `archive/R` in the same state directory and writes
@@ -40,7 +46,11 @@ print `archived: false` and a `reason`, and change nothing.
 On `alive` the VM is still running and holds the overlay. Stop that QEMU
 yourself (the controller is gone, so nothing else will), check that
 `recover` now shows `absent`, then archive. On `unknown` establish the
-process state by hand first.
+process state by hand first. For a run with no process record, run
+`pgrep -af qemu-system` and look for the run's `root.qcow2` path in a command
+line. If one matches, it is that run's VM: stop it, then archive by hand
+once no such process is left. If none matches, the run has no VM; move it out
+of `runs/` yourself, since `--archive` refuses `unknown`.
 
 ## Owner-prepared Linux L2 execution (stage 5a)
 

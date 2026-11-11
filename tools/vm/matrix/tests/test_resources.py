@@ -470,6 +470,68 @@ class ReconciliationTests(unittest.TestCase):
         self.assertEqual({"run_id": run_id, "status": "absent", "processes": []}, result)
         read.assert_not_called()
 
+    def run_in_state(self, state, journal=None, run_id="run-a"):
+        path = {"prepared": (), "starting": ("starting",), "running": ("starting", "running"),
+                "stopping": ("starting", "stopping"), "exited": ("starting", "exited"),
+                "error": (), "quarantined": ()}[state]
+        with StandLease(self.root, "stand-a") as lease:
+            run = create_run(lease, run_id)
+            for step in path:
+                run.mark(step)
+            if state == "error":
+                run.mark("error", "preparation-failed")
+            if state == "quarantined":
+                run.mark("quarantined", "vm-start-failed")
+            if journal is not None:
+                (run.directory / "lifecycle.jsonl").write_bytes(journal)
+        return run_id
+
+    @staticmethod
+    def rows(*pairs):
+        return b"".join(json.dumps({"action": a, "result": r}).encode() + b"\n" for a, r in pairs)
+
+    def test_states_that_cannot_have_started_a_process_are_absent_without_one(self):
+        for state in ("prepared", "error"):
+            with self.subTest(state=state), tempfile.TemporaryDirectory() as temp:
+                self.root = Path(temp) / "state"
+                run_id = self.run_in_state(state)
+                self.assertEqual({"run_id": run_id, "status": "absent", "processes": []},
+                                 self.status(run_id))
+
+    def test_states_that_may_have_spawned_qemu_are_unknown_without_a_process(self):
+        for state in ("starting", "running", "stopping", "exited"):
+            with self.subTest(state=state), tempfile.TemporaryDirectory() as temp:
+                self.root = Path(temp) / "state"
+                run_id = self.run_in_state(state)
+                self.assertEqual({"run_id": run_id, "status": "unknown", "processes": []},
+                                 self.status(run_id))
+
+    def test_quarantined_without_a_start_intent_is_absent(self):
+        cases = {"no journal": None, "empty journal": b"",
+                 "other rows": self.rows(("start", "error"), ("close", "intent"))}
+        for name, journal in cases.items():
+            with self.subTest(name), tempfile.TemporaryDirectory() as temp:
+                self.root = Path(temp) / "state"
+                run_id = self.run_in_state("quarantined", journal)
+                self.assertEqual("absent", self.status(run_id)["status"])
+
+    def test_quarantined_with_a_start_intent_or_a_doubtful_journal_is_unknown(self):
+        cases = {"start intent": self.rows(("start", "intent")),
+                 "intent among others": self.rows(("prepare", "ok"), ("start", "intent"), ("start", "error")),
+                 "truncated row": self.rows(("close", "intent")) + b'{"action": "sta',
+                 "not an object": b"[]\n",
+                 "oversized": b" " * (256 * 1024 + 1)}
+        for name, journal in cases.items():
+            with self.subTest(name), tempfile.TemporaryDirectory() as temp:
+                self.root = Path(temp) / "state"
+                run_id = self.run_in_state("quarantined", journal)
+                self.assertEqual("unknown", self.status(run_id)["status"])
+
+    def test_quarantined_with_an_unreadable_journal_is_unknown(self):
+        run_id = self.run_in_state("quarantined")
+        (self.root / "runs" / run_id / "lifecycle.jsonl").mkdir()
+        self.assertEqual("unknown", self.status(run_id)["status"])
+
     def test_alive_outranks_unknown_outranks_absent(self):
         second = dict(process_resource(5000, 1), id="helper")
         third = dict(process_resource(6000, 2, platform="windows"), id="other")
@@ -587,6 +649,20 @@ class ArchiveTests(unittest.TestCase):
         self.refused("process-unknown", "run-w")
         self.assertTrue((self.root / "runs" / "run-a").is_dir())
         self.assertFalse((self.root / "archive").exists())
+
+    def test_run_quarantined_before_the_process_started_is_archived(self):
+        with StandLease(self.root, "stand-a") as lease:
+            run = create_run(lease, "run-a")
+            run.mark("quarantined", "vm-start-failed")
+        with fake_proc():
+            self.assertTrue(archive_run(self.root, "run-a")["archived"])
+        self.assertFalse((self.root / "runs" / "run-a").exists())
+
+    def test_starting_run_without_a_process_is_refused_as_unknown(self):
+        with StandLease(self.root, "stand-a") as lease:
+            create_run(lease, "run-a").mark("starting")
+        self.refused("process-unknown")
+        self.assertTrue((self.root / "runs" / "run-a").is_dir())
 
     def test_held_stand_lock_means_a_live_controller(self):
         with StandLease(self.root, "stand-a") as lease:

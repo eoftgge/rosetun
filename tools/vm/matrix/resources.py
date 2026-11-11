@@ -200,10 +200,49 @@ def _process_status(resource):
     return 'alive' if start == resource['start_id'] else 'absent'
 
 
-def _reconcile(data):
+def _start_intent_recorded(directory):
+    """True unless the journal is provably free of a `start intent` row.
+
+    A missing journal means the controller never got as far as writing one.
+    Anything unreadable, oversized or malformed counts as recorded.
+    """
+    try:
+        path = resource_path(directory, 'lifecycle.jsonl')
+        _no_links(path)
+        with path.open('rb') as stream:
+            raw = stream.read(256 * 1024 + 1)
+        if len(raw) > 256 * 1024:
+            return True
+        for line in raw.splitlines():
+            row = json.loads(line, object_pairs_hook=_unique_object, parse_constant=_invalid_constant)
+            if type(row) is not dict or row.get('action') == 'start' and row.get('result') == 'intent':
+                return True
+        return False
+    except FileNotFoundError:
+        return False
+    except (OSError, ValueError, RecursionError):
+        return True
+
+
+def _may_have_spawned(directory, data):
+    """Whether a run with no process resource could still own a QEMU process.
+
+    The process is registered only after it is spawned, so a controller that
+    died in between leaves a live QEMU and no record of it.
+    """
+    if data['state'] in ('prepared', 'error'):
+        return False
+    if data['state'] == 'quarantined':
+        return _start_intent_recorded(directory)
+    return True
+
+
+def _reconcile(directory, data):
     processes = [{'id': r['id'], 'pid': r['pid'], 'status': _process_status(r)}
                  for r in data['resources'] if r['kind'] == 'process']
     statuses = {p['status'] for p in processes}
+    if not processes and _may_have_spawned(directory, data):
+        statuses.add('unknown')
     overall = 'alive' if 'alive' in statuses else 'unknown' if 'unknown' in statuses else 'absent'
     return {'run_id': data['run_id'], 'status': overall, 'processes': processes}
 
@@ -211,12 +250,18 @@ def _reconcile(data):
 def reconcile_run(state_directory, run_id):
     """Report whether the recorded VM processes of one run still exist.
 
-    Only the manifest and /proc are read. `absent` means every recorded process is
-    provably gone (a run without a process resource counts as absent); `unknown`
-    means identity could not be established.
+    Only the manifest, the lifecycle journal and /proc are read. `absent` means
+    every recorded process is provably gone. A run with no process record is
+    `absent` only if it could not have spawned one: state `prepared` or `error`,
+    or `quarantined` without a `start intent` row in `lifecycle.jsonl` (no
+    journal at all counts). Any other such run (`starting`, `running`,
+    `stopping`, `exited`, `quarantined` with that row, an unreadable journal)
+    is `unknown`, because QEMU is registered only after it is spawned and the
+    controller may have died in between. `unknown` also means identity could
+    not be established.
     """
     directory = _state_path(state_directory) / 'runs' / _identifier(run_id)
-    return _reconcile(read_manifest(directory, run_id=run_id))
+    return _reconcile(directory, read_manifest(directory, run_id=run_id))
 
 
 def inspect_runs(state_directory):
@@ -236,7 +281,7 @@ def inspect_runs(state_directory):
                 record['problems'].remove('resource-state-unverified')
             if data["state"] in ("preparing", "prepared"):
                 record["problems"].append("preparation-is-not-execution")
-            reconciliation = _reconcile(data)
+            reconciliation = _reconcile(directory, data)
             record["process_status"] = reconciliation["status"]
             record["processes"] = reconciliation["processes"]
             result.append(record)
@@ -403,7 +448,7 @@ def archive_run(state_directory, run_id):
             data = read_manifest(source, run_id=run_id, stand_id=stand)
         except (OSError, ValueError, RecursionError):
             raise ArchiveRefused("run-manifest-invalid") from None
-        reconciliation = _reconcile(data)
+        reconciliation = _reconcile(source, data)
         if reconciliation["status"] != "absent":
             raise ArchiveRefused("process-" + reconciliation["status"])
         target_parent = root / "archive"
