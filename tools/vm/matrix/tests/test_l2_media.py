@@ -98,6 +98,56 @@ class MediaTests(unittest.TestCase):
         self.assertIn('failed-retain-partials', (self.run.directory / 'l2-media.jsonl').read_text())
         self.assertIn('partial diagnostic', (self.run.directory / 'l2-media.jsonl').read_text())
 
+    def plan_bytes(self):
+        return (self.run.directory / 'launch-plan.json').read_bytes()
+
+    def test_success_replaces_the_plan_without_a_temporary_file(self):
+        before = self.plan_bytes()
+        self.build()
+        self.assertNotEqual(before, self.plan_bytes())
+        self.assertFalse((self.run.directory / 'launch-plan.tmp').exists())
+        self.assertEqual('prepared', self.run._read()['state'])
+
+    def test_refusal_before_any_registration_leaves_the_run_prepared(self):
+        (self.run.directory / 'l2-media.iso').write_bytes(b'foreign')
+        before = list(self.run._read()['resources'])
+        with self.assertRaisesRegex(ValueError, 'l2-media-destination-exists'):
+            self.build()
+        self.assertEqual('prepared', self.run._read()['state'])
+        self.assertEqual(before, self.run._read()['resources'])
+
+    def test_xorriso_failure_quarantines_the_run_and_keeps_the_old_plan(self):
+        before = self.plan_bytes()
+        def fail(argv, **limits):
+            if argv[-1] == '-version':
+                return self.executor(argv, **limits)
+            Path(argv[argv.index('-o') + 1]).write_bytes(b'partial')
+            return CommandResult(1, b'', b'SECRET')
+        with self.assertRaisesRegex(ValueError, 'xorriso-failed'):
+            self.build(fail)
+        manifest = self.run._read()
+        self.assertEqual('quarantined', manifest['state'])
+        self.assertEqual(['l2-media-attach-failed'], manifest['reasons'])
+        self.assertEqual(before, self.plan_bytes())
+        self.assertEqual(b'partial', (self.run.directory / 'l2-media.iso').read_bytes())
+        self.assertTrue(any(r['id'].startswith('l2-media-') for r in manifest['resources']))
+
+    def test_plan_write_failure_quarantines_the_run_and_keeps_the_old_plan(self):
+        before = self.plan_bytes()
+        real = os.replace
+        def replace(source, target):
+            if Path(target).name == 'launch-plan.json':
+                raise OSError('SECRET')
+            return real(source, target)
+        with patch.object(media.os, 'replace', replace), self.assertRaises(OSError):
+            self.build()
+        manifest = self.run._read()
+        self.assertEqual('quarantined', manifest['state'])
+        self.assertEqual(['l2-media-attach-failed'], manifest['reasons'])
+        self.assertEqual(before, self.plan_bytes())
+        self.assertTrue((self.run.directory / 'l2-media.iso').exists())
+        self.assertTrue((self.run.directory / 'launch-plan.tmp').exists())
+
     def test_changed_source_during_copy_is_rejected(self):
         real = media.copy_verified
         def change(src, dst, sha, size):

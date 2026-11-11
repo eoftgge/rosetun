@@ -75,81 +75,102 @@ def attach_media(run, *, directory, checkout, xorriso, executor=execute):
     plan = l2._json(plan_path.read_bytes())
     if not plan['config'].get('qga') or plan['config']['machine'] != 'pc-i440fx-10.0':
         raise ValueError('l2-media-requires-pinned-qga-machine')
-    for i, name in enumerate(RESOURCES):
-        path = resource_path(run.directory, name)
-        if path.exists():
-            raise ValueError('l2-media-destination-exists')
-        run.register(dict(id='l2-media-' + str(i), kind='file', path=name))
-        path.parent.mkdir(parents=True, exist_ok=True)
-    log = resource_path(run.directory, 'l2-media.jsonl')
-    def event(**row):
+    # Once a resource is registered the run holds partial files that no retry
+    # may reuse, so any later failure quarantines it, as qemu.prepare does.
+    registered = False
+    try:
+        for i, name in enumerate(RESOURCES):
+            path = resource_path(run.directory, name)
+            if path.exists():
+                raise ValueError('l2-media-destination-exists')
+            run.register(dict(id='l2-media-' + str(i), kind='file', path=name))
+            registered = True
+            path.parent.mkdir(parents=True, exist_ok=True)
+        log = resource_path(run.directory, 'l2-media.jsonl')
+        def event(**row):
+            run._read()
+            with log.open('a', encoding='ascii') as stream:
+                stream.write(json.dumps(row, sort_keys=True) + '\n')
+                stream.flush()
+                os.fsync(stream.fileno())
+        def command(args, timeout):
+            argv = [str(xorriso), '-no_rc', *args]
+            event(argv=argv, timeout=timeout, output_limit=65536, state='intent')
+            try:
+                result = executor(argv, timeout=timeout, output_limit=65536)
+                if (not isinstance(result, CommandResult) or
+                        type(result.stdout) is not bytes or type(result.stderr) is not bytes or
+                        max(len(result.stdout), len(result.stderr)) > 65536):
+                    raise ValueError('invalid-xorriso-output')
+                event(state='returned', returncode=result.returncode,
+                      stdout=result.stdout.decode('utf-8', 'replace'),
+                      stderr=result.stderr.decode('utf-8', 'replace'))
+                if result.returncode != 0:
+                    raise ValueError('xorriso-failed')
+                return result.stdout + result.stderr
+            except BaseException as error:
+                event(state='failed-retain-partials',
+                      stdout=(getattr(error, 'stdout', None) or b'')[:65536].decode('utf-8', 'replace'),
+                      stderr=(getattr(error, 'stderr', None) or b'')[:65536].decode('utf-8', 'replace'))
+                raise
+        event(state='preflight', source=str(directory), checkout=str(checkout),
+              snapshot='l2-snapshot', output='l2-media.iso')
+        try:
+            local_file(xorriso)  # Explicit installed executable; no PATH fallback.
+        except (OSError, ValueError):
+            event(state='preflight-executable-unavailable')
+            raise ValueError('xorriso-1.5.6-preflight-executable-unavailable') from None
+        version = command(['-version'], 10).decode('utf-8', 'replace')
+        if not re.search(r'xorriso(?: version)?\s*:?\s*1\.5\.6(?:\s|$)', version):
+            raise ValueError('xorriso-1.5.6-required')
+        package = l2.validate_package(directory, checkout=checkout, immutable=True)
+        if sum(package['sizes'].values()) > TOTAL_LIMIT:
+            raise ValueError('l2-media-total-size')
+        snapshot = resource_path(run.directory, 'l2-snapshot')
+        for n in CONTENT:
+            for target in (snapshot / n, resource_path(run.directory, 'l2-package/' + n)):
+                copy_verified(Path(directory) / n, target, package['hashes'][n], package['sizes'][n])
+        if l2.validate_package(directory, checkout=checkout, immutable=True) != package:
+            raise ValueError('l2-source-changed')
+        if l2.validate_package(snapshot, checkout=checkout, immutable=True) != package:
+            raise ValueError('l2-snapshot-mismatch')
+        content = manifest(package['hashes'], CONTENT)
+        write(snapshot / 'content.sha256', content)
+        event(state='snapshot-verified', package=package, content_sha256=hashlib.sha256(content).hexdigest())
+        iso = resource_path(run.directory, 'l2-media.iso')
+        command(['-as', 'mkisofs', '-iso-level', '3', '-R', '-V', 'ROSETUN_L2',
+                 '-o', str(iso), str(snapshot)], 300)
+        sha, size, _ = l2._hash(iso, ISO_LIMIT)
+        record = dict(path=str(iso), sha256=sha, size=size,
+                      content_sha256=hashlib.sha256(content).hexdigest(), package=package)
+        write(resource_path(run.directory, 'l2-media.json'),
+              json.dumps(dict(record, tool_version=version), sort_keys=True).encode())
+        # Preserve old plans byte-for-byte when this API is not invoked.
+        from .qemu import QemuConfig, _launch_plan
+        from .images import ImageDescriptor
+        plan = _launch_plan(QemuConfig(**plan['config']), ImageDescriptor(**plan['image']),
+                            resource_path(run.directory, 'root.qcow2'), plan['uuid'], media=record)
         run._read()
-        with log.open('a', encoding='ascii') as stream:
-            stream.write(json.dumps(row, sort_keys=True) + '\n')
+        temporary = resource_path(run.directory, 'launch-plan.tmp')
+        with temporary.open('xb') as stream:
+            stream.write(json.dumps(plan, sort_keys=True).encode())
             stream.flush()
             os.fsync(stream.fileno())
-    def command(args, timeout):
-        argv = [str(xorriso), '-no_rc', *args]
-        event(argv=argv, timeout=timeout, output_limit=65536, state='intent')
-        try:
-            result = executor(argv, timeout=timeout, output_limit=65536)
-            if (not isinstance(result, CommandResult) or
-                    type(result.stdout) is not bytes or type(result.stderr) is not bytes or
-                    max(len(result.stdout), len(result.stderr)) > 65536):
-                raise ValueError('invalid-xorriso-output')
-            event(state='returned', returncode=result.returncode,
-                  stdout=result.stdout.decode('utf-8', 'replace'),
-                  stderr=result.stderr.decode('utf-8', 'replace'))
-            if result.returncode != 0:
-                raise ValueError('xorriso-failed')
-            return result.stdout + result.stderr
-        except BaseException as error:
-            event(state='failed-retain-partials',
-                  stdout=(getattr(error, 'stdout', None) or b'')[:65536].decode('utf-8', 'replace'),
-                  stderr=(getattr(error, 'stderr', None) or b'')[:65536].decode('utf-8', 'replace'))
-            raise
-    event(state='preflight', source=str(directory), checkout=str(checkout),
-          snapshot='l2-snapshot', output='l2-media.iso')
-    try:
-        local_file(xorriso)  # Explicit installed executable; no PATH fallback.
-    except (OSError, ValueError):
-        event(state='preflight-executable-unavailable')
-        raise ValueError('xorriso-1.5.6-preflight-executable-unavailable') from None
-    version = command(['-version'], 10).decode('utf-8', 'replace')
-    if not re.search(r'xorriso(?: version)?\s*:?\s*1\.5\.6(?:\s|$)', version):
-        raise ValueError('xorriso-1.5.6-required')
-    package = l2.validate_package(directory, checkout=checkout, immutable=True)
-    if sum(package['sizes'].values()) > TOTAL_LIMIT:
-        raise ValueError('l2-media-total-size')
-    snapshot = resource_path(run.directory, 'l2-snapshot')
-    for n in CONTENT:
-        for target in (snapshot / n, resource_path(run.directory, 'l2-package/' + n)):
-            copy_verified(Path(directory) / n, target, package['hashes'][n], package['sizes'][n])
-    if l2.validate_package(directory, checkout=checkout, immutable=True) != package:
-        raise ValueError('l2-source-changed')
-    if l2.validate_package(snapshot, checkout=checkout, immutable=True) != package:
-        raise ValueError('l2-snapshot-mismatch')
-    content = manifest(package['hashes'], CONTENT)
-    write(snapshot / 'content.sha256', content)
-    event(state='snapshot-verified', package=package, content_sha256=hashlib.sha256(content).hexdigest())
-    iso = resource_path(run.directory, 'l2-media.iso')
-    command(['-as', 'mkisofs', '-iso-level', '3', '-R', '-V', 'ROSETUN_L2',
-             '-o', str(iso), str(snapshot)], 300)
-    sha, size, _ = l2._hash(iso, ISO_LIMIT)
-    record = dict(path=str(iso), sha256=sha, size=size,
-                  content_sha256=hashlib.sha256(content).hexdigest(), package=package)
-    write(resource_path(run.directory, 'l2-media.json'),
-          json.dumps(dict(record, tool_version=version), sort_keys=True).encode())
-    # Preserve old plans byte-for-byte when this API is not invoked.
-    from .qemu import QemuConfig, _launch_plan
-    from .images import ImageDescriptor
-    plan = _launch_plan(QemuConfig(**plan['config']), ImageDescriptor(**plan['image']),
-                        resource_path(run.directory, 'root.qcow2'), plan['uuid'], media=record)
-    with plan_path.open('wb') as stream:
-        stream.write(json.dumps(plan, sort_keys=True).encode())
-        stream.flush()
-        os.fsync(stream.fileno())
-    event(state='ready', sha256=sha, size=size, content_sha256=record['content_sha256'])
-    for name in ('l2-import.jsonl', 'l2-receipt.json', 'l2-package/job.env', 'l2-package/manifest.sha256'):
-        write(resource_path(run.directory, name), b'')
-    return record
+        os.replace(temporary, plan_path)
+        if os.name == 'posix':
+            fd = os.open(run.directory, os.O_RDONLY)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+        event(state='ready', sha256=sha, size=size, content_sha256=record['content_sha256'])
+        for name in ('l2-import.jsonl', 'l2-receipt.json', 'l2-package/job.env', 'l2-package/manifest.sha256'):
+            write(resource_path(run.directory, name), b'')
+        return record
+    except BaseException as error:
+        if registered:
+            try:
+                run.mark('quarantined', 'l2-media-attach-failed')
+            except (OSError, ValueError):
+                pass
+        raise

@@ -558,30 +558,41 @@ def start(run, *, timeout=5, executor=execute, lab=None):
         image.verify_bytes()
     except (KeyError, TypeError, OSError, ValueError):
         raise LifecycleError('prelaunch-validation-failed') from None
-    for name in (('qemu-stderr.log', 'completion.json', 'qga-observations.jsonl', 'job-evidence.jsonl')
-                 if config.qga else ('qemu-stderr.log', 'completion.json')):
-        run.register({'id': name.split('.')[0], 'kind': 'file', 'path': name})
-    if config.qga:
-        from .linux_l2 import EVIDENCE_FILES
-        for index, name in enumerate(EVIDENCE_FILES):
-            relative = 'linux-l2/' + name
-            run.register({'id': 'linux-l2-' + str(index), 'kind': 'file', 'path': relative})
-            path = resource_path(run.directory, relative)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.touch(exist_ok=False)
-        # Reserve one fixed smoke package before running; registration stays closed.
-        for index, name in enumerate(('guest/launch.sh', 'guest/start.sh', 'guest/lib.sh',
-                                      'guest/run-smoke.sh', 'job.env', 'manifest.sha256',
-                                      'digest.sha256', 'staging.jsonl')):
-            path = resource_path(run.directory, 'smoke-package/' + name)
-            run.register({'id': 'smoke-stage-' + str(index), 'kind': 'file',
-                          'path': 'smoke-package/' + name})
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.touch(exist_ok=False)
-    journal = resource_path(run.directory, 'lifecycle.jsonl')
-    run.register({'id': 'lifecycle', 'kind': 'file', 'path': 'lifecycle.jsonl'})
-    with journal.open('x', encoding='utf-8'):
-        pass
+    # No process exists yet, so a failure here leaves partial resources and a
+    # quarantined run instead of a prepared one that later starts refuse.
+    try:
+        for name in (('qemu-stderr.log', 'completion.json', 'qga-observations.jsonl', 'job-evidence.jsonl')
+                     if config.qga else ('qemu-stderr.log', 'completion.json')):
+            run.register({'id': name.split('.')[0], 'kind': 'file', 'path': name})
+        if config.qga:
+            from .linux_l2 import EVIDENCE_FILES
+            for index, name in enumerate(EVIDENCE_FILES):
+                relative = 'linux-l2/' + name
+                run.register({'id': 'linux-l2-' + str(index), 'kind': 'file', 'path': relative})
+                path = resource_path(run.directory, relative)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.touch(exist_ok=False)
+            # Reserve one fixed smoke package before running; registration stays closed.
+            for index, name in enumerate(('guest/launch.sh', 'guest/start.sh', 'guest/lib.sh',
+                                          'guest/run-smoke.sh', 'job.env', 'manifest.sha256',
+                                          'digest.sha256', 'staging.jsonl')):
+                path = resource_path(run.directory, 'smoke-package/' + name)
+                run.register({'id': 'smoke-stage-' + str(index), 'kind': 'file',
+                              'path': 'smoke-package/' + name})
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.touch(exist_ok=False)
+        journal = resource_path(run.directory, 'lifecycle.jsonl')
+        run.register({'id': 'lifecycle', 'kind': 'file', 'path': 'lifecycle.jsonl'})
+        with journal.open('x', encoding='utf-8'):
+            pass
+    except BaseException as error:
+        try:
+            run.mark('quarantined', 'vm-start-failed')
+        except (OSError, ValueError):
+            pass
+        if not isinstance(error, Exception) or isinstance(error, AssertionError):
+            raise
+        raise LifecycleError('vm-start-failed') from None
     vm = Vm(run, timeout)
     vm.vm_uuid = plan['uuid']
     vm._l2_media = media

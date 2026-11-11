@@ -395,6 +395,44 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual('quarantined', self.run._read()['state'])
         self.assertNotIn('SECRET', (self.run.directory / 'lifecycle.jsonl').read_text())
 
+    def assert_failed_before_process(self, caught):
+        self.assertEqual('vm-start-failed', str(caught.exception))
+        self.assertIsNone(caught.exception.vm)
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertTrue(caught.exception.__suppress_context__)
+        self.assertNotIn('SECRET', str(caught.exception))
+        lifecycle.subprocess.Popen.assert_not_called()
+        self.assertFalse(self.run._lease._active)
+        manifest = self.run._read()
+        self.assertEqual('quarantined', manifest['state'])
+        self.assertEqual(['vm-start-failed'], manifest['reasons'])
+
+    def test_registration_failure_before_the_process_quarantines_the_run(self):
+        from tools.vm.matrix.resources import PreparedRun
+        original = PreparedRun.register
+        def register(run, resource):
+            if resource['id'] == 'completion':
+                raise OSError('SECRET')
+            return original(run, resource)
+        with patch.object(PreparedRun, 'register', register), self.assertRaises(
+                lifecycle.LifecycleError) as caught:
+            self.start()
+        self.assert_failed_before_process(caught)
+        self.assertEqual(['qemu-stderr'], [r['id'] for r in self.run._read()['resources']
+                                           if r['id'] == 'qemu-stderr'])
+
+    def test_touch_failure_before_the_process_quarantines_the_run(self):
+        from pathlib import Path
+        self.enable_qga()
+        original = Path.touch
+        def touch(path, *args, **kwargs):
+            if path.parent.name == 'linux-l2':
+                raise OSError('SECRET')
+            return original(path, *args, **kwargs)
+        with patch.object(Path, 'touch', touch), self.assertRaises(lifecycle.LifecycleError) as caught:
+            self.start()
+        self.assert_failed_before_process(caught)
+
     def test_runtime_argv_uses_only_private_qmp_and_original_plan(self):
         vm = self.start()
         try:
