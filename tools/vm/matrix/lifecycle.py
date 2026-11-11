@@ -472,20 +472,27 @@ class Vm:
         self.close()
 
 
-def start(run, *, timeout=5, executor=execute):
-    """Launch exactly one verified prepared VM, initially paused; no CLI entry.
+def start(run, *, timeout=5, executor=execute, lab=None):
+    """Launch one verified prepared VM, initially paused, with optional lab ownership.
 
     Executor replaces only prelaunch qemu-img observations in offline tests.
     Startup failures expose .vm for a bounded close retry if exit is unconfirmed.
     """
     timeout = _limit(timeout)
     manifest = run._read()
-    if manifest['state'] != 'prepared' or run._lease._active:
+    if lab is not None:
+        from .lab import LabPair
+        if not isinstance(lab, LabPair):
+            raise LifecycleError('invalid-lab-capability')
+        lab.check_start(run)
+    if manifest['state'] != 'prepared' or (lab is None and run._lease._active):
         raise LifecycleError('launch-requires-prepared-idle-run')
     _host()
     expected = {'preparation': 'preparation.jsonl', 'launch-plan': 'launch-plan.json',
                 'overlay': 'root.qcow2'}
     expected.update({r['id']: r['path'] for r in execution_resources(manifest)})
+    if lab is not None:
+        expected.update(lab.resources(run))
     if any(r['id'].startswith('l2-media-') for r in manifest['resources']):
         from .l2_media import RESOURCES
         expected.update({'l2-media-' + str(i): n for i, n in enumerate(RESOURCES)})
@@ -564,6 +571,10 @@ def start(run, *, timeout=5, executor=execute):
         argv = [*plan['argv'], '-S', '-chardev', f'socket,id=control,fd={child.fileno()}',
                 '-mon', 'chardev=control,mode=control']
         descriptors = [child.fileno()]
+        if lab is not None:
+            network_argv, network_fd = lab.network(run)
+            argv += network_argv
+            descriptors.append(network_fd)
         if config.qga:
             qga_parent, qga_child = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
             vm.launch_sockets.extend((qga_parent, qga_child))

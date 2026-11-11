@@ -1,0 +1,37 @@
+schema = "rosetun.matrix.lab.v1"
+state_directory = "/srv/rosetun-lab-state"
+stand_id = "isolated-lab-example"
+
+[qemu]
+schema = "rosetun.matrix.qemu.v1"
+executable = "/opt/qemu-10.0.13/bin/qemu-system-x86_64"
+image_executable = "/opt/qemu-10.0.13/bin/qemu-img"
+bios = "/opt/qemu-10.0.13/share/qemu/bios.bin"
+machine = "pc-i440fx-10.0"
+accelerator = "kvm"
+cpu = "host"
+memory_mib = 1024
+vcpus = 1
+qga = true
+
+[test_image]
+schema = "rosetun.matrix.image.v1"
+identifier = "prepared-lab-test"
+guest_os = "linux"
+architecture = "x86_64"
+path = "/srv/images/lab-test.qcow2"
+size_bytes = 1
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+format = "qcow2"
+profile = "bios-i440fx-v1"
+
+[lab_image]
+schema = "rosetun.matrix.image.v1"
+identifier = "prepared-lab-router"
+guest_os = "linux"
+architecture = "x86_64"
+path = "/srv/images/lab-router.qcow2"
+size_bytes = 1
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+format = "qcow2"
+profile = "bios-i440fx-v1"

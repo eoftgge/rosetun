@@ -29,6 +29,9 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description="Plan, assess, inspect or explicitly execute exploratory L2")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("doctor", help="inspect local prerequisites without executing binaries")
+    lab = commands.add_parser('lab-smoke', help='qualify the isolated two-VM infrastructure only')
+    lab.add_argument('--config', required=True)
+    lab.add_argument('--dry-run', action='store_true')
     run = commands.add_parser('run', help='execute exploratory Linux L2 on an explicitly selected stand')
     run.add_argument('suite', choices=['linux-l2'])
     run.add_argument('--config', required=True)
@@ -46,7 +49,12 @@ def main(argv=None):
         command.add_argument("--state-directory", required=True)
     args = parser.parse_args(argv)
     try:
-        if args.command == 'run':
+        if args.command == 'lab-smoke':
+            from .lab import load_lab, plan_lab, lab_smoke
+            config = load_lab(args.config)
+            result = plan_lab(config) if args.dry_run else lab_smoke(config)
+            code = 0 if args.dry_run else result['exit_code']
+        elif args.command == 'run':
             from .execution import load_execution, preflight
             config = load_execution(args.config)
             if args.dry_run:
@@ -76,6 +84,10 @@ def main(argv=None):
             result = assess_files(args.report_path, args.plan)
             code = 2 if result["validation"]["status"] == "ERROR" else 0 if result["acceptance"]["accepted"] else 1
     except KeyboardInterrupt:
+        if args.command == 'lab-smoke':
+            print(json.dumps(dict(schema='rosetun.matrix.lab-summary.v1', exit_code=130,
+                                  qualified=False, security_invariants='UNVERIFIED', release_gate=False)))
+            return 130
         if args.command != 'run':
             raise
         print(json.dumps(dict(schema='rosetun.matrix.execution-summary.v1', exit_code=130,
@@ -83,6 +95,11 @@ def main(argv=None):
                               security_invariants='UNVERIFIED')))
         return 130
     except (OSError, ValueError, TypeError, RecursionError):
+        if args.command == 'lab-smoke':
+            print(json.dumps(dict(schema='rosetun.matrix.lab-summary.v1', exit_code=2,
+                  error='invalid lab configuration or prerequisites', qualified=False,
+                  security_invariants='UNVERIFIED', release_gate=False)))
+            return 2
         if args.command == 'run':
             result = dict(schema='rosetun.matrix.execution-summary.v1', exit_code=2,
                           error='invalid or unreadable execution configuration/local prerequisites',
