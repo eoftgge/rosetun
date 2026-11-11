@@ -12,6 +12,7 @@ import stat
 import tempfile
 import uuid
 
+from . import evidence
 from .report import read_json, _unique_object, _invalid_constant
 
 SCHEMA = "rosetun.matrix.resources.v1"
@@ -164,12 +165,7 @@ def _atomic_manifest(directory, data):
         stream.flush()
         os.fsync(stream.fileno())
     os.replace(name, directory / "manifest.json")
-    if os.name == "posix":
-        fd = os.open(directory, os.O_RDONLY)
-        try:
-            os.fsync(fd)
-        finally:
-            os.close(fd)
+    evidence.fsync_directory(directory)
 
 
 def _proc_text(path):
@@ -410,15 +406,6 @@ class ArchiveRefused(ValueError):
         self.reason = reason
 
 
-def _fsync_directory(path):
-    if os.name == "posix":
-        fd = os.open(path, os.O_RDONLY)
-        try:
-            os.fsync(fd)
-        finally:
-            os.close(fd)
-
-
 def archive_run(state_directory, run_id):
     """Move one reconciled run from runs/ to archive/ so it stops blocking its stand.
 
@@ -464,14 +451,14 @@ def archive_run(state_directory, run_id):
                   "utc": datetime.now(timezone.utc).isoformat()}
         target_parent.mkdir(exist_ok=True)
         os.rename(source, target)
-        _fsync_directory(source.parent)
-        _fsync_directory(target_parent)
+        evidence.fsync_directory(source.parent)
+        evidence.fsync_directory(target_parent)
         with record_path.open("x", encoding="utf-8", newline="\n") as record_stream:
             json.dump(record, record_stream, sort_keys=True, indent=2)
             record_stream.write("\n")
             record_stream.flush()
             os.fsync(record_stream.fileno())
-        _fsync_directory(target_parent)
+        evidence.fsync_directory(target_parent)
         return {"schema": ARCHIVE_SCHEMA, "archived": True, "run_id": run_id,
                 "stand_id": stand, "record": "archive/" + record_path.name}
     finally:
@@ -541,17 +528,8 @@ class PreparedRun:
                  'vm_uuid': vm_uuid, 'resources': data['resources'], 'exits': exits,
                  'controls_closed': True, 'retained_artifacts': True,
                  'journal_sha256': hashlib.sha256(journal.read_bytes()).hexdigest()}
-        path = resource_path(self.directory, 'completion.json')
-        with path.open('x', encoding='utf-8', newline='\n') as stream:
-            json.dump(proof, stream, sort_keys=True)
-            stream.flush()
-            os.fsync(stream.fileno())
-        if os.name == 'posix':
-            fd = os.open(self.directory, os.O_RDONLY)
-            try:
-                os.fsync(fd)
-            finally:
-                os.close(fd)
+        evidence.write_file(self, 'completion.json', json.dumps(proof, sort_keys=True).encode(),
+                            mode='create', sync_parent=True)
         if not completion_verified(self.directory, self._read()):
             raise ValueError('completion-readback-failed')
 

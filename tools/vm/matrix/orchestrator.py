@@ -3,12 +3,12 @@
 from datetime import datetime, timezone
 import hashlib
 import json
-import os
 import re
 import sys
 import time
 import uuid
 
+from .evidence import write_file
 from .execution import preflight
 from .resources import (StandLease, create_run, resource_path, EXECUTION_FILES,
                         completion_verified)
@@ -26,33 +26,15 @@ def failure(stage, error):
 
 def save(run, name, value, *, initial=False):
     """Registered output; replace atomically without altering lifecycle evidence."""
-    run._read()
-    path = resource_path(run.directory, name)
     if name not in EXECUTION_FILES.values():
         raise ValueError('unregistered execution output')
-    if not any(r.get('path') == name and r['kind'] == 'file' for r in run._read()['resources']):
-        raise ValueError('unregistered execution output')
     raw = (json.dumps(value, sort_keys=True, indent=2) + '\n').encode()
-    if run._identity[2].encode() in raw:
-        raise ValueError('owner token in execution output')
     if initial:
-        with path.open('xb') as stream:
-            stream.write(raw)
-            stream.flush()
-            os.fsync(stream.fileno())
+        write_file(run, name, raw, mode='create', forbid=run._identity[2],
+                   require_registered=True, sync_parent=True)
     else:
-        temporary = resource_path(run.directory, 'execution-summary.tmp')
-        with temporary.open('xb') as stream:
-            stream.write(raw)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-    if os.name == 'posix':
-        fd = os.open(run.directory, os.O_RDONLY)
-        try:
-            os.fsync(fd)
-        finally:
-            os.close(fd)
+        write_file(run, name, raw, mode='replace', temporary='execution-summary.tmp',
+                   forbid=run._identity[2], require_registered=True)
 
 
 class Adapters:

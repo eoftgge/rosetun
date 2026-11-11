@@ -10,7 +10,7 @@ import time
 
 from .jobs import SmokeJob, JobError, _uuid
 from .lifecycle import _guest_serialized
-from .evidence import append_row
+from .evidence import append_row, fsync_directory
 from .resources import _identifier, _regular_file, resource_path
 from .report import _unique_object, _invalid_constant
 
@@ -129,11 +129,7 @@ class SmokePackage:
             self._evidence('built')
             if os.name == 'posix':
                 for directory in ('smoke-package/guest', 'smoke-package'):
-                    fd = os.open(resource_path(vm.run.directory, directory), os.O_RDONLY)
-                    try:
-                        os.fsync(fd)
-                    finally:
-                        os.close(fd)
+                    fsync_directory(resource_path(vm.run.directory, directory))
         except BaseException:
             vm.evidence_failed = True
             raise

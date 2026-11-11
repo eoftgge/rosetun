@@ -12,7 +12,7 @@ from .jobs import JobError, _uuid
 from .lifecycle import _guest_serialized
 from .resources import _identifier, resource_path
 from .staging import SmokePackage
-from .l2_media import CONTENT, manifest, write
+from .l2_media import CONTENT, manifest
 
 HELPER = '/usr/local/libexec/rosetun-l2/stage-l2'
 

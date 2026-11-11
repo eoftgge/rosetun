@@ -11,10 +11,11 @@ import time
 
 from .catalog import digest, parse_catalog
 from .config import make_plan, validate_plan
+from .evidence import write_file
 from .jobs import JobError, LAUNCHER, SmokeJob, _uuid
 from .lifecycle import _guest_serialized
 from .report import assess, _unique_object, _invalid_constant
-from .resources import _identifier, _no_links, _regular_file, resource_path
+from .resources import _identifier, _no_links, _regular_file
 
 BINARIES = ('l2_transport_fixture', 'rosetun_helper_privileged_tests', 'rosetun_ipc_tests')
 SOURCES = ('guest/launch.sh', 'guest/start.sh', 'guest/lib.sh', 'guest/run-l2.sh', 'scenarios.tsv')
@@ -251,14 +252,7 @@ class LinuxL2Job:
     def _save(self, name, data):
         relative = 'linux-l2/' + name
         try:
-            if not any(r.get('kind') == 'file' and r.get('path') == relative
-                       for r in self.vm.run._read()['resources']):
-                raise JobError('l2-evidence-not-registered')
-            path = resource_path(self.vm.run.directory, relative)
-            with path.open('wb') as stream:
-                stream.write(data)
-                stream.flush()
-                os.fsync(stream.fileno())
+            write_file(self.vm.run, relative, data, mode='overwrite', require_registered=True)
         except (OSError, ValueError):
             self.vm.evidence_failed = True
             raise JobError('l2-evidence-write-failed') from None

@@ -3,7 +3,6 @@ import base64
 import hashlib
 from dataclasses import fields
 import json
-import os
 import re
 from pathlib import Path
 import secrets
@@ -12,6 +11,7 @@ import time
 import tomllib
 import uuid
 
+from .evidence import ReadbackError, write_file
 from .execution import exact
 from .images import ImageDescriptor
 from .qemu import QemuConfig, prepare, execute
@@ -268,14 +268,11 @@ def lab_smoke(config, *, adapters=None, clock=time.monotonic, sleep=time.sleep):
         evidence = {}
         for name, limit in (('capture.pcap', CAPTURE_LIMIT), ('targets.json', LOG_LIMIT), ('health.json', LOG_LIMIT)):
             raw = lab.read(name, limit)
-            path = resource_path(runs['lab'].directory, name)
-            with path.open('wb') as stream:
-                stream.write(raw)
-                stream.flush()
-                os.fsync(stream.fileno())
-            evidence[name] = path.read_bytes()
-            if evidence[name] != raw:
-                raise ValueError('lab-evidence-readback-failed')
+            try:
+                write_file(runs['lab'], name, raw, mode='overwrite', readback=True)
+            except ReadbackError:
+                raise ValueError('lab-evidence-readback-failed') from None
+            evidence[name] = raw
         result['evidence_sha256'] = {name: hashlib.sha256(raw).hexdigest() for name, raw in evidence.items()}
         result['qualification'] = qualify(expected, replies, json.loads(evidence['targets.json']),
                     evidence['capture.pcap'], ready['capture_ready'], json.loads(evidence['health.json']))

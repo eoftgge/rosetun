@@ -7,7 +7,7 @@ from pathlib import Path
 import re
 
 from . import linux_l2 as l2
-from .evidence import append_row
+from .evidence import append_row, write_file
 from .images import local_file
 from .qemu import execute, CommandResult
 from .resources import resource_path, execution_resources
@@ -24,13 +24,6 @@ RESOURCES = ('l2-media.iso', 'l2-media.jsonl', 'l2-media.json',
 
 def manifest(hashes, names):
     return ''.join(hashes[n] + '  ' + n + '\n' for n in names).encode('ascii')
-
-
-def write(path, raw):
-    with path.open('xb') as stream:
-        stream.write(raw)
-        stream.flush()
-        os.fsync(stream.fileno())
 
 
 def copy_verified(source, target, sha, size):
@@ -131,7 +124,7 @@ def attach_media(run, *, directory, checkout, xorriso, executor=execute):
         if l2.validate_package(snapshot, checkout=checkout, immutable=True) != package:
             raise ValueError('l2-snapshot-mismatch')
         content = manifest(package['hashes'], CONTENT)
-        write(snapshot / 'content.sha256', content)
+        write_file(run, 'l2-snapshot/content.sha256', content, mode='create')
         event(state='snapshot-verified', package=package, content_sha256=hashlib.sha256(content).hexdigest())
         iso = resource_path(run.directory, 'l2-media.iso')
         command(['-as', 'mkisofs', '-iso-level', '3', '-R', '-V', 'ROSETUN_L2',
@@ -139,29 +132,19 @@ def attach_media(run, *, directory, checkout, xorriso, executor=execute):
         sha, size, _ = l2._hash(iso, ISO_LIMIT)
         record = dict(path=str(iso), sha256=sha, size=size,
                       content_sha256=hashlib.sha256(content).hexdigest(), package=package)
-        write(resource_path(run.directory, 'l2-media.json'),
-              json.dumps(dict(record, tool_version=version), sort_keys=True).encode())
+        write_file(run, 'l2-media.json',
+                   json.dumps(dict(record, tool_version=version), sort_keys=True).encode(),
+                   mode='create')
         # Preserve old plans byte-for-byte when this API is not invoked.
         from .qemu import QemuConfig, _launch_plan
         from .images import ImageDescriptor
         plan = _launch_plan(QemuConfig(**plan['config']), ImageDescriptor(**plan['image']),
                             resource_path(run.directory, 'root.qcow2'), plan['uuid'], media=record)
-        run._read()
-        temporary = resource_path(run.directory, 'launch-plan.tmp')
-        with temporary.open('xb') as stream:
-            stream.write(json.dumps(plan, sort_keys=True).encode())
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, plan_path)
-        if os.name == 'posix':
-            fd = os.open(run.directory, os.O_RDONLY)
-            try:
-                os.fsync(fd)
-            finally:
-                os.close(fd)
+        write_file(run, 'launch-plan.json', json.dumps(plan, sort_keys=True).encode(),
+                   mode='replace', temporary='launch-plan.tmp')
         event(state='ready', sha256=sha, size=size, content_sha256=record['content_sha256'])
         for name in ('l2-import.jsonl', 'l2-receipt.json', 'l2-package/job.env', 'l2-package/manifest.sha256'):
-            write(resource_path(run.directory, name), b'')
+            write_file(run, name, b'', mode='create')
         return record
     except BaseException as error:
         if registered:
