@@ -12,7 +12,8 @@ import unittest
 from unittest.mock import patch
 
 from tools.vm.matrix.resources import (
-    StandLease, create_run, inspect_runs, read_manifest, recovery_plan, resource_path,
+    StandLease, create_run, inspect_runs, read_manifest, recovery_plan, reconcile_run,
+    resource_path,
 )
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -370,3 +371,150 @@ with StandLease(sys.argv[1], 'stand-a') as lease:
     @unittest.skipUnless(os.name == "nt", "Windows adapter untested on this OS")
     def test_windows_adapter(self):
         self.test_competing_process_and_independent_stands()
+
+
+BOOT = "0a1b2c3d-0000-4000-8000-000000000001"
+
+
+def process_resource(pid, start, boot=BOOT, platform="posix"):
+    return {"id": "qemu", "kind": "process", "pid": pid, "platform": platform,
+            "boot_id": boot, "start_id": str(start), "executable": "/usr/bin/qemu-system-x86_64"}
+
+
+def stat_text(pid, start):
+    # Field 22 (starttime) is index 19 after the parenthesised command name.
+    return f"{pid} (qemu (x)) S " + " ".join(["0"] * 18 + [str(start)]) + "\n"
+
+
+def fake_proc(boot=BOOT, stats=None, error=None):
+    stats = stats or {}
+
+    def read(path):
+        if error is not None:
+            raise error
+        if path == "/proc/sys/kernel/random/boot_id":
+            return boot + "\n"
+        if path in stats:
+            return stats[path]
+        raise FileNotFoundError(path)
+    return patch("tools.vm.matrix.resources._proc_text", side_effect=read)
+
+
+class ReconciliationTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name) / "state"
+
+    def run_with(self, *resources, run_id="run-a"):
+        with StandLease(self.root, "stand-a") as lease:
+            run = create_run(lease, run_id)
+            for resource in resources:
+                run.register(resource)
+        return run_id
+
+    def status(self, run_id="run-a"):
+        return reconcile_run(self.root, run_id)
+
+    def test_matching_boot_and_starttime_is_alive(self):
+        run_id = self.run_with(process_resource(4242, 777))
+        with fake_proc(stats={"/proc/4242/stat": stat_text(4242, 777)}):
+            result = self.status(run_id)
+        self.assertEqual("alive", result["status"])
+        self.assertEqual([{"id": "qemu", "pid": 4242, "status": "alive"}], result["processes"])
+
+    def test_missing_proc_entry_is_absent(self):
+        run_id = self.run_with(process_resource(4242, 777))
+        with fake_proc():
+            self.assertEqual("absent", self.status(run_id)["status"])
+
+    def test_foreign_boot_id_is_absent_without_reading_the_pid(self):
+        run_id = self.run_with(process_resource(4242, 777, boot="another-boot"))
+        with fake_proc(stats={"/proc/4242/stat": stat_text(4242, 777)}):
+            self.assertEqual("absent", self.status(run_id)["status"])
+
+    def test_reused_pid_with_another_starttime_is_absent(self):
+        run_id = self.run_with(process_resource(4242, 777))
+        with fake_proc(stats={"/proc/4242/stat": stat_text(4242, 778)}):
+            self.assertEqual("absent", self.status(run_id)["status"])
+
+    def test_unreadable_proc_is_unknown(self):
+        run_id = self.run_with(process_resource(4242, 777))
+        for error in (PermissionError("denied"), FileNotFoundError("no /proc here"), OSError("io")):
+            with self.subTest(error=type(error).__name__), fake_proc(error=error):
+                self.assertEqual("unknown", self.status(run_id)["status"])
+
+    def test_unreadable_stat_or_malformed_stat_is_unknown(self):
+        run_id = self.run_with(process_resource(4242, 777))
+
+        def read(path):
+            if path.endswith("boot_id"):
+                return BOOT
+            raise PermissionError(path)
+        with patch("tools.vm.matrix.resources._proc_text", side_effect=read):
+            self.assertEqual("unknown", self.status(run_id)["status"])
+        for text in ("garbage", "1 (x) S 0 0"):
+            with self.subTest(text=text), fake_proc(stats={"/proc/4242/stat": text}):
+                self.assertEqual("unknown", self.status(run_id)["status"])
+
+    def test_windows_process_is_unknown_and_never_reads_proc(self):
+        run_id = self.run_with(process_resource(4242, 777, platform="windows"))
+        with fake_proc(stats={"/proc/4242/stat": stat_text(4242, 777)}) as read:
+            self.assertEqual("unknown", self.status(run_id)["status"])
+        read.assert_not_called()
+
+    def test_run_without_a_process_is_absent(self):
+        run_id = self.run_with({"id": "disk", "kind": "file", "path": "disk"})
+        with fake_proc(error=PermissionError("not consulted")) as read:
+            result = self.status(run_id)
+        self.assertEqual({"run_id": run_id, "status": "absent", "processes": []}, result)
+        read.assert_not_called()
+
+    def test_alive_outranks_unknown_outranks_absent(self):
+        second = dict(process_resource(5000, 1), id="helper")
+        third = dict(process_resource(6000, 2, platform="windows"), id="other")
+        run_id = self.run_with(process_resource(4242, 777), second, third)
+        with fake_proc(stats={"/proc/4242/stat": stat_text(4242, 777)}):
+            result = self.status(run_id)
+        self.assertEqual("alive", result["status"])
+        self.assertEqual(["alive", "absent", "unknown"], [p["status"] for p in result["processes"]])
+        with fake_proc():
+            self.assertEqual("unknown", self.status(run_id)["status"])
+
+    def test_unreadable_manifest_is_an_error_not_a_status(self):
+        directory = self.root / "runs" / "broken"
+        directory.mkdir(parents=True)
+        with self.assertRaises((OSError, ValueError)):
+            reconcile_run(self.root, "broken")
+        with self.assertRaises(ValueError):
+            reconcile_run(self.root, "../broken")
+
+    def test_inspection_and_recovery_show_the_status_and_change_nothing(self):
+        run_id = self.run_with(process_resource(4242, 777))
+        before = {p.relative_to(self.root): p.read_bytes() for p in self.root.rglob("*") if p.is_file()}
+        with fake_proc(stats={"/proc/4242/stat": stat_text(4242, 777)}):
+            record = inspect_runs(self.root)[0]
+            plan = recovery_plan(self.root)
+        self.assertEqual("alive", record["process_status"])
+        self.assertEqual("alive", plan["runs"][0]["process_status"])
+        self.assertEqual(run_id, record["run_id"])
+        self.assertEqual(before, {p.relative_to(self.root): p.read_bytes()
+                                  for p in self.root.rglob("*") if p.is_file()})
+
+    def test_unreadable_run_has_no_process_status(self):
+        (self.root / "runs" / "broken").mkdir(parents=True)
+        self.assertNotIn("process_status", inspect_runs(self.root)[0])
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "needs the Linux /proc")
+    def test_live_child_is_alive_and_a_reaped_child_is_absent(self):
+        child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+        try:
+            text = Path(f"/proc/{child.pid}/stat").read_text()
+            start = text[text.rfind(")") + 2:].split()[19]
+            boot = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+            run_id = self.run_with(process_resource(child.pid, start, boot=boot))
+            self.assertEqual("alive", self.status(run_id)["status"])
+        finally:
+            child.kill()
+            child.wait(timeout=10)
+        self.assertEqual("absent", self.status(run_id)["status"])

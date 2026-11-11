@@ -171,6 +171,53 @@ def _atomic_manifest(directory, data):
             os.close(fd)
 
 
+def _proc_text(path):
+    return Path(path).read_text()
+
+
+def _process_status(resource):
+    """Compare one recorded process with the live host. No side effects."""
+    if resource['platform'] != 'posix':
+        return 'unknown'
+    try:
+        boot = _proc_text('/proc/sys/kernel/random/boot_id').strip()
+    except (OSError, ValueError):
+        return 'unknown'
+    if boot != resource['boot_id']:
+        return 'absent'
+    try:
+        text = _proc_text(f"/proc/{resource['pid']}/stat")
+    except (FileNotFoundError, ProcessLookupError):
+        # A vanished pid reads as missing only when the boot id above was readable.
+        return 'absent'
+    except (OSError, ValueError):
+        return 'unknown'
+    try:
+        start = text[text.rindex(')') + 2:].split()[19]
+    except (ValueError, IndexError):
+        return 'unknown'
+    return 'alive' if start == resource['start_id'] else 'absent'
+
+
+def _reconcile(data):
+    processes = [{'id': r['id'], 'pid': r['pid'], 'status': _process_status(r)}
+                 for r in data['resources'] if r['kind'] == 'process']
+    statuses = {p['status'] for p in processes}
+    overall = 'alive' if 'alive' in statuses else 'unknown' if 'unknown' in statuses else 'absent'
+    return {'run_id': data['run_id'], 'status': overall, 'processes': processes}
+
+
+def reconcile_run(state_directory, run_id):
+    """Report whether the recorded VM processes of one run still exist.
+
+    Only the manifest and /proc are read. `absent` means every recorded process is
+    provably gone (a run without a process resource counts as absent); `unknown`
+    means identity could not be established.
+    """
+    directory = _state_path(state_directory) / 'runs' / _identifier(run_id)
+    return _reconcile(read_manifest(directory, run_id=run_id))
+
+
 def inspect_runs(state_directory):
     """Read-only inventory. Invalid evidence has no inferred owner or stand."""
     root = _state_path(state_directory) / "runs"
@@ -188,6 +235,9 @@ def inspect_runs(state_directory):
                 record['problems'].remove('resource-state-unverified')
             if data["state"] in ("preparing", "prepared"):
                 record["problems"].append("preparation-is-not-execution")
+            reconciliation = _reconcile(data)
+            record["process_status"] = reconciliation["status"]
+            record["processes"] = reconciliation["processes"]
             result.append(record)
         except (OSError, ValueError, RecursionError):
             # Never print raw JSON, exception text or an untrusted directory name.
