@@ -15,5 +15,8 @@
 # Binary
 *.exe
 
+# Python bytecode
+__pycache__/
+
 # Temporary directory
 /temp
