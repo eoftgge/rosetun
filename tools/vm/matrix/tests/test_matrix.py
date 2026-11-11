@@ -1,4 +1,6 @@
+import contextlib
 import copy
+import io
 import json
 from pathlib import Path
 import subprocess
@@ -9,7 +11,9 @@ from unittest.mock import patch
 
 from tools.vm.matrix.catalog import LINUX_ROOT, SUITES, canonical, digest, read_catalog
 from tools.vm.matrix.config import load_profile, make_plan, validate_plan
+from tools.vm.matrix.cli import main
 from tools.vm.matrix.report import assess, assess_files, read_json
+from tools.vm.matrix.resources import StandLease, create_run
 
 ROOT = Path(__file__).resolve().parents[4]
 PACKAGE = ROOT / "tools/vm/matrix"
@@ -342,6 +346,79 @@ class FileAndCliTests(unittest.TestCase):
             self.assertEqual(first.returncode, 0, first.stderr)
             self.assertEqual(first.stdout, second.stdout)
             self.assertNotIn("run_id", json.loads(first.stdout)["policy"])
+
+
+class RecoverArchiveCliTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name) / "state"
+        with StandLease(self.root, "stand-a") as lease:
+            self.run = create_run(lease, "run-a")
+            self.run.register({"id": "qemu", "kind": "process", "pid": 4242, "platform": "posix",
+                               "boot_id": "boot-a", "start_id": "777", "executable": "/usr/bin/qemu"})
+
+    def tree(self):
+        return {p: p.read_bytes() for p in self.root.rglob("*") if p.is_file() and "archive" not in p.parts}
+
+    def call(self, *args, boot="boot-b"):
+        def read(path):
+            if path.endswith("boot_id"):
+                return boot
+            raise FileNotFoundError(path)
+        out = io.StringIO()
+        with patch("tools.vm.matrix.resources._proc_text", side_effect=read), contextlib.redirect_stdout(out):
+            code = main(["recover", "--state-directory", str(self.root), *args])
+        return code, json.loads(out.getvalue())
+
+    def test_recover_without_archive_only_reads_and_shows_the_status(self):
+        before = self.tree()
+        code, result = self.call()
+        self.assertEqual(0, code)
+        self.assertTrue(result["dry_run"])
+        self.assertEqual("absent", result["runs"][0]["process_status"])
+        self.assertEqual(before, self.tree())
+        self.assertFalse((self.root / "archive").exists())
+
+    def test_archive_moves_the_run_and_the_next_acquire_passes(self):
+        code, result = self.call("--run-id", "run-a", "--archive")
+        self.assertEqual((0, True), (code, result["archived"]))
+        self.assertTrue((self.root / "archive" / "run-a" / "manifest.json").is_file())
+        self.assertTrue((self.root / "archive" / "run-a.archive.json").is_file())
+        with StandLease(self.root, "stand-a"):
+            pass
+
+    def test_archive_refuses_a_matching_process_with_a_named_reason(self):
+        # The fake /proc has no entry for the pid, so a matching boot id is "absent";
+        # an unreadable stat file is what makes the status unknown here.
+        before = self.tree()
+
+        def read(path):
+            if path.endswith("boot_id"):
+                return "boot-a"
+            raise PermissionError(path)
+        out = io.StringIO()
+        with patch("tools.vm.matrix.resources._proc_text", side_effect=read), contextlib.redirect_stdout(out):
+            code = main(["recover", "--state-directory", str(self.root), "--run-id", "run-a", "--archive"])
+        result = json.loads(out.getvalue())
+        self.assertEqual(1, code)
+        self.assertEqual({"archived": False, "reason": "process-unknown"},
+                         {k: result[k] for k in ("archived", "reason")})
+        self.assertEqual(before, self.tree())
+
+    def test_archive_needs_run_id_and_run_id_needs_archive(self):
+        for args in (("--archive",), ("--run-id", "run-a")):
+            with self.subTest(args=args), contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as caught:
+                    self.call(*args)
+                self.assertEqual(2, caught.exception.code)
+        self.assertTrue((self.root / "runs" / "run-a").is_dir())
+
+    def test_archive_of_unreadable_run_is_refused(self):
+        (self.root / "runs" / "broken").mkdir()
+        code, result = self.call("--run-id", "broken", "--archive")
+        self.assertEqual((1, "run-manifest-invalid"), (code, result["reason"]))
+        self.assertTrue((self.root / "runs" / "broken").is_dir())
 
 
 if __name__ == "__main__":

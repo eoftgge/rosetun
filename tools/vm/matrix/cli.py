@@ -9,7 +9,7 @@ import sys
 from .catalog import LINUX_ROOT, SUITES
 from .config import load_profile, make_plan
 from .report import ASSESSMENT_SCHEMA, assess_files
-from .resources import inspect_runs, recovery_plan
+from .resources import ArchiveRefused, archive_run, inspect_runs, recovery_plan
 
 
 def doctor():
@@ -47,7 +47,13 @@ def main(argv=None):
     for name in ("runs", "recover"):
         command = commands.add_parser(name, help="read local resource records (no cleanup)")
         command.add_argument("--state-directory", required=True)
+        if name == "recover":
+            command.add_argument("--run-id")
+            command.add_argument("--archive", action="store_true",
+                                 help="move one run with no live VM process to archive/ (no deletion)")
     args = parser.parse_args(argv)
+    if args.command == "recover" and bool(args.archive) != bool(args.run_id):
+        parser.error("--archive and --run-id must be given together")
     try:
         if args.command == 'lab-smoke':
             from .lab import load_lab, plan_lab, lab_smoke
@@ -63,6 +69,12 @@ def main(argv=None):
                 from .orchestrator import run_linux_l2
                 result = run_linux_l2(config)
                 code = result['exit_code']
+        elif args.command == "recover" and args.archive:
+            try:
+                result, code = archive_run(args.state_directory, args.run_id), 0
+            except ArchiveRefused as refusal:
+                result, code = {"schema": "rosetun.matrix.archive.v1", "archived": False,
+                                "reason": refusal.reason, "cleanup_executed": False}, 1
         elif args.command in ("runs", "recover"):
             result = (recovery_plan(args.state_directory) if args.command == "recover" else
                       {"schema": "rosetun.matrix.runs.v1", "runs": inspect_runs(args.state_directory)})

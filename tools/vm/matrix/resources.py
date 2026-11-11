@@ -2,6 +2,7 @@
 
 import hashlib
 from dataclasses import dataclass
+from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
@@ -252,7 +253,7 @@ def recovery_plan(state_directory):
             "runs": runs, "actions": [
                 "retain evidence; independently establish ownership of invalid entries",
                 "verify process boot and creation identity before considering any PID action",
-                "verify file containment and resource absence before manually archiving records"
+                "when process_status is absent, recover --run-id R --archive releases the stand"
             ] if runs else [], "cleanup_executed": False}
 
 
@@ -266,6 +267,30 @@ def _lock(stream, acquire):
         fcntl.flock(stream.fileno(), (fcntl.LOCK_EX | fcntl.LOCK_NB) if acquire else fcntl.LOCK_UN)
     else:
         raise ValueError("local lease platform is unsupported")
+
+
+def _lock_stand(root, stand):
+    """Take the OS lock of a stand; the file is never unlinked or rewritten here."""
+    locks = root / "locks"
+    _no_links(locks)
+    locks.mkdir(parents=True, exist_ok=True)
+    path = locks / (hashlib.sha256(stand.encode()).hexdigest() + ".lock")
+    _no_links(path)
+    if path.exists():
+        _regular_file(path)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+    stream = os.fdopen(fd, "r+b", buffering=0)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise ValueError("expected a regular lock file")
+        _lock(stream, True)
+    except OSError:
+        stream.close()
+        raise ValueError("stand is already leased") from None
+    except BaseException:
+        stream.close()
+        raise
+    return stream, path
 
 
 class StandLease:
@@ -293,25 +318,7 @@ class StandLease:
         if self._used:
             raise ValueError("lease cannot be re-entered")
         self._used = True
-        locks = self._root / "locks"
-        _no_links(locks)
-        locks.mkdir(parents=True, exist_ok=True)
-        path = locks / (hashlib.sha256(self._stand.encode()).hexdigest() + ".lock")
-        _no_links(path)
-        if path.exists():
-            _regular_file(path)
-        fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
-        stream = os.fdopen(fd, "r+b", buffering=0)
-        try:
-            if not stat.S_ISREG(os.fstat(fd).st_mode):
-                raise ValueError("expected a regular lock file")
-            _lock(stream, True)
-        except OSError:
-            stream.close()
-            raise ValueError("stand is already leased") from None
-        except BaseException:
-            stream.close()
-            raise
+        stream, path = _lock_stand(self._root, self._stand)
         self._stream = stream
         self._pid = os.getpid()
         self._lock_path = path
@@ -345,6 +352,86 @@ class StandLease:
 
     def __exit__(self, *args):
         self.release()
+
+
+ARCHIVE_SCHEMA = "rosetun.matrix.archive.v1"
+
+
+class ArchiveRefused(ValueError):
+    """A named, expected refusal; nothing was changed."""
+
+    def __init__(self, reason):
+        super().__init__(reason)
+        self.reason = reason
+
+
+def _fsync_directory(path):
+    if os.name == "posix":
+        fd = os.open(path, os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+
+
+def archive_run(state_directory, run_id):
+    """Move one reconciled run from runs/ to archive/ so it stops blocking its stand.
+
+    Nothing is deleted or signalled and the run's files are not touched: the
+    directory is renamed as a whole. A held stand lock means a live controller.
+    """
+    try:
+        root = _state_path(state_directory)
+        _identifier(run_id)
+    except ValueError:
+        raise ArchiveRefused("invalid-run-id") from None
+    source = root / "runs" / run_id
+    _no_links(source)
+    if not source.is_dir():
+        raise ArchiveRefused("run-not-found")
+    try:
+        stand = read_manifest(source, run_id=run_id)["stand_id"]
+    except (OSError, ValueError, RecursionError):
+        raise ArchiveRefused("run-manifest-invalid") from None
+    try:
+        stream, _ = _lock_stand(root, stand)
+    except ValueError:
+        raise ArchiveRefused("stand-locked") from None
+    try:
+        # Read again under the lock: only now can nobody else change the run.
+        try:
+            data = read_manifest(source, run_id=run_id, stand_id=stand)
+        except (OSError, ValueError, RecursionError):
+            raise ArchiveRefused("run-manifest-invalid") from None
+        reconciliation = _reconcile(data)
+        if reconciliation["status"] != "absent":
+            raise ArchiveRefused("process-" + reconciliation["status"])
+        target_parent = root / "archive"
+        target, record_path = target_parent / run_id, target_parent / (run_id + ".archive.json")
+        _no_links(target_parent)
+        for path in (target, record_path):
+            if os.path.lexists(path):
+                raise ArchiveRefused("archive-exists")
+        record = {"schema": ARCHIVE_SCHEMA, "run_id": run_id, "stand_id": stand,
+                  "previous_state": data["state"], "previous_reasons": data["reasons"],
+                  "completion_verified": completion_verified(source, data),
+                  "processes": reconciliation["processes"],
+                  "utc": datetime.now(timezone.utc).isoformat()}
+        target_parent.mkdir(exist_ok=True)
+        os.rename(source, target)
+        _fsync_directory(source.parent)
+        _fsync_directory(target_parent)
+        with record_path.open("x", encoding="utf-8", newline="\n") as record_stream:
+            json.dump(record, record_stream, sort_keys=True, indent=2)
+            record_stream.write("\n")
+            record_stream.flush()
+            os.fsync(record_stream.fileno())
+        _fsync_directory(target_parent)
+        return {"schema": ARCHIVE_SCHEMA, "archived": True, "run_id": run_id,
+                "stand_id": stand, "record": "archive/" + record_path.name}
+    finally:
+        _lock(stream, False)
+        stream.close()
 
 
 @dataclass(frozen=True, repr=False)

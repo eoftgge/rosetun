@@ -12,8 +12,8 @@ import unittest
 from unittest.mock import patch
 
 from tools.vm.matrix.resources import (
-    StandLease, create_run, inspect_runs, read_manifest, recovery_plan, reconcile_run,
-    resource_path,
+    ArchiveRefused, StandLease, archive_run, create_run, inspect_runs, read_manifest,
+    recovery_plan, reconcile_run, resource_path,
 )
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -518,3 +518,134 @@ class ReconciliationTests(unittest.TestCase):
             child.kill()
             child.wait(timeout=10)
         self.assertEqual("absent", self.status(run_id)["status"])
+
+
+class ArchiveTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name) / "state"
+
+    def make_run(self, run_id="run-a", stand="stand-a", *resources):
+        with StandLease(self.root, stand) as lease:
+            run = create_run(lease, run_id)
+            for resource in resources:
+                run.register(resource)
+            run.mark("error", "preparation-failed")
+        return run.directory
+
+    def tree(self, base):
+        # A held Windows byte-range lock makes the lock file unreadable.
+        return {p.relative_to(base): p.read_bytes() for p in base.rglob("*")
+                if p.is_file() and "locks" not in p.relative_to(base).parts}
+
+    def refused(self, reason, run_id="run-a"):
+        before = self.tree(self.root)
+        with self.assertRaises(ArchiveRefused) as caught:
+            archive_run(self.root, run_id)
+        self.assertEqual(reason, caught.exception.reason)
+        self.assertEqual(before, self.tree(self.root))
+
+    def test_archiving_releases_the_stand_and_keeps_every_byte(self):
+        directory = self.make_run("run-a", "stand-a", {"id": "disk", "kind": "file", "path": "disk"})
+        (directory / "disk").write_bytes(b"evidence")
+        with self.assertRaisesRegex(ValueError, "unresolved"):
+            StandLease(self.root, "stand-a").acquire()
+        before = self.tree(directory)
+        with fake_proc():
+            result = archive_run(self.root, "run-a")
+        self.assertEqual({"schema": "rosetun.matrix.archive.v1", "archived": True, "run_id": "run-a",
+                          "stand_id": "stand-a", "record": "archive/run-a.archive.json"}, result)
+        self.assertFalse(directory.exists())
+        self.assertEqual(before, self.tree(self.root / "archive" / "run-a"))
+        record = json.loads((self.root / "archive" / "run-a.archive.json").read_text(encoding="utf-8"))
+        self.assertEqual({"schema", "run_id", "stand_id", "previous_state", "previous_reasons",
+                          "completion_verified", "processes", "utc"}, set(record))
+        self.assertEqual(("error", ["preparation-failed"], []),
+                         (record["previous_state"], record["previous_reasons"], record["processes"]))
+        self.assertTrue(record["utc"].endswith("+00:00"))
+        self.assertNotIn(read_manifest(self.root / "archive" / "run-a")["owner_token"],
+                         json.dumps(record))
+        self.assertEqual([], inspect_runs(self.root))
+        with StandLease(self.root, "stand-a"):
+            pass
+
+    def test_process_status_is_recorded_for_each_process(self):
+        self.make_run("run-a", "stand-a", process_resource(4242, 777))
+        with fake_proc():
+            archive_run(self.root, "run-a")
+        record = json.loads((self.root / "archive" / "run-a.archive.json").read_text(encoding="utf-8"))
+        self.assertEqual([{"id": "qemu", "pid": 4242, "status": "absent"}], record["processes"])
+
+    def test_alive_and_unknown_processes_are_refused_with_a_reason(self):
+        self.make_run("run-a", "stand-a", process_resource(4242, 777))
+        with fake_proc(stats={"/proc/4242/stat": stat_text(4242, 777)}):
+            self.refused("process-alive")
+        with fake_proc(error=PermissionError("denied")):
+            self.refused("process-unknown")
+        self.make_run("run-w", "stand-w", process_resource(1, 1, platform="windows"))
+        self.refused("process-unknown", "run-w")
+        self.assertTrue((self.root / "runs" / "run-a").is_dir())
+        self.assertFalse((self.root / "archive").exists())
+
+    def test_held_stand_lock_means_a_live_controller(self):
+        with StandLease(self.root, "stand-a") as lease:
+            create_run(lease, "run-a")
+            self.refused("stand-locked")
+        with fake_proc():
+            archive_run(self.root, "run-a")
+
+    def test_existing_archive_target_or_record_is_refused(self):
+        self.make_run()
+        (self.root / "archive" / "run-a").mkdir(parents=True)
+        (self.root / "archive" / "run-a" / "keep").write_bytes(b"older")
+        with fake_proc():
+            self.refused("archive-exists")
+        (self.root / "archive" / "run-a" / "keep").unlink()
+        (self.root / "archive" / "run-a").rmdir()
+        (self.root / "archive" / "run-a.archive.json").write_bytes(b"older")
+        with fake_proc():
+            self.refused("archive-exists")
+
+    def test_unreadable_foreign_and_missing_runs_are_not_touched(self):
+        directory = self.make_run("run-a", "stand-a")
+        foreign = self.make_run("run-b", "stand-b")
+        (directory / "manifest.json").write_bytes((foreign / "manifest.json").read_bytes())
+        (self.root / "runs" / "broken").mkdir()
+        (self.root / "runs" / "broken" / "manifest.json").write_text("{", encoding="utf-8")
+        (self.root / "runs" / "empty").mkdir()
+        with fake_proc():
+            self.refused("run-manifest-invalid", "run-a")
+            self.refused("run-manifest-invalid", "broken")
+            self.refused("run-manifest-invalid", "empty")
+            self.refused("run-not-found", "absent-run")
+            self.refused("invalid-run-id", "../runs")
+        self.assertFalse((self.root / "archive").exists())
+
+    def test_verified_complete_run_is_archived_the_same_way(self):
+        directory = self.make_run()
+        with patch("tools.vm.matrix.resources.completion_verified", return_value=True), fake_proc():
+            archive_run(self.root, "run-a")
+        record = json.loads((self.root / "archive" / "run-a.archive.json").read_text(encoding="utf-8"))
+        self.assertTrue(record["completion_verified"])
+        self.assertFalse(directory.exists())
+
+    def test_failed_rename_leaves_the_run_in_place(self):
+        directory = self.make_run()
+        before = self.tree(self.root)
+        with fake_proc(), patch("tools.vm.matrix.resources.os.rename", side_effect=OSError("xdev")):
+            with self.assertRaises(OSError):
+                archive_run(self.root, "run-a")
+        self.assertTrue(directory.is_dir())
+        self.assertEqual(before, self.tree(self.root))
+        with fake_proc():
+            archive_run(self.root, "run-a")
+
+    def test_other_runs_of_the_stand_still_block_it(self):
+        with StandLease(self.root, "stand-a") as lease:
+            create_run(lease, "run-a")
+            create_run(lease, "run-b")
+        with fake_proc():
+            archive_run(self.root, "run-a")
+        with self.assertRaisesRegex(ValueError, "unresolved"):
+            StandLease(self.root, "stand-a").acquire()
