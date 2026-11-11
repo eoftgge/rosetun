@@ -7,6 +7,41 @@ operations; the limited L2 execution path is described below. Existing legacy
 matrices remain supported. Internal QEMU qualification does not establish
 network protection or scenario/release acceptance.
 
+## When a stand is blocked
+
+A run that did not reach a verified completion keeps its stand locked:
+`run` and the lease refuse with "stand has unresolved runs". One run whose
+manifest cannot be read blocks every stand.
+
+`python -m tools.vm.matrix recover --state-directory D` only reads. For each run
+it prints the state, the reasons and `process_status`, the result of comparing
+the recorded VM process with the host (`/proc/sys/kernel/random/boot_id` and
+the start time in `/proc/<pid>/stat`; Linux only):
+
+- `absent`: another boot, no such PID, or a different start time (a reused
+  PID). A run that recorded no process is `absent` too.
+- `alive`: the same process is still running.
+- `unknown`: the check could not be made (unreadable `/proc`, not Linux, a
+  Windows process record).
+
+`recover --state-directory D --run-id R --archive` moves one run with
+`absent` to `archive/R` in the same state directory and writes
+`archive/R.archive.json` (previous state and reasons, the status of each
+process, UTC time, no owner token). It first takes the stand's OS lock, so it
+refuses while a controller is alive, and it refuses if `archive/R` exists.
+Afterwards the stand can be leased again. A run that completed with verified
+evidence is archived the same way.
+
+`--archive` does not delete anything, does not stop or signal any process and
+does not touch a run whose manifest is unreadable or belongs to another run
+(the refusal is `run-manifest-invalid`); those stay a manual case. Refusals
+print `archived: false` and a `reason`, and change nothing.
+
+On `alive` the VM is still running and holds the overlay. Stop that QEMU
+yourself (the controller is gone, so nothing else will), check that
+`recover` now shows `absent`, then archive. On `unknown` establish the
+process state by hand first.
+
 ## Owner-prepared Linux L2 execution (stage 5a)
 
 `linux_l2.LinuxL2Job` runs the existing L2 Bash checks through the installed
