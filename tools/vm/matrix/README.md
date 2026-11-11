@@ -145,9 +145,61 @@ absence, TUN, nftables or Lockdown behavior. L3/L4/L5/Proxy are not migrated.
 
 Offline tests use inert ELF headers, synthetic legacy reports and fake QGA.
 Run `python -B -m unittest tools.vm.matrix.tests.test_linux_l2 -q` and the existing
-matrix tests/legacy self-tests. Real L2 execution, report sizes on actual runs,
-agent loss/recovery during L2, guest cleanup and cross-path parity remain UNRUN.
-The existing smoke qualification does not qualify L2.
+matrix tests/legacy self-tests. Separate real L2 qualification passed on
+2026-11-11 on the existing Debian 13/WSL2 KVM stand, using source/artifacts from
+`88d05d55f05c72cbc2a6a9ab0826486f8b3efa8a` (recorded clean build checkout),
+Rust 1.96.0, QEMU/qemu-ga 10.0.13, pc-i440fx-10.0, qemu.qmp 0.0.6,
+host Python 3.13.5, guest kernel 6.12.115+deb13.1-amd64 and systemd 257.13.
+The owner separately authorized the build, package preparation and real VM runs.
+No images or dependencies were downloaded or installed. Seven already cached
+Cargo archives were reused locally after Cargo.lock checksum verification;
+the build ran with `CARGO_NET_OFFLINE=true`.
+
+Five fresh overlays covered normal Python/QGA execution, a dropped real exec PID
+reply before the relay forwarded it, a stopped agent after the first report
+block, changed boot rejection, and direct legacy launcher execution through an
+independent serial console. The four completed L2 runs each produced 33 PASS,
+one optional `missing-group.refusal` SKIP and cleanup PASS. Every retained report
+was 9,500 bytes. A qualification-only RPC wrapper requested 4 KiB blocks from
+the real agent to exercise multi-block collection (three blocks per report);
+production's 32 KiB request size and limits were unchanged. The read-loss case
+retained its first 4,096 bytes and unconfirmed handle evidence, then recovered
+the same boot and collected without resubmission. The lost exec reply left
+submission unknown and recovered only through saved results. Deadlines were
+unchanged. Each completed unit had one journal start and independent console
+checks confirmed the endpoint and fixture absent. A new QGA-observed boot
+rejected collection even though VM completion subsequently succeeded.
+
+All five final VMs and one earlier diagnostic VM had verified completion, child
+reap and closed local sessions/endpoints; the stand was reused. The original
+base remained 476,774,400 bytes with SHA-256
+`f4a05e7aba2c889437f6bce798926a381b7ebf257178e75d140493f817b74de8`.
+Packages were manually copied through the independent console from a temporary
+read-only 9p share into each overlay. This is qualification setup, not an L2
+delivery API. The earlier diagnostic attempt retained a DrvFS UID through
+`cp -a`; explicit root ownership in the guest fixed placement without changing
+launcher checks. Its overlay, interrupted-run evidence and completion remain
+retained separately.
+
+The direct legacy and Python/QGA runs used the same catalog, scripts and
+binaries on equivalent fresh stands. Per-ID comparison matched required flags,
+evidence, groups, expectations, actual results and successful cleanup; raw
+reasons are retained separately. Original PowerShell and Python assessment
+also agreed on all 34 rows in all four complete real reports. This qualifies
+that limited launcher/Bash/result comparison. Full legacy Hyper-V/SSH host
+orchestration parity remains UNRUN. Unknown guest-handle closure, controller
+restart, power-loss durability and other images/builds remain unqualified;
+release gate stays false and security invariants UNVERIFIED.
+
+Evidence is retained under git-ignored
+`tools/vm/logs/qga-5a-qualification-20261111/`: build provenance and local-cache
+reuse record, qualification harness, `real-2/qualification-results.json`,
+`real-2/scenario-comparison.json`, `real-2/legacy-assessment-comparison.json`,
+serial logs and per-run ledger/QGA/job/raw-result/completion evidence. Production
+source hashes were checked against the qualified commit. Linux offline checks:
+245 Python tests (18 platform skips), 35 targeted tests without skips,
+legacy shell self-test 122/122 and smoke shell self-test PASS. The earlier smoke
+qualification remains separate from these actual L2 results.
 
 Manual qualification by the owner:
 
@@ -164,8 +216,8 @@ Manual qualification by the owner:
 4. Compare saved legacy and Python-path runs by each ID below, required flag,
    evidence, actual result/reason and cleanup, with matched checkout/artifacts and
    equivalent clean stands. Send back all saved evidence and version/image data
-   for discrepancies. Equal PASS counts do not establish parity. No real
-   comparison has been performed, so parity is not claimed.
+   for discrepancies. Equal PASS counts do not establish parity. The limited
+   real comparison above does not establish full Hyper-V/SSH orchestration parity.
 
 Large artifact delivery remains manual and is the next stage; smoke delivery is
 unchanged. The scenario mapping below refers to the same unchanged `run-l2.sh`

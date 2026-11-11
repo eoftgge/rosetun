@@ -5,8 +5,10 @@ runs the same `run-l2.sh` and all 34 catalog IDs through the installed launcher.
 It requires owner-built artifacts with matching provenance and a complete package
 manually placed in the guest, bound to its stand, VM UUID and observed boot.
 It preserves the legacy preflight and cleanup and uses the existing Python
-assessment. Artifact delivery and real L2/parity qualification remain owner work;
-the API performs no build and requires no Windows, Hyper-V, SSH or WSL.
+assessment. Artifact delivery remains manual. The linked guide records the
+real L2 qualification and limits of its legacy comparison; full Hyper-V/SSH
+orchestration parity remains unverified. The API performs no build and requires
+no Windows, Hyper-V, SSH or WSL.
 
 The separate opt-in [QGA infrastructure smoke delivery](../matrix/README.md#bounded-smoke-delivery-over-qga-stage-4b3)
 reuses the verified guest launcher and start dispatcher with its own exact package
