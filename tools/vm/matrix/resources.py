@@ -19,6 +19,16 @@ STATES = ("preparing", "prepared", "starting", "running", "stopping", "exited",
 DEVICES = {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$",
            *(f"{prefix}{i}" for prefix in ("COM", "LPT") for i in "0123456789¹²³")}
 
+EXECUTION_FILES = {'execution-identity': 'execution-identity.json',
+                   'execution-summary': 'execution-summary.json'}
+
+
+def execution_resources(data):
+    entries = [r for r in data['resources'] if r['id'] in EXECUTION_FILES]
+    if entries and {r['id']: r.get('path') for r in entries} != EXECUTION_FILES:
+        raise ValueError('incomplete-execution-resources')
+    return entries
+
 
 def _identifier(value):
     if type(value) is not str or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,95}", value):

@@ -10,7 +10,7 @@ import threading
 import uuid
 
 from .images import image_chain, local_file
-from .resources import resource_path
+from .resources import resource_path, execution_resources
 
 OUTPUT_LIMIT = 256 * 1024
 TIMEOUT_SECONDS = 30
@@ -164,7 +164,7 @@ def prepare(run, image, config, *, executor=execute):
     Never retry in this directory; retain failed and partial resources.
     """
     manifest = run._read()
-    if manifest['state'] != 'prepared' or manifest['resources']:
+    if manifest['state'] != 'prepared' or manifest['resources'] != execution_resources(manifest):
         raise ValueError("preparation requires an empty owned run")
     diagnostics = 'preparation.jsonl'
     plan_path = 'launch-plan.json'

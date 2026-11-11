@@ -9,7 +9,7 @@ import re
 from . import linux_l2 as l2
 from .images import local_file
 from .qemu import execute, CommandResult
-from .resources import resource_path
+from .resources import resource_path, execution_resources
 
 CONTENT = tuple(n for n in l2.PAYLOAD if n != 'job.env')
 SERIAL = 'rosetun-l2-media'
@@ -70,7 +70,7 @@ def verify_media(record):
 def attach_media(run, *, directory, checkout, xorriso, executor=execute):
     """After qemu.prepare, before start. Input is the exact immutable CONTENT tree."""
     plan_path = resource_path(run.directory, 'launch-plan.json')
-    if run._read()['state'] != 'prepared' or len(run._read()['resources']) != 3:
+    if run._read()['state'] != 'prepared' or len(run._read()['resources']) != 3 + len(execution_resources(run._read())):
         raise ValueError('l2-media-requires-new-prepared-run')
     plan = l2._json(plan_path.read_bytes())
     if not plan['config'].get('qga') or plan['config']['machine'] != 'pc-i440fx-10.0':

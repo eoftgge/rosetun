@@ -77,7 +77,7 @@ def source_identity(checkout):
                 source_dirty_digest=hashlib.sha256(status + b'\n--\n' + diff).hexdigest())
 
 
-def validate_package(directory, *, checkout, immutable=False):
+def validate_package(directory, *, checkout, immutable=False, check_source=True):
     """Stream hash existing binaries; reject any extra file, directory or link."""
     root, checkout = Path(directory), Path(checkout)
     for path in (root, checkout):
@@ -134,7 +134,8 @@ def validate_package(directory, *, checkout, immutable=False):
             provenance.get('target') != 'x86_64-unknown-linux-gnu' or
             provenance.get('stage', 'l2') != 'l2'):
         raise JobError('l2-provenance-target')
-    source = source_identity(checkout)
+    source = source_identity(checkout) if check_source else {
+        k: provenance.get(k) for k in ('source_sha', 'source_dirty', 'source_dirty_digest')}
     if (not re.fullmatch('[0-9a-f]{40}', source['source_sha']) or
             type(provenance.get('source_dirty')) is not bool or
             any(provenance.get(k) != v for k, v in source.items())):

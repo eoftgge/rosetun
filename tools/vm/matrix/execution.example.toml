@@ -1,0 +1,47 @@
+schema = "rosetun.matrix.execution.v1"
+mode = "exploratory"
+platform = "linux-x86_64-kvm"
+state_directory = "/srv/rosetun-state"
+stand_id = "linux-l2-example"
+xorriso = "/usr/bin/xorriso"
+content_directory = "/srv/l2-content"
+source_checkout = "/srv/l2-source"
+
+[image]
+schema = "rosetun.matrix.image.v1"
+identifier = "prepared-l2-example"
+guest_os = "linux"
+architecture = "x86_64"
+path = "/srv/images/prepared-l2.qcow2"
+# Replace both placeholders with independently verified prepared-image values.
+size_bytes = 1
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+format = "qcow2"
+profile = "bios-i440fx-v1"
+
+[qemu]
+schema = "rosetun.matrix.qemu.v1"
+executable = "/usr/bin/qemu-system-x86_64"
+image_executable = "/usr/bin/qemu-img"
+bios = "/usr/share/seabios/bios.bin"
+machine = "pc-i440fx-10.0"
+accelerator = "kvm"
+cpu = "host"
+memory_mib = 2048
+vcpus = 2
+qga = true
+
+[accounts]
+user_a = "l2a"
+user_b = "l2b"
+
+[timeouts]
+scenario = 30
+unit = 180
+job = 900
+
+[deadlines]
+preparation = 600
+boot = 300
+import = 900
+execution = 1080

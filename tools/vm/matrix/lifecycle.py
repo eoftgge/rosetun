@@ -26,7 +26,7 @@ from .diagnostics import StderrSink
 from .images import ImageDescriptor, image_chain, local_file
 from .qemu import QemuConfig, CommandResult, _launch_plan, execute, OUTPUT_LIMIT
 from .report import _unique_object, _invalid_constant
-from .resources import resource_path
+from .resources import resource_path, execution_resources
 
 
 class LifecycleError(ValueError):
@@ -146,6 +146,32 @@ class Vm:
     @_guest_serialized
     def observe_guest(self):
         return self._observe_guest()
+
+    def wait_initial_guest(self, *, timeout, clock=time.monotonic, sleep=time.sleep):
+        """Bound first-agent startup separately from post-operation recovery."""
+        if self.last_boot_id is not None or not 0 < timeout <= 300:
+            raise LifecycleError('initial-guest-wait-requires-unobserved-boot', self)
+        deadline, previous = clock() + timeout, self.timeout
+        try:
+            for attempt in range(20):
+                remaining = deadline - clock()
+                if remaining <= 0:
+                    break
+                self.timeout = min(10, remaining)
+                try:
+                    return self.observe_guest()
+                except LifecycleError:
+                    if self.process.poll() is not None or self.evidence_failed:
+                        raise
+                    self.qga.close()
+                    if not self.qga.closed:
+                        raise LifecycleError('initial-qga-close-unconfirmed', self)
+                    self._sync_seed = (self._sync_seed + 1) % 2**63
+                    self._new_qga()
+                    sleep(min(15, max(0, deadline - clock())))
+            raise LifecycleError('initial-guest-deadline', self)
+        finally:
+            self.timeout = previous
 
     @_guest_serialized
     def recover_guest(self):
@@ -459,6 +485,7 @@ def start(run, *, timeout=5, executor=execute):
     _host()
     expected = {'preparation': 'preparation.jsonl', 'launch-plan': 'launch-plan.json',
                 'overlay': 'root.qcow2'}
+    expected.update({r['id']: r['path'] for r in execution_resources(manifest)})
     if any(r['id'].startswith('l2-media-') for r in manifest['resources']):
         from .l2_media import RESOURCES
         expected.update({'l2-media-' + str(i): n for i, n in enumerate(RESOURCES)})
@@ -581,7 +608,8 @@ def start(run, *, timeout=5, executor=execute):
         except BaseException:
             pass
         try:
-            vm._event('start', 'interrupted' if not isinstance(error, Exception) else 'error')
+            if not vm.completed:
+                vm._event('start', 'interrupted' if not isinstance(error, Exception) else 'error')
         except (OSError, ValueError):
             pass
         try:
