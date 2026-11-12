@@ -670,6 +670,7 @@ struct EngineControls {
     outcomes: Mutex<VecDeque<bool>>,
     readiness: Mutex<VecDeque<bool>>,
     adapter_busy: Mutex<VecDeque<bool>>,
+    address_held: Mutex<VecDeque<bool>>,
     rendered_rules: Mutex<Vec<RuleSet>>,
     /// Server addresses of the extra nodes in each render.
     rendered_extra: Mutex<Vec<Vec<String>>>,
@@ -687,6 +688,15 @@ impl EngineControls {
     /// The next starts exit like sing-box while Windows removes the old adapter.
     fn adapter_busy_next(&self, count: usize) {
         self.adapter_busy
+            .lock()
+            .unwrap()
+            .extend(std::iter::repeat_n(true, count));
+    }
+
+    /// The next starts exit like sing-box when Windows still holds the
+    /// tunnel address of the previous session.
+    fn address_held_next(&self, count: usize) {
+        self.address_held
             .lock()
             .unwrap()
             .extend(std::iter::repeat_n(true, count));
@@ -811,7 +821,14 @@ impl EngineBackend for ControlledEngine {
             .unwrap()
             .pop_front()
             .unwrap_or(false);
-        let running = Arc::new(AtomicBool::new(!adapter_busy));
+        let address_held = self
+            .controls
+            .address_held
+            .lock()
+            .unwrap()
+            .pop_front()
+            .unwrap_or(false);
+        let running = Arc::new(AtomicBool::new(!adapter_busy && !address_held));
         *self.controls.running.lock().expect("test process mutex") = Some(Arc::clone(&running));
         let ready = self
             .controls
@@ -824,6 +841,7 @@ impl EngineBackend for ControlledEngine {
             running,
             ready,
             adapter_busy,
+            address_held,
         }))
     }
 }
@@ -833,12 +851,14 @@ struct ControlledProcess {
     running: Arc<AtomicBool>,
     ready: bool,
     adapter_busy: bool,
+    address_held: bool,
 }
 
 impl EngineProcess for ControlledProcess {
     fn startup_hints(&self) -> rosetun_engine::StartupHints {
         rosetun_engine::StartupHints {
             adapter_still_removing: self.adapter_busy,
+            tunnel_address_in_use: self.address_held,
             ..Default::default()
         }
     }
@@ -4202,6 +4222,7 @@ impl XrayRunner for FakeXrayRunner {
             running,
             ready: true,
             adapter_busy: false,
+            address_held: false,
         }))
     }
 }
@@ -5127,6 +5148,45 @@ fn engine_start_retries_end_after_two_and_other_exits_are_not_retried() {
         .expect_err("an ordinary exit fails");
     assert_eq!(error.code, ErrorCode::EngineFailed);
     assert_eq!(controls.spawns(), 1);
+}
+
+#[test]
+fn a_tunnel_address_held_by_windows_is_not_retried_and_carries_a_marker() {
+    let (helper, controls, _, _) = supervised_helper(true);
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    controls.address_held_next(1);
+
+    let error = helper
+        .connect(&request)
+        .expect_err("the address is still held");
+    assert_eq!(error.code, ErrorCode::EngineFailed);
+    assert!(error.is_tunnel_address_in_use());
+    assert_eq!(controls.spawns(), 1);
+    match helper.status().state {
+        ConnectionState::Failed { reason, .. }
+        | ConnectionState::FailedProtected { reason, .. } => {
+            assert!(rosetun_ipc::is_tunnel_address_in_use_reason(&reason));
+        }
+        other => panic!("expected a failed connection, got {other:?}"),
+    }
+}
+
+#[test]
+fn the_held_tunnel_log_reads_the_adapter_and_survives_a_failed_read() {
+    for lookup in [
+        (|_: &str| Ok(None))
+            as fn(&str) -> std::io::Result<Option<rosetun_routing::TunnelAdapterState>>,
+        |_| {
+            Ok(Some(rosetun_routing::TunnelAdapterState {
+                oper_status: "up",
+                description: "Example Tunnel".to_owned(),
+            }))
+        },
+        |_| Err(std::io::Error::other("lookup failed")),
+    ] {
+        log_held_tunnel("rosetun0", "172.19.0.1/30", lookup, 1);
+    }
 }
 
 #[test]

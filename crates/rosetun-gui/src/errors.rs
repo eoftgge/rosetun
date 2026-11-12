@@ -789,7 +789,9 @@ pub(crate) fn client(language: Language, error: &ClientError) -> String {
                 }
                 ErrorCode::Internal => tr_in(language, "error-code-internal", &FluentArgs::new()),
             };
-            if error.code == ErrorCode::EngineFailed {
+            if error.is_tunnel_address_in_use() {
+                tr_in(language, "error-tunnel-held-by-windows", &FluentArgs::new())
+            } else if error.code == ErrorCode::EngineFailed {
                 // The helper's detail is English and internal; it stays in the service log.
                 tr_in(
                     language,
@@ -1219,6 +1221,24 @@ mod tests {
             assert!(!message.contains("test-secret"));
             assert!(!message.contains("sub.example.com"));
         }
+    }
+
+    #[test]
+    fn a_tunnel_held_by_windows_gets_its_own_text_in_both_languages() {
+        let held = ClientError::Helper(HelperError::tunnel_address_in_use());
+        assert_eq!(
+            client(Language::English, &held),
+            "Windows still holds the tunnel of the last session · restart the computer"
+        );
+        assert_eq!(
+            client(Language::Russian, &held),
+            "Windows ещё держит туннель прошлой сессии · перезагрузите компьютер"
+        );
+        let other = ClientError::Helper(HelperError::new(ErrorCode::EngineFailed, "exited"));
+        assert_ne!(
+            client(Language::English, &other),
+            client(Language::English, &held)
+        );
     }
 
     #[test]
