@@ -514,6 +514,9 @@ pub struct StartupHints {
     /// The engine failed because the previous tunnel adapter was still being
     /// removed by the system; a later start is expected to succeed.
     pub adapter_still_removing: bool,
+    /// The engine failed because the tunnel address is still configured by a
+    /// previous session; waiting and retrying does not clear it.
+    pub tunnel_address_in_use: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
