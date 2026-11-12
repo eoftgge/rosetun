@@ -25,6 +25,13 @@ $results = [Collections.Generic.List[object]]::new()
 $recorder = New-RosetunProxyResults $Directory synthetic-vm synthetic-boot $UseHostNode
 $guestDir = Join-Path $recorder.Directory 'guest'
 $null = New-Item -ItemType Directory -Path $guestDir
+# The guest block under test writes to $env:TEMP, which every Windows guest has and a
+# Linux runner does not. Without it the block fails before netsh.exe and every case
+# that expects UNVERIFIED passes for the wrong reason. The recorder creates its own
+# directory and refuses an existing one, so this goes inside it afterwards.
+if ([string]::IsNullOrEmpty($env:TEMP)) {
+    $env:TEMP = (New-Item -ItemType Directory -Path (Join-Path $recorder.Directory 'temp')).FullName
+}
 # Take actual cleanup names from the matrix, including all request variants.
 foreach ($name in @('RequestNames', 'RecordName', 'DesktopTool')) {
     $assignment = $ast.EndBlock.Statements | Where-Object { $_ -is [Management.Automation.Language.AssignmentStatementAst] -and $_.Left.Extent.Text -eq ('$' + $name) }
@@ -163,6 +170,12 @@ if ($Case -eq 'fail-export') {
 } elseif (-not (Test-Path (Join-Path $recorder.Directory 'status.json'))) { throw 'No completion.' }
 if (-not $script:lanRemoved -or -not $script:watchStopped -or -not $script:disconnected -or ($UseHostNode -and -not $script:nodeStopped)) { throw 'Cleanup path was not executed.' }
 if ($Case -eq 'not-started' -and ($script:offCalled -or $script:dumpCalled -or $components.lockdown -ne 'NOT_CREATED')) { throw 'Unacquired Lockdown touched.' }
-if ($Case -in @('success', 'no-host') -and (-not $script:offCalled -or -not $script:dumpCalled)) { throw 'Observation path missing.' }
+# Every other case must reach the WFP dump, so an UNVERIFIED verdict comes from parsing the
+# fake dump and not from the block failing early. These stop before netsh.exe by design:
+# the matrix has no Lockdown to observe, or a cleanup or earlier error already settled the
+# verdict, or the substituted guest call refuses the read.
+$beforeDump = @('not-started', 'prior-error', 'off-fails', 'off-throws', 'fail-cleanup',
+    'read-denied', 'bad-envelope', 'fail-infrastructure')
+if ($Case -notin $beforeDump -and (-not $script:offCalled -or -not $script:dumpCalled)) { throw 'Observation path missing.' }
 
 if ($Case -in @('prior-error', 'off-fails', 'off-throws', 'fail-cleanup') -and $script:dumpCalled) { throw 'Established error was re-observed.' }
