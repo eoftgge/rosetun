@@ -26,7 +26,7 @@ def doctor():
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="Plan, assess, inspect or explicitly execute exploratory L2")
+    parser = argparse.ArgumentParser(description="Plan, assess, inspect or explicitly execute exploratory Linux L2 or L3")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("doctor", help="inspect local prerequisites without executing binaries")
     lab = commands.add_parser('lab-smoke', help='qualify the isolated two-VM infrastructure only')
@@ -34,8 +34,8 @@ def main(argv=None):
     lab.add_argument('--dry-run', action='store_true')
     lab.add_argument('--canary', action='store_true',
                      help='send a deliberate leak and succeed only if exactly that leak is detected')
-    run = commands.add_parser('run', help='execute exploratory Linux L2 on an explicitly selected stand')
-    run.add_argument('suite', choices=['linux-l2'])
+    run = commands.add_parser('run', help='execute exploratory Linux L2 or L3 on an explicitly selected stand')
+    run.add_argument('suite', choices=['linux-l2', 'linux-l3'])
     run.add_argument('--config', required=True)
     run.add_argument('--dry-run', action='store_true')
     plan = commands.add_parser("plan", help="write a deterministic catalog snapshot to stdout")
@@ -63,13 +63,16 @@ def main(argv=None):
             result = plan_lab(config) if args.dry_run else lab_smoke(config, canary=args.canary)
             code = 0 if args.dry_run else result['exit_code']
         elif args.command == 'run':
-            from .execution import load_execution, preflight
+            from .execution import load_execution, preflight, suite_of
             config = load_execution(args.config)
+            if suite_of(config) != args.suite:
+                raise ValueError('configuration is for another suite')
             if args.dry_run:
                 result, code = preflight(config, dry_run=True), 0
             else:
-                from .orchestrator import run_linux_l2
-                result = run_linux_l2(config)
+                from . import orchestrator
+                result = (orchestrator.run_linux_l3 if args.suite == 'linux-l3'
+                          else orchestrator.run_linux_l2)(config)
                 code = result['exit_code']
         elif args.command == "recover" and args.archive:
             try:

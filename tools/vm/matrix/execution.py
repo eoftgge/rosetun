@@ -1,6 +1,7 @@
 """Strict execution configuration, separate from assessment profiles."""
 
 from dataclasses import fields
+import ipaddress
 from pathlib import Path
 import platform
 import os
@@ -14,6 +15,8 @@ from .qemu import QemuConfig
 from .resources import _identifier, _state_path, inspect_runs
 
 SCHEMA = 'rosetun.matrix.execution.v1'
+SCHEMA_V2 = 'rosetun.matrix.execution.v2'
+SUITES = ('linux-l2', 'linux-l3')
 FIELDS = {'schema', 'mode', 'platform', 'state_directory', 'stand_id', 'image', 'qemu',
           'xorriso', 'content_directory', 'source_checkout', 'accounts', 'timeouts', 'deadlines'}
 
@@ -23,10 +26,42 @@ def exact(value, names):
         raise ValueError('unknown or missing execution configuration fields')
 
 
+def suite_of(config):
+    """Version 1 has no suite field and always means the L2 job."""
+    return config.get('suite', 'linux-l2')
+
+
+def validate_l3(block):
+    """Fill the optional job.env values; the hash of the delivered engine has no default."""
+    from .linux_l2 import DOCUMENTATION_V4, L3_DEFAULTS
+    if (type(block) is not dict or 'sing_box_sha256' not in block or
+            set(block) - {'sing_box_sha256'} - set(L3_DEFAULTS)):
+        raise ValueError('unknown or missing L3 configuration fields')
+    block = dict(L3_DEFAULTS, **block)
+    if type(block['sing_box_sha256']) is not str or not re.fullmatch('[0-9a-f]{64}', block['sing_box_sha256']):
+        raise ValueError('sing-box SHA-256 must be 64 lowercase hex digits')
+    for name in ('host_address', 'probe_address', 'dns_probe_address'):
+        value = block[name]
+        if (type(value) is not str or not re.fullmatch(r'[0-9]{1,3}(\.[0-9]{1,3}){3}', value) or
+                not any(ipaddress.IPv4Address(value) in net for net in DOCUMENTATION_V4)):
+            raise ValueError('L3 addresses must be documentation IPv4 addresses')
+    if type(block['node_port']) is not int or not 1 <= block['node_port'] <= 65535:
+        raise ValueError('invalid L3 node port')
+    return block
+
+
 def validate(config):
-    exact(config, FIELDS)
-    if config['schema'] != SCHEMA:
+    if type(config) is not dict or config.get('schema') not in (SCHEMA, SCHEMA_V2):
         raise ValueError('unsupported execution schema')
+    if config['schema'] == SCHEMA:
+        exact(config, FIELDS)
+    else:
+        suite = config.get('suite')
+        if suite not in SUITES:
+            raise ValueError('unsupported execution suite')
+        exact(config, FIELDS | {'suite'} | ({'l3'} if suite == 'linux-l3' else set()))
+        if suite == 'linux-l3':
+            config['l3'] = validate_l3(config['l3'])
     if config['mode'] != 'exploratory':
         raise ValueError('execution supports exploratory only; release is unsupported')
     if config['platform'] != 'linux-x86_64-kvm':
@@ -71,8 +106,11 @@ def preflight(config, *, dry_run=False):
     QemuConfig(**config['qemu']).validate()
     local_file(config['xorriso'])
     from .linux_l2 import validate_package
+    suite = suite_of(config)
+    l3 = config.get('l3')
+    extra = dict(profile='l3', sing_box_sha256=l3['sing_box_sha256'], pending_requests=True) if l3 else {}
     package = validate_package(config['content_directory'], checkout=config['source_checkout'],
-                               immutable=True, check_source=not dry_run)
+                               immutable=True, check_source=not dry_run, **extra)
     from .l2_media import TOTAL_LIMIT
     if sum(package['sizes'].values()) > TOTAL_LIMIT:
         raise ValueError('L2 content exceeds media limit')
@@ -90,16 +128,23 @@ def preflight(config, *, dry_run=False):
             raise ValueError('qemu.qmp 0.0.6 required')
         from .linux_l2 import source_identity
         controller_source = source_identity(controller)
-    return dict(schema='rosetun.matrix.execution-plan.v1', dry_run=dry_run,
+    actions = ['lease', 'create run and identities', 'overlay', 'ISO', 'start paused',
+               'resume', 'observe boot', 'import once', 'verify receipt', 'submit once',
+               'wait job timeout + 125 seconds', 'collect at most twice', 'close', 'summary']
+    limitations = ['no controller restart recovery', 'no automatic file cleanup',
+                   'no network', 'dry-run does not execute binary version checks']
+    if l3:
+        actions.insert(2, 'write the five L3 lab requests into the content directory')
+        limitations += ['the VM has no network: preflight.baseline is expected to FAIL and the '
+                        'remaining scenarios to ERROR',
+                        'the sing-box binary is hashed, never executed, on the controller']
+    return dict(schema='rosetun.matrix.execution-plan.v1', dry_run=dry_run, suite=suite,
                 configuration=config, content_hashes=package['hashes'],
                 controller_checkout=str(controller), controller_source=controller_source,
                 source_check='deferred: Git status/diff requires external Git' if dry_run else 'matched',
                 host_platform=sys.platform, backend_qualified=False,
-                actions=['lease', 'create run and identities', 'overlay', 'ISO', 'start paused',
-                         'resume', 'observe boot', 'import once', 'verify receipt', 'submit once',
-                         'wait job timeout + 125 seconds', 'collect at most twice', 'close', 'summary'],
+                actions=actions,
                 dependencies=['prepared trusted image/helpers/accounts', 'qemu.qmp 0.0.6',
                               'KVM', 'pinned QEMU/BIOS', 'xorriso 1.5.6', 'Git (execution only)'],
-                limitations=['no controller restart recovery', 'no automatic file cleanup',
-                             'no network', 'dry-run does not execute binary version checks'],
+                limitations=limitations,
                 security_invariants='UNVERIFIED', release_gate=False)

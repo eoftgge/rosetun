@@ -1,13 +1,15 @@
-"""Sequential exploratory L2 execution under the original stand lease."""
+"""Sequential exploratory L2 or L3 execution under the original stand lease."""
 
 from datetime import datetime, timezone
 import hashlib
 import json
+from pathlib import Path
 import re
 import sys
 import time
 import uuid
 
+from . import l3_requests
 from .evidence import write_file
 from .execution import preflight
 from .resources import (StandLease, create_run, resource_path, EXECUTION_FILES,
@@ -48,12 +50,28 @@ class Adapters:
         from .l2_import import L2Import
         self.prepare, self.execute, self.config, self.image = prepare, execute, QemuConfig, ImageDescriptor
         self.start, self.attach, self.importer = start, attach_media, L2Import
+        self.requests = l3_requests.write_all
 
 
-def run_linux_l2(config, *, adapters=None, clock=time.monotonic, sleep=time.sleep,
-                 progress=None):
+def run_linux_l2(config, **options):
+    if config.get('suite', 'linux-l2') != 'linux-l2':
+        raise ValueError('configuration is for another suite')
+    return run_linux(config, **options)
+
+
+def run_linux_l3(config, **options):
+    if config.get('suite') != 'linux-l3':
+        raise ValueError('configuration is for another suite')
+    return run_linux(config, **options)
+
+
+def run_linux(config, *, adapters=None, clock=time.monotonic, sleep=time.sleep,
+              progress=None):
+    """One path for both stages; only L3 adds its requests and passes its profile on."""
     progress = progress or (lambda stage: print(stage, file=sys.stderr, flush=True))
-    result = dict(schema=SUMMARY_SCHEMA, identities={}, configuration=config, stages=[],
+    suite = config.get('suite', 'linux-l2')
+    l3 = config.get('l3') if suite == 'linux-l3' else None
+    result = dict(schema=SUMMARY_SCHEMA, suite=suite, identities={}, configuration=config, stages=[],
                   evidence=[], assessment=None, delivery=None, execution=None,
                   completion=False, manual_recovery_required=False, errors=[],
                   security_invariants='UNVERIFIED', release_gate=False, exit_code=2)
@@ -107,12 +125,17 @@ def run_linux_l2(config, *, adapters=None, clock=time.monotonic, sleep=time.slee
         step('save-identities', lambda: save(run, 'execution-identity.json',
               dict(schema='rosetun.matrix.execution-identity.v1', **identities), initial=True))
         save(run, 'execution-summary.json', result, initial=True)
+        if l3:
+            # The requests are the only generated part of the content; existing equal files are kept.
+            step('requests', lambda: adapters.requests(
+                Path(config['content_directory']) / 'artifacts', l3['host_address'], l3['node_port']))
         deadline = clock() + config['deadlines']['preparation']
         executor = bounded_executor(deadline)
         step('prepare', lambda: adapters.prepare(run, adapters.image(**config['image']),
                                                 adapters.config(**config['qemu']), executor=executor))
         step('media', lambda: adapters.attach(run, directory=config['content_directory'],
-              checkout=config['source_checkout'], xorriso=config['xorriso'], executor=executor))
+              checkout=config['source_checkout'], xorriso=config['xorriso'], executor=executor,
+              **(dict(profile='l3', sing_box_sha256=l3['sing_box_sha256']) if l3 else {})))
         if clock() >= deadline:
             raise TimeoutError('preparation deadline')
         vm = step('start', lambda: adapters.start(run))
@@ -122,7 +145,8 @@ def run_linux_l2(config, *, adapters=None, clock=time.monotonic, sleep=time.slee
         identities.update(boot_id=vm.last_boot_id, vm_uuid=vm.vm_uuid)
         attempt = step('import-create', lambda: adapters.importer(vm, enabled=True,
               guest_run_id=identities['guest_run_id'], import_id=identities['import_id'],
-              **config['accounts'], **{k + '_timeout': v for k, v in config['timeouts'].items()}))
+              **config['accounts'], **{k + '_timeout': v for k, v in config['timeouts'].items()},
+              **(dict(l3=l3) if l3 else {})))
         attempt.deadline = min(attempt.deadline, clock() + config['deadlines']['import'])
         try:
             step('import', attempt.stage)
