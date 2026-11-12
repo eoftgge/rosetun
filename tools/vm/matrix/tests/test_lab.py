@@ -118,6 +118,13 @@ def pcap(expected, window=None, extra=()):
     return capture(marker_exchange(window[0]) + frames + list(extra) + marker_exchange(window[1]))
 
 
+def healthy(window, **changes):
+    """A clean health record whose marker times follow the lab machine's own clock."""
+    rows = [dict(word=m['word'], nonce=m['nonce'], at=at) for m, at in zip(window, (2.0, 8.0))]
+    return dict(error=False, dropped=0, finished=True, capture_started=1.0, capture_ended=9.0,
+                markers=rows) | changes
+
+
 class EvidenceTests(unittest.TestCase):
     def setUp(self):
         self.expected = wire.probes('a' * 32, iter(f'{i:024x}' for i in range(8)).__next__)
@@ -521,22 +528,28 @@ class OrchestrationTests(unittest.TestCase):
             return vm
         class Guest:
             def __init__(self, vm, role, lab_id, **kwargs): pass
-            def call(self, operation, expected):
-                captured['probes'] = expected
+            def call(self, operation, expected, window=()):
+                captured['probes'], captured['window'] = expected, list(window)
                 if operation == 'setup':
                     return dict(capture_ready=fault != 'observer-not-ready')
                 if operation == 'probe':
                     if fault == 'target-unavailable':
                         raise ValueError('target-unavailable')
-                    return dict(replies=[{**p, 'response': wire.answer(p).hex()} for p in expected])
+                    return dict(replies=[{**p, 'response': wire.answer(p).hex()} for p in expected],
+                                marker_replies=[{**m, 'response': wire.marker_answer(m).hex()} for m in window],
+                                marker_sent=dict(open=1.0, close=2.0))
                 return dict(finished=True)
             def read(self, name, limit):
-                expected = captured['probes']
+                expected, window = captured['probes'], captured['window']
                 if name == 'capture.pcap':
-                    return pcap(expected)[:24] if fault == 'missing-observation' else pcap(expected)
+                    if fault == 'missing-observation':
+                        return wire.PCAP_HEADER
+                    if fault == 'leak':
+                        return pcap(expected, window, [ip_frame(wire.CLIENTS[4], wire.TARGETS[4], 1, icmp(8))])
+                    return pcap(expected) if fault == 'no-markers' else pcap(expected, window)
                 if name == 'targets.json':
                     return json.dumps([{**p, 'response': wire.answer(p).hex()} for p in expected]).encode()
-                return json.dumps(dict(error=False, dropped=0, finished=fault != 'incomplete-evidence')).encode()
+                return json.dumps(healthy(window, finished=fault != 'incomplete-evidence')).encode()
         def pair(*args):
             result = lab.LabPair(*args, pair_factory=lambda *args: (Endpoint(), Endpoint()))
             if fault == 'channel-close':
@@ -556,6 +569,9 @@ class OrchestrationTests(unittest.TestCase):
         self.assertTrue(result['completed'])
         self.assertEqual(dict(test=True, lab=True), result['completion'])
         self.assertTrue(result['qualification']['qualified'])
+        self.assertEqual(('NONE', 'clean'), (result['leak'], result['leak_reason']))
+        self.assertEqual(dict(markers_found=True, ordered=True, test_clock_sent=dict(open=1.0, close=2.0)),
+                         result['window'])
         self.assertEqual('UNVERIFIED', result['security_invariants'])
         self.assertFalse(result['release_gate'])
 
@@ -569,6 +585,16 @@ class OrchestrationTests(unittest.TestCase):
                     self.assertFalse(result['qualification']['qualified'])
                 else:
                     self.assertFalse(result['completed'])
+
+    def test_a_seen_leak_fails_the_run_and_a_missing_window_is_never_no_leak(self):
+        leaked = self.scenario('leak')
+        self.assertEqual((2, 'DETECTED', 1), (leaked['exit_code'], leaked['leak'], leaked['categories']['unexpected']))
+        self.assertTrue(leaked['qualification']['qualified'])
+        for fault in ('no-markers', 'missing-observation', 'incomplete-evidence', 'target-unavailable'):
+            with self.subTest(fault=fault):
+                result = self.scenario(fault)
+                self.assertEqual((2, 'UNVERIFIED'), (result['exit_code'], result['leak']))
+        self.assertEqual('window-markers-missing-or-repeated', self.scenario('no-markers')['leak_reason'])
 
     def test_dry_run_has_no_mutations_or_network(self):
         fixture = test_qemu.PreparationTests()
@@ -678,10 +704,12 @@ class GuestIdentityTests(unittest.TestCase):
         self.entry = importlib.util.module_from_spec(spec)
         with patch.dict(sys.modules, {'lab_protocol': wire}):
             spec.loader.exec_module(self.entry)
+        nonces = iter(f'{i:024x}' for i in range(10))
         self.request = dict(role='lab', lab_id='a' * 32,
              vm_uuid='12345678-1234-4234-8234-123456789abc',
              boot_id='22345678-1234-4234-8234-123456789abc',
-             probes=wire.probes('a' * 32, iter(f'{i:024x}' for i in range(8)).__next__), operation='setup')
+             probes=wire.probes('a' * 32, nonces.__next__), operation='setup')
+        self.request['markers'] = wire.markers('a' * 32, nonces.__next__)
 
     def test_wrong_vm_boot_or_role_cannot_mutate_guest_network(self):
         values = {'/etc/rosetun-lab-role': 'lab',
@@ -694,6 +722,63 @@ class GuestIdentityTests(unittest.TestCase):
                  patch.object(self.entry, 'command', side_effect=AssertionError('network operation before identity')):
                 with self.assertRaises(ValueError):
                     self.entry.main(request)
+
+    def identity(self, request):
+        values = {'/etc/rosetun-lab-role': 'lab',
+                  '/proc/sys/kernel/random/boot_id': request['boot_id'],
+                  '/sys/class/dmi/id/product_uuid': request['vm_uuid']}
+        rows = json.dumps([dict(ifname='enp7s0', address=wire.MACS['lab'], link_type='ether')]).encode()
+        with patch.object(self.entry.os, 'geteuid', return_value=0, create=True),              patch.object(Path, 'read_text', lambda p: values[p.as_posix()]),              patch.object(self.entry, 'command', return_value=rows):
+            return self.entry.identity(request)
+
+    def test_only_the_run_s_own_two_markers_are_accepted(self):
+        self.assertEqual('enp7s0', self.identity(self.request))
+        first, second = self.request['markers']
+        bad = {
+            'missing': self.request['markers'][:1],
+            'swapped': [second, first],
+            'repeated-nonce': [first, dict(second, nonce=first['nonce'])],
+            'probe-nonce': [first, dict(second, nonce=self.request['probes'][0]['nonce'])],
+            'other-run': [dict(first, run_id='b' * 32), second],
+            'other-port': [first, dict(second, port=wire.PORTS['udp'])],
+            'other-source': [first, dict(second, source='192.0.2.9')],
+            'extra-field': [first, dict(second, extra=1)],
+            'short-nonce': [first, dict(second, nonce='abc')],
+        }
+        for name, window in bad.items():
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                self.identity(dict(self.request, markers=window))
+
+    def test_the_observer_accepts_each_marker_once_and_only_in_order(self):
+        first, second = self.request['markers']
+        request = self.request
+        source = wire.CLIENTS[4]
+        self.assertIs(first, self.entry.accept_marker(request, [], wire.marker_query(first), source))
+        self.assertIs(second, self.entry.accept_marker(request, [{}], wire.marker_query(second), source))
+        for marks, data, peer in (([], wire.marker_query(second), source), ([{}], wire.marker_query(first), source),
+                                  ([{}, {}], wire.marker_query(second), source), ([], wire.marker_query(first), '192.0.2.9'),
+                                  ([], wire.marker_query(first) + b'x', source), ([], b'', source)):
+            with self.assertRaises(ValueError):
+                self.entry.accept_marker(request, marks, data, peer)
+
+    def test_the_test_machine_sends_the_opening_marker_first_and_the_closing_marker_last(self):
+        events = []
+        def marker(m):
+            events.append(m['word'])
+            return dict(m, response=wire.marker_answer(m).hex())
+        def exchanges(request):
+            events.append('exchanges')
+            return []
+        with patch.object(self.entry, 'exchange_marker', marker),              patch.object(self.entry, 'probe_exchanges', exchanges), patch.object(self.entry.time, 'sleep'):
+            result = self.entry.probe_all(self.request)
+        self.assertEqual(['open', 'exchanges', 'close'], events)
+        self.assertEqual(['open', 'close'], [m['word'] for m in result['marker_replies']])
+        self.assertEqual({'open', 'close'}, set(result['marker_sent']))
+
+    def test_a_refused_opening_marker_sends_no_probe(self):
+        with patch.object(self.entry, 'exchange_marker', side_effect=ValueError('unexpected-marker-answer')),              patch.object(self.entry, 'probe_exchanges', side_effect=AssertionError('probe after failed marker')):
+            with self.assertRaises(ValueError):
+                self.entry.probe_all(self.request)
 
     def test_guest_evidence_write_limit_and_one_shot_claim(self):
         with tempfile.TemporaryDirectory() as directory:

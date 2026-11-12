@@ -12,8 +12,9 @@ import sys
 import time
 import uuid
 
-from lab_protocol import (MACS, CLIENTS, GATEWAYS, TARGETS, PORTS, CAPTURE_LIMIT,
-                          LOG_LIMIT, DURATION, interface, query, answer, token)
+from lab_protocol import (MACS, CLIENTS, GATEWAYS, TARGETS, PORTS, SERVICES, CAPTURE_LIMIT,
+                          LOG_LIMIT, DURATION, interface, query, answer, token,
+                          marker_query, marker_answer)
 
 ROOT = Path('/run/rosetun-lab')
 ENTRY = '/usr/local/libexec/rosetun-lab/entry'
@@ -45,6 +46,17 @@ def identity(request):
                 or p['target'] != TARGETS[p['family']] or p['port'] != PORTS[p['service']]
                 or p['protocol'] != ('tcp' if p['service'] in ('http', 'dns-tcp') else 'udp')):
             raise ValueError('foreign-probe')
+    window = request['markers']
+    if (type(window) is not list or [m.get('word') for m in window] != ['open', 'close']
+            or len({m.get('nonce') for m in window + expected}) != 10):
+        raise ValueError('invalid-markers')
+    for m in window:
+        if (set(m) != {'run_id', 'nonce', 'word', 'family', 'service', 'protocol', 'source', 'target', 'port'}
+                or m['run_id'] != request['lab_id'] or len(m['nonce']) != 24
+                or any(c not in '0123456789abcdef' for c in m['nonce'])
+                or (m['family'], m['service'], m['protocol']) != (4, 'marker', 'udp')
+                or m['source'] != CLIENTS[4] or m['target'] != TARGETS[4] or m['port'] != PORTS['marker']):
+            raise ValueError('foreign-marker')
     return iface
 
 
@@ -68,7 +80,7 @@ def receive(stream, size):
     return bytes(data)
 
 
-def probe_all(request):
+def probe_exchanges(request):
     replies = []
     for p in request['probes']:
         family = socket.AF_INET if p['family'] == 4 else socket.AF_INET6
@@ -108,6 +120,33 @@ def probe_all(request):
     return replies
 
 
+def exchange_marker(marker):
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as stream:
+        stream.settimeout(2)
+        stream.bind((marker['source'], 0))
+        stream.connect((marker['target'], marker['port']))
+        stream.sendall(marker_query(marker))
+        response = stream.recv(1024)
+    if response != marker_answer(marker):
+        raise ValueError('unexpected-marker-answer')
+    return {**marker, 'response': response.hex()}
+
+
+def probe_all(request):
+    """The exchanges between an opening and a closing marker, each answered by the target."""
+    opening, closing = request['markers']
+    sent, marker_replies = {}, []
+    # The clock below is this machine's and is only logged; verdicts never compare it.
+    sent['open'] = time.monotonic()
+    marker_replies.append(exchange_marker(opening))
+    replies = probe_exchanges(request)
+    # Let the last connection finish closing on the wire before the window ends.
+    time.sleep(.2)
+    sent['close'] = time.monotonic()
+    marker_replies.append(exchange_marker(closing))
+    return dict(replies=replies, marker_replies=marker_replies, marker_sent=sent)
+
+
 def setup(request, iface, directory):
     # The role, VM, boot and one-shot run claim are checked before any mutation.
     command('/usr/sbin/ip', 'addr', 'add', GATEWAYS[4] + '/24', 'dev', iface)
@@ -142,19 +181,39 @@ def setup(request, iface, directory):
     raise ValueError('capture-ready-timeout')
 
 
+def accept_marker(request, marks, data, source):
+    """The window marker a datagram carries, accepted once and only in open-then-close order."""
+    word = ('open', 'close')[len(marks)] if len(marks) < 2 else None
+    found = [m for m in request['markers'] if m['word'] == word and m['source'] == source
+             and marker_query(m) == data]
+    if len(found) != 1:
+        raise ValueError('unexpected-marker')
+    return found[0]
+
+
 def serve(request, directory):
     deadline = time.monotonic() + DURATION
-    logs, error, dropped = [], False, 0
+    logs, error, dropped, marks, ended = [], False, 0, [], None
     selector = selectors.DefaultSelector()
     capture = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(3))
     capture.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 262144)
     capture.bind((request['interface'], 0))
     capture.setblocking(False)
+    started = time.monotonic()
     selector.register(capture, selectors.EVENT_READ, 'capture')
     raw = (directory / 'capture.pcap').open('xb')
     raw.write(struct.pack('<IHHIIII', 0xa1b2c3d4, 2, 4, 0, 0, 2048, 1))
     count = 24
     sockets = []
+
+    def record(frame):
+        nonlocal count
+        if len(frame) > 2048 or count + 16 + len(frame) > CAPTURE_LIMIT:
+            raise ValueError('capture-limit')
+        now = time.time()
+        raw.write(struct.pack('<IIII', int(now), int(now % 1 * 1000000), len(frame), len(frame)) + frame)
+        count += 16 + len(frame)
+
     try:
         # Switch only this process's thread into the disposable target namespace.
         with open('/proc/self/ns/net', 'rb') as original, open('/run/netns/rtlab', 'rb') as target:
@@ -163,7 +222,7 @@ def serve(request, directory):
                 raise OSError('target-setns')
             try:
                 for family in (4, 6):
-                    for service in ('http', 'udp', 'dns-udp', 'dns-tcp'):
+                    for service in SERVICES:
                         tcp = service in ('http', 'dns-tcp')
                         stream = socket.socket(socket.AF_INET if family == 4 else socket.AF_INET6,
                                                socket.SOCK_STREAM if tcp else socket.SOCK_DGRAM)
@@ -172,6 +231,10 @@ def serve(request, directory):
                         if tcp:
                             stream.listen(4)
                         selector.register(stream, selectors.EVENT_READ, (family, service))
+                stream = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                sockets.append(stream)
+                stream.bind((TARGETS[4], PORTS['marker']))
+                selector.register(stream, selectors.EVENT_READ, (4, 'marker'))
             finally:
                 if libc.setns(original.fileno(), 0) != 0:
                     raise OSError('router-setns')
@@ -179,14 +242,15 @@ def serve(request, directory):
         while time.monotonic() < deadline and not (directory / 'stop').exists():
             for key, _ in selector.select(.1):
                 if key.data == 'capture':
-                    frame = capture.recv(2049)
-                    if len(frame) > 2048 or count + 16 + len(frame) > CAPTURE_LIMIT:
-                        raise ValueError('capture-limit')
-                    now = time.time()
-                    raw.write(struct.pack('<IIII', int(now), int(now % 1 * 1000000), len(frame), len(frame)) + frame)
-                    count += 16 + len(frame)
+                    record(capture.recv(2049))
                     continue
                 family, service = key.data
+                if service == 'marker':
+                    data, peer = key.fileobj.recvfrom(1024)
+                    marker = accept_marker(request, marks, data, peer[0])
+                    key.fileobj.sendto(marker_answer(marker), peer)
+                    marks.append(dict(word=marker['word'], nonce=marker['nonce'], at=time.monotonic()))
+                    continue
                 tcp = service in ('http', 'dns-tcp')
                 connection = None
                 try:
@@ -227,6 +291,14 @@ def serve(request, directory):
                         connection.close()
         if time.monotonic() >= deadline:
             raise ValueError('capture-deadline')
+        # Frames queued since the last poll still belong to the window.
+        while True:
+            try:
+                frame = capture.recv(2049)
+            except BlockingIOError:
+                break
+            record(frame)
+        ended = time.monotonic()
         # Linux PACKET_STATISTICS reports kernel drops, not just process success.
         _, dropped = struct.unpack('II', capture.getsockopt(263, 6, 8))
     except BaseException:
@@ -240,7 +312,9 @@ def serve(request, directory):
         for stream in sockets:
             stream.close()
         write(directory / 'targets.json', logs)
-        write(directory / 'health.json', dict(error=error, dropped=dropped, finished=True))
+        # Times are this machine's monotonic clock; a failed run records no end.
+        write(directory / 'health.json', dict(error=error, dropped=dropped, finished=True,
+                                              capture_started=started, capture_ended=ended, markers=marks))
     if error or dropped:
         raise ValueError('observer-unverified')
 
@@ -260,9 +334,9 @@ def main(request):
     if operation == 'probe' and request['role'] == 'test':
         ROOT.mkdir(mode=0o700, exist_ok=True)
         write(ROOT / 'claim.json', request)
-        return dict(replies=probe_all(request))
+        return probe_all(request)
     saved = json.loads((directory / 'identity.json').read_bytes())
-    if any(saved[k] != request[k] for k in ('lab_id', 'role', 'vm_uuid', 'boot_id', 'probes')):
+    if any(saved[k] != request[k] for k in ('lab_id', 'role', 'vm_uuid', 'boot_id', 'probes', 'markers')):
         raise ValueError('wrong-run')
     if request['role'] == 'lab' and operation == 'serve':
         if request.get('interface') != iface:

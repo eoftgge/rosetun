@@ -19,7 +19,7 @@ from .lifecycle import start, _host
 from .resources import (StandLease, create_run, completion_verified, resource_path,
                         EXECUTION_FILES, _identifier, _state_path)
 from .orchestrator import save, failure, _RETAINED_LEASES
-from .lab_protocol import MACS, CAPTURE_LIMIT, LOG_LIMIT, probes, qualify
+from .lab_protocol import MACS, CAPTURE_LIMIT, LOG_LIMIT, probes, markers, qualify, leak_verdict
 
 ENTRY = '/usr/local/libexec/rosetun-lab/entry'
 ARTIFACTS = {'lab-capture': 'capture.pcap', 'lab-targets': 'targets.json', 'lab-health': 'health.json'}
@@ -149,7 +149,7 @@ class Guest:
         self.vm.qga.deadline = time.monotonic() + min(5, self.deadline - self.clock())
         return self.vm.qga._rpc(name, 5, args)
 
-    def call(self, operation, expected):
+    def call(self, operation, expected, window=()):
         if operation not in ({'setup', 'finish'} if self.role == 'lab' else {'probe'}):
             raise ValueError('invalid-lab-operation')
         with self.vm._guest_lock:
@@ -157,7 +157,8 @@ class Guest:
             if self.vm.qga.read_boot_id(5) != self.vm.last_boot_id:
                 raise ValueError('lab-boot-changed')
             request = dict(operation=operation, role=self.role, lab_id=self.lab_id,
-                           vm_uuid=self.vm.vm_uuid, boot_id=self.vm.last_boot_id, probes=expected)
+                           vm_uuid=self.vm.vm_uuid, boot_id=self.vm.last_boot_id, probes=expected,
+                           markers=list(window))
             self.vm.qga.jobs_enabled = True
             self.vm.qga.probe(5)
             response = self.rpc('guest-exec', {'path': ENTRY, 'arg': [json.dumps(request)], 'capture-output': True})
@@ -218,11 +219,14 @@ def lab_smoke(config, *, adapters=None, clock=time.monotonic, sleep=time.sleep):
     adapters = adapters or Adapters()
     lab_id = uuid.uuid4().hex
     expected = probes(lab_id, lambda: secrets.token_hex(12))
+    window = markers(lab_id, lambda: secrets.token_hex(12))
     result = dict(schema='rosetun.matrix.lab-summary.v1', lab_id=lab_id, readiness={},
                   artifact_directories={}, configuration=config,
                   qualification=dict(qualified=False, ipv4='UNVERIFIED', ipv6='UNVERIFIED',
                                      services='UNVERIFIED', observer='UNVERIFIED', evidence='UNVERIFIED'),
-                  probes=expected, completion={}, channel_closed=False, completed=False,
+                  probes=expected, markers=window, completion={}, channel_closed=False, completed=False,
+                  leak='UNVERIFIED', leak_reason='not-evaluated', categories={}, unexpected=[], canary_flows=[], canary_other=0,
+                  window=dict(markers_found=False, ordered=False),
                   errors=[], security_invariants='UNVERIFIED', release_gate=False, exit_code=2)
     lease, pair, runs, vms = None, None, {}, {}
     try:
@@ -255,16 +259,18 @@ def lab_smoke(config, *, adapters=None, clock=time.monotonic, sleep=time.sleep):
         pair.close()
         lab = adapters.guest(vms['lab'], 'lab', lab_id, clock=clock, sleep=sleep)
         test = adapters.guest(vms['test'], 'test', lab_id, clock=clock, sleep=sleep)
-        ready = lab.call('setup', expected)
+        ready = lab.call('setup', expected, window)
         if ready.get('capture_ready') is not True:
             raise ValueError('capture-not-ready')
+        sent = {}
         try:
-            replies = test.call('probe', expected)['replies']
+            probed = test.call('probe', expected, window)
+            replies, marker_replies, sent = probed['replies'], probed['marker_replies'], probed['marker_sent']
         except Exception as error:
             result['errors'].append(failure('probe', error))
-            replies = []
+            replies, marker_replies = [], []
         result['replies'] = replies
-        lab.call('finish', expected)
+        lab.call('finish', expected, window)
         evidence = {}
         for name, limit in (('capture.pcap', CAPTURE_LIMIT), ('targets.json', LOG_LIMIT), ('health.json', LOG_LIMIT)):
             raw = lab.read(name, limit)
@@ -276,8 +282,13 @@ def lab_smoke(config, *, adapters=None, clock=time.monotonic, sleep=time.sleep):
                 raise ValueError('lab-evidence-readback-failed') from None
             evidence[name] = raw
         result['evidence_sha256'] = {name: hashlib.sha256(raw).hexdigest() for name, raw in evidence.items()}
+        health = json.loads(evidence['health.json'])
+        # The leak verdict comes first so that a rejected capture cannot hide a seen leak.
+        verdict = leak_verdict(evidence['capture.pcap'], expected, window, health, ready['capture_ready'], marker_replies)
+        verdict['window'] = dict(verdict['window'], test_clock_sent=sent)
+        result.update(verdict)
         result['qualification'] = qualify(expected, replies, json.loads(evidence['targets.json']),
-                    evidence['capture.pcap'], ready['capture_ready'], json.loads(evidence['health.json']))
+                    evidence['capture.pcap'], ready['capture_ready'], health)
     except BaseException as error:
         result['errors'].append(failure('lab-smoke', error))
         if isinstance(error, KeyboardInterrupt):
@@ -311,7 +322,8 @@ def lab_smoke(config, *, adapters=None, clock=time.monotonic, sleep=time.sleep):
             result['completed'] = (set(result['completion']) == set(MACS)
                                    and all(result['completion'].values()) and result['channel_closed'])
             if result['exit_code'] != 130:
-                result['exit_code'] = 0 if result['completed'] and not result['errors'] and result['qualification']['qualified'] else 2
+                result['exit_code'] = 0 if (result['completed'] and not result['errors']
+                                            and result['qualification']['qualified'] and result['leak'] == 'NONE') else 2
             for run in runs.values():
                 try:
                     save(run, 'execution-summary.json', result)
