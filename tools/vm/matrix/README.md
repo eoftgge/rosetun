@@ -2360,6 +2360,169 @@ Owner qualification on the prepared stand, after reinstalling the helper:
 6. Read the saved pcap in Wireshark: the frame counts per category match
    `categories` in the summary.
 
+## Stage 7b1: lab VPN node and HTTPS target
+
+Stage 7b1 gives the lab two more fixtures and a way to qualify them: a VPN node
+and an HTTPS target. Rosetun is **not** started, `run-l3.sh` is untouched and L3
+does not run through the lab yet. The only Shadowsocks client is a throwaway
+sing-box on the test machine whose job is to prove the node works. Security
+invariants stay **UNVERIFIED** and the release gate stays false.
+
+```text
+test VM 192.0.2.2 --- lab VM 192.0.2.1:8388   VPN node: sing-box, Shadowsocks aes-128-gcm
+                           |  direct out via rt-route 203.0.113.1
+                      rtlab 203.0.113.2:443    HTTPS target: Python ssl, IP SAN, lab CA
+```
+
+**What it checks.** That the node accepts a Shadowsocks connection from the
+test machine and relays it, that the HTTPS target answers with a certificate
+the system store of the test image trusts (no `-k`, no `--cacert`), and that the
+observer tells the two paths apart on the wire:
+
+- `https-direct`: the test machine connects straight to `203.0.113.2:443`. The
+  target's log shows source `192.0.2.2`.
+- `https-tunnel`: a throwaway sing-box client on the test machine (SOCKS on
+  `127.0.0.1` only, Shadowsocks out, no DNS) reaches the same target through the
+  node. The target's log shows source `203.0.113.1`, the router side of the lab.
+  On the wire it is only TCP to `192.0.2.1:8388`.
+
+**What it does not check.** Rosetun, its kill switch, its DNS lock, any L3
+scenario, DNS, IPv6 through the node, UDP through the node, or anything about the
+real engine beyond the pinned version starting and relaying one connection.
+`aes-128-gcm` and the lab-only password come from `l3-request-template.json`, the
+one place both the L3 requests and the node read them from.
+
+### Observer: category `tunnel`
+
+`classify` and `leak_verdict` take two optional arguments, both off by default so
+stage 6b is unchanged. `tunnel_port` adds the category `tunnel`: TCP between the
+test machine and `192.0.2.1` on that port, either way, with the payload never
+read. Without it those frames stay `unexpected`. `https` (the `https-direct`
+exchange, the client port its helper reported and the target's own log) makes the
+one `https-direct` connection a `probe` by its four-tuple, because TLS hides the
+payload. If the helper's port and the log's single row for that path (source
+`192.0.2.2`) disagree, those frames stay `unexpected`. Any other frame of the test
+machine to `203.0.113.2:443`, including a second direct connection, is
+`unexpected`. The port may not be `443`, `9999`, a port of `PORTS` or the
+client's SOCKS port `10808`.
+
+### Helper fixtures
+
+All paths are fixed in `lab-entry.py`. A missing, foreign-owned or
+group-writable file is a refusal with a fixed reason (`lab-helper-failed-<reason>`
+in the controller's error), never a skip, and nothing in the guest changes first.
+
+| Role | What the helper does when the request has a `tunnel` block |
+| --- | --- |
+| Lab, `setup` | Checks the engine (hash), the certificate and the key. In the observer, before `capture_ready`: serves HTTPS on `203.0.113.2:443` in `rtlab`, writes the node's configuration itself (one Shadowsocks inbound on `192.0.2.1:<port>`, `direct` outbound, no DNS, no other inbound), starts sing-box and waits until it is alive and listening. |
+| Lab, `finish` | Records whether the node was still alive, stops it and records its exit code in `health.json` (`node`). Saves `https.json` (source, client port, path, lab monotonic time; at most 16 rows) and `node.log` (sing-box's own log at level `warn`, at most `LOG_LIMIT`, every address outside the documentation ranges blanked). |
+| Test, `probe` | Checks the engine and the CA file (hash) before the opening marker. After the eight exchanges and before the closing marker: `https-direct` (stdlib `ssl`, system store, `server_hostname` the IP), then a throwaway sing-box client, `https-tunnel` through a hand-written SOCKS5 handshake, and the client is stopped. Returns the client port of `https-direct`, both answers and the client's exit code. |
+
+Without a `tunnel` block the requests and the answers of stages 6a and 6b are
+byte for byte what they were.
+
+### Prepared image contract v5
+
+This is added next to the 6a contract, which stays as written above for history.
+It applies to both images unless it says otherwise. The 6a record is not valid for
+v5: the owner qualifies 6a and 6b again on v5 (see below).
+
+- **Test.** Everything in the 6a contract except the route restriction: the
+  default IPv4 route goes through `192.0.2.1` (no IPv6 default yet). The lab CA
+  certificate is in the system store (`update-ca-certificates` or the
+  distribution's equivalent), its PEM file at
+  `/usr/local/share/ca-certificates/rosetun-lab-ca.crt`. sing-box of the pinned
+  version (1.14.3) at `/usr/local/libexec/rosetun-lab/sing-box`: not a service and
+  not on `PATH`; only the helper starts it. The packages 7a needs are here too:
+  `nft`, `curl` with TFTP, `dig`.
+- **Lab.** Everything in the 6a contract plus the same sing-box binary at the same
+  path, the HTTPS target's certificate at
+  `/usr/local/libexec/rosetun-lab/https-cert.pem` and its key at
+  `/usr/local/libexec/rosetun-lab/https-key.pem` (root, mode `0600` for the key),
+  and **no** service that starts the node at boot. The lab still gets no route to
+  the outside: the stand has no external network.
+- **Keys.** The CA key is in no image. The owner makes the CA and the target
+  certificate on the stand while preparing the images and keeps the CA key off
+  them. Directories and files above are root-owned and not writable by others.
+- **Hashes.** `sing_box_sha256` is the SHA-256 of the one binary used in both
+  images; `ca_sha256` is the SHA-256 of the CA PEM file on the test image. Both go
+  in the `[tunnel]` table of the configuration.
+
+Certificates, with a term and the IP SAN (the guest clocks must be inside the
+validity period: check `date` in both images after preparing them):
+
+```sh
+openssl ecparam -name prime256v1 -genkey -noout -out lab-ca.key
+openssl req -x509 -new -key lab-ca.key -sha256 -days 825 -subj '/CN=Rosetun lab CA' \
+  -addext 'basicConstraints=critical,CA:TRUE' -addext 'keyUsage=critical,keyCertSign,cRLSign' \
+  -out rosetun-lab-ca.crt
+openssl ecparam -name prime256v1 -genkey -noout -out https-key.pem
+openssl req -new -key https-key.pem -subj '/CN=203.0.113.2' -out target.csr
+printf 'subjectAltName=IP:203.0.113.2\nbasicConstraints=CA:FALSE\nkeyUsage=digitalSignature\nextendedKeyUsage=serverAuth\n' > target.ext
+openssl x509 -req -in target.csr -CA rosetun-lab-ca.crt -CAkey lab-ca.key -CAcreateserial \
+  -sha256 -days 825 -extfile target.ext -out https-cert.pem
+sha256sum rosetun-lab-ca.crt /path/to/sing-box
+```
+
+Install `rosetun-lab-ca.crt` on the test image only, `https-cert.pem` and
+`https-key.pem` on the lab image only, and keep `lab-ca.key` out of both.
+
+### Reinstall the helper
+
+This stage changes `linux/guest/lab-entry.py` and `matrix/lab_protocol.py`, so
+their hashes change. The owner installs the new bytes in **both** v5 images
+(`/usr/local/libexec/rosetun-lab/entry` and `lab_protocol.py` beside it) and
+updates the image descriptors before any qualification. The 6a and 6b records
+were made with earlier bytes and do not cover this stage.
+
+### Configuration and command
+
+`rosetun.matrix.lab.v2` is `lab.v1` plus a `[tunnel]` table (`sing_box_sha256`,
+`ca_sha256`, `node_port`, normally `8388`). Version 1 files read as before and do
+not accept `--tunnel`. Start from [lab-tunnel.example.toml](lab-tunnel.example.toml).
+
+```sh
+python -m tools.vm.matrix lab-smoke --config /srv/lab-v2.toml --dry-run --tunnel
+python -m tools.vm.matrix lab-smoke --config /srv/lab-v2.toml --tunnel
+python -m tools.vm.matrix lab-smoke --config /srv/lab-v2.toml --tunnel --canary
+```
+
+`--tunnel` exits 0 only when everything stage 6b needs holds (qualified, `leak`
+`NONE`, window proven) and also: `https-direct` was answered and `https.json`
+has exactly one row for it, from `192.0.2.2`, from the client port the helper
+reported; `https-tunnel` was answered and `https.json` has exactly one row for it,
+from `203.0.113.1`; the `tunnel` category is above zero; the node was alive at
+`finish`. With `--canary` the canary conditions of 6b replace `leak` `NONE`.
+The summary gains `https` (the two exchanges) and a `tunnel` block next to the old
+fields:
+
+| Field | Meaning |
+| --- | --- |
+| `direct` | `https-direct` answered, exactly one row from `192.0.2.2`, matching port |
+| `via_node` | `https-tunnel` answered, exactly one row from `203.0.113.1` |
+| `tunnel_frames` | frames in the category `tunnel` |
+| `node` | `alive_at_finish` and the node's `exit_code` |
+| `client_exit` | exit code of the throwaway client (informational) |
+
+Summaries without `--tunnel` are unchanged. `https.json` and `node.log` are saved
+beside `capture.pcap` in the lab run. The sing-box configuration format of the
+pinned version is exercised only by this qualification; no offline test starts it.
+
+### Owner qualification
+
+1. Prepare the v5 images by the contract, make the CA and the target certificate,
+   install the helper and `lab_protocol.py` in both images and update the
+   descriptors and the `[tunnel]` hashes.
+2. Repeat 6a and 6b on v5: ordinary `lab-smoke`, `--canary`, one extra packet by
+   hand, the observer stopped, the channel cut (the lists above).
+3. `lab-smoke --tunnel`: exit 0, source `192.0.2.2` for the direct exchange,
+   `203.0.113.1` for the one through the node, `leak` `NONE`.
+4. `lab-smoke --tunnel --canary`: exit 0, exactly the canary's two flows.
+5. Stop the node from the lab console before `https-tunnel`: exit 2.
+6. Read the pcap in Wireshark: frames to port 8388 and exactly one direct
+   connection to `203.0.113.2:443`.
+7. Repeat `run linux-l2` and the 7a run on v5: results as before.
+
 ## Stage 7a: Linux L3 delivery without network
 
 `run linux-l3` delivers the L3 package to one VM and runs the existing
