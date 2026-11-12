@@ -512,9 +512,13 @@ def start(run, *, timeout=5, executor=execute, lab=None):
     expected.update({r['id']: r['path'] for r in execution_resources(manifest)})
     if lab is not None:
         expected.update(lab.resources(run))
+    stage = 'l2'
     if any(r['id'].startswith('l2-media-') for r in manifest['resources']):
-        from .l2_media import RESOURCES
-        expected.update({'l2-media-' + str(i): n for i, n in enumerate(RESOURCES)})
+        from .l2_media import resources
+        # The media registers the paths of its own stage profile.
+        if any(r.get('path') == 'l2-package/guest/run-l3.sh' for r in manifest['resources']):
+            stage = 'l3'
+        expected.update({'l2-media-' + str(i): n for i, n in enumerate(resources(stage))})
     if {r['id']: r.get('path') for r in manifest['resources']} != expected:
         raise LifecycleError('incomplete-preparation-resources')
     plan_path = local_file(resource_path(run.directory, 'launch-plan.json'))
@@ -536,6 +540,8 @@ def start(run, *, timeout=5, executor=execute, lab=None):
             if media['path'] != str(resource_path(run.directory, 'l2-media.iso')):
                 raise LifecycleError('l2-media-path-mismatch')
             verify_media(media)
+            if media['package'].get('profile', 'l2') != stage:
+                raise LifecycleError('l2-media-profile-mismatch')
         if plan != _launch_plan(config, image, overlay, plan['uuid'], media=media):
             raise LifecycleError('launch-plan-mismatch')
         result = executor([config.image_executable, 'info', '--output=json', '--backing-chain',
@@ -557,8 +563,8 @@ def start(run, *, timeout=5, executor=execute, lab=None):
         if config.qga:
             from .linux_l2 import EVIDENCE_FILES
             for index, name in enumerate(EVIDENCE_FILES):
-                relative = 'linux-l2/' + name
-                run.register({'id': 'linux-l2-' + str(index), 'kind': 'file', 'path': relative})
+                relative = 'linux-' + stage + '/' + name
+                run.register({'id': 'linux-' + stage + '-' + str(index), 'kind': 'file', 'path': relative})
                 path = resource_path(run.directory, relative)
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.touch(exist_ok=False)

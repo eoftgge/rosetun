@@ -12,7 +12,7 @@ from .jobs import JobError, _uuid
 from .lifecycle import _guest_serialized
 from .resources import _identifier, resource_path
 from .staging import SmokePackage
-from .l2_media import CONTENT, manifest
+from .l2_media import manifest
 
 HELPER = '/usr/local/libexec/rosetun-l2/stage-l2'
 
@@ -29,13 +29,13 @@ class L2Import:
         return dict(self._identity)
 
     def __init__(self, vm, *, guest_run_id, import_id, user_a, user_b,
-                 scenario_timeout=30, unit_timeout=180, job_timeout=900, enabled=False):
+                 scenario_timeout=30, unit_timeout=180, job_timeout=900, enabled=False, l3=None):
         self.vm = vm
         self._create(guest_run_id, import_id, user_a, user_b, scenario_timeout,
-                     unit_timeout, job_timeout, enabled)
+                     unit_timeout, job_timeout, enabled, l3)
 
     @_guest_serialized
-    def _create(self, guest, attempt, user_a, user_b, scenario, unit, job, enabled):
+    def _create(self, guest, attempt, user_a, user_b, scenario, unit, job, enabled, l3):
         vm = self.vm
         vm._check()
         if (enabled is not True or vm.qga is None or not getattr(vm, '_l2_media', None) or
@@ -48,20 +48,30 @@ class L2Import:
             raise JobError('l2-import-requires-observed-boot')
         if not re.fullmatch('[0-9a-f]{32}', attempt):
             raise JobError('invalid-l2-import-id')
+        media = vm._l2_media
+        # The media record names its stage; the L3 block must accompany an L3 media and only that.
+        profile = l2.profile_of(media['package'].get('profile', 'l2'))
+        if (profile.name == 'l3') != (l3 is not None):
+            raise JobError('l2-import-profile-mismatch')
         env = dict(RUN_ID=guest, STAND_ID=_identifier(vm.run._identity[1]),
                    EXPECTED_BOOT_ID=_uuid(observation['boot_id']), USER_A=user_a, USER_B=user_b,
                    BIOS_GUID=_uuid(vm.vm_uuid), SCENARIO_TIMEOUT_SECONDS=str(scenario),
                    UNIT_TIMEOUT_SECONDS=str(unit), JOB_TIMEOUT_SECONDS=str(job))
+        if l3 is not None:
+            env.update(HOST_ADDRESS=l3['host_address'], NODE_PORT=str(l3['node_port']),
+                       PROBE_ADDRESS=l3['probe_address'], DNS_PROBE_ADDRESS=l3['dns_probe_address'])
+            self.l3 = dict(l3)
         raw_env = ''.join(k + '=' + v + '\n' for k, v in env.items()).encode('ascii')
-        l2.validate_env(raw_env)
-        media = vm._l2_media
+        l2.validate_env(raw_env, profile.name)
         hashes = dict(media['package']['hashes'], **{'job.env': hashlib.sha256(raw_env).hexdigest()})
-        raw_manifest = manifest(hashes, l2.PAYLOAD)
+        raw_manifest = manifest(hashes, profile.payload)
         identity = dict(host_run_id=_identifier(vm.run._identity[0]), guest_run_id=guest,
                         stand_id=env['STAND_ID'], vm_uuid=env['BIOS_GUID'], boot_id=env['EXPECTED_BOOT_ID'],
                         import_id=attempt, media_sha256=media['sha256'], media_size=media['size'],
                         content_sha256=media['content_sha256'],
                         manifest_sha256=hashlib.sha256(raw_manifest).hexdigest())
+        if profile.name != 'l2':
+            identity['profile'] = profile.name  # L2 requests and receipts keep their old bytes
         self._identity = tuple(identity.items())
         self.request = dict(identity=identity, env=env, hashes=media['package']['hashes'],
                             sizes=media['package']['sizes'])
@@ -190,5 +200,7 @@ class L2Import:
 
     def linux_l2_job(self, *, checkout, enabled=False):
         self.require_ready()
+        profile = self.vm._l2_media['package'].get('profile', 'l2')
+        extra = dict(profile=profile, sing_box_sha256=self.l3['sing_box_sha256']) if profile != 'l2' else {}
         return l2.LinuxL2Job(self.vm, package_directory=resource_path(self.vm.run.directory, 'l2-package'),
-                             checkout=checkout, enabled=enabled)
+                             checkout=checkout, enabled=enabled, **extra)

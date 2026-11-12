@@ -5,6 +5,7 @@ import base64
 import subprocess
 import ctypes
 import hashlib
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -76,6 +77,20 @@ def vm_uuid():
 BINARIES = ('l2_transport_fixture', 'rosetun_helper_privileged_tests', 'rosetun_ipc_tests')
 CONTENT = ('guest/launch.sh', 'guest/start.sh', 'guest/lib.sh', 'guest/run-l2.sh',
            'scenarios.tsv') + tuple('artifacts/' + n for n in BINARIES) + ('artifacts/provenance.json',)
+# The stage profiles. L2 names no profile in its request; L3 names itself in the identity.
+L3_BINARIES = ('rosetun-helper-privileged', 'rosetun', 'sing-box')
+L3_CONTENT = ('guest/launch.sh', 'guest/start.sh', 'guest/lib.sh', 'guest/run-l3.sh',
+              'scenarios-l3.tsv') + tuple('artifacts/' + n for n in L3_BINARIES + (
+                  'rosetun-helper.service', 'rosetun-engine.rules', 'request-kill-switch.json',
+                  'request-lan.json', 'request-dns-lock.json', 'request-program-direct.json',
+                  'request-program-proxy.json')) + ('artifacts/provenance.json',)
+ENV_L2 = ('RUN_ID STAND_ID EXPECTED_BOOT_ID USER_A USER_B BIOS_GUID SCENARIO_TIMEOUT_SECONDS '
+          'UNIT_TIMEOUT_SECONDS JOB_TIMEOUT_SECONDS').split()
+ENV_L3 = ENV_L2 + ['HOST_ADDRESS', 'NODE_PORT', 'PROBE_ADDRESS', 'DNS_PROBE_ADDRESS']
+PROFILES = {'l2': dict(content=CONTENT, binaries=BINARIES, env=ENV_L2),
+            'l3': dict(content=L3_CONTENT, binaries=L3_BINARIES, env=ENV_L3)}
+EXECUTABLE = set(BINARIES) | set(L3_BINARIES)
+DOCUMENTATION_V4 = tuple(ipaddress.ip_network(n) for n in ('192.0.2.0/24', '198.51.100.0/24', '203.0.113.0/24'))
 SERIAL = 'rosetun-l2-media'
 ISO_LIMIT = 1700 * 1024 * 1024
 TOTAL_LIMIT = 1600 * 1024 * 1024
@@ -105,7 +120,11 @@ def request(raw):
     require(type(value) is dict and set(value) == {'identity', 'env', 'hashes', 'sizes'})
     i, env, hashes, sizes = (value[k] for k in ('identity', 'env', 'hashes', 'sizes'))
     require(all(type(v) is dict for v in (i, env, hashes, sizes)))
-    require(set(i) == set('host_run_id guest_run_id stand_id vm_uuid boot_id import_id media_sha256 media_size content_sha256 manifest_sha256'.split()))
+    profile = i.get('profile', 'l2')
+    require(type(profile) is str and profile in PROFILES and ('profile' in i) == (profile != 'l2'))
+    content, binaries, order = (PROFILES[profile][k] for k in ('content', 'binaries', 'env'))
+    require(set(i) == set('host_run_id guest_run_id stand_id vm_uuid boot_id import_id media_sha256 media_size content_sha256 manifest_sha256'.split()) | (
+        {'profile'} if profile != 'l2' else set()))
     for k in ('host_run_id', 'stand_id'):
         require(type(i[k]) is str and re.fullmatch('[A-Za-z0-9][A-Za-z0-9_-]{0,95}', i[k]))
     require(type(i['guest_run_id']) is str and re.fullmatch('[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}', i['guest_run_id']))
@@ -115,13 +134,13 @@ def request(raw):
     for k in ('media_sha256', 'content_sha256', 'manifest_sha256'):
         require(type(i[k]) is str and re.fullmatch('[0-9a-f]{64}', i[k]))
     require(type(i['media_size']) is int and 0 < i['media_size'] <= ISO_LIMIT)
-    require(set(hashes) == set(sizes) == set(CONTENT))
-    for n in CONTENT:
+    require(set(hashes) == set(sizes) == set(content))
+    for n in content:
         require(type(hashes[n]) is str and re.fullmatch('[0-9a-f]{64}', hashes[n]))
-        limit = 512 * 1024 * 1024 if n in tuple('artifacts/' + b for b in BINARIES) else 256 * 1024
+        limit = 512 * 1024 * 1024 if n in tuple('artifacts/' + b for b in binaries) else 256 * 1024
         require(type(sizes[n]) is int and 0 < sizes[n] <= limit)
     require(sum(sizes.values()) <= TOTAL_LIMIT)
-    require(set(env) == set('RUN_ID STAND_ID EXPECTED_BOOT_ID USER_A USER_B BIOS_GUID SCENARIO_TIMEOUT_SECONDS UNIT_TIMEOUT_SECONDS JOB_TIMEOUT_SECONDS'.split()))
+    require(set(env) == set(order))
     require(all(type(v) is str for v in env.values()))
     require(env['RUN_ID'] == i['guest_run_id'] and env['STAND_ID'] == i['stand_id'] and
             env['EXPECTED_BOOT_ID'] == i['boot_id'] and env['BIOS_GUID'] == i['vm_uuid'])
@@ -131,11 +150,16 @@ def request(raw):
     for k in ('SCENARIO_TIMEOUT_SECONDS', 'UNIT_TIMEOUT_SECONDS', 'JOB_TIMEOUT_SECONDS'):
         require(re.fullmatch('[0-9]+', env[k]) and 10 <= int(env[k]) <= 86400)
     require(60 <= int(env['JOB_TIMEOUT_SECONDS']) <= 7200)
-    order = 'RUN_ID STAND_ID EXPECTED_BOOT_ID USER_A USER_B BIOS_GUID SCENARIO_TIMEOUT_SECONDS UNIT_TIMEOUT_SECONDS JOB_TIMEOUT_SECONDS'.split()
+    if profile == 'l3':
+        for k in ('HOST_ADDRESS', 'PROBE_ADDRESS', 'DNS_PROBE_ADDRESS'):
+            require(re.fullmatch(r'[0-9]{1,3}(\.[0-9]{1,3}){3}', env[k]))
+            address = ipaddress.IPv4Address(env[k])
+            require(any(address in net for net in DOCUMENTATION_V4))
+        require(re.fullmatch('[0-9]{1,5}', env['NODE_PORT']) and 1 <= int(env['NODE_PORT']) <= 65535)
     raw_env = ''.join(k + '=' + env[k] + '\n' for k in order).encode('ascii')
-    final = make_manifest(dict(hashes, **{'job.env': sha(raw_env)}), CONTENT[:5] + ('job.env',) + CONTENT[5:])
+    final = make_manifest(dict(hashes, **{'job.env': sha(raw_env)}), content[:5] + ('job.env',) + content[5:])
     require(sha(final) == i['manifest_sha256'])
-    require(sha(make_manifest(hashes, CONTENT)) == i['content_sha256'])
+    require(sha(make_manifest(hashes, content)) == i['content_sha256'])
     return i, hashes, sizes, raw_env, final
 
 
@@ -188,7 +212,7 @@ class LinuxDevice:
         require(not any(r.split()[4] == str(target) for r in Path('/proc/self/mountinfo').read_text().splitlines()))
 
 
-def composition(root):
+def composition(root, content=CONTENT):
     found = set()
     for parent, dirs, files in os.walk(root, followlinks=False):
         for name in dirs + files:
@@ -198,7 +222,7 @@ def composition(root):
             if name in files:
                 require(path.lstat().st_nlink == 1)
             found.add(path.relative_to(root).as_posix())
-    require(found == set(CONTENT) | {'guest', 'artifacts', 'content.sha256'})
+    require(found == set(content) | {'guest', 'artifacts', 'content.sha256'})
 
 
 def copy_file(source, target, size, expected):
@@ -223,7 +247,7 @@ def copy_file(source, target, size, expected):
                 (after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns))
         require(count == size and digest.hexdigest() == expected)
         os.fchown(dst.fileno(), 0, 0)
-        os.fchmod(dst.fileno(), 0o755 if source.name.endswith('.sh') or source.name in BINARIES else 0o644)
+        os.fchmod(dst.fileno(), 0o755 if source.name.endswith('.sh') or source.name in EXECUTABLE else 0o644)
         dst.flush()
         os.fsync(dst.fileno())
 
@@ -235,6 +259,7 @@ def mkdir_private(path):
 
 
 def import_media(i, hashes, sizes, env, final, adapter):
+    names = PROFILES[i.get('profile', 'l2')]['content']
     attempt = ROOT / ('.import-' + i['import_id'])
     destination = ROOT / i['guest_run_id']
     require(not os.path.lexists(destination))
@@ -258,12 +283,12 @@ def import_media(i, hashes, sizes, env, final, adapter):
     write_new(attempt / 'mount-confirmed', b'confirmed\n')
     sync_dir(attempt)
     try:
-        composition(mountpoint)
-        expected_content = make_manifest(hashes, CONTENT)
+        composition(mountpoint, names)
+        expected_content = make_manifest(hashes, names)
         content = mountpoint / 'content.sha256'
         require(content.stat().st_size == len(expected_content))
         require(content.read_bytes() == expected_content)
-        for n in CONTENT:
+        for n in names:
             copy_file(mountpoint / n, package / n, sizes[n], hashes[n])
         write_new(package / 'job.env', env)
         write_new(package / 'manifest.sha256', final)
