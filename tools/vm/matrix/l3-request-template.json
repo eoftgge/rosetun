@@ -1,0 +1,59 @@
+{
+  "selection": {
+    "subscription": "lab",
+    "node": "lab-node"
+  },
+  "node": {
+    "id": "lab-node",
+    "name": "lab-node.test",
+    "server": "192.0.2.1",
+    "port": 8388,
+    "outbound": { "shadowsocks": { "method": "aes-128-gcm", "password": "lab-only-fixed-password" } },
+    "stream": {
+      "transport": "tcp",
+      "tls": "plain"
+    }
+  },
+  "rule_set": {
+    "id": "base",
+    "name": "Domain routing test",
+    "rules": [
+      {
+        "id": "direct-domain",
+        "enabled": true,
+        "matcher": {
+          "domain": {
+            "exact": "direct.lab.test"
+          }
+        },
+        "target": "direct"
+      },
+      {
+        "id": "proxy-domain",
+        "enabled": true,
+        "matcher": {
+          "domain": {
+            "exact": "proxy.lab.test"
+          }
+        },
+        "target": "proxy"
+      }
+    ],
+    "default_target": "proxy"
+  },
+  "settings": {
+    "engine": "sing_box",
+    "kill_switch": true,
+    "log_level": "debug",
+    "dns": {
+      "server": "203.0.113.3",
+      "server_name": "doh.lab.test"
+    },
+    "tun": {
+      "name": "rosetun0",
+      "mtu": 1500,
+      "ipv4": "198.51.100.65/30",
+      "auto_route": true
+    }
+  }
+}
