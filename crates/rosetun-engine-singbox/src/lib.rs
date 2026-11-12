@@ -531,6 +531,7 @@ fn find_in_neighbours() -> Option<PathBuf> {
 struct HintFlags {
     slow_tunnel: AtomicBool,
     adapter_still_removing: AtomicBool,
+    tunnel_address_in_use: AtomicBool,
 }
 
 impl HintFlags {
@@ -540,6 +541,9 @@ impl HintFlags {
         }
         if output::is_adapter_busy_message(line) {
             self.adapter_still_removing.store(true, Ordering::Release);
+        }
+        if output::is_address_conflict_message(line) {
+            self.tunnel_address_in_use.store(true, Ordering::Release);
         }
     }
 }
@@ -579,6 +583,7 @@ impl EngineProcess for SingBoxProcess {
         rosetun_engine::StartupHints {
             slow_tunnel_creation: self.hints.slow_tunnel.load(Ordering::Acquire),
             adapter_still_removing: self.hints.adapter_still_removing.load(Ordering::Acquire),
+            tunnel_address_in_use: self.hints.tunnel_address_in_use.load(Ordering::Acquire),
         }
     }
     fn is_running(&mut self) -> Result<bool, EngineError> {
