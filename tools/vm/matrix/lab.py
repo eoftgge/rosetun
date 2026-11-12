@@ -11,6 +11,7 @@ import time
 import tomllib
 import uuid
 
+from . import l3_requests
 from .evidence import ReadbackError, write_file
 from .execution import exact
 from .images import ImageDescriptor
@@ -19,10 +20,14 @@ from .lifecycle import start, _host
 from .resources import (StandLease, create_run, completion_verified, resource_path,
                         EXECUTION_FILES, _identifier, _state_path)
 from .orchestrator import save, failure, _RETAINED_LEASES
-from .lab_protocol import MACS, CAPTURE_LIMIT, LOG_LIMIT, probes, markers, qualify, leak_verdict
+from .lab_protocol import (MACS, CAPTURE_LIMIT, LOG_LIMIT, PORTS, CANARY_PORT, HTTPS_PORT, SOCKS_PORT, EGRESS,
+                           probes, markers, qualify, leak_verdict, https_exchanges, https_answer)
 
 ENTRY = '/usr/local/libexec/rosetun-lab/entry'
+SCHEMA_V1, SCHEMA_V2 = 'rosetun.matrix.lab.v1', 'rosetun.matrix.lab.v2'
 ARTIFACTS = {'lab-capture': 'capture.pcap', 'lab-targets': 'targets.json', 'lab-health': 'health.json'}
+# Only a tunnel run reads these two; they are registered with the lab run only then.
+TUNNEL_ARTIFACTS = {'lab-https': 'https.json', 'lab-node': 'node.log'}
 
 
 def controls(run):
@@ -36,10 +41,26 @@ def load_lab(path):
     return validate(config)
 
 
+def validate_tunnel(block):
+    """The pinned fixtures of stage 7b1: one engine binary in both images, the CA, the node port."""
+    exact(block, ('sing_box_sha256', 'ca_sha256', 'node_port'))
+    for name in ('sing_box_sha256', 'ca_sha256'):
+        if type(block[name]) is not str or not re.fullmatch('[0-9a-f]{64}', block[name]):
+            raise ValueError('lab-tunnel-hash')
+    port = block['node_port']
+    if (type(port) is not int or not 1 <= port <= 65535
+            or port in (*PORTS.values(), CANARY_PORT, HTTPS_PORT, SOCKS_PORT)):
+        raise ValueError('lab-tunnel-port')
+
+
 def validate(config):
-    exact(config, ('schema', 'state_directory', 'stand_id', 'qemu', 'test_image', 'lab_image'))
-    if config['schema'] != 'rosetun.matrix.lab.v1':
+    base = ('schema', 'state_directory', 'stand_id', 'qemu', 'test_image', 'lab_image')
+    # Version 1 reads exactly as before; version 2 only adds the tunnel block.
+    exact(config, base + (('tunnel',) if type(config) is dict and config.get('schema') == SCHEMA_V2 else ()))
+    if config['schema'] not in (SCHEMA_V1, SCHEMA_V2):
         raise ValueError('unsupported-lab-schema')
+    if config['schema'] == SCHEMA_V2:
+        validate_tunnel(config['tunnel'])
     _state_path(config['state_directory'])
     _identifier(config['stand_id'])
     exact(config['qemu'], [f.name for f in fields(QemuConfig)])
@@ -50,9 +71,11 @@ def validate(config):
     return config
 
 
-def plan_lab(config):
+def plan_lab(config, *, tunnel=False):
     """Read only: no lease, directories, subprocesses or sockets."""
     validate(config)
+    if tunnel and config['schema'] != SCHEMA_V2:
+        raise ValueError('lab-tunnel-requires-v2')
     state = _state_path(config['state_directory'])
     QemuConfig(**config['qemu']).validate()
     for role in MACS:
@@ -65,7 +88,7 @@ def plan_lab(config):
 
 class LabPair:
     """Capability for two particular runs under their original lease."""
-    def __init__(self, lease, runs, lab_id, *, pair_factory=socket.socketpair):
+    def __init__(self, lease, runs, lab_id, *, pair_factory=socket.socketpair, tunnel=False):
         lease._check_live()
         if set(runs) != set(MACS) or lease._active or runs['test'] is runs['lab']:
             raise ValueError('invalid-lab-members')
@@ -73,6 +96,7 @@ class LabPair:
             if run._lease is not lease or run._read()['state'] != 'prepared':
                 raise ValueError('foreign-lab-member')
         self.lease, self.runs, self.lab_id = lease, dict(runs), _identifier(lab_id)
+        self.tunnel = tunnel is True
         self.sockets = {}
         self.used = set()
         self.closed = False
@@ -97,7 +121,9 @@ class LabPair:
         return roles[0]
 
     def resources(self, run):
-        return ARTIFACTS if self.role(run) == 'lab' else {}
+        if self.role(run) != 'lab':
+            return {}
+        return {**ARTIFACTS, **TUNNEL_ARTIFACTS} if self.tunnel else ARTIFACTS
 
     def check_start(self, run):
         self.lease._check_live()
@@ -135,6 +161,16 @@ class LabPair:
         self.closed = True
 
 
+def refusal(status):
+    """'lab-helper-failed', plus the helper's own fixed reason when it printed one."""
+    try:
+        text = base64.b64decode(status.get('err-data', ''), validate=True).decode('ascii')
+    except (ValueError, UnicodeDecodeError):
+        return 'lab-helper-failed'
+    match = re.fullmatch(r'lab-helper-failed:([a-z0-9-]{1,64})\s*', text)
+    return 'lab-helper-failed-' + match[1] if match else 'lab-helper-failed'
+
+
 class Guest:
     """Fixed installed entry point, serialized QGA, no shell or arbitrary paths."""
     def __init__(self, vm, role, lab_id, *, clock=time.monotonic, sleep=time.sleep):
@@ -149,7 +185,7 @@ class Guest:
         self.vm.qga.deadline = time.monotonic() + min(5, self.deadline - self.clock())
         return self.vm.qga._rpc(name, 5, args)
 
-    def call(self, operation, expected, window=(), canary=False):
+    def call(self, operation, expected, window=(), canary=False, tunnel=None):
         if operation not in ({'setup', 'finish'} if self.role == 'lab' else {'probe'}):
             raise ValueError('invalid-lab-operation')
         with self.vm._guest_lock:
@@ -159,6 +195,8 @@ class Guest:
             request = dict(operation=operation, role=self.role, lab_id=self.lab_id,
                            vm_uuid=self.vm.vm_uuid, boot_id=self.vm.last_boot_id, probes=expected,
                            markers=list(window), canary=canary is True)
+            if tunnel is not None:
+                request['tunnel'] = tunnel
             self.vm.qga.jobs_enabled = True
             self.vm.qga.probe(5)
             response = self.rpc('guest-exec', {'path': ENTRY, 'arg': [json.dumps(request)], 'capture-output': True})
@@ -168,7 +206,7 @@ class Guest:
                 status = self.rpc('guest-exec-status', response)
                 if status.get('exited') is True:
                     if status.get('exitcode') != 0 or status.get('out-truncated') or status.get('err-truncated'):
-                        raise ValueError('lab-helper-failed')
+                        raise ValueError(refusal(status))
                     raw = base64.b64decode(status.get('out-data', ''), validate=True)
                     if len(raw) > LOG_LIMIT:
                         raise ValueError('lab-helper-output-limit')
@@ -180,7 +218,7 @@ class Guest:
             raise ValueError('lab-helper-timeout')
 
     def read(self, name, limit):
-        if name not in ARTIFACTS.values():
+        if name not in (*ARTIFACTS.values(), *TUNNEL_ARTIFACTS.values()):
             raise ValueError('invalid-lab-artifact')
         with self.vm._guest_lock:
             handle = self.rpc('guest-file-open', {'path': '/run/rosetun-lab/' + self.lab_id + '/' + name, 'mode': 'r'})
@@ -228,12 +266,58 @@ def expected_leak(result):
     return result['leak'] == 'NONE'
 
 
-def lab_smoke(config, *, canary=False, adapters=None, clock=time.monotonic, sleep=time.sleep):
-    plan_lab(config)
+def tunnel_request(config, exchanges):
+    """The block sent to both helpers. Method and password come from the one public template."""
+    shadowsocks = l3_requests.template()['node']['outbound']['shadowsocks']
+    block = config['tunnel']
+    return dict(port=block['node_port'], method=shadowsocks['method'], password=shadowsocks['password'],
+                sing_box_sha256=block['sing_box_sha256'], ca_sha256=block['ca_sha256'], https=exchanges)
+
+
+def tunnel_summary(exchanges, reports, log, health, categories):
+    """What the tunnel run proved, from the helper's answers and the target's own log."""
+    direct, via_node = exchanges
+    reports = reports if type(reports) is dict else {}
+
+    def report(kind, exchange):
+        row = reports.get(kind)
+        return row if (type(row) is dict and row.get('path') == exchange['path']
+                       and row.get('response') == https_answer(exchange).hex()) else None
+
+    def rows(exchange):
+        return [row for row in log if type(row) is dict and row.get('path') == exchange['path']]
+
+    sent, relayed = report('direct', direct), report('tunnel', via_node)
+    direct_rows, relayed_rows = rows(direct), rows(via_node)
+    node = health.get('node') if type(health) is dict and type(health.get('node')) is dict else {}
+    code = node.get('exit_code')
+    client = reports.get('client_exit')
+    return dict(
+        direct=(sent is not None and type(sent.get('client_port')) is int and len(direct_rows) == 1
+                and direct_rows[0].get('source') == direct['source']
+                and direct_rows[0].get('port') == sent['client_port']),
+        via_node=relayed is not None and len(relayed_rows) == 1 and relayed_rows[0].get('source') == EGRESS,
+        tunnel_frames=categories.get('tunnel', 0),
+        node=dict(alive_at_finish=node.get('alive_at_finish') is True,
+                  exit_code=code if type(code) is int else None),
+        client_exit=client if type(client) is int else None)
+
+
+def tunnel_ok(result):
+    """Everything a tunnel run needs beyond the ordinary or canary condition."""
+    block = result.get('tunnel')
+    return (block is None or (block['direct'] is True and block['via_node'] is True
+                              and block['tunnel_frames'] > 0 and block['node']['alive_at_finish'] is True))
+
+
+def lab_smoke(config, *, canary=False, tunnel=False, adapters=None, clock=time.monotonic, sleep=time.sleep):
+    plan_lab(config, tunnel=tunnel)
     adapters = adapters or Adapters()
     lab_id = uuid.uuid4().hex
     expected = probes(lab_id, lambda: secrets.token_hex(12))
     window = markers(lab_id, lambda: secrets.token_hex(12))
+    exchanges = https_exchanges(lab_id, lambda: secrets.token_hex(12)) if tunnel else []
+    extra = dict(tunnel=tunnel_request(config, exchanges)) if tunnel else {}
     result = dict(schema='rosetun.matrix.lab-summary.v1', lab_id=lab_id, readiness={},
                   artifact_directories={}, configuration=config,
                   qualification=dict(qualified=False, ipv4='UNVERIFIED', ipv6='UNVERIFIED',
@@ -242,6 +326,10 @@ def lab_smoke(config, *, canary=False, adapters=None, clock=time.monotonic, slee
                   leak='UNVERIFIED', leak_reason='not-evaluated', observer_reasons=['not-evaluated'], categories={}, unexpected=[], canary_flows=[], canary_other=0,
                   window=dict(markers_found=False, ordered=False), canary=canary is True,
                   errors=[], security_invariants='UNVERIFIED', release_gate=False, exit_code=2)
+    if tunnel:
+        # Stage 6a and 6b summaries gain nothing; only a tunnel run carries these.
+        result.update(https=exchanges, tunnel=dict(direct=False, via_node=False, tunnel_frames=0,
+                      node=dict(alive_at_finish=False, exit_code=None), client_exit=None))
     lease, pair, runs, vms = None, None, {}, {}
     try:
         adapters.host()
@@ -261,7 +349,7 @@ def lab_smoke(config, *, canary=False, adapters=None, clock=time.monotonic, slee
                  endpoint=dict(kind='inherited-unix-stream', role=role, mac=MACS[role])), initial=True)
             save(run, 'execution-summary.json', result, initial=True)
             adapters.prepare(run, ImageDescriptor(**config[role + '_image']), QemuConfig(**config['qemu']))
-        pair = adapters.pair(lease, runs, lab_id)
+        pair = adapters.pair(lease, runs, lab_id, **({'tunnel': True} if tunnel else {}))
         for role in MACS:
             vm = adapters.start(runs[role], lab=pair)
             vms[role] = vm
@@ -273,20 +361,24 @@ def lab_smoke(config, *, canary=False, adapters=None, clock=time.monotonic, slee
         pair.close()
         lab = adapters.guest(vms['lab'], 'lab', lab_id, clock=clock, sleep=sleep)
         test = adapters.guest(vms['test'], 'test', lab_id, clock=clock, sleep=sleep)
-        ready = lab.call('setup', expected, window)
+        ready = lab.call('setup', expected, window, **extra)
         if ready.get('capture_ready') is not True:
             raise ValueError('capture-not-ready')
-        sent = {}
+        sent, reports = {}, None
         try:
-            probed = test.call('probe', expected, window, canary=canary)
+            probed = test.call('probe', expected, window, canary=canary, **extra)
             replies, marker_replies, sent = probed['replies'], probed['marker_replies'], probed['marker_sent']
+            reports = probed.get('https')
         except Exception as error:
             result['errors'].append(failure('probe', error))
             replies, marker_replies = [], []
         result['replies'] = replies
-        lab.call('finish', expected, window)
+        lab.call('finish', expected, window, **extra)
         evidence = {}
-        for name, limit in (('capture.pcap', CAPTURE_LIMIT), ('targets.json', LOG_LIMIT), ('health.json', LOG_LIMIT)):
+        files = (('capture.pcap', CAPTURE_LIMIT), ('targets.json', LOG_LIMIT), ('health.json', LOG_LIMIT))
+        if tunnel:
+            files += (('https.json', LOG_LIMIT), ('node.log', LOG_LIMIT))
+        for name, limit in files:
             raw = lab.read(name, limit)
             try:
                 # A pcap is binary and guest-supplied; only the JSON files are checked.
@@ -298,9 +390,19 @@ def lab_smoke(config, *, canary=False, adapters=None, clock=time.monotonic, slee
         result['evidence_sha256'] = {name: hashlib.sha256(raw).hexdigest() for name, raw in evidence.items()}
         health = json.loads(evidence['health.json'])
         # The leak verdict comes first so that a rejected capture cannot hide a seen leak.
-        verdict = leak_verdict(evidence['capture.pcap'], expected, window, health, ready['capture_ready'], marker_replies)
+        options = {}
+        if tunnel:
+            log = json.loads(evidence['https.json'])
+            direct_report = reports.get('direct') if type(reports) is dict else None
+            options = dict(tunnel_port=config['tunnel']['node_port'],
+                           https=dict(direct=exchanges[0], log=log, client_port=(
+                               direct_report.get('client_port') if type(direct_report) is dict else None)))
+        verdict = leak_verdict(evidence['capture.pcap'], expected, window, health, ready['capture_ready'],
+                               marker_replies, **options)
         verdict['window'] = dict(verdict['window'], test_clock_sent=sent)
         result.update(verdict)
+        if tunnel:
+            result['tunnel'] = tunnel_summary(exchanges, reports, log, health, verdict['categories'])
         result['qualification'] = qualify(expected, replies, json.loads(evidence['targets.json']),
                     evidence['capture.pcap'], ready['capture_ready'], health)
     except BaseException as error:
@@ -337,7 +439,8 @@ def lab_smoke(config, *, canary=False, adapters=None, clock=time.monotonic, slee
                                    and all(result['completion'].values()) and result['channel_closed'])
             if result['exit_code'] != 130:
                 result['exit_code'] = 0 if (result['completed'] and not result['errors']
-                                            and result['qualification']['qualified'] and expected_leak(result)) else 2
+                                            and result['qualification']['qualified'] and expected_leak(result)
+                                            and tunnel_ok(result)) else 2
             for run in runs.values():
                 try:
                     save(run, 'execution-summary.json', result)
