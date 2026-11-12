@@ -149,7 +149,7 @@ class Guest:
         self.vm.qga.deadline = time.monotonic() + min(5, self.deadline - self.clock())
         return self.vm.qga._rpc(name, 5, args)
 
-    def call(self, operation, expected, window=()):
+    def call(self, operation, expected, window=(), canary=False):
         if operation not in ({'setup', 'finish'} if self.role == 'lab' else {'probe'}):
             raise ValueError('invalid-lab-operation')
         with self.vm._guest_lock:
@@ -158,7 +158,7 @@ class Guest:
                 raise ValueError('lab-boot-changed')
             request = dict(operation=operation, role=self.role, lab_id=self.lab_id,
                            vm_uuid=self.vm.vm_uuid, boot_id=self.vm.last_boot_id, probes=expected,
-                           markers=list(window))
+                           markers=list(window), canary=canary is True)
             self.vm.qga.jobs_enabled = True
             self.vm.qga.probe(5)
             response = self.rpc('guest-exec', {'path': ENTRY, 'arg': [json.dumps(request)], 'capture-output': True})
@@ -214,7 +214,15 @@ class Adapters:
     guest = Guest
 
 
-def lab_smoke(config, *, adapters=None, clock=time.monotonic, sleep=time.sleep):
+def expected_leak(result):
+    """An ordinary run must see no leak; a canary run must see exactly its own two flows."""
+    if result['canary']:
+        return (result['leak'] == 'DETECTED' and result['canary_flows'] == ['tcp', 'udp']
+                and result['canary_other'] == 0)
+    return result['leak'] == 'NONE'
+
+
+def lab_smoke(config, *, canary=False, adapters=None, clock=time.monotonic, sleep=time.sleep):
     plan_lab(config)
     adapters = adapters or Adapters()
     lab_id = uuid.uuid4().hex
@@ -226,7 +234,7 @@ def lab_smoke(config, *, adapters=None, clock=time.monotonic, sleep=time.sleep):
                                      services='UNVERIFIED', observer='UNVERIFIED', evidence='UNVERIFIED'),
                   probes=expected, markers=window, completion={}, channel_closed=False, completed=False,
                   leak='UNVERIFIED', leak_reason='not-evaluated', categories={}, unexpected=[], canary_flows=[], canary_other=0,
-                  window=dict(markers_found=False, ordered=False),
+                  window=dict(markers_found=False, ordered=False), canary=canary is True,
                   errors=[], security_invariants='UNVERIFIED', release_gate=False, exit_code=2)
     lease, pair, runs, vms = None, None, {}, {}
     try:
@@ -264,7 +272,7 @@ def lab_smoke(config, *, adapters=None, clock=time.monotonic, sleep=time.sleep):
             raise ValueError('capture-not-ready')
         sent = {}
         try:
-            probed = test.call('probe', expected, window)
+            probed = test.call('probe', expected, window, canary=canary)
             replies, marker_replies, sent = probed['replies'], probed['marker_replies'], probed['marker_sent']
         except Exception as error:
             result['errors'].append(failure('probe', error))
@@ -323,7 +331,7 @@ def lab_smoke(config, *, adapters=None, clock=time.monotonic, sleep=time.sleep):
                                    and all(result['completion'].values()) and result['channel_closed'])
             if result['exit_code'] != 130:
                 result['exit_code'] = 0 if (result['completed'] and not result['errors']
-                                            and result['qualification']['qualified'] and result['leak'] == 'NONE') else 2
+                                            and result['qualification']['qualified'] and expected_leak(result)) else 2
             for run in runs.values():
                 try:
                     save(run, 'execution-summary.json', result)

@@ -1,8 +1,10 @@
 """Offline two-VM and evidence regressions. No host networking or real child."""
 import base64
+import contextlib
 from dataclasses import asdict, replace
 import json
 import importlib.util
+import io
 from pathlib import Path
 import socket
 import struct
@@ -13,7 +15,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from tools.vm.matrix import lab, lifecycle, lab_protocol as wire
+from tools.vm.matrix import cli, lab, lifecycle, lab_protocol as wire
 from tools.vm.matrix.resources import create_run, EXECUTION_FILES
 from tools.vm.matrix.tests import test_qemu, test_lifecycle
 
@@ -116,6 +118,16 @@ def pcap(expected, window=None, extra=()):
     if window is None:
         return capture(frames)
     return capture(marker_exchange(window[0]) + frames + list(extra) + marker_exchange(window[1]))
+
+
+def canary_frames(*, udp_flow=True, tcp_flow=True):
+    """The two deliberate flows and the errors the lab's router sends back for them."""
+    def error(flow):
+        return ip_frame(wire.TARGETS[4], wire.CLIENTS[4], 1, icmp(3, bytes(4) + flow[14:14 + 28]),
+                        src=wire.MACS['lab'], dst=wire.MACS['test'])
+    datagram = ip_frame(wire.CLIENTS[4], wire.TARGETS[4], 17, udp(42000, wire.CANARY_PORT, b'canary'))
+    syn = ip_frame(wire.CLIENTS[4], wire.CANARY_TCP_TARGET, 6, tcp(42001, wire.CANARY_PORT, flags=0x02))
+    return (([datagram, error(datagram)] if udp_flow else []) + ([syn, error(syn)] if tcp_flow else []))
 
 
 def healthy(window, **changes):
@@ -383,13 +395,8 @@ class LeakTests(unittest.TestCase):
         json.dumps(result)
 
     def test_canary_flows_include_the_errors_they_provoke_and_nothing_else(self):
-        udp_flow = ip_frame(wire.CLIENTS[4], wire.TARGETS[4], 17, udp(42000, wire.CANARY_PORT, b'canary'))
-        syn_flow = ip_frame(wire.CLIENTS[4], wire.CANARY_TCP_TARGET, 6, tcp(42001, wire.CANARY_PORT, flags=0x02))
-        def error(kind, flow):
-            quoted = flow[14:14 + 28]
-            return ip_frame(wire.TARGETS[4], wire.CLIENTS[4], 1, icmp(kind, bytes(4) + quoted),
-                            src=self.lab, dst=self.test)
-        both = [udp_flow, error(3, udp_flow), syn_flow, error(3, syn_flow)]
+        both = canary_frames()
+        udp_flow = both[0]
         result = self.verdict(both)
         self.assertEqual((['tcp', 'udp'], 0, 'DETECTED', 4), (result['canary_flows'], result['canary_other'],
                                                               result['leak'], result['categories']['unexpected']))
@@ -501,7 +508,7 @@ class PairTests(unittest.TestCase):
 
 
 class OrchestrationTests(unittest.TestCase):
-    def scenario(self, fault=None):
+    def scenario(self, fault=None, canary=False):
         fixture = test_qemu.PreparationTests()
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
@@ -528,8 +535,9 @@ class OrchestrationTests(unittest.TestCase):
             return vm
         class Guest:
             def __init__(self, vm, role, lab_id, **kwargs): pass
-            def call(self, operation, expected, window=()):
+            def call(self, operation, expected, window=(), canary=False):
                 captured['probes'], captured['window'] = expected, list(window)
+                captured.setdefault('canary', []).append((operation, canary))
                 if operation == 'setup':
                     return dict(capture_ready=fault != 'observer-not-ready')
                 if operation == 'probe':
@@ -546,6 +554,11 @@ class OrchestrationTests(unittest.TestCase):
                         return wire.PCAP_HEADER
                     if fault == 'leak':
                         return pcap(expected, window, [ip_frame(wire.CLIENTS[4], wire.TARGETS[4], 1, icmp(8))])
+                    if canary and fault != 'no-markers':
+                        stray = [ip_frame(wire.CLIENTS[4], wire.TARGETS[4], 1, icmp(8))]
+                        extra = {'blind': [], 'udp-only': canary_frames(tcp_flow=False),
+                                 'stray': canary_frames() + stray}.get(fault, canary_frames())
+                        return pcap(expected, window, extra)
                     return pcap(expected) if fault == 'no-markers' else pcap(expected, window)
                 if name == 'targets.json':
                     return json.dumps([{**p, 'response': wire.answer(p).hex()} for p in expected]).encode()
@@ -560,7 +573,8 @@ class OrchestrationTests(unittest.TestCase):
         with patch.object(socket, 'AF_UNIX', 1, create=True), \
              patch.object(lab, 'completion_verified', side_effect=lambda directory, manifest:
                           any(v.run.directory == directory and v.closed for v in members.values())):
-            result = lab.lab_smoke(config, adapters=adapters, clock=lambda: 0, sleep=lambda _: None)
+            result = lab.lab_smoke(config, canary=canary, adapters=adapters, clock=lambda: 0, sleep=lambda _: None)
+        result['canary_calls'] = captured.get('canary', [])
         return result
 
     def test_complete_smoke_requires_both_completions_and_keeps_release_closed(self):
@@ -595,6 +609,26 @@ class OrchestrationTests(unittest.TestCase):
                 result = self.scenario(fault)
                 self.assertEqual((2, 'UNVERIFIED'), (result['exit_code'], result['leak']))
         self.assertEqual('window-markers-missing-or-repeated', self.scenario('no-markers')['leak_reason'])
+
+    def test_a_canary_run_succeeds_only_when_exactly_its_own_two_flows_are_detected(self):
+        result = self.scenario(canary=True)
+        self.assertEqual((0, 'DETECTED', True, ['tcp', 'udp'], 0),
+                         (result['exit_code'], result['leak'], result['canary'], result['canary_flows'],
+                          result['canary_other']))
+        self.assertTrue(result['qualification']['qualified'])
+        self.assertIn(('probe', True), result['canary_calls'])
+        self.assertEqual(4, result['categories']['unexpected'])
+        for fault in ('blind', 'udp-only', 'stray', 'leak', 'target-unavailable', 'no-markers',
+                      'incomplete-evidence'):
+            with self.subTest(fault=fault):
+                self.assertEqual(2, self.scenario(fault, canary=True)['exit_code'])
+        self.assertEqual('NONE', self.scenario('blind', canary=True)['leak'])
+
+    def test_an_ordinary_run_never_asks_for_the_leak_and_a_leak_fails_it(self):
+        result = self.scenario()
+        self.assertEqual((False, 0), (result['canary'], result['exit_code']))
+        self.assertNotIn(('probe', True), result['canary_calls'])
+        self.assertEqual(2, self.scenario('leak')['exit_code'])
 
     def test_dry_run_has_no_mutations_or_network(self):
         fixture = test_qemu.PreparationTests()
@@ -648,6 +682,22 @@ class OrchestrationTests(unittest.TestCase):
             self.assertFalse(result['release_gate'])
         finally:
             fixture.doCleanups()
+
+
+class CommandLineTests(unittest.TestCase):
+    def run_cli(self, *flags, exit_code=0):
+        calls = []
+        def smoke(config, **kwargs):
+            calls.append(kwargs)
+            return dict(exit_code=exit_code)
+        with patch.object(lab, 'load_lab', return_value={}), patch.object(lab, 'lab_smoke', smoke),              contextlib.redirect_stdout(io.StringIO()):
+            code = cli.main(['lab-smoke', '--config', 'unused.toml', *flags])
+        return code, calls
+
+    def test_the_leak_control_is_requested_only_by_the_canary_flag(self):
+        self.assertEqual((0, [dict(canary=False)]), self.run_cli())
+        self.assertEqual((0, [dict(canary=True)]), self.run_cli('--canary'))
+        self.assertEqual((2, [dict(canary=True)]), self.run_cli('--canary', exit_code=2))
 
 
 class QgaFacadeTests(unittest.TestCase):
@@ -710,6 +760,7 @@ class GuestIdentityTests(unittest.TestCase):
              boot_id='22345678-1234-4234-8234-123456789abc',
              probes=wire.probes('a' * 32, nonces.__next__), operation='setup')
         self.request['markers'] = wire.markers('a' * 32, nonces.__next__)
+        self.request['canary'] = False
 
     def test_wrong_vm_boot_or_role_cannot_mutate_guest_network(self):
         values = {'/etc/rosetun-lab-role': 'lab',
@@ -745,6 +796,8 @@ class GuestIdentityTests(unittest.TestCase):
             'extra-field': [first, dict(second, extra=1)],
             'short-nonce': [first, dict(second, nonce='abc')],
         }
+        with self.assertRaises(ValueError):
+            self.identity(dict(self.request, canary='yes'))
         for name, window in bad.items():
             with self.subTest(name=name), self.assertRaises(ValueError):
                 self.identity(dict(self.request, markers=window))
@@ -774,6 +827,46 @@ class GuestIdentityTests(unittest.TestCase):
         self.assertEqual(['open', 'exchanges', 'close'], events)
         self.assertEqual(['open', 'close'], [m['word'] for m in result['marker_replies']])
         self.assertEqual({'open', 'close'}, set(result['marker_sent']))
+
+    def test_the_canary_goes_out_between_the_exchanges_and_the_closing_marker_only_when_asked(self):
+        for canary, expected in ((False, ['open', 'exchanges', 'close']),
+                                 (True, ['open', 'exchanges', 'canary', 'close'])):
+            events = []
+            def marker(m):
+                events.append(m['word'])
+                return dict(m, response=wire.marker_answer(m).hex())
+            with patch.object(self.entry, 'exchange_marker', marker), \
+                 patch.object(self.entry, 'probe_exchanges', lambda request: events.append('exchanges') or []), \
+                 patch.object(self.entry, 'send_canary', lambda: events.append('canary')), \
+                 patch.object(self.entry.time, 'sleep'):
+                self.entry.probe_all(dict(self.request, canary=canary))
+            self.assertEqual(expected, events)
+
+    def test_the_canary_is_a_datagram_to_an_unserved_port_and_a_syn_to_an_unheld_address(self):
+        sockets = []
+        outcome = [self.entry.errno.EINPROGRESS]
+        class Fake:
+            def __init__(self, family, kind):
+                self.sent, self.connected = [], None
+                sockets.append(self)
+            def __enter__(self): return self
+            def __exit__(self, *args): return False
+            def bind(self, address): self.bound = address
+            def setblocking(self, flag): self.blocking = flag
+            def sendto(self, data, address): self.sent.append(address)
+            def connect_ex(self, address):
+                self.connected = address
+                return outcome[0]
+        with patch.object(self.entry.socket, 'socket', Fake):
+            self.entry.send_canary()
+        datagram, stream = sockets
+        self.assertEqual([(wire.TARGETS[4], wire.CANARY_PORT)], datagram.sent)
+        self.assertEqual((wire.CANARY_TCP_TARGET, wire.CANARY_PORT), stream.connected)
+        self.assertEqual(wire.CLIENTS[4], stream.bound[0])
+        self.assertNotIn(wire.CANARY_PORT, wire.PORTS.values())
+        outcome[0] = self.entry.errno.ENETUNREACH
+        with patch.object(self.entry.socket, 'socket', Fake), self.assertRaises(ValueError):
+            self.entry.send_canary()
 
     def test_a_refused_opening_marker_sends_no_probe(self):
         with patch.object(self.entry, 'exchange_marker', side_effect=ValueError('unexpected-marker-answer')),              patch.object(self.entry, 'probe_exchanges', side_effect=AssertionError('probe after failed marker')):

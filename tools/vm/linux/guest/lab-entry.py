@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 """Owner-installed root-only lab entry. Never invoked on the controller host."""
 import ctypes
+import errno
 import json
 import os
 from pathlib import Path
@@ -14,7 +15,7 @@ import uuid
 
 from lab_protocol import (MACS, CLIENTS, GATEWAYS, TARGETS, PORTS, SERVICES, CAPTURE_LIMIT,
                           LOG_LIMIT, DURATION, interface, query, answer, token,
-                          marker_query, marker_answer)
+                          CANARY_PORT, CANARY_TCP_TARGET, marker_query, marker_answer)
 
 ROOT = Path('/run/rosetun-lab')
 ENTRY = '/usr/local/libexec/rosetun-lab/entry'
@@ -46,6 +47,8 @@ def identity(request):
                 or p['target'] != TARGETS[p['family']] or p['port'] != PORTS[p['service']]
                 or p['protocol'] != ('tcp' if p['service'] in ('http', 'dns-tcp') else 'udp')):
             raise ValueError('foreign-probe')
+    if type(request['canary']) is not bool:
+        raise ValueError('invalid-canary')
     window = request['markers']
     if (type(window) is not list or [m.get('word') for m in window] != ['open', 'close']
             or len({m.get('nonce') for m in window + expected}) != 10):
@@ -132,6 +135,19 @@ def exchange_marker(marker):
     return {**marker, 'response': response.hex()}
 
 
+def send_canary():
+    """A datagram to a port nobody serves and a SYN to an address nobody holds; no answer is awaited."""
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as stream:
+        stream.bind((CLIENTS[4], 0))
+        stream.sendto(b'rosetun-lab-canary', (TARGETS[4], CANARY_PORT))
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as stream:
+        stream.bind((CLIENTS[4], 0))
+        stream.setblocking(False)
+        # Closing the half-open socket sends nothing more.
+        if stream.connect_ex((CANARY_TCP_TARGET, CANARY_PORT)) != errno.EINPROGRESS:
+            raise ValueError('canary-not-sent')
+
+
 def probe_all(request):
     """The exchanges between an opening and a closing marker, each answered by the target."""
     opening, closing = request['markers']
@@ -140,6 +156,8 @@ def probe_all(request):
     sent['open'] = time.monotonic()
     marker_replies.append(exchange_marker(opening))
     replies = probe_exchanges(request)
+    if request['canary']:
+        send_canary()
     # Let the last connection finish closing on the wire before the window ends.
     time.sleep(.2)
     sent['close'] = time.monotonic()

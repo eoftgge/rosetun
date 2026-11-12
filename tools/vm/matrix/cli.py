@@ -32,6 +32,8 @@ def main(argv=None):
     lab = commands.add_parser('lab-smoke', help='qualify the isolated two-VM infrastructure only')
     lab.add_argument('--config', required=True)
     lab.add_argument('--dry-run', action='store_true')
+    lab.add_argument('--canary', action='store_true',
+                     help='send a deliberate leak and succeed only if exactly that leak is detected')
     run = commands.add_parser('run', help='execute exploratory Linux L2 on an explicitly selected stand')
     run.add_argument('suite', choices=['linux-l2'])
     run.add_argument('--config', required=True)
@@ -58,7 +60,7 @@ def main(argv=None):
         if args.command == 'lab-smoke':
             from .lab import load_lab, plan_lab, lab_smoke
             config = load_lab(args.config)
-            result = plan_lab(config) if args.dry_run else lab_smoke(config)
+            result = plan_lab(config) if args.dry_run else lab_smoke(config, canary=args.canary)
             code = 0 if args.dry_run else result['exit_code']
         elif args.command == 'run':
             from .execution import load_execution, preflight
