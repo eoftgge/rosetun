@@ -515,9 +515,13 @@ def start(run, *, timeout=5, executor=execute, lab=None):
     stage = 'l2'
     if any(r['id'].startswith('l2-media-') for r in manifest['resources']):
         from .l2_media import resources
-        # The media registers the paths of its own stage profile.
-        if any(r.get('path') == 'l2-package/guest/run-l3.sh' for r in manifest['resources']):
-            stage = 'l3'
+        # The media registers the paths of its own stage profile, named by its record.
+        try:
+            record = _json(local_file(resource_path(run.directory, 'launch-plan.json')).read_bytes())
+            stage = record['l2_media']['package'].get('profile', 'l2')
+            resources(stage)
+        except (KeyError, TypeError, AttributeError, OSError, ValueError):
+            raise LifecycleError('l2-media-preparation-incomplete') from None
         expected.update({'l2-media-' + str(i): n for i, n in enumerate(resources(stage))})
     if {r['id']: r.get('path') for r in manifest['resources']} != expected:
         raise LifecycleError('incomplete-preparation-resources')
@@ -540,8 +544,6 @@ def start(run, *, timeout=5, executor=execute, lab=None):
             if media['path'] != str(resource_path(run.directory, 'l2-media.iso')):
                 raise LifecycleError('l2-media-path-mismatch')
             verify_media(media)
-            if media['package'].get('profile', 'l2') != stage:
-                raise LifecycleError('l2-media-profile-mismatch')
         if plan != _launch_plan(config, image, overlay, plan['uuid'], media=media):
             raise LifecycleError('launch-plan-mismatch')
         result = executor([config.image_executable, 'info', '--output=json', '--backing-chain',

@@ -11,7 +11,7 @@ import tomllib
 import unittest
 from unittest.mock import patch
 
-from tools.vm.matrix import cli, execution, l3_requests, orchestrator as o
+from tools.vm.matrix import cli, evidence, execution, l3_requests, orchestrator as o
 from tools.vm.matrix.tests import test_orchestrator as base, test_qemu
 from tools.vm.matrix.tests.test_qga import BOOT
 from tools.vm.matrix.tests.test_stage_profiles import SING_BOX_SHA, package_l3
@@ -19,7 +19,7 @@ from tools.vm.matrix.tests.test_stage_profiles import SING_BOX_SHA, package_l3
 PACKAGE = Path(__file__).resolve().parents[1]
 L3_BLOCK = dict(sing_box_sha256=SING_BOX_SHA, host_address='192.0.2.1', node_port=8388,
                 probe_address='203.0.113.2', dns_probe_address='203.0.113.53')
-ORDER = ['preflight', 'requests', 'prepare', 'media', 'start', 'resume', 'boot', 'import-create',
+ORDER = ['preflight', 'prepare', 'requests', 'media', 'start', 'resume', 'boot', 'import-create',
          'import', 'recovery', 'receipt', 'job-create', 'submit', 'collect', 'close']
 
 
@@ -34,9 +34,15 @@ class L3FlowTests(base.FlowTests):
         self.adapters.attach = self.attach
         self.adapters.importer = self.importer_l3
 
-    def requests(self, directory, server, port):
-        self.written = (directory, server, port)
+    def requests(self, run, server, port):
+        self.written = (run, server, port)
         self.call('requests')
+        # What the real adapter does: registered files in the run, nothing in the content.
+        for index, (name, data) in enumerate(l3_requests.render_all(server, port).items()):
+            run.register(dict(id='fake-request-' + str(index), kind='file', path='l3-requests/' + name))
+            (run.directory / 'l3-requests').mkdir(exist_ok=True)
+            evidence.write_file(run, 'l3-requests/' + name, data, mode='create',
+                                require_registered=True)
 
     def attach(self, *args, **kwargs):
         self.media_options = kwargs
@@ -64,17 +70,35 @@ class L3FlowTests(base.FlowTests):
 
     def test_requests_media_and_import_receive_the_l3_profile(self):
         self.execute()
-        self.assertEqual((Path(self.config['content_directory']) / 'artifacts', '192.0.2.1', 8388), self.written)
+        self.assertEqual(('192.0.2.1', 8388), self.written[1:])
         self.assertEqual(dict(profile='l3', sing_box_sha256=SING_BOX_SHA), {
             k: v for k, v in self.media_options.items() if k in ('profile', 'sing_box_sha256')})
         self.assertEqual(L3_BLOCK, self.import_options['l3'])
         self.assertEqual({'user_a': 'l2a', 'user_b': 'l2b'},
                          {k: v for k, v in self.import_options.items() if k.startswith('user_')})
 
-    def test_requests_precede_every_state_change(self):
+    def test_requests_follow_prepare_and_precede_the_media(self):
         self.execute()
         names = [e[0] for e in self.events]
-        self.assertLess(names.index('requests'), names.index('prepare'))
+        self.assertLess(names.index('prepare'), names.index('requests'))
+        self.assertLess(names.index('requests'), names.index('media'))
+
+    def test_the_content_directory_is_not_touched_and_the_requests_live_in_the_run(self):
+        with tempfile.TemporaryDirectory() as temp:
+            content = Path(temp)
+            (content / 'artifacts').mkdir()
+            (content / 'artifacts/inert').write_bytes(b'inert')
+            self.config['content_directory'] = temp
+            def tree():
+                return {p.relative_to(content).as_posix(): (p.read_bytes() if p.is_file() else None)
+                        for p in content.rglob('*')}
+            before = tree()
+            result = self.execute()
+            self.assertEqual(0, result['exit_code'])
+            self.assertEqual(before, tree())
+            created = Path(result['artifact_directory']) / 'l3-requests'
+            self.assertEqual(l3_requests.render_all('192.0.2.1', 8388),
+                             {p.name: p.read_bytes() for p in created.iterdir()})
 
     def test_failures_at_each_api_preserve_error_and_close(self):
         for failure in ORDER:
@@ -97,7 +121,7 @@ class L3FlowTests(base.FlowTests):
         self.failure = 'requests'
         result = self.execute()
         self.assertEqual(2, result['exit_code'])
-        self.assertEqual(['preflight', 'requests'], [e[0] for e in self.events])
+        self.assertEqual(['preflight', 'prepare', 'requests'], [e[0] for e in self.events])
 
     def test_import_refusal_stops_before_the_job_and_still_closes(self):
         self.failure = 'import'
@@ -274,13 +298,12 @@ class L3DryRunTests(unittest.TestCase):
         self.assertEqual([], [p for p in (self.root / 'artifacts').iterdir() if p.name.startswith('request-')])
         self.assertFalse(Path(self.config['state_directory']).exists())
 
-    def test_dry_run_accepts_matching_requests_and_refuses_a_different_one(self):
-        l3_requests.write_all(self.root / 'artifacts')
+    def test_dry_run_refuses_any_request_file_in_the_content_directory(self):
         self.assertEqual(0, self.dry_run()[0])
+        l3_requests.write_all(self.root / 'artifacts')
+        self.assertEqual(2, self.dry_run()[0])
         (self.root / 'artifacts/request-lan.json').write_bytes(b'{}\n')
-        code, text = self.dry_run()
-        self.assertEqual(2, code)
-        self.assertNotIn('request-lan', text)
+        self.assertEqual(2, self.dry_run()[0])
 
     def test_dry_run_refuses_a_wrong_engine_hash_or_a_missing_binary(self):
         config = copy.deepcopy(self.config)

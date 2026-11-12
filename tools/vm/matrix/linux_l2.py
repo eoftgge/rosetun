@@ -147,11 +147,14 @@ def _checkout_text(path, *, strip):
 
 
 def validate_package(directory, *, checkout, immutable=False, check_source=True,
-                     profile='l2', sing_box_sha256=None, pending_requests=False):
+                     profile='l2', sing_box_sha256=None, requests_directory=None,
+                     without_requests=False):
     """Stream hash existing binaries; reject any extra file, directory or link.
 
-    pending_requests lets the generated L3 requests be absent before the controller
-    writes them; any that exist are still compared byte for byte.
+    The generated L3 requests never belong to the owner's content. With
+    requests_directory they are read from the run's own directory; with
+    without_requests they are left out (the controller renders them in memory).
+    Either way a request file inside `directory` is an error.
     """
     profile = profile_of(profile)
     root, checkout = Path(directory), Path(checkout)
@@ -162,26 +165,46 @@ def validate_package(directory, *, checkout, immutable=False, check_source=True,
     payload = profile.payload
     requests = tuple('artifacts/' + n for n in profile.requests)
     files = tuple(n for n in payload if n != "job.env") if immutable else profile.files
-    if pending_requests:
-        files = tuple(n for n in files if n not in requests or os.path.lexists(root / n))
+    external = requests_directory is not None or without_requests
+    if external:
+        if any(os.path.lexists(root / n) for n in requests):
+            raise JobError('l3-requests-in-content')
+        in_root = tuple(n for n in files if n not in requests)
+    else:
+        in_root = files
+    if requests_directory is not None:
+        requests_directory = Path(requests_directory)
+        if not requests_directory.is_absolute() or '..' in requests_directory.parts:
+            raise JobError('l2-absolute-path-required')
+        _no_links(requests_directory)
+        if sorted(os.listdir(requests_directory)) != sorted(profile.requests):
+            raise JobError('l3-request-composition')
+    else:
+        files = in_root
+
+    def locate(name):
+        if requests_directory is not None and name in requests:
+            return requests_directory / name.rpartition('/')[2]
+        return root / name
+
     found = set()
     for parent, dirs, names in os.walk(root, followlinks=False):
         for name in dirs + names:
             path = Path(parent) / name
             _no_links(path)
             found.add(path.relative_to(root).as_posix())
-    if found != set(files) | {'guest', 'artifacts'}:
+    if found != set(in_root) | {'guest', 'artifacts'}:
         raise JobError('l2-package-composition')
     hashes, sizes, headers = {}, {}, {}
     for name in files:
         limit = 512 * 1024 * 1024 if name in profile.elf else 256 * 1024
-        hashes[name], sizes[name], headers[name] = _hash(root / name, limit)
+        hashes[name], sizes[name], headers[name] = _hash(locate(name), limit)
     small = {}
     for name in files:
         if name in profile.elf:
             continue
-        _regular_file(root / name)
-        with (root / name).open('rb') as stream:
+        _regular_file(locate(name))
+        with locate(name).open('rb') as stream:
             raw = stream.read(256 * 1024 + 1)
         if len(raw) != sizes[name] or hashlib.sha256(raw).hexdigest() != hashes[name]:
             raise JobError('l2-package-file-changed')

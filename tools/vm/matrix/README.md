@@ -2406,7 +2406,7 @@ The owner prepares it like the L2 one (an immutable tree, LF text, no links):
 | `artifacts/rosetun-helper-privileged`, `artifacts/rosetun`, `artifacts/provenance.json` | `tools/vm/linux/build-artifacts.sh --l3 OUTPUT_DIR`; `provenance.json` has `"stage": "l3"` and the SHA-256 of both binaries |
 | `artifacts/sing-box` | the Linux sing-box of the supported version, delivered by the owner; ELF x86-64 |
 | `artifacts/rosetun-helper.service`, `artifacts/rosetun-engine.rules` | copies of `packaging/linux/` in `source_checkout`, compared byte for byte |
-| `artifacts/request-*.json` (five) | written by the controller, see below |
+| `artifacts/request-*.json` | none: the controller generates them in the run directory, and the content directory must not contain them |
 
 The sing-box binary is hashed, never executed, on the controller. Its SHA-256 is
 required in the `[l3]` table of the configuration and must equal the file's: the
@@ -2421,13 +2421,16 @@ template `l3-request-template.json`: documentation addresses only (node
 `192.0.2.1:8388`, DNS `203.0.113.3`, TUN `198.51.100.65/30`), reserved names
 (`lab-node.test`, `doh.lab.test`, rules for `*.lab.test`) and a fixed laboratory
 Shadowsocks password. The generator reads no owner request. The controller
-creates the files in `<content_directory>/artifacts/` before it prepares the
-disk (exclusive create). Files that already exist must be byte-identical to the
-generator's output, or the run stops. So the directory must be writable by the
-controller user, and a repeated run reuses the earlier files. `--dry-run` writes
-nothing: it accepts missing requests and still compares any that exist. Package
-validation also requires every request to name the same node as `HOST_ADDRESS`
-and `NODE_PORT` of `job.env`.
+creates the files as registered resources of the run, in `l3-requests/` of the
+run directory, after it prepares the disk and before it builds the media (exclusive
+create). The content directory is never written: it stays the exact input tree,
+and a request file in it stops the run (`l3-requests-in-content`). The media step
+takes these five files from the run and everything else from the content
+directory, checks both with the same hashes and size limits, and snapshots them
+together, so the snapshot and the ISO carry the requests. `--dry-run` writes
+nothing: it checks the content directory without requests and renders them in
+memory with the same generator. Package validation also requires every request
+to name the same node as `HOST_ADDRESS` and `NODE_PORT` of `job.env`.
 
 ### Configuration
 

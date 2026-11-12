@@ -387,34 +387,68 @@ class L3PackageTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'node'):
             self.validate()
 
-    def test_pending_requests_may_be_absent_only_when_asked(self):
-        for name in L3.requests:
-            (self.root / 'artifacts' / name).unlink()
+    def strip_to_input(self):
+        """The owner's input tree: no job.env, no manifest and no generated requests."""
         (self.root / 'job.env').unlink()
         (self.root / 'manifest.sha256').unlink()
+        full = self.validate(immutable=True)
+        generated = {}
+        for name in L3.requests:
+            generated[name] = (self.root / 'artifacts' / name).read_bytes()
+            (self.root / 'artifacts' / name).unlink()
+        return full, generated
+
+    def test_the_input_tree_has_no_requests_and_they_are_not_hashed_with_it(self):
+        self.strip_to_input()
         with self.assertRaisesRegex(ValueError, 'composition'):
             self.validate(immutable=True)
-        package = self.validate(immutable=True, pending_requests=True)
+        package = self.validate(immutable=True, without_requests=True)
         self.assertFalse(any(n.startswith('artifacts/request-') for n in package['hashes']))
-        l3_requests.write_all(self.root / 'artifacts')
-        self.assertEqual(set(media.content('l3')), set(self.validate(immutable=True)['hashes']))
 
-    def test_pending_requests_still_compare_the_ones_that_exist(self):
-        for name in L3.requests[1:]:
-            (self.root / 'artifacts' / name).unlink()
-        (self.root / 'job.env').unlink()
-        (self.root / 'manifest.sha256').unlink()
-        self.validate(immutable=True, pending_requests=True)
-        (self.root / 'artifacts' / L3.requests[0]).write_bytes(b'{"node": {"server": "192.0.2.1", "port": 1}}\n')
-        with self.assertRaisesRegex(ValueError, 'request'):
-            self.validate(immutable=True, pending_requests=True)
+    def test_requests_from_the_run_directory_give_the_package_of_the_full_tree(self):
+        full, generated = self.strip_to_input()
+        with tempfile.TemporaryDirectory() as temp:
+            for name, data in generated.items():
+                (Path(temp) / name).write_bytes(data)
+            package = self.validate(immutable=True, requests_directory=temp)
+        self.assertEqual(full, package)
+        self.assertEqual(tuple(full['hashes']), tuple(package['hashes']))
 
-    def test_a_pending_request_does_not_excuse_a_missing_script(self):
-        (self.root / 'job.env').unlink()
-        (self.root / 'manifest.sha256').unlink()
+    def test_a_request_file_in_the_content_directory_is_refused(self):
+        _, generated = self.strip_to_input()
+        with tempfile.TemporaryDirectory() as temp:
+            for name, data in generated.items():
+                (Path(temp) / name).write_bytes(data)
+            for name in ('request-lan.json', 'request-dns-lock.json'):
+                with self.subTest(name=name):
+                    (self.root / 'artifacts' / name).write_bytes(generated[name])
+                    with self.assertRaisesRegex(ValueError, 'l3-requests-in-content'):
+                        self.validate(immutable=True, without_requests=True)
+                    with self.assertRaisesRegex(ValueError, 'l3-requests-in-content'):
+                        self.validate(immutable=True, requests_directory=temp)
+                    (self.root / 'artifacts' / name).unlink()
+        # Even a different file under a request name is a content error, not a generator one.
+        (self.root / 'artifacts/request-lan.json').write_bytes(b'{}\n')
+        with self.assertRaisesRegex(ValueError, 'l3-requests-in-content'):
+            self.validate(immutable=True, without_requests=True)
+
+    def test_requests_of_the_run_are_compared_with_the_generator(self):
+        _, generated = self.strip_to_input()
+        with tempfile.TemporaryDirectory() as temp:
+            for name, data in generated.items():
+                (Path(temp) / name).write_bytes(data)
+            (Path(temp) / 'request-lan.json').write_bytes(b'{}\n')
+            with self.assertRaisesRegex(ValueError, 'request'):
+                self.validate(immutable=True, requests_directory=temp)
+            (Path(temp) / 'request-lan.json').unlink()
+            with self.assertRaisesRegex(ValueError, 'request'):
+                self.validate(immutable=True, requests_directory=temp)
+
+    def test_without_requests_does_not_excuse_a_missing_script(self):
+        self.strip_to_input()
         (self.root / 'guest/lib.sh').unlink()
         with self.assertRaisesRegex(ValueError, 'composition'):
-            self.validate(immutable=True, pending_requests=True)
+            self.validate(immutable=True, without_requests=True)
 
     def test_text_artifacts_have_the_l2_size_limit(self):
         (self.root / 'artifacts/rosetun-engine.rules').write_bytes(b'x' * (256 * 1024 + 1))
@@ -432,9 +466,14 @@ class L3MediaTests(unittest.TestCase):
         for child in list(self.root.iterdir()):
             shutil.rmtree(child) if child.is_dir() else child.unlink()
         package_l3(self.root, BOOT)
-        for name in ('job.env', 'manifest.sha256'):
+        for name in ('job.env', 'manifest.sha256', *('artifacts/' + n for n in L3.requests)):
             (self.root / name).unlink()
         self.run = self.fixture.run
+        media.write_requests(self.run, '192.0.2.1', 8388)
+
+    def tree(self):
+        return {p.relative_to(self.root).as_posix(): (p.read_bytes() if p.is_file() else None)
+                for p in self.root.rglob('*')}
 
     def build(self, **kwargs):
         options = dict(profile='l3', sing_box_sha256=SING_BOX_SHA)
@@ -448,6 +487,11 @@ class L3MediaTests(unittest.TestCase):
         snapshot = self.run.directory / 'l2-snapshot'
         found = {p.relative_to(snapshot).as_posix() for p in snapshot.rglob('*') if p.is_file()}
         self.assertEqual(set(media.content('l3')) | {'content.sha256'}, found)
+        rendered = l3_requests.render_all('192.0.2.1', 8388)
+        for name, data in rendered.items():
+            self.assertEqual(data, (self.run.directory / 'l3-requests' / name).read_bytes())
+            self.assertEqual(data, (snapshot / 'artifacts' / name).read_bytes())
+            self.assertEqual(data, (self.run.directory / 'l2-package/artifacts' / name).read_bytes())
         self.assertEqual('l3', record['package']['profile'])
         argv = self.fixture.commands[1][0]
         self.assertEqual(['-as', 'mkisofs', '-iso-level', '3', '-R', '-V', 'ROSETUN_L3'], argv[2:9])
@@ -489,10 +533,33 @@ class L3MediaTests(unittest.TestCase):
         with patch.object(lifecycle, '_host'), self.assertRaises(lifecycle.LifecycleError):
             lifecycle.start(self.run, executor=lambda *a, **k: self.fail('no image tool before validation'))
 
-    def test_a_requests_directory_that_differs_from_the_generator_is_refused(self):
-        (self.root / 'artifacts/request-dns-lock.json').write_bytes(b'{}\n')
+    def test_the_owner_content_is_not_changed_and_the_requests_are_run_resources(self):
+        before = self.tree()
+        self.build()
+        self.assertEqual(before, self.tree())
+        paths = [r['path'] for r in self.run._read()['resources']]
+        for name in media.request_resources('l3'):
+            self.assertIn(name, paths)
+        self.assertEqual(media.request_resources('l3'), media.resources('l3')[:5])
+        self.assertEqual((), media.request_resources('l2'))
+
+    def test_a_request_file_in_the_content_directory_is_refused(self):
+        (self.root / 'artifacts/request-dns-lock.json').write_bytes(
+            l3_requests.render_all()['request-dns-lock.json'])
+        with self.assertRaisesRegex(ValueError, 'l3-requests-in-content'):
+            self.build()
+        self.assertEqual([], self.fixture.commands[2:])
+
+    def test_a_request_of_the_run_that_differs_from_the_generator_is_refused(self):
+        (self.run.directory / 'l3-requests/request-dns-lock.json').write_bytes(b'{}\n')
         with self.assertRaisesRegex(ValueError, 'request'):
             self.build()
+
+    def test_attaching_without_the_requests_is_refused(self):
+        (self.run.directory / 'l3-requests/request-lan.json').unlink()
+        with self.assertRaisesRegex(ValueError, 'l3-requests-missing'):
+            self.build()
+        self.assertEqual([], self.fixture.commands)
 
 
 class L3ImportTests(unittest.TestCase):

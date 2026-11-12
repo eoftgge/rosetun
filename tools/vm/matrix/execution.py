@@ -108,10 +108,14 @@ def preflight(config, *, dry_run=False):
     from .linux_l2 import validate_package
     suite = suite_of(config)
     l3 = config.get('l3')
-    extra = dict(profile='l3', sing_box_sha256=l3['sing_box_sha256'], pending_requests=True) if l3 else {}
+    extra = dict(profile='l3', sing_box_sha256=l3['sing_box_sha256'], without_requests=True) if l3 else {}
     package = validate_package(config['content_directory'], checkout=config['source_checkout'],
                                immutable=True, check_source=not dry_run, **extra)
     from .l2_media import TOTAL_LIMIT
+    if l3:
+        # Rendered in memory only: the same generator the run later writes from.
+        from .l3_requests import render_all
+        render_all(l3['host_address'], l3['node_port'])
     if sum(package['sizes'].values()) > TOTAL_LIMIT:
         raise ValueError('L2 content exceeds media limit')
     if any(r['stand_id'] in (None, config['stand_id']) and not r.get('completion_verified')
@@ -134,7 +138,7 @@ def preflight(config, *, dry_run=False):
     limitations = ['no controller restart recovery', 'no automatic file cleanup',
                    'no network', 'dry-run does not execute binary version checks']
     if l3:
-        actions.insert(2, 'write the five L3 lab requests into the content directory')
+        actions.insert(2, 'write the five L3 lab requests into the run directory')
         limitations += ['the VM has no network: preflight.baseline is expected to FAIL and the '
                         'remaining scenarios to ERROR',
                         'the sing-box binary is hashed, never executed, on the controller']
