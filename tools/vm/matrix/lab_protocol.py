@@ -16,6 +16,10 @@ PORTS = {'http': 8080, 'udp': 9000, 'dns-udp': 53, 'dns-tcp': 53, 'marker': 9100
 # Nothing listens here and no expected exchange uses it: the deliberate leak control.
 CANARY_PORT = 9999
 CANARY_TCP_TARGET = '203.0.113.9'
+# The VPN node of the tunnel stage listens on the lab address; the HTTPS target is the routed one.
+NODE_PORT = 8388
+HTTPS_PORT = 443
+HTTPS_KINDS = ('https-direct', 'https-tunnel')
 
 # The only traffic between the two machines that is neither a probe nor a window
 # marker. Rows are (name, kind, message code, where the frame may go); a frame must
@@ -77,6 +81,21 @@ def markers(run_id, nonce_factory):
     return [dict(run_id=run_id, nonce=nonce_factory(), word=word, family=4, service='marker',
                  protocol='udp', source=CLIENTS[4], target=TARGETS[4], port=PORTS['marker'])
             for word in ('open', 'close')]
+
+
+def https_exchanges(run_id, nonce_factory):
+    """The two HTTPS requests of the tunnel stage: one straight to the target, one through the node."""
+    result = []
+    for kind in HTTPS_KINDS:
+        nonce = nonce_factory()
+        result.append(dict(run_id=run_id, nonce=nonce, kind=kind, family=4, protocol='tcp',
+                           source=CLIENTS[4], target=TARGETS[4], port=HTTPS_PORT,
+                           path='/' + run_id + '/' + nonce))
+    return result
+
+
+def https_answer(exchange):
+    return b'rosetun-lab-https:' + (exchange['run_id'] + '.' + exchange['nonce']).encode('ascii')
 
 
 def token(probe):
@@ -387,6 +406,52 @@ def _allowance(frame, names):
     return None
 
 
+def _tunnel_port(port):
+    if (type(port) is not int or not 1 <= port <= 65535 or port == HTTPS_PORT
+            or port == CANARY_PORT or port in PORTS.values()):
+        raise ValueError('invalid-tunnel-port')
+    return port
+
+
+def _tunnel_frame(frame, port):
+    """TCP between the test machine and the lab's own address on the node port, either way."""
+    if frame.family != 4 or frame.proto != 6:
+        return False
+    return ((frame.src_mac, frame.dst_mac, frame.src, frame.dst, frame.dport)
+            == (MACS['test'], MACS['lab'], CLIENTS[4], GATEWAYS[4], port)
+            or (frame.src_mac, frame.dst_mac, frame.src, frame.dst, frame.sport)
+            == (MACS['lab'], MACS['test'], GATEWAYS[4], CLIENTS[4], port))
+
+
+def direct_connection(https):
+    """Client port of the https-direct connection, or None unless helper and target log agree.
+
+    The helper of the test machine reports the port it used; the target's own log must
+    hold exactly one request for the exchange, from the test machine, from that port.
+    """
+    if type(https) is not dict:
+        return None
+    exchange, reported, log = https.get('direct'), https.get('client_port'), https.get('log')
+    if (type(exchange) is not dict or type(reported) is not int or type(reported) is bool
+            or not 0 < reported < 65536 or type(log) is not list):
+        return None
+    rows = [row for row in log if type(row) is dict and row.get('path') == exchange.get('path')]
+    if (len(rows) != 1 or rows[0].get('source') != exchange.get('source')
+            or rows[0].get('port') != reported):
+        return None
+    return reported
+
+
+def _direct_frame(frame, client_port):
+    """A frame of the one https-direct connection, identified by its four-tuple (TLS is opaque)."""
+    if frame.family != 4 or frame.proto != 6:
+        return False
+    return ((frame.src_mac, frame.dst_mac, frame.src, frame.dst, frame.sport, frame.dport)
+            == (MACS['test'], MACS['lab'], CLIENTS[4], TARGETS[4], client_port, HTTPS_PORT)
+            or (frame.src_mac, frame.dst_mac, frame.src, frame.dst, frame.sport, frame.dport)
+            == (MACS['lab'], MACS['test'], TARGETS[4], CLIENTS[4], HTTPS_PORT, client_port))
+
+
 def _involves_test(frame):
     addresses = {frame.src, frame.dst}
     if frame.arp is not None:
@@ -435,16 +500,24 @@ def _declared(allowances):
     return names
 
 
-def classify(raw, expected, window, allowances=()):
+def classify(raw, expected, window, allowances=(), tunnel_port=None, https=None):
     """Put every captured frame into exactly one category and check the window markers.
 
     `allowances` names link events (see ALLOWANCES) that count as `allowed` instead of
     `unexpected`; the default is none, and an unknown name is an error before any parsing.
 
+    `tunnel_port` turns on the category `tunnel`: TCP between the test machine and the
+    lab address on that port, never parsed further. `https` (see direct_connection)
+    makes the one https-direct connection a probe; without agreement between the
+    helper and the target's log its frames stay `unexpected`.
+
     Frames that cannot be parsed are counted apart and make the result unverified. A
     truncated record ends the walk, but frames already seen keep their category.
     """
     names = _declared(allowances)
+    if tunnel_port is not None:
+        _tunnel_port(tunnel_port)
+    direct = direct_connection(https)
     if [m['word'] for m in window] != ['open', 'close']:
         raise ValueError('invalid-window')
     parsed, unparsed, problem = [], [], None
@@ -469,6 +542,8 @@ def classify(raw, expected, window, allowances=()):
                 connections[position].add(frame.sport if direction == 'request' else frame.dport)
 
     def is_probe(frame):
+        if direct is not None and _direct_frame(frame, direct):
+            return True
         for position, p in enumerate(expected):
             direction = _direction(frame, p)
             if direction is None:
@@ -483,6 +558,8 @@ def classify(raw, expected, window, allowances=()):
     counts = dict(probe=0, marker=0, infrastructure=0, unexpected=0, foreign=0, unparsed=len(unparsed))
     if names:
         counts['allowed'] = dict.fromkeys(sorted(names), 0)
+    if tunnel_port is not None:
+        counts['tunnel'] = 0
     unexpected, canary = [], dict(udp=0, tcp=0, other=0)
     probe_at, seen = [], {(m['word'], d): [] for m in window for d in ('request', 'response')}
     def count_unexpected(frame):
@@ -504,6 +581,8 @@ def classify(raw, expected, window, allowances=()):
             seen[hit].append(index)
         elif _infrastructure(frame):
             counts['infrastructure'] += 1
+        elif tunnel_port is not None and _tunnel_frame(frame, tunnel_port):
+            counts['tunnel'] += 1
         elif allowed := _allowance(frame, names):
             counts['allowed'][allowed] += 1
         elif _involves_test(frame):
@@ -562,9 +641,10 @@ def _health_reasons(health, ready, window, marker_replies):
     return reasons
 
 
-def leak_verdict(raw, expected, window, health, ready, marker_replies, allowances=()):
+def leak_verdict(raw, expected, window, health, ready, marker_replies, allowances=(),
+                 tunnel_port=None, https=None):
     """DETECTED, NONE or UNVERIFIED. Only a complete, healthy and bracketed capture says NONE."""
-    result = classify(raw, expected, window, allowances)
+    result = classify(raw, expected, window, allowances, tunnel_port, https)
     reasons = result.pop('unverified') + _health_reasons(health, ready, window, marker_replies)
     canary = result.pop('canary')
     if result['categories']['unexpected']:
