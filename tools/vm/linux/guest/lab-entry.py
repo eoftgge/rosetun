@@ -2,11 +2,16 @@
 """Owner-installed root-only lab entry. Never invoked on the controller host."""
 import ctypes
 import errno
+import hashlib
+import ipaddress
 import json
 import os
 from pathlib import Path
+import re
 import selectors
 import socket
+import ssl
+import stat
 import struct
 import subprocess
 import sys
@@ -15,10 +20,25 @@ import uuid
 
 from lab_protocol import (MACS, CLIENTS, GATEWAYS, TARGETS, PORTS, SERVICES, CAPTURE_LIMIT,
                           LOG_LIMIT, DURATION, interface, query, answer, token,
-                          CANARY_PORT, CANARY_TCP_TARGET, marker_query, marker_answer)
+                          CANARY_PORT, CANARY_TCP_TARGET, marker_query, marker_answer,
+                          HTTPS_PORT, HTTPS_KINDS, EGRESS, SOCKS_PORT, https_answer, LAB_NETWORKS)
 
 ROOT = Path('/run/rosetun-lab')
 ENTRY = '/usr/local/libexec/rosetun-lab/entry'
+# Stage 7b1 fixtures. The paths are fixed here; a missing or different file is a refusal.
+LIBEXEC = Path('/usr/local/libexec/rosetun-lab')
+NODE_BINARY = LIBEXEC / 'sing-box'
+HTTPS_CERT = LIBEXEC / 'https-cert.pem'
+HTTPS_KEY = LIBEXEC / 'https-key.pem'
+CA_CERT = Path('/usr/local/share/ca-certificates/rosetun-lab-ca.crt')
+HTTPS_LOG_ENTRIES = 16
+TUNNEL_KEYS = {'port', 'method', 'password', 'sing_box_sha256', 'ca_sha256', 'https'}
+HTTPS_KEYS = {'run_id', 'nonce', 'kind', 'family', 'protocol', 'source', 'target', 'port', 'path'}
+lstat = os.lstat
+
+
+class Refused(ValueError):
+    """A fixed, data-free reason the helper prints instead of a bare failure."""
 
 
 def command(*args):
@@ -50,6 +70,7 @@ def identity(request):
     if type(request['canary']) is not bool:
         raise ValueError('invalid-canary')
     window = request['markers']
+    tunnel = tunnel_of(request)
     if (type(window) is not list or [m.get('word') for m in window] != ['open', 'close']
             or len({m.get('nonce') for m in window + expected}) != 10):
         raise ValueError('invalid-markers')
@@ -60,7 +81,58 @@ def identity(request):
                 or (m['family'], m['service'], m['protocol']) != (4, 'marker', 'udp')
                 or m['source'] != CLIENTS[4] or m['target'] != TARGETS[4] or m['port'] != PORTS['marker']):
             raise ValueError('foreign-marker')
+    if tunnel is not None and len({m['nonce'] for m in window + expected + tunnel['https']}) != 12:
+        raise ValueError('invalid-tunnel')
     return iface
+
+
+def tunnel_of(request):
+    """The validated tunnel block of a request, or None when the request has none."""
+    if 'tunnel' not in request:
+        return None
+    tunnel = request['tunnel']
+    if type(tunnel) is not dict or set(tunnel) != TUNNEL_KEYS:
+        raise ValueError('invalid-tunnel')
+    port = tunnel['port']
+    if (type(port) is not int or not 1 <= port <= 65535
+            or port in (*PORTS.values(), CANARY_PORT, HTTPS_PORT, SOCKS_PORT)):
+        raise ValueError('invalid-tunnel')
+    if (tunnel['method'] != 'aes-128-gcm' or type(tunnel['password']) is not str
+            or not re.fullmatch(r'[A-Za-z0-9._~-]{8,64}', tunnel['password'])):
+        raise ValueError('invalid-tunnel')
+    for key in ('sing_box_sha256', 'ca_sha256'):
+        if type(tunnel[key]) is not str or not re.fullmatch('[0-9a-f]{64}', tunnel[key]):
+            raise ValueError('invalid-tunnel')
+    exchanges = tunnel['https']
+    if (type(exchanges) is not list or len(exchanges) != 2 or not all(type(e) is dict for e in exchanges)
+            or [e.get('kind') for e in exchanges] != list(HTTPS_KINDS)):
+        raise ValueError('invalid-tunnel')
+    for e in exchanges:
+        if (set(e) != HTTPS_KEYS or e['run_id'] != request['lab_id'] or type(e['nonce']) is not str
+                or len(e['nonce']) != 24 or any(c not in '0123456789abcdef' for c in e['nonce'])
+                or (e['family'], e['protocol'], e['source'], e['target'], e['port'])
+                != (4, 'tcp', CLIENTS[4], TARGETS[4], HTTPS_PORT)
+                or e['path'] != '/' + e['run_id'] + '/' + e['nonce']):
+            raise ValueError('foreign-https-exchange')
+    return tunnel
+
+
+def fixture(path, reason, *, sha256=None, private=False):
+    """A root-owned regular file at a fixed path, optionally of a known hash; else a refusal."""
+    try:
+        info = lstat(path)
+    except OSError:
+        raise Refused(reason) from None
+    if (not stat.S_ISREG(info.st_mode) or info.st_uid != 0
+            or info.st_mode & (0o077 if private else 0o022)):
+        raise Refused(reason + '-unsafe')
+    if sha256 is not None:
+        digest = hashlib.sha256()
+        with path.open('rb') as stream:
+            for block in iter(lambda: stream.read(1024 * 1024), b''):
+                digest.update(block)
+        if digest.hexdigest() != sha256:
+            raise Refused(reason + '-hash')
 
 
 def write(path, value):
@@ -148,25 +220,190 @@ def send_canary():
             raise ValueError('canary-not-sent')
 
 
+def read_response(stream):
+    """An HTTP/1.0 response of at most 2048 bytes, up to its Content-Length."""
+    data = bytearray()
+    while True:
+        head, separator, body = bytes(data).partition(b'\r\n\r\n')
+        if separator:
+            length = re.search(rb'\r\nContent-Length: ([0-9]{1,4})(?:\r\n|$)', head)
+            if length is None:
+                raise ValueError('https-response-length')
+            if len(body) >= int(length[1]):
+                return head, body[:int(length[1])]
+        if len(data) > 2048:
+            raise ValueError('http-response-limit')
+        try:
+            block = stream.recv(1024)
+        except ssl.SSLEOFError:
+            block = b''
+        if not block:
+            raise ValueError('short-response')
+        data.extend(block)
+
+
+def https_get(sock, exchange, context):
+    with context.wrap_socket(sock, server_hostname=exchange['target']) as stream:
+        stream.sendall(b'GET ' + exchange['path'].encode('ascii') + b' HTTP/1.0\r\n\r\n')
+        head, body = read_response(stream)
+    if not head.startswith(b'HTTP/1.0 200 OK') or body != https_answer(exchange):
+        raise ValueError('unexpected-https-answer')
+    return body
+
+
+def socks_connect(sock, address, port):
+    """The SOCKS5 handshake and one CONNECT to an IPv4 address, by hand."""
+    sock.sendall(b'\x05\x01\x00')
+    if receive(sock, 2) != b'\x05\x00':
+        raise ValueError('socks-method-refused')
+    sock.sendall(b'\x05\x01\x00\x01' + socket.inet_aton(address) + struct.pack('!H', port))
+    head = receive(sock, 4)
+    if head[:3] != b'\x05\x00\x00' or head[3] not in (1, 4):
+        raise ValueError('socks-connect-refused')
+    receive(sock, (4 if head[3] == 1 else 16) + 2)
+
+
+def probe_tunnel(request):
+    """https-direct, then the same kind of request through the node by a throwaway sing-box client."""
+    tunnel = request['tunnel']
+    direct, via_node = tunnel['https']
+    context = ssl.create_default_context()
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(2)
+        sock.bind((direct['source'], 0))
+        sock.connect((direct['target'], direct['port']))
+        client_port = sock.getsockname()[1]
+        direct_response = https_get(sock, direct, context)
+    directory = ROOT / request['lab_id']
+    directory.mkdir(mode=0o700, exist_ok=True)
+    client = start_process(client_config(tunnel), directory, 'client', '127.0.0.1', SOCKS_PORT)
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.settimeout(2)
+            sock.connect(('127.0.0.1', SOCKS_PORT))
+            socks_connect(sock, via_node['target'], via_node['port'])
+            tunnel_response = https_get(sock, via_node, context)
+    finally:
+        _, client_exit = stop_process(client)
+    return dict(direct=dict(direct, response=direct_response.hex(), client_port=client_port),
+                tunnel=dict(via_node, response=tunnel_response.hex()), client_exit=client_exit)
+
+
 def probe_all(request):
     """The exchanges between an opening and a closing marker, each answered by the target."""
     opening, closing = request['markers']
     sent, marker_replies = {}, []
+    tunnel = tunnel_of(request)
+    if tunnel is not None:
+        # A missing file stops the run before a single marker or packet leaves.
+        fixture(NODE_BINARY, 'missing-sing-box', sha256=tunnel['sing_box_sha256'])
+        fixture(CA_CERT, 'missing-ca-certificate', sha256=tunnel['ca_sha256'])
     # The clock below is this machine's and is only logged; verdicts never compare it.
     sent['open'] = time.monotonic()
     marker_replies.append(exchange_marker(opening))
     replies = probe_exchanges(request)
+    https = probe_tunnel(request) if tunnel is not None else None
     if request['canary']:
         send_canary()
     # Let the last connection finish closing on the wire before the window ends.
     time.sleep(.2)
     sent['close'] = time.monotonic()
     marker_replies.append(exchange_marker(closing))
-    return dict(replies=replies, marker_replies=marker_replies, marker_sent=sent)
+    return dict(replies=replies, marker_replies=marker_replies, marker_sent=sent,
+                **({'https': https} if https is not None else {}))
+
+
+def node_config(tunnel):
+    """The node: one Shadowsocks inbound on the lab address, direct out, no DNS and no other inbound."""
+    return {'log': {'level': 'warn', 'timestamp': False},
+            'inbounds': [{'type': 'shadowsocks', 'tag': 'node-in', 'listen': GATEWAYS[4],
+                          'listen_port': tunnel['port'], 'method': tunnel['method'],
+                          'password': tunnel['password']}],
+            'outbounds': [{'type': 'direct', 'tag': 'direct'}],
+            'route': {'final': 'direct'}}
+
+
+def client_config(tunnel):
+    """The test's check of the node: SOCKS on loopback only, Shadowsocks out, no DNS."""
+    return {'log': {'level': 'warn', 'timestamp': False},
+            'inbounds': [{'type': 'socks', 'tag': 'socks-in', 'listen': '127.0.0.1',
+                          'listen_port': SOCKS_PORT}],
+            'outbounds': [{'type': 'shadowsocks', 'tag': 'node', 'server': GATEWAYS[4],
+                           'server_port': tunnel['port'], 'method': tunnel['method'],
+                           'password': tunnel['password']}],
+            'route': {'final': 'node'}}
+
+
+def scrub_log(raw):
+    """A bounded sing-box log with every address outside the documentation ranges blanked."""
+    text = raw[:LOG_LIMIT].decode('utf-8', 'replace')
+
+    def keep(match):
+        try:
+            address = ipaddress.ip_address(match.group(0))
+        except ValueError:
+            return '[address]'
+        return match.group(0) if any(address in net for net in LAB_NETWORKS) else '[address]'
+
+    text = re.sub(r'[0-9]{1,3}(?:\.[0-9]{1,3}){3}|[0-9a-fA-F]*:[0-9a-fA-F:]*:[0-9a-fA-F]*', keep, text)
+    return text.encode('utf-8')[:LOG_LIMIT]
+
+
+def listening(address, port, table='/proc/net/tcp'):
+    key = '%s:%04X' % (socket.inet_aton(address)[::-1].hex().upper(), port)
+    for line in Path(table).read_text().splitlines()[1:]:
+        fields = line.split()
+        if len(fields) > 3 and fields[1] == key and fields[3] == '0A':
+            return True
+    return False
+
+
+def spawn(config_path, log_path):
+    """sing-box in its own session; its stderr goes to a file this helper reads back, bounded."""
+    with log_path.open('xb') as log:
+        return subprocess.Popen([str(NODE_BINARY), 'run', '-c', str(config_path)],
+                                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=log,
+                                start_new_session=True, close_fds=True)
+
+
+def stop_process(process):
+    """Stop a child and return whether it was still running and its exit code."""
+    alive = process.poll() is None
+    if alive:
+        process.terminate()
+        try:
+            process.wait(5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(5)
+    return alive, process.returncode
+
+
+def start_process(config, directory, name, address, port):
+    """Write the configuration, start sing-box and wait until it is alive and listening."""
+    write(directory / (name + '.json'), config)
+    process = spawn(directory / (name + '.json'), directory / (name + '.stderr'))
+    for _ in range(50):
+        if process.poll() is not None:
+            raise Refused(name + '-exited')
+        if listening(address, port):
+            return process
+        time.sleep(.1)
+    stop_process(process)
+    raise Refused(name + '-not-listening')
+
+
+def check_lab_fixtures(tunnel):
+    fixture(NODE_BINARY, 'missing-sing-box', sha256=tunnel['sing_box_sha256'])
+    fixture(HTTPS_CERT, 'missing-https-certificate')
+    fixture(HTTPS_KEY, 'missing-https-key', private=True)
 
 
 def setup(request, iface, directory):
     # The role, VM, boot and one-shot run claim are checked before any mutation.
+    tunnel = tunnel_of(request)
+    if tunnel is not None:
+        check_lab_fixtures(tunnel)
     command('/usr/sbin/ip', 'addr', 'add', GATEWAYS[4] + '/24', 'dev', iface)
     command('/usr/sbin/ip', '-6', 'addr', 'add', GATEWAYS[6] + '/64', 'dev', iface, 'nodad')
     command('/usr/sbin/ip', 'link', 'set', iface, 'up')
@@ -190,7 +427,8 @@ def setup(request, iface, directory):
     child = subprocess.Popen([ENTRY, json.dumps({**request, 'operation': 'serve', 'interface': iface})],
                              stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                              stderr=subprocess.DEVNULL, start_new_session=True, close_fds=True)
-    for _ in range(50):
+    # The node and its listener start inside the observer, so they get a little longer.
+    for _ in range(100 if tunnel is not None else 50):
         if child.poll() is not None:
             raise ValueError('observer-start-failed')
         if (directory / 'ready.json').exists():
@@ -209,9 +447,42 @@ def accept_marker(request, marks, data, source):
     return found[0]
 
 
+def https_exchange(connection, peer, context, request):
+    """One request to the HTTPS target; the log row names who asked and from which port."""
+    connection.settimeout(1)
+    with context.wrap_socket(connection, server_side=True) as stream:
+        data = bytearray()
+        while b'\r\n\r\n' not in data:
+            block = stream.recv(1024)
+            if not block:
+                break
+            data.extend(block)
+            if len(data) > 1024:
+                raise ValueError('request-limit')
+        matches = [e for e in request['tunnel']['https']
+                   if bytes(data) == b'GET ' + e['path'].encode('ascii') + b' HTTP/1.0\r\n\r\n']
+        if len(matches) != 1 or peer[0] not in (CLIENTS[4], EGRESS):
+            raise ValueError('unexpected-request')
+        body = https_answer(matches[0])
+        stream.sendall(b'HTTP/1.0 200 OK\r\nContent-Length: ' + str(len(body)).encode() + b'\r\n\r\n' + body)
+        try:
+            stream.unwrap()
+        except (OSError, ssl.SSLError):
+            pass
+    return dict(source=peer[0], port=peer[1], path=matches[0]['path'], at=time.monotonic())
+
+
+def record_https(log, row):
+    log.append(row)
+    if len(log) > HTTPS_LOG_ENTRIES or len(json.dumps(log)) > LOG_LIMIT:
+        raise ValueError('https-log-limit')
+
+
 def serve(request, directory):
     deadline = time.monotonic() + DURATION
     logs, error, dropped, marks, ended = [], False, 0, [], None
+    tunnel = tunnel_of(request)
+    https_log, node, node_state, context = [], None, None, None
     selector = selectors.DefaultSelector()
     capture = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(3))
     capture.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 262144)
@@ -253,9 +524,22 @@ def serve(request, directory):
                 sockets.append(stream)
                 stream.bind((TARGETS[4], PORTS['marker']))
                 selector.register(stream, selectors.EVENT_READ, (4, 'marker'))
+                if tunnel is not None:
+                    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+                    context.minimum_version = ssl.TLSVersion.TLSv1_2
+                    context.load_cert_chain(str(HTTPS_CERT), str(HTTPS_KEY))
+                    stream = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    sockets.append(stream)
+                    stream.bind((TARGETS[4], HTTPS_PORT))
+                    stream.listen(4)
+                    selector.register(stream, selectors.EVENT_READ, (4, 'https'))
             finally:
                 if libc.setns(original.fileno(), 0) != 0:
                     raise OSError('router-setns')
+        if tunnel is not None:
+            # Alive and listening, before the observer says it is ready.
+            check_lab_fixtures(tunnel)
+            node = start_process(node_config(tunnel), directory, 'node', GATEWAYS[4], tunnel['port'])
         write(directory / 'ready.json', {'capture_ready': True})
         while time.monotonic() < deadline and not (directory / 'stop').exists():
             for key, _ in selector.select(.1):
@@ -263,6 +547,13 @@ def serve(request, directory):
                     record(capture.recv(2049))
                     continue
                 family, service = key.data
+                if service == 'https':
+                    connection, peer = key.fileobj.accept()
+                    try:
+                        record_https(https_log, https_exchange(connection, peer, context, request))
+                    finally:
+                        connection.close()
+                    continue
                 if service == 'marker':
                     data, peer = key.fileobj.recvfrom(1024)
                     marker = accept_marker(request, marks, data, peer[0])
@@ -309,6 +600,10 @@ def serve(request, directory):
                         connection.close()
         if time.monotonic() >= deadline:
             raise ValueError('capture-deadline')
+        if node is not None:
+            # Whether the node was still there at finish, then its exit code.
+            alive, code = stop_process(node)
+            node_state = dict(alive_at_finish=alive, exit_code=code)
         # Frames queued since the last poll still belong to the window.
         while True:
             try:
@@ -329,10 +624,21 @@ def serve(request, directory):
         capture.close()
         for stream in sockets:
             stream.close()
+        extra = {}
+        if tunnel is not None:
+            if node is not None and node_state is None:
+                alive, code = stop_process(node)
+                node_state = dict(alive_at_finish=alive, exit_code=code)
+            write(directory / 'https.json', https_log)
+            with (directory / 'node.log').open('xb') as stream:
+                stream.write(scrub_log((directory / 'node.stderr').read_bytes()
+                                       if (directory / 'node.stderr').exists() else b''))
+            extra['node'] = node_state or dict(alive_at_finish=False, exit_code=None)
         write(directory / 'targets.json', logs)
         # Times are this machine's monotonic clock; a failed run records no end.
         write(directory / 'health.json', dict(error=error, dropped=dropped, finished=True,
-                                              capture_started=started, capture_ended=ended, markers=marks))
+                                              capture_started=started, capture_ended=ended, markers=marks,
+                                              **extra))
     if error or dropped:
         raise ValueError('observer-unverified')
 
@@ -356,6 +662,8 @@ def main(request):
     saved = json.loads((directory / 'identity.json').read_bytes())
     if any(saved[k] != request[k] for k in ('lab_id', 'role', 'vm_uuid', 'boot_id', 'probes', 'markers')):
         raise ValueError('wrong-run')
+    if saved.get('tunnel') != request.get('tunnel'):
+        raise ValueError('wrong-run')
     if request['role'] == 'lab' and operation == 'serve':
         if request.get('interface') != iface:
             raise ValueError('wrong-capture-interface')
@@ -377,6 +685,9 @@ if __name__ == '__main__':
         request = json.loads(sys.argv[1])
         output = main(request)
         print(json.dumps(dict(lab_id=request['lab_id'], boot_id=request['boot_id'], **output)))
+    except Refused as error:
+        print('lab-helper-failed:' + str(error), file=sys.stderr)
+        sys.exit(2)
     except Exception:
         print('lab-helper-failed', file=sys.stderr)
         sys.exit(2)

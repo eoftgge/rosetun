@@ -20,6 +20,12 @@ CANARY_TCP_TARGET = '203.0.113.9'
 NODE_PORT = 8388
 HTTPS_PORT = 443
 HTTPS_KINDS = ('https-direct', 'https-tunnel')
+# What the HTTPS target sees when the request came through the node: the router's own side.
+EGRESS = '203.0.113.1'
+# The throwaway client of the test machine listens here, on loopback only.
+SOCKS_PORT = 10808
+LAB_NETWORKS = tuple(ipaddress.ip_network(n) for n in (
+    '192.0.2.0/24', '198.51.100.0/24', '203.0.113.0/24', '2001:db8::/32'))
 
 # The only traffic between the two machines that is neither a probe nor a window
 # marker. Rows are (name, kind, message code, where the frame may go); a frame must
