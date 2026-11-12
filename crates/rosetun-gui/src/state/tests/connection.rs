@@ -566,6 +566,25 @@ fn failed_connect_reported_by_status_has_no_second_error() {
 }
 
 #[test]
+fn a_tunnel_held_by_windows_is_told_apart_from_other_engine_failures() {
+    let failed = |reason: &str| State {
+        helper_available: true,
+        status: Status {
+            state: ConnectionState::Failed {
+                failure_kind: None,
+                reason: reason.into(),
+            },
+            ..Status::default()
+        },
+        ..State::default()
+    };
+    let held = HelperError::tunnel_address_in_use();
+    assert!(failed(&held.message).tunnel_held_by_windows());
+    assert!(!failed("engine exited with code 1").tunnel_held_by_windows());
+    assert!(!State::default().tunnel_held_by_windows());
+}
+
+#[test]
 fn busy_connect_and_failed_disconnect_still_show_errors() {
     let mut state = State::default();
     state.operations.helper = true;

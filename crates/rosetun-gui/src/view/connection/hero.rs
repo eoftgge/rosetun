@@ -376,13 +376,14 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                                         ));
                                     }
                                 } else {
+                                    let text = if state.tunnel_held_by_windows() {
+                                        tr!("error-tunnel-held-by-windows")
+                                    } else {
+                                        state.failure_details().unwrap_or_default()
+                                    };
                                     ui.add(
                                         egui::Label::new(
-                                            RichText::new(
-                                                state.failure_details().unwrap_or_default(),
-                                            )
-                                            .small()
-                                            .color(theme::ERROR),
+                                            RichText::new(text).small().color(theme::ERROR),
                                         )
                                         .wrap(),
                                     );

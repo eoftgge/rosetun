@@ -153,6 +153,19 @@ impl State {
         }
     }
 
+    /// The engine could not start because Windows still holds the tunnel of
+    /// the previous session; only a restart clears it.
+    pub(crate) fn tunnel_held_by_windows(&self) -> bool {
+        self.visible_status().is_some_and(|status| {
+            matches!(
+                &status.state,
+                ConnectionState::Failed { reason, failure_kind: None }
+                    | ConnectionState::FailedProtected { reason, failure_kind: None }
+                    if rosetun_ipc::is_tunnel_address_in_use_reason(reason)
+            )
+        })
+    }
+
     /// Why the protection the session asks for is missing, while the
     /// session runs without it.
     pub(crate) fn missing_protection(&self) -> Option<ProtectionShortfallCode> {

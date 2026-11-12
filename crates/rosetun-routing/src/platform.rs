@@ -59,6 +59,28 @@ pub fn tunnel_adapter_present(alias: &str) -> std::io::Result<bool> {
     }
 }
 
+/// What Windows reports about an adapter, for the service log. It carries no
+/// address and no identifier.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TunnelAdapterState {
+    pub oper_status: &'static str,
+    pub description: String,
+}
+
+/// The adapter with this alias as Windows reports it, `None` when there is
+/// none. Read-only.
+pub fn tunnel_adapter_state(alias: &str) -> std::io::Result<Option<TunnelAdapterState>> {
+    #[cfg(windows)]
+    {
+        windows::tunnel_adapter_state(alias)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = alias;
+        Ok(None)
+    }
+}
+
 pub(super) fn lan_segment(
     query: &crate::lan::SegmentQuery<'_>,
 ) -> std::io::Result<crate::lan::SegmentScan> {

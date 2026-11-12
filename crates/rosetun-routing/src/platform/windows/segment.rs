@@ -94,7 +94,7 @@ fn unicast_addresses(adapter: &IP_ADAPTER_ADDRESSES_LH) -> Vec<(IpAddr, u8)> {
     addresses
 }
 
-fn wide_string(value: *const u16) -> String {
+pub(super) fn wide_string(value: *const u16) -> String {
     if value.is_null() {
         return String::new();
     }

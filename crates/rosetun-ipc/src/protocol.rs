@@ -9,6 +9,13 @@ use std::time::Duration;
 
 pub const PROTOCOL_VERSION: u32 = 20;
 const LOCAL_PROXY_PORT_BUSY: &str = "another program holds the local proxy port ";
+const TUNNEL_ADDRESS_IN_USE: &str = "the tunnel address is still held by the previous session";
+
+/// Whether a failure reason, as the status carries it, is the one
+/// `HelperError::tunnel_address_in_use` sends.
+pub fn is_tunnel_address_in_use_reason(reason: &str) -> bool {
+    reason == TUNNEL_ADDRESS_IN_USE
+}
 pub const MAX_PROBE_NODES: usize = 256;
 pub const MAX_TEMPORARY_RULES: usize = 256;
 pub const MAX_EXTRA_NODES: usize = 16;
@@ -501,6 +508,19 @@ impl HelperError {
         )
     }
 
+    /// The engine could not start because Windows still holds the tunnel
+    /// adapter or address of the previous session. The detail is the marker
+    /// clients read with `is_tunnel_address_in_use`; the code is unchanged,
+    /// so the protocol number is too.
+    pub fn tunnel_address_in_use() -> Self {
+        Self::new(ErrorCode::EngineFailed, TUNNEL_ADDRESS_IN_USE)
+    }
+
+    /// Whether this is the `tunnel_address_in_use` failure.
+    pub fn is_tunnel_address_in_use(&self) -> bool {
+        self.code == ErrorCode::EngineFailed && is_tunnel_address_in_use_reason(&self.message)
+    }
+
     /// The port a `local_proxy_port_busy` error names.
     pub fn local_proxy_port(&self) -> Option<u16> {
         self.message
@@ -563,6 +583,18 @@ mod tests {
         assert_eq!(error.local_proxy_port(), Some(10808));
         let other = super::HelperError::new(super::ErrorCode::Busy, "10808");
         assert_eq!(other.local_proxy_port(), None);
+    }
+
+    #[test]
+    fn a_held_tunnel_address_is_an_engine_failure_with_a_marker() {
+        let error = super::HelperError::tunnel_address_in_use();
+        assert_eq!(error.code, super::ErrorCode::EngineFailed);
+        assert!(error.is_tunnel_address_in_use());
+        assert!(super::is_tunnel_address_in_use_reason(&error.message));
+        let other = super::HelperError::new(super::ErrorCode::EngineFailed, "engine exited");
+        assert!(!other.is_tunnel_address_in_use());
+        let wrong_code = super::HelperError::new(super::ErrorCode::Internal, error.message.clone());
+        assert!(!wrong_code.is_tunnel_address_in_use());
     }
 
     #[test]

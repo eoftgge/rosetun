@@ -4,17 +4,27 @@ use std::{
     ptr,
 };
 
-use crate::{RoutingError, TunnelInterface};
+use super::segment::wide_string;
+use crate::{RoutingError, TunnelAdapterState, TunnelInterface};
 use windows_sys::Win32::{
     Foundation::ERROR_BUFFER_OVERFLOW,
     NetworkManagement::{
         IpHelper::{ConvertInterfaceAliasToLuid, GetAdaptersAddresses, IP_ADAPTER_ADDRESSES_LH},
-        Ndis::{IfOperStatusUp, NET_LUID_LH},
+        Ndis::{
+            IfOperStatusDormant, IfOperStatusDown, IfOperStatusLowerLayerDown,
+            IfOperStatusNotPresent, IfOperStatusTesting, IfOperStatusUp, NET_LUID_LH,
+        },
     },
     Networking::WinSock::{AF_INET, AF_UNSPEC, SOCKADDR_IN},
 };
 
 pub(super) fn adapter_present(alias: &str) -> std::io::Result<bool> {
+    Ok(adapter_state(alias)?.is_some())
+}
+
+/// What Windows reports about the adapter with this alias, or `None` when
+/// there is none. Read-only, and it names no address.
+pub(super) fn adapter_state(alias: &str) -> std::io::Result<Option<TunnelAdapterState>> {
     if alias.contains('\0') {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -26,14 +36,30 @@ pub(super) fn adapter_present(alias: &str) -> std::io::Result<bool> {
     // SAFETY: alias is NUL-terminated and luid is writable for the synchronous call.
     let status = unsafe { ConvertInterfaceAliasToLuid(alias.as_ptr(), &mut luid) };
     match status {
-        // SAFETY: Value is the plain 64-bit view of the LUID union.
-        0 => Ok(find_adapter(AF_UNSPEC as u32, 0, |adapter| unsafe {
-            (adapter.Luid.Value == luid.Value).then_some(())
-        })?
-        .is_some()),
-        windows_sys::Win32::Foundation::ERROR_INVALID_PARAMETER => Ok(false),
+        0 => find_adapter(AF_UNSPEC as u32, 0, |adapter| {
+            // SAFETY: Value is the plain 64-bit view of the LUID union.
+            (unsafe { adapter.Luid.Value == luid.Value }).then(|| TunnelAdapterState {
+                oper_status: oper_status_name(adapter.OperStatus),
+                description: wide_string(adapter.Description),
+            })
+        }),
+        windows_sys::Win32::Foundation::ERROR_INVALID_PARAMETER => Ok(None),
         _ => Err(std::io::Error::from_raw_os_error(status as i32)),
     }
+}
+
+fn oper_status_name(status: i32) -> &'static str {
+    [
+        (IfOperStatusUp, "up"),
+        (IfOperStatusDown, "down"),
+        (IfOperStatusTesting, "testing"),
+        (IfOperStatusDormant, "dormant"),
+        (IfOperStatusNotPresent, "not present"),
+        (IfOperStatusLowerLayerDown, "lower layer down"),
+    ]
+    .into_iter()
+    .find_map(|(known, name)| (known == status).then_some(name))
+    .unwrap_or("unknown")
 }
 
 /// Windows-specific identity accepted by

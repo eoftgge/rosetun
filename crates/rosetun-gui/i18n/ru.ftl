@@ -105,6 +105,7 @@ error-code-not-privileged = служба запущена без прав адм
 error-code-access-denied = Туннель подключён из другой учётной записи. Управлять им может только она или администратор.
 error-code-engine-failed = сбой ядра
 error-code-engine-failed-hint = ядро не запустилось; попробуйте ещё раз или соберите отчёт для поддержки
+error-tunnel-held-by-windows = Windows ещё держит туннель прошлой сессии · перезагрузите компьютер
 error-code-xray-start-failed = Xray не запустился
 error-code-xray-stopped = Xray остановился
 error-code-no-network = Нет подключения к сети

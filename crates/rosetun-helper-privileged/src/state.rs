@@ -286,6 +286,7 @@ struct Session {
     server_check_grace: Duration,
     watchdog_timing: WatchdogTiming,
     adapter_lookup: fn(&str) -> std::io::Result<bool>,
+    adapter_state: fn(&str) -> std::io::Result<Option<rosetun_routing::TunnelAdapterState>>,
     name_lookup: fn(&str, u16, NameLookup) -> Result<Vec<IpAddr>, Unresolved>,
     /// How long a connect waits for the network to look the server name up.
     network_wait: Duration,
@@ -422,6 +423,10 @@ impl Helper {
                 adapter_lookup: rosetun_routing::tunnel_adapter_present,
                 #[cfg(test)]
                 adapter_lookup: |_| Ok(false),
+                #[cfg(not(test))]
+                adapter_state: rosetun_routing::tunnel_adapter_state,
+                #[cfg(test)]
+                adapter_state: |_| Ok(None),
                 name_lookup: lookup_name,
                 #[cfg(not(test))]
                 network_wait: NETWORK_WAIT,
@@ -2381,8 +2386,20 @@ impl Session {
                 Ok(()) => break spawned_at,
                 Err(error) => error,
             };
-            let adapter_busy = error.code == ErrorCode::EngineFailed
-                && process.startup_hints().adapter_still_removing;
+            let hints = process.startup_hints();
+            if error.code == ErrorCode::EngineFailed && hints.tunnel_address_in_use {
+                // Waiting does not clear it, and the system is left as it is: a
+                // retry would only meet the same address.
+                log_held_tunnel(
+                    &settings.tun.name,
+                    &settings.tun.ipv4,
+                    self.adapter_state,
+                    attempt,
+                );
+                return Err(HelperError::tunnel_address_in_use());
+            }
+            let adapter_busy =
+                error.code == ErrorCode::EngineFailed && hints.adapter_still_removing;
             if !adapter_busy || attempt > ADAPTER_BUSY_RETRIES {
                 if adapter_busy {
                     tracing::warn!(
@@ -2958,6 +2975,39 @@ fn wait_for_previous_adapter(
     lookup: impl FnMut(&str) -> std::io::Result<bool>,
 ) -> Result<(), HelperError> {
     wait_for_previous_adapter_cancellable(alias, timeout, interval, lookup, &AtomicBool::new(false))
+}
+
+/// Writes what is visible about a tunnel that Windows still holds, without
+/// changing anything. The node's address and the user's addresses are not
+/// part of it; the tunnel's own address is.
+fn log_held_tunnel(
+    alias: &str,
+    tunnel_address: &str,
+    lookup: fn(&str) -> std::io::Result<Option<rosetun_routing::TunnelAdapterState>>,
+    attempt: u32,
+) {
+    match lookup(alias) {
+        Ok(Some(adapter)) => tracing::warn!(
+            attempt,
+            tunnel_address,
+            adapter_present = true,
+            oper_status = adapter.oper_status,
+            description = %adapter.description,
+            "engine start failed: Windows still holds the tunnel address of a previous session"
+        ),
+        Ok(None) => tracing::warn!(
+            attempt,
+            tunnel_address,
+            adapter_present = false,
+            "engine start failed: Windows still holds the tunnel address of a previous session"
+        ),
+        Err(error) => tracing::warn!(
+            attempt,
+            tunnel_address,
+            %error,
+            "engine start failed: Windows still holds the tunnel address of a previous session; the adapter could not be read"
+        ),
+    }
 }
 
 fn failure_kind(error: &HelperError) -> Option<rosetun_config::FailureKind> {
