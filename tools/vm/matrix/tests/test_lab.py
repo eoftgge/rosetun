@@ -35,30 +35,87 @@ class Endpoint:
         return Endpoint()
 
 
-def pcap(expected):
-    raw = bytearray(struct.pack('<IHHIIII', 0xa1b2c3d4, 2, 4, 0, 0, 2048, 1))
-    for p in expected:
-        for reply in (False, True):
-            source, target = (p['target'], p['source']) if reply else (p['source'], p['target'])
-            data = wire.answer(p) if reply else wire.query(p)
-            sport, dport = (p['port'], 40000) if reply else (40000, p['port'])
-            if p['protocol'] == 'tcp':
-                transport = struct.pack('!HHIIHHHH', sport, dport, 0, 0, 0x5018, 1024, 0, 0) + data
-                proto = 6
-            else:
-                transport = struct.pack('!HHHH', sport, dport, len(data) + 8, 0) + data
-                proto = 17
-            if p['family'] == 4:
-                ip = struct.pack('!BBHHHBBH4s4s', 0x45, 0, 20 + len(transport), 0, 0, 64, proto, 0,
-                                 socket.inet_pton(socket.AF_INET, source), socket.inet_pton(socket.AF_INET, target))
-                ether = b'\x08\x00'
-            else:
-                ip = struct.pack('!IHBB16s16s', 6 << 28, len(transport), proto, 64,
-                                 socket.inet_pton(socket.AF_INET6, source), socket.inet_pton(socket.AF_INET6, target))
-                ether = b'\x86\xdd'
-            frame = b'\x00' * 12 + ether + ip + transport
-            raw.extend(struct.pack('<IIII', 0, 0, len(frame), len(frame)) + frame)
+ETHER_IPV4, ETHER_IPV6, ETHER_ARP = (n.to_bytes(2, 'big') for n in (0x0800, 0x86dd, 0x0806))
+
+
+def mac(text):
+    return bytes.fromhex(text.replace(':', ''))
+
+
+def udp(sport, dport, data):
+    return struct.pack('!HHHH', sport, dport, len(data) + 8, 0) + data
+
+
+def tcp(sport, dport, data=b'', flags=0x18):
+    return struct.pack('!HHIIHHHH', sport, dport, 0, 0, (5 << 12) | flags, 1024, 0, 0) + data
+
+
+def icmp(kind, body=bytes(4)):
+    return struct.pack('!BBH', kind, 0, 0) + body
+
+
+def ethernet(src, dst, ether, body):
+    return mac(dst) + mac(src) + ether + body
+
+
+def ipv4(source, target, proto, transport, *, fragment=0):
+    return struct.pack('!BBHHHBBH4s4s', 0x45, 0, 20 + len(transport), 0, fragment, 64, proto, 0,
+                       socket.inet_pton(socket.AF_INET, source), socket.inet_pton(socket.AF_INET, target)) + transport
+
+
+def ipv6(source, target, proto, transport, *, first=None, extension=b''):
+    return struct.pack('!IHBB16s16s', 6 << 28, len(extension) + len(transport), proto if first is None else first, 64,
+                       socket.inet_pton(socket.AF_INET6, source), socket.inet_pton(socket.AF_INET6, target)) + extension + transport
+
+
+def ip_frame(source, target, proto, transport, *, src=wire.MACS['test'], dst=wire.MACS['lab'], **kwargs):
+    if ':' in source:
+        return ethernet(src, dst, ETHER_IPV6, ipv6(source, target, proto, transport, **kwargs))
+    return ethernet(src, dst, ETHER_IPV4, ipv4(source, target, proto, transport, **kwargs))
+
+
+def exchange(p, port=40000):
+    """The request and the response frames of one probe, as the lab ingress sees them."""
+    data = (wire.query(p), wire.answer(p))
+    frames = []
+    for reply in (False, True):
+        source, target = (p['target'], p['source']) if reply else (p['source'], p['target'])
+        sport, dport = (p['port'], port) if reply else (port, p['port'])
+        transport = (tcp if p['protocol'] == 'tcp' else udp)(sport, dport, data[reply])
+        frames.append(ip_frame(source, target, 6 if p['protocol'] == 'tcp' else 17, transport,
+                               src=wire.MACS['lab' if reply else 'test'], dst=wire.MACS['test' if reply else 'lab']))
+    return frames
+
+
+def marker_exchange(m):
+    request = ip_frame(m['source'], m['target'], 17, udp(41000, m['port'], wire.marker_query(m)))
+    response = ip_frame(m['target'], m['source'], 17, udp(m['port'], 41000, wire.marker_answer(m)),
+                        src=wire.MACS['lab'], dst=wire.MACS['test'])
+    return [request, response]
+
+
+def arp(op, sender, target, *, src, dst, sha, tha):
+    body = struct.pack('!HHBBH6s4s6s4s', 1, 0x0800, 6, 4, op, mac(sha), socket.inet_aton(sender), mac(tha), socket.inet_aton(target))
+    return ethernet(src, dst, ETHER_ARP, body + bytes(18))
+
+
+def neighbor(kind, source, target, neighbor_address, *, src, dst):
+    return ip_frame(source, target, 58, icmp(kind, bytes(4) + socket.inet_pton(socket.AF_INET6, neighbor_address)),
+                    src=src, dst=dst)
+
+
+def capture(frames):
+    raw = bytearray(wire.PCAP_HEADER)
+    for frame in frames:
+        raw.extend(struct.pack('<IIII', 0, 0, len(frame), len(frame)) + frame)
     return bytes(raw)
+
+
+def pcap(expected, window=None, extra=()):
+    frames = [f for p in expected for f in exchange(p)]
+    if window is None:
+        return capture(frames)
+    return capture(marker_exchange(window[0]) + frames + list(extra) + marker_exchange(window[1]))
 
 
 class EvidenceTests(unittest.TestCase):
@@ -105,6 +162,248 @@ class EvidenceTests(unittest.TestCase):
                            ([row, dict(ifname='other', address='00:00:5e:00:53:63', link_type='ether')], 'test')):
             with self.assertRaises(ValueError):
                 wire.interface(rows, role)
+
+
+class LeakTests(unittest.TestCase):
+    def setUp(self):
+        nonces = iter(f'{i:024x}' for i in range(10))
+        self.expected = wire.probes('a' * 32, nonces.__next__)
+        self.window = wire.markers('a' * 32, nonces.__next__)
+        self.replies = [dict(m, response=wire.marker_answer(m).hex()) for m in self.window]
+        self.health = dict(error=False, dropped=0, finished=True, capture_started=1.0, capture_ended=9.0,
+                           markers=[dict(word=m['word'], nonce=m['nonce'], at=at)
+                                    for m, at in zip(self.window, (2.0, 8.0))])
+        self.test, self.lab = wire.MACS['test'], wire.MACS['lab']
+
+    def verdict(self, extra=(), **changes):
+        args = dict(raw=pcap(self.expected, self.window, extra), expected=self.expected, window=self.window,
+                    health=self.health, ready=True, marker_replies=self.replies)
+        args.update(changes)
+        return wire.leak_verdict(**args)
+
+    def ping(self, target=wire.TARGETS[4]):
+        return ip_frame(wire.CLIENTS[4], target, 1, icmp(8, bytes(4) + b'ping'))
+
+    def test_a_clean_run_has_no_leak_and_every_frame_in_a_category(self):
+        result = self.verdict()
+        self.assertEqual(('NONE', 'clean'), (result['leak'], result['leak_reason']))
+        self.assertEqual(dict(probe=16, marker=4, infrastructure=0, unexpected=0, foreign=0, unparsed=0),
+                         result['categories'])
+        self.assertEqual(dict(markers_found=True, ordered=True), result['window'])
+        self.assertEqual([], result['unexpected'])
+
+    def test_arp_neighbor_discovery_and_multicast_listener_traffic_are_infrastructure(self):
+        extra = [
+            arp(1, wire.CLIENTS[4], wire.GATEWAYS[4], src=self.test, dst=wire.BROADCAST, sha=self.test,
+                tha='00:00:00:00:00:00'),
+            arp(2, wire.GATEWAYS[4], wire.CLIENTS[4], src=self.lab, dst=self.test, sha=self.lab, tha=self.test),
+            neighbor(135, wire.CLIENTS[6], 'ff02::1:ff00:1', wire.GATEWAYS[6], src=self.test, dst='33:33:ff:00:00:01'),
+            neighbor(136, wire.GATEWAYS[6], wire.CLIENTS[6], wire.GATEWAYS[6], src=self.lab, dst=self.test),
+            neighbor(135, 'fe80::2', 'fe80::1', 'fe80::1', src=self.lab, dst=self.test),
+            ip_frame('fe80::1', 'ff02::2', 58, icmp(133, bytes(4)), dst='33:33:00:00:00:02'),
+            ip_frame('fe80::2', 'ff02::1', 58, icmp(134, bytes(12)), src=self.lab, dst='33:33:00:00:00:01'),
+            ip_frame('fe80::1', 'ff02::16', 58, icmp(143, bytes(4)), first=0, dst='33:33:00:00:00:16',
+                     extension=bytes([58, 0, 5, 2, 0, 0, 1, 0]))]
+        result = self.verdict(extra)
+        self.assertEqual(8, result['categories']['infrastructure'])
+        self.assertEqual('NONE', result['leak'])
+
+    def test_service_traffic_outside_the_listed_exchanges_is_a_leak(self):
+        extra = [
+            arp(1, wire.CLIENTS[4], '192.0.2.99', src=self.test, dst=wire.BROADCAST, sha=self.test,
+                tha='00:00:00:00:00:00'),
+            arp(2, wire.GATEWAYS[4], wire.CLIENTS[4], src=self.lab, dst=self.test, sha=self.test, tha=self.test),
+            neighbor(135, wire.CLIENTS[6], 'ff02::1:ff00:1', '2001:db8:6a:3::9', src=self.test, dst='33:33:ff:00:00:01'),
+            neighbor(136, wire.GATEWAYS[6], wire.CLIENTS[6], wire.GATEWAYS[6], src=self.lab, dst='00:00:5e:00:53:70'),
+            ip_frame(wire.CLIENTS[6], wire.GATEWAYS[6], 58, icmp(128, bytes(4) + b'ping'))]
+        result = self.verdict(extra)
+        self.assertEqual((5, 'DETECTED'), (result['categories']['unexpected'], result['leak']))
+
+    def test_repeated_tcp_segments_and_data_free_segments_of_the_connection_are_probe_frames(self):
+        http = self.expected[0]
+        request, response = exchange(http)
+        client, server = http['source'], http['target']
+        def segment(flags, reply=False):
+            source, target = (server, client) if reply else (client, server)
+            ports = (http['port'], 40000) if reply else (40000, http['port'])
+            return ip_frame(source, target, 6, tcp(*ports, flags=flags), src=self.lab if reply else self.test,
+                            dst=self.test if reply else self.lab)
+        extra = [request, response, segment(0x02), segment(0x12, True), segment(0x10), segment(0x11),
+                 segment(0x04, True)]
+        result = self.verdict(extra)
+        self.assertEqual((16 + 7, 'NONE'), (result['categories']['probe'], result['leak']))
+
+    def test_a_connection_to_a_probe_service_that_carried_no_exchange_is_unexpected(self):
+        syn = ip_frame(wire.CLIENTS[4], wire.TARGETS[4], 6, tcp(41234, wire.PORTS['http'], flags=0x02))
+        self.assertEqual('DETECTED', self.verdict([syn])['leak'])
+
+    def test_probe_shaped_frames_with_foreign_hardware_or_payload_are_unexpected(self):
+        udp_probe = next(p for p in self.expected if p['service'] == 'udp' and p['family'] == 4)
+        spoofed = ip_frame(udp_probe['source'], udp_probe['target'], 17,
+                           udp(40001, udp_probe['port'], wire.query(udp_probe)), src='00:00:5e:00:53:70')
+        other = ip_frame(udp_probe['source'], udp_probe['target'], 17, udp(40002, udp_probe['port'], b'other'))
+        result = self.verdict([spoofed, other])
+        self.assertEqual((2, 'DETECTED'), (result['categories']['unexpected'], result['leak']))
+
+    def test_icmp_echo_from_the_test_machine_is_unexpected_and_described_without_payload(self):
+        result = self.verdict([self.ping()])
+        self.assertEqual('DETECTED', result['leak'])
+        self.assertEqual([('0x0800', 4, 'icmp', ('192.0.2.2', '203.0.113.2'), None, 14 + 20 + 12)], result['unexpected'])
+
+    def test_other_port_other_target_other_prefix_and_other_ethertype_are_unexpected(self):
+        frames = {
+            'port': ip_frame(wire.CLIENTS[4], wire.TARGETS[4], 17, udp(40003, 9001, b'x')),
+            'target': ip_frame(wire.CLIENTS[4], '198.51.100.7', 6, tcp(40004, 8080, flags=0x02)),
+            'prefix': ip_frame(wire.CLIENTS[6], '2001:db8:6a:3::2', 17, udp(40005, 9000, b'x')),
+            'ethertype': ethernet(self.test, self.lab, (0x88b5).to_bytes(2, 'big'), bytes(46)),
+            'broadcast': ethernet(self.test, wire.BROADCAST, (0x88b5).to_bytes(2, 'big'), bytes(46))}
+        for name, frame in frames.items():
+            with self.subTest(name=name):
+                result = self.verdict([frame])
+                self.assertEqual(('DETECTED', 1), (result['leak'], result['categories']['unexpected']))
+        self.assertEqual(('0x88b5', None, None, (self.test, self.lab), None, 60),
+                         self.verdict([frames['ethertype']])['unexpected'][0])
+
+    def test_unparsable_frames_are_counted_and_never_become_no_leak(self):
+        whole = ip_frame(wire.CLIENTS[4], wire.TARGETS[4], 17, udp(40006, 9000, b'payload'))
+        fragment = ip_frame(wire.CLIENTS[4], wire.TARGETS[4], 17, udp(40006, 9000, b'payload'), fragment=0x2000)
+        short_arp = ethernet(self.test, wire.BROADCAST, ETHER_ARP, bytes(20))
+        for name, frame, reason in (('cut', whole[:-10], 'unparsed-frame:fragmented-or-invalid-ipv4'),
+                                    ('fragment', fragment, 'unparsed-frame:fragmented-or-invalid-ipv4'),
+                                    ('arp', short_arp, 'unparsed-frame:truncated-arp'),
+                                    ('header', whole[:20], 'unparsed-frame:truncated-ipv4')):
+            with self.subTest(name=name):
+                result = self.verdict([frame])
+                self.assertEqual(('UNVERIFIED', reason, 1), (result['leak'], result['leak_reason'],
+                                                             result['categories']['unparsed']))
+
+    def test_empty_and_header_only_captures_and_broken_records_are_unverified(self):
+        for raw, reason in ((b'', 'invalid-pcap:invalid-or-overlimit-pcap'),
+                            (wire.PCAP_HEADER, 'window-markers-missing-or-repeated'),
+                            (pcap(self.expected, self.window)[:-1], 'invalid-pcap:truncated-pcap-frame'),
+                            (pcap(self.expected, self.window) + bytes(5), 'invalid-pcap:incomplete-pcap')):
+            with self.subTest(reason=reason):
+                result = self.verdict(raw=raw)
+                self.assertEqual(('UNVERIFIED', reason), (result['leak'], result['leak_reason']))
+
+    def test_traffic_between_other_machines_is_counted_but_does_not_change_the_verdict(self):
+        stranger = '00:00:5e:00:53:70'
+        extra = [ip_frame('198.51.100.1', '198.51.100.2', 17, udp(5000, 5001, b'x'), src=stranger, dst=self.lab),
+                 arp(1, '198.51.100.1', '198.51.100.2', src=self.lab, dst=wire.BROADCAST, sha=self.lab,
+                     tha='00:00:00:00:00:00')]
+        result = self.verdict(extra)
+        self.assertEqual((2, 'NONE'), (result['categories']['foreign'], result['leak']))
+
+    def test_a_seen_leak_stays_a_leak_when_the_observer_failed(self):
+        broken = dict(error=True, dropped=3, finished=False)
+        result = self.verdict([self.ping()], health=broken, ready=False, marker_replies=[])
+        self.assertEqual('DETECTED', result['leak'])
+        before_open = capture([self.ping()])
+        self.assertEqual('DETECTED', self.verdict(raw=before_open, health=broken)['leak'])
+
+    def test_traffic_before_open_and_after_close_is_still_judged(self):
+        frames = marker_exchange(self.window[0]) + [f for p in self.expected for f in exchange(p)] \
+            + marker_exchange(self.window[1])
+        before = self.verdict(raw=capture([self.ping()] + frames))
+        after = self.verdict(raw=capture(frames + [self.ping()]))
+        self.assertEqual(('DETECTED', 'DETECTED'), (before['leak'], after['leak']))
+        self.assertTrue(before['window']['ordered'] and after['window']['ordered'])
+
+    def test_markers_must_be_single_complete_and_around_every_probe(self):
+        open_pair, close_pair = (marker_exchange(m) for m in self.window)
+        probes = [f for p in self.expected for f in exchange(p)]
+        cases = {
+            'no-close': open_pair + probes,
+            'no-open': probes + close_pair,
+            'open-twice': open_pair + open_pair + probes + close_pair,
+            'close-twice': open_pair + probes + close_pair + close_pair,
+            'request-only': open_pair[:1] + probes + close_pair,
+            'probe-before-open': probes[:2] + open_pair + probes[2:] + close_pair,
+            'probe-after-close': open_pair + probes[:-2] + close_pair + probes[-2:],
+            'swapped': close_pair + probes + open_pair,
+        }
+        for name, frames in cases.items():
+            with self.subTest(name=name):
+                result = self.verdict(raw=capture(frames))
+                self.assertEqual('UNVERIFIED', result['leak'])
+                self.assertTrue(result['leak_reason'].startswith('window-markers-'), result['leak_reason'])
+                self.assertFalse(result['window']['markers_found'] and result['window']['ordered'])
+
+    def test_a_marker_of_another_run_is_unexpected(self):
+        stale = wire.markers('b' * 32, iter(f'{i:024x}' for i in range(2)).__next__)
+        result = self.verdict(marker_exchange(stale[0]))
+        self.assertEqual(('DETECTED', 2), (result['leak'], result['categories']['unexpected']))
+
+    def test_every_observer_failure_makes_a_clean_capture_unverified(self):
+        def health(**changes):
+            return {**self.health, **changes}
+        def times(started=1.0, opened=2.0, closed=8.0, ended=9.0):
+            rows = [dict(word=m['word'], nonce=m['nonce'], at=at) for m, at in zip(self.window, (opened, closed))]
+            return dict(capture_started=started, markers=rows, capture_ended=ended)
+        cases = [
+            ('observer-not-ready', dict(ready=False)),
+            ('observer-health', dict(health=health(error=True))),
+            ('observer-health', dict(health=health(dropped=1))),
+            ('observer-health', dict(health=health(finished=False))),
+            ('observer-health', dict(health=health(dropped=True))),
+            ('marker-reply-mismatch', dict(marker_replies=self.replies[:1])),
+            ('marker-reply-mismatch', dict(marker_replies=[dict(self.replies[0], response='00'), self.replies[1]])),
+            ('capture-window-unrecorded', dict(health={k: v for k, v in self.health.items() if k != 'capture_ended'})),
+            ('capture-window-unrecorded', dict(health=health(markers=[]))),
+            ('capture-window-unrecorded', dict(health=health(capture_started='1'))),
+            ('capture-window-unrecorded', dict(health=health(**times(started=float('nan'))))),
+            ('capture-window-unrecorded', dict(health=health(markers=[dict(word='open', nonce='0' * 24, at=2.0),
+                                                                      dict(word='close', nonce='1' * 24, at=8.0)]))),
+            ('capture-ended-before-close', dict(health=health(**times(ended=7.0)))),
+            ('capture-window-inconsistent', dict(health=health(**times(started=3.0)))),
+            ('capture-window-inconsistent', dict(health=health(**times(opened=8.5)))),
+        ]
+        for index, (reason, changes) in enumerate(cases):
+            with self.subTest(index=index, reason=reason):
+                result = self.verdict(**changes)
+                self.assertEqual(('UNVERIFIED', reason), (result['leak'], result['leak_reason']))
+
+    def test_a_capture_that_reached_its_size_limit_is_unverified(self):
+        padding = ethernet('00:00:5e:00:53:70', '00:00:5e:00:53:71', (0x88b5).to_bytes(2, 'big'), bytes(1400))
+        frames = marker_exchange(self.window[0]) + [padding] * 90 + marker_exchange(self.window[1])
+        result = self.verdict(raw=capture(frames))
+        self.assertEqual(('UNVERIFIED', 'capture-limit-reached'), (result['leak'], result['leak_reason']))
+        self.assertEqual(90, result['categories']['foreign'])
+
+    def test_only_the_first_sixteen_unexpected_frames_are_described(self):
+        result = self.verdict([self.ping()] * 20)
+        self.assertEqual((20, 16), (result['categories']['unexpected'], len(result['unexpected'])))
+        json.dumps(result)
+
+    def test_canary_flows_include_the_errors_they_provoke_and_nothing_else(self):
+        udp_flow = ip_frame(wire.CLIENTS[4], wire.TARGETS[4], 17, udp(42000, wire.CANARY_PORT, b'canary'))
+        syn_flow = ip_frame(wire.CLIENTS[4], wire.CANARY_TCP_TARGET, 6, tcp(42001, wire.CANARY_PORT, flags=0x02))
+        def error(kind, flow):
+            quoted = flow[14:14 + 28]
+            return ip_frame(wire.TARGETS[4], wire.CLIENTS[4], 1, icmp(kind, bytes(4) + quoted),
+                            src=self.lab, dst=self.test)
+        both = [udp_flow, error(3, udp_flow), syn_flow, error(3, syn_flow)]
+        result = self.verdict(both)
+        self.assertEqual((['tcp', 'udp'], 0, 'DETECTED', 4), (result['canary_flows'], result['canary_other'],
+                                                              result['leak'], result['categories']['unexpected']))
+        result = self.verdict(both[:2] + [self.ping()])
+        self.assertEqual((['udp'], 1), (result['canary_flows'], result['canary_other']))
+        stray = ip_frame(wire.TARGETS[4], wire.CLIENTS[4], 1, icmp(3, bytes(4) + udp_flow[14:14 + 20] + bytes(8)),
+                         src=self.lab, dst=self.test)
+        self.assertEqual(([], 1), tuple(self.verdict([stray])[k] for k in ('canary_flows', 'canary_other')))
+
+    def test_the_window_needs_exactly_an_open_and_a_close_marker(self):
+        for window in ([], self.window[::-1], self.window[:1], self.window + self.window):
+            with self.assertRaises(ValueError):
+                wire.classify(self.raw_capture(), self.expected, window)
+
+    def raw_capture(self):
+        return pcap(self.expected, self.window)
+
+    def test_a_longer_health_record_still_qualifies_the_exchanges(self):
+        replies = [{**p, 'response': wire.answer(p).hex()} for p in self.expected]
+        result = wire.qualify(self.expected, replies, replies, self.raw_capture(), True, self.health)
+        self.assertTrue(result['qualified'])
 
 
 class PairTests(unittest.TestCase):
