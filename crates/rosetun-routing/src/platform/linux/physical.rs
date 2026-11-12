@@ -16,6 +16,25 @@ pub(in crate::platform) fn physical_default_interface(exclude_alias: &str) -> Op
         })
 }
 
+/// Every interface with a default route in the main table: the ones that lead
+/// out of the local network, as "has a gateway" on Windows.
+pub(in crate::platform) fn interfaces_with_default_route(exclude_alias: &str) -> Vec<String> {
+    let ipv4 = std::fs::read_to_string("/proc/net/route").unwrap_or_default();
+    let ipv6 = std::fs::read_to_string("/proc/net/ipv6_route").unwrap_or_default();
+    defaults_of(&ipv4, &ipv6, exclude_alias)
+}
+
+fn defaults_of(ipv4: &str, ipv6: &str, exclude_alias: &str) -> Vec<String> {
+    let mut interfaces: Vec<String> = ipv4_defaults(ipv4, exclude_alias)
+        .into_iter()
+        .chain(ipv6_defaults(ipv6, exclude_alias))
+        .map(|(_, interface)| interface)
+        .collect();
+    interfaces.sort_unstable();
+    interfaces.dedup();
+    interfaces
+}
+
 fn usable(interface: &str, exclude_alias: &str) -> bool {
     !interface.is_empty() && interface != "lo" && interface != exclude_alias
 }
@@ -23,6 +42,13 @@ fn usable(interface: &str, exclude_alias: &str) -> bool {
 /// `/proc/net/route`: `Iface Destination Gateway Flags RefCnt Use Metric Mask
 /// ...`, numbers in hexadecimal, a header line first.
 fn ipv4_default(table: &str, exclude_alias: &str) -> Option<String> {
+    ipv4_defaults(table, exclude_alias)
+        .into_iter()
+        .min()
+        .map(|(_, interface)| interface)
+}
+
+fn ipv4_defaults(table: &str, exclude_alias: &str) -> Vec<(u32, String)> {
     table
         .lines()
         .skip(1)
@@ -43,13 +69,19 @@ fn ipv4_default(table: &str, exclude_alias: &str) -> Option<String> {
                 && usable(interface, exclude_alias))
             .then(|| (metric, interface.to_owned()))
         })
-        .min()
-        .map(|(_, interface)| interface)
+        .collect()
 }
 
 /// `/proc/net/ipv6_route`: `dest prefix src prefix next-hop metric refcnt use
 /// flags iface`, all hexadecimal, no header.
 fn ipv6_default(table: &str, exclude_alias: &str) -> Option<String> {
+    ipv6_defaults(table, exclude_alias)
+        .into_iter()
+        .min()
+        .map(|(_, interface)| interface)
+}
+
+fn ipv6_defaults(table: &str, exclude_alias: &str) -> Vec<(u32, String)> {
     table
         .lines()
         .filter_map(|line| {
@@ -69,8 +101,7 @@ fn ipv6_default(table: &str, exclude_alias: &str) -> Option<String> {
                 && usable(interface, exclude_alias))
             .then(|| (metric, interface.to_owned()))
         })
-        .min()
-        .map(|(_, interface)| interface)
+        .collect()
 }
 
 #[cfg(test)]
@@ -104,6 +135,26 @@ eth1\t00000000\t010200C0\t0002\t0\t0\t0\t00000000\t0\t0\t0
         assert_eq!(ipv4_default(&table, "rosetun0"), None);
         assert_eq!(ipv4_default(HEADER, "rosetun0"), None);
         assert_eq!(ipv4_default("", "rosetun0"), None);
+    }
+
+    #[test]
+    fn every_interface_with_a_default_route_has_a_gateway() {
+        let ipv4 = format!(
+            "{HEADER}wlan0	00000000	0102000A	0003	0	0	600	00000000	0	0	0
+br0	00000000	010200C0	0003	0	0	100	00000000	0	0	0
+eth0	000200C0	00000000	0001	0	0	100	00FFFFFF	0	0	0
+rosetun0	00000000	00000000	0001	0	0	0	00000000	0	0	0
+"
+        );
+        let zeros = "00000000000000000000000000000000";
+        let ipv6 = format!(
+            "{zeros} 00 {zeros} 00 fe800000000000000000000000000001 00000400 00000001 00000000 00450003 eth1
+"
+        );
+        assert_eq!(
+            defaults_of(&ipv4, &ipv6, "rosetun0"),
+            ["br0", "eth1", "wlan0"]
+        );
     }
 
     #[test]

@@ -709,14 +709,100 @@ scenario_program_rules() {
     rm -rf -- "$other_dir"
 }
 
+# A datagram bound to the physical interface, sent to ADDRESS: an nftables drop
+# fails sendto() at once ("Operation not permitted"); a datagram that left just
+# goes unanswered, which is all these checks need.
+udp_to() {
+    UDP_OUT=$(curl -v -s -o /dev/null --connect-timeout 3 --max-time 4 --interface "$PHYS" "tftp://$1:69/rosetun-l3" 2>&1 </dev/null)
+}
+
+expect_udp_sent_to() {
+    udp_to "$1"
+    ! printf '%s' "$UDP_OUT" | grep -q 'Operation not permitted' ||
+        { fail_reason="a datagram to $2 on $PHYS was refused locally"; return 1; }
+}
+
+expect_udp_refused_to() {
+    udp_to "$1"
+    printf '%s' "$UDP_OUT" | grep -q 'Operation not permitted' ||
+        { fail_reason="a datagram to $2 on $PHYS was sent, not refused"; return 1; }
+}
+
+own_address() { ip -4 -o addr show dev "$PHYS" scope global | awk '{print $4}' | cut -d/ -f1 | head -n 1; }
+
+# A device of the own network, not the guest and not the host node: nobody needs
+# to answer, the permit is what is tested.
+neighbor_address() {
+    local own base last
+    own=$(own_address)
+    base=${own%.*}
+    for last in 250 251 252; do
+        if [ "$base.$last" != "$own" ] && [ "$base.$last" != "$HOST_ADDRESS" ]; then
+            printf '%s' "$base.$last"
+            return
+        fi
+    done
+}
+
+# A private address outside the own network, as a network behind the gateway.
+behind_router_address() {
+    local own cand
+    own=$(own_address)
+    for cand in 10.254.254.1 172.31.254.1 192.168.254.1; do
+        if [ "${cand%.*.*}" != "${own%.*.*}" ]; then
+            printf '%s' "$cand"
+            return
+        fi
+    done
+}
+
 scenario_lan_on() {
     lan_on() {
+        local neighbor
+        neighbor=$(neighbor_address)
         connect_with request-lan.json || return 1
-        expect_reached "the host node" direct_node || return 1
+        expect_udp_sent_to "$neighbor" "the device $neighbor of the own network" || return 1
+        # The host node is the VPN server: its address is left out of the own
+        # network, so only the engine reaches it.
+        expect_blocked "the host node (the VPN server)" direct_node || return 1
         expect_blocked "HTTPS to $PROBE_ADDRESS on $PHYS" direct_https || return 1
         disconnect
     }
-    check lan.on "the host node connected, the probe address did not" lan_on
+    check lan.on "a device of the own network was reached, the VPN server and the probe address were not" lan_on
+    lan_private_closed() {
+        local behind
+        behind=$(behind_router_address)
+        connect_with request-lan.json || return 1
+        expect_udp_refused_to "$behind" "the private network $behind behind the gateway" || return 1
+        disconnect
+    }
+    check lan.private-closed "a private network behind the gateway was refused without Private networks behind the router" lan_private_closed
+    lan_follows_change() {
+        local extra=203.0.113.5/24 waited
+        connect_with request-lan.json || return 1
+        ip addr add "$extra" dev "$PHYS" || { fail_reason="could not add $extra to $PHYS"; return 1; }
+        for waited in $(seq 1 20); do
+            "$NFT" list table inet rosetun 2>/dev/null | grep -q '203.0.113.0/24' && break
+            sleep 1
+        done
+        "$NFT" list table inet rosetun 2>/dev/null | grep -q '203.0.113.0/24' || {
+            ip addr del "$extra" dev "$PHYS"
+            fail_reason="the new network $extra did not reach the table within 20 seconds"
+            return 1
+        }
+        wait_state '^Connected' 30 || { ip addr del "$extra" dev "$PHYS"; return 1; }
+        ip addr del "$extra" dev "$PHYS"
+        for waited in $(seq 1 20); do
+            "$NFT" list table inet rosetun 2>/dev/null | grep -q '203.0.113.0/24' || break
+            sleep 1
+        done
+        ! "$NFT" list table inet rosetun 2>/dev/null | grep -q '203.0.113.0/24' ||
+            { fail_reason="the removed network stayed in the table"; return 1; }
+        wait_state '^Connected' 30 || return 1
+        expect_blocked "HTTPS to $PROBE_ADDRESS on $PHYS" direct_https || return 1
+        disconnect
+    }
+    check lan.follows-change "a network added during the session reached the table and, removed, left it, with the kill switch holding" lan_follows_change
 }
 
 scenario_dns_lock() {

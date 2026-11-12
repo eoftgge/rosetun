@@ -17,29 +17,30 @@
 //! `mangle` that may reroute a packet, so `oif` is the final interface.
 //!
 //! Only checked values reach the text: interface names as `InterfaceName`,
-//! cgroup paths as `CgroupPath`, addresses as `Ipv4Addr` and `Ipv6Addr`.
+//! cgroup paths as `CgroupPath`, addresses as `IpPrefix` and `IpAddr`.
 
 use std::fmt::Write as _;
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::IpAddr;
+
+use rosetun_config::{IpPrefix, LINK_LOCAL_V4, LINK_LOCAL_V6};
 
 use crate::cgroup::CgroupPath;
+use crate::lan::{LanAccess, MAX_SERVERS_PER_NETWORK};
 use crate::{ProtectionScope, RoutingError};
 
 pub(crate) const TABLE: &str = "rosetun";
 /// `IFNAMSIZ` minus the terminating zero.
 const MAX_INTERFACE_BYTES: usize = 15;
 
-/// As on Windows: the private ranges and link-local, permitted with "Local
-/// network", but never for DNS.
-const LAN_V4: [(Ipv4Addr, u8); 4] = [
-    (Ipv4Addr::new(10, 0, 0, 0), 8),
-    (Ipv4Addr::new(172, 16, 0, 0), 12),
-    (Ipv4Addr::new(192, 168, 0, 0), 16),
-    (Ipv4Addr::new(169, 254, 0, 0), 16),
-];
-const LAN_V6: [(Ipv6Addr, u8); 2] = [
-    (Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 0), 10),
-    (Ipv6Addr::new(0xfc00, 0, 0, 0, 0, 0, 0, 0), 7),
+/// "Private networks behind the router", as on Windows: the private ranges
+/// and link-local, on any interface, but never for DNS.
+const PRIVATE_NETWORKS: [IpPrefix; 6] = [
+    IpPrefix::v4([10, 0, 0, 0], 8),
+    IpPrefix::v4([172, 16, 0, 0], 12),
+    IpPrefix::v4([192, 168, 0, 0], 16),
+    IpPrefix::v4([169, 254, 0, 0], 16),
+    IpPrefix::v6([0xfe80, 0, 0, 0, 0, 0, 0, 0], 10),
+    IpPrefix::v6([0xfc00, 0, 0, 0, 0, 0, 0, 0], 7),
 ];
 /// IPv6 neighbor discovery the kernel sends without a socket, so with no
 /// cgroup: without it the engine cannot reach a server over IPv6 and the
@@ -98,9 +99,11 @@ pub(crate) enum LeftBehind {
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Rules<'a> {
     pub(crate) scope: ProtectionScope,
-    /// Private ranges and link-local, out and forwarded; only with
-    /// `AllTraffic`.
+    /// "Local network", out and forwarded; only with `AllTraffic`.
     pub(crate) allow_lan: bool,
+    /// What it opens (`None` is an empty segment), when `allow_lan` or
+    /// Lockdown's own "Local network" is on.
+    pub(crate) lan: Option<&'a LanAccess>,
     /// The engines' leaf: everything an engine sends passes. `None` only in
     /// Lockdown's set at boot, before the unit has made its leaves: a rule
     /// naming a cgroup that does not exist cannot be loaded.
@@ -118,8 +121,8 @@ pub(crate) struct Rules<'a> {
 /// What Lockdown adds to the kill switch.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Lockdown<'a> {
-    /// "Local network" of Lockdown itself: the private ranges may also
-    /// connect to this host, and this host may answer them.
+    /// "Local network" of Lockdown itself: the local network may also
+    /// connect to this host, and this host may answer it.
     pub(crate) lan: bool,
     /// A session runs: what this host forwards may use the tunnel and,
     /// with `Rules::allow_lan`, the local network. Without one nothing is
@@ -132,11 +135,38 @@ pub(crate) struct Lockdown<'a> {
     pub(crate) programs: &'a [CgroupPath],
 }
 
+/// The lines "Local network" adds, written once per table.
+#[derive(Default)]
+struct LanLines {
+    /// Leaving this host, and forwarded.
+    permits: Vec<String>,
+    /// DNS to the local networks is dropped above the permits.
+    dns_drops: Vec<String>,
+    /// Reaching this host, under Lockdown only.
+    inbound: Vec<String>,
+}
+
 impl Rules<'_> {
-    /// The private ranges this host may send to.
+    /// The local networks this host may send to.
     fn lan(&self) -> bool {
         let lockdown_lan = self.lockdown.is_some_and(|lockdown| lockdown.lan);
         (self.allow_lan || lockdown_lan) && self.scope() == ProtectionScope::AllTraffic
+    }
+
+    fn lan_lines(&self) -> LanLines {
+        if !self.lan() {
+            return LanLines::default();
+        }
+        let access = self.lan.cloned().unwrap_or_default();
+        LanLines {
+            permits: lan_permits(&access, Way::Out),
+            dns_drops: lan_dns_drops(&access),
+            inbound: if self.lockdown.is_some_and(|lockdown| lockdown.lan) {
+                lan_permits(&access, Way::In)
+            } else {
+                Vec::new()
+            },
+        }
     }
 
     fn scope(&self) -> ProtectionScope {
@@ -155,12 +185,13 @@ impl Rules<'_> {
 /// Replaces the table with `rules` in one transaction.
 pub(crate) fn replace(rules: &Rules<'_>) -> String {
     let mut text = remove();
+    let lan = rules.lan_lines();
     let _ = writeln!(text, "table inet {TABLE} {{");
-    if let Some(lockdown) = rules.lockdown {
-        input_chain(&mut text, rules, &lockdown);
+    if rules.lockdown.is_some() {
+        input_chain(&mut text, rules, &lan);
     }
-    output_chain(&mut text, rules);
-    forward_chain(&mut text, rules);
+    output_chain(&mut text, rules, &lan);
+    forward_chain(&mut text, rules, &lan);
     text.push_str("}\n");
     text
 }
@@ -177,7 +208,7 @@ pub(crate) fn replace(rules: &Rules<'_>) -> String {
 /// chain let in). A first packet from outside is `new` and dropped here
 /// with its entry. `related` carries ICMP errors for those connections,
 /// which path MTU discovery needs.
-fn input_chain(text: &mut String, rules: &Rules<'_>, lockdown: &Lockdown<'_>) {
+fn input_chain(text: &mut String, rules: &Rules<'_>, lan: &LanLines) {
     chain_head(text, "input", ProtectionScope::AllTraffic);
     text.push_str("\t\tiif \"lo\" accept\n");
     if let Some(tunnel) = rules.tunnel {
@@ -186,15 +217,14 @@ fn input_chain(text: &mut String, rules: &Rules<'_>, lockdown: &Lockdown<'_>) {
     text.push_str("\t\tct state established,related accept\n");
     text.push_str("\t\tmeta nfproto ipv4 udp sport 67 udp dport 68 accept\n");
     let _ = writeln!(text, "\t\t{NEIGHBOR_DISCOVERY_IN}");
-    if lockdown.lan {
-        let _ = writeln!(text, "\t\tip saddr {{ {} }} accept", v4_list());
-        let _ = writeln!(text, "\t\tip6 saddr {{ {} }} accept", v6_list());
+    for line in &lan.inbound {
+        let _ = writeln!(text, "\t\t{line}");
     }
     text.push_str("\t}\n");
 }
 
 /// What this host sends.
-fn output_chain(text: &mut String, rules: &Rules<'_>) {
+fn output_chain(text: &mut String, rules: &Rules<'_>, lan: &LanLines) {
     chain_head(text, "output", rules.scope());
     // The tunnel first: its own DNS address lies in 172.16/12, which the
     // private DNS drop below would catch.
@@ -218,7 +248,7 @@ fn output_chain(text: &mut String, rules: &Rules<'_>) {
             let _ = writeln!(text, "\t\t{} udp dport 53 accept", cgroup_match(program));
         }
     }
-    lan_dns_drop(text, rules);
+    lan_dns_drop(text, lan);
     text.push_str("\t\toif \"lo\" accept\n");
     if rules.scope() == ProtectionScope::AllTraffic && rules.lockdown.is_none() {
         // Answers to connections opened from outside, as under the Windows
@@ -244,7 +274,7 @@ fn output_chain(text: &mut String, rules: &Rules<'_>) {
         ProtectionScope::AllTraffic => {
             text.push_str("\t\tmeta nfproto ipv4 udp sport 68 udp dport 67 accept\n");
             let _ = writeln!(text, "\t\t{NEIGHBOR_DISCOVERY}");
-            lan_permit(text, rules);
+            lan_permit(text, lan);
         }
         ProtectionScope::DnsOnly => {
             text.push_str("\t\tmeta l4proto { tcp, udp } th dport 53 drop\n");
@@ -263,15 +293,15 @@ fn output_chain(text: &mut String, rules: &Rules<'_>) {
 /// lock only their DNS beside the tunnel is dropped. Nothing has a cgroup
 /// here, so there is no engine permit. In the hold, and under Lockdown
 /// without a session, nothing is forwarded.
-fn forward_chain(text: &mut String, rules: &Rules<'_>) {
+fn forward_chain(text: &mut String, rules: &Rules<'_>, lan: &LanLines) {
     chain_head(text, "forward", rules.scope());
     if rules.forwards() {
         tunnel_permit(text, rules);
-        lan_dns_drop(text, rules);
+        lan_dns_drop(text, lan);
         match rules.scope() {
             ProtectionScope::AllTraffic => {
                 text.push_str("\t\tct direction reply accept\n");
-                lan_permit(text, rules);
+                lan_permit(text, lan);
             }
             ProtectionScope::DnsOnly => {
                 text.push_str("\t\tmeta l4proto { tcp, udp } th dport 53 drop\n");
@@ -300,25 +330,232 @@ fn tunnel_permit(text: &mut String, rules: &Rules<'_>) {
     }
 }
 
-fn lan_dns_drop(text: &mut String, rules: &Rules<'_>) {
-    if rules.lan() {
-        let _ = writeln!(
-            text,
-            "\t\tip daddr {{ {} }} meta l4proto {{ tcp, udp }} th dport 53 drop",
-            v4_list()
-        );
-        let _ = writeln!(
-            text,
-            "\t\tip6 daddr {{ {} }} meta l4proto {{ tcp, udp }} th dport 53 drop",
-            v6_list()
-        );
+fn lan_dns_drop(text: &mut String, lan: &LanLines) {
+    for line in &lan.dns_drops {
+        let _ = writeln!(text, "\t\t{line}");
     }
 }
 
-fn lan_permit(text: &mut String, rules: &Rules<'_>) {
-    if rules.lan() {
-        let _ = writeln!(text, "\t\tip daddr {{ {} }} accept", v4_list());
-        let _ = writeln!(text, "\t\tip6 daddr {{ {} }} accept", v6_list());
+fn lan_permit(text: &mut String, lan: &LanLines) {
+    for line in &lan.permits {
+        let _ = writeln!(text, "\t\t{line}");
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Way {
+    /// Leaving this host: the output and forward chains.
+    Out,
+    /// Reaching this host: the input chain.
+    In,
+}
+
+impl Way {
+    fn interface(self) -> &'static str {
+        match self {
+            Self::Out => "oifname",
+            Self::In => "iifname",
+        }
+    }
+
+    /// `ip daddr`, `ip6 saddr` and so on, for the family of `prefix`.
+    fn address(self, prefix: IpPrefix) -> &'static str {
+        match (self, prefix.is_ipv4()) {
+            (Self::Out, true) => "ip daddr",
+            (Self::Out, false) => "ip6 daddr",
+            (Self::In, true) => "ip saddr",
+            (Self::In, false) => "ip6 saddr",
+        }
+    }
+}
+
+/// What "Local network" permits: each connected network only on its own
+/// interface; link-local networks on the physical interfaces; with "Private
+/// networks behind the router" also the private ranges on any interface. The
+/// VPN servers' addresses are left out of all of them: only the engine goes
+/// there, by its own permit. A rule with no address would open a whole
+/// interface, so a network with nothing left to open gets no line.
+///
+/// Each line is one set: the sets of two lines may overlap, the elements of
+/// one never do, which nftables would refuse to load.
+fn lan_permits(access: &LanAccess, way: Way) -> Vec<String> {
+    let mut lines = Vec::new();
+    let segment = &access.segment;
+    for network in segment.networks() {
+        let Some(name) = segment
+            .interface_name(network.interface)
+            .and_then(|name| InterfaceName::new(name).ok())
+        else {
+            continue;
+        };
+        let pieces = open_pieces(network.prefix, segment.left_out());
+        if !pieces.is_empty() {
+            lines.push(format!(
+                "{} \"{}\" {} {{ {} }} accept",
+                way.interface(),
+                name.as_str(),
+                way.address(network.prefix),
+                pieces.join(", ")
+            ));
+        }
+    }
+    let names = physical_names(access);
+    if !names.is_empty() {
+        let prefixes: Vec<IpPrefix> = match way {
+            Way::Out => link_local(access.ipv6_multicast).collect(),
+            Way::In => vec![LINK_LOCAL_V4[0], LINK_LOCAL_V6[0]],
+        };
+        for ipv4 in [true, false] {
+            if let Some((first, pieces)) = family_pieces(&prefixes, ipv4, &access.servers) {
+                lines.push(format!(
+                    "{} {{ {} }} {} {{ {} }} accept",
+                    way.interface(),
+                    names.join(", "),
+                    way.address(first),
+                    pieces.join(", ")
+                ));
+            }
+        }
+    }
+    if access.private_networks {
+        for ipv4 in [true, false] {
+            if let Some((first, pieces)) = family_pieces(&PRIVATE_NETWORKS, ipv4, &access.servers) {
+                lines.push(format!(
+                    "{} {{ {} }} accept",
+                    way.address(first),
+                    pieces.join(", ")
+                ));
+            }
+        }
+    }
+    lines
+}
+
+/// The pieces of the networks of one family, with the first of them to tell
+/// the family by; `None` when nothing is left to open.
+fn family_pieces(
+    prefixes: &[IpPrefix],
+    ipv4: bool,
+    servers: &[IpAddr],
+) -> Option<(IpPrefix, Vec<String>)> {
+    let wanted: Vec<IpPrefix> = prefixes
+        .iter()
+        .copied()
+        .filter(|prefix| prefix.is_ipv4() == ipv4)
+        .collect();
+    let pieces: Vec<String> = wanted
+        .iter()
+        .flat_map(|prefix| open_pieces(*prefix, servers))
+        .collect();
+    let first = *wanted.first()?;
+    (!pieces.is_empty()).then_some((first, pieces))
+}
+
+/// DNS to any of the local networks stays blocked, so a resolver there is not
+/// a way round the tunnel's. The block sits above the permits and above the
+/// engine's, which is why a server's address is left out of it as well: the
+/// engine could not reach a server on port 53 otherwise.
+fn lan_dns_drops(access: &LanAccess) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    let mut add = |prefixes: &[IpPrefix], servers: &[IpAddr]| {
+        for ipv4 in [true, false] {
+            let wanted: Vec<IpPrefix> = prefixes
+                .iter()
+                .copied()
+                .filter(|prefix| prefix.is_ipv4() == ipv4)
+                .collect();
+            let Some(first) = wanted.first() else {
+                continue;
+            };
+            let pieces: Vec<String> = wanted
+                .iter()
+                .flat_map(|prefix| closed_pieces(*prefix, servers))
+                .collect();
+            let line = format!(
+                "{} {{ {} }} meta l4proto {{ tcp, udp }} th dport 53 drop",
+                Way::Out.address(*first),
+                pieces.join(", ")
+            );
+            if !lines.contains(&line) {
+                lines.push(line);
+            }
+        }
+    };
+    for network in access.segment.networks() {
+        add(&[network.prefix], access.segment.left_out());
+    }
+    add(
+        &link_local(access.ipv6_multicast).collect::<Vec<_>>(),
+        &access.servers,
+    );
+    if access.private_networks {
+        add(&PRIVATE_NETWORKS, &access.servers);
+    }
+    lines
+}
+
+/// The link-local networks "Local network" opens. IPv6 link-local multicast
+/// only when the tunnel carries IPv6: otherwise sing-box blocks all IPv6
+/// while it runs, and mDNS and SSDP work over IPv4 anyway.
+fn link_local(ipv6_multicast: bool) -> impl Iterator<Item = IpPrefix> {
+    let multicast_v6 = LINK_LOCAL_V6[1];
+    LINK_LOCAL_V4
+        .into_iter()
+        .chain(LINK_LOCAL_V6)
+        .filter(move |prefix| ipv6_multicast || *prefix != multicast_v6)
+}
+
+/// The names of the physical interfaces, quoted, for `oifname { ... }`.
+fn physical_names(access: &LanAccess) -> Vec<String> {
+    let mut names: Vec<String> = access
+        .segment
+        .interfaces()
+        .iter()
+        .filter_map(|id| access.segment.interface_name(*id))
+        .filter_map(|name| InterfaceName::new(name).ok())
+        .map(|name| format!("\"{}\"", name.as_str()))
+        .collect();
+    names.sort_unstable();
+    names.dedup();
+    names
+}
+
+/// The network as address conditions: whole, or the ranges around the
+/// servers inside it. Empty past `MAX_SERVERS_PER_NETWORK` servers or when
+/// nothing is left: such a network is closed.
+fn open_pieces(prefix: IpPrefix, servers: &[IpAddr]) -> Vec<String> {
+    let inside = servers
+        .iter()
+        .filter(|server| prefix.contains(**server))
+        .count();
+    if inside > MAX_SERVERS_PER_NETWORK {
+        tracing::warn!("local network: a range holds too many VPN servers and stays closed");
+        return Vec::new();
+    }
+    if inside == 0 {
+        return vec![prefix.to_string()];
+    }
+    prefix
+        .ranges_without(servers)
+        .into_iter()
+        .map(|(low, high)| {
+            if low == high {
+                low.to_string()
+            } else {
+                format!("{low}-{high}")
+            }
+        })
+        .collect()
+}
+
+/// A range without a permit keeps its DNS block whole: nothing else is open
+/// there, and an empty set would not load.
+fn closed_pieces(prefix: IpPrefix, servers: &[IpAddr]) -> Vec<String> {
+    let pieces = open_pieces(prefix, servers);
+    if pieces.is_empty() {
+        vec![prefix.to_string()]
+    } else {
+        pieces
     }
 }
 
@@ -414,22 +651,6 @@ fn cgroup_match(path: &CgroupPath) -> String {
     )
 }
 
-fn v4_list() -> String {
-    LAN_V4
-        .iter()
-        .map(|(address, prefix)| format!("{address}/{prefix}"))
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-fn v6_list() -> String {
-    LAN_V6
-        .iter()
-        .map(|(address, prefix)| format!("{address}/{prefix}"))
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
 #[cfg(test)]
 mod proxy_mode_tests {
     use super::*;
@@ -438,8 +659,20 @@ mod proxy_mode_tests {
         CgroupPath::parse("/system.slice/rosetun-helper.service/engines").unwrap()
     }
 
-    fn proxy_mode(engines: &CgroupPath, allow_lan: bool) -> Rules<'_> {
+    fn private_networks() -> LanAccess {
+        LanAccess {
+            private_networks: true,
+            ..LanAccess::default()
+        }
+    }
+
+    fn proxy_mode<'a>(
+        engines: &'a CgroupPath,
+        allow_lan: bool,
+        lan: Option<&'a LanAccess>,
+    ) -> Rules<'a> {
         Rules {
+            lan,
             scope: ProtectionScope::AllTraffic,
             allow_lan,
             engines: Some(engines),
@@ -453,7 +686,7 @@ mod proxy_mode_tests {
     #[test]
     fn the_kill_switch_of_the_proxy_mode_stays_in_its_first_phase() {
         let engines = engines();
-        let text = replace(&proxy_mode(&engines, false));
+        let text = replace(&proxy_mode(&engines, false, None));
         assert!(text.contains("type filter hook output priority filter; policy drop;"));
         assert!(text.contains("oif \"lo\" accept"));
         assert!(text.contains("system.slice/rosetun-helper.service/engines"));
@@ -467,14 +700,17 @@ mod proxy_mode_tests {
     #[test]
     fn local_network_in_the_proxy_mode_opens_the_private_ranges_as_in_the_tunnel_mode() {
         let engines = engines();
-        let open = replace(&proxy_mode(&engines, true));
-        let closed = replace(&proxy_mode(&engines, false));
-        assert!(open.contains(&v4_list()));
-        assert!(!closed.contains(&format!("ip daddr {{ {} }} accept", v4_list())));
+        let access = private_networks();
+        let open = replace(&proxy_mode(&engines, true, Some(&access)));
+        let closed = replace(&proxy_mode(&engines, false, Some(&access)));
+        let ranges =
+            "ip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16 } accept";
+        assert!(open.contains(ranges));
+        assert!(!closed.contains(ranges));
         let tunnel = InterfaceName::new("rosetun0").unwrap();
         let tunnel_mode = replace(&Rules {
             tunnel: Some(&tunnel),
-            ..proxy_mode(&engines, true)
+            ..proxy_mode(&engines, true, Some(&access))
         });
         assert_eq!(
             open,
@@ -489,6 +725,7 @@ mod proxy_mode_tests {
     #[test]
     fn lockdown_takes_inbound_only_from_its_local_network() {
         let engines = engines();
+        let access = private_networks();
         let with = |lan| {
             replace(&Rules {
                 lockdown: Some(Lockdown {
@@ -497,14 +734,16 @@ mod proxy_mode_tests {
                     helper: None,
                     programs: &[],
                 }),
-                ..proxy_mode(&engines, false)
+                ..proxy_mode(&engines, false, Some(&access))
             })
         };
         // Sharing adds no rule: this is the proxy's port like any other.
         let open = with(true);
         let closed = with(false);
-        assert!(open.contains(&format!("ip saddr {{ {} }} accept", v4_list())));
-        assert!(open.contains(&format!("ip6 saddr {{ {} }} accept", v6_list())));
+        assert!(open.contains(
+            "ip saddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16 } accept"
+        ));
+        assert!(open.contains("ip6 saddr { fe80::/10, fc00::/7 } accept"));
         assert!(!closed.contains("saddr {"));
         assert!(closed.contains("type filter hook input priority filter; policy drop;"));
     }
@@ -513,6 +752,9 @@ mod proxy_mode_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::lan::{
+        Adapter, ETHERNET, InterfaceId, SegmentQuery, WIFI, canonical_servers, select,
+    };
 
     #[test]
     fn a_listing_compares_equal_whatever_its_layout() {
@@ -549,6 +791,7 @@ mod tests {
     fn phase_one_of_the_kill_switch_drops_everything_but_the_bootstrap() {
         let engines = engines();
         let text = replace(&Rules {
+            lan: None,
             scope: ProtectionScope::AllTraffic,
             allow_lan: false,
             engines: Some(&engines),
@@ -582,6 +825,7 @@ mod tests {
         let engines = engines();
         let tunnel = InterfaceName::new("rosetun0").unwrap();
         let text = replace(&Rules {
+            lan: None,
             scope: ProtectionScope::AllTraffic,
             allow_lan: false,
             engines: Some(&engines),
@@ -612,46 +856,203 @@ mod tests {
         );
     }
 
-    #[test]
-    fn the_local_network_is_permitted_but_never_for_dns() {
+    fn adapter(index: u64, name: &str, if_type: u32, addresses: &[(&str, u8)]) -> Adapter {
+        Adapter {
+            interface: InterfaceId(index),
+            alias: name.to_owned(),
+            description: String::new(),
+            if_type,
+            up: true,
+            hardware: true,
+            has_gateway: false,
+            addresses: addresses
+                .iter()
+                .map(|(address, length)| (address.parse().unwrap(), *length))
+                .collect(),
+        }
+    }
+
+    /// Two physical interfaces on documentation networks, with these VPN servers.
+    fn access(servers: &[&str], private_networks: bool, ipv6_multicast: bool) -> LanAccess {
+        let adapters = [
+            adapter(2, "eth0", ETHERNET, &[("192.0.2.15", 24), ("fe80::1", 64)]),
+            adapter(
+                3,
+                "wlan0",
+                WIFI,
+                &[("198.51.100.20", 24), ("2001:db8:1::20", 64)],
+            ),
+        ];
+        let servers: Vec<IpAddr> = servers.iter().map(|text| text.parse().unwrap()).collect();
+        let scan = select(
+            &adapters,
+            &SegmentQuery {
+                tunnel_alias: "rosetun0",
+                tunnel_networks: &[],
+                servers: &servers,
+            },
+        );
+        LanAccess {
+            segment: scan.segment,
+            private_networks,
+            ipv6_multicast,
+            servers: canonical_servers(&servers),
+        }
+    }
+
+    fn kill_switch(access: &LanAccess) -> String {
         let engines = engines();
         let tunnel = InterfaceName::new("rosetun0").unwrap();
-        let text = replace(&Rules {
+        replace(&Rules {
+            lan: Some(access),
             scope: ProtectionScope::AllTraffic,
             allow_lan: true,
             engines: Some(&engines),
             lockdown: None,
             hold: None,
             tunnel: Some(&tunnel),
-        });
+        })
+    }
+
+    /// The lines of "Local network" in one chain of `text`.
+    fn lan_lines(text: &str, chain: &str) -> Vec<String> {
+        let start = text.find(&format!("\tchain {chain} {{")).unwrap();
+        let body = &text[start..];
+        let end = body.find("\t}\n").unwrap();
+        body[..end]
+            .lines()
+            .map(str::trim)
+            .filter(|line| {
+                line.contains("daddr") || line.contains("saddr") || line.contains("th dport 53")
+            })
+            .map(str::to_owned)
+            .collect()
+    }
+
+    #[test]
+    fn each_connected_network_is_permitted_only_on_its_own_interface() {
+        let text = kill_switch(&access(&[], false, false));
         assert_eq!(
-            text,
-            format!(
-                "{HEAD}\
-\t\ttype filter hook output priority filter; policy drop;
-\t\toif \"rosetun0\" accept
-\t\tip daddr {{ 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16 }} meta l4proto {{ tcp, udp }} th dport 53 drop
-\t\tip6 daddr {{ fe80::/10, fc00::/7 }} meta l4proto {{ tcp, udp }} th dport 53 drop
-\t\toif \"lo\" accept
-\t\tct direction reply accept
-\t\tsocket cgroupv2 level 3 \"system.slice/rosetun-helper.service/engines\" accept
-\t\tmeta nfproto ipv4 udp sport 68 udp dport 67 accept
-\t\ticmpv6 type {{ nd-router-solicit, nd-neighbor-solicit, nd-neighbor-advert }} ip6 hoplimit 255 accept
-\t\tip daddr {{ 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16 }} accept
-\t\tip6 daddr {{ fe80::/10, fc00::/7 }} accept
-\t}}
-\tchain forward {{
-\t\ttype filter hook forward priority filter; policy drop;
-\t\toif \"rosetun0\" accept
-\t\tip daddr {{ 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16 }} meta l4proto {{ tcp, udp }} th dport 53 drop
-\t\tip6 daddr {{ fe80::/10, fc00::/7 }} meta l4proto {{ tcp, udp }} th dport 53 drop
-\t\tct direction reply accept
-\t\tip daddr {{ 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16 }} accept
-\t\tip6 daddr {{ fe80::/10, fc00::/7 }} accept
-\t}}
-}}
-"
+            lan_lines(&text, "output"),
+            [
+                "ip daddr { 192.0.2.0/24 } meta l4proto { tcp, udp } th dport 53 drop",
+                "ip daddr { 198.51.100.0/24 } meta l4proto { tcp, udp } th dport 53 drop",
+                "ip6 daddr { 2001:db8:1::/64 } meta l4proto { tcp, udp } th dport 53 drop",
+                "ip daddr { 169.254.0.0/16, 224.0.0.0/24, 239.255.255.250/32, 255.255.255.255/32 } meta l4proto { tcp, udp } th dport 53 drop",
+                "ip6 daddr { fe80::/10 } meta l4proto { tcp, udp } th dport 53 drop",
+                "oifname \"eth0\" ip daddr { 192.0.2.0/24 } accept",
+                "oifname \"wlan0\" ip daddr { 198.51.100.0/24 } accept",
+                "oifname \"wlan0\" ip6 daddr { 2001:db8:1::/64 } accept",
+                "oifname { \"eth0\", \"wlan0\" } ip daddr { 169.254.0.0/16, 224.0.0.0/24, 239.255.255.250/32, 255.255.255.255/32 } accept",
+                "oifname { \"eth0\", \"wlan0\" } ip6 daddr { fe80::/10 } accept",
+            ]
+        );
+        // The same lines leave for the machines this host forwards for.
+        assert_eq!(lan_lines(&text, "forward").len(), 10);
+    }
+
+    #[test]
+    fn the_private_ranges_behind_the_router_stay_closed_without_their_option() {
+        let text = kill_switch(&access(&[], false, false));
+        assert!(!text.contains("10.0.0.0/8"));
+        assert!(!text.contains("192.168.0.0/16"));
+        let with = kill_switch(&access(&[], true, false));
+        assert!(with.contains(
+            "\t\tip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16 } accept\n"
+        ));
+        assert!(with.contains("\t\tip6 daddr { fe80::/10, fc00::/7 } accept\n"));
+    }
+
+    #[test]
+    fn a_vpn_server_in_the_own_network_is_left_out_of_the_permit_and_the_dns_block() {
+        let text = kill_switch(&access(&["198.51.100.200"], false, false));
+        let lines = lan_lines(&text, "output");
+        let ranges = "198.51.100.0-198.51.100.199, 198.51.100.201-198.51.100.255";
+        assert!(lines.contains(&format!("oifname \"wlan0\" ip daddr {{ {ranges} }} accept")));
+        assert!(lines.contains(&format!(
+            "ip daddr {{ {ranges} }} meta l4proto {{ tcp, udp }} th dport 53 drop"
+        )));
+        assert!(lines.contains(&"oifname \"eth0\" ip daddr { 192.0.2.0/24 } accept".to_owned()));
+        assert!(!text.contains("198.51.100.200 "), "{text}");
+    }
+
+    #[test]
+    fn a_server_in_a_private_range_is_left_out_of_it_too() {
+        let text = kill_switch(&access(&["10.1.2.3"], true, false));
+        assert!(text.contains("ip daddr { 10.0.0.0-10.1.2.2, 10.1.2.4-10.255.255.255, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16 } accept"));
+    }
+
+    #[test]
+    fn ipv6_multicast_is_permitted_only_when_the_tunnel_carries_ipv6() {
+        let without = kill_switch(&access(&[], false, false));
+        let with = kill_switch(&access(&[], false, true));
+        assert!(!without.contains("ff02::/16"));
+        assert!(
+            with.contains(
+                "oifname { \"eth0\", \"wlan0\" } ip6 daddr { fe80::/10, ff02::/16 } accept"
             )
+        );
+    }
+
+    #[test]
+    fn an_empty_segment_opens_no_interface() {
+        let text = kill_switch(&LanAccess::default());
+        assert!(!text.contains("oifname"));
+        assert!(
+            !text
+                .lines()
+                .any(|line| line.contains("daddr") && line.ends_with("accept"))
+        );
+    }
+
+    #[test]
+    fn an_interface_name_nftables_could_misread_gets_no_rule() {
+        let adapters = [adapter(2, "eth0\"; drop", ETHERNET, &[("192.0.2.15", 24)])];
+        let scan = select(
+            &adapters,
+            &SegmentQuery {
+                tunnel_alias: "rosetun0",
+                tunnel_networks: &[],
+                servers: &[],
+            },
+        );
+        let text = kill_switch(&LanAccess {
+            segment: scan.segment,
+            ..LanAccess::default()
+        });
+        assert!(!text.contains("oifname"));
+        assert!(!text.contains("drop\""));
+    }
+
+    #[test]
+    fn lockdown_takes_the_own_network_in_on_its_interface_only() {
+        let engines = engines();
+        let helper = helper();
+        let access = access(&["198.51.100.200"], false, false);
+        let text = replace(&Rules {
+            lan: Some(&access),
+            scope: ProtectionScope::AllTraffic,
+            allow_lan: false,
+            engines: Some(&engines),
+            hold: None,
+            tunnel: None,
+            lockdown: Some(Lockdown {
+                lan: true,
+                session: false,
+                helper: Some(&helper),
+                programs: &[],
+            }),
+        });
+        let input = lan_lines(&text, "input");
+        assert_eq!(
+            input,
+            [
+                "iifname \"eth0\" ip saddr { 192.0.2.0/24 } accept",
+                "iifname \"wlan0\" ip saddr { 198.51.100.0-198.51.100.199, 198.51.100.201-198.51.100.255 } accept",
+                "iifname \"wlan0\" ip6 saddr { 2001:db8:1::/64 } accept",
+                "iifname { \"eth0\", \"wlan0\" } ip saddr { 169.254.0.0/16 } accept",
+                "iifname { \"eth0\", \"wlan0\" } ip6 saddr { fe80::/10 } accept",
+            ]
         );
     }
 
@@ -663,6 +1064,7 @@ mod tests {
         {
             // "Local network" does not apply to the DNS lock.
             let text = replace(&Rules {
+                lan: None,
                 scope: ProtectionScope::DnsOnly,
                 allow_lan: true,
                 engines: Some(&engines),
@@ -697,6 +1099,7 @@ mod tests {
         let engines = engines();
         let helper = helper();
         let text = replace(&Rules {
+            lan: None,
             scope: ProtectionScope::AllTraffic,
             allow_lan: false,
             engines: Some(&engines),
@@ -723,6 +1126,7 @@ mod tests {
         );
         let engines = engines();
         let text = replace(&Rules {
+            lan: None,
             scope: ProtectionScope::DnsOnly,
             allow_lan: false,
             engines: Some(&engines),
@@ -773,6 +1177,7 @@ mod tests {
                     (ProtectionScope::DnsOnly, None, LeftBehind::DnsLock),
                 ] {
                     let text = listing(&Rules {
+                        lan: None,
                         scope,
                         allow_lan,
                         engines: Some(&engines),
@@ -875,6 +1280,7 @@ mod tests {
         for scope in [ProtectionScope::AllTraffic, ProtectionScope::DnsOnly] {
             for allow_lan in [false, true] {
                 let text = replace(&Rules {
+                    lan: None,
                     scope,
                     allow_lan,
                     engines: Some(&engines),
@@ -920,7 +1326,12 @@ mod tests {
 
     /// Lockdown's set as the boot unit writes it: no cgroup at all.
     fn boot(lan: bool) -> String {
+        let access = LanAccess {
+            private_networks: true,
+            ..LanAccess::default()
+        };
         replace(&Rules {
+            lan: lan.then_some(&access),
             scope: ProtectionScope::AllTraffic,
             allow_lan: false,
             engines: None,
@@ -975,6 +1386,8 @@ mod tests {
 \t}}
 \tchain output {{
 \t\ttype filter hook output priority filter; policy drop;
+\t\tip daddr {{ 169.254.0.0/16, 224.0.0.0/24, 239.255.255.250/32, 255.255.255.255/32 }} meta l4proto {{ tcp, udp }} th dport 53 drop
+\t\tip6 daddr {{ fe80::/10 }} meta l4proto {{ tcp, udp }} th dport 53 drop
 \t\tip daddr {{ 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16 }} meta l4proto {{ tcp, udp }} th dport 53 drop
 \t\tip6 daddr {{ fe80::/10, fc00::/7 }} meta l4proto {{ tcp, udp }} th dport 53 drop
 \t\toif \"lo\" accept
@@ -996,7 +1409,12 @@ mod tests {
         let engines = engines();
         let helper = helper();
         let programs = [gui()];
+        let access = LanAccess {
+            private_networks: true,
+            ..LanAccess::default()
+        };
         let text = replace(&Rules {
+            lan: Some(&access),
             scope: ProtectionScope::AllTraffic,
             allow_lan: false,
             engines: Some(&engines),
@@ -1025,6 +1443,8 @@ mod tests {
 \t\tsocket cgroupv2 level 3 \"system.slice/rosetun-helper.service/helper\" meta l4proto {{ tcp, udp }} th dport 53 accept
 \t\t{gui} meta l4proto tcp accept
 \t\t{gui} udp dport 53 accept
+\t\tip daddr {{ 169.254.0.0/16, 224.0.0.0/24, 239.255.255.250/32, 255.255.255.255/32 }} meta l4proto {{ tcp, udp }} th dport 53 drop
+\t\tip6 daddr {{ fe80::/10 }} meta l4proto {{ tcp, udp }} th dport 53 drop
 \t\tip daddr {{ 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16 }} meta l4proto {{ tcp, udp }} th dport 53 drop
 \t\tip6 daddr {{ fe80::/10, fc00::/7 }} meta l4proto {{ tcp, udp }} th dport 53 drop
 \t\toif \"lo\" accept
@@ -1045,7 +1465,12 @@ mod tests {
     fn locked_session(lan: bool, allow_lan: bool, tunnel: Option<&InterfaceName>) -> String {
         let engines = engines();
         let helper = helper();
+        let access = LanAccess {
+            private_networks: true,
+            ..LanAccess::default()
+        };
         replace(&Rules {
+            lan: Some(&access),
             // Lockdown makes any session all-traffic.
             scope: ProtectionScope::DnsOnly,
             allow_lan,
@@ -1156,6 +1581,7 @@ mod tests {
         for lan in [false, true] {
             for session in [false, true] {
                 let text = replace(&Rules {
+                    lan: None,
                     scope: ProtectionScope::AllTraffic,
                     allow_lan: lan,
                     engines: Some(&engines),

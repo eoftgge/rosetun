@@ -23,7 +23,7 @@ pub const MIN_IPV6_LENGTH: u8 = 48;
 pub const MAX_SERVERS_PER_NETWORK: usize = 8;
 
 /// An adapter as the routing layer identifies it, opaque outside the crate.
-/// On Windows the value is the interface LUID.
+/// On Windows the value is the interface LUID, on Linux the interface index.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct InterfaceId(pub(crate) u64);
 
@@ -55,6 +55,10 @@ impl fmt::Debug for SegmentNetwork {
 pub struct LanSegment {
     networks: Vec<SegmentNetwork>,
     interfaces: Vec<InterfaceId>,
+    /// The physical adapters' names, which nftables matches (`iifname` and
+    /// `oifname`): a name outlives an interface that is made again, an index
+    /// does not.
+    names: Vec<(InterfaceId, String)>,
     left_out: Vec<IpAddr>,
 }
 
@@ -82,6 +86,7 @@ impl LanSegment {
         Self {
             networks,
             interfaces,
+            names: Vec::new(),
             left_out: Vec::new(),
         }
     }
@@ -113,8 +118,18 @@ impl LanSegment {
                 })
                 .collect(),
             interfaces: vec![InterfaceId(1)],
+            names: Vec::new(),
             left_out: Vec::new(),
         }
+    }
+
+    /// A segment of these networks on the interface of this name, for tests
+    /// of code that renders rules from it.
+    #[doc(hidden)]
+    pub fn named_for_tests(interface: &str, prefixes: &[IpPrefix]) -> Self {
+        let mut segment = Self::for_tests(prefixes);
+        segment.names = vec![(InterfaceId(1), interface.to_owned())];
+        segment
     }
 
     pub fn networks(&self) -> &[SegmentNetwork] {
@@ -149,11 +164,23 @@ impl LanSegment {
 
     /// The physical adapters that are up, in a stable order.
     #[cfg_attr(
-        all(not(windows), not(test)),
-        expect(dead_code, reason = "only WFP uses it")
+        not(any(windows, target_os = "linux", test)),
+        expect(dead_code, reason = "only WFP and nftables use it")
     )]
     pub(crate) fn interfaces(&self) -> &[InterfaceId] {
         &self.interfaces
+    }
+
+    /// The name of one of the segment's adapters, where the platform gave one.
+    #[cfg_attr(
+        not(target_os = "linux"),
+        expect(dead_code, reason = "only nftables matches by name")
+    )]
+    pub(crate) fn interface_name(&self, interface: InterfaceId) -> Option<&str> {
+        self.names
+            .iter()
+            .find(|(id, _)| *id == interface)
+            .map(|(_, name)| name.as_str())
     }
 
     pub fn is_empty(&self) -> bool {
@@ -215,29 +242,30 @@ pub struct SegmentQuery<'a> {
 }
 
 /// An adapter as the platform reports it.
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "linux", test))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Adapter {
     pub(crate) interface: InterfaceId,
     pub(crate) alias: String,
     pub(crate) description: String,
     /// IANA ifType: 6 Ethernet, 71 Wi-Fi, 24 loopback, 53 and 131 tunnels.
+    /// Linux maps what it knows onto these.
     pub(crate) if_type: u32,
     pub(crate) up: bool,
-    /// Windows' `HardwareInterface` flag: a NIC, not a driver's software
-    /// adapter.
+    /// Windows' `HardwareInterface` flag, on Linux a device behind the
+    /// interface: a NIC, not a driver's software adapter.
     pub(crate) hardware: bool,
     pub(crate) has_gateway: bool,
     /// Usable unicast addresses with their on-link prefix lengths.
     pub(crate) addresses: Vec<(IpAddr, u8)>,
 }
 
-#[cfg(any(windows, test))]
-const ETHERNET: u32 = 6;
-#[cfg(any(windows, test))]
-const WIFI: u32 = 71;
+#[cfg(any(windows, target_os = "linux", test))]
+pub(crate) const ETHERNET: u32 = 6;
+#[cfg(any(windows, target_os = "linux", test))]
+pub(crate) const WIFI: u32 = 71;
 /// Software adapters of other VPNs that present themselves as Ethernet.
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "linux", test))]
 const TUNNEL_MARKERS: [&str; 6] = ["tap", "vpn", "wintun", "wireguard", "tunnel", "openvpn"];
 
 /// Whether the adapter leads to a real network next to the computer.
@@ -249,7 +277,7 @@ const TUNNEL_MARKERS: [&str; 6] = ["tap", "vpn", "wintun", "wireguard", "tunnel"
 /// Switch and WSL's vEthernet have no gateway, so they stay out; so do
 /// host-only VM adapters. Tunnels (53, 131) and loopback (24) are not
 /// Ethernet or Wi-Fi at all.
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "linux", test))]
 pub(crate) fn is_physical(adapter: &Adapter, tunnel_alias: &str) -> bool {
     if !adapter.up
         || adapter.alias.eq_ignore_ascii_case(tunnel_alias)
@@ -265,7 +293,7 @@ pub(crate) fn is_physical(adapter: &Adapter, tunnel_alias: &str) -> bool {
 }
 
 /// The segment of these adapters.
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "linux", test))]
 pub(crate) fn select(adapters: &[Adapter], query: &SegmentQuery<'_>) -> SegmentScan {
     let mut scan = SegmentScan::default();
     let mut interfaces = Vec::new();
@@ -332,6 +360,11 @@ pub(crate) fn select(adapters: &[Adapter], query: &SegmentQuery<'_>) -> SegmentS
     interfaces.sort_unstable();
     interfaces.dedup();
     scan.segment.interfaces = interfaces;
+    scan.segment.names = adapters
+        .iter()
+        .filter(|adapter| scan.segment.interfaces.contains(&adapter.interface))
+        .map(|adapter| (adapter.interface, adapter.alias.clone()))
+        .collect();
     scan.segment
         .networks
         .sort_by_key(|network| (network.prefix, network.interface));
@@ -343,7 +376,7 @@ pub(crate) fn select(adapters: &[Adapter], query: &SegmentQuery<'_>) -> SegmentS
 /// Host routes and link-local addresses add nothing: a /32 has no
 /// neighbours, and link-local networks are opened on every physical adapter
 /// anyway.
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "linux", test))]
 fn counts(address: IpAddr, length: u8) -> bool {
     match address {
         IpAddr::V4(address) => length < 32 && !address.is_link_local() && !address.is_loopback(),

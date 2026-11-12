@@ -73,7 +73,9 @@ impl IpPrefix {
         Some(Self { address, length })
     }
 
-    const fn v4(octets: [u8; 4], length: u8) -> Self {
+    /// A constant IPv4 network; panics on a length past 32, at compile time
+    /// in a `const`.
+    pub const fn v4(octets: [u8; 4], length: u8) -> Self {
         let [a, b, c, d] = octets;
         match Self::new(IpAddr::V4(Ipv4Addr::new(a, b, c, d)), length) {
             Some(prefix) => prefix,
@@ -81,7 +83,9 @@ impl IpPrefix {
         }
     }
 
-    const fn v6(segments: [u16; 8], length: u8) -> Self {
+    /// A constant IPv6 network; panics on a length past 128, at compile time
+    /// in a `const`.
+    pub const fn v6(segments: [u16; 8], length: u8) -> Self {
         let [a, b, c, d, e, f, g, h] = segments;
         match Self::new(IpAddr::V6(Ipv6Addr::new(a, b, c, d, e, f, g, h)), length) {
             Some(prefix) => prefix,

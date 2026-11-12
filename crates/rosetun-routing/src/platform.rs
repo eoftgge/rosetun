@@ -88,7 +88,14 @@ pub(super) fn lan_segment(
     {
         Ok(crate::lan::select(&windows::adapters()?, query))
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    {
+        Ok(crate::lan::select(
+            &linux::segment::adapters(query.tunnel_alias)?,
+            query,
+        ))
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
     {
         let _ = query;
         Ok(crate::lan::SegmentScan::default())

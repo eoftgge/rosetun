@@ -8,7 +8,7 @@ use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::Path;
 
-const SYS_NET: &str = "/sys/class/net";
+pub(super) const SYS_NET: &str = "/sys/class/net";
 
 /// A physical interface has a device behind it. Tunnels, bridges, veth pairs and
 /// other software interfaces do not, and what is behind them is no local network.
@@ -38,8 +38,57 @@ fn openable(interfaces: Vec<(String, IpAddr)>, sys_net: &Path) -> Vec<IpAddr> {
     addresses
 }
 
-/// The addresses of the interfaces that are up.
-fn interface_addresses() -> io::Result<Vec<(String, IpAddr)>> {
+/// An address of an interface that is up, with the length of its network.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct Found {
+    pub(super) name: String,
+    pub(super) address: IpAddr,
+    pub(super) length: u8,
+}
+
+/// The number of leading one bits of a netmask; `None` for a mask with
+/// holes, which no interface has.
+fn mask_length(mask: IpAddr) -> Option<u8> {
+    let (bits, width) = match mask {
+        IpAddr::V4(mask) => (u128::from(mask.to_bits()) << 96, 32),
+        IpAddr::V6(mask) => (mask.to_bits(), 128),
+    };
+    let ones = bits.leading_ones();
+    let rest = bits.checked_shl(ones).unwrap_or(0);
+    (rest == 0 && ones <= width)
+        .then(|| u8::try_from(ones).ok())
+        .flatten()
+}
+
+/// Reads one `sockaddr` of the list `getifaddrs` returned.
+///
+/// # Safety
+/// `address` is null or points to a `sockaddr` that stays valid for the call.
+unsafe fn socket_address(address: *const libc::sockaddr) -> Option<IpAddr> {
+    if address.is_null() {
+        return None;
+    }
+    // SAFETY: the caller promises a valid sockaddr; sa_family says which of the
+    // two layouts below it really has.
+    unsafe {
+        match i32::from((*address).sa_family) {
+            libc::AF_INET => {
+                let v4 = address.cast::<libc::sockaddr_in>();
+                Some(IpAddr::V4(Ipv4Addr::from(u32::from_be(
+                    (*v4).sin_addr.s_addr,
+                ))))
+            }
+            libc::AF_INET6 => {
+                let v6 = address.cast::<libc::sockaddr_in6>();
+                Some(IpAddr::V6(Ipv6Addr::from((*v6).sin6_addr.s6_addr)))
+            }
+            _ => None,
+        }
+    }
+}
+
+/// The addresses of the interfaces that are up, each with its network's length.
+pub(super) fn interfaces_up() -> io::Result<Vec<Found>> {
     let mut list: *mut libc::ifaddrs = std::ptr::null_mut();
     // SAFETY: getifaddrs writes a pointer to a list it allocates into `list`; on
     // success the list is ours until freeifaddrs below.
@@ -59,29 +108,34 @@ fn interface_addresses() -> io::Result<Vec<(String, IpAddr)>> {
         {
             continue;
         }
-        // SAFETY: ifa_addr is non-null and points to a sockaddr owned by the
-        // list; sa_family says which of the two layouts below it really has.
-        let address = unsafe {
-            match i32::from((*current.ifa_addr).sa_family) {
-                libc::AF_INET => {
-                    let v4 = current.ifa_addr.cast::<libc::sockaddr_in>();
-                    IpAddr::V4(Ipv4Addr::from(u32::from_be((*v4).sin_addr.s_addr)))
-                }
-                libc::AF_INET6 => {
-                    let v6 = current.ifa_addr.cast::<libc::sockaddr_in6>();
-                    IpAddr::V6(Ipv6Addr::from((*v6).sin6_addr.s6_addr))
-                }
-                _ => continue,
-            }
+        // SAFETY: ifa_addr is non-null and owned by the list.
+        let Some(address) = (unsafe { socket_address(current.ifa_addr) }) else {
+            continue;
         };
+        // SAFETY: ifa_netmask is null or a sockaddr owned by the list.
+        let mask = unsafe { socket_address(current.ifa_netmask) };
+        let full = if address.is_ipv4() { 32 } else { 128 };
+        let length = mask.and_then(mask_length).unwrap_or(full);
         // SAFETY: ifa_name is a NUL-terminated string owned by the list.
         let name = unsafe { CStr::from_ptr(current.ifa_name) };
-        found.push((name.to_string_lossy().into_owned(), address));
+        found.push(Found {
+            name: name.to_string_lossy().into_owned(),
+            address,
+            length,
+        });
     }
     // SAFETY: `list` came from getifaddrs and nothing refers to it any more:
     // the name was copied and the addresses are values.
     unsafe { libc::freeifaddrs(list) };
     Ok(found)
+}
+
+/// The addresses of the interfaces that are up.
+fn interface_addresses() -> io::Result<Vec<(String, IpAddr)>> {
+    Ok(interfaces_up()?
+        .into_iter()
+        .map(|found| (found.name, found.address))
+        .collect())
 }
 
 /// A failure opens nothing: the proxy stays on loopback, and the log says why.
@@ -165,5 +219,18 @@ mod tests {
     #[test]
     fn this_machines_interfaces_can_be_read() {
         assert!(interface_addresses().is_ok());
+    }
+
+    #[test]
+    fn a_netmask_is_its_prefix_length_and_a_mask_with_holes_is_none() {
+        let length = |text: &str| mask_length(text.parse().unwrap());
+        assert_eq!(length("255.255.255.0"), Some(24));
+        assert_eq!(length("255.255.0.0"), Some(16));
+        assert_eq!(length("255.255.255.255"), Some(32));
+        assert_eq!(length("0.0.0.0"), Some(0));
+        assert_eq!(length("ffff:ffff:ffff:ffff::"), Some(64));
+        assert_eq!(length("ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff"), Some(128));
+        assert_eq!(length("255.0.255.0"), None);
+        assert_eq!(length("::ffff"), None);
     }
 }
