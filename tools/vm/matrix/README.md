@@ -2259,3 +2259,87 @@ VPN and HTTPS fixtures, and all existing L3 protection scenarios. Offline reject
 tests cover the documented limits; they do not make these real cases qualified.
 This record qualifies infrastructure only. Linux L3 remains unmigrated, security
 invariants remain **UNVERIFIED**, release gate remains **false**.
+
+## Lab leak observer (stage 6b)
+
+Stage 6a shows that the expected exchanges happened. Stage 6b adds the opposite
+claim, "nothing else was sent", for the two-VM lab only. Rosetun, sing-box and
+`run-l3.sh` are untouched and L3 is still not migrated.
+
+The summary keeps the 6a `qualification` and adds `leak` beside it, with
+`leak_reason`, `categories`, `unexpected`, `canary`, `canary_flows`,
+`canary_other` and `window`:
+
+- `DETECTED`: at least one captured frame is `unexpected`. This holds whatever
+  the observer's health: a leak that was seen stays a leak.
+- `NONE`: no `unexpected` frame; the opening and closing markers each appear once
+  in both directions, the opening one before every exchange frame and the closing
+  one after; the whole capture parsed and stayed under its size limit; the
+  observer was ready and its health is clean (`error` false, `dropped` 0,
+  `finished` true); both markers were answered to the test machine; and the lab
+  machine's own clock puts the capture start before both markers and the capture
+  end after the closing one.
+- `UNVERIFIED`: everything else, with the first reason in `leak_reason`. It never
+  turns into `NONE`. An empty or header-only capture, a stopped observer, a downed
+  link before the closing marker, a truncated record, a fragment or any frame the
+  parser cannot read all land here, as does a capture that ends before the
+  closing marker.
+
+Every parsed frame has exactly one category, counted in `categories`:
+
+| Category | Meaning |
+| --- | --- |
+| `probe` | A frame of one of the eight expected exchanges: same family, protocol, addresses, hardware addresses, service port, and the run's marker or answer in the payload. A TCP segment without data counts only on a connection that carried a matching request or answer, so SYN, ACK, FIN, RST and repeats of that connection are probe frames and a bare connection to a service port is not. |
+| `marker` | The run's opening or closing marker, request or answer. |
+| `infrastructure` | Only the listed service traffic between the two machines, kept in one table (`INFRASTRUCTURE`) next to the addresses in `lab_protocol.py`: ARP requests and replies between `192.0.2.2` and `192.0.2.1`, and ICMPv6 neighbor solicitation and advertisement between the two lab addresses and their link-local addresses, router solicitation and advertisement, and multicast listener messages. |
+| `unexpected` | Any other frame whose sender or receiver hardware address is the test machine's, or whose sender or receiver address is the test machine's: ICMP, another port or target, another prefix, another EtherType, broadcast or multicast outside the table. |
+| `foreign` | A frame with neither the test machine's hardware address nor its addresses, such as the lab machine's own traffic. Counted; it never changes the verdict. |
+
+`unparsed` counts frames that could not be read. `unexpected` lists at most the
+first 16 as tuples of EtherType, family, protocol, addresses, ports and size, never
+payload; the addresses are documentation values. Frames before the opening marker
+and after the closing one are judged like any other, but without both markers in
+order the verdict cannot be `NONE`.
+
+The markers are two UDP datagrams to port 9100 of the IPv4 target, sent by the test
+machine before the first exchange and after the last, each carrying the run ID, a
+fresh nonce and `open` or `close`. The target answers and the test machine checks
+the answer. The lab observer records its own monotonic capture start, capture end
+and the times it served each marker in `health.json`. Times from the two machines
+are never compared: the test machine's send times appear in `window` for the
+journal only.
+
+Positive control:
+
+```sh
+python -m tools.vm.matrix lab-smoke --config /srv/lab.toml --canary
+```
+
+After the ordinary exchanges and before the closing marker the test machine sends
+one UDP datagram to port 9999 of the target, which nothing serves, and one TCP SYN
+to `203.0.113.9`, which nothing holds. It waits for no answer. Frames the lab's
+router returns for these two packets (ICMP errors that quote them) belong to the
+same flows. An ordinary run exits 0 only when `qualified` is true and `leak` is
+`NONE`. A `--canary` run exits 0 only when `qualified` is true, `leak` is
+`DETECTED`, `canary_flows` is exactly `tcp` and `udp`, and `canary_other` is 0.
+Any other combination exits 2.
+
+This changes the helper bytes. The owner must reinstall
+`linux/guest/lab-entry.py` and `matrix/lab_protocol.py` in both images and update
+the image descriptors before any real qualification; the 6a record above was made
+with the earlier bytes and does not cover this stage.
+
+Owner qualification on the prepared stand, after reinstalling the helper:
+
+1. Ordinary `lab-smoke`: exit 0, `leak` `NONE`, both markers found and ordered.
+   If an unlisted frame shows up (for example IPv6 router solicitation or
+   multicast listener traffic outside the table), the run is `DETECTED`; send the
+   summary instead of widening the table.
+2. `lab-smoke --canary`: exit 0, `leak` `DETECTED`, `canary_flows` `["tcp", "udp"]`.
+3. From the test machine's console during capture, send one extra packet by hand
+   (for example `ping -c1 203.0.113.2`): exit 2, `leak` `DETECTED`.
+4. Stop the observer process on the lab machine in the middle of the window: `leak`
+   `UNVERIFIED`, never `NONE`.
+5. `set_link test-wire off` through QMP before the closing marker: `UNVERIFIED`.
+6. Read the saved pcap in Wireshark: the frame counts per category match
+   `categories` in the summary.
