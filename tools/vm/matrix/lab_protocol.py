@@ -408,7 +408,9 @@ def classify(raw, expected, window):
     for index, frame in parsed:
         if is_probe(frame):
             counts['probe'] += 1
-            probe_at.append(index)
+            # The last segments of a closing connection may follow the closing marker.
+            if frame.proto != 6 or frame.payload or frame.flags & 0x02:
+                probe_at.append(index)
             continue
         hit = _marker_hit(frame, window)
         if hit:

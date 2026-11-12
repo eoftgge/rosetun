@@ -348,6 +348,43 @@ class LeakTests(unittest.TestCase):
                 self.assertTrue(result['leak_reason'].startswith('window-markers-'), result['leak_reason'])
                 self.assertFalse(result['window']['markers_found'] and result['window']['ordered'])
 
+    def closing_case(self, *after):
+        """Every exchange inside the window, then the frames that follow the closing marker."""
+        open_pair, close_pair = (marker_exchange(m) for m in self.window)
+        inside = [f for p in self.expected for f in exchange(p)]
+        return self.verdict(raw=capture(open_pair + inside + close_pair + list(after)))
+
+    def http_segment(self, flags, reply=False, port=40000):
+        http = self.expected[0]
+        source, target = (http['target'], http['source']) if reply else (http['source'], http['target'])
+        ports = (http['port'], port) if reply else (port, http['port'])
+        return ip_frame(source, target, 6, tcp(*ports, flags=flags), src=self.lab if reply else self.test,
+                        dst=self.test if reply else self.lab)
+
+    def test_the_last_segments_of_a_closing_connection_may_follow_the_closing_marker(self):
+        for name, frame in (('ack-of-target', self.http_segment(0x10, True)),
+                            ('fin-of-target', self.http_segment(0x11, True)),
+                            ('ack-of-test', self.http_segment(0x10)),
+                            ('reset', self.http_segment(0x04, True))):
+            with self.subTest(name=name):
+                result = self.closing_case(frame)
+                self.assertEqual(('NONE', 17), (result['leak'], result['categories']['probe']))
+                self.assertTrue(result['window']['ordered'])
+
+    def test_a_syn_or_exchange_data_after_the_closing_marker_is_out_of_order(self):
+        request = exchange(self.expected[0])[0]
+        for name, frame in (('syn', self.http_segment(0x02)), ('syn-ack', self.http_segment(0x12, True)),
+                            ('data', request)):
+            with self.subTest(name=name):
+                result = self.closing_case(frame)
+                self.assertEqual(('UNVERIFIED', 'window-markers-out-of-order'),
+                                 (result['leak'], result['leak_reason']))
+                self.assertEqual(17, result['categories']['probe'])
+
+    def test_an_empty_segment_on_a_port_no_exchange_used_after_the_closing_marker_is_a_leak(self):
+        result = self.closing_case(self.http_segment(0x10, port=40999))
+        self.assertEqual(('DETECTED', 1), (result['leak'], result['categories']['unexpected']))
+
     def test_a_marker_of_another_run_is_unexpected(self):
         stale = wire.markers('b' * 32, iter(f'{i:024x}' for i in range(2)).__next__)
         result = self.verdict(marker_exchange(stale[0]))
