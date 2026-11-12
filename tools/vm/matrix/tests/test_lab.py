@@ -137,6 +137,10 @@ def healthy(window, **changes):
                 markers=rows) | changes
 
 
+def wire_names():
+    return tuple(row[0] for row in wire.ALLOWANCES)
+
+
 class EvidenceTests(unittest.TestCase):
     def setUp(self):
         self.expected = wire.probes('a' * 32, iter(f'{i:024x}' for i in range(8)).__next__)
@@ -442,6 +446,76 @@ class LeakTests(unittest.TestCase):
     def test_an_empty_segment_on_a_port_no_exchange_used_after_the_closing_marker_is_a_leak(self):
         result = self.closing_case(self.http_segment(0x10, port=40999))
         self.assertEqual(('DETECTED', 1), (result['leak'], result['categories']['unexpected']))
+
+    def link_events(self):
+        zero = '00:00:00:00:00:00'
+        return {
+            'arp-announcement': arp(1, wire.CLIENTS[4], wire.CLIENTS[4], src=self.test, dst=wire.BROADCAST,
+                                    sha=self.test, tha=zero),
+            'arp-probe': arp(1, '0.0.0.0', wire.CLIENTS[4], src=self.test, dst=wire.BROADCAST, sha=self.test,
+                             tha=zero),
+            'ipv6-dad': neighbor(135, '::', 'ff02::1:ff00:2', wire.CLIENTS[6], src=self.test, dst='33:33:ff:00:00:02'),
+            'ipv6-unspecified-rs': ip_frame('::', 'ff02::2', 58, icmp(133, bytes(4)), dst='33:33:00:00:00:02')}
+
+    def test_a_link_event_is_a_leak_unless_its_allowance_is_declared(self):
+        for name, frame in self.link_events().items():
+            with self.subTest(name=name):
+                plain = self.verdict([frame])
+                self.assertEqual(('DETECTED', 1), (plain['leak'], plain['categories']['unexpected']))
+                self.assertNotIn('allowed', plain['categories'])
+                allowed = self.verdict([frame], allowances=[name])
+                self.assertEqual(('NONE', 0), (allowed['leak'], allowed['categories']['unexpected']))
+                self.assertEqual({name: 1}, allowed['categories']['allowed'])
+                self.assertEqual('DETECTED', self.verdict([frame], allowances=set(wire_names()) - {name})['leak'])
+
+    def test_every_allowance_together_counts_each_name_and_the_lab_machine_may_announce_too(self):
+        lab_announcement = arp(1, wire.GATEWAYS[4], wire.GATEWAYS[4], src=self.lab, dst=wire.BROADCAST, sha=self.lab,
+                               tha='00:00:00:00:00:00')
+        extra = list(self.link_events().values()) + [lab_announcement]
+        result = self.verdict(extra, allowances=wire_names())
+        self.assertEqual(dict(zip(sorted(wire_names()), (2, 1, 1, 1))), result['categories']['allowed'])
+        self.assertEqual(('NONE', 0), (result['leak'], result['categories']['unexpected']))
+
+    def test_a_frame_that_only_looks_like_an_allowance_stays_unexpected(self):
+        zero, stranger = '00:00:00:00:00:00', '00:00:5e:00:53:70'
+        temporary = '2001:db8:6a:1::abcd'
+        cases = {
+            'announcement-of-another-address': arp(1, '192.0.2.99', '192.0.2.99', src=self.test, dst=wire.BROADCAST,
+                                                   sha=self.test, tha=zero),
+            'announcement-of-the-peer-address': arp(1, wire.GATEWAYS[4], wire.GATEWAYS[4], src=self.test,
+                                                    dst=wire.BROADCAST, sha=self.test, tha=zero),
+            'announcement-to-one-machine': arp(1, wire.CLIENTS[4], wire.CLIENTS[4], src=self.test, dst=self.lab,
+                                               sha=self.test, tha=zero),
+            'announcement-from-a-stranger': arp(1, wire.CLIENTS[4], wire.CLIENTS[4], src=stranger, dst=wire.BROADCAST,
+                                                sha=stranger, tha=zero),
+            'probe-for-another-address': arp(1, '0.0.0.0', '192.0.2.99', src=self.test, dst=wire.BROADCAST,
+                                             sha=self.test, tha=zero),
+            'dad-for-a-temporary-address': neighbor(135, '::', 'ff02::1:ff00:abcd', temporary, src=self.test,
+                                                    dst='33:33:ff:00:ab:cd'),
+            'dad-for-a-foreign-address': neighbor(135, '::', 'ff02::1:ff00:9', '2001:db8:6a:3::9', src=self.test,
+                                                  dst='33:33:ff:00:00:09'),
+            'dad-to-the-wrong-group': neighbor(135, '::', 'ff02::1:ff00:3', wire.CLIENTS[6], src=self.test,
+                                               dst='33:33:ff:00:00:03'),
+            'solicitation-from-a-temporary-address': neighbor(135, temporary, 'ff02::1:ff00:abcd', temporary,
+                                                              src=self.test, dst='33:33:ff:00:ab:cd'),
+            'router-solicitation-to-all-nodes': ip_frame('::', 'ff02::1', 58, icmp(133, bytes(4)),
+                                                         dst='33:33:00:00:00:01'),
+            'router-solicitation-from-a-temporary-address': ip_frame(temporary, 'ff02::2', 58, icmp(133, bytes(4)),
+                                                                     dst='33:33:00:00:00:02'),
+        }
+        for name, frame in cases.items():
+            with self.subTest(name=name):
+                result = self.verdict([frame], allowances=wire_names())
+                self.assertEqual(('DETECTED', 1), (result['leak'], result['categories']['unexpected']))
+                self.assertEqual(0, sum(result['categories']['allowed'].values()))
+
+    def test_an_unknown_allowance_is_an_error_before_anything_is_parsed(self):
+        for names in (['arp-announcement', 'made-up'], ['ARP-PROBE'], [None]):
+            with self.subTest(names=names):
+                with self.assertRaises(ValueError):
+                    self.verdict(raw=b'', allowances=names)
+                with self.assertRaises(ValueError):
+                    wire.classify(self.raw_capture(), self.expected, self.window, names)
 
     def test_a_marker_of_another_run_is_unexpected(self):
         stale = wire.markers('b' * 32, iter(f'{i:024x}' for i in range(2)).__next__)

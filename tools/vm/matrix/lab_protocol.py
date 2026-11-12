@@ -33,6 +33,15 @@ INFRASTRUCTURE = (
     ('multicast-listener-report-v2', 'icmpv6', 143, 'link-multicast'),
 )
 
+# Link events a scenario that switches the network may declare legitimate. The lab
+# smoke declares none. Rows are (name, kind, what the frame must be).
+ALLOWANCES = (
+    ('arp-announcement', 'arp', 'broadcast naming its own address as sender and target'),
+    ('arp-probe', 'arp', 'broadcast from 0.0.0.0 asking for its own address'),
+    ('ipv6-dad', 'icmpv6', 'neighbor solicitation from :: to the solicited-node group of its own address'),
+    ('ipv6-unspecified-rs', 'icmpv6', 'router solicitation from :: to all routers'),
+)
+
 BROADCAST = 'ff:ff:ff:ff:ff:ff'
 PCAP_HEADER = struct.pack('<IHHIIII', 0xa1b2c3d4, 2, 4, 0, 0, 2048, 1)
 UNEXPECTED_LIMIT = 16
@@ -352,6 +361,32 @@ def _infrastructure(frame):
     return False
 
 
+def _allowance(frame, names):
+    """Name of the declared allowance a frame matches, else None."""
+    sender = next((role for role, mac in MACS.items() if mac == frame.src_mac), None)
+    if sender is None:
+        return None
+    own4, own6 = ENDPOINTS[sender]
+    if frame.arp is not None:
+        op, sha, spa, tha, tpa = frame.arp
+        if sha != frame.src_mac or frame.dst_mac != BROADCAST:
+            return None
+        if op in (1, 2) and spa == tpa == own4 and tha in ('00:00:00:00:00:00', sha):
+            return 'arp-announcement' if 'arp-announcement' in names else None
+        if op == 1 and spa == '0.0.0.0' and tpa == own4 and tha == '00:00:00:00:00:00':
+            return 'arp-probe' if 'arp-probe' in names else None
+    elif frame.family == 6 and frame.icmp is not None and frame.src == '::':
+        if frame.icmp[0] == 133 and frame.dst == 'ff02::2' and frame.dst_mac == '33:33:00:00:00:02':
+            return 'ipv6-unspecified-rs' if 'ipv6-unspecified-rs' in names else None
+        if frame.icmp[0] == 135 and len(frame.payload) >= 16:
+            neighbor = ipaddress.ip_address(frame.payload[:16])
+            group = ipaddress.ip_address(int(SOLICITED_NODE.network_address) | int(neighbor) & 0xffffff)
+            if ((str(neighbor) == own6 or neighbor in LINK_LOCAL) and frame.dst == str(group)
+                    and frame.dst_mac == '33:33:' + group.packed[-4:].hex(':')):
+                return 'ipv6-dad' if 'ipv6-dad' in names else None
+    return None
+
+
 def _involves_test(frame):
     addresses = {frame.src, frame.dst}
     if frame.arp is not None:
@@ -393,12 +428,23 @@ def _describe(frame):
     return ('0x%04x' % frame.ethertype, frame.family, protocol, addresses, ports, frame.size)
 
 
-def classify(raw, expected, window):
+def _declared(allowances):
+    names = frozenset(allowances)
+    if not names <= {row[0] for row in ALLOWANCES}:
+        raise ValueError('unknown-allowance')
+    return names
+
+
+def classify(raw, expected, window, allowances=()):
     """Put every captured frame into exactly one category and check the window markers.
+
+    `allowances` names link events (see ALLOWANCES) that count as `allowed` instead of
+    `unexpected`; the default is none, and an unknown name is an error before any parsing.
 
     Frames that cannot be parsed are counted apart and make the result unverified. A
     truncated record ends the walk, but frames already seen keep their category.
     """
+    names = _declared(allowances)
     if [m['word'] for m in window] != ['open', 'close']:
         raise ValueError('invalid-window')
     parsed, unparsed, problem = [], [], None
@@ -435,6 +481,8 @@ def classify(raw, expected, window):
         return False
 
     counts = dict(probe=0, marker=0, infrastructure=0, unexpected=0, foreign=0, unparsed=len(unparsed))
+    if names:
+        counts['allowed'] = dict.fromkeys(sorted(names), 0)
     unexpected, canary = [], dict(udp=0, tcp=0, other=0)
     probe_at, seen = [], {(m['word'], d): [] for m in window for d in ('request', 'response')}
     def count_unexpected(frame):
@@ -456,6 +504,8 @@ def classify(raw, expected, window):
             seen[hit].append(index)
         elif _infrastructure(frame):
             counts['infrastructure'] += 1
+        elif allowed := _allowance(frame, names):
+            counts['allowed'][allowed] += 1
         elif _involves_test(frame):
             count_unexpected(frame)
         else:
@@ -512,9 +562,9 @@ def _health_reasons(health, ready, window, marker_replies):
     return reasons
 
 
-def leak_verdict(raw, expected, window, health, ready, marker_replies):
+def leak_verdict(raw, expected, window, health, ready, marker_replies, allowances=()):
     """DETECTED, NONE or UNVERIFIED. Only a complete, healthy and bracketed capture says NONE."""
-    result = classify(raw, expected, window)
+    result = classify(raw, expected, window, allowances)
     reasons = result.pop('unverified') + _health_reasons(health, ready, window, marker_replies)
     canary = result.pop('canary')
     if result['categories']['unexpected']:
