@@ -544,7 +544,8 @@ class OrchestrationTests(unittest.TestCase):
                     if fault == 'target-unavailable':
                         raise ValueError('target-unavailable')
                     return dict(replies=[{**p, 'response': wire.answer(p).hex()} for p in expected],
-                                marker_replies=[{**m, 'response': wire.marker_answer(m).hex()} for m in window],
+                                marker_replies=[] if fault == 'marker-reply-lost' else
+                                [{**m, 'response': wire.marker_answer(m).hex()} for m in window],
                                 marker_sent=dict(open=1.0, close=2.0))
                 return dict(finished=True)
             def read(self, name, limit):
@@ -558,11 +559,18 @@ class OrchestrationTests(unittest.TestCase):
                         stray = [ip_frame(wire.CLIENTS[4], wire.TARGETS[4], 1, icmp(8))]
                         extra = {'blind': [], 'udp-only': canary_frames(tcp_flow=False),
                                  'stray': canary_frames() + stray}.get(fault, canary_frames())
+                        opened, closed = (marker_exchange(m) for m in window)
+                        body = [f for p in expected for f in exchange(p)] + canary_frames()
+                        if fault == 'lost-marker':
+                            return capture(opened + body)
+                        if fault == 'swapped-markers':
+                            return capture(closed + body + opened)
                         return pcap(expected, window, extra)
                     return pcap(expected) if fault == 'no-markers' else pcap(expected, window)
                 if name == 'targets.json':
                     return json.dumps([{**p, 'response': wire.answer(p).hex()} for p in expected]).encode()
-                return json.dumps(healthy(window, finished=fault != 'incomplete-evidence')).encode()
+                return json.dumps(healthy(window, finished=fault != 'incomplete-evidence',
+                                          **(dict(markers=[]) if fault == 'unrecorded-window' else {}))).encode()
         def pair(*args):
             result = lab.LabPair(*args, pair_factory=lambda *args: (Endpoint(), Endpoint()))
             if fault == 'channel-close':
@@ -623,6 +631,29 @@ class OrchestrationTests(unittest.TestCase):
             with self.subTest(fault=fault):
                 self.assertEqual(2, self.scenario(fault, canary=True)['exit_code'])
         self.assertEqual('NONE', self.scenario('blind', canary=True)['leak'])
+
+    def test_a_canary_run_without_a_proven_window_fails_even_when_both_flows_are_seen(self):
+        for fault, reason in (('lost-marker', 'window-markers-missing-or-repeated'),
+                              ('swapped-markers', 'window-markers-out-of-order'),
+                              ('marker-reply-lost', 'marker-reply-mismatch'),
+                              ('unrecorded-window', 'capture-window-unrecorded')):
+            with self.subTest(fault=fault):
+                result = self.scenario(fault, canary=True)
+                self.assertEqual(['tcp', 'udp'], result['canary_flows'])
+                self.assertEqual('DETECTED', result['leak'])
+                self.assertIn(reason, result['observer_reasons'])
+                self.assertEqual(2, result['exit_code'])
+        self.assertEqual([], self.scenario(canary=True)['observer_reasons'])
+
+    def test_the_canary_condition_names_each_part_of_the_proven_window(self):
+        clean = dict(canary=True, leak='DETECTED', canary_flows=['tcp', 'udp'], canary_other=0,
+                     window=dict(markers_found=True, ordered=True), observer_reasons=[])
+        self.assertTrue(lab.expected_leak(clean))
+        for changes in (dict(window=dict(markers_found=False, ordered=False)),
+                        dict(window=dict(markers_found=True, ordered=False)),
+                        dict(observer_reasons=['observer-health'])):
+            with self.subTest(changes=changes):
+                self.assertFalse(lab.expected_leak({**clean, **changes}))
 
     def test_an_ordinary_run_never_asks_for_the_leak_and_a_leak_fails_it(self):
         result = self.scenario()

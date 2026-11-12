@@ -215,10 +215,16 @@ class Adapters:
 
 
 def expected_leak(result):
-    """An ordinary run must see no leak; a canary run must see exactly its own two flows."""
+    """An ordinary run must see no leak; a canary run must see exactly its own two flows.
+
+    The canary also needs the proven window an ordinary run needs for NONE: a seen leak
+    outside a bracketed, healthy capture proves nothing about the observer.
+    """
     if result['canary']:
+        window = result['window']
         return (result['leak'] == 'DETECTED' and result['canary_flows'] == ['tcp', 'udp']
-                and result['canary_other'] == 0)
+                and result['canary_other'] == 0 and window['markers_found'] is True
+                and window['ordered'] is True and result['observer_reasons'] == [])
     return result['leak'] == 'NONE'
 
 
@@ -233,7 +239,7 @@ def lab_smoke(config, *, canary=False, adapters=None, clock=time.monotonic, slee
                   qualification=dict(qualified=False, ipv4='UNVERIFIED', ipv6='UNVERIFIED',
                                      services='UNVERIFIED', observer='UNVERIFIED', evidence='UNVERIFIED'),
                   probes=expected, markers=window, completion={}, channel_closed=False, completed=False,
-                  leak='UNVERIFIED', leak_reason='not-evaluated', categories={}, unexpected=[], canary_flows=[], canary_other=0,
+                  leak='UNVERIFIED', leak_reason='not-evaluated', observer_reasons=['not-evaluated'], categories={}, unexpected=[], canary_flows=[], canary_other=0,
                   window=dict(markers_found=False, ordered=False), canary=canary is True,
                   errors=[], security_invariants='UNVERIFIED', release_gate=False, exit_code=2)
     lease, pair, runs, vms = None, None, {}, {}

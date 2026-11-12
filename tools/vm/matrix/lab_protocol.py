@@ -486,6 +486,6 @@ def leak_verdict(raw, expected, window, health, ready, marker_replies):
         leak, reason = 'UNVERIFIED', reasons[0]
     else:
         leak, reason = 'NONE', 'clean'
-    return dict(leak=leak, leak_reason=reason, categories=result['categories'], unexpected=result['unexpected'],
-                canary_flows=sorted(name for name in ('udp', 'tcp') if canary[name]),
+    return dict(leak=leak, leak_reason=reason, observer_reasons=reasons, categories=result['categories'],
+                unexpected=result['unexpected'], canary_flows=sorted(name for name in ('udp', 'tcp') if canary[name]),
                 canary_other=canary['other'], window=result['window'])
