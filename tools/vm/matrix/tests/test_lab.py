@@ -285,7 +285,8 @@ class LeakTests(unittest.TestCase):
 
     def test_unparsable_frames_are_counted_and_never_become_no_leak(self):
         whole = ip_frame(wire.CLIENTS[4], wire.TARGETS[4], 17, udp(40006, 9000, b'payload'))
-        fragment = ip_frame(wire.CLIENTS[4], wire.TARGETS[4], 17, udp(40006, 9000, b'payload'), fragment=0x2000)
+        fragment = ip_frame('198.51.100.1', '198.51.100.2', 17, udp(40006, 9000, b'payload'), fragment=0x2000,
+                            src='00:00:5e:00:53:70', dst='00:00:5e:00:53:71')
         short_arp = ethernet(self.test, wire.BROADCAST, ETHER_ARP, bytes(20))
         for name, frame, reason in (('cut', whole[:-10], 'unparsed-frame:fragmented-or-invalid-ipv4'),
                                     ('fragment', fragment, 'unparsed-frame:fragmented-or-invalid-ipv4'),
@@ -295,6 +296,63 @@ class LeakTests(unittest.TestCase):
                 result = self.verdict([frame])
                 self.assertEqual(('UNVERIFIED', reason, 1), (result['leak'], result['leak_reason'],
                                                              result['categories']['unparsed']))
+
+    def fragments(self, **kwargs):
+        data = udp(40006, 9000, b'payload')
+        header = bytes([17, 0, 0, 1, 0, 0, 0, 7])
+        return {'ipv4-first': ip_frame(wire.CLIENTS[4], wire.TARGETS[4], 17, data, fragment=0x2000, **kwargs),
+                'ipv4-later': ip_frame(wire.CLIENTS[4], wire.TARGETS[4], 17, data, fragment=0x0010, **kwargs),
+                'ipv6': ip_frame(wire.CLIENTS[6], wire.TARGETS[6], 17, data, first=44, extension=header, **kwargs),
+                'ipv6-behind-options': ip_frame(wire.CLIENTS[6], wire.TARGETS[6], 17, data, first=60,
+                                                extension=bytes([44, 0, 1, 4, 0, 0]) + bytes(2) + header, **kwargs)}
+
+    def test_a_fragment_to_or_from_the_test_machine_is_a_leak_described_without_payload(self):
+        for name, frame in self.fragments().items():
+            with self.subTest(name=name):
+                result = self.verdict([frame])
+                self.assertEqual(('DETECTED', 1, 0, 1), (result['leak'], result['categories']['unexpected'],
+                                                          result['categories']['unparsed'], result['canary_other']))
+                self.assertEqual('fragment', result['unexpected'][0][2])
+                self.assertEqual(len(frame), result['unexpected'][0][5])
+        addresses = ('0x0800', 4, 'fragment', (wire.CLIENTS[4], wire.TARGETS[4]), None, 14 + 20 + 15)
+        self.assertEqual([addresses], self.verdict([self.fragments()['ipv4-first']])['unexpected'])
+
+    def test_a_fragment_is_matched_by_hardware_address_or_by_ip_address(self):
+        stranger, other = '00:00:5e:00:53:70', '00:00:5e:00:53:71'
+        data = udp(40006, 9000, b'payload')
+        to_test = ip_frame(wire.TARGETS[4], wire.CLIENTS[4], 17, data, fragment=0x2000, src=stranger, dst=other)
+        by_mac = ip_frame('198.51.100.1', '198.51.100.2', 17, data, fragment=0x2000, src=stranger, dst=self.test)
+        by_reply = ip_frame(wire.TARGETS[6], wire.CLIENTS[6], 17, data, first=44, src=self.lab, dst=self.test,
+                            extension=bytes([17, 0, 0, 1, 0, 0, 0, 7]))
+        for name, frame in (('to-address', to_test), ('by-mac', by_mac), ('reply', by_reply)):
+            with self.subTest(name=name):
+                result = self.verdict([frame])
+                self.assertEqual(('DETECTED', 1), (result['leak'], result['categories']['unexpected']))
+
+    def test_a_fragment_between_other_machines_or_with_unreadable_headers_is_unverified(self):
+        stranger, other = '00:00:5e:00:53:70', '00:00:5e:00:53:71'
+        data = udp(40006, 9000, b'payload')
+        foreign4 = ip_frame('198.51.100.1', '198.51.100.2', 17, data, fragment=0x2000, src=stranger, dst=other)
+        foreign6 = ip_frame('2001:db8:6a:3::1', '2001:db8:6a:3::2', 17, data, first=44, src=stranger, dst=other,
+                            extension=bytes([17, 0, 0, 1, 0, 0, 0, 7]))
+        mine = self.fragments()
+        cases = (('foreign4', foreign4, 'unparsed-frame:fragmented-or-invalid-ipv4'),
+                 ('foreign6', foreign6, 'unparsed-frame:fragmented-ipv6'),
+                 ('cut-ipv4-header', mine['ipv4-first'][:14 + 12], 'unparsed-frame:truncated-ipv4'),
+                 ('cut-ipv6-header', mine['ipv6'][:14 + 30], 'unparsed-frame:truncated-ipv6'),
+                 ('cut-before-fragment-header', mine['ipv6-behind-options'][:14 + 40 + 4], 'unparsed-frame:invalid-ipv6'))
+        for name, frame, reason in cases:
+            with self.subTest(name=name):
+                result = self.verdict([frame])
+                self.assertEqual(('UNVERIFIED', reason, 1, 0), (result['leak'], result['leak_reason'],
+                                                                result['categories']['unparsed'],
+                                                                result['categories']['unexpected']))
+
+    def test_a_fragment_cut_after_its_ip_header_is_still_a_leak(self):
+        for name in ('ipv4-first', 'ipv6'):
+            with self.subTest(name=name):
+                frame = self.fragments()[name]
+                self.assertEqual('DETECTED', self.verdict([frame[:14 + 48]])['leak'])
 
     def test_empty_and_header_only_captures_and_broken_records_are_unverified(self):
         for raw, reason in ((b'', 'invalid-pcap:invalid-or-overlimit-pcap'),

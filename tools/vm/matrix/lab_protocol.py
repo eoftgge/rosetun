@@ -119,6 +119,7 @@ class Frame(NamedTuple):
     arp: tuple | None
     icmp: tuple | None
     inner: tuple | None
+    fragment: bool = False
 
 
 def _inner(quoted):
@@ -196,6 +197,31 @@ def parse(packet):
         fields.update(icmp=(data[0], data[1]), payload=data[8:],
                       inner=_inner(data[8:]) if family == 4 and data[0] in ICMP_ERRORS else None)
     return Frame(**fields)
+
+
+def _fragment(packet):
+    """A Frame for an IP fragment whose Ethernet and IP headers can be read, else None.
+
+    The payload of a fragment is never looked at. Fragments of the lab's exchanges do
+    not exist, so one that involves the test machine is judged from these headers alone.
+    """
+    ethertype, ip = int.from_bytes(packet[12:14], 'big'), packet[14:]
+    if ethertype == 0x0800 and len(ip) >= 20 and ip[0] >> 4 == 4 and (ip[0] & 15) >= 5 and (ip[6] & 0x3f or ip[7]):
+        family, source, target = 4, ip[12:16], ip[16:20]
+    elif ethertype == 0x86dd and len(ip) >= 40 and ip[0] >> 4 == 6:
+        proto, start = ip[6], 40
+        while proto in (0, 43, 60):
+            if start + 8 > len(ip):
+                return None
+            proto, start = ip[start], start + (ip[start + 1] + 1) * 8
+        if proto != 44:
+            return None
+        family, source, target = 6, ip[8:24], ip[24:40]
+    else:
+        return None
+    return Frame(size=len(packet), dst_mac=packet[0:6].hex(':'), src_mac=packet[6:12].hex(':'), ethertype=ethertype,
+                 family=family, proto=None, src=str(ipaddress.ip_address(source)), dst=str(ipaddress.ip_address(target)),
+                 sport=None, dport=None, flags=None, payload=b'', arp=None, icmp=None, inner=None, fragment=True)
 
 
 def records(raw):
@@ -357,6 +383,8 @@ def _describe(frame):
     """Header facts of a frame, never its payload."""
     if frame.arp is not None:
         protocol, addresses = 'arp', (frame.arp[2], frame.arp[4])
+    elif frame.fragment:
+        protocol, addresses = 'fragment', (frame.src, frame.dst)
     elif frame.family is not None:
         protocol, addresses = PROTOCOL_NAMES.get(frame.proto, 'ip-%d' % frame.proto), (frame.src, frame.dst)
     else:
@@ -376,6 +404,10 @@ def classify(raw, expected, window):
     parsed, unparsed, problem = [], [], None
     try:
         for index, packet in enumerate(records(raw)):
+            fragment = _fragment(packet)
+            if fragment is not None and _involves_test(fragment):
+                parsed.append((index, fragment))
+                continue
             try:
                 parsed.append((index, parse(packet)))
             except ValueError as error:
@@ -405,24 +437,27 @@ def classify(raw, expected, window):
     counts = dict(probe=0, marker=0, infrastructure=0, unexpected=0, foreign=0, unparsed=len(unparsed))
     unexpected, canary = [], dict(udp=0, tcp=0, other=0)
     probe_at, seen = [], {(m['word'], d): [] for m in window for d in ('request', 'response')}
+    def count_unexpected(frame):
+        counts['unexpected'] += 1
+        if len(unexpected) < UNEXPECTED_LIMIT:
+            unexpected.append(_describe(frame))
+        canary[_canary_flow(frame) or 'other'] += 1
+
     for index, frame in parsed:
-        if is_probe(frame):
+        if frame.fragment:
+            count_unexpected(frame)
+        elif is_probe(frame):
             counts['probe'] += 1
             # The last segments of a closing connection may follow the closing marker.
             if frame.proto != 6 or frame.payload or frame.flags & 0x02:
                 probe_at.append(index)
-            continue
-        hit = _marker_hit(frame, window)
-        if hit:
+        elif hit := _marker_hit(frame, window):
             counts['marker'] += 1
             seen[hit].append(index)
         elif _infrastructure(frame):
             counts['infrastructure'] += 1
         elif _involves_test(frame):
-            counts['unexpected'] += 1
-            if len(unexpected) < UNEXPECTED_LIMIT:
-                unexpected.append(_describe(frame))
-            canary[_canary_flow(frame) or 'other'] += 1
+            count_unexpected(frame)
         else:
             counts['foreign'] += 1
     found = all(len(indexes) == 1 for indexes in seen.values())
