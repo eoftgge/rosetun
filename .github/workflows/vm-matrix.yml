@@ -1,0 +1,40 @@
+name: VM matrix tests
+
+on:
+  push:
+    branches: [master, dev]
+    paths:
+      - 'tools/vm/**'
+      - 'packaging/linux/**'
+      - '.github/workflows/vm-matrix.yml'
+  pull_request:
+    paths:
+      - 'tools/vm/**'
+      - 'packaging/linux/**'
+      - '.github/workflows/vm-matrix.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vm-matrix-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  offline:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.11'
+      - name: Run offline VM matrix tests
+        # qemu.qmp is not installed here: tests that need it are skipped.
+        run: python -m unittest discover -s tools/vm/matrix/tests -t .
