@@ -2267,8 +2267,9 @@ claim, "nothing else was sent", for the two-VM lab only. Rosetun, sing-box and
 `run-l3.sh` are untouched and L3 is still not migrated.
 
 The summary keeps the 6a `qualification` and adds `leak` beside it, with
-`leak_reason`, `categories`, `unexpected`, `canary`, `canary_flows`,
-`canary_other` and `window`:
+`leak_reason`, `observer_reasons` (every reason that would stop `NONE`, not only the
+first), `categories`, `unexpected`, `canary`, `canary_flows`, `canary_other` and
+`window`:
 
 - `DETECTED`: at least one captured frame is `unexpected`. This holds whatever
   the observer's health: a leak that was seen stays a leak.
@@ -2281,18 +2282,18 @@ The summary keeps the 6a `qualification` and adds `leak` beside it, with
   end after the closing one.
 - `UNVERIFIED`: everything else, with the first reason in `leak_reason`. It never
   turns into `NONE`. An empty or header-only capture, a stopped observer, a downed
-  link before the closing marker, a truncated record, a fragment or any frame the
-  parser cannot read all land here, as does a capture that ends before the
+  link before the closing marker, a truncated record, a fragment between other
+  machines or any frame the parser cannot read all land here, as does a capture that ends before the
   closing marker.
 
 Every parsed frame has exactly one category, counted in `categories`:
 
 | Category | Meaning |
 | --- | --- |
-| `probe` | A frame of one of the eight expected exchanges: same family, protocol, addresses, hardware addresses, service port, and the run's marker or answer in the payload. A TCP segment without data counts only on a connection that carried a matching request or answer, so SYN, ACK, FIN, RST and repeats of that connection are probe frames and a bare connection to a service port is not. |
+| `probe` | A frame of one of the eight expected exchanges: same family, protocol, addresses, hardware addresses, service port, and the run's marker or answer in the payload. A TCP segment without data counts only on a connection that carried a matching request or answer, so SYN, ACK, FIN, RST and repeats of that connection are probe frames and a bare connection to a service port is not. All probe frames with data and every SYN must lie between the opening answer and the closing request; the data-free, SYN-free segments of a connection that carried data (the final ACK or FIN of the close) may also come after the closing request, wherever in the capture, and do not affect the order. |
 | `marker` | The run's opening or closing marker, request or answer. |
 | `infrastructure` | Only the listed service traffic between the two machines, kept in one table (`INFRASTRUCTURE`) next to the addresses in `lab_protocol.py`: ARP requests and replies between `192.0.2.2` and `192.0.2.1`, and ICMPv6 neighbor solicitation and advertisement between the two lab addresses and their link-local addresses, router solicitation and advertisement, and multicast listener messages. |
-| `unexpected` | Any other frame whose sender or receiver hardware address is the test machine's, or whose sender or receiver address is the test machine's: ICMP, another port or target, another prefix, another EtherType, broadcast or multicast outside the table. |
+| `unexpected` | Any other frame whose sender or receiver hardware address is the test machine's, or whose sender or receiver address is the test machine's: ICMP, another port or target, another prefix, another EtherType, broadcast or multicast outside the table, and any IPv4 or IPv6 fragment sent by or addressed to the test machine (the lab exchanges are never fragmented; the description is `fragment`, judged from the Ethernet and IP headers only). A fragment whose IP header cannot be read, or one between other machines, stays `unparsed`. |
 | `foreign` | A frame with neither the test machine's hardware address nor its addresses, such as the lab machine's own traffic. Counted; it never changes the verdict. |
 
 `unparsed` counts frames that could not be read. `unexpected` lists at most the
@@ -2321,8 +2322,23 @@ to `203.0.113.9`, which nothing holds. It waits for no answer. Frames the lab's
 router returns for these two packets (ICMP errors that quote them) belong to the
 same flows. An ordinary run exits 0 only when `qualified` is true and `leak` is
 `NONE`. A `--canary` run exits 0 only when `qualified` is true, `leak` is
-`DETECTED`, `canary_flows` is exactly `tcp` and `udp`, and `canary_other` is 0.
-Any other combination exits 2.
+`DETECTED`, `canary_flows` is exactly `tcp` and `udp`, `canary_other` is 0, and the
+window is proven as for `NONE`: both markers found and ordered and
+`observer_reasons` empty. A seen canary in a capture that could not have said `NONE`
+proves nothing about the observer. Any other combination exits 2.
+
+Allowances are for the L3 scenarios that switch the network, not for `lab-smoke`,
+which declares none and whose command line has no option for them. Such a scenario
+passes a set of names to `classify` or `leak_verdict`; a frame matching a declared
+name is counted under `categories.allowed[name]` instead of `unexpected`, and the
+key `allowed` exists only when names were declared. The fixed table `ALLOWANCES`
+next to `INFRASTRUCTURE` holds `arp-announcement` (broadcast naming the sender's own
+address as sender and target), `arp-probe` (broadcast from `0.0.0.0` for the
+sender's own address), `ipv6-dad` (neighbor solicitation from `::` to the
+solicited-node group of the sender's own or a link-local address) and
+`ipv6-unspecified-rs` (router solicitation from `::` to `ff02::2`). The sender is
+the test or the lab machine. An unknown name is a `ValueError` before parsing.
+Temporary and other IPv6 addresses are not covered: that traffic stays `unexpected`.
 
 This changes the helper bytes. The owner must reinstall
 `linux/guest/lab-entry.py` and `matrix/lab_protocol.py` in both images and update
