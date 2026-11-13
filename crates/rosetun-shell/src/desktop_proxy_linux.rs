@@ -359,7 +359,15 @@ impl<G: Gsettings> Backend for Gnome<G> {
         for ((schema, key), value) in GNOME_KEYS.iter().zip(&values).rev() {
             self.runner.set(schema, key, value)?;
         }
-        Ok(())
+        // Without a running dconf service `gsettings set` succeeds into a store that
+        // dies with the command; reading back is the only way to tell.
+        if self.holds_ours(port)? {
+            Ok(())
+        } else {
+            Err(io::Error::other(
+                "the desktop did not keep the proxy settings",
+            ))
+        }
     }
 
     /// The mode first, for the same reason.
@@ -643,6 +651,125 @@ SendLanguageSettings=false
             runner.order.lock().unwrap().first().unwrap(),
             "org.gnome.system.proxy mode"
         );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_new_start_restores_gnome_settings_after_a_crash() {
+        let root = scratch("gnome-crash");
+        let runner = FakeGsettings::default();
+        runner.set(GNOME_SCHEMA, "mode", "'auto'").unwrap();
+        let record = root.join("record.json");
+        DesktopProxy::with_backend(
+            Box::new(Gnome {
+                runner: runner.clone(),
+            }),
+            record.clone(),
+        )
+        .set(10808)
+        .unwrap();
+        // The process is gone; a new one finds the record and nothing else.
+        let again = DesktopProxy::with_backend(
+            Box::new(Gnome {
+                runner: runner.clone(),
+            }),
+            record.clone(),
+        );
+        assert_eq!(again.restore().unwrap(), ProxyRestore::Restored);
+        assert_eq!(runner.get(GNOME_SCHEMA, "mode").unwrap(), "'auto'");
+        assert!(!record.exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn setting_gnome_twice_still_comes_back_to_the_users_own() {
+        let root = scratch("gnome-twice");
+        let runner = FakeGsettings::default();
+        runner.set(GNOME_SCHEMA, "mode", "'auto'").unwrap();
+        let proxy = DesktopProxy::with_backend(
+            Box::new(Gnome {
+                runner: runner.clone(),
+            }),
+            root.join("record.json"),
+        );
+        proxy.set(10808).unwrap();
+        proxy.set(10809).unwrap();
+        assert_eq!(proxy.restore().unwrap(), ProxyRestore::Restored);
+        assert_eq!(runner.get(GNOME_SCHEMA, "mode").unwrap(), "'auto'");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Writes that the desktop forgets, as `gsettings` does without a dconf service.
+    struct Forgetful(FakeGsettings);
+
+    impl Gsettings for Forgetful {
+        fn get(&self, schema: &str, key: &str) -> io::Result<String> {
+            self.0.get(schema, key)
+        }
+
+        fn set(&self, _: &str, _: &str, _: &str) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn gnome_settings_that_the_desktop_does_not_keep_are_an_error_with_nothing_left_behind() {
+        let root = scratch("gnome-forgetful");
+        let record = root.join("record.json");
+        let proxy = DesktopProxy::with_backend(
+            Box::new(Gnome {
+                runner: Forgetful(FakeGsettings::default()),
+            }),
+            record.clone(),
+        );
+        assert!(proxy.set(10808).is_err());
+        assert!(!record.exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A tool that stops answering after a few calls.
+    struct Breaking {
+        inner: FakeGsettings,
+        calls: Mutex<usize>,
+        allowed: usize,
+    }
+
+    impl Gsettings for Breaking {
+        fn get(&self, schema: &str, key: &str) -> io::Result<String> {
+            self.inner.get(schema, key)
+        }
+
+        fn set(&self, schema: &str, key: &str, value: &str) -> io::Result<()> {
+            let mut calls = self.calls.lock().unwrap();
+            *calls += 1;
+            if *calls > self.allowed {
+                return Err(io::Error::other("gsettings refused the request"));
+            }
+            self.inner.set(schema, key, value)
+        }
+    }
+
+    #[test]
+    fn a_failure_half_way_through_gnome_puts_the_users_settings_back() {
+        let root = scratch("gnome-half");
+        let inner = FakeGsettings::default();
+        inner.set(GNOME_SCHEMA, "mode", "'auto'").unwrap();
+        let record = root.join("record.json");
+        let proxy = DesktopProxy::with_backend(
+            Box::new(Gnome {
+                runner: Breaking {
+                    inner: inner.clone(),
+                    calls: Mutex::new(0),
+                    // The first writes go in, then the tool stops, undo included.
+                    allowed: 3,
+                },
+            }),
+            record.clone(),
+        );
+        assert!(proxy.set(10808).is_err());
+        // Mode is written last, so the half-written change never took effect.
+        assert_eq!(inner.get(GNOME_SCHEMA, "mode").unwrap(), "'auto'");
+        assert!(!record.exists());
         std::fs::remove_dir_all(root).unwrap();
     }
 
