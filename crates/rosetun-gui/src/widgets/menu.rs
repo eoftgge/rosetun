@@ -184,8 +184,11 @@ mod tests {
             crate::i18n::Language::English,
             crate::i18n::Language::Russian,
         ] {
-            let labels = ["check-quick", "check-full"]
-                .map(|key| crate::i18n::tr_in(language, key, &fluent_bundle::FluentArgs::new()));
+            let args = fluent_bundle::FluentArgs::new();
+            let labels = [
+                crate::i18n::tr_in(language, "check-quick", &args),
+                crate::i18n::tr_in(language, "check-full", &args),
+            ];
             for minimum in [0.0, 80.0, 240.0] {
                 let ctx = egui::Context::default();
                 theme::apply(&ctx);
