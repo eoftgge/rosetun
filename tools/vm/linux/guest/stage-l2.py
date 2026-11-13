@@ -82,8 +82,8 @@ L3_BINARIES = ('rosetun-helper-privileged', 'rosetun', 'sing-box')
 L3_CONTENT = ('guest/launch.sh', 'guest/start.sh', 'guest/lib.sh', 'guest/run-l3.sh',
               'scenarios-l3.tsv') + tuple('artifacts/' + n for n in L3_BINARIES + (
                   'rosetun-helper.service', 'rosetun-engine.rules', 'request-kill-switch.json',
-                  'request-lan.json', 'request-dns-lock.json', 'request-program-direct.json',
-                  'request-program-proxy.json')) + ('artifacts/provenance.json',)
+                  'request-lan.json', 'request-lan-private.json', 'request-dns-lock.json',
+                  'request-program-direct.json', 'request-program-proxy.json')) + ('artifacts/provenance.json',)
 ENV_L2 = ('RUN_ID STAND_ID EXPECTED_BOOT_ID USER_A USER_B BIOS_GUID SCENARIO_TIMEOUT_SECONDS '
           'UNIT_TIMEOUT_SECONDS JOB_TIMEOUT_SECONDS').split()
 ENV_L3 = ENV_L2 + ['HOST_ADDRESS', 'NODE_PORT', 'PROBE_ADDRESS', 'DNS_PROBE_ADDRESS']

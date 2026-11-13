@@ -15,7 +15,7 @@ PSM1 = ROOT / 'tools/vm/linux/RosetunLinuxVm.psm1'
 OWNER = ROOT / 'tools/vm/windows/request-local.json'
 # Fields the PowerShell functions add to the template; everything else must
 # already exist in it.
-ADDED = {'settings.allow_lan', 'settings.auto_reconnect', 'settings.verbose_log_until',
+ADDED = {'settings.allow_lan', 'settings.private_networks', 'settings.auto_reconnect', 'settings.verbose_log_until',
          'rule_set.rules[].matcher.process', 'rule_set.rules[].matcher.process.name'}
 # Value-bearing paths of the owner's request; none of their values may be reused.
 VALUE_PATHS = ('selection.subscription', 'selection.node', 'node.id', 'node.name', 'node.server',
@@ -69,9 +69,9 @@ class RequestTests(unittest.TestCase):
         self.files = req.render_all()
         self.requests = {n: json.loads(b) for n, b in self.files.items()}
 
-    def test_exactly_the_five_files_in_the_order_the_job_uses(self):
-        self.assertEqual(['request-kill-switch.json', 'request-lan.json', 'request-dns-lock.json',
-                          'request-program-direct.json', 'request-program-proxy.json'], list(self.files))
+    def test_exactly_the_six_files_in_the_order_the_job_uses(self):
+        self.assertEqual(['request-kill-switch.json', 'request-lan.json', 'request-lan-private.json',
+                          'request-dns-lock.json', 'request-program-direct.json', 'request-program-proxy.json'], list(self.files))
 
     def test_variants_equal_the_tables_of_the_powershell_functions(self):
         text = PSM1.read_text(encoding='utf-8')
@@ -89,16 +89,20 @@ class RequestTests(unittest.TestCase):
 
     def test_connect_requests_differ_exactly_by_the_powershell_settings(self):
         r = self.requests
-        ks, lan, dns = (r[n] for n in ('request-kill-switch.json', 'request-lan.json', 'request-dns-lock.json'))
+        ks, lan, private, dns = (r[n] for n in ('request-kill-switch.json', 'request-lan.json',
+                                                'request-lan-private.json', 'request-dns-lock.json'))
         self.assertEqual({'settings.allow_lan'}, differences(ks, lan))
+        self.assertEqual({'settings.private_networks'}, differences(lan, private))
+        self.assertEqual({'settings.allow_lan', 'settings.private_networks'}, differences(ks, private))
         self.assertEqual({'settings.kill_switch'}, differences(ks, dns))
         self.assertEqual({'settings.allow_lan', 'settings.kill_switch'}, differences(lan, dns))
-        for request in (ks, lan, dns):
+        for request in (ks, lan, private, dns):
             self.assertIs(True, request['settings']['auto_reconnect'])
             self.assertNotIn('verbose_log_until', request['settings'])
-        self.assertEqual((True, False), (ks['settings']['kill_switch'], ks['settings']['allow_lan']))
-        self.assertEqual((True, True), (lan['settings']['kill_switch'], lan['settings']['allow_lan']))
-        self.assertEqual((False, False), (dns['settings']['kill_switch'], dns['settings']['allow_lan']))
+        for request, expected in ((ks, (True, False, False)), (lan, (True, True, False)),
+                                  (private, (True, True, True)), (dns, (False, False, False))):
+            self.assertEqual(expected, tuple(request['settings'][k] for k in
+                                             ('kill_switch', 'allow_lan', 'private_networks')))
 
     def test_program_requests_differ_from_kill_switch_by_rule_set_and_verbose_log(self):
         r = self.requests

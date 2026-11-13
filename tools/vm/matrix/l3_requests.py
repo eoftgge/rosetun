@@ -17,10 +17,12 @@ DEFAULT_PORT = 8388
 # Year 2100: past any run, so the verbose log stays on for the whole job.
 VERBOSE_LOG_UNTIL = 4102444800
 
-# name -> (kill_switch, allow_lan)
-CONNECT = {'request-kill-switch.json': (True, False),
-           'request-lan.json': (True, True),
-           'request-dns-lock.json': (False, False)}
+# name -> (kill_switch, allow_lan, private_networks), in the order of
+# New-RosetunLinuxL3Requests; every connect request sets all three fields.
+CONNECT = {'request-kill-switch.json': (True, False, False),
+           'request-lan.json': (True, True, False),
+           'request-lan-private.json': (True, True, True),
+           'request-dns-lock.json': (False, False, False)}
 # name -> (default_target, target of the rule for curl)
 PROGRAM = {'request-program-direct.json': ('proxy', 'direct'),
            'request-program-proxy.json': ('direct', 'proxy')}
@@ -83,7 +85,7 @@ def _serialize(request):
 
 
 def render_all(server=DEFAULT_SERVER, port=DEFAULT_PORT):
-    """Return the five request files as name -> bytes, in the order the job uses them."""
+    """Return the six request files as name -> bytes, in the order the job uses them."""
     if type(server) is not str or ipaddress.ip_address(server).version != 4 \
             or not documentation_address(server):
         raise ValueError('l3-request-server-not-documentation-ipv4')
@@ -94,9 +96,10 @@ def render_all(server=DEFAULT_SERVER, port=DEFAULT_PORT):
     base['node']['port'] = port
     files = {}
     kill_switch = None
-    for name, (kill, lan) in CONNECT.items():
+    for name, (kill, lan, private) in CONNECT.items():
         request = copy.deepcopy(base)
-        request['settings'].update(kill_switch=kill, allow_lan=lan, auto_reconnect=True)
+        request['settings'].update(kill_switch=kill, allow_lan=lan, private_networks=private,
+                                   auto_reconnect=True)
         files[name] = _serialize(request)
         if name == 'request-kill-switch.json':
             kill_switch = request

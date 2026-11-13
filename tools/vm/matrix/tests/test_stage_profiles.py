@@ -207,7 +207,7 @@ class L3PackageTests(unittest.TestCase):
     def test_complete_package_is_accepted_with_the_l3_catalog_and_env(self):
         package = self.validate()
         self.assertEqual('l3', package['profile'])
-        self.assertEqual((36, 35), (len(package['catalog']), sum(r['required'] for r in package['catalog'])))
+        self.assertEqual((39, 38), (len(package['catalog']), sum(r['required'] for r in package['catalog'])))
         self.assertEqual(list(L3.env), list(package['env']))
         self.assertEqual(set(L3.files), set(package['hashes']))
         self.assertEqual(SING_BOX_SHA, package['hashes']['artifacts/sing-box'])
@@ -540,7 +540,7 @@ class L3MediaTests(unittest.TestCase):
         paths = [r['path'] for r in self.run._read()['resources']]
         for name in media.request_resources('l3'):
             self.assertIn(name, paths)
-        self.assertEqual(media.request_resources('l3'), media.resources('l3')[:5])
+        self.assertEqual(media.request_resources('l3'), media.resources('l3')[:6])
         self.assertEqual((), media.request_resources('l2'))
 
     def test_a_request_file_in_the_content_directory_is_refused(self):
@@ -637,7 +637,7 @@ class L3ImportTests(unittest.TestCase):
         self.assertEqual('l3', job.profile.name)
         self.assertEqual('linux-l3', job.identity['job_id'])
         self.assertEqual('linux-l3', job.plan['suite'])
-        self.assertEqual(36, len(job.plan['catalog']))
+        self.assertEqual(39, len(job.plan['catalog']))
         job.submit()
         plan, report, status = synthetic_inputs('linux-l3')
         report['run_id'] = GUEST
@@ -651,7 +651,7 @@ class L3ImportTests(unittest.TestCase):
                                    'status.json': json.dumps(status).encode()})
         result = job.collect()
         counts = result['assessment']['execution']['counts']
-        self.assertEqual((4, 1, 31, 0), (counts['PASS'], counts['FAIL'], counts['ERROR'], counts['SKIP']))
+        self.assertEqual((4, 1, 34, 0), (counts['PASS'], counts['FAIL'], counts['ERROR'], counts['SKIP']))
         self.assertFalse(result['accepted'])
         self.assertFalse(result['assessment']['acceptance']['accepted'])
         self.assertEqual('FAIL', result['assessment']['execution']['status'])

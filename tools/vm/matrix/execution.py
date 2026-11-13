@@ -138,7 +138,7 @@ def preflight(config, *, dry_run=False):
     limitations = ['no controller restart recovery', 'no automatic file cleanup',
                    'no network', 'dry-run does not execute binary version checks']
     if l3:
-        actions.insert(2, 'write the five L3 lab requests into the run directory')
+        actions.insert(2, 'write the six L3 lab requests into the run directory')
         limitations += ['the VM has no network: preflight.baseline is expected to FAIL and the '
                         'remaining scenarios to ERROR',
                         'the sing-box binary is hashed, never executed, on the controller']

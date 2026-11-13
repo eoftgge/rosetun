@@ -47,7 +47,7 @@ def summarize(report):
 
 class CatalogTests(unittest.TestCase):
     def test_all_existing_catalogs_keep_their_fields(self):
-        expected_counts = {"linux-l2": 34, "linux-l3": 36, "linux-l4": 26,
+        expected_counts = {"linux-l2": 34, "linux-l3": 39, "linux-l4": 26,
                            "linux-l5": 17, "linux-proxy": 27}
         for suite, filename in SUITES.items():
             with self.subTest(suite=suite):
