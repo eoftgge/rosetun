@@ -2662,6 +2662,158 @@ splits the capture. `windows_expected` lists the expected windows as
    similar answers (this proves the DoH certificate chain and name). The
    controller has no command that holds such a run open yet.
 
+## Stage 7b2b: the L3 kill switch group in the lab
+
+Stage 7b2b runs the real Linux L3 stage through the lab: `run linux-l3 --lab` starts the lab
+machine and the test machine of stages 7b1 and 7b2a together and runs **all 39 scenarios**, exactly
+as `run-l3.sh` runs them, on the test machine. The lab machine is the VPN node (`192.0.2.1:8388`),
+the HTTPS target (`203.0.113.2:443`), the resolver and the DoH target, and it records the wire to its
+evidence disk. Only the **kill switch group** is judged; the other scenarios run and appear in the
+summary as the script reported them. Nothing is accepted: the release gate stays false and the
+security invariants stay **UNVERIFIED**.
+
+```text
+test VM 192.0.2.2  --- lab VM 192.0.2.1:8388  VPN node (sing-box, Shadowsocks)
+ run-l3.sh, ISO         rtlab 203.0.113.2:443  HTTPS target     203.0.113.53 resolver
+ window markers  --->   rtlab 203.0.113.2:9100 marker service  203.0.113.3:443 DoH
+                        evidence disk: the capture, one pcap for the whole run
+```
+
+### The group and its windows
+
+Judged are the 16 scenarios below. A *window* is one protected session, from just before
+`rosetun connect` to just after the protection is gone; the observer judges only the frames of the
+test machine inside a window. The label of a window is the function of `run-l3.sh` that opened the
+session, so scenarios that run in one session share its window:
+
+| Window label | Scenarios that ran in it |
+| --- | --- |
+| none (no protected session) | `preflight.identity`, `preflight.accounts`, `preflight.no-foreign-service`, `preflight.tools`, `preflight.baseline`, `install.service` |
+| `reported` | `protection.reported` |
+| `identity` | `engine.identity`, `engine.files` (the second ends the session the first opened) |
+| `connect_ks` | `killswitch.direct-blocked`, `killswitch.tunnel-passes`, `lan.off`, `killswitch.foreign-table`, `killswitch.engine-killed`, `killswitch.flush-restored`, `killswitch.disconnect` |
+
+So there is no window of its own for `killswitch.engine-killed`: a leak while the engine is killed is
+a leak in the window `connect_ks`, and every pass in that window is contradicted by it.
+
+### Markers in `run-l3.sh`
+
+`job.env` gains one optional key, `LAB_MARKER_ADDRESS` (`203.0.113.2:9100`), only in a run inside
+the lab. Without it `run-l3.sh` does what it did and the Hyper-V path is unchanged: no datagram, no
+file, no new line in a result or a note. With it, `lab_mark open` runs before `rosetun connect` in
+`connect_with`, and `lab_mark close` runs after the protection is confirmed gone: in `disconnect`
+(after `Disconnected`), after `rosetun open-network`, after `systemctl stop`, after the restarted
+helper removed a DNS lock, and at the end of the peer scenarios. The marker is one UDP datagram
+(bash `/dev/udp`) `rosetun-lab-marker:<run>.<index>.<word>.<label>`; the lab echoes it and the
+script waits at most two seconds for the echo. It is sent only while there is no table
+`inet rosetun` and the state is `Disconnected`; otherwise nothing is sent, nothing else changes, and
+the window stays open, which the observer calls unverified. Index and label of the open window live
+in the run's state directory, so `finalize` and a restarted function still know them.
+
+`<run>` is 32 hexadecimal digits, the first 32 of `sha256("rosetun-lab-run:" + RUN_ID)` where
+`RUN_ID` is the guest's run ID; the controller derives the same digits (`marker_run_id`) and uses
+them as the lab ID of the run.
+
+### How the windows are found
+
+`classify_windows(..., windows_expected=None, required_labels=...)` takes the windows from the
+capture: index `n` is window `n`, its label is the one its markers carry, and a label may repeat. The
+count is not known beforehand (an implicit `disconnect`, two connects in `rules.capabilities`,
+scenarios skipped after a FAIL), so an extra session spoils nothing. The rules of 6b apply to each
+window by itself; an index out of sequence still spoils every window from that place on. The three
+labels of the group each need at least one window; one without any is listed in `missing_labels` and
+only its scenarios are unobserved. The exact list of stage 7b2a stays for `lab-smoke`.
+
+### Cross-check and exit code
+
+The summary (`rosetun.matrix.l3-summary.v1`) has three parts next to the usual stage fields:
+
+- `legacy`: the report of `run-l3.sh` as it is, its SHA-256, its summary and every row.
+- `lab`: what the fixtures did (`node` alive at finish, `https`, `dns`, `doh` answered; the first
+  three are required, DoH is only reported because only scenarios outside the group use it), the
+  evidence disk, and every window with its label, index, verdict, reasons and categories.
+- `crosscheck`: one row per scenario of the group, `AGREE`, `DISAGREE`, `UNOBSERVED` or
+  `NOT_APPLICABLE`. A pass in a clean window is `AGREE`; a pass in a window with a leak is
+  `DISAGREE`; a pass whose window is unverified or missing is `UNOBSERVED`; anything the script did
+  not pass, and the scenarios without a session, are `NOT_APPLICABLE` (a failure stays a failure).
+  The scenarios outside the group are listed in `out_of_scope` without a verdict. `group` says what
+  decided the code.
+
+| Exit | Meaning |
+| --- | --- |
+| 0 | The whole group passed, every row `AGREE` or `NOT_APPLICABLE`, the observer clean, the fixtures answered, the evidence disk verified, both machines completed. |
+| 1 | A finding: a scenario of the group failed, a pass is `DISAGREE`, or a window of the group saw a leak. A finding stands whatever else went wrong. |
+| 2 | Nothing found, but the run cannot vouch for itself: a controller error, a machine that did not stop, no report, an unverified evidence disk, a fixture that did not answer, an unclean observer, a pass nobody observed (`UNOBSERVED`, which includes a window that never closed), a scenario of the group that did not run. |
+| 130 | Interrupted. |
+
+Scenarios outside the group, and windows outside it that cannot be verified, change no code. A leak
+in a window outside the group is shown (`lab.windows`, `group.outside_leaks`) but does not change the
+code either, because several scenarios outside the group leave the protection off on purpose and
+nothing declares those expectations yet (`LEAK_OUTSIDE_THE_GROUP_FAILS` in `l3_summary.py` turns
+that on).
+
+### Scenarios outside the group
+
+They run and are reported. Until stages 7c to 7e, expect some of them to fail or to show a leak:
+
+- `inbound.reply` fails: the image has no `sshd`, so the peer reads no banner.
+- `lan.private-closed`, `lan.private-open`, `lan.on`: no host in a private range exists in the lab.
+- `ipv6.neighbor` is skipped: the test machine has no IPv6 default router.
+- `dnslock.*` and `crash.dns-lock-killed` leave the network open on purpose (a DNS lock without a kill
+  switch, UDP 53 that is meant to leave): their windows are `DETECTED` and nothing yet says that is
+  expected.
+- `rules.direct-other-account` and `rules.proxy-default-direct` send a program direct by design, so
+  their windows are `DETECTED` too.
+
+### Configuration and commands
+
+`rosetun.matrix.execution.v3` is version 2 for the L3 suite plus a `[lab]` block: `[lab.image]` (the
+descriptor of the lab image), `[lab.tunnel]` (as in `lab.v2`), and `https_cert_sha256` and
+`doh_cert_sha256`, the hashes of the two certificates on the lab image. `[l3]` must name the lab's
+own addresses (`host_address` `192.0.2.1`, `probe_address` `203.0.113.2`, `node_port` equal to the
+tunnel's). `timeouts.job` is at most 1800, default in the example 900; the capture lasts
+`job + 300` seconds and also covers the boot and the import of the test machine. Versions 1 and 2
+never carry `[lab]` and refuse `--lab`; a version 3 file needs `--lab`. Start from
+[execution-l3-lab.example.toml](execution-l3-lab.example.toml).
+
+```sh
+python -m tools.vm.matrix run linux-l3 --lab --config /srv/linux-l3-lab.toml --dry-run
+python -m tools.vm.matrix run linux-l3 --lab --config /srv/linux-l3-lab.toml
+```
+
+Order: lease; the two runs; both overlays; the evidence disk; the L3 requests and the ISO of the test
+run; the lab machine starts and is set up (node, HTTPS target, resolver, DoH, capture to the
+disk, `capture_ready`); the test machine starts; import; `job.env` with `LAB_MARKER_ADDRESS`; the
+job; collection; `finish` on the lab; both machines stop; the evidence disk is read and checked; the
+windows are found; the summary. A failure after the first machine started closes both. The lab
+machine pins the certificates: the helper refuses a certificate whose hash is not in the request.
+
+### Reinstall
+
+This stage changes `linux/guest/lab-entry.py` (the pinned certificates), `linux/guest/stage-l2.py`
+(the optional `LAB_MARKER_ADDRESS` of the L3 profile), `linux/guest/start.sh` and
+`linux/guest/run-l3.sh` (reached through the package) and `matrix/lab_protocol.py`. Install the new
+`lab-entry.py` and `lab_protocol.py` in both images and `stage-l2.py` in the test image, and update
+the descriptors, before any qualification.
+
+### Known limit
+
+The HTTPS target of the lab (`lab-entry.py`) answers only the two exchanges of stage 7b1 by their
+exact request; any other request, such as the `curl https://203.0.113.2/` of `run-l3.sh`, makes the
+observer stop with an error, and its log keeps 16 rows. A real run needs a target that answers the
+requests of the script and counts them instead of listing them; that is not part of this stage.
+
+### Owner qualification
+
+1. `run linux-l3 --lab --dry-run`, then the ordinary command. Expect the group `PASS`, the
+   cross-check `AGREE`, exit 0 (see the known limit), and keep the summary.
+2. Legacy L3 on Hyper-V with the new `run-l3.sh`: all `PASS`, as before.
+3. Positive control: during the window `connect_ks`, `systemctl stop rosetun-helper` from the
+   console of the test machine. The table goes, the probes of the script leave directly: that window
+   is `DETECTED`, exit 1.
+4. Stop the observer on the lab machine in the middle of the run: exit 2.
+5. Compare the rows of the group with a run on Hyper-V.
+
 ## Stage 7a: Linux L3 delivery without network
 
 `run linux-l3` delivers the L3 package to one VM and runs the existing
