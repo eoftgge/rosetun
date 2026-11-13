@@ -25,7 +25,8 @@ from lab_protocol import (MACS, CLIENTS, GATEWAYS, TARGETS, PORTS, SERVICES, CAP
                           HTTPS_PORT, HTTPS_KINDS, EGRESS, SOCKS_PORT, https_answer, LAB_NETWORKS,
                           RESOLVER, DOH_ADDRESS, DNS_LOG_ENTRIES, DOH_BODY_LIMIT, DOH_HEAD_LIMIT,
                           dns_reply, doh_reply, parse_request_head, http_response,
-                          EVIDENCE_PCAP_LIMIT, EVIDENCE_HEADER_SIZE, DURATION_MAX, evidence_header)
+                          EVIDENCE_PCAP_LIMIT, EVIDENCE_HEADER_SIZE, DURATION_MAX, evidence_header,
+                          WINDOW_LIMIT, ACK_PREFIX, parse_window_marker)
 
 ROOT = Path('/run/rosetun-lab')
 ENTRY = '/usr/local/libexec/rosetun-lab/entry'
@@ -87,9 +88,15 @@ def identity(request):
     if 'duration_seconds' in request and (type(request['duration_seconds']) is not int
                                           or not DURATION <= request['duration_seconds'] <= DURATION_MAX):
         raise ValueError('invalid-duration')
+    if 'windows' in request and request['windows'] is not True:
+        raise ValueError('invalid-windows')
     window = request['markers']
     tunnel = tunnel_of(request)
-    if (type(window) is not list or [m.get('word') for m in window] != ['open', 'close']
+    if request.get('windows') is True:
+        # Phase windows: the markers come from the test machine's script, one pair per phase.
+        if window != []:
+            raise ValueError('invalid-markers')
+    elif (type(window) is not list or [m.get('word') for m in window] != ['open', 'close']
             or len({m.get('nonce') for m in window + expected}) != 10):
         raise ValueError('invalid-markers')
     for m in window:
@@ -99,7 +106,7 @@ def identity(request):
                 or (m['family'], m['service'], m['protocol']) != (4, 'marker', 'udp')
                 or m['source'] != CLIENTS[4] or m['target'] != TARGETS[4] or m['port'] != PORTS['marker']):
             raise ValueError('foreign-marker')
-    if tunnel is not None and len({m['nonce'] for m in window + expected + tunnel['https']}) != 12:
+    if tunnel is not None and len({m['nonce'] for m in window + expected + tunnel['https']}) != len(window) + 10:
         raise ValueError('invalid-tunnel')
     return iface
 
@@ -663,6 +670,14 @@ def accept_marker(request, marks, data, source):
     return found[0]
 
 
+def accept_window_marker(request, marks, data, source):
+    """(index, word, label) of a phase marker from the test machine; order is judged from the capture."""
+    found = parse_window_marker(data, request['lab_id'])
+    if found is None or source != CLIENTS[4] or len(marks) >= 2 * WINDOW_LIMIT:
+        raise ValueError('unexpected-marker')
+    return found
+
+
 def https_exchange(connection, peer, context, request):
     """One request to the HTTPS target; the log row names who asked and from which port."""
     connection.settimeout(1)
@@ -793,6 +808,11 @@ def serve(request, directory):
                     continue
                 if service == 'marker':
                     data, peer = key.fileobj.recvfrom(1024)
+                    if request.get('windows') is True:
+                        index, word, label = accept_window_marker(request, marks, data, peer[0])
+                        key.fileobj.sendto(ACK_PREFIX.encode('ascii') + data, peer)
+                        marks.append(dict(word=word, index=index, label=label, at=time.monotonic()))
+                        continue
                     marker = accept_marker(request, marks, data, peer[0])
                     key.fileobj.sendto(marker_answer(marker), peer)
                     marks.append(dict(word=marker['word'], nonce=marker['nonce'], at=time.monotonic()))
@@ -910,7 +930,7 @@ def main(request):
     saved = json.loads((directory / 'identity.json').read_bytes())
     if any(saved[k] != request[k] for k in ('lab_id', 'role', 'vm_uuid', 'boot_id', 'probes', 'markers')):
         raise ValueError('wrong-run')
-    if any(saved.get(key) != request.get(key) for key in ('tunnel', 'dns', 'evidence_disk', 'duration_seconds')):
+    if any(saved.get(key) != request.get(key) for key in ('tunnel', 'dns', 'evidence_disk', 'duration_seconds', 'windows')):
         raise ValueError('wrong-run')
     if request['role'] == 'lab' and operation == 'serve':
         if request.get('interface') != iface:

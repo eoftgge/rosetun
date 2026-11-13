@@ -13,6 +13,14 @@ GATEWAYS = {4: '192.0.2.1', 6: '2001:db8:6a:1::1'}
 TARGETS = {4: '203.0.113.2', 6: '2001:db8:6a:2::2'}
 CAPTURE_LIMIT = 131072
 LOG_LIMIT = 32768
+# Stage 7b2a: phase windows. Window N is bracketed by `open` and `close` markers that carry
+# its index and the short name of the phase it observes.
+WINDOW_WORDS = ('open', 'close')
+WINDOW_LIMIT = 100
+WINDOW_LABEL = re.compile(r'[a-z0-9_.-]{1,48}')
+MARKER_PREFIX = 'rosetun-lab-marker:'
+ACK_PREFIX = 'rosetun-lab-ack:'
+_WINDOW_MARKER = re.compile(rb'rosetun-lab-marker:([0-9a-f]{32})\.(0|[1-9][0-9]{0,2})\.(open|close)\.([a-z0-9_.-]{1,48})')
 DURATION = 60
 # The longest legacy L3 job (run-l3.sh) plus the time to finish and read the evidence.
 JOB_TIMEOUT_SECONDS = 1800
@@ -153,12 +161,33 @@ def answer(probe):
     return b'rosetun-lab:' + token(probe)
 
 
+def window_marker(run_id, index, word, label):
+    """The marker that opens or closes window `index`; the index replaces the nonce of stage 6b."""
+    if (word not in WINDOW_WORDS or type(index) is not int or not 0 <= index < WINDOW_LIMIT
+            or not WINDOW_LABEL.fullmatch(label)):
+        raise ValueError('invalid-window-marker')
+    return dict(run_id=run_id, index=index, word=word, label=label, family=4, service='marker',
+                protocol='udp', source=CLIENTS[4], target=TARGETS[4], port=PORTS['marker'])
+
+
+def parse_window_marker(data, run_id):
+    """(index, word, label) of this run's phase marker datagram, else None."""
+    found = _WINDOW_MARKER.fullmatch(data)
+    if found is None or found[1].decode('ascii') != run_id or int(found[2]) >= WINDOW_LIMIT:
+        return None
+    return int(found[2]), found[3].decode('ascii'), found[4].decode('ascii')
+
+
 def marker_query(marker):
-    return ('rosetun-lab-marker:' + '.'.join((marker['run_id'], marker['nonce'], marker['word']))).encode('ascii')
+    if 'index' in marker:
+        tail = '.'.join((marker['run_id'], str(marker['index']), marker['word'], marker['label']))
+    else:
+        tail = '.'.join((marker['run_id'], marker['nonce'], marker['word']))
+    return (MARKER_PREFIX + tail).encode('ascii')
 
 
 def marker_answer(marker):
-    return b'rosetun-lab-ack:' + marker_query(marker)
+    return ACK_PREFIX.encode('ascii') + marker_query(marker)
 
 
 class DnsRefusal(ValueError):
@@ -682,6 +711,50 @@ def _declared(allowances):
     return names
 
 
+def _parse_capture(raw, limit):
+    """(parsed [(record, Frame)], unparsed [(record, reason)], pcap problem or None)."""
+    parsed, unparsed, problem = [], [], None
+    try:
+        for index, packet in enumerate(records(raw, limit)):
+            fragment = _fragment(packet)
+            if fragment is not None and _involves_test(fragment):
+                parsed.append((index, fragment))
+                continue
+            try:
+                parsed.append((index, parse(packet)))
+            except ValueError as error:
+                unparsed.append((index, str(error)))
+    except ValueError as error:
+        problem = str(error)
+    return parsed, unparsed, problem
+
+
+def _probe_matcher(frames, expected, direct):
+    """A predicate for the frames of the expected exchanges and of the one direct connection."""
+    # A TCP segment without data belongs to a probe only on a connection that carried it.
+    connections = [set() for _ in expected]
+    for frame in frames:
+        for position, p in enumerate(expected):
+            direction = _direction(frame, p)
+            if p['protocol'] == 'tcp' and direction and frame.payload and _needle(p, direction) in frame.payload:
+                connections[position].add(frame.sport if direction == 'request' else frame.dport)
+
+    def is_probe(frame):
+        if direct is not None and _direct_frame(frame, direct):
+            return True
+        for position, p in enumerate(expected):
+            direction = _direction(frame, p)
+            if direction is None:
+                continue
+            if p['protocol'] == 'tcp' and not frame.payload:
+                if (frame.sport if direction == 'request' else frame.dport) in connections[position]:
+                    return True
+            elif _needle(p, direction) in frame.payload:
+                return True
+        return False
+    return is_probe
+
+
 def classify(raw, expected, window, allowances=(), tunnel_port=None, https=None, limit=CAPTURE_LIMIT):
     """Put every captured frame into exactly one category and check the window markers.
 
@@ -702,41 +775,8 @@ def classify(raw, expected, window, allowances=(), tunnel_port=None, https=None,
     direct = direct_connection(https)
     if [m['word'] for m in window] != ['open', 'close']:
         raise ValueError('invalid-window')
-    parsed, unparsed, problem = [], [], None
-    try:
-        for index, packet in enumerate(records(raw, limit)):
-            fragment = _fragment(packet)
-            if fragment is not None and _involves_test(fragment):
-                parsed.append((index, fragment))
-                continue
-            try:
-                parsed.append((index, parse(packet)))
-            except ValueError as error:
-                unparsed.append(str(error))
-    except ValueError as error:
-        problem = str(error)
-    # A TCP segment without data belongs to a probe only on a connection that carried it.
-    connections = [set() for _ in expected]
-    for _, frame in parsed:
-        for position, p in enumerate(expected):
-            direction = _direction(frame, p)
-            if p['protocol'] == 'tcp' and direction and frame.payload and _needle(p, direction) in frame.payload:
-                connections[position].add(frame.sport if direction == 'request' else frame.dport)
-
-    def is_probe(frame):
-        if direct is not None and _direct_frame(frame, direct):
-            return True
-        for position, p in enumerate(expected):
-            direction = _direction(frame, p)
-            if direction is None:
-                continue
-            if p['protocol'] == 'tcp' and not frame.payload:
-                if (frame.sport if direction == 'request' else frame.dport) in connections[position]:
-                    return True
-            elif _needle(p, direction) in frame.payload:
-                return True
-        return False
-
+    parsed, unparsed, problem = _parse_capture(raw, limit)
+    is_probe = _probe_matcher([frame for _, frame in parsed], expected, direct)
     counts = dict(probe=0, marker=0, infrastructure=0, unexpected=0, foreign=0, unparsed=len(unparsed))
     if names:
         counts['allowed'] = dict.fromkeys(sorted(names), 0)
@@ -782,7 +822,7 @@ def classify(raw, expected, window, allowances=(), tunnel_port=None, https=None,
     if problem:
         unverified.append('invalid-pcap:' + problem)
     if unparsed:
-        unverified.append('unparsed-frame:' + unparsed[0])
+        unverified.append('unparsed-frame:' + unparsed[0][1])
     if len(raw) + 16 + 2048 > limit:
         unverified.append('capture-limit-reached')
     if not found:
@@ -791,6 +831,216 @@ def classify(raw, expected, window, allowances=(), tunnel_port=None, https=None,
         unverified.append('window-markers-out-of-order')
     return dict(categories=counts, unexpected=unexpected, canary=canary,
                 window=dict(markers_found=found, ordered=ordered), unverified=unverified)
+
+
+def _window_specs(windows_expected):
+    """The phase labels of the windows the controller expects, in order; only NONE is expected."""
+    if type(windows_expected) is not list or not 1 <= len(windows_expected) <= WINDOW_LIMIT:
+        raise ValueError('invalid-windows')
+    labels = []
+    for spec in windows_expected:
+        if type(spec) is not dict or not set(spec) <= {'label', 'expected'} or type(spec.get('label')) is not str:
+            raise ValueError('invalid-windows')
+        if not WINDOW_LABEL.fullmatch(spec['label']):
+            raise ValueError('invalid-windows')
+        if spec.get('expected', 'NONE') != 'NONE':
+            raise ValueError('unsupported-window-expectation')
+        labels.append(spec['label'])
+    return labels
+
+
+def _phase_hit(frame, run):
+    """(direction, index, word, label) when the frame is this run's phase marker or its answer."""
+    if frame.family != 4 or frame.proto != 17:
+        return None
+    if ((frame.src_mac, frame.dst_mac, frame.src, frame.dst, frame.dport)
+            == (MACS['test'], MACS['lab'], CLIENTS[4], TARGETS[4], PORTS['marker'])):
+        direction, data = 'request', frame.payload
+    elif ((frame.src_mac, frame.dst_mac, frame.src, frame.dst, frame.sport)
+            == (MACS['lab'], MACS['test'], TARGETS[4], CLIENTS[4], PORTS['marker'])):
+        if not frame.payload.startswith(ACK_PREFIX.encode('ascii')):
+            return None
+        direction, data = 'response', frame.payload[len(ACK_PREFIX):]
+    else:
+        return None
+    found = parse_window_marker(data, run)
+    return (direction, *found) if found else None
+
+
+def _category(frame, is_probe, names, tunnel_port):
+    """The category of a frame that is no marker; an allowance is ('allowed', name)."""
+    if frame.fragment:
+        return 'unexpected'
+    if is_probe(frame):
+        return 'probe'
+    if _infrastructure(frame):
+        return 'infrastructure'
+    if tunnel_port is not None and _tunnel_frame(frame, tunnel_port):
+        return 'tunnel'
+    if allowed := _allowance(frame, names):
+        return 'allowed', allowed
+    return 'unexpected' if _involves_test(frame) else 'foreign'
+
+
+def _window_counts(names, tunnel_port):
+    counts = dict(probe=0, marker=0, infrastructure=0, unexpected=0, foreign=0, unparsed=0)
+    if names:
+        counts['allowed'] = dict.fromkeys(sorted(names), 0)
+    if tunnel_port is not None:
+        counts['tunnel'] = 0
+    return counts
+
+
+def _count(counts, category, frame, listing, unexpected_key):
+    if category == 'unexpected':
+        counts[unexpected_key] += 1
+        if len(listing) < UNEXPECTED_LIMIT:
+            listing.append(_describe(frame))
+    elif type(category) is tuple:
+        counts['allowed'][category[1]] += 1
+    else:
+        counts[category] += 1
+
+
+def _window_health_reasons(health, ready, served):
+    reasons = []
+    if ready is not True:
+        reasons.append('observer-not-ready')
+    if not _clean(health):
+        reasons.append('observer-health')
+    rows = health.get('markers') if type(health) is dict else None
+    logged = None
+    if type(rows) is list and all(type(row) is dict for row in rows):
+        logged = [(row.get('index'), row.get('word'), row.get('label')) for row in rows]
+    # What the lab machine says it served must be what the wire shows it was asked.
+    if logged != served:
+        reasons.append('marker-log-mismatch')
+    times = None
+    if logged is not None:
+        times = [health.get('capture_started'), *[row.get('at') for row in rows], health.get('capture_ended')]
+    if times is None or not all(type(t) in (int, float) and math.isfinite(t) for t in times):
+        reasons.append('capture-window-unrecorded')
+    elif times != sorted(times):
+        reasons.append('capture-window-inconsistent')
+    return reasons
+
+
+def classify_windows(raw, run, windows_expected, *, health, ready, allowances=(), tunnel_port=None,
+                     https=None, probes=(), limit=CAPTURE_LIMIT):
+    """Split one capture into phase windows and give every expected window its own leak verdict.
+
+    `windows_expected` lists, in order, the windows the controller expects: dicts with the
+    `label` of the phase and `expected`, which may only be `NONE` here. `allowances`,
+    `tunnel_port` and `https` are those of the whole run; `probes` is the list of stage 6a
+    exchanges and is normally empty.
+
+    A window is the span from its opening marker to its closing marker. A frame inside it is
+    judged by the rules of stage 6b: any `unexpected` frame makes the window `DETECTED`. A
+    frame outside every window is only counted, in `outside_window`, and changes no verdict.
+    `NONE` needs both markers asked and answered once each in order, the indexes in sequence
+    from zero without a gap, the label the controller expects, a whole capture and a clean
+    observer. Anything else is `UNVERIFIED`; a seen leak stays `DETECTED`. After the first
+    marker out of sequence (an index repeated, skipped or reversed, an opening inside an open
+    window, a closing without its opening) no later window can be `NONE`.
+    """
+    labels = _window_specs(windows_expected)
+    names = _declared(allowances)
+    if tunnel_port is not None:
+        _tunnel_port(tunnel_port)
+    parsed, unparsed, problem = _parse_capture(raw, limit)
+    is_probe = _probe_matcher([frame for _, frame in parsed], probes, direct_connection(https))
+    windows, requests = {}, []
+    outside = _window_counts(names, tunnel_port)
+    outside['outside-window'] = outside.pop('unexpected')
+    outside_frames = []
+    current, broken, next_index = None, None, 0
+
+    def window(index):
+        if index not in windows:
+            windows[index] = dict(categories=_window_counts(names, tunnel_port), unexpected=[], reasons=[],
+                                  labels=[], first=None, last=None,
+                                  seen={(word, kind): [] for word in WINDOW_WORDS for kind in ('request', 'response')})
+        return windows[index]
+
+    for position, item in sorted([*parsed, *unparsed], key=lambda row: row[0]):
+        if type(item) is str:
+            if current is None:
+                outside['unparsed'] += 1
+            else:
+                windows[current]['categories']['unparsed'] += 1
+                windows[current]['reasons'].append('unparsed-frame:' + item)
+            continue
+        hit = _phase_hit(item, run)
+        if hit is not None:
+            direction, index, word, label = hit
+            row = window(index)
+            row['categories']['marker'] += 1
+            row['labels'].append(label)
+            row['seen'][(word, direction)].append(position)
+            row['first'] = position if row['first'] is None else row['first']
+            row['last'] = position
+            if direction == 'request':
+                requests.append((index, word, label))
+                fault = None
+                if word == 'open':
+                    if current is not None:
+                        fault = 'open-inside-open-window'
+                    elif index != next_index:
+                        fault = 'window-index-out-of-sequence'
+                    current = index
+                else:
+                    if current is None:
+                        fault = 'close-without-open'
+                    elif index != current:
+                        fault = 'close-index-mismatch'
+                    else:
+                        next_index = index + 1
+                    current = None
+                if fault is not None and broken is None:
+                    broken = (fault, position)
+            continue
+        category = _category(item, is_probe, names, tunnel_port)
+        if current is None:
+            _count(outside, category, item, outside_frames, 'outside-window')
+        else:
+            _count(windows[current]['categories'], category, item, windows[current]['unexpected'], 'unexpected')
+    shared = []
+    if problem:
+        shared.append('invalid-pcap:' + problem)
+    if len(raw) + 16 + 2048 > limit:
+        shared.append('capture-limit-reached')
+    shared += _window_health_reasons(health, ready, requests)
+    extra = sorted(index for index in windows if index >= len(labels))
+    if extra:
+        shared.append('window-count-mismatch')
+    results = []
+    for index, label in enumerate(labels):
+        row, reasons = windows.get(index), []
+        if row is None:
+            reasons.append('window-missing')
+            row = dict(categories=_window_counts(names, tunnel_port), unexpected=[], reasons=[])
+        else:
+            seen = row['seen']
+            if any(len(positions) != 1 for positions in seen.values()):
+                reasons.append('window-markers-missing-or-repeated')
+            elif not (seen[('open', 'request')][0] < seen[('open', 'response')][0]
+                      < seen[('close', 'request')][0] < seen[('close', 'response')][0]):
+                reasons.append('window-markers-out-of-order')
+            if any(seen_label != label for seen_label in row['labels']):
+                reasons.append('window-label-mismatch')
+            if broken is not None and row['last'] >= broken[1]:
+                reasons.append(broken[0])
+        reasons += row['reasons'] + shared
+        if row['categories']['unexpected']:
+            leak, reason = 'DETECTED', 'unexpected-frames'
+        elif reasons:
+            leak, reason = 'UNVERIFIED', reasons[0]
+        else:
+            leak, reason = 'NONE', 'clean'
+        results.append(dict(index=index, label=label, expected='NONE', leak=leak, leak_reason=reason,
+                            observer_reasons=reasons, categories=row['categories'], unexpected=row['unexpected']))
+    return dict(windows=results, outside_window=dict(categories=outside, frames=outside_frames),
+                extra_windows=extra, observer_reasons=shared)
 
 
 def _window_times(health, window):
