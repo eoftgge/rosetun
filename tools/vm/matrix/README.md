@@ -2513,6 +2513,20 @@ v5: the owner qualifies 6a and 6b again on v5 (see below).
 - **Hashes.** `sing_box_sha256` is the SHA-256 of the one binary used in both
   images; `ca_sha256` is the SHA-256 of the CA PEM file on the test image. Both go
   in the `[tunnel]` table of the configuration.
+- **A quiet test image.** With a default route the test machine can reach the
+  lab's router, so anything that calls out on its own is extra traffic in the
+  capture, and the observer reports it as `unexpected`. The test image has no
+  service or timer that goes onto the network by itself: `systemd-timesyncd` (its
+  NTP queries were the first one found on the stand), `apt-daily.timer`,
+  `apt-daily-upgrade.timer`, `fwupd-refresh.timer` and anything like them
+  (`motd-news.timer`, package-metadata refreshers, telemetry). Mask them, do not
+  only disable them: a masked unit cannot be started by a socket, a timer or a
+  dependency. Check after a boot, before the image is sealed:
+  `systemctl list-timers --all` shows none of them, and `ss -tunap` lists no
+  connection and no UDP socket of a process that is not one of the image's own
+  services (no port 123, no established TCP). A unit that shows up in either list
+  and is not named here is judged by the same question: does it open a connection
+  without being asked? If it does, mask it.
 
 Certificates, with a term and the IP SAN (the guest clocks must be inside the
 validity period: check `date` in both images after preparing them):
