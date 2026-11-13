@@ -382,7 +382,12 @@ fn rule_set_picker(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
     }
     let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
     widgets::menu_popup(&response).show(|ui| {
-        ui.set_min_width(response.rect.width().max(180.0));
+        ui.set_min_width(
+            response
+                .rect
+                .width()
+                .max(widgets::MenuWidth::Compact.points()),
+        );
         if widgets::menu_item(
             ui,
             widgets::MenuItem {

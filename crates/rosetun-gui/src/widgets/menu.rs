@@ -4,6 +4,7 @@ use crate::icons::{self, Icon};
 use crate::theme;
 
 const ITEM_RADIUS_PX: f32 = theme::RADIUS_INNER as f32;
+const ITEM_SIDE_PADDING: f32 = theme::space::M;
 
 pub(crate) struct MenuItem<'a> {
     pub label: &'a str,
@@ -49,7 +50,7 @@ pub(crate) fn menu_item(ui: &mut egui::Ui, item: MenuItem<'_>) -> egui::Response
                 .override_text_color
                 .unwrap_or(theme::palette().text)
         };
-        let mut right = rect.right() - 10.0;
+        let mut right = rect.right() - ITEM_SIDE_PADDING;
         if item.selected {
             icons::paint(
                 ui.painter(),
@@ -83,7 +84,7 @@ pub(crate) fn menu_item(ui: &mut egui::Ui, item: MenuItem<'_>) -> egui::Response
             );
             right -= width + 10.0;
         }
-        let left = rect.left() + ui.spacing().button_padding.x.max(10.0);
+        let left = rect.left() + ui.spacing().button_padding.x.max(ITEM_SIDE_PADDING);
         let galley = egui::WidgetText::from(egui::RichText::new(item.label).color(color))
             .into_galley(
                 ui,
@@ -135,6 +136,22 @@ pub(crate) fn menu_width(ui: &mut egui::Ui, width: MenuWidth) {
     ui.set_width(width.points());
 }
 
+/// Sizes plain menu items to their labels, keeping room for the opening button.
+pub(crate) fn menu_content_width(ui: &mut egui::Ui, labels: &[&str], minimum: f32) {
+    let font = egui::TextStyle::Button.resolve(ui.style());
+    let longest = labels
+        .iter()
+        .map(|label| {
+            ui.painter()
+                .layout_no_wrap((*label).to_owned(), font.clone(), theme::palette().text)
+                .size()
+                .x
+        })
+        .fold(0.0, f32::max);
+    let padding = ui.spacing().button_padding.x.max(ITEM_SIDE_PADDING) + ITEM_SIDE_PADDING;
+    ui.set_width((longest + padding).max(minimum));
+}
+
 pub(crate) fn menu_popup(response: &egui::Response) -> egui::Popup<'_> {
     style_popup(egui::Popup::menu(response), response)
 }
@@ -160,6 +177,67 @@ fn style_popup<'a>(popup: egui::Popup<'a>, response: &egui::Response) -> egui::P
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn check_menu_width_follows_translated_items_and_the_trigger() {
+        for language in [
+            crate::i18n::Language::English,
+            crate::i18n::Language::Russian,
+        ] {
+            let labels = ["check-quick", "check-full"]
+                .map(|key| crate::i18n::tr_in(language, key, &fluent_bundle::FluentArgs::new()));
+            for minimum in [0.0, 80.0, 240.0] {
+                let ctx = egui::Context::default();
+                theme::apply(&ctx);
+                let mut output = ctx.run_ui(egui::RawInput::default(), |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        let trigger = ui.button("Check");
+                        menu_popup(&trigger).open(true).show(|ui| {
+                            let longest = labels
+                                .iter()
+                                .map(|label| {
+                                    ui.painter()
+                                        .layout_no_wrap(
+                                            label.clone(),
+                                            egui::TextStyle::Button.resolve(ui.style()),
+                                            theme::palette().text,
+                                        )
+                                        .size()
+                                        .x
+                                })
+                                .fold(0.0, f32::max);
+                            menu_content_width(ui, &labels.each_ref().map(String::as_str), minimum);
+                            for label in &labels {
+                                let item = menu_item(
+                                    ui,
+                                    MenuItem {
+                                        label,
+                                        enabled: true,
+                                        selected: false,
+                                        danger: false,
+                                        note: None,
+                                    },
+                                );
+                                assert!(
+                                    (item.rect.width()
+                                        - (longest
+                                            + ui.spacing()
+                                                .button_padding
+                                                .x
+                                                .max(ITEM_SIDE_PADDING)
+                                            + ITEM_SIDE_PADDING)
+                                            .max(minimum))
+                                    .abs()
+                                        < 1.0
+                                );
+                            }
+                        });
+                    });
+                });
+                output.textures_delta.clear();
+            }
+        }
+    }
 
     #[test]
     fn menu_item_radius_tracks_physical_pixels() {

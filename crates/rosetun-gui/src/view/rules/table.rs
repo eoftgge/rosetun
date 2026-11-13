@@ -484,23 +484,30 @@ pub(super) fn rule_row(
                         .on_hover_text(tr!("more-actions"));
                     if can_open {
                         let group = selected && state.rules.screen.selected_rules.len() >= 2;
-                        let menu_width = if group {
-                            ui.painter()
-                                .layout_no_wrap(
-                                    crate::i18n::delete_selected_rules(
-                                        state.rules.screen.selected_rules.len(),
-                                    ),
-                                    egui::TextStyle::Button.resolve(ui.style()),
-                                    theme::ERROR,
-                                )
-                                .size()
-                                .x
-                                + 40.0
-                        } else {
-                            160.0
-                        };
                         widgets::menu_popup(&menu).show(|ui| {
-                            ui.set_min_width(menu_width.max(160.0));
+                            let delete_group = crate::i18n::delete_selected_rules(
+                                state.rules.screen.selected_rules.len(),
+                            );
+                            let labels = if group {
+                                vec![
+                                    tr!("edit"),
+                                    tr!("move-selected-to-top"),
+                                    tr!("move-to-end"),
+                                    delete_group,
+                                ]
+                            } else {
+                                vec![
+                                    tr!("keep-permanently"),
+                                    tr!("edit"),
+                                    tr!("move-to-top"),
+                                    tr!("delete"),
+                                ]
+                            };
+                            widgets::menu_content_width(
+                                ui,
+                                &labels.iter().map(String::as_str).collect::<Vec<_>>(),
+                                widgets::MenuWidth::Compact.points(),
+                            );
                             if group {
                                 widgets::menu_item(
                                     ui,

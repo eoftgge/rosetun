@@ -456,7 +456,15 @@ fn details(
                 let menu =
                     menu_link(ui, &tr!("check-menu"), enabled).on_hover_text(tr!("check-hint"));
                 widgets::menu_popup(&menu).show(|ui| {
-                    check_menu_items(ui, state, subscription, None, enabled, actions);
+                    check_menu_items(
+                        ui,
+                        state,
+                        subscription,
+                        None,
+                        enabled,
+                        menu.rect.width(),
+                        actions,
+                    );
                 });
             }
         },

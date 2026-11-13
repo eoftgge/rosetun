@@ -10,7 +10,7 @@ pub(super) fn set_controls(ui: &mut egui::Ui, state: &State, actions: &mut Vec<A
         let menu =
             icons::icon_button_sized(ui, Icon::More, true, 38.0).on_hover_text(tr!("more-actions"));
         widgets::menu_popup(&menu).show(|ui| {
-            ui.set_min_width(180.0);
+            widgets::menu_width(ui, widgets::MenuWidth::Compact);
             if !active
                 && widgets::menu_item(
                     ui,
