@@ -1087,7 +1087,7 @@ fn service(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     ui.add_space(theme::space::L);
     widgets::settings_card(ui, |card| {
         card.row(tr!("log-title"), Some(&tr!("log-detail")), |ui| {
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "linux"))]
             ui.horizontal(|ui| {
                 if widgets::outline_button(
                     ui,
@@ -1108,10 +1108,10 @@ fn service(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                     actions.push(Action::OpenFolder(AboutFolder::Config));
                 }
             });
-            #[cfg(not(windows))]
+            #[cfg(not(any(windows, target_os = "linux")))]
             let _ = ui;
         });
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "linux"))]
         if state.settings.screen.report_saved.is_some() {
             card.row(tr!("report-saved"), None, |ui| {
                 if widgets::outline_button(ui, tr!("report-show-in-folder"), true).clicked() {
@@ -1509,11 +1509,11 @@ fn about_path(
         },
         None,
         |ui| {
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "linux"))]
             if widgets::outline_button(ui, tr!("open-folder"), state.can_open_folders()).clicked() {
                 actions.push(Action::OpenFolder(folder));
             }
-            #[cfg(not(windows))]
+            #[cfg(not(any(windows, target_os = "linux")))]
             let _ = (ui, actions, folder);
         },
     );

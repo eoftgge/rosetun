@@ -500,12 +500,12 @@ impl App {
             Job::SetDns(dns) => self.workers.set_dns(dns),
             Job::ResetSettings => self.workers.reset_settings(),
             Job::SetVerboseLog(on) => self.workers.set_verbose_log(on),
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "linux"))]
             Job::SaveReport {
                 snapshot,
                 own_alias,
             } => self.workers.save_report(snapshot, own_alias),
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "linux"))]
             Job::OpenFolder(folder) => self.workers.open_folder(folder),
             Job::SelectNode(subscription, node) => self.workers.select_node(subscription, node),
             Job::SelectRuleSet(id) => self.workers.select_rule_set(id),

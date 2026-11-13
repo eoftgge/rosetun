@@ -47,6 +47,40 @@ pub(crate) fn pick_file(
     }
 }
 
+/// Where to save, proposing `file_name`. `Ok(None)` is a cancelled dialog.
+pub(crate) fn save_file(
+    title: &str,
+    file_name: &str,
+    filter: Option<Filter<'_>>,
+) -> Result<Option<PathBuf>, Unavailable> {
+    #[cfg(windows)]
+    {
+        let mut dialog = rfd::FileDialog::new()
+            .set_title(title)
+            .set_file_name(file_name);
+        if let Some(filter) = filter {
+            dialog = dialog.add_filter(filter.name, filter.extensions);
+        }
+        Ok(dialog.save_file())
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let filters: Vec<rosetun_shell::FileFilter<'_>> = filter
+            .map(|filter| rosetun_shell::FileFilter {
+                name: filter.name,
+                extensions: filter.extensions,
+            })
+            .into_iter()
+            .collect();
+        rosetun_shell::save_file(title, file_name, &filters).map_err(unavailable)
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        let _ = (title, file_name, filter);
+        Err(Unavailable)
+    }
+}
+
 #[cfg(target_os = "linux")]
 fn unavailable(error: rosetun_shell::FileDialogError) -> Unavailable {
     // The reason is a bus or portal message; it holds no path.

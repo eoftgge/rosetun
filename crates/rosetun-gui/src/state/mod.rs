@@ -332,11 +332,11 @@ pub(crate) enum Action {
     CancelResetSettings,
     ConfirmResetSettings,
     SetVerboseLog(bool),
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     SaveReport,
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     ShowReportFolder,
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     OpenFolder(AboutFolder),
     OpenRules,
     OpenActiveRules,
@@ -516,12 +516,12 @@ pub(crate) enum Job {
     SetDns(DnsSettings),
     ResetSettings,
     SetVerboseLog(bool),
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     SaveReport {
         snapshot: Box<crate::report::ReportSnapshot>,
         own_alias: String,
     },
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     OpenFolder(PathBuf),
     SelectNode(SubscriptionId, NodeId),
     SelectRuleSet(Option<RuleSetId>),
@@ -733,7 +733,7 @@ impl State {
             event @ (WorkerEvent::AutostartLoaded(_) | WorkerEvent::SetAutostart(_)) => {
                 self.reduce_settings(event);
             }
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "linux"))]
             event @ (WorkerEvent::ReportSaved { .. } | WorkerEvent::OpenFolder(_)) => {
                 self.reduce_settings(event);
             }
@@ -851,7 +851,7 @@ impl State {
             | Action::SetNotifications(_)) => {
                 return self.act_settings(action);
             }
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "linux"))]
             action @ (Action::SaveReport | Action::ShowReportFolder | Action::OpenFolder(_)) => {
                 return self.act_settings(action);
             }

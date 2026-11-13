@@ -35,7 +35,7 @@ mod renderer;
 mod reorder;
 mod repaint;
 mod repaint_trace;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 mod report;
 mod rose_icon;
 mod rose_shape;

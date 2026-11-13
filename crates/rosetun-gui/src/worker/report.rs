@@ -1,9 +1,11 @@
 use std::fs::{self, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use rosetun_config::redact_report_text;
-use rosetun_ipc::{ClientError, ErrorCode, HelperClient};
+use rosetun_ipc::HelperClient;
+#[cfg(windows)]
+use rosetun_ipc::{ClientError, ErrorCode};
 
 use super::{CLIENT_NAME, WorkerDispatcher, WorkerEvent, emit};
 use crate::report::ReportSnapshot;
@@ -20,13 +22,7 @@ impl WorkerDispatcher {
     pub(crate) fn save_report(&self, mut snapshot: Box<ReportSnapshot>, own_alias: String) {
         self.spawn_task("rosetun-support-report", move |publisher| {
             let filename = format!("rosetun-report-{}.txt", report_timestamp());
-            let path = rfd::FileDialog::new()
-                .add_filter(
-                    report_label!("report-text-file", snapshot.language_for_report),
-                    &["txt"],
-                )
-                .set_file_name(&filename)
-                .save_file();
+            let path = report_path(publisher.store.path(), &filename, &snapshot);
             let mut new_checks = None;
             let result = path
                 .map(|path| {
@@ -51,11 +47,13 @@ impl WorkerDispatcher {
                         snapshot.helper_version = Some(version);
                     }
                     #[cfg(windows)]
-                    let build = rosetun_shell::windows_build().ok();
-                    #[cfg(not(windows))]
-                    let build = None;
+                    let system = rosetun_shell::windows_build()
+                        .ok()
+                        .map(|build| build.to_string());
+                    #[cfg(target_os = "linux")]
+                    let system = rosetun_shell::os_description();
                     let report = snapshot.render(
-                        build,
+                        system.as_deref(),
                         (engine_versions.0.as_deref(), engine_versions.1.as_deref()),
                         &log,
                         &helper_log,
@@ -73,14 +71,33 @@ impl WorkerDispatcher {
     }
 }
 
+/// Where to save: the system's dialog. Without one (Linux with no portal) the report goes
+/// next to the settings, and the "show in folder" button finds it there.
+fn report_path(config_path: &Path, filename: &str, snapshot: &ReportSnapshot) -> Option<PathBuf> {
+    let filter = crate::file_dialog::Filter {
+        name: &report_label!("report-text-file", snapshot.language_for_report),
+        extensions: &["txt"],
+    };
+    let title = report_label!("report-save", snapshot.language_for_report);
+    match crate::file_dialog::save_file(&title, filename, Some(filter)) {
+        Ok(path) => path,
+        Err(crate::file_dialog::Unavailable) => Some(config_path.with_file_name(filename)),
+    }
+}
+
 fn helper_details(
     snapshot: &ReportSnapshot,
 ) -> (Option<String>, (Option<String>, Option<String>), String) {
     match HelperClient::connect(&rosetun_ipc::default_endpoint(), CLIENT_NAME) {
-        Ok(mut client) => {
+        Ok(client) => {
+            #[cfg(windows)]
+            let mut client = client;
             let version = Some(client.helper_version().to_owned());
             let (sing_box, xray) = client.engine_versions();
             let versions = (sing_box.map(str::to_owned), xray.map(str::to_owned));
+            #[cfg(target_os = "linux")]
+            let log = journal::helper_log(snapshot.language_for_report);
+            #[cfg(windows)]
             let log = match client.diagnostic_log() {
                 Ok(text) => redact_report_text(&text),
                 Err(ClientError::Helper(error)) if error.code == ErrorCode::AccessDenied => {
@@ -96,14 +113,22 @@ fn helper_details(
             };
             (version, versions, log)
         }
-        Err(_) => (
-            None,
-            (None, None),
-            report_label!(
-                "report-helper-log-unavailable",
-                snapshot.language_for_report
-            ),
-        ),
+        Err(_) => (None, (None, None), log_without_client(snapshot)),
+    }
+}
+
+/// With no connection to the service Windows has no log to show; Linux reads the system's.
+fn log_without_client(snapshot: &ReportSnapshot) -> String {
+    #[cfg(target_os = "linux")]
+    {
+        journal::helper_log(snapshot.language_for_report)
+    }
+    #[cfg(windows)]
+    {
+        report_label!(
+            "report-helper-log-unavailable",
+            snapshot.language_for_report
+        )
     }
 }
 
@@ -137,6 +162,9 @@ fn save_new_file(path: &Path, content: &[u8]) -> io::Result<()> {
     }
     Ok(())
 }
+
+#[cfg(target_os = "linux")]
+mod journal;
 
 fn report_timestamp() -> String {
     rosetun_shell::local_report_timestamp()

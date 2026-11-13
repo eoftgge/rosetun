@@ -20,6 +20,8 @@ mod elevated;
 mod file_dialog_linux;
 #[cfg(any(windows, test))]
 mod first_start;
+#[cfg(target_os = "linux")]
+mod folders_linux;
 #[cfg(windows)]
 #[expect(
     unsafe_code,
@@ -92,6 +94,12 @@ mod system_checks;
     reason = "Win32 FFI; every unsafe block carries a SAFETY comment"
 )]
 mod system_info;
+#[cfg(target_os = "linux")]
+#[expect(
+    unsafe_code,
+    reason = "libc time calls; every unsafe block carries a SAFETY comment"
+)]
+mod system_info_linux;
 #[cfg(windows)]
 #[expect(
     unsafe_code,
@@ -128,6 +136,8 @@ pub use desktop_proxy::{DesktopProxy, ProxyRestore, ProxySet};
 pub use elevated::run_elevated;
 #[cfg(target_os = "linux")]
 pub use file_dialog_linux::{FileDialogError, FileFilter, pick_file, save_file};
+#[cfg(target_os = "linux")]
+pub use folders_linux::open_folder;
 #[cfg(windows)]
 pub use fonts::fonts_dir;
 #[cfg(windows)]
@@ -154,6 +164,8 @@ pub use status_item::{StatusItem, TrayEntry, TrayInput, TrayItem, TrayPixmap};
 pub use system_checks::{proxy_settings, windivert_running};
 #[cfg(windows)]
 pub use system_info::{local_report_timestamp, windows_build};
+#[cfg(target_os = "linux")]
+pub use system_info_linux::{local_report_timestamp, os_description};
 #[cfg(windows)]
 pub use tray_notice::tray_notice;
 #[cfg(windows)]
