@@ -27,6 +27,8 @@ FILES = PAYLOAD + ('manifest.sha256',)
 ENV_L2 = tuple('RUN_ID STAND_ID EXPECTED_BOOT_ID USER_A USER_B BIOS_GUID SCENARIO_TIMEOUT_SECONDS '
                'UNIT_TIMEOUT_SECONDS JOB_TIMEOUT_SECONDS'.split())
 ENV_L3 = ENV_L2 + ('HOST_ADDRESS', 'NODE_PORT', 'PROBE_ADDRESS', 'DNS_PROBE_ADDRESS')
+# Only a run inside the lab names the observer's marker service; it comes last in job.env.
+LAB_MARKER_KEY = 'LAB_MARKER_ADDRESS'
 DOCUMENTATION_V4 = tuple(ipaddress.ip_network(n) for n in ('192.0.2.0/24', '198.51.100.0/24', '203.0.113.0/24'))
 L3_DEFAULTS = dict(host_address='192.0.2.1', node_port=8388, probe_address='203.0.113.2',
                    dns_probe_address='203.0.113.53')
@@ -290,7 +292,8 @@ def validate_env(raw, profile='l2'):
         if not match or match[1] in env:
             raise JobError('l2-invalid-job-env')
         env[match[1]] = match[2]
-    if set(env) != set(profile.env):
+    optional = {LAB_MARKER_KEY} if profile.name == 'l3' else set()
+    if not set(profile.env) <= set(env) <= set(profile.env) | optional:
         raise JobError('l2-job-env-fields')
     if not re.fullmatch(r'[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}', env['RUN_ID']):
         raise JobError('l2-guest-run-id')
@@ -319,6 +322,17 @@ def validate_env(raw, profile='l2'):
                 raise JobError('l3-job-env-address-not-documentation')
         if not re.fullmatch(r'[0-9]{1,5}', env['NODE_PORT']) or not 1 <= int(env['NODE_PORT']) <= 65535:
             raise JobError('l3-job-env-port')
+        if LAB_MARKER_KEY in env:
+            # A documentation address and the port of the lab's marker service, nothing else.
+            from .lab_protocol import PORTS
+            host, _, port = env[LAB_MARKER_KEY].partition(':')
+            try:
+                address = ipaddress.IPv4Address(host) if re.fullmatch(r'[0-9]{1,3}(\.[0-9]{1,3}){3}', host) else None
+            except ValueError:
+                address = None
+            if (address is None or not any(address in net for net in DOCUMENTATION_V4)
+                    or port != str(PORTS['marker'])):
+                raise JobError('l3-job-env-lab-marker')
     return env
 
 

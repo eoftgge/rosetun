@@ -355,6 +355,18 @@ class L3PackageTests(unittest.TestCase):
         self.assertEqual(9, len(l2.validate_env(legacy, 'l2')))
         self.assertEqual(13, len(l2.validate_env((self.root / 'job.env').read_bytes(), 'l3')))
 
+    def test_the_lab_marker_address_is_optional_and_only_the_markers_of_the_lab(self):
+        raw = (self.root / 'job.env').read_bytes()
+        self.assertEqual(14, len(l2.validate_env(raw + b'LAB_MARKER_ADDRESS=203.0.113.2:9100\n', 'l3')))
+        for value in ('203.0.113.2:9101', '203.0.113.2', '10.0.0.1:9100', '1.1.1.1:9100', '203.0.113.256:9100',
+                      '203.000.113.2:9100', ':9100', '203.0.113.2:09100', 'doh.lab.test:9100'):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                l2.validate_env(raw + b'LAB_MARKER_ADDRESS=' + value.encode() + b'\n', 'l3')
+        with self.assertRaisesRegex(ValueError, 'fields'):
+            l2.validate_env(raw + b'LAB_MARKER_ADDRESS=203.0.113.2:9100\n', 'l2')
+        with self.assertRaisesRegex(ValueError, 'invalid'):
+            l2.validate_env(raw + b'LAB_MARKER_ADDRESS=203.0.113.2:9100\nLAB_MARKER_ADDRESS=203.0.113.2:9100\n', 'l3')
+
     def test_requests_must_be_the_generator_output_for_one_node(self):
         path = self.root / 'artifacts/request-lan.json'
         saved = path.read_bytes()
@@ -606,6 +618,44 @@ class L3ImportTests(unittest.TestCase):
                           'DNS_PROBE_ADDRESS=203.0.113.53'], env[9:])
         self.assertEqual('l3', self.obj.identity['profile'])
         self.assertEqual(set(media.content('l3')), set(self.obj.request['hashes']))
+
+    def test_a_lab_marker_in_job_env_comes_last_and_the_helper_in_the_image_agrees(self):
+        def request_with(value):
+            request = copy.deepcopy(self.obj.request)
+            request['env']['LAB_MARKER_ADDRESS'] = value
+            raw = ''.join(k + '=' + v + chr(10) for k, v in request['env'].items()).encode('ascii')
+            hashes = dict(request['hashes'], **{'job.env': hashlib.sha256(raw).hexdigest()})
+            request['identity']['manifest_sha256'] = hashlib.sha256(media.manifest(hashes, L3.payload)).hexdigest()
+            return request, raw
+        def encode(value):
+            return base64.b64encode(json.dumps(value).encode()).decode()
+        request, raw = request_with('203.0.113.2:9100')
+        self.assertEqual(14, len(raw.splitlines()))
+        self.assertEqual(b'LAB_MARKER_ADDRESS=203.0.113.2:9100', raw.splitlines()[-1])
+        l2.validate_env(raw, 'l3')
+        identity, hashes, sizes, env, final = helper.request(encode(request))
+        self.assertEqual(raw, env)
+        for value in ('203.0.113.2:9101', '10.0.0.1:9100', '203.0.113.2', 'x', '203.0.113.2:9100 '):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                helper.request(encode(request_with(value)[0]))
+        self.assertNotIn('LAB_MARKER_ADDRESS', self.obj.request['env'])
+
+    def test_the_importer_writes_the_lab_marker_last_only_when_it_is_given(self):
+        package = self.vm.run.directory / 'l2-package'
+        plain = (package / 'job.env').read_bytes()
+        del self.vm._l2_import
+        for name in ('job.env', 'manifest.sha256'):
+            (package / name).write_bytes(b'')
+        delivery.L2Import(self.vm, guest_run_id=GUEST, import_id='c' * 32, user_a='l2a', user_b='l2b',
+                          enabled=True, l3=dict(L3_BLOCK, lab_marker_address='203.0.113.2:9100'))
+        marked = (package / 'job.env').read_bytes()
+        self.assertEqual(plain + b'LAB_MARKER_ADDRESS=203.0.113.2:9100\n', marked)
+        del self.vm._l2_import
+        for name in ('job.env', 'manifest.sha256'):
+            (package / name).write_bytes(b'')
+        with self.assertRaises(ValueError):
+            delivery.L2Import(self.vm, guest_run_id=GUEST, import_id='b' * 32, user_a='l2a', user_b='l2b',
+                              enabled=True, l3=dict(L3_BLOCK, lab_marker_address='10.0.0.1:9100'))
 
     def test_the_l3_block_and_the_media_profile_must_agree(self):
         del self.vm._l2_import

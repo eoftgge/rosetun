@@ -87,6 +87,7 @@ L3_CONTENT = ('guest/launch.sh', 'guest/start.sh', 'guest/lib.sh', 'guest/run-l3
 ENV_L2 = ('RUN_ID STAND_ID EXPECTED_BOOT_ID USER_A USER_B BIOS_GUID SCENARIO_TIMEOUT_SECONDS '
           'UNIT_TIMEOUT_SECONDS JOB_TIMEOUT_SECONDS').split()
 ENV_L3 = ENV_L2 + ['HOST_ADDRESS', 'NODE_PORT', 'PROBE_ADDRESS', 'DNS_PROBE_ADDRESS']
+LAB_MARKER, MARKER_PORT = 'LAB_MARKER_ADDRESS', '9100'
 PROFILES = {'l2': dict(content=CONTENT, binaries=BINARIES, env=ENV_L2),
             'l3': dict(content=L3_CONTENT, binaries=L3_BINARIES, env=ENV_L3)}
 EXECUTABLE = set(BINARIES) | set(L3_BINARIES)
@@ -140,6 +141,9 @@ def request(raw):
         limit = 512 * 1024 * 1024 if n in tuple('artifacts/' + b for b in binaries) else 256 * 1024
         require(type(sizes[n]) is int and 0 < sizes[n] <= limit)
     require(sum(sizes.values()) <= TOTAL_LIMIT)
+    # Only an L3 run inside the lab names the observer's marker service, last in the file.
+    marker = profile == 'l3' and LAB_MARKER in env
+    order = order + [LAB_MARKER] if marker else order
     require(set(env) == set(order))
     require(all(type(v) is str for v in env.values()))
     require(env['RUN_ID'] == i['guest_run_id'] and env['STAND_ID'] == i['stand_id'] and
@@ -156,6 +160,9 @@ def request(raw):
             address = ipaddress.IPv4Address(env[k])
             require(any(address in net for net in DOCUMENTATION_V4))
         require(re.fullmatch('[0-9]{1,5}', env['NODE_PORT']) and 1 <= int(env['NODE_PORT']) <= 65535)
+        if marker:
+            require(re.fullmatch(r'[0-9]{1,3}(\.[0-9]{1,3}){3}:' + MARKER_PORT, env[LAB_MARKER]))
+            require(any(ipaddress.IPv4Address(env[LAB_MARKER].split(':')[0]) in net for net in DOCUMENTATION_V4))
     raw_env = ''.join(k + '=' + env[k] + '\n' for k in order).encode('ascii')
     final = make_manifest(dict(hashes, **{'job.env': sha(raw_env)}), content[:5] + ('job.env',) + content[5:])
     require(sha(final) == i['manifest_sha256'])

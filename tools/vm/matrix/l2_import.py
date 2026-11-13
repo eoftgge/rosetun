@@ -60,6 +60,9 @@ class L2Import:
         if l3 is not None:
             env.update(HOST_ADDRESS=l3['host_address'], NODE_PORT=str(l3['node_port']),
                        PROBE_ADDRESS=l3['probe_address'], DNS_PROBE_ADDRESS=l3['dns_probe_address'])
+            # Only inside the lab, and last: the importer in the image takes it in that place.
+            if l3.get('lab_marker_address') is not None:
+                env['LAB_MARKER_ADDRESS'] = l3['lab_marker_address']
             self.l3 = dict(l3)
         raw_env = ''.join(k + '=' + v + '\n' for k, v in env.items()).encode('ascii')
         l2.validate_env(raw_env, profile.name)

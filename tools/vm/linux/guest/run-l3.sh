@@ -55,6 +55,9 @@ NAT_TABLE=rosetun-l3-nat
 
 RUN_ID='' STAND_ID='' EXPECTED_BOOT_ID='' USER_A='' USER_B='' BIOS_GUID=''
 HOST_ADDRESS='' NODE_PORT='' PROBE_ADDRESS='' DNS_PROBE_ADDRESS=''
+# ADDRESS:PORT of the lab observer's marker service. Empty (the default, and always on
+# Hyper-V) means no markers: nothing below sends a datagram or writes a file for them.
+LAB_MARKER_ADDRESS=''
 SCENARIO_TIMEOUT_SECONDS=30 UNIT_TIMEOUT_SECONDS=180 JOB_TIMEOUT_SECONDS=1800
 EXPECTED_ARCH=x86_64
 PHYS=''
@@ -135,11 +138,72 @@ wait_state() {
     return 1
 }
 
+# ---------------------------------------------------------------- lab windows
+#
+# Only with a lab (LAB_MARKER_ADDRESS set). The lab's observer judges the traffic between
+# an `open` and a `close` marker, one pair per protected session. A marker is a UDP
+# datagram to the lab, so it can only go out while nothing of Rosetun is in the way: no
+# table inet rosetun and the state Disconnected. Otherwise nothing is sent and nothing
+# else changes; the window then stays open and the observer calls it unverified. These
+# functions never change a result, a note, CLI_OUT or the return code of their caller.
+
+# The function the window belongs to: the first caller that is not a session helper.
+lab_label() {
+    local name
+    for name in "${FUNCNAME[@]:1}"; do
+        case $name in lab_* | connect_with | disconnect) continue ;; esac
+        printf '%s' "$name" | tr 'A-Z' 'a-z' | tr -c 'a-z0-9_.-' '_' | cut -c1-48
+        return
+    done
+}
+
+# The marker grammar asks for 32 hexadecimal digits; they are derived from the run id,
+# and the controller derives the same ones for the lab.
+lab_run_id() { printf '%s' "rosetun-lab-run:$RUN_ID" | sha256sum | cut -c1-32; }
+
+# lab_send TEXT: one datagram, then the echo for at most two seconds.
+lab_send() {
+    (
+        exec 7<>"/dev/udp/${LAB_MARKER_ADDRESS%:*}/${LAB_MARKER_ADDRESS##*:}" || exit 1
+        printf '%s' "$1" >&7 || exit 1
+        IFS= read -r -t 2 -n 1 _ <&7
+    ) 2>/dev/null
+}
+
+# lab_mark open|close: the index and the label of the open window are kept in STATE,
+# so that finalize and a restarted function still know them.
+lab_mark() {
+    [ -n "$LAB_MARKER_ADDRESS" ] || return 0
+    table_present && return 0
+    [[ $(state_line) =~ ^Disconnected ]] || return 0
+    local index label
+    case ${1-} in
+        open)
+            index=$(cat "$STATE/lab-index" 2>/dev/null || echo 0)
+            [[ $index =~ ^[0-9]{1,2}$ ]] && [ "$index" -lt 100 ] || return 0
+            label=$(lab_label)
+            [ -n "$label" ] || return 0
+            printf '%s\n' "$((index + 1))" >"$STATE/lab-index"
+            printf '%s %s\n' "$index" "$label" >"$STATE/lab-window"
+            lab_send "rosetun-lab-marker:$(lab_run_id).$index.open.$label"
+            ;;
+        close)
+            [ -f "$STATE/lab-window" ] || return 0
+            read -r index label <"$STATE/lab-window"
+            rm -f -- "$STATE/lab-window"
+            lab_send "rosetun-lab-marker:$(lab_run_id).$index.close.$label"
+            ;;
+    esac
+    return 0
+}
+
 connect_with() {
     local request=$1
     # A scenario that failed half-way may have left a session.
     [[ $(state_line) =~ ^Disconnected ]] || cli 60 disconnect
+    lab_mark close
     install -m 0600 -o "$(uid_of "$USER_A")" -g "$(gid_of "$USER_A")" -- "$ART/$request" "$RUN/work-$USER_A/$request"
+    lab_mark open
     cli 120 connect "$request"
     [ "$CLI_RC" -eq 0 ] || { fail_reason="connect with $request failed: $(cli_error)"; return 1; }
     wait_state '^Connected' 30
@@ -147,7 +211,8 @@ connect_with() {
 
 disconnect() {
     cli 60 disconnect
-    wait_state '^Disconnected' 30
+    wait_state '^Disconnected' 30 || return 1
+    lab_mark close
 }
 
 table_present() { "$NFT" list table inet rosetun >/dev/null 2>&1; }
@@ -974,6 +1039,7 @@ scenario_peer() {
     }
     check forward.blocked "forwarded HTTPS answered, was dropped under the kill switch, answered again" forwarded
     [[ $(state_line) =~ ^Disconnected ]] || cli 60 disconnect
+    lab_mark close
     # What stays is the cleanup's to remove and report.
     peer_down
 }
@@ -1001,6 +1067,7 @@ scenario_crash() {
         cli 30 open-network
         [ "$CLI_RC" -eq 0 ] || { fail_reason="open-network failed: $CLI_OUT"; return 1; }
         ! table_present || { fail_reason="the table stays after open-network"; return 1; }
+        lab_mark close
         expect_reached "HTTPS to $PROBE_ADDRESS on $PHYS" direct_https
     }
     check crash.open-network "the table went away and the direct path answered" opened
@@ -1012,6 +1079,7 @@ scenario_crash() {
         [ "$KILLED_TABLE_PRESENT" = 1 ] || { fail_reason="the table went away with the helper, before the restart"; return 1; }
         ! printf '%s\n' "$CLI_OUT" | grep -q '^network: held closed' || { fail_reason="status reports the network held closed after a DNS-lock crash"; return 1; }
         ! table_present || { fail_reason="the restarted helper kept the DNS lock's table"; return 1; }
+        lab_mark close
         journalctl -b -u rosetun-helper.service --no-pager 2>/dev/null | grep -q 'removed the DNS lock a crashed helper left' ||
             { fail_reason="the journal does not say that the DNS lock was removed"; return 1; }
         expect_udp_dns_sent || return 1
@@ -1119,6 +1187,7 @@ scenario_stop() {
         connect_with request-kill-switch.json || return 1
         timeout "$UNIT_TIMEOUT_SECONDS" systemctl stop rosetun-helper.service || { fail_reason="systemctl stop failed"; return 1; }
         ! table_present || { fail_reason="the table stays after a normal stop"; return 1; }
+        lab_mark close
         expect_reached "HTTPS to $PROBE_ADDRESS on $PHYS" direct_https
     }
     check stop.removes-table "the table went away with the stop and the direct path answered" stopped
@@ -1225,13 +1294,15 @@ finalize() {
 
 load_job() {
     l2_read_env_file "$RUN/job.env" RUN_ID STAND_ID EXPECTED_BOOT_ID USER_A USER_B BIOS_GUID \
-        SCENARIO_TIMEOUT_SECONDS UNIT_TIMEOUT_SECONDS JOB_TIMEOUT_SECONDS HOST_ADDRESS NODE_PORT PROBE_ADDRESS DNS_PROBE_ADDRESS || return 1
+        SCENARIO_TIMEOUT_SECONDS UNIT_TIMEOUT_SECONDS JOB_TIMEOUT_SECONDS HOST_ADDRESS NODE_PORT PROBE_ADDRESS DNS_PROBE_ADDRESS LAB_MARKER_ADDRESS || return 1
     l2_valid_run_id "$RUN_ID" || { echo "invalid run id" >&2; return 1; }
     [ "$(basename -- "$RUN")" = "$RUN_ID" ] || { echo "run directory does not match the run id" >&2; return 1; }
     [[ $HOST_ADDRESS =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || { echo "invalid host address" >&2; return 1; }
     [[ $PROBE_ADDRESS =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || { echo "invalid probe address" >&2; return 1; }
     [[ $DNS_PROBE_ADDRESS =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || { echo "invalid DNS probe address" >&2; return 1; }
     [[ $NODE_PORT =~ ^[0-9]{1,5}$ ]] || { echo "invalid node port" >&2; return 1; }
+    [ -z "$LAB_MARKER_ADDRESS" ] || [[ $LAB_MARKER_ADDRESS =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}:[0-9]{1,5}$ ]] ||
+        { echo "invalid lab marker address" >&2; return 1; }
 }
 
 load_job || exit 65

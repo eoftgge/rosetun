@@ -220,7 +220,7 @@ while IFS= read -r path; do
 done <<<"$required"
 l3_allows() { bash -c '. "$1" && l3_start_path_allowed "$2"' _ "$start" "$1"; }
 required_l3=$(bash -c '. "$1" && printf "%s\n" "${L3_START_REQUIRED[@]}"' _ "$start")
-expect "start.sh requires the L3 job, the service, the engine and the requests" test "$(printf '%s\n' "$required_l3" | wc -l)" -eq 17
+expect "start.sh requires the L3 job, the service, the engine and the requests" test "$(printf '%s\n' "$required_l3" | wc -l)" -eq 18
 while IFS= read -r path; do
     expect "every required L3 path passes both lists: $path" bash -c '. "$1" && l2_launch_path_allowed "$3" && . "$2" && l3_start_path_allowed "$3"' _ "$launch" "$start" "$path"
 done <<<"$required_l3"
@@ -233,6 +233,78 @@ expect "run-l3.sh reads the host node values through the strict reader" \
     grep -q 'JOB_TIMEOUT_SECONDS HOST_ADDRESS NODE_PORT PROBE_ADDRESS DNS_PROBE_ADDRESS' "$here/../guest/run-l3.sh"
 expect_not "run-l3.sh never deletes the service's own table" \
     grep -Eq 'delete table inet rosetun([^-]|$)' "$here/../guest/run-l3.sh"
+
+# --- run-l3.sh: the lab window markers (only with LAB_MARKER_ADDRESS)
+l3=$here/../guest/run-l3.sh
+expect "run-l3.sh takes LAB_MARKER_ADDRESS as an optional key of job.env" \
+    grep -q 'DNS_PROBE_ADDRESS LAB_MARKER_ADDRESS || return 1' "$l3"
+expect "run-l3.sh sends no marker unless the address is set" grep -q '^    \[ -n "\$LAB_MARKER_ADDRESS" \] || return 0$' "$l3"
+expect "start.sh lets only an L3 stage read LAB_MARKER_ADDRESS" \
+    grep -q '^    \[ "\$stage" != l3 \] || keys+=(LAB_MARKER_ADDRESS)$' "$start"
+lab_functions=$work/lab-functions.sh
+awk '/^# -+ lab windows/ { on = 1 } /^connect_with\(\) \{/ { on = 0 } on' "$l3" >"$lab_functions"
+expect "the lab window functions were found in run-l3.sh" test -s "$lab_functions"
+py=$(command -v python3 || command -v python || true)
+if [ -n "$py" ]; then
+    cat >"$work/echo-server.py" <<'PY'
+import socket, sys
+server = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+server.bind(('127.0.0.1', 0))
+open(sys.argv[1], 'w').write(str(server.getsockname()[1]))
+with open(sys.argv[2], 'ab', buffering=0) as log:
+    while True:
+        data, peer = server.recvfrom(512)
+        log.write(data + b'\n')
+        server.sendto(b'rosetun-lab-ack:' + data, peer)
+PY
+    "$py" "$work/echo-server.py" "$work/echo-port" "$work/echo-log" &
+    echo_pid=$!
+    for _ in $(seq 1 50); do [ -s "$work/echo-port" ] && break; sleep 0.1; done
+    mark_state=$work/mark-state
+    mkdir -p "$mark_state"
+    # A stand-in for the guest: the table, the state and the two helpers lab_mark calls.
+    cat >"$work/mark-harness.sh" <<'SH'
+. "$LAB_FUNCTIONS"
+STATE=$MARK_STATE RUN_ID=20261113T101010Z-0a1b2c3d
+table_present() { [ -f "$MARK_STATE/table" ]; }
+state_line() { cat "$MARK_STATE/state"; }
+connect_with() { lab_mark "$1"; }
+connect_ks() { connect_with open; }
+disconnect() { lab_mark close; }
+Odd_Name.1() { connect_with open; }
+"$@"
+SH
+    mark() { LAB_FUNCTIONS=$lab_functions MARK_STATE=$mark_state LAB_MARKER_ADDRESS=${MARK_ADDRESS-127.0.0.1:$(cat "$work/echo-port")} bash "$work/mark-harness.sh" "$@"; }
+    export -f mark
+    export work lab_functions mark_state
+    run_id_hash=$(printf '%s' 'rosetun-lab-run:20261113T101010Z-0a1b2c3d' | sha256sum | cut -c1-32)
+    printf 'Disconnected\n' >"$mark_state/state"
+    expect "without an address nothing is sent or written" bash -c 'MARK_ADDRESS= ; export MARK_ADDRESS; LAB_FUNCTIONS=$1 MARK_STATE=$2 LAB_MARKER_ADDRESS= bash "$3" connect_ks; [ ! -e "$2/lab-window" ] && [ ! -e "$2/lab-index" ]' _ "$lab_functions" "$mark_state" "$work/mark-harness.sh"
+    expect "a closing marker without an open window sends nothing" mark disconnect
+    expect "an open window is sent by the function that asked for it" mark connect_ks
+    expect "the first window has index 0 and the function's name" grep -qx "rosetun-lab-marker:$run_id_hash.0.open.connect_ks" "$work/echo-log"
+    expect "the open window is kept in STATE" grep -qx '0 connect_ks' "$mark_state/lab-window"
+    expect "the closing marker keeps the index and the label of the opening one" mark disconnect
+    expect "the closing marker is on the wire" grep -qx "rosetun-lab-marker:$run_id_hash.0.close.connect_ks" "$work/echo-log"
+    expect_not "a closed window leaves nothing open" test -e "$mark_state/lab-window"
+    expect "the next window has the next index, a lower-case label" mark 'Odd_Name.1'
+    expect "an odd function name becomes a valid label" grep -qx "rosetun-lab-marker:$run_id_hash.1.open.odd_name.1" "$work/echo-log"
+    expect "a second closing marker without a window is not sent" bash -c 'before=$(wc -l <"$1"); mark disconnect; mark disconnect; [ "$(wc -l <"$1")" -eq $((before + 1)) ]' _ "$work/echo-log"
+    : >"$work/echo-log"
+    : >"$mark_state/table"
+    expect "no marker is sent while the table is there" bash -c 'mark connect_ks; [ ! -s "$1" ]' _ "$work/echo-log"
+    rm -f -- "$mark_state/table"
+    printf 'Connected\n' >"$mark_state/state"
+    expect "no marker is sent unless the state is Disconnected" bash -c 'mark connect_ks; [ ! -s "$1" ]' _ "$work/echo-log"
+    expect "a refused marker leaves no window and uses no index" bash -c '[ ! -e "$1/lab-window" ] && [ "$(cat "$1/lab-index")" = 2 ]' _ "$mark_state"
+    printf 'Disconnected\n' >"$mark_state/state"
+    expect "an echo that never comes does not fail the caller" bash -c 'MARK_ADDRESS=127.0.0.1:9; export MARK_ADDRESS; mark connect_ks'
+    kill "$echo_pid" 2>/dev/null
+    wait "$echo_pid" 2>/dev/null
+else
+    printf 'note  no python; the lab marker functions were not run
+'
+fi
 
 read_manifest() { bash -c '. "$1" && l2_launch_read_manifest "$2"' _ "$launch" "$1"; }
 h=$(printf '0%.0s' $(seq 1 64))
