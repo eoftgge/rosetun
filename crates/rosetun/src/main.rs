@@ -1,5 +1,6 @@
 mod connections;
 mod exits;
+mod rules;
 mod subcommands;
 mod subscriptions;
 
@@ -34,6 +35,7 @@ enum Command {
     },
     Delay,
     Exits,
+    Rules(rules::Command),
     Connections,
     CloseConnection {
         id: String,
@@ -154,6 +156,7 @@ fn main() -> ExitCode {
         },
         Command::Delay => with_helper(delay),
         Command::Exits => local_result(exits::run()),
+        Command::Rules(command) => local_result(rules::run(command)),
         Command::Connections => with_helper(connections::run),
         Command::CloseConnection { id } => with_helper(|client| connections::close(client, &id)),
         Command::Status => with_helper(status),
@@ -930,6 +933,7 @@ fn parse_command_arguments(arguments: &[String]) -> Result<Command, String> {
         }),
         ["delay"] => Ok(Command::Delay),
         ["exits"] => Ok(Command::Exits),
+        ["rules", arguments @ ..] => rules::parse(arguments).map(Command::Rules),
         ["connections"] => Ok(Command::Connections),
         ["connections", "close", id] => Ok(Command::CloseConnection {
             id: (*id).to_owned(),
@@ -1000,6 +1004,7 @@ fn read_connect_request(path: &Path) -> Result<ConnectRequest, String> {
 }
 
 fn print_usage() {
+    eprintln!("  rosetun rules export [--selected-ids ID,...] [--with-list-urls] [FILE|-]\n  rosetun rules import [--replace] [--yes] FILE|-");
     eprintln!(
         "\
 Usage:
