@@ -168,13 +168,39 @@ fn tab_body(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
     ui.heading(tr!("rules-tab-title"));
     ui.horizontal(|ui| {
         ui.menu_button(tr!("rules-transfer-export"), |ui| {
-            if widgets::outline_button(ui, tr!("rules-transfer-all"), state.can_edit_rules()).clicked() { state.rules.exchange.selected = false; actions.push(Action::OpenRulesExport(false)); ui.close(); }
-            if widgets::outline_button(ui, tr!("rules-transfer-selected"), state.can_edit_rules() && !state.rules.screen.selected_rules.is_empty()).clicked() { state.rules.exchange.selected = true; actions.push(Action::OpenRulesExport(false)); ui.close(); }
+            if widgets::outline_button(ui, tr!("rules-transfer-all"), state.can_edit_rules())
+                .clicked()
+            {
+                state.rules.exchange.selected = false;
+                actions.push(Action::OpenRulesExport(false));
+                ui.close();
+            }
+            if widgets::outline_button(
+                ui,
+                tr!("rules-transfer-selected"),
+                state.can_edit_rules() && !state.rules.screen.selected_rules.is_empty(),
+            )
+            .clicked()
+            {
+                state.rules.exchange.selected = true;
+                actions.push(Action::OpenRulesExport(false));
+                ui.close();
+            }
         });
         ui.menu_button(tr!("rules-transfer-import"), |ui| {
-            if widgets::outline_button(ui, tr!("rules-transfer-clipboard"), state.can_edit_rules()).clicked() { actions.push(Action::ReadRulesImport(false)); ui.close(); }
+            if widgets::outline_button(ui, tr!("rules-transfer-clipboard"), state.can_edit_rules())
+                .clicked()
+            {
+                actions.push(Action::ReadRulesImport(false));
+                ui.close();
+            }
             #[cfg(windows)]
-            if widgets::outline_button(ui, tr!("rules-transfer-file"), state.can_edit_rules()).clicked() { actions.push(Action::ReadRulesImport(true)); ui.close(); }
+            if widgets::outline_button(ui, tr!("rules-transfer-file"), state.can_edit_rules())
+                .clicked()
+            {
+                actions.push(Action::ReadRulesImport(true));
+                ui.close();
+            }
             #[cfg(target_os = "linux")]
             ui.label(tr!("rules-transfer-linux"));
         });

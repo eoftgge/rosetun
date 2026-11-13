@@ -731,22 +731,43 @@ fn rule_value(
         }
         RuleCaption::Template => tr!("caption-template"),
     };
-    let caption = if !rule.enabled {
+    let caption = if rule.enabled {
+        caption
+    } else {
         match &rule.matcher {
-            RuleMatcher::Process(value) if rosetun_config::rules_exchange::translate_process(value, rosetun_config::rules_exchange::System::current(), rosetun_config::rules_exchange::System::current()).1 => tr!("rules-transfer-other-system"),
-            RuleMatcher::List { list, .. } => {
-                state.config.lists.iter().find(|entry| &entry.id == list).map_or_else(|| caption.clone(), |entry| {
-                    match &entry.source {
-                        rosetun_config::ListSource::File { original_name } if entry.sha256.is_none() => {
-                            if original_name == "list-required" { tr!("rules-transfer-needs-list") } else { format!("{}: {original_name}", tr!("rules-transfer-needs-file")) }
+            RuleMatcher::Process(value)
+                if rosetun_config::rules_exchange::translate_process(
+                    value,
+                    rosetun_config::rules_exchange::System::current(),
+                    rosetun_config::rules_exchange::System::current(),
+                )
+                .1 =>
+            {
+                tr!("rules-transfer-other-system")
+            }
+            RuleMatcher::List { list, .. } => state
+                .config
+                .lists
+                .iter()
+                .find(|entry| &entry.id == list)
+                .map_or_else(
+                    || caption.clone(),
+                    |entry| match &entry.source {
+                        rosetun_config::ListSource::File { original_name }
+                            if entry.sha256.is_none() =>
+                        {
+                            if original_name == "list-required" {
+                                tr!("rules-transfer-needs-list")
+                            } else {
+                                format!("{}: {original_name}", tr!("rules-transfer-needs-file"))
+                            }
                         }
                         _ => caption.clone(),
-                    }
-                })
-            }
+                    },
+                ),
             _ => caption,
         }
-    } else { caption };
+    };
     let missing = state.missing_list_rule(set, &rule.id);
     let exit_missing = rule.target == RuleTarget::Exit
         && rule.exit.as_ref().is_none_or(|id| unresolved.contains(id));

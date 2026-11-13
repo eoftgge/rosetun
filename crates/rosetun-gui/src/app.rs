@@ -523,7 +523,10 @@ impl App {
             Job::BrowseExecutable => self.workers.browse_executable(),
             Job::WriteRules(text, file) => self.workers.write_rules(text, file),
             Job::ReadRules(file) => self.workers.read_rules(file),
-            Job::ImportRules(set, preview, replace, default_target) => self.workers.import_rules(set, preview, replace, default_target),
+            Job::ImportRules(set, preview, replace, default_target) => {
+                self.workers
+                    .import_rules(set, preview, replace, default_target);
+            }
             Job::AddRule(set, matcher, target) => self.workers.add_rule(set, matcher, target),
             Job::AddRules(set, matchers, target) => self.workers.add_rules(set, matchers, target),
             Job::UpdateRule(set, rule, matcher, target) => {

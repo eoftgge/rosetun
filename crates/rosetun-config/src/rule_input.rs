@@ -18,7 +18,6 @@ pub enum RuleInputError {
     RelativePath,
 }
 
-
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum IpCidrError {
     #[error("enter an IP address or subnet")]
@@ -26,7 +25,6 @@ pub enum IpCidrError {
     #[error("subnet starts at {corrected}")]
     HostBits { corrected: String },
 }
-
 
 pub fn parse_ip_cidr(value: &str) -> Result<String, IpCidrError> {
     let (ip, prefix) = match value.split_once('/') {
@@ -60,7 +58,6 @@ pub fn parse_ip_cidr(value: &str) -> Result<String, IpCidrError> {
         })
     }
 }
-
 
 pub fn parse_domain_input(input: &str) -> Result<DomainMatch, RuleInputError> {
     let input = input.trim();
@@ -113,4 +110,3 @@ fn parse_domain(host: &str, suffix: bool) -> Result<DomainMatch, RuleInputError>
         Err(_) => Err(RuleInputError::InvalidDomain),
     }
 }
-

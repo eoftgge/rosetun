@@ -1004,7 +1004,9 @@ fn read_connect_request(path: &Path) -> Result<ConnectRequest, String> {
 }
 
 fn print_usage() {
-    eprintln!("  rosetun rules export [--selected-ids ID,...] [--with-list-urls] [FILE|-]\n  rosetun rules import [--replace] [--yes] FILE|-");
+    eprintln!(
+        "  rosetun rules export [--selected-ids ID,...] [--with-list-urls] [FILE|-]\n  rosetun rules import [--replace] [--yes] FILE|-"
+    );
     eprintln!(
         "\
 Usage:

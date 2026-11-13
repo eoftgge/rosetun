@@ -536,7 +536,12 @@ pub(crate) enum Job {
     SetDefaultTarget(RuleSetId, RuleTarget),
     WriteRules(String, bool),
     ReadRules(bool),
-    ImportRules(RuleSetId, rosetun_config::rules_exchange::Preview, bool, bool),
+    ImportRules(
+        RuleSetId,
+        rosetun_config::rules_exchange::Preview,
+        bool,
+        bool,
+    ),
     LoadProcesses(u64),
     #[cfg(windows)]
     BrowseExecutable,
@@ -899,7 +904,11 @@ impl State {
             | Action::RequestDeleteExit(_)
             | Action::CancelDeleteExit
             | Action::ConfirmDeleteExit) => return self.act_exits(action),
-            action @ (Action::OpenRulesExport(_) | Action::ConfirmRulesExport(_) | Action::ReadRulesImport(_) | Action::ConfirmRulesImport(_) | Action::CancelRulesExchange) => return self.act_rules_exchange(action),
+            action @ (Action::OpenRulesExport(_)
+            | Action::ConfirmRulesExport(_)
+            | Action::ReadRulesImport(_)
+            | Action::ConfirmRulesImport(_)
+            | Action::CancelRulesExchange) => return self.act_rules_exchange(action),
             action @ (Action::OpenRules
             | Action::OpenActiveRules
             | Action::ChooseRuleSet(_)

@@ -194,19 +194,41 @@ fn save_exit(
 }
 
 impl WorkerDispatcher {
-    pub(crate) fn import_rules(&self, set: RuleSetId, preview: rosetun_config::rules_exchange::Preview, replace: bool, default_target: bool) {
-        self.spawn_complete("rosetun-import-rules", move |store| WorkerEvent::ImportRules(rosetun_core::rules_exchange::apply(store,&set,&preview,replace,default_target)));
+    pub(crate) fn import_rules(
+        &self,
+        set: RuleSetId,
+        preview: rosetun_config::rules_exchange::Preview,
+        replace: bool,
+        default_target: bool,
+    ) {
+        self.spawn_complete("rosetun-import-rules", move |store| {
+            WorkerEvent::ImportRules(rosetun_core::rules_exchange::apply(
+                store,
+                &set,
+                &preview,
+                replace,
+                default_target,
+            ))
+        });
     }
     pub(crate) fn write_rules(&self, text: String, file: bool) {
         self.spawn_task("rosetun-export-rules", move |publisher| {
             let result = write_rules_document(text, file);
-            emit(&publisher.tx, &publisher.repaint, WorkerEvent::RulesWritten(result));
+            emit(
+                &publisher.tx,
+                &publisher.repaint,
+                WorkerEvent::RulesWritten(result),
+            );
         });
     }
     pub(crate) fn read_rules(&self, file: bool) {
         self.spawn_task("rosetun-read-rules", move |publisher| {
             let result = read_rules_document(file);
-            emit(&publisher.tx, &publisher.repaint, WorkerEvent::RulesRead(result));
+            emit(
+                &publisher.tx,
+                &publisher.repaint,
+                WorkerEvent::RulesRead(result),
+            );
         });
     }
 }
@@ -214,27 +236,48 @@ fn write_rules_document(text: String, file: bool) -> Result<(), String> {
     if file {
         #[cfg(windows)]
         {
-            let Some(path) = rfd::FileDialog::new().set_title(tr!("rules-transfer-export")).add_filter("JSON", &["json"]).set_file_name("rules.json").save_file() else { return Ok(()); };
-            return std::fs::write(path,text).map_err(|_| "write".into());
+            let Some(path) = rfd::FileDialog::new()
+                .set_title(tr!("rules-transfer-export"))
+                .add_filter("JSON", &["json"])
+                .set_file_name("rules.json")
+                .save_file()
+            else {
+                return Ok(());
+            };
+            return std::fs::write(path, text).map_err(|_| "write".into());
         }
         #[cfg(not(windows))]
         return Err("file dialogs unavailable".into());
     }
-    arboard::Clipboard::new().and_then(|mut clipboard| clipboard.set_text(text)).map_err(|_| "clipboard".into())
+    arboard::Clipboard::new()
+        .and_then(|mut clipboard| clipboard.set_text(text))
+        .map_err(|_| "clipboard".into())
 }
 fn read_rules_document(file: bool) -> Result<Option<String>, String> {
     if file {
         #[cfg(windows)]
         {
             use std::io::Read;
-            let Some(path) = rfd::FileDialog::new().set_title(tr!("rules-transfer-import")).add_filter("JSON", &["json"]).pick_file() else { return Ok(None); };
+            let Some(path) = rfd::FileDialog::new()
+                .set_title(tr!("rules-transfer-import"))
+                .add_filter("JSON", &["json"])
+                .pick_file()
+            else {
+                return Ok(None);
+            };
             let input = std::fs::File::open(path).map_err(|_| "read")?;
             let mut text = String::new();
-            input.take((rosetun_config::rules_exchange::MAX_DOCUMENT_BYTES+1) as u64).read_to_string(&mut text).map_err(|_| "read")?;
+            input
+                .take((rosetun_config::rules_exchange::MAX_DOCUMENT_BYTES + 1) as u64)
+                .read_to_string(&mut text)
+                .map_err(|_| "read")?;
             return Ok(Some(text));
         }
         #[cfg(not(windows))]
         return Err("file dialogs unavailable".into());
     }
-    arboard::Clipboard::new().and_then(|mut clipboard| clipboard.get_text()).map(Some).map_err(|_| "clipboard".into())
+    arboard::Clipboard::new()
+        .and_then(|mut clipboard| clipboard.get_text())
+        .map(Some)
+        .map_err(|_| "clipboard".into())
 }
