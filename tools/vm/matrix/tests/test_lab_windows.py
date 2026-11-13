@@ -276,5 +276,89 @@ class WindowTests(Cases):
         self.assertEqual({'arp-probe': 0}, result['windows'][0]['categories']['allowed'])
 
 
+class FoundWindowTests(Cases):
+    """No list from the controller: the windows are the ones the markers name, by label."""
+    GROUP = ['first', 'second']
+
+    def found(self, frames, rows, required=GROUP, **changes):
+        raw = capture(frames) if isinstance(frames, list) else frames
+        return wire.classify_windows(raw, RUN, None, health=health(rows), ready=True,
+                                     required_labels=required, **changes)
+
+    def test_any_number_of_windows_with_any_labels_is_found_in_order(self):
+        frames = window(0, 'first') + window(1, 'other') + window(2, 'second') + window(3, 'first')
+        rows = served([(0, 'first'), (1, 'other'), (2, 'second'), (3, 'first')])
+        result = self.found(frames, rows)
+        self.assertEqual(['NONE'] * 4, self.leaks(result))
+        self.assertEqual(['first', 'other', 'second', 'first'], [w['label'] for w in result['windows']])
+        self.assertEqual([True, False, True, True], [w['in_group'] for w in result['windows']])
+        self.assertEqual([], result['missing_labels'])
+        self.assertEqual([], result['extra_windows'])
+        self.assertNotIn('window-count-mismatch', result['observer_reasons'])
+
+    def test_a_session_outside_the_group_spoils_nobody_and_a_leak_in_it_is_still_detected(self):
+        frames = window(0, 'first') + window(1, 'other', (LEAK,)) + window(2, 'second')
+        result = self.found(frames, served([(0, 'first'), (1, 'other'), (2, 'second')]))
+        self.assertEqual(['NONE', 'DETECTED', 'NONE'], self.leaks(result))
+        self.assertFalse(result['windows'][1]['in_group'])
+
+    def test_two_windows_with_one_label_are_judged_each_by_itself(self):
+        frames = window(0, 'first') + window(1, 'second') + window(2, 'first', (LEAK,))
+        result = self.found(frames, served([(0, 'first'), (1, 'second'), (2, 'first')]))
+        self.assertEqual(['NONE', 'NONE', 'DETECTED'], self.leaks(result))
+        self.assertEqual([], result['missing_labels'])
+
+    def test_a_label_of_the_group_without_a_window_is_listed_and_spoils_no_other_window(self):
+        frames = window(0, 'first') + window(1, 'other')
+        result = self.found(frames, served([(0, 'first'), (1, 'other')]))
+        self.assertEqual(['NONE', 'NONE'], self.leaks(result))
+        self.assertEqual(['second'], result['missing_labels'])
+        nothing = self.found([], [])
+        self.assertEqual([], nothing['windows'])
+        self.assertEqual(self.GROUP, nothing['missing_labels'])
+
+    def test_an_index_out_of_sequence_in_the_middle_spoils_the_windows_after_it(self):
+        frames = window(0, 'first') + window(2, 'second') + window(3, 'first')
+        result = self.found(frames, served([(0, 'first'), (2, 'second'), (3, 'first')]))
+        self.assertEqual(['NONE', 'UNVERIFIED', 'UNVERIFIED', 'UNVERIFIED'], self.leaks(result))
+        self.assertEqual('window-missing', result['windows'][1]['leak_reason'])
+        self.assertIsNone(result['windows'][1]['label'])
+        self.assertIn('window-index-out-of-sequence', result['windows'][2]['observer_reasons'])
+        self.assertEqual([], result['missing_labels'])
+
+    def test_a_repeated_index_and_a_missing_close_spoil_only_what_the_rules_say(self):
+        frames = window(0, 'first') + window(1, 'second', close=False)
+        rows = [(0, 'open', 'first'), (0, 'close', 'first'), (1, 'open', 'second')]
+        result = self.found(frames, rows)
+        self.assertEqual(['NONE', 'UNVERIFIED'], self.leaks(result))
+        self.assertEqual('window-markers-missing-or-repeated', result['windows'][1]['leak_reason'])
+        self.assertEqual([], result['missing_labels'])
+
+    def test_a_label_that_changes_inside_a_window_is_unverified(self):
+        frames = marker_frames(0, 'open', 'first') + marker_frames(0, 'close', 'second')
+        result = self.found(frames, [(0, 'open', 'first'), (0, 'close', 'second')])
+        self.assertEqual('window-label-mismatch', result['windows'][0]['leak_reason'])
+
+    def test_the_observer_rules_still_apply_to_every_found_window(self):
+        frames = window(0, 'first') + window(1, 'other')
+        result = wire.classify_windows(capture(frames), RUN, None, ready=False, required_labels=self.GROUP,
+                                       health=health(served([(0, 'first'), (1, 'other')])))
+        self.assertEqual(['UNVERIFIED', 'UNVERIFIED'], self.leaks(result))
+        self.assertIn('observer-not-ready', result['windows'][0]['observer_reasons'])
+
+    def test_the_two_modes_do_not_mix_and_the_labels_are_checked(self):
+        spec = [dict(label='first')]
+        with self.assertRaises(ValueError):
+            wire.classify_windows(capture([]), RUN, spec, health=health([]), ready=True, required_labels=['first'])
+        for bad in (['First'], ['a', 'a'], [1], 'first', ['x' * 49]):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                wire.classify_windows(capture([]), RUN, None, health=health([]), ready=True, required_labels=bad)
+
+    def test_the_exact_mode_has_no_found_mode_fields(self):
+        result = self.verdict(self.three())
+        self.assertNotIn('missing_labels', result)
+        self.assertNotIn('in_group', result['windows'][0])
+
+
 if __name__ == '__main__':
     unittest.main()

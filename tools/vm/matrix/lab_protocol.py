@@ -925,8 +925,16 @@ def _window_health_reasons(health, ready, served):
     return reasons
 
 
+def _required_labels(required_labels):
+    """The labels that must have a window when the windows are found in the capture."""
+    if (type(required_labels) not in (list, tuple) or len(set(required_labels)) != len(required_labels)
+            or not all(type(label) is str and WINDOW_LABEL.fullmatch(label) for label in required_labels)):
+        raise ValueError('invalid-windows')
+    return list(required_labels)
+
+
 def classify_windows(raw, run, windows_expected, *, health, ready, allowances=(), tunnel_port=None,
-                     https=None, probes=(), limit=CAPTURE_LIMIT):
+                     https=None, probes=(), limit=CAPTURE_LIMIT, required_labels=()):
     """Split one capture into phase windows and give every expected window its own leak verdict.
 
     `windows_expected` lists, in order, the windows the controller expects: dicts with the
@@ -942,8 +950,24 @@ def classify_windows(raw, run, windows_expected, *, health, ready, allowances=()
     observer. Anything else is `UNVERIFIED`; a seen leak stays `DETECTED`. After the first
     marker out of sequence (an index repeated, skipped or reversed, an opening inside an open
     window, a closing without its opening) no later window can be `NONE`.
+
+    With `windows_expected=None` the windows are found in the capture instead: window `n` is
+    the one whose markers carry index `n`, its label the one its markers name (a label may
+    repeat), and any number of windows is accepted, so one more session than the controller
+    guessed spoils nothing. The rules above are otherwise the same, each window by itself.
+    `required_labels` are the labels of the stage's group: each needs at least one window, and
+    one without any is listed in `missing_labels` for the controller to answer for the
+    scenarios of that label only. Every row says whether its label is in the group.
     """
-    labels = _window_specs(windows_expected)
+    found_mode = windows_expected is None
+    if found_mode:
+        required = _required_labels(required_labels)
+        labels = None
+    else:
+        if required_labels:
+            raise ValueError('invalid-windows')
+        required = []
+        labels = _window_specs(windows_expected)
     names = _declared(allowances)
     if tunnel_port is not None:
         _tunnel_port(tunnel_port)
@@ -1010,7 +1034,13 @@ def classify_windows(raw, run, windows_expected, *, health, ready, allowances=()
     if len(raw) + 16 + 2048 > limit:
         shared.append('capture-limit-reached')
     shared += _window_health_reasons(health, ready, requests)
-    extra = sorted(index for index in windows if index >= len(labels))
+    if found_mode:
+        # A gap in the indexes leaves a window nobody can name; the sequence fault covers what follows.
+        labels = [windows[index]['labels'][0] if index in windows else None
+                  for index in range(max(windows) + 1 if windows else 0)]
+        extra = []
+    else:
+        extra = sorted(index for index in windows if index >= len(labels))
     if extra:
         shared.append('window-count-mismatch')
     results = []
@@ -1039,8 +1069,14 @@ def classify_windows(raw, run, windows_expected, *, health, ready, allowances=()
             leak, reason = 'NONE', 'clean'
         results.append(dict(index=index, label=label, expected='NONE', leak=leak, leak_reason=reason,
                             observer_reasons=reasons, categories=row['categories'], unexpected=row['unexpected']))
-    return dict(windows=results, outside_window=dict(categories=outside, frames=outside_frames),
-                extra_windows=extra, observer_reasons=shared)
+    answer = dict(windows=results, outside_window=dict(categories=outside, frames=outside_frames),
+                  extra_windows=extra, observer_reasons=shared)
+    if found_mode:
+        for row in results:
+            row['in_group'] = row['label'] in required
+        answer.update(windows_found=True, required_labels=required,
+                      missing_labels=[label for label in required if label not in {row['label'] for row in results}])
+    return answer
 
 
 def _window_times(health, window):
