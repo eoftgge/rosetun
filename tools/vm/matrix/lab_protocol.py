@@ -522,20 +522,37 @@ def _fragment(packet):
                  sport=None, dport=None, flags=None, payload=b'', arp=None, icmp=None, inner=None, fragment=True)
 
 
-def records(raw, limit=CAPTURE_LIMIT):
-    """Yield the frames of a pcap, failing closed on any irregular record."""
+def _timed_records(raw, limit=CAPTURE_LIMIT):
+    """Yield (capture time in seconds, frame) of a pcap, failing closed on any irregular record."""
     if not 24 <= len(raw) <= limit or raw[:24] != PCAP_HEADER:
         raise ValueError('invalid-or-overlimit-pcap')
     offset = 24
     while offset < len(raw):
         if len(raw) - offset < 16:
             raise ValueError('incomplete-pcap')
-        _, _, size, original = struct.unpack_from('<IIII', raw, offset)
+        seconds, micro, size, original = struct.unpack_from('<IIII', raw, offset)
         offset += 16
         if size != original or not 14 <= size <= 2048 or offset + size > len(raw):
             raise ValueError('truncated-pcap-frame')
-        yield raw[offset:offset + size]
+        yield seconds + micro / 1e6, raw[offset:offset + size]
         offset += size
+
+
+def records(raw, limit=CAPTURE_LIMIT):
+    """Yield the frames of a pcap, failing closed on any irregular record."""
+    for _, packet in _timed_records(raw, limit):
+        yield packet
+
+
+def _record_times(raw, limit):
+    """The capture time of every record up to the first irregular one, by record number."""
+    times = []
+    try:
+        for seconds, _ in _timed_records(raw, limit):
+            times.append(seconds)
+    except ValueError:
+        pass
+    return times
 
 
 def frames(raw, limit=CAPTURE_LIMIT):
@@ -941,6 +958,72 @@ def _category(frame, is_probe, names, tunnel_port):
     return 'unexpected' if _involves_test(frame) else 'foreign'
 
 
+FLOW_LIMIT = 64
+TCP_FIN, TCP_SYN, TCP_RST, TCP_ACK = 0x01, 0x02, 0x04, 0x10
+
+
+def _endpoint(address, port):
+    return f'[{address}]:{port}' if ':' in address else f'{address}:{port}'
+
+
+def _flow_kind(peer, tunnel_port):
+    """`node` for the node's own port, `target` for the HTTPS target, else `other`."""
+    address, port = peer
+    if tunnel_port is not None and port == tunnel_port and address in (GATEWAYS[4], GATEWAYS[6]):
+        return 'node'
+    if port == HTTPS_PORT and address in (TARGETS[4], TARGETS[6]):
+        return 'target'
+    return 'other'
+
+
+class _Flows:
+    """The TCP connections of the test machine seen in one window, by four-tuple.
+
+    Only headers are read: frame and payload byte counts per direction, the capture time of the first
+    and the last frame (milliseconds after the opening marker) and which of SYN, SYN-ACK, FIN and RST were
+    seen, and for FIN and RST from which side. At most `FLOW_LIMIT` connections are kept; the rest are counted.
+    """
+
+    def __init__(self, tunnel_port):
+        self.tunnel_port, self.start = tunnel_port, None
+        self.table, self.omitted = {}, set()
+
+    def add(self, frame, seconds):
+        tests = (CLIENTS[4], CLIENTS[6])
+        if frame.src in tests:
+            outbound, client, peer = True, (frame.src, frame.sport), (frame.dst, frame.dport)
+        elif frame.dst in tests:
+            outbound, client, peer = False, (frame.dst, frame.dport), (frame.src, frame.sport)
+        else:
+            return
+        key = (client, peer)
+        row = self.table.get(key)
+        if row is None:
+            if len(self.table) >= FLOW_LIMIT:
+                self.omitted.add(key)
+                return
+            row = self.table[key] = dict(
+                kind=_flow_kind(peer, self.tunnel_port), client=_endpoint(*client), server=_endpoint(*peer),
+                frames_out=0, frames_back=0, bytes_out=0, bytes_back=0, first_ms=None, last_ms=None,
+                syn=False, syn_ack=False, fin=[], rst=[])
+        side = 'out' if outbound else 'back'
+        row['frames_' + side] += 1
+        row['bytes_' + side] += len(frame.payload)
+        if seconds is not None and self.start is not None:
+            at = round((seconds - self.start) * 1000)
+            row['first_ms'] = at if row['first_ms'] is None else row['first_ms']
+            row['last_ms'] = at
+        flags = frame.flags or 0
+        if flags & TCP_SYN:
+            row['syn_ack' if flags & TCP_ACK else 'syn'] = True
+        for name, bit in (('fin', TCP_FIN), ('rst', TCP_RST)):
+            if flags & bit and side not in row[name]:
+                row[name].append(side)
+
+    def document(self):
+        return dict(connections=list(self.table.values()), omitted=len(self.omitted))
+
+
 def _window_counts(names, tunnel_port):
     counts = dict(probe=0, marker=0, infrastructure=0, unexpected=0, foreign=0, unparsed=0)
     if names:
@@ -993,7 +1076,7 @@ def _required_labels(required_labels):
 
 
 def classify_windows(raw, run, windows_expected, *, health, ready, allowances=(), tunnel_port=None,
-                     https=None, probes=(), limit=CAPTURE_LIMIT, required_labels=()):
+                     https=None, probes=(), limit=CAPTURE_LIMIT, required_labels=(), flows=False):
     """Split one capture into phase windows and give every expected window its own leak verdict.
 
     `windows_expected` lists, in order, the windows the controller expects: dicts with the
@@ -1017,6 +1100,9 @@ def classify_windows(raw, run, windows_expected, *, health, ready, allowances=()
     `required_labels` are the labels of the stage's group: each needs at least one window, and
     one without any is listed in `missing_labels` for the controller to answer for the
     scenarios of that label only. Every row says whether its label is in the group.
+
+    With `flows` every window row also has `flows`: the TCP connections of the test machine inside
+    it (`_Flows`), from the headers of the frames already captured. They change no verdict.
     """
     found_mode = windows_expected is None
     if found_mode:
@@ -1032,6 +1118,7 @@ def classify_windows(raw, run, windows_expected, *, health, ready, allowances=()
         _tunnel_port(tunnel_port)
     parsed, unparsed, problem = _parse_capture(raw, limit)
     is_probe = _probe_matcher([frame for _, frame in parsed], probes, direct_connection(https))
+    times = _record_times(raw, limit) if flows else []
     windows, requests = {}, []
     outside = _window_counts(names, tunnel_port)
     outside['outside-window'] = outside.pop('unexpected')
@@ -1041,7 +1128,7 @@ def classify_windows(raw, run, windows_expected, *, health, ready, allowances=()
     def window(index):
         if index not in windows:
             windows[index] = dict(categories=_window_counts(names, tunnel_port), unexpected=[], reasons=[],
-                                  labels=[], first=None, last=None,
+                                  labels=[], first=None, last=None, flows=_Flows(tunnel_port) if flows else None,
                                   seen={(word, kind): [] for word in WINDOW_WORDS for kind in ('request', 'response')})
         return windows[index]
 
@@ -1060,6 +1147,8 @@ def classify_windows(raw, run, windows_expected, *, health, ready, allowances=()
             row['categories']['marker'] += 1
             row['labels'].append(label)
             row['seen'][(word, direction)].append(position)
+            if row['flows'] is not None and row['first'] is None and position < len(times):
+                row['flows'].start = times[position]
             row['first'] = position if row['first'] is None else row['first']
             row['last'] = position
             if direction == 'request':
@@ -1087,6 +1176,8 @@ def classify_windows(raw, run, windows_expected, *, health, ready, allowances=()
             _count(outside, category, item, outside_frames, 'outside-window')
         else:
             _count(windows[current]['categories'], category, item, windows[current]['unexpected'], 'unexpected')
+            if flows and item.proto == 6 and not item.fragment:
+                windows[current]['flows'].add(item, times[position] if position < len(times) else None)
     shared = []
     if problem:
         shared.append('invalid-pcap:' + problem)
@@ -1127,7 +1218,9 @@ def classify_windows(raw, run, windows_expected, *, health, ready, allowances=()
         else:
             leak, reason = 'NONE', 'clean'
         results.append(dict(index=index, label=label, expected='NONE', leak=leak, leak_reason=reason,
-                            observer_reasons=reasons, categories=row['categories'], unexpected=row['unexpected']))
+                            observer_reasons=reasons, categories=row['categories'], unexpected=row['unexpected'],
+                            **({'flows': row['flows'].document() if row.get('flows') else dict(connections=[], omitted=0)}
+                               if flows else {})))
     answer = dict(windows=results, outside_window=dict(categories=outside, frames=outside_frames),
                   extra_windows=extra, observer_reasons=shared)
     if found_mode:

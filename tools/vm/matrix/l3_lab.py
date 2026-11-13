@@ -18,8 +18,8 @@ import uuid
 from . import lab as labmod
 from .evidence import ReadbackError, write_file
 from .execution import lab_of, preflight
-from .lab_protocol import (LOG_LIMIT, PORTS, TARGETS, EVIDENCE_PCAP_LIMIT, CLIENTS, EGRESS, classify_windows,
-                           https_exchanges, marker_run_id, probes)
+from .lab_protocol import (LOG_LIMIT, PORTS, TARGETS, EVIDENCE_PCAP_LIMIT, CLIENTS, EGRESS, HELPER_REASON,
+                           classify_windows, https_exchanges, marker_run_id, probes)
 from .orchestrator import _RETAINED_LEASES, failure, save
 from .resources import StandLease, completion_verified, create_run, resource_path, EXECUTION_FILES
 
@@ -104,6 +104,29 @@ def https_fixture(log):
     return dict(answered=direct and via_node, direct=direct, via_node=via_node, requests=sum(sources.values()))
 
 
+# The most refusal rows the HTTPS target keeps (`REFUSAL_ROWS` of the lab helper) and the shape of one.
+REFUSAL_ROWS = 8
+_SERVICE = re.compile(r'[a-z0-9-]{1,16}')
+
+
+def https_refusals(log):
+    """The rows in which the HTTPS target turned a connection away: service, family and the reason.
+
+    A row of the log is a refusal when it has a `reason`. Only the three fields are passed on, and only
+    in the shape the helper writes them, so that nothing else of the lab machine reaches the summary.
+    """
+    rows = []
+    for row in log if type(log) is list else []:
+        if type(row) is not dict or 'reason' not in row or len(rows) >= REFUSAL_ROWS:
+            continue
+        service, family, reason = row.get('service'), row.get('family'), row['reason']
+        rows.append(dict(
+            service=service if type(service) is str and _SERVICE.fullmatch(service) else 'invalid',
+            family=family if type(family) is int and family in (4, 6) else None,
+            reason=reason if type(reason) is str and HELPER_REASON.fullmatch(reason) else 'invalid'))
+    return rows
+
+
 def fixtures_block(health, logs):
     """What the lab's fixtures were seen to do: from the observer's own files, never from the guest."""
     def rows(name):
@@ -120,11 +143,16 @@ def fixtures_block(health, logs):
                          requests=sum(row.get('transport') == 'doh' for row in dns)))
 
 
-def lab_block(lab_id, evidence_disk, verdict, fixtures, hashes):
-    """The observer's side: the fixtures, the evidence disk and every window the markers named."""
+def lab_block(lab_id, evidence_disk, verdict, fixtures, hashes, refusals=()):
+    """The observer's side: the fixtures, the evidence disk and every window the markers named.
+
+    `https_refusals` are the connections the HTTPS target turned away, and each window has its `flows`:
+    both are there to say what happened to a connection, and neither is judged.
+    """
     block = dict(lab_id=lab_id, qualification=dict(fixtures=fixtures, evidence=evidence_disk, observer=dict(
         ready=verdict is not None, reasons=verdict['observer_reasons'] if verdict else ['not-evaluated'])),
-        windows=[], outside_window=None, missing_labels=[], extra_windows=[], artifacts_sha256=hashes)
+        windows=[], outside_window=None, missing_labels=[], extra_windows=[], artifacts_sha256=hashes,
+        https_refusals=list(refusals))
     if verdict is not None:
         block.update(windows=verdict['windows'], outside_window=verdict['outside_window'],
                      missing_labels=verdict['missing_labels'], extra_windows=verdict['extra_windows'])
@@ -351,7 +379,7 @@ def judge(lab_id, config, seen):
     seen['health'] = json.loads(seen['logs']['health.json'])
     seen['verdict'] = classify_windows(seen['logs']['capture.pcap'], lab_id, None, health=seen['health'], ready=True,
                                        tunnel_port=config['lab']['tunnel']['node_port'],
-                                       required_labels=GROUP_LABELS, limit=EVIDENCE_PCAP_LIMIT)
+                                       required_labels=GROUP_LABELS, limit=EVIDENCE_PCAP_LIMIT, flows=True)
 
 
 def finish(result, lease, pair, runs, vms, closed, job, attempt, seen, interrupted, lab_id):
@@ -389,9 +417,10 @@ def finish(result, lease, pair, runs, vms, closed, job, attempt, seen, interrupt
                            and (pair is None or pair.closed))
     result['manual_recovery_required'] = bool(runs) and not result['completed']
     result['legacy'] = legacy_block(seen['raw_report'], getattr(job, 'assessment', None))
+    parsed = {k: _json_or_none(v) for k, v in seen['logs'].items() if k.endswith('.json')}
     result['lab'] = lab_block(lab_id, seen['evidence_disk'], seen['verdict'],
-                              fixtures_block(seen['health'] or {}, {k: _json_or_none(v) for k, v in seen['logs'].items()
-                                                                    if k.endswith('.json')}), seen['hashes'])
+                              fixtures_block(seen['health'] or {}, parsed), seen['hashes'],
+                              https_refusals(parsed.get('https.json')))
     from .l3_summary import decide
     decide(result, interrupted)
     if runs:

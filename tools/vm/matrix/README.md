@@ -2935,6 +2935,37 @@ code either, because several scenarios outside the group leave the protection of
 nothing declares those expectations yet (`LEAK_OUTSIDE_THE_GROUP_FAILS` in `l3_summary.py` turns
 that on).
 
+### Flows of each window
+
+Each row of `lab.windows` has `flows`, read from the capture that was already taken (headers only, no
+payload is parsed) and judged by nothing: they change no verdict and no code. They say what the
+connections of the test machine did inside the window, from its opening marker to its closing one:
+
+```json
+{"connections": [{"kind": "node", "client": "192.0.2.2:43000", "server": "192.0.2.1:8388",
+                  "frames_out": 4, "frames_back": 3, "bytes_out": 120, "bytes_back": 400,
+                  "first_ms": 500, "last_ms": 1750, "syn": true, "syn_ack": true,
+                  "fin": ["out", "back"], "rst": []}],
+ "omitted": 0}
+```
+
+- `kind` is `node` (the node's own port on `192.0.2.1`), `target` (the HTTPS target, `203.0.113.2:443`,
+  reached directly) or `other`. A connection of the engine to the node is a `node` flow; a `curl` that
+  the tunnel carries has no flow of its own on the wire, only bytes in the one to the node.
+- `frames_*` and `bytes_*` count the frames and the TCP payload bytes the test machine sent (`out`) and
+  received (`back`). `first_ms` and `last_ms` are the capture times of the first and the last frame,
+  in milliseconds after the opening marker (null when the capture has no time for it). A connection that
+  began before the window shows no `syn`.
+- `syn` is a SYN without ACK, `syn_ack` a SYN with ACK; `fin` and `rst` list the sides that sent one.
+  So a connection that only ever got a `syn` has `frames_back` 0 and no `syn_ack`, and a refused one
+  has `rst: ["back"]`.
+- At most 64 connections are kept per window, in the order of their first frame; `omitted` counts the
+  others.
+
+`lab.https_refusals` lists the connections the HTTPS target turned away (`service`, `family` and the
+`reason` of the rows of `https.json` that have one, at most eight; any other field is dropped). The
+rows do not name the client, so they say what failed (`ssl-...`, `timeout`) and not who.
+
 ### Scenarios outside the group
 
 They run and are reported. Until stages 7c to 7e, expect some of them to fail or to show a leak:

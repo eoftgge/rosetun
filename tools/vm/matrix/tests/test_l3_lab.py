@@ -440,6 +440,7 @@ class Machines:
             counts = [dict(source=source, method='GET', path_class='root', count=3) for source in sources]
             return json.dumps([dict(source=source, port=51000, method='GET', path_class='root', at=6.0)
                                for source in sources]
+                              + list(self.fixtures.get('refusals', []))
                               + [dict(kind='counts', counts=counts, rows_dropped=0, counts_dropped=0)]).encode()
         if name == 'dns.json':
             kinds = [] if self.fixtures.get('dns') is False else ['udp']
@@ -682,6 +683,54 @@ class DiagnosticTests(Flow):
         finally:
             base.doCleanups()
         self.assertEqual([dict(diagnostic=True), {}], seen)
+
+
+class FlowSummaryTests(Flow):
+    def test_every_window_of_the_summary_has_its_flows_and_the_lab_has_the_refusals_of_the_target(self):
+        machines = Machines(self)
+        result = self.go(machines)
+        windows = result['lab']['windows']
+        self.assertTrue(windows)
+        for window in windows:
+            self.assertEqual({'connections', 'omitted'}, set(window['flows']))
+        self.assertEqual([], result['lab']['https_refusals'])
+        self.assertEqual(0, result['exit_code'])
+
+    def test_a_connection_to_the_node_in_the_window_of_the_session_is_in_the_summary(self):
+        from tools.vm.matrix.tests.test_lab import tcp
+        syn = wire_frame(wire.CLIENTS[4], wire.GATEWAYS[4], 6, tcp(43000, 8388, flags=0x02))
+        reply = wire_frame(wire.GATEWAYS[4], wire.CLIENTS[4], 6, tcp(8388, 43000, b'x' * 5, 0x18), reply=True)
+        windows = [('reported', ()), ('identity', ()), ('connect_ks', (syn, reply)), ('capabilities', ()),
+                   ('lan_on', ())]
+        result = self.go(Machines(self, windows=windows))
+        self.assertEqual(0, result['exit_code'])
+        by_label = {w['label']: w['flows'] for w in result['lab']['windows']}
+        (flow,) = by_label['connect_ks']['connections']
+        self.assertEqual(('node', '192.0.2.2:43000', '192.0.2.1:8388', 1, 1, 0, 5, True, False),
+                         (flow['kind'], flow['client'], flow['server'], flow['frames_out'], flow['frames_back'],
+                          flow['bytes_out'], flow['bytes_back'], flow['syn'], flow['syn_ack']))
+        self.assertEqual([], by_label['reported']['connections'])
+
+    def test_the_refusals_of_the_target_reach_the_summary_without_changing_the_exit_code(self):
+        refusal = dict(service='https', family=4, reason='ssl-unexpected_eof_while_reading')
+        machines = Machines(self, fixtures=dict(refusals=[refusal]))
+        result = self.go(machines)
+        self.assertEqual([refusal], result['lab']['https_refusals'])
+        self.assertEqual(0, result['exit_code'])
+
+    def test_a_refusal_row_is_passed_on_as_service_family_and_reason_and_nothing_else(self):
+        log = [dict(source='192.0.2.2', port=1, at=2.0, method='GET', path_class='root'),
+               dict(service='https', family=4, reason='ssl-wrong_version_number', source='198.51.100.9'),
+               dict(service='https', family=4, reason='timeout'),
+               dict(service='X' * 40, family=7, reason='bad reason with spaces'),
+               dict(kind='counts', counts=[], rows_dropped=0, counts_dropped=0), 'text', None]
+        self.assertEqual([dict(service='https', family=4, reason='ssl-wrong_version_number'),
+                          dict(service='https', family=4, reason='timeout'),
+                          dict(service='invalid', family=None, reason='invalid')], l3_lab.https_refusals(log))
+        self.assertEqual([], l3_lab.https_refusals(None))
+        self.assertEqual([], l3_lab.https_refusals({'reason': 'x'}))
+        many = [dict(service='https', family=4, reason='timeout')] * 20
+        self.assertEqual(l3_lab.REFUSAL_ROWS, len(l3_lab.https_refusals(many)))
 
 
 class FailureTests(Flow):
