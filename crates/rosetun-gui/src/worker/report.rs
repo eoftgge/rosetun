@@ -29,7 +29,7 @@ impl WorkerDispatcher {
                     if snapshot.checks.is_none() {
                         // Never a DNS check from here: the report shows the
                         // last verdict kept in the snapshot.
-                        let results = rosetun_core::check_system(&own_alias, true);
+                        let results = super::system_checks::check_with_service(&own_alias, true);
                         snapshot.set_checks(&results);
                         new_checks = Some(results);
                     }

@@ -52,7 +52,11 @@ pub(crate) fn check_issue(result: &CheckResult) -> String {
                 .map(|name| display::safe_text(name))
                 .collect::<Vec<_>>();
             if *driver {
-                parts.push(tr!("system-check-windivert"));
+                parts.push(if cfg!(windows) {
+                    tr!("system-check-windivert")
+                } else {
+                    tr!("system-check-netfilter-queue")
+                });
             }
             tr!(
                 "system-check-packet-found",
@@ -102,8 +106,12 @@ pub(crate) fn check_detail(result: &CheckResult) -> String {
         CheckStatus::Warning => {
             let advice = match result.kind {
                 CheckKind::Clock => tr!("system-check-clock-advice"),
-                CheckKind::Proxy => tr!("system-check-proxy-advice"),
-                CheckKind::PacketInterceptor => tr!("system-check-packet-advice"),
+                CheckKind::Proxy if cfg!(windows) => tr!("system-check-proxy-advice"),
+                CheckKind::Proxy => tr!("system-check-proxy-advice-linux"),
+                CheckKind::PacketInterceptor if cfg!(windows) => {
+                    tr!("system-check-packet-advice")
+                }
+                CheckKind::PacketInterceptor => tr!("system-check-packet-advice-linux"),
                 CheckKind::OtherVpn => tr!("system-check-vpn-advice"),
                 // A status word; the explanation is in the hint.
                 CheckKind::DnsSubstitution => return check_issue(result),

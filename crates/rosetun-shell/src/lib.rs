@@ -88,6 +88,8 @@ mod screen_clip;
     reason = "Win32 FFI; every unsafe block carries a SAFETY comment"
 )]
 mod system_checks;
+#[cfg(target_os = "linux")]
+mod system_checks_linux;
 #[cfg(windows)]
 #[expect(
     unsafe_code,
@@ -162,6 +164,8 @@ pub use service_group_linux::{ServiceGroupJoin, join_service_group};
 pub use status_item::{StatusItem, TrayEntry, TrayInput, TrayItem, TrayPixmap};
 #[cfg(windows)]
 pub use system_checks::{proxy_settings, windivert_running};
+#[cfg(target_os = "linux")]
+pub use system_checks_linux::{packet_queue_bound, proxy_settings};
 #[cfg(windows)]
 pub use system_info::{local_report_timestamp, windows_build};
 #[cfg(target_os = "linux")]

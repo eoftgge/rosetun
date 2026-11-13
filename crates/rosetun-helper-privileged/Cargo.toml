@@ -17,6 +17,7 @@ rosetun-engine-singbox.workspace = true
 rosetun-engine-xray.workspace = true
 rosetun-ipc.workspace = true
 rosetun-routing.workspace = true
+serde_json.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 

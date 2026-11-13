@@ -96,6 +96,12 @@ pub fn lan_segment(query: &lan::SegmentQuery<'_>) -> std::io::Result<lan::Segmen
     platform::lan_segment(query)
 }
 
+/// The firewall's whole ruleset as JSON, to see what other programs redirect (Linux;
+/// `Unsupported` elsewhere). Needs the rights the service has.
+pub fn ruleset_json() -> Result<String, RoutingError> {
+    platform::ruleset_json()
+}
+
 /// Where a shared local proxy listens besides loopback, where no filter limits
 /// who reaches it (Linux): the private addresses of the physical interfaces.
 /// Nothing where filters do it instead.

@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt::Formatter;
 use std::time::Duration;
 
-pub const PROTOCOL_VERSION: u32 = 20;
+pub const PROTOCOL_VERSION: u32 = 21;
 const LOCAL_PROXY_PORT_BUSY: &str = "another program holds the local proxy port ";
 const TUNNEL_ADDRESS_IN_USE: &str = "the tunnel address is still held by the previous session";
 
@@ -42,6 +42,8 @@ pub enum Request {
     TemporaryRules,
     SessionExits,
     DiagnosticLog,
+    /// The firewall tables other programs have put redirects in (protocol 21, Linux).
+    ForeignRules,
     /// The running session's connections, for its owner only (protocol 12).
     Connections,
     /// Closes one of them by [`LiveConnection::id`], for the same owner
@@ -114,6 +116,7 @@ impl std::fmt::Debug for Request {
             Self::TemporaryRules => f.write_str("TemporaryRules"),
             Self::SessionExits => f.write_str("SessionExits"),
             Self::DiagnosticLog => f.write_str("DiagnosticLog"),
+            Self::ForeignRules => f.write_str("ForeignRules"),
             Self::Connections => f.write_str("Connections"),
             Self::CloseConnection { .. } => f.write_str("CloseConnection"),
             Self::TunnelDelay => f.write_str("TunnelDelay"),
@@ -452,6 +455,10 @@ pub enum Response {
     DiagnosticLog {
         text: String,
     },
+    /// Table names such as `ip nat`, never addresses. Empty where there is nothing to say.
+    ForeignRules {
+        tables: Vec<String>,
+    },
     /// Newest first.
     Connections {
         active: Vec<LiveConnection>,
@@ -622,7 +629,7 @@ mod tests {
             serde_json::to_string(&super::ErrorCode::AccessDenied).unwrap(),
             "\"access_denied\""
         );
-        assert_eq!(super::PROTOCOL_VERSION, 20);
+        assert_eq!(super::PROTOCOL_VERSION, 21);
         assert_eq!(
             serde_json::to_string(&super::Request::OpenNetwork).unwrap(),
             "\"open_network\""

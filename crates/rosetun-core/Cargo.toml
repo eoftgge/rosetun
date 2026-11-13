@@ -35,7 +35,7 @@ tracing.workspace = true
 rosetun-engine.workspace = true
 rosetun-engine-singbox.workspace = true
 
-[target.'cfg(windows)'.dependencies]
+[target.'cfg(any(windows, target_os = "linux"))'.dependencies]
 rosetun-shell = { workspace = true, optional = true }
 
 [lints]

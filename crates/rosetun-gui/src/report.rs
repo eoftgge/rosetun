@@ -331,7 +331,10 @@ impl ReportSnapshot {
                 let title = match kind {
                     CheckKind::Clock => report_label!("system-check-clock"),
                     CheckKind::Proxy => report_label!("system-check-proxy"),
-                    CheckKind::PacketInterceptor => report_label!("system-check-packet"),
+                    CheckKind::PacketInterceptor if cfg!(windows) => {
+                        report_label!("system-check-packet")
+                    }
+                    CheckKind::PacketInterceptor => report_label!("system-check-packet-linux"),
                     CheckKind::OtherVpn => report_label!("system-check-vpn"),
                     CheckKind::DnsSubstitution => report_label!("system-check-dns"),
                 };

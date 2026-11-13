@@ -9,6 +9,7 @@ mod cgroup;
 mod data_dir;
 #[cfg(windows)]
 mod engine_copy;
+mod foreign_rules;
 #[cfg(windows)]
 mod install_dir;
 mod list_store;

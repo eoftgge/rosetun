@@ -1049,7 +1049,8 @@ fn service(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                 let title = match result.kind {
                     CheckKind::Clock => tr!("system-check-clock"),
                     CheckKind::Proxy => tr!("system-check-proxy"),
-                    CheckKind::PacketInterceptor => tr!("system-check-packet"),
+                    CheckKind::PacketInterceptor if cfg!(windows) => tr!("system-check-packet"),
+                    CheckKind::PacketInterceptor => tr!("system-check-packet-linux"),
                     CheckKind::OtherVpn => tr!("system-check-vpn"),
                     CheckKind::DnsSubstitution => tr!("system-check-dns"),
                 };

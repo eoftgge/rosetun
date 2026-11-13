@@ -110,18 +110,20 @@ pub fn check_system(own_alias: &str, guarded: bool) -> Vec<CheckResult> {
 
 fn check_local(own_alias: &str) -> Vec<CheckResult> {
     let clock = check_clock();
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     let proxy = rosetun_shell::proxy_settings().map_or_else(
         |_| CheckResult::unavailable(CheckKind::Proxy),
         |(enabled, server, auto_config)| proxy_result(enabled, server, auto_config),
     );
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "linux")))]
     let proxy = CheckResult::unavailable(CheckKind::Proxy);
 
     let processes = rosetun_processes::running_processes();
     #[cfg(windows)]
     let driver = rosetun_shell::windivert_running();
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    let driver = rosetun_shell::packet_queue_bound();
+    #[cfg(not(any(windows, target_os = "linux")))]
     let driver = Err(std::io::Error::other("not available on this platform"));
     let packet_interceptor = match &processes {
         Ok(processes) => packet_interceptor_result(processes, driver),
@@ -164,7 +166,16 @@ const OTHER_VPN_PROCESSES: &[&str] = &[
     "AmneziaVPN",
     "openvpn",
     "openconnect",
+    "v2ray",
+    "clash",
+    "clash-meta",
+    "hysteria",
 ];
+/// Programs that read the packets of other programs: Zapret's `nfqws` and `tpws`, ByeDPI.
+#[cfg(windows)]
+const INTERCEPTOR_PROCESSES: &[&str] = &["winws.exe", "winws2.exe"];
+#[cfg(not(windows))]
+const INTERCEPTOR_PROCESSES: &[&str] = &["nfqws", "tpws", "ciadpi", "byedpi"];
 /// Engines the service runs too: another copy of one is another VPN.
 #[cfg(windows)]
 const ENGINE_PROCESSES: &[&str] = &["sing-box.exe", "xray.exe"];
@@ -190,8 +201,9 @@ fn packet_interceptor_result(
     driver: std::io::Result<bool>,
 ) -> CheckResult {
     let names = process_names(processes, |process| {
-        process.name.eq_ignore_ascii_case("winws.exe")
-            || process.name.eq_ignore_ascii_case("winws2.exe")
+        INTERCEPTOR_PROCESSES
+            .iter()
+            .any(|name| process.name.eq_ignore_ascii_case(name))
     });
     if !names.is_empty() || driver.as_ref().is_ok_and(|&running| running) {
         CheckResult::warning(
@@ -253,7 +265,7 @@ fn other_vpn_result(
     }
 }
 
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "linux", test))]
 fn proxy_result(
     enabled: Option<u32>,
     server: Option<String>,
@@ -542,15 +554,20 @@ mod tests {
 
     #[test]
     fn detects_interceptors_without_duplicate_process_names() {
+        let (upper, lower) = if cfg!(windows) {
+            ("WINWS2.EXE", "winws2.exe")
+        } else {
+            ("NFQWS", "nfqws")
+        };
         let processes = [
-            process("WINWS2.EXE", None),
-            process("winws2.exe", None),
+            process(upper, None),
+            process(lower, None),
             process("example.exe", None),
         ];
         assert_eq!(
             packet_interceptor_result(&processes, Ok(false)).detail,
             CheckDetail::PacketInterceptor {
-                processes: vec!["WINWS2.EXE".into()],
+                processes: vec![upper.into()],
                 driver: false
             }
         );

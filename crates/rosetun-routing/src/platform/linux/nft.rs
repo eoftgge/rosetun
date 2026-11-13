@@ -48,6 +48,12 @@ impl Nft for SystemNft {
     }
 }
 
+/// The whole ruleset as `nft -j list ruleset` prints it, for a look at what other
+/// programs have put in the firewall. Read-only.
+pub(in crate::platform) fn ruleset_json() -> Result<String, RoutingError> {
+    run(&["-j", "list", "ruleset"], "")
+}
+
 fn run(arguments: &[&str], input: &str) -> Result<String, RoutingError> {
     let mut child = prepare_command(Path::new("/"), ROOT, arguments)?.spawn()?;
     // The script is a few kilobytes, far below a pipe's buffer, and nft

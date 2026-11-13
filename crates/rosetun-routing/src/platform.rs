@@ -81,6 +81,17 @@ pub fn tunnel_adapter_state(alias: &str) -> std::io::Result<Option<TunnelAdapter
     }
 }
 
+pub(super) fn ruleset_json() -> Result<String, crate::RoutingError> {
+    #[cfg(target_os = "linux")]
+    {
+        linux::ruleset_json()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        Err(crate::RoutingError::Unsupported)
+    }
+}
+
 pub(super) fn lan_segment(
     query: &crate::lan::SegmentQuery<'_>,
 ) -> std::io::Result<crate::lan::SegmentScan> {

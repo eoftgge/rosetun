@@ -91,7 +91,7 @@ pub(crate) fn backend() -> Option<Box<dyn Backend>> {
     }
 }
 
-fn kioslaverc_path() -> Option<PathBuf> {
+pub(crate) fn kioslaverc_path() -> Option<PathBuf> {
     let config = std::env::var_os("XDG_CONFIG_HOME")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
@@ -118,7 +118,7 @@ fn kde_entries(port: u16) -> [(&'static str, String); 6] {
 
 /// The value of `key` in `[group]`; KConfig's localized and `[$e]` forms of a key
 /// are other keys, and stay as they are.
-fn ini_get(text: &str, group: &str, key: &str) -> Option<String> {
+pub(crate) fn ini_get(text: &str, group: &str, key: &str) -> Option<String> {
     let mut inside = false;
     for line in text.lines() {
         let line = line.trim();

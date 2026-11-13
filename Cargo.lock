@@ -3005,6 +3005,7 @@ dependencies = [
  "rosetun-engine-xray",
  "rosetun-ipc",
  "rosetun-routing",
+ "serde_json",
  "sha2",
  "tracing",
  "tracing-subscriber",

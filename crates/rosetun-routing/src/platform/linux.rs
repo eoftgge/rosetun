@@ -53,6 +53,7 @@ use self::nft::{Nft, SystemNft};
 use self::programs::{CLI_SCOPE, GUI_SCOPE, Membership, Program};
 use self::state::{Saved, Stored};
 
+pub(super) use self::nft::ruleset_json;
 pub(super) use self::physical::physical_default_interface;
 
 /// Why there is no protection when the helper does not run as the unit.
