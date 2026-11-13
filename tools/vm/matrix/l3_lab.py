@@ -214,13 +214,15 @@ def run_linux_l3_lab(config, *, adapters=None, clock=time.monotonic, sleep=time.
                                                      adapters.config(**config['qemu']), executor=executor))
         step('prepare-test', lambda: adapters.prepare(runs['test'], adapters.image(**config['image']),
                                                       adapters.config(**config['qemu']), executor=executor))
-        # The evidence disk is made with the pair; it belongs to the lab machine alone.
-        pair = step('evidence-disk', lambda: adapters.pair(lease, runs, lab_id, tunnel=True, evidence_disk=True,
-                                                           dns=True))
         step('requests', lambda: adapters.requests(runs['test'], l3['host_address'], l3['node_port']))
         step('media', lambda: adapters.attach(runs['test'], directory=config['content_directory'],
              checkout=config['source_checkout'], xorriso=config['xorriso'], executor=executor,
              profile='l3', sing_box_sha256=l3['sing_box_sha256']))
+        # The pair registers its files in both runs (the test machine's DNS client log among them), while the
+        # requests and the media accept only the resources of a freshly prepared run: so it comes last.
+        # The evidence disk is made with the pair; it belongs to the lab machine alone.
+        pair = step('evidence-disk', lambda: adapters.pair(lease, runs, lab_id, tunnel=True, evidence_disk=True,
+                                                           dns=True))
         if clock() >= deadline:
             raise TimeoutError('preparation deadline')
 

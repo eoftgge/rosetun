@@ -3086,6 +3086,11 @@ nothing: it checks the content directory without requests and renders them in
 memory with the same generator. Package validation also requires every request
 to name the same node as `HOST_ADDRESS` and `NODE_PORT` of `job.env`.
 
+In `run linux-l3 --lab` the lab pair (the evidence disk, the lab's files and the test machine's `client.log`)
+registers its files after the media, because the requests and the media accept only the resources of a freshly
+prepared run. A stage that fails with an error of this package shows its code in the summary, a builtin
+`ValueError` or `OSError` included; any other failure stays `operation-failed`.
+
 ### Configuration
 
 `rosetun.matrix.execution.v2` adds `suite` (`linux-l2` or `linux-l3`) and, for

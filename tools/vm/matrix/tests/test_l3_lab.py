@@ -14,9 +14,11 @@ import tomllib
 import unittest
 from unittest.mock import patch
 
-from tools.vm.matrix import cli, execution, l3_lab, l3_requests, lab, lab_protocol as wire, lifecycle
-from tools.vm.matrix.resources import EXECUTION_FILES, create_run
-from tools.vm.matrix.tests import test_lifecycle, test_orchestrator_l3 as l3tests, test_qemu, test_stage_profiles
+from tools.vm.matrix import (cli, execution, l2_media as media, l3_lab, l3_requests, lab, lab_protocol as wire,
+                             lifecycle, linux_l2 as l2, qemu)
+from tools.vm.matrix.resources import EXECUTION_FILES, create_run, read_manifest
+from tools.vm.matrix.tests import (test_lifecycle, test_linux_l2, test_orchestrator_l3 as l3tests, test_qemu,
+                                   test_stage_profiles)
 from tools.vm.matrix.tests.test_lab import Endpoint, capture
 from tools.vm.matrix.tests.test_lab_fixtures import load_entry
 from tools.vm.matrix.tests.test_lab_windows import health, served
@@ -507,7 +509,7 @@ class Flow(unittest.TestCase):
                                            sleep=sleep, progress=lambda stage: None)
 
 
-ORDER = ['prepare-lab', 'prepare-test', 'evidence-disk', 'requests', 'media', 'start-lab', 'resume-lab', 'boot-lab',
+ORDER = ['prepare-lab', 'prepare-test', 'requests', 'media', 'evidence-disk', 'start-lab', 'resume-lab', 'boot-lab',
          'lab-setup', 'start-test', 'resume-test', 'boot-test', 'import-create', 'import', 'recovery', 'receipt',
          'job-create', 'submit', 'collect', 'lab-finish']
 
@@ -716,6 +718,104 @@ class EvidenceDiskTests(Flow):
         import hashlib
         self.assertEqual((len(raw), hashlib.sha256(raw).hexdigest()), (disk['pcap_bytes'], disk['pcap_sha256']))
         self.assertEqual(disk['pcap_sha256'], result['lab']['artifacts_sha256']['capture.pcap'])
+
+
+class LedgerSequenceTests(Flow):
+    """The preparation of the run as the ledger sees it: nothing but the commands and the start is a fake.
+
+    The lease, the runs, `qemu.prepare`, `write_requests`, `attach_media` and the `LabPair` are the real ones;
+    `qemu-img` and `xorriso` are scripted, and `start` stops the controller where the machines would boot.
+    """
+
+    class Stopped(Exception):
+        pass
+
+    def setUp(self):
+        super().setUp()
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        content = Path(temp.name)
+        test_stage_profiles.package_l3(content, BOOT)
+        for name in ('job.env', 'manifest.sha256', *('artifacts/' + n for n in l2.PROFILES['l3'].requests)):
+            (content / name).unlink()
+        record = self.fixture.image.record()
+        self.config.update(content_directory=str(content), source_checkout=str(test_linux_l2.CHECKOUT),
+                           xorriso=self.fixture.config.executable, image=record)
+        self.config['lab']['image'] = record
+        self.config['l3']['sing_box_sha256'] = test_stage_profiles.SING_BOX_SHA
+        self.started = []
+        self.commands = []
+
+    def execute(self, argv, *, timeout, output_limit):
+        self.commands.append(argv[1])
+        if argv[1] == '--version':
+            return qemu.CommandResult(0, b'QEMU emulator version 10.0.13\n')
+        if argv[1] == '-no_rc':
+            if argv[-1] == '-version':
+                return qemu.CommandResult(0, b'xorriso 1.5.6\n')
+            Path(argv[argv.index('-o') + 1]).write_bytes(b'inert ISO fixture')
+            return qemu.CommandResult(0, b'')
+        if argv[1] == 'create':
+            Path(argv[-1]).write_bytes(b'fake overlay')
+            return qemu.CommandResult(0, b'')
+        base = Path(self.fixture.config.image_executable)
+        chain = [self.fixture.info(argv[-1]), self.fixture.info(base)]
+        if Path(argv[-1]) == base:
+            chain = chain[:1]
+        else:
+            chain[0].update({'backing-filename': str(base), 'full-backing-filename': str(base),
+                             'backing-filename-format': 'qcow2'})
+        return qemu.CommandResult(0, json.dumps(chain).encode())
+
+    def adapters(self):
+        real = l3_lab.Adapters()
+
+        def start(run, lab=None):
+            self.started.append(run.directory.name)
+            raise self.Stopped('stopped-before-start')
+
+        def pair(*args, **kwargs):
+            return lab.LabPair(*args, pair_factory=lambda *a: (Endpoint(), Endpoint()), **kwargs)
+        real.execute, real.start, real.pair = self.execute, start, pair
+        return real
+
+    def go_to_the_start(self):
+        with patch.object(l2, 'source_identity', return_value=test_stage_profiles.SOURCE), \
+                patch.object(socket, 'AF_UNIX', 1, create=True), \
+                patch.object(l3_lab, 'preflight', return_value={}):
+            return l3_lab.run_linux_l3_lab(self.config, adapters=self.adapters(), clock=lambda: self.clock.now,
+                                           sleep=self.sleeps.append, progress=lambda stage: None)
+
+    def paths(self, result, role):
+        directory = Path(result['artifact_directories'][role])
+        return [entry['path'] for entry in read_manifest(directory)['resources']]
+
+    def test_both_runs_are_prepared_and_the_pair_registers_its_files_last(self):
+        result = self.go_to_the_start()
+        self.assertEqual([dict(stage='start-lab', kind='Stopped', reason='stopped-before-start')], result['errors'])
+        stages = [row['stage'] for row in result['stages']]
+        self.assertEqual(['prepare-lab', 'prepare-test', 'requests', 'media', 'evidence-disk', 'start-lab'],
+                         stages[stages.index('prepare-lab'):])
+        self.assertTrue(all(row['state'] == 'completed' for row in result['stages'][:-1]))
+        self.assertEqual(1, len(self.started))
+        self.assertTrue(self.started[0].endswith('-lab'))
+
+    def test_the_ledgers_hold_the_requests_and_the_media_before_the_files_of_the_pair(self):
+        result = self.go_to_the_start()
+        test, lab_paths = self.paths(result, 'test'), self.paths(result, 'lab')
+        requests = list(media.request_resources('l3'))
+        self.assertEqual(requests, test[test.index(requests[0]):][:len(requests)])
+        self.assertLess(test.index('l2-package/manifest.sha256'), test.index('client.log'))
+        self.assertEqual('client.log', test[-1])
+        self.assertIn('evidence.img', lab_paths)
+        self.assertNotIn('client.log', lab_paths)
+        self.assertEqual(['l2-media.iso', 'l2-media.jsonl', 'l2-media.json'],
+                         [name for name in test if name.startswith('l2-media.')])
+
+    def test_the_commands_are_the_ones_of_the_preparation_and_the_media_only(self):
+        self.go_to_the_start()
+        self.assertEqual(['--version', '--version', 'info', 'create', 'info', 'info', 'create', 'info',
+                          '-no_rc', '-no_rc'], self.commands)
 
 
 if __name__ == '__main__':

@@ -3,6 +3,7 @@
 from datetime import datetime, timezone
 import hashlib
 import json
+from pathlib import Path
 import re
 import sys
 import time
@@ -18,11 +19,33 @@ SUMMARY_SCHEMA = 'rosetun.matrix.execution-summary.v1'
 _RETAINED_LEASES = []
 
 
+_PACKAGE_DIRECTORY = Path(__file__).resolve().parent
+
+
+def _raised_here(error):
+    """Whether the innermost frame of the traceback is code of this package, not of the standard library."""
+    frame = error.__traceback__
+    while frame is not None and frame.tb_next is not None:
+        frame = frame.tb_next
+    if frame is None:
+        return False
+    name = frame.tb_frame.f_code.co_filename
+    if name.startswith('<'):
+        return False
+    try:
+        return Path(name).resolve().is_relative_to(_PACKAGE_DIRECTORY)
+    except (OSError, ValueError):
+        return False
+
+
 def failure(stage, error):
     reason = str(error)
     ours = type(error).__module__.startswith('tools.vm.matrix.')
+    # The controllers raise the builtin ValueError and OSError with a code of their own as the message.
+    builtin = type(error).__module__ == 'builtins' and isinstance(error, (ValueError, OSError))
+    shown = ours or (builtin and _raised_here(error))
     row = dict(stage=stage, kind=type(error).__name__,
-               reason=reason if ours and re.fullmatch(r'[A-Za-z0-9_-]{1,96}', reason) else 'operation-failed')
+               reason=reason if shown and re.fullmatch(r'[A-Za-z0-9_-]{1,96}', reason) else 'operation-failed')
     # The code a guest helper printed, when it fits the fixed alphabet: it says which exchange failed.
     helper = getattr(error, 'helper_reason', None)
     if ours and type(helper) is str and HELPER_REASON.fullmatch(helper):

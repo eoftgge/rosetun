@@ -404,3 +404,63 @@ class ReservationTests(unittest.TestCase):
         record = fixture.build()
         self.assertTrue(record['sha256'])
         self.assertEqual(2, len(fixture.commands))
+
+
+def raised_in(filename, error):
+    """An exception raised by code that lives in `filename`, as a frame of that file would raise it."""
+    code = compile('def raiser(error):\n    raise error\n', filename, 'exec')
+    scope = {}
+    exec(code, scope)
+    try:
+        scope['raiser'](error)
+    except BaseException as caught:
+        return caught
+
+
+def raised_by_the_package(error):
+    raise error
+
+
+class FailureReasonTests(unittest.TestCase):
+    """The summary names why a stage failed, as long as the code of this package wrote the reason."""
+
+    def row(self, error):
+        try:
+            raised_by_the_package(error)
+        except BaseException as caught:
+            return o.failure('stage', caught)
+
+    def test_a_code_the_package_raised_in_a_builtin_value_error_is_shown(self):
+        self.assertEqual(dict(stage='stage', kind='ValueError', reason='l3-requests-require-new-prepared-run'),
+                         self.row(ValueError('l3-requests-require-new-prepared-run')))
+
+    def test_a_code_the_package_raised_in_a_builtin_os_error_is_shown(self):
+        self.assertEqual(dict(stage='stage', kind='OSError', reason='disk-full'), self.row(OSError('disk-full')))
+
+    def test_a_value_error_of_the_standard_library_stays_operation_failed_even_with_a_fitting_message(self):
+        stdlib = Path(tempfile.gettempdir()).resolve().parent / 'python' / 'Lib' / 'stdlib_module.py'
+        for kind in (ValueError, OSError):
+            with self.subTest(kind=kind.__name__):
+                error = raised_in(str(stdlib), kind('looks-fine'))
+                self.assertEqual(dict(stage='stage', kind=kind.__name__, reason='operation-failed'),
+                                 o.failure('stage', error))
+
+    def test_a_message_with_an_address_or_a_path_stays_operation_failed(self):
+        for message in ('192.0.2.1:8388', 'connect to 192.0.2.1', r'C:\state\run', '/var/lib/run', 'a b',
+                        '', 'x' * 97):
+            with self.subTest(message=message):
+                self.assertEqual('operation-failed', self.row(ValueError(message))['reason'])
+        self.assertEqual('x' * 96, self.row(ValueError('x' * 96))['reason'])
+
+    def test_an_exception_that_was_never_raised_has_no_frame_and_is_not_shown(self):
+        self.assertEqual('operation-failed', o.failure('stage', ValueError('looks-fine'))['reason'])
+
+    def test_another_builtin_class_stays_operation_failed(self):
+        for error in (KeyError('looks-fine'), RuntimeError('looks-fine'), TypeError('looks-fine')):
+            with self.subTest(kind=type(error).__name__):
+                self.assertEqual('operation-failed', self.row(error)['reason'])
+
+    def test_a_helper_reason_still_needs_a_class_of_the_package(self):
+        error = ValueError('looks-fine')
+        error.helper_reason = 'missing-sing-box'
+        self.assertNotIn('helper_reason', self.row(error))
