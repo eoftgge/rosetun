@@ -50,6 +50,8 @@ HTTPS_LOG_ENTRIES = 16
 HTTPS_CONNECTIONS = 32
 HTTPS_COUNT_KEYS = 64
 HTTPS_HEAD_LIMIT = 4096
+# The client's log in the helper's answer, which as a whole may not pass LOG_LIMIT.
+CLIENT_LOG_LIMIT = 4096
 L3_BODY = b'rosetun-lab-target\n'
 REFUSAL_ROWS = 8
 TUNNEL_KEYS = {'port', 'method', 'password', 'sing_box_sha256', 'ca_sha256', 'https'}
@@ -62,7 +64,14 @@ class Refused(ValueError):
 
 
 class ExchangeFailed(Refused):
-    """An exchange of the test machine failed. The text is `name:family:reason:<elapsed>ms`."""
+    """An exchange of the test machine failed. The text is `name:family:reason:<elapsed>ms`.
+
+    The parts are kept as well, for a step that reports the failure instead of ending the run.
+    """
+
+    def __init__(self, text, *, name=None, reason=None, elapsed_ms=None):
+        super().__init__(text)
+        self.name, self.reason, self.elapsed_ms = name, reason, elapsed_ms
 
 
 def command(*args):
@@ -378,10 +387,23 @@ def socks_connect_domain(sock, name, port):
     receive(sock, (4 if head[3] == 1 else 16) + 2)
 
 
+def client_log_of(directory, name):
+    """What a throwaway sing-box client of the test machine said, as the text `node.log` is: bounded, addresses blanked."""
+    stderr = directory / (name + '.stderr')
+    raw = scrub_log(stderr.read_bytes() if stderr.exists() else b'')[:CLIENT_LOG_LIMIT]
+    return raw.decode('utf-8', 'replace')
+
+
 def probe_dns(request):
-    """dns-plain over UDP, then dns-doh-singbox: a sing-box client that resolves through the node and DoH."""
+    """dns-plain over UDP, then dns-doh-singbox: a sing-box client that resolves through the node and DoH.
+
+    A failed exchange ends the check but not the answer: it is returned as `failed` (which exchange, why,
+    how long) beside the exit code and the log of the client, so that the run goes on to its closing
+    marker and says why DNS did not work. The answers of the exchanges before it are kept.
+    """
     checks = request['dns_check']
     plain, doh = checks['plain'], checks['doh']
+    context = ssl.create_default_context()
 
     def ask_plain():
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
@@ -401,20 +423,19 @@ def probe_dns(request):
             socks_connect_domain(sock, dns_name(doh), doh['port'])
             return https_get(sock, doh, context)
 
-    reply = exchange(plain['service'], 4, ask_plain)
     directory = ROOT / request['lab_id']
-    directory.mkdir(mode=0o700, exist_ok=True)
-    client = exchange('dns-client', 4, lambda: start_process(dns_client_config(request['tunnel']), directory,
-                                                             'dns-client', '127.0.0.1', SOCKS_PORT))
-    context = ssl.create_default_context()
+    report, client = {}, None
     try:
-        doh_response = exchange(doh['kind'], 4, get_doh)
+        report['plain'] = dict(plain, response=exchange(plain['service'], 4, ask_plain).hex())
+        directory.mkdir(mode=0o700, exist_ok=True)
+        client = exchange('dns-client', 4, lambda: start_process(dns_client_config(request['tunnel']), directory,
+                                                                 'dns-client', '127.0.0.1', SOCKS_PORT))
+        report['doh'] = dict(doh, response=exchange(doh['kind'], 4, get_doh).hex())
+    except ExchangeFailed as error:
+        report['failed'] = dict(exchange=error.name, reason=error.reason, elapsed_ms=error.elapsed_ms)
     finally:
-        _, client_exit = stop_process(client)
-        stderr = directory / 'dns-client.stderr'
-        client_log = scrub_log(stderr.read_bytes() if stderr.exists() else b'')[:4096]
-    return dict(plain=dict(plain, response=reply.hex()), doh=dict(doh, response=doh_response.hex()),
-                client_exit=client_exit, client_log=client_log)
+        client_exit = stop_process(client)[1] if client is not None else None
+    return dict(report, client_exit=client_exit, client_log=client_log_of(directory, 'dns-client'))
 
 
 def probe_all(request):
@@ -516,6 +537,18 @@ def reason_of(error):
     return (type(error).__name__ + ':' + short_code(error))[:REASON_LIMIT]
 
 
+def failure_code(error):
+    """What the helper prints after `lab-helper-failed:` for an exception it did not expect.
+
+    The class and the short message as `error_reason` has them, in the lowercase alphabet the controller
+    accepts. Nothing here may fail, or the one line that says why would be lost as well.
+    """
+    try:
+        return reason_of(error).lower()
+    except Exception:
+        return 'unprintable-error'
+
+
 def exchange(name, family, operation):
     """Run one exchange of the test machine; a failure names it, its family, why and how long it took."""
     started = time.monotonic()
@@ -523,7 +556,9 @@ def exchange(name, family, operation):
         return operation()
     except Exception as error:
         elapsed = int((time.monotonic() - started) * 1000)
-        raise ExchangeFailed('%s:%s:%s:%dms' % (name, family, short_code(error), elapsed)) from None
+        reason = short_code(error)
+        raise ExchangeFailed('%s:%s:%s:%dms' % (name, family, reason, elapsed), name=name, reason=reason,
+                             elapsed_ms=elapsed) from None
 
 
 def listening(address, port, table='/proc/net/tcp'):
@@ -1393,6 +1428,6 @@ if __name__ == '__main__':
     except Refused as error:
         print('lab-helper-failed:' + str(error), file=sys.stderr)
         sys.exit(2)
-    except Exception:
-        print('lab-helper-failed', file=sys.stderr)
+    except Exception as error:
+        print('lab-helper-failed:' + failure_code(error), file=sys.stderr)
         sys.exit(2)

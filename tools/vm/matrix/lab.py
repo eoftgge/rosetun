@@ -34,6 +34,12 @@ ARTIFACTS = {'lab-capture': 'capture.pcap', 'lab-targets': 'targets.json', 'lab-
 TUNNEL_ARTIFACTS = {'lab-https': 'https.json', 'lab-node': 'node.log'}
 # Only a run with the lab resolver and DoH target has the log of their questions.
 DNS_ARTIFACTS = {'lab-dns': 'dns.json'}
+# The DNS check's throwaway client of the test machine: its log is saved in the test run, whatever came of the check.
+DNS_CLIENT_LOG = {'lab-dns-client-log': 'client.log'}
+# The helper_reason of a failed helper that printed no code of its own (an older helper, a cut or foreign stderr).
+HELPER_REASON_MISSING = 'reason-not-reported'
+# The exchanges of the DNS check, as the helper names them when one of them failed.
+DNS_EXCHANGES = ('dns-plain', 'dns-client', DNS_CHECK_DOH)
 # Only a run with an evidence disk registers the image; the capture is then read from it.
 EVIDENCE_IMAGE = 'evidence.img'
 EVIDENCE_RESOURCES = {'lab-evidence-disk': EVIDENCE_IMAGE}
@@ -149,7 +155,7 @@ class LabPair:
 
     def resources(self, run):
         if self.role(run) != 'lab':
-            return {}
+            return DNS_CLIENT_LOG if getattr(self, 'dns', False) else {}
         files = {**ARTIFACTS, **TUNNEL_ARTIFACTS} if self.tunnel else ARTIFACTS
         # Unbound calls with a stand-in object exist in older tests, which know no disk or DNS.
         if getattr(self, 'dns', False):
@@ -265,7 +271,9 @@ class Guest:
                 status = self.rpc('guest-exec-status', response)
                 if status.get('exited') is True:
                     if status.get('exitcode') != 0 or status.get('out-truncated') or status.get('err-truncated'):
-                        raise HelperFailed(refusal(status), helper_code(status))
+                        # A line cut by the output limit may be a part of its code: it says nothing.
+                        code = None if status.get('err-truncated') else helper_code(status)
+                        raise HelperFailed(refusal(status), code or HELPER_REASON_MISSING)
                     raw = base64.b64decode(status.get('out-data', ''), validate=True)
                     if len(raw) > LOG_LIMIT:
                         raise ValueError('lab-helper-output-limit')
@@ -385,6 +393,29 @@ def tunnel_summary(exchanges, reports, log, health, categories):
         client_exit=client if type(client) is int else None)
 
 
+def dns_failure(reports):
+    """The exchange of the DNS check that failed, as the helper reported it, or None when none did or it is unreadable."""
+    row = reports.get('failed') if type(reports) is dict else None
+    if (type(row) is dict and set(row) == {'exchange', 'reason', 'elapsed_ms'} and row['exchange'] in DNS_EXCHANGES
+            and type(row['reason']) is str and HELPER_REASON.fullmatch(row['reason'])
+            and type(row['elapsed_ms']) is int and row['elapsed_ms'] >= 0):
+        return dict(exchange=row['exchange'], reason=row['reason'], elapsed_ms=row['elapsed_ms'])
+    return None
+
+
+def save_client_log(run, reports, result):
+    """The DNS client's log in `client.log` of the test run; its path, or None when there is no log or it did not save."""
+    text = reports.get('client_log') if type(reports) is dict else None
+    if type(text) is not str:
+        return None
+    try:
+        write_file(run, 'client.log', text.encode('utf-8'), mode='overwrite', readback=True, forbid=run._identity[2])
+    except (OSError, ValueError) as error:
+        result['errors'].append(failure('client-log', error))
+        return None
+    return str(resource_path(run.directory, 'client.log'))
+
+
 def dns_summary(checks, reports, dns_log, https_log):
     """What the DNS check proved, from the helper's answers and the resolver's and target's own logs."""
     reports = reports if type(reports) is dict else {}
@@ -406,13 +437,15 @@ def dns_summary(checks, reports, dns_log, https_log):
                       and len(reached) == 1 and reached[0].get('source') == EGRESS),
         doh_requests=sum(row.get('transport') == 'doh' for row in rows),
         client_exit=code if type(code) is int else None,
-        client_log=reports.get('client_log') if type(reports.get('client_log')) is str else None)
+        client_log=reports.get('client_log') if type(reports.get('client_log')) is str else None,
+        client_log_path=None,
+        failed=dns_failure(reports))
 
 
 def dns_ok(result):
-    """The DNS check, when it was asked for: both lookups proven by the logs of the lab."""
+    """The DNS check, when it was asked for: both lookups proven by the logs of the lab, none of them failed."""
     block = result.get('dns')
-    return block is None or (block['plain'] is True and block['doh_via_node'] is True)
+    return block is None or (block['plain'] is True and block['doh_via_node'] is True and block['failed'] is None)
 
 
 def tunnel_ok(result):
@@ -455,7 +488,8 @@ def lab_smoke(config, *, canary=False, tunnel=False, evidence_disk=False, durati
         result.update(https=exchanges, tunnel=dict(direct=False, via_node=False, tunnel_frames=0,
                       node=dict(alive_at_finish=False, exit_code=None), client_exit=None))
     if dns:
-        result['dns'] = dict(plain=False, doh_via_node=False, doh_requests=0, client_exit=None, client_log=None)
+        result['dns'] = dict(plain=False, doh_via_node=False, doh_requests=0, client_exit=None, client_log=None,
+                             client_log_path=None, failed=None)
     lease, pair, runs, vms = None, None, {}, {}
     try:
         adapters.host()
@@ -498,6 +532,13 @@ def lab_smoke(config, *, canary=False, tunnel=False, evidence_disk=False, durati
             replies, marker_replies, sent = probed['replies'], probed['marker_replies'], probed['marker_sent']
             reports = probed.get('https')
             dns_reports = probed.get('dns')
+            if dns:
+                # Kept at once: a later failure must not take away what the client said.
+                answers = dns_reports if type(dns_reports) is dict else {}
+                result['dns'].update(
+                    failed=dns_failure(answers), client_log_path=save_client_log(runs['test'], answers, result),
+                    client_exit=answers['client_exit'] if type(answers.get('client_exit')) is int else None,
+                    client_log=answers['client_log'] if type(answers.get('client_log')) is str else None)
         except Exception as error:
             result['errors'].append(failure('probe', error))
             replies, marker_replies = [], []
@@ -559,7 +600,8 @@ def lab_smoke(config, *, canary=False, tunnel=False, evidence_disk=False, durati
         if tunnel:
             result['tunnel'] = tunnel_summary(exchanges, reports, log, health, verdict['categories'])
         if dns:
-            result['dns'] = dns_summary(checks, dns_reports, json.loads(evidence['dns.json']), log)
+            result['dns'] = dict(dns_summary(checks, dns_reports, json.loads(evidence['dns.json']), log),
+                                 client_log_path=result['dns']['client_log_path'])
         result['qualification'] = qualify(expected, replies, json.loads(evidence['targets.json']),
                     evidence['capture.pcap'], ready['capture_ready'], health,
                     **({'limit': EVIDENCE_PCAP_LIMIT} if evidence_disk else {}))

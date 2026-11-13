@@ -3,6 +3,7 @@ import contextlib
 from dataclasses import asdict, replace
 import io
 import json
+from pathlib import Path
 import socket
 from types import SimpleNamespace
 import unittest
@@ -78,9 +79,24 @@ class DnsSmoke(unittest.TestCase):
                         plain, doh = captured['checks']['plain'], captured['checks']['doh']
                         if fault == 'doh-client-failed':
                             raise ValueError('lab-helper-failed')
-                        answer = dict(dns=dict(plain=dict(plain, response=wire.dns_reply(wire.query(plain))[0].hex()),
-                                               doh=dict(doh, response=wire.https_answer(doh).hex()),
-                                               client_exit=0, client_log='WARN none'))
+                        if fault == 'helper-failed':
+                            raise lab.HelperFailed('lab-helper-failed', 'typeerror:' + 'x' * 20)
+                        answered = dict(plain=dict(plain, response=wire.dns_reply(wire.query(plain))[0].hex()),
+                                        doh=dict(doh, response=wire.https_answer(doh).hex()))
+                        failures = {
+                            'doh-exchange-failed': (dict(exchange='dns-doh-singbox', reason='unexpected-https-answer',
+                                                         elapsed_ms=312), 1, 'FATAL start service: boom'),
+                            'plain-exchange-failed': (dict(exchange='dns-plain', reason='timeout', elapsed_ms=5003),
+                                                      None, ''),
+                            'failed-unreadable': ('boom', 0, 'WARN none'),
+                            'failed-foreign': (dict(exchange='/etc/passwd', reason='Not Valid', elapsed_ms=-1), 0,
+                                               'WARN none')}
+                        if fault in failures:
+                            failed, code, text = failures[fault]
+                            kept = {} if fault == 'plain-exchange-failed' else dict(plain=answered['plain'])
+                            answer = dict(dns=dict(kept, failed=failed, client_exit=code, client_log=text))
+                        else:
+                            answer = dict(dns=dict(answered, client_exit=0, client_log='WARN none'))
                     return dict(replies=[{**p, 'response': wire.answer(p).hex()} for p in expected],
                                 marker_replies=[{**m, 'response': wire.marker_answer(m).hex()} for m in window],
                                 marker_sent=dict(open=1.0, close=2.0), https=reports, **answer)
@@ -147,8 +163,12 @@ class DnsSmoke(unittest.TestCase):
         result = self.scenario()
         self.assertEqual(0, result['exit_code'])
         self.assertEqual(('NONE', 'clean'), (result['leak'], result['leak_reason']))
-        self.assertEqual(dict(plain=True, doh_via_node=True, doh_requests=2, client_exit=0, client_log='WARN none'),
-                         result['dns'])
+        block = dict(result['dns'])
+        path = Path(block.pop('client_log_path'))
+        self.assertEqual(dict(plain=True, doh_via_node=True, doh_requests=2, client_exit=0, client_log='WARN none',
+                              failed=None), block)
+        self.assertEqual(('client.log', b'WARN none'), (path.name, path.read_bytes()))
+        self.assertEqual(result['members']['test'].run.directory, path.parent)
         self.assertTrue(result['tunnel']['direct'] and result['tunnel']['via_node'])
         self.assertTrue(result['qualification']['qualified'])
         self.assertEqual(20, result['categories']['probe'])
@@ -207,6 +227,49 @@ class DnsSmoke(unittest.TestCase):
         result = self.scenario('doh-client-failed')
         self.assertEqual(2, result['exit_code'])
         self.assertEqual((False, False), (result['dns']['plain'], result['dns']['doh_via_node']))
+
+    def test_a_failed_exchange_is_in_the_dns_block_with_the_exit_and_the_saved_log_of_the_client(self):
+        for fault, failed, code, text in (
+                ('doh-exchange-failed', dict(exchange='dns-doh-singbox', reason='unexpected-https-answer',
+                                             elapsed_ms=312), 1, 'FATAL start service: boom'),
+                ('plain-exchange-failed', dict(exchange='dns-plain', reason='timeout', elapsed_ms=5003), None, '')):
+            with self.subTest(fault=fault):
+                result = self.scenario(fault)
+                block = result['dns']
+                self.assertEqual(2, result['exit_code'])
+                self.assertEqual((failed, code, text), (block['failed'], block['client_exit'], block['client_log']))
+                self.assertFalse(block['doh_via_node'])
+                self.assertEqual(text.encode(), Path(block['client_log_path']).read_bytes())
+                self.assertEqual([], result['errors'])
+
+    def test_a_failed_exchange_that_the_helper_reports_unreadably_is_not_believed_and_still_fails_the_run(self):
+        for fault in ('failed-unreadable', 'failed-foreign'):
+            with self.subTest(fault=fault):
+                result = self.scenario(fault)
+                self.assertEqual((2, None, False), (result['exit_code'], result['dns']['failed'],
+                                                    result['dns']['doh_via_node']))
+
+    def test_a_helper_that_failed_names_why_in_the_error_and_the_dns_block_stays_as_it_was(self):
+        result = self.scenario('helper-failed')
+        self.assertEqual(2, result['exit_code'])
+        self.assertEqual([dict(stage='probe', kind='HelperFailed', reason='lab-helper-failed',
+                               helper_reason='typeerror:' + 'x' * 20)], result['errors'])
+        block = result['dns']
+        self.assertEqual((False, False, None, None, None, None), (
+            block['plain'], block['doh_via_node'], block['client_exit'], block['client_log'],
+            block['client_log_path'], block['failed']))
+
+    def test_the_client_log_is_saved_only_in_a_dns_run_and_never_with_the_owner_token(self):
+        self.assertFalse((self.scenario(dns=False)['members']['test'].run.directory / 'client.log').exists())
+        result = self.scenario()
+        self.assertTrue((result['members']['test'].run.directory / 'client.log').is_file())
+        run = result['members']['test'].run
+        errors = []
+        saved = lab.save_client_log(run, dict(client_log='leaked ' + run._identity[2]), dict(errors=errors))
+        self.assertEqual((None, ['client-log']), (saved, [row['stage'] for row in errors]))
+        self.assertEqual('WARN none', (run.directory / 'client.log').read_text())
+        for reports in ({}, None, dict(client_log=b'bytes'), dict(client_log=None)):
+            self.assertIsNone(lab.save_client_log(run, reports, dict(errors=[])))
 
     def test_a_frame_to_doh_or_udp_53_beside_dns_plain_is_a_leak(self):
         for fault in ('direct-doh', 'stray-udp53'):

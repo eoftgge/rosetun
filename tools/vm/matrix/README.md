@@ -2395,12 +2395,19 @@ records do.
   `dns-doh-singbox`, `marker-open`, `marker-close`, `canary`, or `client` and
   `dns-client` for starting the throwaway sing-box. The reason is the helper's own
   fixed word, an errno name (`econnrefused`) or `timeout`. Refusals before the first
-  marker keep their plain reason (`missing-sing-box`).
+  marker keep their plain reason (`missing-sing-box`). Any other exception, one the
+  helper did not expect (a failure while printing its own answer, a bug), prints
+  `lab-helper-failed:<class>:<message>` in lowercase, cleaned as `error_reason` is: at
+  most 96 characters and no address outside the documentation ranges, for example
+  `lab-helper-failed:typeerror:object-of-type-bytes-is-not-json-serializable`. The
+  bare `lab-helper-failed` is never printed.
 
 The controller copies a code that fits `[a-z0-9:._-]{1,96}` into the error row of
 the summary as `helper_reason`. `reason` stays what it was (`lab-helper-failed`, or
-`lab-helper-failed-<word>` for a plain refusal), and a code outside the alphabet is
-not copied at all.
+`lab-helper-failed-<word>` for a plain refusal). A failed helper always has a
+`helper_reason`: when its stderr held no code that fits, was cut by the output limit
+or came from a helper that still printed the bare word, it is `reason-not-reported`,
+which names the controller's own gap and never something the guest said.
 
 #### One exchange does not stop the observer
 
@@ -2786,15 +2793,34 @@ then fails, which is the answer.
 `udp` question for the `dns-plain` name from `192.0.2.2`; every question for the `dns-doh-singbox`
 name came by `doh` from `203.0.113.1` (through the node) and there is at least one; the target logged
 exactly one request for the `dns-doh-singbox` path, from `203.0.113.1`; the helper saw both answers;
-`leak` is `NONE`. The summary gains `dns` (`plain`, `doh_via_node`, `doh_requests`, `client_exit` and
-the first 4 KiB of the client's log with addresses outside the documentation ranges blanked).
-Summaries without `--dns` are unchanged, as are the requests of every other run.
+`leak` is `NONE`. The summary gains `dns` (`plain`, `doh_via_node`, `doh_requests`, `client_exit`,
+the first 4 KiB of the client's log with addresses outside the documentation ranges blanked, `client_log_path`
+and `failed`). Summaries without `--dns` are unchanged, as are the requests of every other run.
+
+**When an exchange fails.** The check does not end the run with a bare error. The helper returns the failed
+exchange as `failed`: `{"exchange", "reason", "elapsed_ms"}`, where `exchange` is `dns-plain`, `dns-client`
+(starting the throwaway client) or `dns-doh-singbox`, `reason` the helper's own word, an errno name or
+`timeout`, and `elapsed_ms` how long that exchange took. The answers before it are kept, the client is stopped
+and its exit code (`client_exit`, `null` when it never started) and log (`client_log`, `""` when there is
+none) come back with it, so the run goes on to its closing marker and the capture is judged as usual; the
+exit is 2, as for any DNS check that is not proven. A `failed` that does not have this shape is not believed
+(`null`) and the lookups it would have answered are false all the same. The controller saves the client's log
+as `client.log` in the **test** run's directory (registered with the run only in a `--dns` run, written whole,
+never when it holds the run's owner token) and the block names the file in `client_log_path`; `null` when
+there was no helper answer. The log is cut at 4 KiB, not at `LOG_LIMIT`, because the whole answer of the
+helper may not pass `LOG_LIMIT`.
+
+The reason a `--dns` run failed used to be lost when the helper could not print its own answer: the client's
+log was bytes, `json.dumps` raised a `TypeError` and the helper printed the bare `lab-helper-failed`, with
+`dns.plain` and `doh_via_node` false and no reason. The log is text now, and any such failure prints its code
+(see "Why a lab helper failed").
 
 **Reinstall.** `linux/guest/lab-entry.py` and `matrix/lab_protocol.py` changed: the owner installs
 them in **both** images again and updates the descriptors.
 
 Manual check: `lab-smoke --tunnel --dns --evidence-disk`, exit 0. If `dns-doh-singbox` fails, keep
-`node.log`, the `dns` block with the client's log, and `dns.json` of the lab run.
+`node.log`, the `dns` block (`failed`, `client_exit`) with `client.log` of the test run, and `dns.json`
+of the lab run.
 
 ## Stage 7b2b: the L3 kill switch group in the lab
 
