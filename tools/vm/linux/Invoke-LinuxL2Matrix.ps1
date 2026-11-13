@@ -461,6 +461,8 @@ if ($mode -eq 'Run') {
             $requestDir = Join-Path $runLog 'requests'
             $null = New-Item -ItemType Directory -Path $requestDir
             $extraFiles = New-RosetunLinuxL3Requests -RequestPath $RequestPath -HostAddress $hostAddress -NodePort $nodePort -OutDir $requestDir
+            # Only L3 checks the private networks behind the router.
+            if ($Stage -ne 'L3') { $extraFiles.Remove('request-lan-private.json') }
             if ($Stage -ne 'L5') {
                 $extraFiles['sing-box'] = (Resolve-Path -LiteralPath $SingBoxLinuxPath).ProviderPath
                 $extraFiles['rosetun-helper.service'] = Join-Path $RepoRoot 'packaging\linux\rosetun-helper.service'

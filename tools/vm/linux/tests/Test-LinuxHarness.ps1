@@ -546,7 +546,10 @@ try {
     $dns = & $read 'request-dns-lock.json'
     Assert-That 'the requests point at the host node' ($ks.node.server -eq '192.0.2.1' -and $ks.node.port -eq 8388 -and $dns.node.server -eq '192.0.2.1')
     Assert-That 'the kill-switch request has the kill switch and no LAN' ($ks.settings.kill_switch -and -not $ks.settings.allow_lan)
-    Assert-That 'the LAN request has both' ($lan.settings.kill_switch -and $lan.settings.allow_lan)
+    Assert-That 'the LAN request has both' ($lan.settings.kill_switch -and $lan.settings.allow_lan -and -not $lan.settings.private_networks)
+    $private = & $read 'request-lan-private.json'
+    Assert-That 'the private-networks request has the kill switch, the LAN and the private ranges' ($private.settings.kill_switch -and $private.settings.allow_lan -and $private.settings.private_networks)
+    Assert-That 'no other request opens the private ranges' (-not $ks.settings.private_networks -and -not $dns.settings.private_networks)
     Assert-That 'the DNS-lock request has no kill switch' (-not $dns.settings.kill_switch)
     Assert-That 'every request reconnects by itself' ($ks.settings.auto_reconnect -and $lan.settings.auto_reconnect -and $dns.settings.auto_reconnect)
     $programRequests = New-RosetunLinuxProgramRuleRequests -KillSwitchRequestPath $requests['request-kill-switch.json'] -OutDir $requestDir

@@ -716,6 +716,10 @@ udp_to() {
     UDP_OUT=$(curl -v -s -o /dev/null --connect-timeout 3 --max-time 4 --interface "$PHYS" "tftp://$1:69/rosetun-l3" 2>&1 </dev/null)
 }
 
+udp_dns_to() {
+    UDP_OUT=$(curl -v -s -o /dev/null --connect-timeout 3 --max-time 4 --interface "$PHYS" "tftp://$1:53/rosetun-l3" 2>&1 </dev/null)
+}
+
 expect_udp_sent_to() {
     udp_to "$1"
     ! printf '%s' "$UDP_OUT" | grep -q 'Operation not permitted' ||
@@ -777,6 +781,23 @@ scenario_lan_on() {
         disconnect
     }
     check lan.private-closed "a private network behind the gateway was refused without Private networks behind the router" lan_private_closed
+    lan_private_open() {
+        local behind
+        behind=$(behind_router_address)
+        connect_with request-lan-private.json || return 1
+        expect_udp_sent_to "$behind" "the private network $behind behind the gateway" || return 1
+        # DNS to a private network stays blocked: a resolver there is no way round the tunnel's.
+        udp_dns_to "$behind"
+        printf '%s' "$UDP_OUT" | grep -q 'Operation not permitted' ||
+            { fail_reason="UDP 53 to $behind was sent, not refused"; return 1; }
+        # The VPN server is left out of the private ranges too, and the probe is not private.
+        expect_blocked "the host node (the VPN server)" direct_node || return 1
+        expect_blocked "HTTPS to $PROBE_ADDRESS on $PHYS" direct_https || return 1
+        # The own network is open as before.
+        expect_udp_sent_to "$(neighbor_address)" "the device of the own network" || return 1
+        disconnect
+    }
+    check lan.private-open "with Private networks behind the router a private address behind the gateway is reached, DNS there, the VPN server and the probe address are not" lan_private_open
     lan_follows_change() {
         local extra=203.0.113.5/24 waited
         connect_with request-lan.json || return 1
