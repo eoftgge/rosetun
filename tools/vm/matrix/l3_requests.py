@@ -84,8 +84,13 @@ def _serialize(request):
     return (json.dumps(request, indent=2) + '\n').encode('ascii')
 
 
-def render_all(server=DEFAULT_SERVER, port=DEFAULT_PORT):
-    """Return the six request files as name -> bytes, in the order the job uses them."""
+def render_all(server=DEFAULT_SERVER, port=DEFAULT_PORT, *, diagnostic=False):
+    """Return the six request files as name -> bytes, in the order the job uses them.
+
+    A diagnostic run sets `verbose_log_until` in every request, as the two program requests
+    always do, so that the engine's log names the destinations (here only documentation addresses).
+    Without it the bytes are what they always were.
+    """
     if type(server) is not str or ipaddress.ip_address(server).version != 4 \
             or not documentation_address(server):
         raise ValueError('l3-request-server-not-documentation-ipv4')
@@ -100,6 +105,8 @@ def render_all(server=DEFAULT_SERVER, port=DEFAULT_PORT):
         request = copy.deepcopy(base)
         request['settings'].update(kill_switch=kill, allow_lan=lan, private_networks=private,
                                    auto_reconnect=True)
+        if diagnostic:
+            request['settings']['verbose_log_until'] = VERBOSE_LOG_UNTIL
         files[name] = _serialize(request)
         if name == 'request-kill-switch.json':
             kill_switch = request

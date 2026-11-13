@@ -1,5 +1,6 @@
 """The L3 lab requests: documentation values only, shaped like the PowerShell ones."""
 
+import hashlib
 import inspect
 import ipaddress
 import json
@@ -172,8 +173,44 @@ class RequestTests(unittest.TestCase):
             self.assertFalse(taken & {v for _, v in leaves(request)})
         self.assertFalse(taken & {v for _, v in leaves(req.template())})
 
+    ORDINARY = {
+        ('192.0.2.1', 8388): {
+            'request-kill-switch.json': '0b9df6f0125a1fc52743f00948f6505b7cf869a3a034b2621edcf87587a28840',
+            'request-lan.json': 'cf9495eab458baf6eafc7b7b4dcc3877a2529ad0f9b4df544a34d5deb5c244f4',
+            'request-lan-private.json': '85958ebb174a92ecf7e4fe9172cb16e970fdc52898ed2acec0357c41fc55dd0b',
+            'request-dns-lock.json': 'f0be6592211cb599cea7ea2bb911878531c4dfb3a2a1e1141410e6ace3e5addd',
+            'request-program-direct.json': '0abb99be1dc45a82d247c06b4c9c3eb266d97b9bf7af427dfc97e4127f9f666c',
+            'request-program-proxy.json': 'babfd7fb98c431d834643e35499ebb3eab8ce33be2fba615f8864562899c66ad'},
+        ('198.51.100.7', 9000): {
+            'request-kill-switch.json': '3116aab145a331179deff1d22d984b8cb6ab5fd8ea4473f4e528285c50485609',
+            'request-lan.json': '841261d30f8cef535c6c7bab1072b8b5bfc963bac50e4dfcfbad491d2766060a',
+            'request-lan-private.json': '73d0a82dfc2d994dbfa0daf0c74892faf3eb5bc38e61cc7382cae8ac814ba8b2',
+            'request-dns-lock.json': '6970546469a4209f0fe1ab8202f4c1be431f0c7175b92c8d3213eda0874bdc10',
+            'request-program-direct.json': '4009eae89eb6e5077ce957ecc205c2c27591d713823ea08283acea9025f9b43f',
+            'request-program-proxy.json': '6ec2dc1fb521dc07694e0b265c9b341b37d343478709d8b680fc82b1d40e5c5b'}}
+
+    def test_without_the_flag_the_bytes_are_those_of_the_generator_before_the_flag_existed(self):
+        # The digests were taken from the generator at the commit before `diagnostic` was added.
+        for (server, port), expected in self.ORDINARY.items():
+            for rendered in (req.render_all(server, port), req.render_all(server, port, diagnostic=False)):
+                self.assertEqual(expected, {n: hashlib.sha256(b).hexdigest() for n, b in rendered.items()})
+
+    def test_a_diagnostic_run_adds_verbose_log_until_to_every_request_and_nothing_else(self):
+        diagnostic = {n: json.loads(b) for n, b in req.render_all(diagnostic=True).items()}
+        self.assertEqual(list(self.files), list(diagnostic))
+        for name, request in diagnostic.items():
+            self.assertEqual(req.VERBOSE_LOG_UNTIL, request['settings']['verbose_log_until'], name)
+            ordinary = self.requests[name]
+            self.assertLessEqual(differences(ordinary, request), {'settings.verbose_log_until'}, name)
+            req.check_documentation_only(request)
+        for name in req.CONNECT:
+            self.assertEqual({'settings.verbose_log_until'}, differences(self.requests[name], diagnostic[name]), name)
+        for name in req.PROGRAM:
+            self.assertEqual(self.files[name], req.render_all(diagnostic=True)[name])
+
     def test_generator_takes_no_request_and_no_path(self):
-        self.assertEqual(['server', 'port'], list(inspect.signature(req.render_all).parameters))
+        self.assertEqual(['server', 'port', 'diagnostic'], list(inspect.signature(req.render_all).parameters))
+        self.assertIs(False, inspect.signature(req.render_all).parameters['diagnostic'].default)
 
     def test_only_documentation_ipv4_and_a_real_port_are_accepted(self):
         for server in ('10.0.0.1', '172.30.48.1', '8.8.8.8', '2001:db8::1', 'node.example', '', None, 3):

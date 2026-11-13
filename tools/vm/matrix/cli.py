@@ -46,6 +46,8 @@ def main(argv=None):
     run.add_argument('--dry-run', action='store_true')
     run.add_argument('--lab', action='store_true',
                      help='run linux-l3 inside the two-machine lab (needs an execution.v3 configuration)')
+    run.add_argument('--diagnostic', action='store_true',
+                     help='with --lab: ask the engine to name destinations; the run is never a qualification (exit 2 or more)')
     plan = commands.add_parser("plan", help="write a deterministic catalog snapshot to stdout")
     plan.add_argument("suite", choices=[*SUITES, "windows-list", "windows-proxy"])
     plan.add_argument("--without-host-node", action="store_true", help="plan the limited Windows Proxy variant")
@@ -81,12 +83,14 @@ def main(argv=None):
             # A version 3 configuration is the lab's and nothing else's; versions 1 and 2 never are.
             if args.lab != (lab_of(config) is not None):
                 raise ValueError('--lab and the lab block of the configuration go together')
+            if args.diagnostic and not args.lab:
+                raise ValueError('--diagnostic needs --lab')
             if args.dry_run:
                 result, code = preflight(config, dry_run=True), 0
             else:
                 from . import l3_lab, orchestrator
                 result = (l3_lab.run_linux_l3_lab if args.lab else orchestrator.run_linux_l3 if args.suite == 'linux-l3'
-                          else orchestrator.run_linux_l2)(config)
+                          else orchestrator.run_linux_l2)(config, **({'diagnostic': True} if args.diagnostic else {}))
                 code = result['exit_code']
         elif args.command == "recover" and args.archive:
             try:

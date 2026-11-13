@@ -14,7 +14,7 @@ import tomllib
 import unittest
 from unittest.mock import patch
 
-from tools.vm.matrix import (cli, execution, l2_media as media, l3_lab, l3_requests, lab, lab_protocol as wire,
+from tools.vm.matrix import (cli, execution, l2_media as media, l3_lab, l3_requests, l3_summary, lab, lab_protocol as wire,
                              lifecycle, linux_l2 as l2, qemu)
 from tools.vm.matrix.resources import EXECUTION_FILES, create_run, read_manifest
 from tools.vm.matrix.tests import (test_lifecycle, test_linux_l2, test_orchestrator_l3 as l3tests, test_qemu,
@@ -383,13 +383,14 @@ class Machines:
         return SimpleNamespace(
             execute=lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=b'QEMU emulator version 10.0.13'),
             image=image, config=lambda **record: SimpleNamespace(**record), prepare=prepare, pair=pair,
-            requests=lambda run, server, port: machines.requested(server, port),
+            requests=lambda run, server, port, **options: machines.requested(server, port, **options),
             attach=lambda run, **kwargs: machines.attached(kwargs), start=start, guest=Guest, importer=importer,
             host=lambda: None)
 
-    def requested(self, server, port):
+    def requested(self, server, port, **options):
         self.note('requests')
         self.request_node = (server, port)
+        self.request_options = options
 
     def attached(self, kwargs):
         self.note('media')
@@ -495,7 +496,7 @@ class Flow(unittest.TestCase):
         self.clock = SimpleNamespace(now=0)
         self.sleeps = []
 
-    def go(self, machines):
+    def go(self, machines, **options):
         def sleep(seconds):
             self.sleeps.append(seconds)
             self.clock.now += seconds
@@ -506,7 +507,7 @@ class Flow(unittest.TestCase):
                 patch.object(l3_lab, 'preflight', return_value={}), \
                 patch.object(l3_lab, 'completion_verified', side_effect=completion):
             return l3_lab.run_linux_l3_lab(self.config, adapters=machines.adapters(), clock=lambda: self.clock.now,
-                                           sleep=sleep, progress=lambda stage: None)
+                                           sleep=sleep, progress=lambda stage: None, **options)
 
 
 ORDER = ['prepare-lab', 'prepare-test', 'requests', 'media', 'evidence-disk', 'start-lab', 'resume-lab', 'boot-lab',
@@ -611,6 +612,76 @@ class OrderTests(Flow):
         self.assertEqual(64, len(result['legacy']['report_sha256']))
         self.assertTrue(result['lab']['qualification']['evidence']['verified'])
         self.assertEqual(0, result['exit_code'])
+
+
+class DiagnosticTests(Flow):
+    def test_an_ordinary_run_asks_for_ordinary_requests_and_has_no_diagnostic_mark(self):
+        machines = Machines(self)
+        result = self.go(machines)
+        self.assertEqual({}, machines.request_options)
+        self.assertNotIn('diagnostic', result)
+        self.assertNotIn('diagnostic-run', result['group']['unproven'])
+        self.assertEqual((0, 'group-clean'), (result['exit_code'], result['outcome']))
+
+    def test_a_diagnostic_run_asks_for_diagnostic_requests_marks_its_summary_and_is_never_below_2(self):
+        machines = Machines(self)
+        result = self.go(machines, diagnostic=True)
+        self.assertEqual(dict(diagnostic=True), machines.request_options)
+        self.assertIs(True, result['diagnostic'])
+        self.assertIn('diagnostic-run', result['group']['unproven'])
+        self.assertEqual(2, result['exit_code'])
+        # Everything else is judged as in any run, and the mark is in both saved summaries.
+        self.assertTrue(result['group']['passed'])
+        self.assertEqual([], result['group']['findings'])
+        for run in machines.runs.values():
+            self.assertTrue(json.loads((run.directory / 'execution-summary.json').read_bytes())['diagnostic'])
+
+    def test_an_interrupted_diagnostic_run_stays_130(self):
+        result = dict(diagnostic=True, legacy=dict(scenarios=[]), errors=[], completed=True,
+                      lab=dict(windows=[], missing_labels=[], qualification=dict(
+                          evidence=dict(verified=True), fixtures={}, observer=dict(reasons=[]))))
+        l3_summary.decide(result, True)
+        self.assertEqual(130, result['exit_code'])
+
+    def test_a_finding_of_a_diagnostic_run_stays_in_the_outcome_while_the_code_is_2(self):
+        machines = Machines(self)
+        result = self.go(machines, diagnostic=True)
+        for row in result['legacy']['scenarios']:
+            if row['id'] == 'killswitch.tunnel-passes':
+                row['result'] = 'FAIL'
+        result['errors'] = []
+        l3_summary.decide(result, False)
+        self.assertIn('group-scenario-failed', result['group']['findings'])
+        self.assertEqual('findings', result['outcome'])
+        self.assertEqual(2, result['exit_code'])
+        result.pop('diagnostic')
+        l3_summary.decide(result, False)
+        self.assertEqual(1, result['exit_code'])
+
+    def test_the_command_line_accepts_the_flag_only_with_the_lab(self):
+        base = DryRunTests()
+        base.setUp()
+        try:
+            self.assertEqual(2, base.go('--dry-run', '--diagnostic')[0])
+            self.assertEqual(0, base.go('--dry-run', '--lab', '--diagnostic')[0])
+        finally:
+            base.doCleanups()
+
+    def test_the_flag_reaches_the_lab_run(self):
+        seen = []
+
+        def lab_run(config, **options):
+            seen.append(options)
+            return dict(exit_code=2)
+        base = DryRunTests()
+        base.setUp()
+        try:
+            with patch.object(l3_lab, 'run_linux_l3_lab', side_effect=lab_run):
+                base.go('--lab', '--diagnostic')
+                base.go('--lab')
+        finally:
+            base.doCleanups()
+        self.assertEqual([dict(diagnostic=True), {}], seen)
 
 
 class FailureTests(Flow):

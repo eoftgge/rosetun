@@ -88,6 +88,8 @@ def decide(result, interrupted):
     not stop, no report, an unverified evidence disk, a fixture that did not answer, an unclean
     observer, a pass nobody observed (UNOBSERVED, which includes a window that never closed), or a
     scenario of the group that did not run. 130: interrupted.
+    A diagnostic run (`diagnostic: true`) never exits below 2, whatever it found: what it found stays
+    in `outcome` and `group`, but it is not counted toward a qualification.
     Scenarios outside the group, and windows outside it that cannot be verified, change nothing.
     """
     legacy, lab = result['legacy'], result['lab']
@@ -128,6 +130,8 @@ def decide(result, interrupted):
         unproven.append('observer-not-clean')
     if any(row['agreement'] == 'UNOBSERVED' for row in table):
         unproven.append('pass-not-observed')
+    if result.get('diagnostic'):
+        unproven.append('diagnostic-run')
     result['group'] = dict(scenarios=list(GROUP), results=results, passed=all(o == 'PASS' for o in results.values()),
                            failed=failed, not_run=not_run, labels=list(GROUP_LABELS),
                            missing_labels=lab['missing_labels'], outside_leaks=outside, findings=findings,
@@ -140,3 +144,6 @@ def decide(result, interrupted):
         result['exit_code'], result['outcome'] = 2, 'unverified'
     else:
         result['exit_code'], result['outcome'] = 0, 'group-clean'
+    if result.get('diagnostic') and result['exit_code'] < 2:
+        # A run that asked the engine for more detail is evidence for a diagnosis, never a qualification.
+        result['exit_code'] = 2

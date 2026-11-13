@@ -131,7 +131,9 @@ def lab_block(lab_id, evidence_disk, verdict, fixtures, hashes):
     return block
 
 
-def run_linux_l3_lab(config, *, adapters=None, clock=time.monotonic, sleep=time.sleep, progress=None):
+def run_linux_l3_lab(config, *, diagnostic=False, adapters=None, clock=time.monotonic, sleep=time.sleep,
+                     progress=None):
+    """One L3 run in the lab. A diagnostic run asks the engine to name destinations and is never a qualification."""
     if config.get('suite') != 'linux-l3' or lab_of(config) is None:
         raise ValueError('configuration is not for the lab')
     progress = progress or (lambda stage: print(stage, file=sys.stderr, flush=True))
@@ -141,6 +143,8 @@ def run_linux_l3_lab(config, *, adapters=None, clock=time.monotonic, sleep=time.
                   execution=None, completion=dict.fromkeys(ROLES, False), completed=False,
                   manual_recovery_required=False, errors=[], security_invariants='UNVERIFIED',
                   release_gate=False, exit_code=2)
+    if diagnostic:
+        result['diagnostic'] = True
     lease = pair = job = attempt = lab_id = None
     runs, vms, closed = {}, {}, set()
     stage = 'preflight'
@@ -214,7 +218,8 @@ def run_linux_l3_lab(config, *, adapters=None, clock=time.monotonic, sleep=time.
                                                      adapters.config(**config['qemu']), executor=executor))
         step('prepare-test', lambda: adapters.prepare(runs['test'], adapters.image(**config['image']),
                                                       adapters.config(**config['qemu']), executor=executor))
-        step('requests', lambda: adapters.requests(runs['test'], l3['host_address'], l3['node_port']))
+        step('requests', lambda: adapters.requests(runs['test'], l3['host_address'], l3['node_port'],
+                                                   **({'diagnostic': True} if diagnostic else {})))
         step('media', lambda: adapters.attach(runs['test'], directory=config['content_directory'],
              checkout=config['source_checkout'], xorriso=config['xorriso'], executor=executor,
              profile='l3', sing_box_sha256=l3['sing_box_sha256']))

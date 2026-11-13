@@ -3012,6 +3012,23 @@ requests, any other one refused, and the log of up to 16 rows.
 
 Reinstall the helper (`linux/guest/lab-entry.py`) in both images before qualification.
 
+### A diagnostic run
+
+```sh
+python -m tools.vm.matrix run linux-l3 --lab --diagnostic --config /srv/linux-l3-lab.toml
+```
+
+`--diagnostic` (only with `--lab`; it is refused otherwise) is for finding out why a scenario failed,
+not for qualifying anything. The generator of the L3 requests sets `settings.verbose_log_until` (the
+year 2100, as the two program requests always do) in all six requests, so that the log of the engine in
+the service journal names the destinations of the connections; in the lab those are documentation
+addresses only. Without the flag the six files are byte for byte what they were (a test pins their
+digests). The package check accepts the diagnostic kind as a whole, never a mixture.
+
+The summary says `"diagnostic": true`, `group.unproven` has `diagnostic-run`, and the exit code is never
+below 2: a finding is still shown in `outcome` and `group.findings`, but the run counts toward no
+qualification (130 stays 130). Nothing else is judged differently.
+
 ### Owner qualification
 
 1. `run linux-l3 --lab --dry-run`, then the ordinary command. Expect the group `PASS`, the

@@ -269,18 +269,23 @@ def validate_package(directory, *, checkout, immutable=False, check_source=True,
                 hashes['artifacts/sing-box'] != sing_box_sha256):
             raise JobError('l3-sing-box-sha256-mismatch')
     env = {} if immutable else validate_env(small["job.env"], profile.name)
-    addresses = set()
+    addresses, kinds_left = set(), {False, True}
     for name in requests:
         if name not in small:
             continue
-        # Each file must be what the generator makes for its own node, all for one node.
+        # Each file must be what the generator makes for its own node, all for one node and all of one
+        # kind: the ordinary requests or the diagnostic ones of a lab run.
         try:
             node = _json(small[name])['node']
             server, port = node['server'], node['port']
-            expected = l3_requests.render_all(server, port)[name.rpartition('/')[2]]
+            kinds = {diagnostic for diagnostic in (False, True)
+                     if small[name] == l3_requests.render_all(server, port, diagnostic=diagnostic)[
+                         name.rpartition('/')[2]]}
         except (KeyError, TypeError, ValueError):
             raise JobError('l3-request-invalid') from None
-        if small[name] != expected:
+        # The two program requests are the same in both kinds, so a file narrows the choice, not names it.
+        kinds_left &= kinds
+        if not kinds_left:
             raise JobError('l3-request-not-generated')
         addresses.add((server, port))
     if len(addresses) > 1 or (addresses and env and

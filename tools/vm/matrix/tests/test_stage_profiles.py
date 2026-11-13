@@ -382,6 +382,19 @@ class L3PackageTests(unittest.TestCase):
         manifest_l3(self.root)
         self.validate()
 
+    def test_diagnostic_requests_are_accepted_only_all_together(self):
+        diagnostic = l3_requests.render_all('192.0.2.1', 8388, diagnostic=True)
+        for name, data in diagnostic.items():
+            (self.root / 'artifacts' / name).write_bytes(data)
+        manifest_l3(self.root)
+        self.validate()
+        # One ordinary connect request among diagnostic ones is a package nobody generated.
+        ordinary = l3_requests.render_all('192.0.2.1', 8388)
+        (self.root / 'artifacts/request-lan.json').write_bytes(ordinary['request-lan.json'])
+        manifest_l3(self.root)
+        with self.assertRaisesRegex(ValueError, 'request'):
+            self.validate()
+
     def test_requests_must_name_the_node_of_job_env(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -470,6 +483,8 @@ class L3PackageTests(unittest.TestCase):
 
 
 class L3MediaTests(unittest.TestCase):
+    diagnostic = False
+
     def setUp(self):
         self.fixture = test_l2_media.MediaTests()
         self.fixture.setUp()
@@ -481,7 +496,7 @@ class L3MediaTests(unittest.TestCase):
         for name in ('job.env', 'manifest.sha256', *('artifacts/' + n for n in L3.requests)):
             (self.root / name).unlink()
         self.run = self.fixture.run
-        media.write_requests(self.run, '192.0.2.1', 8388)
+        media.write_requests(self.run, '192.0.2.1', 8388, **({'diagnostic': True} if self.diagnostic else {}))
 
     def tree(self):
         return {p.relative_to(self.root).as_posix(): (p.read_bytes() if p.is_file() else None)
@@ -511,6 +526,17 @@ class L3MediaTests(unittest.TestCase):
         self.assertEqual(list(media.resources('l3')), registered)
         plan = json.loads((self.run.directory / 'launch-plan.json').read_bytes())
         self.assertEqual('l3', plan['l2_media']['package']['profile'])
+        media.verify_media(record)
+
+    def test_diagnostic_requests_are_written_by_the_run_and_delivered_as_they_are(self):
+        self.diagnostic = True
+        self.setUp()
+        record = self.build()
+        rendered = l3_requests.render_all('192.0.2.1', 8388, diagnostic=True)
+        self.assertNotEqual(l3_requests.render_all('192.0.2.1', 8388), rendered)
+        for name, data in rendered.items():
+            self.assertEqual(data, (self.run.directory / 'l3-requests' / name).read_bytes())
+            self.assertEqual(data, (self.run.directory / 'l2-package/artifacts' / name).read_bytes())
         media.verify_media(record)
 
     def test_the_configured_sing_box_hash_is_required(self):

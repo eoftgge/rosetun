@@ -69,13 +69,13 @@ def copy_verified(source, target, sha, size):
         raise ValueError('l2-source-changed')
 
 
-def write_requests(run, server, port):
+def write_requests(run, server, port, diagnostic=False):
     """After qemu.prepare, before attach_media: create the L3 requests as run resources."""
     from . import l3_requests
     manifest = run._read()
     if manifest['state'] != 'prepared' or len(manifest['resources']) != 3 + len(execution_resources(manifest)):
         raise ValueError('l3-requests-require-new-prepared-run')
-    files = l3_requests.render_all(server, port)
+    files = l3_requests.render_all(server, port, diagnostic=diagnostic)
     names = request_resources('l3')
     registered = False
     try:
