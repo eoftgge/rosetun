@@ -27,11 +27,15 @@ const HOST_WAIT: Duration = Duration::from_secs(10);
 const IDLE_WAKE: Duration = Duration::from_secs(30);
 const DEADLINE_WAKE: Duration = Duration::from_millis(100);
 
-/// The window's size to bring back, in logical pixels.
+/// The window to bring back: its size in logical pixels, whether it was maximized and,
+/// on X11 only, where it was (Wayland leaves the place to the compositor). `scale` is the
+/// pixels per point it was seen at, to tell later which monitor the place is on.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct WindowShape {
     pub(crate) size: Option<egui::Vec2>,
     pub(crate) maximized: bool,
+    pub(crate) position: Option<egui::Pos2>,
+    pub(crate) scale: f32,
 }
 
 pub(super) struct WindowLife {
@@ -64,6 +68,8 @@ impl WindowLife {
             shape: WindowShape {
                 size: None,
                 maximized: false,
+                position: None,
+                scale: 1.0,
             },
             host_wait_until: None,
             pending_web_link: None,
@@ -302,16 +308,41 @@ impl App {
         if !self.life.has_window {
             return;
         }
-        let (rect, maximized) = ctx.input(|input| {
+        let (inner, outer, maximized, scale) = ctx.input(|input| {
             let viewport = input.viewport();
-            (viewport.inner_rect, viewport.maximized.unwrap_or(false))
+            (
+                viewport.inner_rect,
+                viewport.outer_rect,
+                viewport.maximized.unwrap_or(false),
+                viewport.native_pixels_per_point.unwrap_or(1.0),
+            )
         });
         // The context's points include the interface scale, a new window's do not.
         let zoom = ctx.zoom_factor();
-        self.life.shape = WindowShape {
-            size: rect.map(|rect| rect.size() * zoom),
+        self.life.shape = crate::window_shape::observed(
+            self.life.shape,
+            inner.map(|rect| rect.size() * zoom),
+            outer.map(|rect| rect.min * zoom),
             maximized,
-        };
+            scale,
+            std::env::var_os("WAYLAND_DISPLAY").is_some(),
+        );
+        if let Some(file) = &self.window_file {
+            crate::window_shape::save(file, &self.life.shape);
+        }
+    }
+
+    /// The window of the last run is the first of this one.
+    pub(crate) fn remembering_window(
+        mut self,
+        file: std::path::PathBuf,
+        saved: Option<WindowShape>,
+    ) -> Self {
+        self.window_file = Some(file);
+        if let Some(shape) = saved {
+            self.life.shape = shape;
+        }
+        self
     }
 
     /// Whether closing the window leaves the program in the tray. Says once

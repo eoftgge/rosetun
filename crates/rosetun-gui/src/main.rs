@@ -51,6 +51,8 @@ mod view;
 mod widgets;
 #[cfg(windows)]
 mod window_memory;
+#[cfg(target_os = "linux")]
+mod window_shape;
 #[cfg(test)]
 #[path = "../../windows_resources.rs"]
 mod windows_resources;
@@ -172,8 +174,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Before the window and its icon exist, so a non-rose preset never flashes rose.
     theme::set_accent(app::initial_accent(&store));
     #[cfg(target_os = "linux")]
+    let window_file = store.path().with_file_name("window.json");
+    #[cfg(target_os = "linux")]
+    let saved_shape = window_shape::load(
+        &window_file,
+        std::env::var_os("WAYLAND_DISPLAY").is_some(),
+        window_shape::x11_monitors,
+    );
+    #[cfg(target_os = "linux")]
     app::host::run(
         app::App::without_window(store, repaint::Repaint::default())
+            .remembering_window(window_file, saved_shape)
             .outside_scope(scope != rosetun_core::Scope::Inside)
             .with_shell(activation, open_link, start_hidden)
             .after_upgrade(after_upgrade)
@@ -230,8 +241,13 @@ fn window_viewport(shape: app::host::WindowShape) -> eframe::egui::ViewportBuild
     let viewport = base_viewport()
         .with_app_id("rosetun")
         .with_maximized(shape.maximized);
-    match shape.size {
+    let viewport = match shape.size {
         Some(size) => viewport.with_inner_size(size),
+        None => viewport,
+    };
+    // Only X11 has a position to bring back; see `window_shape`.
+    match shape.position {
+        Some(position) => viewport.with_position(position),
         None => viewport,
     }
 }
@@ -276,17 +292,23 @@ mod tests {
         let shape = crate::app::host::WindowShape {
             size: Some(eframe::egui::vec2(1000.0, 700.0)),
             maximized: true,
+            position: Some(eframe::egui::pos2(40.0, 60.0)),
+            scale: 1.0,
         };
         let viewport = window_viewport(shape);
         assert_eq!(viewport.app_id.as_deref(), Some("rosetun"));
         assert_eq!(viewport.decorations, Some(true), "the system's frame");
         assert_eq!(viewport.inner_size, Some(eframe::egui::vec2(1000.0, 700.0)));
         assert_eq!(viewport.maximized, Some(true));
+        assert_eq!(viewport.position, Some(eframe::egui::pos2(40.0, 60.0)));
         let first = window_viewport(crate::app::host::WindowShape {
             size: None,
             maximized: false,
+            position: None,
+            scale: 1.0,
         });
         assert_eq!(first.inner_size, Some(eframe::egui::vec2(1200.0, 780.0)));
+        assert_eq!(first.position, None);
     }
 
     #[test]
