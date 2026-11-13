@@ -11,7 +11,12 @@ impl WorkerDispatcher {
             let event = match source {
                 QrSource::File => WorkerEvent::Qr {
                     request,
-                    result: pick_image().map(|path| qr::links_in_file(&path)),
+                    result: match pick_image() {
+                        Ok(path) => path.map(|path| qr::links_in_file(&path)),
+                        Err(crate::file_dialog::Unavailable) => {
+                            Some(Err(QrError::FileDialogUnavailable))
+                        }
+                    },
                 },
                 QrSource::Clipboard => WorkerEvent::Qr {
                     request,
@@ -58,17 +63,14 @@ impl WorkerDispatcher {
     }
 }
 
-fn pick_image() -> Option<PathBuf> {
-    #[cfg(windows)]
-    return rfd::FileDialog::new()
-        .set_title(tr!("choose-qr-image"))
-        .add_filter(
-            tr!("qr-image-files"),
-            &["png", "jpg", "jpeg", "bmp", "webp"],
-        )
-        .pick_file();
-    #[cfg(not(windows))]
-    None
+fn pick_image() -> Result<Option<PathBuf>, crate::file_dialog::Unavailable> {
+    crate::file_dialog::pick_file(
+        &tr!("choose-qr-image"),
+        Some(crate::file_dialog::Filter {
+            name: &tr!("qr-image-files"),
+            extensions: &["png", "jpg", "jpeg", "bmp", "webp"],
+        }),
+    )
 }
 
 /// Reads the clipboard without changing it.

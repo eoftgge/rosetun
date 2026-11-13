@@ -29,6 +29,7 @@ const FILE_EXTENSIONS: &[&str] = &[
 
 pub fn redact_report_text(text: &str) -> String {
     let text = redact_profiles(text);
+    let text = redact_home_dirs(&text);
     let text = redact_secrets(&text);
     let text = redact_uuids(&text);
     let text = redact_urls(&text);
@@ -39,6 +40,26 @@ pub fn redact_report_text(text: &str) -> String {
 /// Removes credential fields and full URLs even when detailed engine logging is enabled.
 pub fn redact_log_credentials(text: &str) -> String {
     redact_urls(&redact_secrets(text))
+}
+
+/// `/home/<name>/…` on Linux: the account name is nobody else's business.
+fn redact_home_dirs(text: &str) -> String {
+    const HOME: &str = "/home/";
+    let mut result = String::with_capacity(text.len());
+    let mut at = 0;
+    while let Some(found) = text[at..].find(HOME) {
+        let start = at + found + HOME.len();
+        let end = text[start..]
+            .find([
+                '\\', '/', ' ', '\n', '\r', '\t', '"', '\'', ',', ';', ':', ')',
+            ])
+            .map_or(text.len(), |offset| start + offset);
+        result.push_str(&text[at..start]);
+        result.push_str("<user>");
+        at = end;
+    }
+    result.push_str(&text[at..]);
+    result
 }
 
 fn redact_profiles(text: &str) -> String {
@@ -542,6 +563,24 @@ mod tests {
             (r"D:\Users\Example\Rosetun", r"D:\Users\<user>\Rosetun"),
             ("e:/users/Example/rosetun", "e:/users/<user>/rosetun"),
             (r"\\?\C:\Users\Example\x", r"\\?\C:\Users\<user>\x"),
+        ] {
+            assert_eq!(redact_report_text(input), expected);
+        }
+    }
+
+    #[test]
+    fn linux_home_folders_are_hidden() {
+        for (input, expected) in [
+            (
+                "/home/example/.config/rosetun/gui.log",
+                "/home/<user>/.config/rosetun/gui.log",
+            ),
+            ("path=\"/home/example\" next", "path=\"/home/<user>\" next"),
+            (
+                "a /home/one/x and /home/two/y",
+                "a /home/<user>/x and /home/<user>/y",
+            ),
+            ("/homework/example", "/homework/example"),
         ] {
             assert_eq!(redact_report_text(input), expected);
         }

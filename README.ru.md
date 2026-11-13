@@ -21,7 +21,7 @@
 Rosetun: VPN-клиент для Windows и Linux на sing-box и Xray.
 Системная служба защищает от утечек независимо от ядра.
 
-**Стабильный выпуск: 0.5.0 · Windows и Linux.**
+**Стабильный выпуск: 0.5.1 · Windows и Linux.**
 
 **Молодой проект:** один разработчик с помощью ИИ-агентов, пока мало пользователей. О проблемах пишите в [Issues](https://github.com/eoftgge/rosetun/issues).
 
@@ -39,11 +39,11 @@ Rosetun: VPN-клиент для Windows и Linux на sing-box и Xray.
 
 Выберите файл на странице выпуска по кнопке выше:
 
-- **Windows 11 x64:** запустите `rosetun-0.5.0-setup.exe`.
-- **Debian / Ubuntu / Linux Mint, amd64:** установите `rosetun_0.5.0_amd64.deb`, добавьте себя в группу службы и перезагрузите компьютер:
+- **Windows 11 x64:** запустите `rosetun-0.5.1-setup.exe`.
+- **Debian / Ubuntu / Linux Mint, amd64:** установите `rosetun_0.5.1_amd64.deb`, добавьте себя в группу службы и перезагрузите компьютер:
 
 ```sh
-sudo apt install ./rosetun_0.5.0_amd64.deb
+sudo apt install ./rosetun_0.5.1_amd64.deb
 sudo usermod -aG rosetun "$USER"
 sudo reboot
 ```

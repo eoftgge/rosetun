@@ -406,6 +406,9 @@ fn dispatch(
             Ok(text) => Response::DiagnosticLog { text },
             Err(error) => Response::Error(error),
         },
+        Request::ForeignRules => Response::ForeignRules {
+            tables: crate::foreign_rules::interceptors(),
+        },
         Request::Connections => match helper.connections_as(caller.expect("caller checked")) {
             Ok((active, closed)) => Response::Connections { active, closed },
             Err(error) => Response::Error(error),
@@ -623,6 +626,7 @@ mod tests {
             Request::TemporaryRules,
             Request::SessionExits,
             Request::DiagnosticLog,
+            Request::ForeignRules,
             Request::Connections,
             Request::CloseConnection { id: "a".to_owned() },
             Request::TunnelDelay,

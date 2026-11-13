@@ -128,10 +128,13 @@ impl WorkerDispatcher {
         });
     }
 
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     pub(crate) fn open_folder(&self, folder: PathBuf) {
         self.spawn_task("rosetun-open-folder", move |publisher| {
+            #[cfg(windows)]
             let result = Command::new("explorer.exe").arg(folder).spawn().map(|_| ());
+            #[cfg(target_os = "linux")]
+            let result = rosetun_shell::open_folder(&folder);
             emit(
                 &publisher.tx,
                 &publisher.repaint,

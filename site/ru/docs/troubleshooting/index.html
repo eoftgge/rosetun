@@ -30,7 +30,7 @@
         <main id="main" class="wrap">
             <div class="prose docs">
                 <h1>Устранение неполадок</h1>
-                <!-- docs-version --><p class="note">Стабильный выпуск: 0.5.0 · Windows и Linux.</p><!-- /docs-version -->
+                <!-- docs-version --><p class="note">Стабильный выпуск: см. загрузки.</p><!-- /docs-version -->
                 <nav aria-label="На этой странице"><a href="#details">Устранение неполадок</a></nav>
                 <section id="details">
 <ul>
@@ -54,7 +54,7 @@
 <li><strong>Windows: окно не открывается или рисуется с ошибками после обновления:</strong> закройте Rosetun через трей и запустите из PowerShell: <code>$env:ROSETUN_RENDERER=&#x27;glow&#x27;; &amp; &#x27;C:\Program Files\Rosetun\rosetun-gui.exe&#x27;</code> (при необходимости исправьте путь). Нажмите <strong>Собрать отчёт</strong> и пришлите отчёт с описанием проблемы.</li>
 <li><strong>Windows: установка останавливается из-за того, что папку в <code>C:\Program Files\Rosetun</code> могут менять обычные пользователи.</strong> Обычно это бывает после кнопки <strong>Продолжить</strong> в Проводнике: она навсегда даёт вашей учётной записи доступ к защищённой папке Rosetun, например <code>data</code>. Удалите Rosetun и установите заново. Журнал службы берите через <strong>Собрать отчёт</strong> или из редактора, запущенного от имени администратора.</li>
 </ul>
-<p><strong>Сообщить о проблеме</strong> можно в <a href="https://github.com/eoftgge/rosetun/issues">Issues</a>, с шагами и текстом ошибки. На Windows приложите <strong>Собрать отчёт</strong>. На Linux приложите вывод команд ниже, сначала убрав адреса, ссылки и имена: в отличие от отчёта, эти журналы не очищены.</p>
+<p><strong>Сообщить о проблеме</strong> можно в <a href="https://github.com/eoftgge/rosetun/issues">Issues</a>, с шагами и текстом ошибки. Приложите <strong>Собрать отчёт</strong> (Настройки → Служба и журнал). На Linux в отчёт входит журнал службы из системного журнала, если ваша учётная запись может его читать (группы <code>adm</code> и <code>systemd-journal</code> в Debian); иначе отчёт так и скажет и ничего не потребует от root. Вывод команд ниже добавьте вручную, сначала убрав адреса, ссылки и имена: в отличие от отчёта, эти журналы не очищены.</p>
 <pre><code>rosetun status
 sudo journalctl -u rosetun-helper -b --no-pager
 cat ~/.config/rosetun/rosetun-gui.log</code></pre>

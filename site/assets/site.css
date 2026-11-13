@@ -4,18 +4,21 @@
     font-weight: 400;
     font-display: swap;
 }
+
 @font-face {
     font-family: Manrope;
     src: url("fonts/Manrope-SemiBold.ttf") format("truetype");
     font-weight: 600 800;
     font-display: swap;
 }
+
 @font-face {
     font-family: Cormorant;
     src: url("fonts/CormorantGaramond-SemiBold.woff2") format("woff2");
     font-weight: 600;
     font-display: swap;
 }
+
 :root {
     color-scheme: light dark;
     --bg: #fff8fa;
@@ -26,6 +29,7 @@
     --border: #d5b9c4;
     --wash: #f4e4e9;
 }
+
 @media (prefers-color-scheme: dark) {
     :root {
         --bg: #171014;
@@ -37,37 +41,44 @@
         --wash: #2b1d23;
     }
 }
+
 * {
     box-sizing: border-box;
 }
+
 html {
     scroll-behavior: auto;
 }
+
 body {
     margin: 0;
     background: var(--bg);
     color: var(--text);
-    font:
-        16px/1.7 Manrope,
-        system-ui,
-        sans-serif;
+    font: 16px/1.7 Manrope,
+    system-ui,
+    sans-serif;
 }
+
 a {
     color: var(--accent);
     text-decoration: none;
 }
+
 a:hover {
     color: var(--text);
 }
+
 a:focus-visible,
 summary:focus-visible {
     outline: 3px solid var(--accent);
     outline-offset: 5px;
 }
+
 .wrap {
     width: min(1120px, calc(100% - 40px));
     margin-inline: auto;
 }
+
 header {
     display: flex;
     align-items: center;
@@ -76,63 +87,75 @@ header {
     padding-block: 24px;
     border-bottom: 1px solid var(--border);
 }
+
 .brand {
-    font:
-        600 34px Cormorant,
-        Georgia,
-        serif;
+    font: 600 34px Cormorant,
+    Georgia,
+    serif;
     display: flex;
     gap: 10px;
     align-items: center;
     text-decoration: none;
     color: var(--text);
 }
+
 nav {
     display: flex;
     flex-wrap: wrap;
     gap: 12px 24px;
 }
+
 nav a {
     font-size: 14px;
 }
+
 section {
     padding-block: 56px;
 }
+
 h1,
 h2,
 h3 {
     line-height: 1.15;
     margin: 0 0 20px;
 }
+
 h1,
 h2 {
     font-family: Cormorant, Georgia, serif;
     font-weight: 600;
 }
+
 h1 {
     font-size: clamp(48px, 7vw, 88px);
     letter-spacing: -0.035em;
 }
+
 h2 {
     font-size: clamp(34px, 4vw, 52px);
 }
+
 h3 {
     font-size: 20px;
     line-height: 1.35;
 }
+
 p {
     margin: 0 0 20px;
 }
+
 .lead {
     font-size: 20px;
     max-width: 560px;
 }
+
 .eyebrow {
     font-size: 12px;
     letter-spacing: 0.16em;
     color: var(--accent);
     font-weight: 600;
 }
+
 .button {
     display: inline-block;
     background: #8c2338;
@@ -142,49 +165,53 @@ p {
     text-decoration: none;
     font-weight: 600;
 }
+
 .release {
     font-size: 14px;
     margin-top: 14px;
 }
+
 .muted,
 small {
     color: var(--muted);
 }
+
 .features {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 20px;
 }
+
 .features article {
     padding: 26px;
     background: var(--panel);
     border: 1px solid var(--border);
     border-radius: 12px;
 }
+
 .features p {
     font-size: 15px;
     margin: 0;
 }
+
 .number {
     display: block;
     color: var(--accent);
     font-size: 13px;
     margin-bottom: 24px;
 }
+
 .note {
     border-left: 3px solid var(--accent);
     padding: 12px 20px;
     margin-top: 28px;
     font-size: 14px;
 }
-.screens {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 24px;
-}
+
 figure {
     margin: 0;
 }
+
 .placeholder {
     aspect-ratio: 16/9;
     border: 1px dashed var(--border);
@@ -193,20 +220,23 @@ figure {
     place-items: center;
     background: var(--wash);
 }
+
 .placeholder span {
-    font:
-        600 64px Cormorant,
-        Georgia,
-        serif;
+    font: 600 64px Cormorant,
+    Georgia,
+    serif;
     color: var(--muted);
 }
+
 figcaption {
     padding: 12px 0;
 }
+
 small {
     display: block;
     font-size: 13px;
 }
+
 pre {
     white-space: pre-wrap;
     overflow-wrap: anywhere;
@@ -215,51 +245,63 @@ pre {
     padding: 18px;
     border-radius: 8px;
 }
+
 pre.diagram {
     white-space: pre;
     overflow-wrap: normal;
     overflow-x: auto;
     max-width: 100%;
 }
+
 pre.diagram code {
     overflow-wrap: normal;
 }
+
 code {
     font-family: Consolas, monospace;
     font-size: 0.9em;
     overflow-wrap: anywhere;
 }
+
 .verification,
 .prose {
     max-width: 820px;
 }
+
 .prose {
     padding-block: 56px;
 }
+
 .docs table {
     table-layout: fixed;
 }
+
 .docs th:first-child,
 .docs td:first-child {
     width: auto;
 }
+
 .docs .doc-pager {
     justify-content: space-between;
     margin-top: 40px;
     padding-top: 24px;
     border-top: 1px solid var(--border);
 }
+
 .prose section {
     padding-block: 24px;
 }
+
 .prose li {
     margin-block: 10px;
 }
+
 table {
     border-collapse: collapse;
     width: 100%;
     font-size: 14px;
 }
+
 th,
 td {
     text-align: left;
@@ -268,21 +310,26 @@ td {
     border-bottom: 1px solid var(--border);
     overflow-wrap: anywhere;
 }
+
 th:first-child,
 td:first-child {
     width: 32%;
 }
+
 details {
     border-bottom: 1px solid var(--border);
     padding: 18px 0;
 }
+
 summary {
     cursor: pointer;
     font-weight: 600;
 }
+
 details p {
     margin-top: 16px;
 }
+
 footer {
     display: flex;
     flex-wrap: wrap;
@@ -291,57 +338,71 @@ footer {
     padding-block: 32px;
     font-size: 13px;
 }
+
 footer span {
     margin-right: auto;
 }
+
 .skip {
     position: absolute;
     top: -100px;
     background: var(--panel);
     padding: 12px;
 }
+
 .skip:focus {
     top: 0;
 }
+
 img {
     max-width: 100%;
 }
+
 main,
 header,
 footer {
     overflow-wrap: anywhere;
 }
+
 @media (max-width: 800px) {
     header {
         align-items: flex-start;
         flex-direction: column;
     }
+
     .features {
         grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 }
+
 @media (max-width: 560px) {
     .wrap {
         width: calc(100% - 32px);
     }
+
     .features,
     .screens {
         grid-template-columns: 1fr;
     }
+
     section {
         padding-block: 36px;
     }
+
     nav {
         gap: 10px 18px;
     }
+
     th,
     td {
         padding: 10px 5px;
         font-size: 13px;
     }
+
     .button {
         padding-inline: 18px;
     }
+
     .prose {
         padding-top: 36px;
     }
@@ -350,6 +411,7 @@ footer {
 .hero {
     padding: 28px 0 48px;
 }
+
 .masthead {
     position: relative;
     overflow: hidden;
@@ -357,26 +419,31 @@ footer {
     border-radius: 20px;
     background: #171014;
 }
+
 .masthead img {
     display: block;
     width: 100%;
     height: auto;
 }
+
 .header-brand {
     position: relative;
     display: grid;
     gap: 4px;
     padding-left: 50px;
 }
+
 .header-brand .brand {
     line-height: 1;
 }
+
 .header-brand .brand img {
     position: absolute;
     left: 0;
     top: 50%;
     transform: translateY(-50%);
 }
+
 .platform-label {
     margin: 0;
     color: var(--muted);
@@ -384,29 +451,35 @@ footer {
     font-weight: 600;
     letter-spacing: 0.12em;
 }
+
 .platform-label span {
     padding-inline: 4px;
 }
+
 .hero-content {
     text-align: center;
     padding: 32px 24px 0;
 }
+
 .hero h1 {
     font-size: clamp(38px, 5.1vw, 66px);
     letter-spacing: -0.035em;
     margin-bottom: 14px;
 }
+
 .hero .lead {
     max-width: 720px;
     margin: 0 auto 26px;
     font-size: 18px;
 }
+
 .download-row {
     display: flex;
     justify-content: center;
     align-items: center;
     gap: 22px;
 }
+
 .button {
     display: inline-flex;
     align-items: center;
@@ -415,10 +488,12 @@ footer {
     min-height: 56px;
     box-shadow: 0 6px 24px #8c233826;
 }
+
 .button:hover {
     background: #a62b43;
     color: #fff;
 }
+
 .button span {
     font-size: 22px;
     line-height: 1;
@@ -432,69 +507,86 @@ footer {
     margin-top: 20px;
     font-size: 13px;
 }
+
 .download-links a {
     display: inline-flex;
     align-items: center;
     gap: 8px;
 }
+
 .compatibility {
     font-size: 12px;
     color: var(--muted);
     margin: 16px 0 0;
 }
+
 nav a {
     padding: 6px 0;
     color: var(--muted);
 }
+
 nav a:hover {
     color: var(--accent);
 }
+
 header nav a[aria-current] {
     color: var(--accent);
     text-decoration: underline;
     text-underline-offset: 0.3em;
 }
+
 .prose p a,
 .note a,
 .verification p a {
     font-weight: 600;
 }
+
 @media (max-width: 800px) {
     .hero h1 {
         font-size: clamp(36px, 5.1vw, 48px);
     }
 }
+
 @media (max-width: 560px) {
     .hero {
         padding-top: 20px;
     }
+
     .masthead {
         border-radius: 12px;
     }
+
     .header-brand {
         gap: 4px;
     }
+
     .platform-label {
         font-size: 9px;
         letter-spacing: 0.08em;
     }
+
     .hero-content {
         padding: 26px 0 0;
     }
+
     .hero h1 {
         font-size: 38px;
         text-wrap: balance;
     }
+
     .hero .lead {
         font-size: 16px;
     }
+
     .download-row {
         flex-direction: column;
         gap: 12px;
     }
+
     .download-row .button {
         width: 100%;
     }
+
     .download-links {
         margin-top: 16px;
     }
@@ -505,6 +597,7 @@ header nav a[aria-current] {
     font-size: 13px;
     color: var(--muted);
 }
+
 .release-detail {
     font-size: 14px;
     color: var(--muted);
@@ -551,9 +644,11 @@ header nav a[aria-current] {
     header.wrap {
         animation: arrive 500ms cubic-bezier(0.16, 1, 0.3, 1) both;
     }
+
     .masthead {
         animation: unveil 750ms cubic-bezier(0.16, 1, 0.3, 1) 60ms backwards;
     }
+
     .masthead::after {
         content: "";
         position: absolute;
@@ -564,50 +659,61 @@ header nav a[aria-current] {
         opacity: 0;
         animation: light-pass 1200ms ease-out 180ms backwards;
     }
+
     .hero-content > * {
         animation: arrive 650ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
     }
+
     .hero h1 {
         animation-delay: 140ms;
     }
+
     .hero .lead {
         animation-delay: 210ms;
     }
+
     .download-row {
         animation-delay: 280ms;
     }
+
     .download-platform {
         animation-delay: 330ms;
     }
+
     .download-links {
         animation-delay: 380ms;
     }
+
     .compatibility {
         animation-delay: 420ms;
     }
+
     .prose > .eyebrow,
     .prose > h1,
     .prose > .lead {
         animation: arrive 600ms cubic-bezier(0.16, 1, 0.3, 1) 100ms backwards;
     }
+
     a {
         transition: color 140ms ease-out;
     }
+
     .button {
-        transition:
-            transform 220ms ease-out,
-            background-color 140ms ease-out,
-            box-shadow 220ms ease-out;
+        transition: transform 220ms ease-out,
+        background-color 140ms ease-out,
+        box-shadow 220ms ease-out;
     }
+
     .button span,
     .download-links a span {
         transition: transform 220ms ease-out;
     }
+
     .features article {
-        transition:
-            transform 220ms ease-out,
-            border-color 220ms ease-out;
+        transition: transform 220ms ease-out,
+        border-color 220ms ease-out;
     }
+
     details[open] > p {
         animation: arrive 220ms ease-out;
     }
@@ -617,12 +723,15 @@ header nav a[aria-current] {
             transform: translateY(-2px);
             box-shadow: 0 10px 28px #8c233840;
         }
+
         .button:hover span {
             transform: translateY(2px);
         }
+
         .download-links a:hover span {
             transform: translateY(-2px);
         }
+
         .features article:hover {
             transform: translateY(-3px);
             border-color: var(--accent);
@@ -661,4 +770,95 @@ header nav a[aria-current] {
 .history {
     color: var(--muted);
     font-size: 14px;
+}
+
+
+.screens {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 24px;
+}
+
+.screens figure {
+    margin: 0;
+    min-width: 0;
+}
+
+.screens img {
+    display: block;
+    width: 100%;
+    height: auto;
+    border-radius: 12px;
+    object-fit: contain;
+}
+
+.screens figcaption {
+    margin-top: 12px;
+    font-weight: 600;
+}
+
+@media (max-width: 700px) {
+    .screens {
+        grid-template-columns: 1fr;
+    }
+}
+
+
+
+.screenshot {
+    display: block;
+    cursor: zoom-in;
+    border-radius: 12px;
+    overflow: hidden;
+}
+
+.screenshot img {
+    display: block;
+    width: 100%;
+    height: auto;
+}
+
+.image-lightbox {
+    position: fixed;
+    inset: 0;
+    width: min(95vw, 1500px);
+    max-width: none;
+    max-height: 95vh;
+    margin: auto;
+    padding: 0;
+    border: none;
+    background: transparent;
+    overflow: visible;
+}
+
+.image-lightbox::backdrop {
+    background: rgba(15, 20, 30, 0.30);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+}
+
+.image-lightbox img {
+    display: block;
+    max-width: 100%;
+    max-height: 90vh;
+    width: auto;
+    height: auto;
+    margin: auto;
+    object-fit: contain;
+    border-radius: 12px;
+}
+
+.lightbox-close {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    z-index: 2;
+    width: 42px;
+    height: 42px;
+    border: none;
+    border-radius: 50%;
+    background: rgba(20, 20, 20, 0.8);
+    color: white;
+    font-size: 28px;
+    cursor: pointer;
 }

@@ -56,12 +56,17 @@ impl WorkerDispatcher {
 
     pub(crate) fn browse_list_file(&self) {
         self.spawn_task("rosetun-browse-list", move |publisher| {
-            #[cfg(windows)]
-            let path = rfd::FileDialog::new()
-                .set_title(tr!("choose-list-file"))
-                .pick_file();
-            #[cfg(not(windows))]
-            let path = None;
+            let path = match crate::file_dialog::pick_file(&tr!("choose-list-file"), None) {
+                Ok(path) => path,
+                Err(crate::file_dialog::Unavailable) => {
+                    emit(
+                        &publisher.tx,
+                        &publisher.repaint,
+                        WorkerEvent::FileDialogUnavailable,
+                    );
+                    None
+                }
+            };
             emit(
                 &publisher.tx,
                 &publisher.repaint,
@@ -111,12 +116,17 @@ impl WorkerDispatcher {
 
     pub(crate) fn update_list_file(&self, id: ListId) {
         self.spawn_task("rosetun-update-list-file", move |publisher| {
-            #[cfg(windows)]
-            let path = rfd::FileDialog::new()
-                .set_title(tr!("choose-list-file"))
-                .pick_file();
-            #[cfg(not(windows))]
-            let path: Option<PathBuf> = None;
+            let path = match crate::file_dialog::pick_file(&tr!("choose-list-file"), None) {
+                Ok(path) => path,
+                Err(crate::file_dialog::Unavailable) => {
+                    emit(
+                        &publisher.tx,
+                        &publisher.repaint,
+                        WorkerEvent::FileDialogUnavailable,
+                    );
+                    None
+                }
+            };
             let Some(path) = path else {
                 emit(
                     &publisher.tx,

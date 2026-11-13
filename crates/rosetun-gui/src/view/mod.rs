@@ -220,7 +220,7 @@ fn config_unreadable_banner(ui: &mut egui::Ui, state: &State, actions: &mut Vec<
         message.push('\n');
         message.push_str(&errors::config_worker(crate::i18n::language(), error));
     }
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     {
         let buttons = [
             (tr!("open-settings-folder"), state.can_open_folders()),
@@ -243,7 +243,7 @@ fn config_unreadable_banner(ui: &mut egui::Ui, state: &State, actions: &mut Vec<
             None => {}
         }
     }
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "linux")))]
     {
         let _ = actions;
         widgets::error_with_actions(ui, &state.text(&message), &[]);

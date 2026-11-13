@@ -34,6 +34,10 @@ fluent-syntax.workspace = true
 qrcode.workspace = true
 serde_json.workspace = true
 
+[target.'cfg(target_os = "linux")'.dependencies]
+serde_json.workspace = true
+x11rb.workspace = true
+
 [target.'cfg(windows)'.dependencies]
 eframe = { workspace = true, features = ["wgpu_no_default_features"] }
 wgpu = { workspace = true, features = ["dx12", "wgsl"] }

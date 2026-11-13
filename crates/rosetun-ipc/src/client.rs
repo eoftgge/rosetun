@@ -98,6 +98,14 @@ impl HelperClient {
         }
     }
 
+    /// The firewall tables that redirect traffic and are not Rosetun's (Linux).
+    pub fn foreign_rules(&mut self) -> Result<Vec<String>, ClientError> {
+        match self.request(Request::ForeignRules)? {
+            Response::ForeignRules { tables } => Ok(tables),
+            _ => Err(ClientError::Unexpected),
+        }
+    }
+
     pub fn status(&mut self) -> Result<Status, ClientError> {
         match self.request(Request::Status)? {
             Response::Status(status) => Ok(status),

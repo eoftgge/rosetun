@@ -136,7 +136,7 @@ impl ReportSnapshot {
 
     pub(crate) fn render(
         &self,
-        windows_build: Option<u32>,
+        system: Option<&str>,
         engine_versions: (Option<&str>, Option<&str>),
         client_log: &str,
         helper_log: &str,
@@ -168,11 +168,15 @@ impl ReportSnapshot {
             report_label!("report-protocol"),
             rosetun_ipc::PROTOCOL_VERSION
         );
+        #[cfg(windows)]
+        let system_label = report_label!("report-windows-build");
+        #[cfg(not(windows))]
+        let system_label = report_label!("report-system");
         let _ = writeln!(
             text,
             "{}: {}",
-            report_label!("report-windows-build"),
-            windows_build.map_or_else(|| missing.clone(), |value| value.to_string())
+            system_label,
+            system.map_or_else(|| missing.clone(), str::to_owned)
         );
         let _ = writeln!(text, "sing-box: {}", engine_versions.0.unwrap_or(&missing));
         let _ = writeln!(text, "Xray: {}", engine_versions.1.unwrap_or(&missing));
@@ -327,7 +331,10 @@ impl ReportSnapshot {
                 let title = match kind {
                     CheckKind::Clock => report_label!("system-check-clock"),
                     CheckKind::Proxy => report_label!("system-check-proxy"),
-                    CheckKind::PacketInterceptor => report_label!("system-check-packet"),
+                    CheckKind::PacketInterceptor if cfg!(windows) => {
+                        report_label!("system-check-packet")
+                    }
+                    CheckKind::PacketInterceptor => report_label!("system-check-packet-linux"),
                     CheckKind::OtherVpn => report_label!("system-check-vpn"),
                     CheckKind::DnsSubstitution => report_label!("system-check-dns"),
                 };
@@ -432,10 +439,15 @@ mod tests {
             Language::English,
             0,
         );
-        let report = snapshot.render(Some(26300), (Some("1.14.3"), Some("26.10.21")), "", "");
+        let report = snapshot.render(Some("26300"), (Some("1.14.3"), Some("26.10.21")), "", "");
         assert!(report.contains("ServerUnreachable"));
         assert!(report.contains("System proxy: Warning"));
-        assert!(report.contains("Windows build: 26300"));
+        let label = if cfg!(windows) {
+            "Windows build"
+        } else {
+            "System"
+        };
+        assert!(report.contains(&format!("{label}: 26300")));
         assert!(report.contains("Lockdown: On\n"));
         assert!(report.contains("DNS: Custom (<url>)"));
         assert!(!report.contains("192.0.2.10"));

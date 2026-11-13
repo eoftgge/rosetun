@@ -30,7 +30,7 @@
         <main id="main" class="wrap">
             <div class="prose docs">
                 <h1>Troubleshooting</h1>
-                <!-- docs-version --><p class="note">Stable release: 0.5.0 · Windows and Linux.</p><!-- /docs-version -->
+                <!-- docs-version --><p class="note">Stable release: see downloads.</p><!-- /docs-version -->
                 <nav aria-label="On this page"><a href="#details">Troubleshooting</a></nav>
                 <section id="details">
 <ul>
@@ -54,7 +54,7 @@
 <li><strong>Windows: the window fails to open or draws incorrectly after an update:</strong> quit Rosetun from the tray, then run <code>$env:ROSETUN_RENDERER=&#x27;glow&#x27;; &amp; &#x27;C:\Program Files\Rosetun\rosetun-gui.exe&#x27;</code> in PowerShell (adjust the path if needed). Use <strong>Collect report</strong> and send the report with a description of the problem.</li>
 <li><strong>Windows: setup stops because standard users can change a folder under <code>C:\Program Files\Rosetun</code>.</strong> This usually follows <strong>Continue</strong> in File Explorer, which gives your account permanent access to a protected Rosetun folder such as <code>data</code>. Uninstall Rosetun and install it again. To read the service log, use <strong>Collect report</strong> or an editor run as administrator instead.</li>
 </ul>
-<p><strong>Report a problem</strong> in <a href="https://github.com/eoftgge/rosetun/issues">Issues</a>, with the steps and the error text. On Windows attach <strong>Collect report</strong>. On Linux attach the output below and remove addresses, links and names first: unlike the report, these logs are not cleaned.</p>
+<p><strong>Report a problem</strong> in <a href="https://github.com/eoftgge/rosetun/issues">Issues</a>, with the steps and the error text. Attach <strong>Collect report</strong> (Settings → Service and log). On Linux the report includes the service log from the system journal when your account may read it (the groups <code>adm</code> and <code>systemd-journal</code> on Debian); otherwise it says so and asks for nothing as root. Then add the output below by hand, removing addresses, links and names first: unlike the report, these logs are not cleaned.</p>
 <pre><code>rosetun status
 sudo journalctl -u rosetun-helper -b --no-pager
 cat ~/.config/rosetun/rosetun-gui.log</code></pre>

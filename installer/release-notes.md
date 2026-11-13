@@ -1,8 +1,12 @@
 # Rosetun {{version}}
 
-**The first beta of Rosetun 0.5, and the first version for Linux as well as Windows.** It is for testing: please report what breaks in [Issues](https://github.com/eoftgge/rosetun/issues), and vulnerabilities privately through [Security](https://github.com/eoftgge/rosetun/security/advisories/new). Rosetun 0.4.0 stays the stable version.
+Rosetun 0.5.1 fixes an Arch Linux compatibility issue in the nftables preflight check. On systems where `/usr/sbin` is a symbolic link to `/usr/bin`, Rosetun rejected the trusted `nft` executable and reported the kill switch and DNS lock as unavailable. This release accepts the standard Arch Linux executable location without relaxing the ownership and permission checks.
 
-<!-- Owner: before tagging, replace this comment with the matrices run on this build and their results, in both languages. Leave nothing here that was not run. -->
+Settings and Lockdown are unchanged from 0.5.0. See **What's new in 0.5** below for the previous release's features and known limitations.
+
+## Fixed in 0.5.1
+
+- **Arch Linux: kill switch and DNS lock.** The nftables executable check now supports the `/usr/bin/nft` layout used by Arch Linux, where `/usr/sbin` points to `/usr/bin`. The kill switch and DNS lock are no longer disabled solely because of this directory layout.
 
 ## What's new in 0.5
 
@@ -87,9 +91,13 @@ On Windows, the sing-box executable embeds Wintun {{wintun_version}}, distribute
 
 ## Русский
 
-**Первая бета Rosetun 0.5 и первая версия не только для Windows, но и для Linux.** Она для проверки: сообщайте о том, что ломается, в [Issues](https://github.com/eoftgge/rosetun/issues), а об уязвимостях приватно через [Security](https://github.com/eoftgge/rosetun/security/advisories/new). Стабильной версией остаётся Rosetun 0.4.0.
+### Исправлено в 0.5.1
 
-<!-- Владельцу: перед тегом замените этот комментарий матрицами, прогнанными на этой сборке, и их результатами, на обоих языках. Не оставляйте здесь ничего, что не запускалось. -->
+Rosetun 0.5.1 исправляет несовместимость проверки nftables с Arch Linux. Когда `/usr/sbin` является символической ссылкой на `/usr/bin`, Rosetun отклонял исполняемый файл `nft` и сообщал, что kill switch и замок DNS недоступны. Теперь стандартное расположение `nft` в Arch Linux поддерживается без ослабления проверок владельца и прав доступа.
+
+- **Arch Linux: kill switch и замок DNS.** Проверка nftables принимает `/usr/bin/nft`, если путь проходит проверку безопасности. Защита больше не становится недоступной только из-за устройства каталогов Arch Linux.
+
+Настройки и Lockdown не изменились по сравнению с 0.5.0. Возможности предыдущего выпуска и известные ограничения описаны ниже.
 
 ### Что нового в 0.5
 

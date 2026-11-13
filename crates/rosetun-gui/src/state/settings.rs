@@ -51,9 +51,9 @@ pub(crate) struct SettingsScreen {
     pub(crate) licenses_folder: Option<PathBuf>,
     #[cfg(any(windows, target_os = "linux"))]
     pub(crate) autostart: Option<bool>,
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     pub(crate) report_running: bool,
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     pub(crate) report_saved: Option<PathBuf>,
     pub(super) opened: bool,
 }
@@ -150,7 +150,7 @@ fn waits_for_save(action: &Action) -> bool {
         | Action::SetCloseToTray(_)
         | Action::SetOnQuit(_)
         | Action::SetNotifications(_) => true,
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "linux"))]
         Action::ShowReportFolder | Action::OpenFolder(_) => true,
         _ => false,
     }
@@ -341,22 +341,15 @@ impl State {
         !self.config_ready && self.config_error.is_some()
     }
 
-    #[cfg(any(windows, test))]
+    #[cfg(any(windows, target_os = "linux", test))]
     pub(crate) fn can_open_folders(&self) -> bool {
         (self.config_ready || self.config_unreadable())
             && !self.settings_busy_shown(self.settings.now_ms)
     }
 
-    #[cfg(any(windows, test))]
+    #[cfg(any(windows, target_os = "linux", test))]
     pub(crate) fn can_save_report(&self) -> bool {
-        #[cfg(windows)]
-        {
-            (self.config_ready || self.config_unreadable()) && !self.settings.screen.report_running
-        }
-        #[cfg(not(windows))]
-        {
-            false
-        }
+        (self.config_ready || self.config_unreadable()) && !self.settings.screen.report_running
     }
 
     /// Whether closing the window hides it to the tray. With unreadable
@@ -470,7 +463,7 @@ impl State {
                 self.finish_settings(result);
             }
             WorkerEvent::SetVerboseLog(result) => self.finish_settings(result),
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "linux"))]
             WorkerEvent::ReportSaved { result, new_checks } => {
                 self.settings.screen.report_running = false;
                 if let Some(checks) = new_checks
@@ -489,7 +482,7 @@ impl State {
                     }
                 }
             }
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "linux"))]
             WorkerEvent::OpenFolder(result) => {
                 let error = result.err().map(|error| {
                     let message = tr!("error-open-folder", detail = error.to_string());
@@ -762,7 +755,7 @@ impl State {
                     return self.start_settings(Job::SetVerboseLog(on));
                 }
             }
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "linux"))]
             Action::SaveReport => {
                 if self.can_save_report() {
                     self.settings.screen.report_running = true;
@@ -785,7 +778,7 @@ impl State {
                     });
                 }
             }
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "linux"))]
             Action::ShowReportFolder => {
                 if let Some(folder) = self
                     .settings
@@ -798,7 +791,7 @@ impl State {
                     return self.start_settings(Job::OpenFolder(folder));
                 }
             }
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "linux"))]
             Action::OpenFolder(folder) => {
                 let path = match folder {
                     AboutFolder::Config => &self.settings.screen.config_folder,

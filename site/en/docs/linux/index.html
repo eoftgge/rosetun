@@ -30,7 +30,7 @@
         <main id="main" class="wrap">
             <div class="prose docs">
                 <h1>Linux support</h1>
-                <!-- docs-version --><p class="note">Stable release: 0.5.0 · Windows and Linux.</p><!-- /docs-version -->
+                <!-- docs-version --><p class="note">Stable release: see downloads.</p><!-- /docs-version -->
                 <nav aria-label="On this page"><a href="#details">Linux support</a></nav>
                 <section id="details">
 <p><strong>Distributions (amd64, glibc 2.36 or newer):</strong> Debian 13 is verified by the system test matrices. Ubuntu 24.04+, Linux Mint 22+ and other Debian/Ubuntu derivatives with this glibc or newer, systemd, nftables and polkit are expected to work with the same <code>.deb</code>; manual Ubuntu verification is pending.</p>
@@ -43,12 +43,14 @@
 <tr><td>Others</td><td>Where a tray host answers; not tested</td><td>Rosetun shows the address to enter yourself</td></tr>
 </table>
 <p>The table says what the code does. Rosetun was checked by hand on GNOME, and not yet on KDE Plasma.</p>
-<p>Linux does not have these yet:</p>
+<p>Linux behaves as Windows does wherever the system allows it. Local network, file dialogs (the desktop&#x27;s own, through the portal), <strong>Collect report</strong>, the buttons that open a folder, the checks in <strong>System check</strong> (the system proxy, programs and firewall rules that redirect traffic) and the remembered window work on both. What the system itself limits:</p>
 <ul>
-<li>file dialogs: a QR code is read from the clipboard only, and there is no screen capture;</li>
-<li><strong>Collect report</strong> and the buttons that open a folder (see <a href="../troubleshooting/">Troubleshooting</a>);</li>
-<li>the system proxy and packet interception checks in <strong>System check</strong>;</li>
-<li>a remembered window position.</li>
+<li>Wayland lets a program choose a window&#x27;s size but not where it goes, so only the size and the maximized state come back there; on X11 the position does too, if a monitor still shows it;</li>
+<li>a file dialog needs a desktop portal (<code>xdg-desktop-portal</code> with a backend for your desktop); without one you type the full path of a list file and the report is saved next to the settings;</li>
+<li>the service log in the report comes from the system journal and needs an account in the <code>systemd-journal</code> or <code>adm</code> group; otherwise the report says so;</li>
+<li>the firewall check sees nftables, including iptables-nft, and not legacy iptables;</li>
+<li>a QR code is read from a file or the clipboard; there is no screen capture;</li>
+<li>multicast from a program that picks no interface: on Windows it goes into the tunnel; on Linux this has not been measured.</li>
 </ul>
 </section>
                 <nav class="doc-pager" aria-label="Previous and next"><a rel="prev" href="../build/">← Build from source</a><a rel="next" href="../everyday/">Everyday use →</a></nav>

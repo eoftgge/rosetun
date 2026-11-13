@@ -115,7 +115,7 @@ pub(crate) enum WorkerEvent {
         request: u64,
         results: Vec<rosetun_core::CheckResult>,
     },
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     ReportSaved {
         result: std::io::Result<Option<PathBuf>>,
         new_checks: Option<Vec<rosetun_core::CheckResult>>,
@@ -172,7 +172,7 @@ pub(crate) enum WorkerEvent {
     SetDns(Result<(), SettingsError>),
     ResetSettings(Result<(), SettingsError>),
     SetVerboseLog(Result<(), SettingsError>),
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     OpenFolder(Result<(), std::io::Error>),
     SelectNode(Result<String, SelectNodeError>),
     SelectRuleSet(Result<(), SelectRuleSetError>),
@@ -220,6 +220,8 @@ pub(crate) enum WorkerEvent {
         sequence: u32,
     },
     BrowsedListFile(Option<PathBuf>),
+    /// The system has no file dialog (Linux without a portal).
+    FileDialogUnavailable,
     AddList(Result<(List, Option<usize>), ListError>),
     ListAvailability {
         revision: u64,
@@ -293,7 +295,7 @@ mod helper;
 mod lists;
 mod programs;
 mod qr;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 mod report;
 mod rules;
 mod settings;

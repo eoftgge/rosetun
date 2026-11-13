@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import tomllib
 import urllib.request
 
 REPOSITORY = 'eoftgge/rosetun'
@@ -18,6 +19,15 @@ LINUX_MARKERS = {'DEB', 'DEB_URL'}
 LINUX_READY = re.compile(r'<!-- linux-ready (.*?) -->', re.DOTALL)
 LINUX_SOON = re.compile(r'<!-- linux-soon -->(.*?)<!-- /linux-soon -->', re.DOTALL)
 DOC_VERSION = re.compile(r'<!-- docs-version -->(.*?)<!-- /docs-version -->', re.DOTALL)
+
+
+def workspace_version(manifest):
+    """The workspace is the sole source of the site's release version."""
+    with manifest.open('rb') as source:
+        version = tomllib.load(source)['workspace']['package']['version']
+    if not re.fullmatch(r'\d+\.\d+\.\d+', version):
+        raise ValueError('the site requires a stable workspace version')
+    return version
 
 
 def fetch(url, api=False):
@@ -101,8 +111,8 @@ def render(source, output, values):
             text = LINUX_READY.sub('', text)
             text = LINUX_SOON.sub(lambda match: match[1], text)
         found = set(re.findall(r'@@([A-Z0-9_]+)@@', text))
-        if found and found != MARKERS:
-            raise ValueError(f'incomplete markers in {path}')
+        if unknown := found - MARKERS:
+            raise ValueError(f'unknown release markers in {path}: {sorted(unknown)}')
         for key in MARKERS:
             text = text.replace(f'@@{key}@@', html.escape(values[key], quote=True))
         text = re.sub(r'href="[^"]*"\s+data-release-href="([^"]*)"',
@@ -126,23 +136,31 @@ def preview_values(version, linux):
     return replacements(release, '\n'.join('0' * 64 + '  ' + name for name in names))
 
 
+def published_values(manifest):
+    version = workspace_version(manifest)
+    release = json.loads(fetch(f'{API}/releases/tags/v{version}', api=True))
+    if release['tag_name'] != f'v{version}':
+        raise ValueError('release tag does not match the workspace version')
+    # Validate asset URLs before making any release download request.
+    provisional = replacements(release, '\n'.join(
+        '0' * 64 + '  ' + name for name in (f'rosetun-{version}-setup.exe', f'rosetun_{version}_amd64.deb')
+    ))
+    sums = fetch(provisional['CHECKSUM_URL']).decode('utf-8-sig')
+    return replacements(release, sums)
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--preview', action='store_true', help='offline preview of the workspace version; never publish')
     parser.add_argument('--preview-version', help='offline preview with synthetic checksums; never publish')
     parser.add_argument('--preview-deb', action='store_true', help='include a Debian package in the preview')
     args = parser.parse_args()
-    if args.preview_deb and not args.preview_version:
-        parser.error('--preview-deb requires --preview-version')
-    if args.preview_version:
-        render(Path('site'), args.output, preview_values(args.preview_version, args.preview_deb))
+    if args.preview_deb and not (args.preview or args.preview_version):
+        parser.error('--preview-deb requires --preview or --preview-version')
+    if args.preview or args.preview_version:
+        version = args.preview_version or workspace_version(Path('Cargo.toml'))
+        render(Path('site'), args.output, preview_values(version, args.preview_deb))
         print('Local preview only: checksums are synthetic. Do not publish this directory.')
         raise SystemExit(0)
-    release = json.loads(fetch(f'{API}/releases/latest', api=True))
-    # Validate asset URLs before making any release download request.
-    stable_version = release['tag_name'].removeprefix('v')
-    provisional = replacements(release, '\n'.join(
-        '0' * 64 + '  ' + name for name in (f'rosetun-{stable_version}-setup.exe', f'rosetun_{stable_version}_amd64.deb')
-    ))
-    sums = fetch(provisional['CHECKSUM_URL']).decode('utf-8-sig')
-    render(Path('site'), args.output, replacements(release, sums))
+    render(Path('site'), args.output, published_values(Path('Cargo.toml')))

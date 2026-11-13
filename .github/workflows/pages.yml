@@ -5,7 +5,7 @@ on:
     types: [published]
   push:
     branches: [master, dev]
-    paths: ['site/**', 'tools/site/**', '.github/workflows/pages.yml']
+    paths: ['Cargo.toml', 'site/**', 'tools/site/**', '.github/workflows/pages.yml']
   workflow_dispatch:
   # Releases created with GITHUB_TOKEN do not emit another workflow run.
   workflow_run:

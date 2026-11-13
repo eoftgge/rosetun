@@ -113,6 +113,9 @@ pub(crate) struct App {
     /// eframe on Windows cannot tell a window hidden in the tray from a shown one.
     #[cfg(any(windows, target_os = "linux"))]
     window_hidden: bool,
+    /// Where the window's shape is kept between runs.
+    #[cfg(target_os = "linux")]
+    window_file: Option<std::path::PathBuf>,
     #[cfg(any(windows, target_os = "linux"))]
     quitting: bool,
     #[cfg(any(windows, target_os = "linux"))]
@@ -177,6 +180,8 @@ impl App {
             repaint_trace,
             #[cfg(target_os = "linux")]
             life: host::WindowLife::new(repaint),
+            #[cfg(target_os = "linux")]
+            window_file: None,
             #[cfg(windows)]
             frame_stats: crate::frame_stats::FrameStats::default(),
             #[cfg(windows)]
@@ -395,13 +400,13 @@ impl App {
         if let Some(job) = job {
             self.dispatch(job);
         }
+        #[cfg(target_os = "linux")]
+        self.remember_shape(ctx);
         if waits {
             #[cfg(windows)]
             if let Some(window) = &self.window {
                 window.save();
             }
-            #[cfg(target_os = "linux")]
-            self.remember_shape(ctx);
             self.leave_window(ctx, Leave::Hide);
             self.quit_disconnecting = disconnect;
             self.quit_apply_deadline = Some(Instant::now() + Duration::from_secs(10));
@@ -500,12 +505,12 @@ impl App {
             Job::SetDns(dns) => self.workers.set_dns(dns),
             Job::ResetSettings => self.workers.reset_settings(),
             Job::SetVerboseLog(on) => self.workers.set_verbose_log(on),
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "linux"))]
             Job::SaveReport {
                 snapshot,
                 own_alias,
             } => self.workers.save_report(snapshot, own_alias),
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "linux"))]
             Job::OpenFolder(folder) => self.workers.open_folder(folder),
             Job::SelectNode(subscription, node) => self.workers.select_node(subscription, node),
             Job::SelectRuleSet(id) => self.workers.select_rule_set(id),

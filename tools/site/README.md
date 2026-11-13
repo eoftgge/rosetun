@@ -5,10 +5,15 @@ Documentation lives in `site/{en,ru}/docs/`, with matching page paths, an on-pag
 contents list, a visible language switch and previous/next links. Handwritten
 HTML shares the existing styles and offline checks without adding a converter
 or a build dependency. Edit it directly; the README is only a short entry point.
-Keep the release markers in both landing pages; the Pages job fills them at
-publication time using the latest stable GitHub release, its installer asset and
-the matching line in `SHA256SUMS.txt`. No API calls run in a visitor's browser.
+Keep release markers in landing pages and installation instructions. Python 3.11+
+reads `[workspace.package].version` from the root `Cargo.toml`; the Pages job
+fetches that exact published stable tag (`v<version>`), its assets and matching
+lines in `SHA256SUMS.txt`. It never falls back to the latest release. No API calls run in a visitor's browser.
 Release markers live in `data-release-href` and `data-release-text` attributes.
+A page may use any subset of known markers; unknown markers stop publication.
+Do not put the current release number in fallback copy. Change Cargo.toml and
+publish its matching release; no HTML version edits are needed. Historical
+references such as the 0.4 documentation and migration notes stay literal.
 The source pages show readable fallback text and link to the latest release;
 publication replaces the fallback links and text and removes those attributes.
 
@@ -34,16 +39,18 @@ network access; source validation and tests do not. A missing stable release,
 asset or unique checksum stops publication. The checksum is copied, not a claim
 that the CI job downloaded and hashed the installer.
 
-Preview the stable 0.5.0 site without network access:
+Preview the Cargo.toml version without network access:
 
 ```sh
-python tools/site/release.py --preview-version 0.5.0 --preview-deb --output target/site-preview-0.5
-python tools/site/check.py target/site-preview-0.5 --rendered
-python -m http.server 8000 --directory target/site-preview-0.5
+python tools/site/release.py --preview --preview-deb --output target/site-preview-offline
+python tools/site/check.py target/site-preview-offline --rendered
+python -m http.server 8000 --directory target/site-preview-offline
 ```
 
 This preview uses synthetic checksums; do not publish its output. The Pages job
-continues to fetch the actual latest stable release and checksums. From 0.5,
+fetches the published release matching Cargo.toml and its actual checksums.
+For testing another version, use `--preview-version 2.7.19` instead of `--preview`.
+A prerelease workspace version is rejected for publication. From 0.5,
 documentation banners name the stable version and its available platforms.
 The 0.4 reference lives in the documentation index history rather than every
 banner. The current documentation describes 0.5 directly, without per-page "since 0.5" notices.
@@ -57,7 +64,7 @@ The workflow checks `dev` pushes without deploying. Deployment uses `master`
 for release events and successful Release workflow completions. The latter is
 needed because a release created with `GITHUB_TOKEN` does not trigger another
 workflow through `release: published`. A completed preview release can therefore
-refresh the site from `master` with the unchanged latest stable download.
+refresh the site from `master` using the version in master's Cargo.toml.
 Manual deployment must select `master`. The workflow does not enable Pages;
 the owner must first choose GitHub Actions in Settings → Pages.
 
@@ -66,11 +73,11 @@ moves forward. Text that depends on the stable release having a Debian package
 sits in `<!-- linux-ready ... -->` and `<!-- linux-soon -->...<!-- /linux-soon -->`
 markers: publication keeps one and drops the other.
 
-The source pages name stable 0.5.0 for Windows and Linux. The
+The source pages use version-neutral fallback text. The
 0.4 reference remains in the documentation index history; per-page "since 0.5"
 notices have been removed. `<!-- docs-version -->...<!-- /docs-version -->`
-wraps the baseline banner. Publication fills it with the actual latest stable
-version and available platforms. If that release is still older than 0.5, the
+wraps the baseline banner. Publication fills it with the Cargo.toml
+version and available platforms from the matching published release. If that release is still older than 0.5, the
 banner names both the older download and the 0.5 documentation baseline.
 The Linux fallback links to the release list; a stable Debian asset replaces
 it with the exact package link. Source pages do not promise an unpublished file.

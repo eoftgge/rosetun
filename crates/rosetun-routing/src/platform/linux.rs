@@ -33,6 +33,7 @@ pub(super) mod connected;
 mod nft;
 mod physical;
 mod programs;
+pub(super) mod segment;
 mod state;
 mod tunnel;
 
@@ -40,6 +41,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use crate::cgroup::{self, CgroupPath, Leaves};
+use crate::lan::LanAccess;
 use crate::nftables::{self, InterfaceName, LeftBehind, Lockdown, Rules};
 use crate::{
     BootRestore, FirewallReset, LockdownApps, LockdownStatus, ProtectionCapabilities,
@@ -51,6 +53,7 @@ use self::nft::{Nft, SystemNft};
 use self::programs::{CLI_SCOPE, GUI_SCOPE, Membership, Program};
 use self::state::{Saved, Stored};
 
+pub(super) use self::nft::ruleset_json;
 pub(super) use self::physical::physical_default_interface;
 
 /// Why there is no protection when the helper does not run as the unit.
@@ -88,7 +91,20 @@ impl LockdownRules {
 struct SessionRules {
     scope: ProtectionScope,
     allow_lan: bool,
+    /// What "Local network" opens for the session; only with `allow_lan`.
+    lan: LanAccess,
     tunnel: Option<InterfaceName>,
+}
+
+impl SessionRules {
+    fn of(plan: &RoutingPlan, tunnel: Option<InterfaceName>) -> Self {
+        Self {
+            scope: plan.scope,
+            allow_lan: plan.allow_lan,
+            lan: plan.lan.clone(),
+            tunnel,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -98,9 +114,14 @@ struct Shared {
     /// crash left it. Never together with `lockdown`.
     hold: bool,
     lockdown: Option<LockdownRules>,
+    /// What Lockdown's own "Local network" opens, as the service last wrote
+    /// it; only with `LockdownRules::allow_lan`. Empty after a reboot, until
+    /// the service has read the networks.
+    lockdown_lan: LanAccess,
     /// During the hold: the Lockdown an administrator turned on, which the
     /// hold becomes when it ends that way (`end_upgrade_hold`).
     requested: Option<LockdownRules>,
+    requested_lan: LanAccess,
     /// The record was read; from then on the service is its only writer.
     loaded: bool,
     /// The programs' scopes found by the last scan.
@@ -285,14 +306,31 @@ fn render(shared: &Shared, leaves: Option<&Leaves>) -> String {
             nftables::remove()
         };
     }
+    let lan = lan_access(shared);
     nftables::replace(&Rules {
         scope: session.map_or(ProtectionScope::AllTraffic, |session| session.scope),
         allow_lan: session.is_some_and(|session| session.allow_lan),
+        lan: Some(&lan),
         engines: leaves.map(|leaves| &leaves.engines),
         hold: None,
         tunnel: session.and_then(|session| session.tunnel.as_ref()),
         lockdown,
     })
+}
+
+/// What "Local network" opens now. The session's own access, which knows its
+/// servers, when it has one; otherwise Lockdown's. Lockdown's "Private
+/// networks behind the router" holds whatever the session asked for.
+fn lan_access(shared: &Shared) -> LanAccess {
+    let lockdown = shared.lockdown.filter(|lockdown| lockdown.allow_lan);
+    let mut access = match shared.session.as_ref().filter(|session| session.allow_lan) {
+        Some(session) => session.lan.clone(),
+        None => shared.lockdown_lan.clone(),
+    };
+    if let Some(lockdown) = lockdown {
+        access.private_networks |= lockdown.private_networks;
+    }
+    access
 }
 
 /// The hold: the kill switch's first phase without "Local network" and with
@@ -302,6 +340,7 @@ fn hold_rules(leaves: Option<&Leaves>) -> String {
     nftables::replace(&Rules {
         scope: ProtectionScope::AllTraffic,
         allow_lan: false,
+        lan: None,
         engines: leaves.map(|leaves| &leaves.engines),
         hold: leaves.map(|leaves| &leaves.helper),
         tunnel: None,
@@ -309,11 +348,20 @@ fn hold_rules(leaves: Option<&Leaves>) -> String {
     })
 }
 
-/// Lockdown's set at boot: no cgroup exists yet that a rule could name.
+/// Lockdown's set at boot: no cgroup exists yet that a rule could name, and
+/// no network either, so no segment to open. With "Private networks behind
+/// the router" the private ranges are open, as the user chose; the segment
+/// and the link-local networks follow once the service has read them, which
+/// it does within seconds of starting.
 fn boot_rules(saved: Saved) -> String {
+    let lan = LanAccess {
+        private_networks: saved.private_networks,
+        ..LanAccess::default()
+    };
     nftables::replace(&Rules {
         scope: ProtectionScope::AllTraffic,
         allow_lan: false,
+        lan: Some(&lan),
         engines: None,
         hold: None,
         tunnel: None,
@@ -511,11 +559,7 @@ impl RoutingBackend for NftBackend {
         // same transaction: there is no moment without rules. Under
         // Lockdown the programs' permits go with it, as on Windows.
         table.change(&mut shared, |next| {
-            next.session = Some(SessionRules {
-                scope: plan.scope,
-                allow_lan: plan.allow_lan,
-                tunnel: None,
-            });
+            next.session = Some(SessionRules::of(plan, None));
             if plan.lockdown
                 && let Some(lockdown) = next.lockdown.as_mut()
             {
@@ -592,8 +636,10 @@ impl RoutingBackend for NftBackend {
             cli: apps.cli.is_some(),
         };
         let mut shared = self.shared();
+        let wanted_lan = lan.cloned().unwrap_or_default();
         if shared.hold && shared.lockdown.is_none() {
             shared.requested = Some(wanted);
+            shared.requested_lan = wanted_lan;
             if shared.session.is_none() {
                 self.table
                     .nft
@@ -608,7 +654,9 @@ impl RoutingBackend for NftBackend {
         self.table.write_record(wanted.saved())?;
         if let Err(error) = self.table.change(&mut shared, |next| {
             next.lockdown = Some(wanted);
+            next.lockdown_lan = wanted_lan;
             next.requested = None;
+            next.requested_lan = LanAccess::default();
         }) {
             self.table.restore_record(before);
             return Err(error);
@@ -632,8 +680,10 @@ impl RoutingBackend for NftBackend {
             self.table.remove_record()?;
             if let Err(error) = self.table.change(&mut shared, |next| {
                 next.lockdown = None;
+                next.lockdown_lan = LanAccess::default();
                 next.hold = false;
                 next.requested = None;
+                next.requested_lan = LanAccess::default();
             }) {
                 self.table.restore_record(Some(before));
                 return Err(error);
@@ -648,6 +698,7 @@ impl RoutingBackend for NftBackend {
         }
         shared.hold = false;
         shared.requested = None;
+        shared.requested_lan = LanAccess::default();
         Ok(true)
     }
 
@@ -658,11 +709,14 @@ impl RoutingBackend for NftBackend {
             return Ok(());
         }
         let wanted = shared.requested.unwrap_or_default();
+        let wanted_lan = shared.requested_lan.clone();
         self.table.write_record(wanted.saved())?;
         if let Err(error) = self.table.change(&mut shared, |next| {
             next.hold = false;
             next.lockdown = Some(wanted);
+            next.lockdown_lan = wanted_lan;
             next.requested = None;
+            next.requested_lan = LanAccess::default();
         }) {
             self.table.restore_record(None);
             return Err(error);
@@ -744,11 +798,7 @@ impl ProtectionSession for NftSession {
         self.require_armed()?;
         let mut shared = self.table.lock();
         self.table.change(&mut shared, |next| {
-            next.session = Some(SessionRules {
-                scope: plan.scope,
-                allow_lan: plan.allow_lan,
-                tunnel: None,
-            });
+            next.session = Some(SessionRules::of(plan, None));
         })
     }
 
@@ -862,6 +912,7 @@ mod tests {
         fn left(scope: ProtectionScope) -> Arc<Self> {
             let nft = Arc::new(Self::default());
             let script = nftables::replace(&Rules {
+                lan: None,
                 scope,
                 allow_lan: false,
                 engines: Some(&leaves().engines),
@@ -1526,10 +1577,17 @@ mod tests {
     fn the_boot_set_names_no_cgroup() {
         let text = boot_rules(Saved {
             allow_lan: true,
-            private_networks: false,
+            private_networks: true,
         });
         assert!(!text.contains("cgroupv2"));
         assert!(text.contains("ip saddr { 10.0.0.0/8"));
+        // Without that option no network is known yet, so none is opened.
+        let own = boot_rules(Saved {
+            allow_lan: true,
+            private_networks: false,
+        });
+        assert!(!own.contains("ip saddr {"));
+        assert!(!own.contains("iifname"));
     }
 
     #[test]

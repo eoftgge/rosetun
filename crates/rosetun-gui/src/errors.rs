@@ -587,6 +587,9 @@ pub(crate) fn qr(language: Language, error: QrError) -> String {
         QrError::ScreenClipUnavailable => {
             tr_in(language, "error-qr-screen-clip-unavailable", &args)
         }
+        QrError::FileDialogUnavailable => {
+            tr_in(language, "error-qr-file-dialog-unavailable", &args)
+        }
         QrError::ScreenClipTimedOut => tr_in(language, "error-qr-screen-clip-timed-out", &args),
     }
 }

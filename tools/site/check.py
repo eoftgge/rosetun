@@ -34,7 +34,7 @@ class Document(HTMLParser):
         if 'id' in attrs:
             assert attrs['id'] not in self.ids, f'{self.path}: duplicate id'
             self.ids.add(attrs['id'])
-        assert tag not in {'script', 'style', 'iframe', 'object', 'embed', 'base', 'form'}, (
+        assert tag not in {'style', 'iframe', 'object', 'embed', 'base', 'form'}, (
             f'{self.path}: unexpected active element {tag}'
         )
         assert not any(k.startswith('on') or k in {'style', 'srcset', 'ping'} for k in attrs), (

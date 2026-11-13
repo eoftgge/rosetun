@@ -380,6 +380,15 @@ pub(crate) fn add_dialog(
             if widgets::outline_button(ui, tr!("choose-list-file"), !busy).clicked() {
                 actions.push(Action::BrowseListFile);
             }
+            if dialog.dialog_missing {
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(tr!("file-dialog-unavailable-path"))
+                            .color(theme::palette().text_dim),
+                    )
+                    .wrap(),
+                );
+            }
             if let Some(path) = &dialog.file {
                 ui.label(tr!(
                     "list-selected-file",

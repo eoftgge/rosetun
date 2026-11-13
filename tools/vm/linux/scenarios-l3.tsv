@@ -20,7 +20,10 @@ rules.proxy-default-direct	yes	real-service	rules	-	Direct by default and a Thro
 rules.restart-guarded	yes	real-service	rules	-	adding and removing a rule by program while connected restarts sing-box with the capabilities it needs; the direct path stays refused throughout
 rules.search-misses	yes	real-service	rules	-	the journal shows process lookups that found a program; the note counts them and those that did not, for the report
 killswitch.disconnect	yes	real-service	killswitch	-	a disconnect removes the table and the direct path answers again
-lan.on	yes	real-service	lan	-	"Local network" on: TCP to the host node bound to the physical interface connects, the probe address does not
+lan.on	yes	real-service	lan	-	"Local network" on: UDP to a device of the own network on the physical interface is sent, the host node (the VPN server) and the probe address are refused
+lan.private-closed	yes	real-service	lan	-	"Local network" on without Private networks behind the router: UDP to a private address outside the own network, on the physical interface, is refused locally
+lan.private-open	yes	real-service	lan	-	"Local network" with Private networks behind the router: UDP to a private address outside the own network is sent, UDP 53 there, the host node (the VPN server) and the probe address are refused locally
+lan.follows-change	yes	real-service	lan	-	a second network added to the physical interface during the session reaches the table within 20 seconds and leaves it when removed; the kill switch holds throughout
 dnslock.direct-blocked	yes	real-service	dnslock	-	the DNS lock without the kill switch: UDP 53 to the DNS probe address bound to the physical interface is refused locally, HTTPS to the probe address there answers
 dnslock.tunnel-passes	yes	real-service	dnslock	-	the DNS lock: dig with the guest's own resolver is answered through the tunnel
 dnslock.unavailable	yes	real-service	dnslock	-	with the nft binary not trusted the DNS lock cannot go in: the session connects without a table, rosetun status names the missing lock and its reason, and UDP 53 leaves the physical interface

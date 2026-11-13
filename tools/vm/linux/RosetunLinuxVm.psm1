@@ -23,7 +23,7 @@ $script:StageProfiles = @{
     L5 = @{ Artifacts = @('rosetun-old.deb', 'rosetun-new.deb'); Scripts = @('launch.sh', 'lib.sh', 'run-l5.sh', 'start.sh'); Scenarios = 'scenarios-l5.tsv'; Packages = $true }
 }
 # The L3 and L4 stages' requests, made from the owner's request on the host.
-$script:L3Requests = @('request-kill-switch.json', 'request-lan.json', 'request-dns-lock.json')
+$script:L3Requests = @('request-kill-switch.json', 'request-lan.json', 'request-lan-private.json', 'request-dns-lock.json')
 $script:ResultNames = @('PASS', 'FAIL', 'SKIP', 'ERROR')
 # The Windows test VM and its credential file are never a Linux stand.
 $script:ForbiddenVmNames = @('rosetun-test')
@@ -945,16 +945,17 @@ function New-RosetunLinuxL3Requests {
         throw "'$RequestPath' is not a connect request (no node or settings)."
     }
     $variants = [ordered]@{
-        'request-kill-switch.json' = @{ kill_switch = $true; allow_lan = $false }
-        'request-lan.json'         = @{ kill_switch = $true; allow_lan = $true }
-        'request-dns-lock.json'    = @{ kill_switch = $false; allow_lan = $false }
+        'request-kill-switch.json' = @{ kill_switch = $true; allow_lan = $false; private_networks = $false }
+        'request-lan.json'         = @{ kill_switch = $true; allow_lan = $true; private_networks = $false }
+        'request-lan-private.json' = @{ kill_switch = $true; allow_lan = $true; private_networks = $true }
+        'request-dns-lock.json'    = @{ kill_switch = $false; allow_lan = $false; private_networks = $false }
     }
     $paths = [ordered]@{}
     foreach ($name in $variants.Keys) {
         $request = $template | ConvertTo-Json -Depth 32 | ConvertFrom-Json
         $request.node.server = $address.ToString()
         $request.node.port = $NodePort
-        foreach ($setting in @('kill_switch', 'allow_lan')) {
+        foreach ($setting in @('kill_switch', 'allow_lan', 'private_networks')) {
             $request.settings | Add-Member -NotePropertyName $setting -NotePropertyValue $variants[$name][$setting] -Force
         }
         $request.settings | Add-Member -NotePropertyName auto_reconnect -NotePropertyValue $true -Force
