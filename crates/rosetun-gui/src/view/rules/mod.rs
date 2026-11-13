@@ -117,7 +117,9 @@ fn undo_notice(ctx: &egui::Context, state: &State, actions: &mut Vec<Action>) {
     };
     ctx.request_repaint_after(left);
     let text = match notice {
-        UndoNotice::RulesImported(count) => format!("{} {count}", tr!("rules-transfer-added")),
+        UndoNotice::RulesImported(count) => {
+            tr!("rules-transfer-added", count = count, n = count.to_string())
+        }
         UndoNotice::RulesDeleted(count) => i18n::rules_deleted(count),
         UndoNotice::SetDeleted => tr!("rule-set-deleted"),
         UndoNotice::RulesMoved(count) => i18n::rules_moved(count),

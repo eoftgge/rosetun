@@ -1352,4 +1352,9 @@ rules-transfer-invalid = Неверный файл правил или неиз�
 rules-transfer-changed = Правила изменились. Откройте импорт заново
 rules-transfer-read-error = Не удалось прочитать правила
 rules-transfer-write-error = Не удалось сохранить правила
-rules-transfer-added = Добавлено правил:
+rules-transfer-added = { $count ->
+    [one] Добавлено { $n } правило
+    [few] Добавлено { $n } правила
+   *[other] Добавлено { $n } правил
+}
+rules-transfer-duplicate-add = Дубликат: пропускается при добавлении

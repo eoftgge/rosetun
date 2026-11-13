@@ -1323,4 +1323,8 @@ rules-transfer-invalid = Invalid rules file or unknown fields
 rules-transfer-changed = Rules changed. Open the import again
 rules-transfer-read-error = Could not read rules
 rules-transfer-write-error = Could not save rules
-rules-transfer-added = Rules added:
+rules-transfer-added = { $count ->
+    [one] Added { $n } rule
+   *[other] Added { $n } rules
+}
+rules-transfer-duplicate-add = Duplicate: skipped when adding

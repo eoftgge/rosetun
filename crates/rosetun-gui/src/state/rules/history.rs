@@ -179,8 +179,16 @@ impl State {
         };
         let ids: Vec<_> = id.into_iter().cloned().collect();
         let mut before = RuleSetsSnapshot::of(&self.config, &ids, with_active);
-        if matches!(job, Job::ImportRules(..)) {
-            before.lists = Some(self.config.lists.clone());
+        if let Job::ImportRules(_, preview, _, _) = job {
+            before.list_ids = preview.lists.iter().map(|list| list.id.clone()).collect();
+            before.lists = Some(
+                self.config
+                    .lists
+                    .iter()
+                    .filter(|list| before.list_ids.contains(&list.id))
+                    .cloned()
+                    .collect(),
+            );
         }
         self.rules.history.pending = Some(Pending::Edit { before, notice });
     }
@@ -195,6 +203,7 @@ impl State {
             (Some(Pending::Edit { before, notice }), StepOutcome::Done) => Some((before, notice)),
             (Some(Pending::CreateSet { active }), StepOutcome::Created(id)) => Some((
                 RuleSetsSnapshot {
+                    list_ids: Vec::new(),
                     lists: None,
                     sets: vec![SetSnapshot {
                         index: 0,
@@ -251,6 +260,7 @@ impl State {
             .position(|set| set.id == applied.id)?;
         let switched = self.config.active_rule_set.as_ref() != Some(&applied.id);
         (switched || &self.config.rule_sets[index] != applied).then(|| RuleSetsSnapshot {
+            list_ids: Vec::new(),
             lists: None,
             sets: vec![SetSnapshot {
                 id: applied.id.clone(),

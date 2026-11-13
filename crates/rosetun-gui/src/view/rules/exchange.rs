@@ -76,7 +76,7 @@ pub(crate) fn show(ctx: &egui::Context, state: &mut State, actions: &mut Vec<Act
                 egui::ScrollArea::vertical()
                     .max_height(widgets::DialogWidth::Narrow.points())
                     .show(ui, |ui| {
-                        for rule in &import.replace.rules {
+                        for (row, rule) in import.replace.rules.iter().enumerate() {
                             let label = match &rule.matcher {
                                 RuleMatcher::List { list, category } => {
                                     let entry = import
@@ -89,10 +89,21 @@ pub(crate) fn show(ctx: &egui::Context, state: &mut State, actions: &mut Vec<Act
                                         || tr!("rules-transfer-needs-list"),
                                         |entry| {
                                             let file = match &entry.source {
+                                                ListSource::File { original_name }
+                                                    if original_name == "list-required" =>
+                                                {
+                                                    String::new()
+                                                }
                                                 ListSource::File { original_name } => {
                                                     format!(" ({original_name})")
                                                 }
-                                                ListSource::Url(_) => String::new(),
+                                                ListSource::Url(value) => url::Url::parse(value)
+                                                    .ok()
+                                                    .and_then(|url| {
+                                                        url.host_str()
+                                                            .map(|host| format!(" ({host})"))
+                                                    })
+                                                    .unwrap_or_default(),
                                             };
                                             format!(
                                                 "{}{} {}",
@@ -105,7 +116,27 @@ pub(crate) fn show(ctx: &egui::Context, state: &mut State, actions: &mut Vec<Act
                                 }
                                 matcher => rosetun_core::rule_value_text(matcher),
                             };
-                            ui.label(format!("{label} → {}", super::target_label(rule.target)));
+                            let target = rule
+                                .exit
+                                .as_ref()
+                                .and_then(|id| {
+                                    state.config.exits.iter().find(|exit| &exit.id == id)
+                                })
+                                .map_or_else(
+                                    || super::target_label(rule.target),
+                                    |exit| {
+                                        format!(
+                                            "{}: {}",
+                                            super::target_label(rule.target),
+                                            exit.name
+                                        )
+                                    },
+                                );
+                            let index = import.replace.indexes[row];
+                            ui.label(format!("{}: {label} → {target}", index + 1));
+                            if !import.add.indexes.contains(&index) {
+                                ui.label(tr!("rules-transfer-duplicate-add"));
+                            }
                         }
                         for entry in &import.replace.entries {
                             for warning in &entry.warnings {

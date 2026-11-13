@@ -143,6 +143,7 @@ pub fn restore_rules_and_dns(
 /// Rule sets as they stood before an edit, so that the edit can be undone.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuleSetsSnapshot {
+    pub list_ids: Vec<rosetun_config::ListId>,
     pub lists: Option<Vec<rosetun_config::List>>,
     pub sets: Vec<SetSnapshot>,
     /// The active set, when the edit could change which one it is.
@@ -172,6 +173,7 @@ impl RuleSetsSnapshot {
             })
             .collect();
         Self {
+            list_ids: Vec::new(),
             lists: None,
             sets,
             active: with_active.then(|| config.active_rule_set.clone()),
@@ -206,7 +208,19 @@ pub fn restore_rule_sets(
         let ids: Vec<_> = snapshot.sets.iter().map(|entry| entry.id.clone()).collect();
         let mut previous = RuleSetsSnapshot::of(config, &ids, snapshot.active.is_some());
         if let Some(lists) = &snapshot.lists {
-            previous.lists = Some(std::mem::replace(&mut config.lists, lists.clone()));
+            previous.list_ids = snapshot.list_ids.clone();
+            previous.lists = Some(
+                config
+                    .lists
+                    .iter()
+                    .filter(|list| snapshot.list_ids.contains(&list.id))
+                    .cloned()
+                    .collect(),
+            );
+            config
+                .lists
+                .retain(|list| !snapshot.list_ids.contains(&list.id));
+            config.lists.extend(lists.clone());
         }
         let mut dropped = 0;
         for entry in &snapshot.sets {

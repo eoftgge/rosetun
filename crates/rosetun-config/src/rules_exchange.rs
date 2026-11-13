@@ -105,6 +105,7 @@ pub struct EntryReport {
 pub struct Preview {
     expected: Box<AppConfig>,
     pub rules: Vec<Rule>,
+    pub indexes: Vec<usize>,
     pub lists: Vec<List>,
     pub duplicates: usize,
     pub entries: Vec<EntryReport>,
@@ -204,6 +205,11 @@ pub fn export(
                         format: entry.map_or(ListFormat::Text, |entry| entry.format),
                         source: entry.and_then(|entry| match &entry.source {
                             ListSource::Url(url) if with_urls => Some(Source::Url(url.clone())),
+                            ListSource::File { original_name }
+                                if original_name == "list-required" =>
+                            {
+                                None
+                            }
                             ListSource::File { original_name } => Some(Source::File {
                                 original_name: original_name.clone(),
                             }),
@@ -352,6 +358,9 @@ fn normalize(
                 return None;
             }
             let (value, foreign) = translate_process(&value, from, to);
+            if matches!(&value, ProcessMatch::Name(name) if name.is_empty()) {
+                return None;
+            }
             if foreign {
                 warnings.push(Warning::OtherSystem);
             }
@@ -400,6 +409,7 @@ pub fn preview(
     let mut result = Preview {
         expected: Box::new(config.clone()),
         rules: Vec::new(),
+        indexes: Vec::new(),
         lists: Vec::new(),
         duplicates: 0,
         entries: Vec::new(),
@@ -556,7 +566,10 @@ pub fn preview(
             {
                 result.duplicates += 1;
             }
-            Some(rule) => result.rules.push(rule),
+            Some(rule) => {
+                result.indexes.push(index);
+                result.rules.push(rule);
+            }
             None => report.invalid = true,
         }
         result.entries.push(report);

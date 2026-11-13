@@ -138,10 +138,49 @@ pub(crate) fn run(command: Command) -> Result<(), String> {
                 preview.entries.iter().filter(|entry| entry.invalid).count()
             );
             for rule in &preview.rules {
+                let label = match &rule.matcher {
+                    rosetun_config::RuleMatcher::List { list, category } => preview
+                        .lists
+                        .iter()
+                        .chain(&config.lists)
+                        .find(|entry| &entry.id == list)
+                        .map_or_else(
+                            || "List required".into(),
+                            |entry| {
+                                let source = match &entry.source {
+                                    rosetun_config::ListSource::Url(value) => {
+                                        rosetun_core::redacted_subscription_url(value)
+                                    }
+                                    rosetun_config::ListSource::File { original_name }
+                                        if original_name == "list-required" =>
+                                    {
+                                        "list required".into()
+                                    }
+                                    rosetun_config::ListSource::File { original_name } => {
+                                        original_name.clone()
+                                    }
+                                };
+                                format!(
+                                    "{} ({source}) {}",
+                                    entry.name,
+                                    category.as_deref().unwrap_or_default()
+                                )
+                            },
+                        ),
+                    matcher => rosetun_core::rule_value_text(matcher),
+                };
+                let target = rule
+                    .exit
+                    .as_ref()
+                    .and_then(|id| config.exits.iter().find(|exit| &exit.id == id))
+                    .map_or_else(
+                        || target_text(rule.target).into(),
+                        |exit| format!("{}: {}", target_text(rule.target), exit.name),
+                    );
                 eprintln!(
                     "{} → {}{}",
-                    terminal_text(&rosetun_core::rule_value_text(&rule.matcher)),
-                    target_text(rule.target),
+                    terminal_text(&label),
+                    terminal_text(&target),
                     if rule.enabled { "" } else { " (disabled)" }
                 );
             }

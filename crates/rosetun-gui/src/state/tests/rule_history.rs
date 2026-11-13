@@ -686,3 +686,35 @@ fn importing_lists_and_the_default_can_be_undone_together() {
     saved.act(&mut state, Action::RedoRules);
     assert_eq!(state.config.lists.len(), before.lists.len() + 1);
 }
+
+#[test]
+fn undoing_an_import_preserves_lists_added_after_it() {
+    let mut state = rules_state();
+    let mut saved = Saved::new(&state);
+    let text = r#"{"format":"rosetun-rules","version":1,"exported_by":"test","system":"linux","lists":[{"name":"Sites","format":"text"}],"rules":[{"enabled":true,"matcher":{"list":{"list":0,"category":null}},"target":"proxy"}]}"#;
+    state.reduce(WorkerEvent::RulesRead(Ok(Some(text.into()))));
+    saved.act(&mut state, Action::ConfirmRulesImport(false));
+    let unrelated = rosetun_config::List {
+        id: ListId::new("987654321"),
+        name: "Independent".into(),
+        source: rosetun_config::ListSource::File {
+            original_name: "independent.txt".into(),
+        },
+        format: rosetun_config::ListFormat::Text,
+        updated_at: None,
+        size: None,
+        sha256: None,
+        categories: vec![],
+    };
+    saved
+        .store
+        .modify::<_, rosetun_core::StoreError>(|config| {
+            config.lists.push(unrelated.clone());
+            Ok(())
+        })
+        .unwrap();
+    saved.act(&mut state, Action::UndoRules);
+    assert_eq!(state.config.lists, vec![unrelated.clone()]);
+    saved.act(&mut state, Action::RedoRules);
+    assert!(state.config.lists.contains(&unrelated));
+}
