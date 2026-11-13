@@ -36,6 +36,8 @@ def main(argv=None):
                      help='send a deliberate leak and succeed only if exactly that leak is detected')
     lab.add_argument('--tunnel', action='store_true',
                      help='also qualify the lab VPN node and HTTPS target (needs a lab.v2 configuration)')
+    lab.add_argument('--evidence-disk', action='store_true',
+                     help='keep the capture on a separate disk of the lab machine and read it after it stops')
     run = commands.add_parser('run', help='execute exploratory Linux L2 or L3 on an explicitly selected stand')
     run.add_argument('suite', choices=['linux-l2', 'linux-l3'])
     run.add_argument('--config', required=True)
@@ -62,7 +64,8 @@ def main(argv=None):
         if args.command == 'lab-smoke':
             from .lab import load_lab, plan_lab, lab_smoke
             config = load_lab(args.config)
-            options = {'tunnel': True} if args.tunnel else {}
+            options = {**({'tunnel': True} if args.tunnel else {}),
+                       **({'evidence_disk': True} if args.evidence_disk else {})}
             result = plan_lab(config, **options) if args.dry_run else lab_smoke(config, canary=args.canary, **options)
             code = 0 if args.dry_run else result['exit_code']
         elif args.command == 'run':

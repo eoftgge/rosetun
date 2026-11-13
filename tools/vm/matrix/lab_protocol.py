@@ -14,6 +14,18 @@ TARGETS = {4: '203.0.113.2', 6: '2001:db8:6a:2::2'}
 CAPTURE_LIMIT = 131072
 LOG_LIMIT = 32768
 DURATION = 60
+# The longest legacy L3 job (run-l3.sh) plus the time to finish and read the evidence.
+JOB_TIMEOUT_SECONDS = 1800
+DURATION_MAX = JOB_TIMEOUT_SECONDS + 300
+# Stage 7b2a: the capture of a long run lives on its own disk, behind a fixed header.
+EVIDENCE_SERIAL = 'rosetun-lab-evidence'
+EVIDENCE_SIZE = 64 * 1024 * 1024
+EVIDENCE_PCAP_LIMIT = 60 * 1024 * 1024
+EVIDENCE_HEADER_SIZE = 4096
+EVIDENCE_MAGIC = b'RTLABEV1'
+EVIDENCE_VERSION = 1
+# Magic, version, completion flag, run ID, pcap length, SHA-256 of the pcap; zeros to the block end.
+_EVIDENCE_HEADER = struct.Struct('<8sHH32sQ32s')
 SERVICES = ('http', 'udp', 'dns-udp', 'dns-tcp')
 PORTS = {'http': 8080, 'udp': 9000, 'dns-udp': 53, 'dns-tcp': 53, 'marker': 9100}
 # Nothing listens here and no expected exchange uses it: the deliberate leak control.
@@ -267,6 +279,33 @@ def http_response(status, headers, body, *, close):
     return (head + ''.join('%s: %s\r\n' % item for item in fields.items()) + '\r\n').encode('ascii') + body
 
 
+def evidence_header(run_id, length, digest, *, complete):
+    """The fixed block at the start of the evidence disk; written last, after the pcap is durable."""
+    block = _EVIDENCE_HEADER.pack(EVIDENCE_MAGIC, EVIDENCE_VERSION, 1 if complete else 0,
+                                  run_id.encode('ascii'), length, digest)
+    return block + bytes(EVIDENCE_HEADER_SIZE - len(block))
+
+
+def parse_evidence_header(block, run_id):
+    """(pcap length, SHA-256 digest) of a finished run's header, else a ValueError naming the defect."""
+    if len(block) != EVIDENCE_HEADER_SIZE:
+        raise ValueError('evidence-truncated')
+    magic, version, complete, owner, length, digest = _EVIDENCE_HEADER.unpack_from(block)
+    if magic != EVIDENCE_MAGIC:
+        raise ValueError('evidence-magic')
+    if version != EVIDENCE_VERSION:
+        raise ValueError('evidence-version')
+    if owner != run_id.encode('ascii'):
+        raise ValueError('evidence-run-id')
+    if complete != 1:
+        raise ValueError('evidence-incomplete')
+    if any(block[_EVIDENCE_HEADER.size:]):
+        raise ValueError('evidence-header-padding')
+    if length > EVIDENCE_PCAP_LIMIT:
+        raise ValueError('evidence-length')
+    return length, digest
+
+
 def _needle(probe, direction):
     if direction == 'request':
         return query(probe)[12:-4] if probe['service'].startswith('dns') else token(probe)
@@ -395,9 +434,9 @@ def _fragment(packet):
                  sport=None, dport=None, flags=None, payload=b'', arp=None, icmp=None, inner=None, fragment=True)
 
 
-def records(raw):
+def records(raw, limit=CAPTURE_LIMIT):
     """Yield the frames of a pcap, failing closed on any irregular record."""
-    if not 24 <= len(raw) <= CAPTURE_LIMIT or raw[:24] != PCAP_HEADER:
+    if not 24 <= len(raw) <= limit or raw[:24] != PCAP_HEADER:
         raise ValueError('invalid-or-overlimit-pcap')
     offset = 24
     while offset < len(raw):
@@ -411,9 +450,9 @@ def records(raw):
         offset += size
 
 
-def frames(raw):
+def frames(raw, limit=CAPTURE_LIMIT):
     packets = []
-    for packet in records(raw):
+    for packet in records(raw, limit):
         frame = parse(packet)
         if frame.proto in (6, 17):
             packets.append((frame.family, 'tcp' if frame.proto == 6 else 'udp', frame.src, frame.dst,
@@ -427,10 +466,10 @@ def _clean(health):
             and health.get('finished') is True)
 
 
-def qualify(expected, replies, logs, capture, ready, health):
+def qualify(expected, replies, logs, capture, ready, health, limit=CAPTURE_LIMIT):
     result = dict(ipv4='UNVERIFIED', ipv6='UNVERIFIED', services='UNVERIFIED',
                   observer='UNVERIFIED', evidence='UNVERIFIED', qualified=False)
-    packets = frames(capture)
+    packets = frames(capture, limit)
     if len(replies) != 8 or len(logs) != 8 or len(expected) != 8:
         return result
     if (len({p['nonce'] for p in expected}) != 8
@@ -643,7 +682,7 @@ def _declared(allowances):
     return names
 
 
-def classify(raw, expected, window, allowances=(), tunnel_port=None, https=None):
+def classify(raw, expected, window, allowances=(), tunnel_port=None, https=None, limit=CAPTURE_LIMIT):
     """Put every captured frame into exactly one category and check the window markers.
 
     `allowances` names link events (see ALLOWANCES) that count as `allowed` instead of
@@ -665,7 +704,7 @@ def classify(raw, expected, window, allowances=(), tunnel_port=None, https=None)
         raise ValueError('invalid-window')
     parsed, unparsed, problem = [], [], None
     try:
-        for index, packet in enumerate(records(raw)):
+        for index, packet in enumerate(records(raw, limit)):
             fragment = _fragment(packet)
             if fragment is not None and _involves_test(fragment):
                 parsed.append((index, fragment))
@@ -744,7 +783,7 @@ def classify(raw, expected, window, allowances=(), tunnel_port=None, https=None)
         unverified.append('invalid-pcap:' + problem)
     if unparsed:
         unverified.append('unparsed-frame:' + unparsed[0])
-    if len(raw) + 16 + 2048 > CAPTURE_LIMIT:
+    if len(raw) + 16 + 2048 > limit:
         unverified.append('capture-limit-reached')
     if not found:
         unverified.append('window-markers-missing-or-repeated')
@@ -785,9 +824,9 @@ def _health_reasons(health, ready, window, marker_replies):
 
 
 def leak_verdict(raw, expected, window, health, ready, marker_replies, allowances=(),
-                 tunnel_port=None, https=None):
+                 tunnel_port=None, https=None, limit=CAPTURE_LIMIT):
     """DETECTED, NONE or UNVERIFIED. Only a complete, healthy and bracketed capture says NONE."""
-    result = classify(raw, expected, window, allowances, tunnel_port, https)
+    result = classify(raw, expected, window, allowances, tunnel_port, https, limit)
     reasons = result.pop('unverified') + _health_reasons(health, ready, window, marker_replies)
     canary = result.pop('canary')
     if result['categories']['unexpected']:

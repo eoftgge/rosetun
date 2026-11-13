@@ -3,6 +3,7 @@ import base64
 import hashlib
 from dataclasses import fields
 import json
+import os
 import re
 from pathlib import Path
 import secrets
@@ -21,13 +22,20 @@ from .resources import (StandLease, create_run, completion_verified, resource_pa
                         EXECUTION_FILES, _identifier, _state_path)
 from .orchestrator import save, failure, _RETAINED_LEASES
 from .lab_protocol import (MACS, CAPTURE_LIMIT, LOG_LIMIT, PORTS, CANARY_PORT, HTTPS_PORT, SOCKS_PORT, EGRESS,
-                           probes, markers, qualify, leak_verdict, https_exchanges, https_answer)
+                           probes, markers, qualify, leak_verdict, https_exchanges, https_answer,
+                           DURATION, DURATION_MAX, EVIDENCE_SIZE, EVIDENCE_PCAP_LIMIT, EVIDENCE_HEADER_SIZE,
+                           EVIDENCE_SERIAL, parse_evidence_header)
 
 ENTRY = '/usr/local/libexec/rosetun-lab/entry'
 SCHEMA_V1, SCHEMA_V2 = 'rosetun.matrix.lab.v1', 'rosetun.matrix.lab.v2'
 ARTIFACTS = {'lab-capture': 'capture.pcap', 'lab-targets': 'targets.json', 'lab-health': 'health.json'}
 # Only a tunnel run reads these two; they are registered with the lab run only then.
 TUNNEL_ARTIFACTS = {'lab-https': 'https.json', 'lab-node': 'node.log'}
+# Only a run with an evidence disk registers the image; the capture is then read from it.
+EVIDENCE_IMAGE = 'evidence.img'
+EVIDENCE_RESOURCES = {'lab-evidence-disk': EVIDENCE_IMAGE}
+# The guest facade lives this long beyond the capture it waits for: setup, finish and the reads.
+GUEST_LIFETIME = 90
 
 
 def controls(run):
@@ -71,7 +79,7 @@ def validate(config):
     return config
 
 
-def plan_lab(config, *, tunnel=False):
+def plan_lab(config, *, tunnel=False, evidence_disk=False):
     """Read only: no lease, directories, subprocesses or sockets."""
     validate(config)
     if tunnel and config['schema'] != SCHEMA_V2:
@@ -80,15 +88,19 @@ def plan_lab(config, *, tunnel=False):
     QemuConfig(**config['qemu']).validate()
     for role in MACS:
         ImageDescriptor(**config[role + '_image']).validate(state)
-    return dict(schema='rosetun.matrix.lab-plan.v1', dry_run=True, configuration=config,
+    plan = dict(schema='rosetun.matrix.lab-plan.v1', dry_run=True, configuration=config,
                 topology='test -> inherited AF_UNIX stream pair -> lab -> guest namespace',
                 roles=MACS, capture_limit=CAPTURE_LIMIT, duration_seconds=60,
                 qualification='UNRUN', security_invariants='UNVERIFIED', release_gate=False)
+    if evidence_disk:
+        plan['evidence_disk'] = dict(size_bytes=EVIDENCE_SIZE, pcap_limit_bytes=EVIDENCE_PCAP_LIMIT,
+                                     serial=EVIDENCE_SERIAL, role='lab')
+    return plan
 
 
 class LabPair:
     """Capability for two particular runs under their original lease."""
-    def __init__(self, lease, runs, lab_id, *, pair_factory=socket.socketpair, tunnel=False):
+    def __init__(self, lease, runs, lab_id, *, pair_factory=socket.socketpair, tunnel=False, evidence_disk=False):
         lease._check_live()
         if set(runs) != set(MACS) or lease._active or runs['test'] is runs['lab']:
             raise ValueError('invalid-lab-members')
@@ -97,6 +109,7 @@ class LabPair:
                 raise ValueError('foreign-lab-member')
         self.lease, self.runs, self.lab_id = lease, dict(runs), _identifier(lab_id)
         self.tunnel = tunnel is True
+        self.evidence_disk = evidence_disk is True
         self.sockets = {}
         self.used = set()
         self.closed = False
@@ -110,6 +123,10 @@ class LabPair:
             for identifier, name in self.resources(run).items():
                 run.register(dict(id=identifier, kind='file', path=name))
                 resource_path(run.directory, name).touch(exist_ok=False)
+                if name == EVIDENCE_IMAGE:
+                    # Fixed and zeroed: a sparse file, so the helper can never grow or shrink it.
+                    with resource_path(run.directory, name).open('r+b') as image:
+                        image.truncate(EVIDENCE_SIZE)
         # Both endpoint records already exist in the execution identity ledgers.
         a, b = pair_factory(socket.AF_UNIX, socket.SOCK_STREAM)
         self.sockets = dict(test=a, lab=b)
@@ -123,7 +140,9 @@ class LabPair:
     def resources(self, run):
         if self.role(run) != 'lab':
             return {}
-        return {**ARTIFACTS, **TUNNEL_ARTIFACTS} if self.tunnel else ARTIFACTS
+        files = {**ARTIFACTS, **TUNNEL_ARTIFACTS} if self.tunnel else ARTIFACTS
+        # Unbound calls with a stand-in object exist in older tests, which know no disk.
+        return {**files, **EVIDENCE_RESOURCES} if getattr(self, 'evidence_disk', False) else files
 
     def check_start(self, run):
         self.lease._check_live()
@@ -143,8 +162,15 @@ class LabPair:
             raise ValueError('lab-endpoint-already-consumed')
         self.used.add(role)
         fd = self.sockets[role].fileno()
-        return ['-netdev', f'stream,id=labwire,addr.type=fd,addr.str={fd},server=off',
-                '-device', f'virtio-net-pci,netdev=labwire,id={role}-wire,mac={MACS[role]}'], fd
+        argv = ['-netdev', f'stream,id=labwire,addr.type=fd,addr.str={fd},server=off',
+                '-device', f'virtio-net-pci,netdev=labwire,id={role}-wire,mac={MACS[role]}']
+        if self.evidence_disk and role == 'lab':
+            # A second, writable raw disk that only the lab machine has.
+            image = resource_path(run.directory, EVIDENCE_IMAGE)
+            argv += ['-blockdev', json.dumps({'driver': 'raw', 'node-name': 'evidence', 'read-only': False,
+                                              'file': {'driver': 'file', 'filename': str(image)}}, sort_keys=True),
+                     '-device', 'virtio-blk-pci,drive=evidence,id=evidence,serial=' + EVIDENCE_SERIAL]
+        return argv, fd
 
     def close(self):
         self.closed = False
@@ -173,10 +199,12 @@ def refusal(status):
 
 class Guest:
     """Fixed installed entry point, serialized QGA, no shell or arbitrary paths."""
-    def __init__(self, vm, role, lab_id, *, clock=time.monotonic, sleep=time.sleep):
+    def __init__(self, vm, role, lab_id, *, clock=time.monotonic, sleep=time.sleep, lifetime=GUEST_LIFETIME):
         self.vm, self.role, self.lab_id = vm, role, lab_id
         self.clock, self.sleep = clock, sleep
-        self.deadline = clock() + 90
+        # The capture itself runs in a helper process of its own and ends with `finish` or at
+        # its own deadline; this only bounds how long the controller may keep talking to the guest.
+        self.deadline = clock() + lifetime
 
     def rpc(self, name, args):
         self.vm._check()
@@ -185,7 +213,7 @@ class Guest:
         self.vm.qga.deadline = time.monotonic() + min(5, self.deadline - self.clock())
         return self.vm.qga._rpc(name, 5, args)
 
-    def call(self, operation, expected, window=(), canary=False, tunnel=None):
+    def call(self, operation, expected, window=(), canary=False, tunnel=None, options=None):
         if operation not in ({'setup', 'finish'} if self.role == 'lab' else {'probe'}):
             raise ValueError('invalid-lab-operation')
         with self.vm._guest_lock:
@@ -197,6 +225,10 @@ class Guest:
                            markers=list(window), canary=canary is True)
             if tunnel is not None:
                 request['tunnel'] = tunnel
+            if options:
+                if not set(options) <= {'evidence_disk', 'duration_seconds'}:
+                    raise ValueError('invalid-lab-option')
+                request.update(options)
             self.vm.qga.jobs_enabled = True
             self.vm.qga.probe(5)
             response = self.rpc('guest-exec', {'path': ENTRY, 'arg': [json.dumps(request)], 'capture-output': True})
@@ -250,6 +282,29 @@ class Adapters:
     execute = staticmethod(execute)
     pair = LabPair
     guest = Guest
+
+
+def read_evidence(image, lab_id):
+    """The pcap of a finished run from its evidence image, or a ValueError naming the defect.
+
+    Everything is checked before a byte of the pcap is used: the header (magic, version,
+    run ID, completion flag), the size of the image, the length and SHA-256 of the pcap,
+    and that nothing but zeros follows it.
+    """
+    with image.open('rb') as stream:
+        size = os.fstat(stream.fileno()).st_size
+        length, digest = parse_evidence_header(stream.read(EVIDENCE_HEADER_SIZE), lab_id)
+        if size < EVIDENCE_HEADER_SIZE + length:
+            raise ValueError('evidence-truncated')
+        if size != EVIDENCE_SIZE:
+            raise ValueError('evidence-size')
+        pcap = stream.read(length)
+        if hashlib.sha256(pcap).digest() != digest:
+            raise ValueError('evidence-sha256')
+        while block := stream.read(1024 * 1024):
+            if block.count(0) != len(block):
+                raise ValueError('evidence-trailing-bytes')
+    return pcap
 
 
 def expected_leak(result):
@@ -310,14 +365,22 @@ def tunnel_ok(result):
                               and block['tunnel_frames'] > 0 and block['node']['alive_at_finish'] is True))
 
 
-def lab_smoke(config, *, canary=False, tunnel=False, adapters=None, clock=time.monotonic, sleep=time.sleep):
+def lab_smoke(config, *, canary=False, tunnel=False, evidence_disk=False, duration_seconds=None,
+              adapters=None, clock=time.monotonic, sleep=time.sleep):
     plan_lab(config, tunnel=tunnel)
+    if duration_seconds is not None and (type(duration_seconds) is not int
+                                         or not DURATION <= duration_seconds <= DURATION_MAX):
+        raise ValueError('lab-duration-out-of-range')
     adapters = adapters or Adapters()
     lab_id = uuid.uuid4().hex
     expected = probes(lab_id, lambda: secrets.token_hex(12))
     window = markers(lab_id, lambda: secrets.token_hex(12))
     exchanges = https_exchanges(lab_id, lambda: secrets.token_hex(12)) if tunnel else []
     extra = dict(tunnel=tunnel_request(config, exchanges)) if tunnel else {}
+    request_options = {**({'evidence_disk': True} if evidence_disk else {}),
+               **({'duration_seconds': duration_seconds} if duration_seconds is not None else {})}
+    if request_options:
+        extra['options'] = request_options
     result = dict(schema='rosetun.matrix.lab-summary.v1', lab_id=lab_id, readiness={},
                   artifact_directories={}, configuration=config,
                   qualification=dict(qualified=False, ipv4='UNVERIFIED', ipv6='UNVERIFIED',
@@ -326,6 +389,8 @@ def lab_smoke(config, *, canary=False, tunnel=False, adapters=None, clock=time.m
                   leak='UNVERIFIED', leak_reason='not-evaluated', observer_reasons=['not-evaluated'], categories={}, unexpected=[], canary_flows=[], canary_other=0,
                   window=dict(markers_found=False, ordered=False), canary=canary is True,
                   errors=[], security_invariants='UNVERIFIED', release_gate=False, exit_code=2)
+    if evidence_disk:
+        result['evidence_disk'] = dict(verified=False, reason='not-read', pcap_bytes=0, pcap_sha256=None)
     if tunnel:
         # Stage 6a and 6b summaries gain nothing; only a tunnel run carries these.
         result.update(https=exchanges, tunnel=dict(direct=False, via_node=False, tunnel_frames=0,
@@ -349,7 +414,8 @@ def lab_smoke(config, *, canary=False, tunnel=False, adapters=None, clock=time.m
                  endpoint=dict(kind='inherited-unix-stream', role=role, mac=MACS[role])), initial=True)
             save(run, 'execution-summary.json', result, initial=True)
             adapters.prepare(run, ImageDescriptor(**config[role + '_image']), QemuConfig(**config['qemu']))
-        pair = adapters.pair(lease, runs, lab_id, **({'tunnel': True} if tunnel else {}))
+        pair = adapters.pair(lease, runs, lab_id, **({'tunnel': True} if tunnel else {}),
+                             **({'evidence_disk': True} if evidence_disk else {}))
         for role in MACS:
             vm = adapters.start(runs[role], lab=pair)
             vms[role] = vm
@@ -359,8 +425,9 @@ def lab_smoke(config, *, canary=False, tunnel=False, adapters=None, clock=time.m
                                              vm=True, qga=observed['result'] == 'observed')
         # Drop controller duplicates before probes; QEMU owns both remaining ends.
         pair.close()
-        lab = adapters.guest(vms['lab'], 'lab', lab_id, clock=clock, sleep=sleep)
-        test = adapters.guest(vms['test'], 'test', lab_id, clock=clock, sleep=sleep)
+        lifetime = {'lifetime': GUEST_LIFETIME + duration_seconds} if duration_seconds is not None else {}
+        lab = adapters.guest(vms['lab'], 'lab', lab_id, clock=clock, sleep=sleep, **lifetime)
+        test = adapters.guest(vms['test'], 'test', lab_id, clock=clock, sleep=sleep, **lifetime)
         ready = lab.call('setup', expected, window, **extra)
         if ready.get('capture_ready') is not True:
             raise ValueError('capture-not-ready')
@@ -375,7 +442,9 @@ def lab_smoke(config, *, canary=False, tunnel=False, adapters=None, clock=time.m
         result['replies'] = replies
         lab.call('finish', expected, window, **extra)
         evidence = {}
-        files = (('capture.pcap', CAPTURE_LIMIT), ('targets.json', LOG_LIMIT), ('health.json', LOG_LIMIT))
+        files = (('targets.json', LOG_LIMIT), ('health.json', LOG_LIMIT))
+        if not evidence_disk:
+            files = (('capture.pcap', CAPTURE_LIMIT),) + files
         if tunnel:
             files += (('https.json', LOG_LIMIT), ('node.log', LOG_LIMIT))
         for name, limit in files:
@@ -387,6 +456,25 @@ def lab_smoke(config, *, canary=False, tunnel=False, adapters=None, clock=time.m
             except ReadbackError:
                 raise ValueError('lab-evidence-readback-failed') from None
             evidence[name] = raw
+        if evidence_disk:
+            # The lab machine must be gone before its disk is read: nothing may still be writing.
+            lab_run = runs['lab']
+            vms['lab'].close()
+            if not completion_verified(lab_run.directory, lab_run._read()):
+                raise ValueError('lab-completion-unconfirmed')
+            try:
+                raw = read_evidence(resource_path(lab_run.directory, EVIDENCE_IMAGE), lab_id)
+                write_file(lab_run, 'capture.pcap', raw, mode='overwrite', readback=True)
+            except ReadbackError:
+                raise ValueError('lab-evidence-readback-failed') from None
+            except (OSError, ValueError) as error:
+                reason = str(error) if str(error).startswith('evidence-') else 'evidence-unreadable'
+                result['evidence_disk'].update(reason=reason)
+                result.update(leak='UNVERIFIED', leak_reason=reason, observer_reasons=[reason])
+                raise ValueError(reason) from None
+            evidence['capture.pcap'] = raw
+            result['evidence_disk'] = dict(verified=True, reason=None, pcap_bytes=len(raw),
+                                           pcap_sha256=hashlib.sha256(raw).hexdigest())
         result['evidence_sha256'] = {name: hashlib.sha256(raw).hexdigest() for name, raw in evidence.items()}
         health = json.loads(evidence['health.json'])
         # The leak verdict comes first so that a rejected capture cannot hide a seen leak.
@@ -397,6 +485,8 @@ def lab_smoke(config, *, canary=False, tunnel=False, adapters=None, clock=time.m
             options = dict(tunnel_port=config['tunnel']['node_port'],
                            https=dict(direct=exchanges[0], log=log, client_port=(
                                direct_report.get('client_port') if type(direct_report) is dict else None)))
+        if evidence_disk:
+            options['limit'] = EVIDENCE_PCAP_LIMIT
         verdict = leak_verdict(evidence['capture.pcap'], expected, window, health, ready['capture_ready'],
                                marker_replies, **options)
         verdict['window'] = dict(verdict['window'], test_clock_sent=sent)
@@ -404,7 +494,8 @@ def lab_smoke(config, *, canary=False, tunnel=False, adapters=None, clock=time.m
         if tunnel:
             result['tunnel'] = tunnel_summary(exchanges, reports, log, health, verdict['categories'])
         result['qualification'] = qualify(expected, replies, json.loads(evidence['targets.json']),
-                    evidence['capture.pcap'], ready['capture_ready'], health)
+                    evidence['capture.pcap'], ready['capture_ready'], health,
+                    **({'limit': EVIDENCE_PCAP_LIMIT} if evidence_disk else {}))
     except BaseException as error:
         result['errors'].append(failure('lab-smoke', error))
         if isinstance(error, KeyboardInterrupt):

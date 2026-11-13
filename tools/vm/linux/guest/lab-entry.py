@@ -24,7 +24,8 @@ from lab_protocol import (MACS, CLIENTS, GATEWAYS, TARGETS, PORTS, SERVICES, CAP
                           CANARY_PORT, CANARY_TCP_TARGET, marker_query, marker_answer,
                           HTTPS_PORT, HTTPS_KINDS, EGRESS, SOCKS_PORT, https_answer, LAB_NETWORKS,
                           RESOLVER, DOH_ADDRESS, DNS_LOG_ENTRIES, DOH_BODY_LIMIT, DOH_HEAD_LIMIT,
-                          dns_reply, doh_reply, parse_request_head, http_response)
+                          dns_reply, doh_reply, parse_request_head, http_response,
+                          EVIDENCE_PCAP_LIMIT, EVIDENCE_HEADER_SIZE, DURATION_MAX, evidence_header)
 
 ROOT = Path('/run/rosetun-lab')
 ENTRY = '/usr/local/libexec/rosetun-lab/entry'
@@ -37,6 +38,8 @@ CA_CERT = Path('/usr/local/share/ca-certificates/rosetun-lab-ca.crt')
 # Stage 7b2a: the DoH target's certificate (SAN doh.lab.test and 203.0.113.3), signed by the same lab CA.
 DOH_CERT = LIBEXEC / 'doh-cert.pem'
 DOH_KEY = LIBEXEC / 'doh-key.pem'
+# Stage 7b2a: the evidence disk is found by its serial and by nothing else.
+EVIDENCE_DEVICE = Path('/dev/disk/by-id/virtio-rosetun-lab-evidence')
 DOH_REQUESTS = 16
 DOH_CONNECTIONS = 8
 HTTPS_LOG_ENTRIES = 16
@@ -79,6 +82,11 @@ def identity(request):
         raise ValueError('invalid-canary')
     if 'dns' in request and request['dns'] is not True:
         raise ValueError('invalid-dns')
+    if 'evidence_disk' in request and request['evidence_disk'] is not True:
+        raise ValueError('invalid-evidence-disk')
+    if 'duration_seconds' in request and (type(request['duration_seconds']) is not int
+                                          or not DURATION <= request['duration_seconds'] <= DURATION_MAX):
+        raise ValueError('invalid-duration')
     window = request['markers']
     tunnel = tunnel_of(request)
     if (type(window) is not list or [m.get('word') for m in window] != ['open', 'close']
@@ -409,6 +417,43 @@ def check_lab_fixtures(tunnel):
     fixture(HTTPS_KEY, 'missing-https-key', private=True)
 
 
+def evidence_device(path=EVIDENCE_DEVICE):
+    """The evidence disk, or a refusal: no other device is ever written to."""
+    try:
+        info = os.stat(path)
+    except OSError:
+        raise Refused('missing-evidence-disk') from None
+    if not stat.S_ISBLK(info.st_mode):
+        raise Refused('evidence-disk-not-a-block-device')
+    return path
+
+
+class EvidenceWriter:
+    """The pcap streamed behind a header block that is written last, after the pcap is durable."""
+
+    def __init__(self, device, run_id):
+        self.stream = open(device, 'r+b')
+        self.run_id, self.digest, self.length = run_id, hashlib.sha256(), 0
+        # A header of zeros says "not finished" until the real one replaces it.
+        self.stream.write(bytes(EVIDENCE_HEADER_SIZE))
+
+    def write(self, data):
+        self.stream.write(data)
+        self.digest.update(data)
+        self.length += len(data)
+
+    def finish(self, *, complete):
+        try:
+            self.stream.flush()
+            os.fsync(self.stream.fileno())
+            self.stream.seek(0)
+            self.stream.write(evidence_header(self.run_id, self.length, self.digest.digest(), complete=complete))
+            self.stream.flush()
+            os.fsync(self.stream.fileno())
+        finally:
+            self.stream.close()
+
+
 def check_dns_fixtures():
     fixture(DOH_CERT, 'missing-doh-certificate')
     fixture(DOH_KEY, 'missing-doh-key', private=True)
@@ -421,6 +466,8 @@ def setup(request, iface, directory):
         check_lab_fixtures(tunnel)
     if request.get('dns') is True:
         check_dns_fixtures()
+    if request.get('evidence_disk') is True:
+        evidence_device()
     command('/usr/sbin/ip', 'addr', 'add', GATEWAYS[4] + '/24', 'dev', iface)
     command('/usr/sbin/ip', '-6', 'addr', 'add', GATEWAYS[6] + '/64', 'dev', iface, 'nodad')
     command('/usr/sbin/ip', 'link', 'set', iface, 'up')
@@ -648,7 +695,7 @@ def record_https(log, row):
 
 
 def serve(request, directory):
-    deadline = time.monotonic() + DURATION
+    deadline = time.monotonic() + request.get('duration_seconds', DURATION)
     logs, error, dropped, marks, ended = [], False, 0, [], None
     tunnel = tunnel_of(request)
     https_log, node, node_state, context = [], None, None, None
@@ -661,14 +708,16 @@ def serve(request, directory):
     capture.setblocking(False)
     started = time.monotonic()
     selector.register(capture, selectors.EVENT_READ, 'capture')
-    raw = (directory / 'capture.pcap').open('xb')
+    disk = request.get('evidence_disk') is True
+    limit = EVIDENCE_PCAP_LIMIT if disk else CAPTURE_LIMIT
+    raw = EvidenceWriter(evidence_device(), request['lab_id']) if disk else (directory / 'capture.pcap').open('xb')
     raw.write(struct.pack('<IHHIIII', 0xa1b2c3d4, 2, 4, 0, 0, 2048, 1))
     count = 24
     sockets = []
 
     def record(frame):
         nonlocal count
-        if len(frame) > 2048 or count + 16 + len(frame) > CAPTURE_LIMIT:
+        if len(frame) > 2048 or count + 16 + len(frame) > limit:
             raise ValueError('capture-limit')
         now = time.time()
         raw.write(struct.pack('<IIII', int(now), int(now % 1 * 1000000), len(frame), len(frame)) + frame)
@@ -805,9 +854,12 @@ def serve(request, directory):
     except BaseException:
         error = True
     finally:
-        raw.flush()
-        os.fsync(raw.fileno())
-        raw.close()
+        if disk:
+            raw.finish(complete=not error)
+        else:
+            raw.flush()
+            os.fsync(raw.fileno())
+            raw.close()
         selector.close()
         capture.close()
         for stream in sockets:
@@ -858,7 +910,7 @@ def main(request):
     saved = json.loads((directory / 'identity.json').read_bytes())
     if any(saved[k] != request[k] for k in ('lab_id', 'role', 'vm_uuid', 'boot_id', 'probes', 'markers')):
         raise ValueError('wrong-run')
-    if any(saved.get(key) != request.get(key) for key in ('tunnel', 'dns')):
+    if any(saved.get(key) != request.get(key) for key in ('tunnel', 'dns', 'evidence_disk', 'duration_seconds')):
         raise ValueError('wrong-run')
     if request['role'] == 'lab' and operation == 'serve':
         if request.get('interface') != iface:
@@ -868,7 +920,8 @@ def main(request):
     if request['role'] == 'lab' and operation == 'finish':
         time.sleep(.3)
         (directory / 'stop').touch(exist_ok=False)
-        for _ in range(50):
+        # A 60 MiB capture takes a while to reach the disk.
+        for _ in range(150 if request.get('evidence_disk') is True else 50):
             if (directory / 'health.json').exists():
                 return dict(finished=True)
             time.sleep(.1)
