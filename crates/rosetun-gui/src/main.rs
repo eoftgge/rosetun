@@ -16,6 +16,7 @@ mod constants;
 mod destinations;
 mod display;
 mod errors;
+mod file_dialog;
 #[cfg(windows)]
 mod frame_stats;
 mod icons;

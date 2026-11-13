@@ -220,6 +220,8 @@ pub(crate) enum WorkerEvent {
         sequence: u32,
     },
     BrowsedListFile(Option<PathBuf>),
+    /// The system has no file dialog (Linux without a portal).
+    FileDialogUnavailable,
     AddList(Result<(List, Option<usize>), ListError>),
     ListAvailability {
         revision: u64,

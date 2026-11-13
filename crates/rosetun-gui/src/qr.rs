@@ -27,6 +27,7 @@ pub(crate) enum QrError {
     NoClipboardImage,
     Clipboard,
     ScreenClipUnavailable,
+    FileDialogUnavailable,
     ScreenClipTimedOut,
 }
 

@@ -23,6 +23,8 @@ pub(crate) struct AddListDialog {
     pub(crate) name_manual: bool,
     pub(crate) busy: bool,
     pub(crate) browsing: bool,
+    /// The system has no file dialog, so the path is typed in the address field.
+    pub(crate) dialog_missing: bool,
     pub(crate) focus_url: bool,
     pub(crate) error: Option<ListError>,
     pub(crate) result: Option<(ListFormat, usize, Option<usize>)>,
@@ -37,6 +39,7 @@ impl Default for AddListDialog {
             name_manual: false,
             busy: false,
             browsing: false,
+            dialog_missing: false,
             focus_url: true,
             error: None,
             result: None,
@@ -66,6 +69,13 @@ impl AddListDialog {
         self.url.clear();
         self.error = None;
     }
+}
+
+/// An absolute path typed where an address goes: the way to a file when the system
+/// has no file dialog.
+fn typed_path(input: &str) -> Option<PathBuf> {
+    let path = PathBuf::from(input.trim());
+    path.is_absolute().then_some(path)
 }
 
 fn suggested_url_name(input: &str) -> Option<String> {
@@ -262,6 +272,13 @@ impl State {
                     }
                 }
             }
+            WorkerEvent::FileDialogUnavailable => {
+                if let Some(dialog) = &mut self.lists.add {
+                    dialog.dialog_missing = true;
+                } else {
+                    self.lists.error = Some(tr!("error-file-dialog-unavailable"));
+                }
+            }
             WorkerEvent::AddList(result) => {
                 if let Some(dialog) = &mut self.lists.add {
                     dialog.busy = false;
@@ -367,6 +384,10 @@ impl State {
                         dialog.busy = true;
                         dialog.error = None;
                         return Some(Job::AddListFile(path.clone(), name.to_owned()));
+                    } else if let Some(path) = typed_path(&dialog.url) {
+                        dialog.busy = true;
+                        dialog.error = None;
+                        return Some(Job::AddListFile(path, name.to_owned()));
                     } else if url::Url::parse(dialog.url.trim()).is_ok_and(|url| {
                         matches!(url.scheme(), "http" | "https") && url.host_str().is_some()
                     }) {

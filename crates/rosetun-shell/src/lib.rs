@@ -16,6 +16,8 @@ mod desktop_linux;
     reason = "Win32 FFI; every unsafe block carries a SAFETY comment"
 )]
 mod elevated;
+#[cfg(target_os = "linux")]
+mod file_dialog_linux;
 #[cfg(any(windows, test))]
 mod first_start;
 #[cfg(windows)]
@@ -124,6 +126,8 @@ pub use desktop_linux::{tray_notice, user_language};
 pub use desktop_proxy::{DesktopProxy, ProxyRestore, ProxySet};
 #[cfg(windows)]
 pub use elevated::run_elevated;
+#[cfg(target_os = "linux")]
+pub use file_dialog_linux::{FileDialogError, FileFilter, pick_file, save_file};
 #[cfg(windows)]
 pub use fonts::fonts_dir;
 #[cfg(windows)]

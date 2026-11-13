@@ -753,6 +753,7 @@ impl State {
             | WorkerEvent::RenameSubscription(_)
             | WorkerEvent::MoveSubscription(_)) => self.reduce_subscriptions(event),
             event @ (WorkerEvent::BrowsedListFile(_)
+            | WorkerEvent::FileDialogUnavailable
             | WorkerEvent::AddList(_)
             | WorkerEvent::ListAvailability { .. }
             | WorkerEvent::UpdateList { .. }
