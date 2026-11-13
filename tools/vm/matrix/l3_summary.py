@@ -24,9 +24,10 @@ WINDOW_OF = {
     'killswitch.flush-restored': 'connect_ks', 'killswitch.disconnect': 'connect_ks',
 }
 GROUP_LABELS = tuple(dict.fromkeys(label for label in WINDOW_OF.values() if label))
-# What the observer must have seen of the lab for the group to mean anything. DoH is reported but not
-# required: only scenarios outside the group (dnslock.*) resolve through it.
-REQUIRED_FIXTURES = ('node', 'https', 'dns')
+# What the observer must have seen of the lab for the group to mean anything. DoH is required too: the
+# helper's DNS check at connect (`check_cancellable` in `state/dns.rs`) goes through the DoH server that
+# `dns_section` of the sing-box render configures, so no scenario connects without it.
+REQUIRED_FIXTURES = ('node', 'https', 'dns', 'doh')
 # Whether a leak seen in a window outside the group changes the exit code. Several scenarios outside the
 # group leave the protection on purpose (a DNS lock without a kill switch, a rule that sends a program
 # direct, a session that is not protected at all), and nothing here declares those expectations yet:

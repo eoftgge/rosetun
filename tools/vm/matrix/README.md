@@ -2863,9 +2863,9 @@ only its scenarios are unobserved. The exact list of stage 7b2a stays for `lab-s
 The summary (`rosetun.matrix.l3-summary.v1`) has three parts next to the usual stage fields:
 
 - `legacy`: the report of `run-l3.sh` as it is, its SHA-256, its summary and every row.
-- `lab`: what the fixtures did (`node` alive at finish, `https`, `dns`, `doh` answered; the first
-  three are required, DoH is only reported because only scenarios outside the group use it), the
-  evidence disk, and every window with its label, index, verdict, reasons and categories.
+- `lab`: what the fixtures did (`node` alive at finish, `https`, `dns`, `doh` answered; all four are
+  required, see "The HTTPS target in an L3 run"), the evidence disk, and every window with its
+  label, index, verdict, reasons and categories.
 - `crosscheck`: one row per scenario of the group, `AGREE`, `DISAGREE`, `UNOBSERVED` or
   `NOT_APPLICABLE`. A pass in a clean window is `AGREE`; a pass in a window with a leak is
   `DISAGREE`; a pass whose window is unverified or missing is `UNOBSERVED`; anything the script did
@@ -2930,17 +2930,43 @@ This stage changes `linux/guest/lab-entry.py` (the pinned certificates), `linux/
 `lab-entry.py` and `lab_protocol.py` in both images and `stage-l2.py` in the test image, and update
 the descriptors, before any qualification.
 
-### Known limit
+### The HTTPS target in an L3 run
 
-The HTTPS target of the lab (`lab-entry.py`) answers only the two exchanges of stage 7b1 by their
-exact request; any other request, such as the `curl https://203.0.113.2/` of `run-l3.sh`, makes the
-observer stop with an error, and its log keeps 16 rows. A real run needs a target that answers the
-requests of the script and counts them instead of listing them; that is not part of this stage.
+A request with `windows: true` (the one `run linux-l3 --lab` sends and `lab-smoke` never does) puts the
+HTTPS target of `203.0.113.2:443` in L3 mode. `lab-smoke` keeps what stage 7b1 made it: two exact
+requests, any other one refused, and the log of up to 16 rows.
+
+- **What it answers.** Any `GET` and `HEAD` of HTTP/1.0 or 1.1 with any path, from `192.0.2.2` (direct)
+  or `203.0.113.1` (through the node): `200`, a short fixed body without a nonce (none for `HEAD`) and
+  `Connection: close`; the connection is then closed. The `curl https://203.0.113.2/` of `run-l3.sh`
+  is one of these. The two exchanges of 7b1 are still known by their exact request and answered with
+  their nonce, and are logged as rows as before. Another method or version, a request cut short or
+  larger than 4 KiB, a client that sends it too slowly, a TLS handshake that fails or a source that is
+  neither of the two is refused: the connection is closed, the log gets a refusal row with the reason
+  (`unsupported-method`, `unsupported-version`, `bad-http-request`, `short-request`, `request-limit`,
+  `timeout`, `unexpected-request`, `ssl-<openssl reason>`) and the observer goes on.
+- **One thread per connection**, as the DoH target has, so a slow client never delays the capture; at
+  most 32 at a time, and a 33rd connection is closed with the reason `connection-limit`.
+- **The log is not a line per request.** `https.json` is still a JSON list: the first 16 requests whole
+  (`source`, `port`, `at`, and `method` and `path_class` or, for a 7b1 exchange, `path`), the refusal
+  rows (at most eight), and one last element `{"kind": "counts", "counts": [...], "rows_dropped",
+  "counts_dropped"}` with a counter per (`source`, `method`, `path_class` `root` or `other`; `root` is `/`
+  with or without a query). Requests beyond the 16th are only counted (`rows_dropped`), and more than 64
+  distinct counters are dropped (`counts_dropped`). Neither makes the observer unclean, and neither
+  counts as an error of the run.
+- **When the `https` fixture works.** The counters hold an answer to `192.0.2.2` and an answer to
+  `203.0.113.1`: the test machine reached the target directly (outside the protected windows, where the
+  script does it) and through the node. The summary's `https` block says which of the two it was
+  (`direct`, `via_node`, `requests`). One path alone is not a working target and the run ends with 2
+  (`fixtures-not-seen:https`). The same goes for `doh`: the DNS check of Rosetun's connect goes
+  through the DoH target, so it is a required fixture with `node`, `https` and `dns`.
+
+Reinstall the helper (`linux/guest/lab-entry.py`) in both images before qualification.
 
 ### Owner qualification
 
 1. `run linux-l3 --lab --dry-run`, then the ordinary command. Expect the group `PASS`, the
-   cross-check `AGREE`, exit 0 (see the known limit), and keep the summary.
+   cross-check `AGREE`, exit 0, and keep the summary.
 2. Legacy L3 on Hyper-V with the new `run-l3.sh`: all `PASS`, as before.
 3. Positive control: during the window `connect_ks`, `systemctl stop rosetun-helper` from the
    console of the test machine. The table goes, the probes of the script leave directly: that window

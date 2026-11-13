@@ -431,8 +431,13 @@ class Machines:
         if name == 'health.json':
             return json.dumps(health(rows, node=node)).encode()
         if name == 'https.json':
-            return json.dumps([] if self.fixtures.get('https') is False else
-                              [dict(source=wire.EGRESS, port=51000, path='/x', at=6.0)]).encode()
+            # What the target of an L3 run leaves: its first rows and the counters by who was answered.
+            sources = {False: [], 'direct-only': [wire.CLIENTS[4]], 'node-only': [wire.EGRESS]}.get(
+                self.fixtures.get('https'), [wire.CLIENTS[4], wire.EGRESS])
+            counts = [dict(source=source, method='GET', path_class='root', count=3) for source in sources]
+            return json.dumps([dict(source=source, port=51000, method='GET', path_class='root', at=6.0)
+                               for source in sources]
+                              + [dict(kind='counts', counts=counts, rows_dropped=0, counts_dropped=0)]).encode()
         if name == 'dns.json':
             kinds = [] if self.fixtures.get('dns') is False else ['udp']
             kinds += ['doh'] if self.fixtures.get('doh', True) else []

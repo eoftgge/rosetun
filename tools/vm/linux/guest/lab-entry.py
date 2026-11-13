@@ -45,6 +45,12 @@ EVIDENCE_DEVICE = Path('/dev/disk/by-id/virtio-rosetun-lab-evidence')
 DOH_REQUESTS = 16
 DOH_CONNECTIONS = 8
 HTTPS_LOG_ENTRIES = 16
+# An L3 run: how many connections the HTTPS target serves at once, how many distinct counters it keeps
+# and the longest request head it reads. Going over the first two loses detail, never the observer.
+HTTPS_CONNECTIONS = 32
+HTTPS_COUNT_KEYS = 64
+HTTPS_HEAD_LIMIT = 4096
+L3_BODY = b'rosetun-lab-target\n'
 REFUSAL_ROWS = 8
 TUNNEL_KEYS = {'port', 'method', 'password', 'sing_box_sha256', 'ca_sha256', 'https'}
 HTTPS_KEYS = {'run_id', 'nonce', 'kind', 'family', 'protocol', 'source', 'target', 'port', 'path'}
@@ -498,7 +504,7 @@ def short_code(error, limit=48):
         return 'exit-%d' % abs(error.returncode)
     text = str(error)
     if isinstance(error, ssl.SSLError):
-        text = 'ssl-' + (error.reason or 'error')
+        text = 'ssl-' + (getattr(error, 'reason', None) or 'error')
     elif isinstance(error, OSError) and error.errno in errno.errorcode:
         return errno.errorcode[error.errno].lower()
     text = scrub_log(text.encode('utf-8', 'replace')).decode('utf-8', 'replace').lower()
@@ -858,6 +864,154 @@ def https_exchange(connection, peer, context, request):
     return dict(source=peer[0], port=peer[1], path=matches[0]['path'], at=time.monotonic())
 
 
+def l3_mode(request):
+    """An L3 run: the controller asks for phase windows, and the HTTPS target then serves what the script asks."""
+    return request.get('windows') is True
+
+
+def read_https_head(stream, deadline):
+    """The request head, up to its blank line. The deadline bounds a client that sends a byte at a time."""
+    data = bytearray()
+    while b'\r\n\r\n' not in data:
+        if time.monotonic() >= deadline:
+            raise TimeoutError('request-timeout')
+        block = stream.recv(1024)
+        if not block:
+            raise ValueError('short-request')
+        data.extend(block)
+        if len(data) > HTTPS_HEAD_LIMIT:
+            raise ValueError('request-limit')
+    return bytes(data[:data.index(b'\r\n\r\n') + 4])
+
+
+def l3_request_line(head):
+    """(method, version, path class) of a GET or HEAD request of HTTP/1.0 or 1.1; anything else is refused."""
+    try:
+        line = head.decode('ascii').split('\r\n')[0]
+    except UnicodeDecodeError:
+        raise ValueError('bad-http-request') from None
+    parts = line.split(' ')
+    if len(parts) != 3 or not parts[1].startswith('/'):
+        raise ValueError('bad-http-request')
+    if parts[0] not in ('GET', 'HEAD'):
+        raise ValueError('unsupported-method')
+    if parts[2] not in ('HTTP/1.0', 'HTTP/1.1'):
+        raise ValueError('unsupported-version')
+    return parts[0], parts[2], 'root' if parts[1].partition('?')[0] == '/' else 'other'
+
+
+def l3_exchange(connection, peer, context, request):
+    """One request to the HTTPS target of an L3 run: (row, method, path class) of what was answered.
+
+    An exchange of stage 7b1 is still known by its exact request and answered with its nonce. Any other GET
+    or HEAD gets a short fixed body without one, and the connection is closed after it.
+    """
+    if peer[0] not in (CLIENTS[4], EGRESS):
+        raise ValueError('unexpected-request')
+    connection.settimeout(REQUEST_TIMEOUT)
+    deadline = time.monotonic() + 2 * REQUEST_TIMEOUT
+    with context.wrap_socket(connection, server_side=True) as stream:
+        head = read_https_head(stream, deadline)
+        known = request['tunnel']['https'] + ([request['dns_check']['doh']] if 'dns_check' in request else [])
+        exact = [e for e in known if head == b'GET ' + e['path'].encode('ascii') + b' HTTP/1.0\r\n\r\n']
+        if len(exact) == 1:
+            body = https_answer(exact[0])
+            stream.sendall(b'HTTP/1.0 200 OK\r\nContent-Length: ' + str(len(body)).encode() + b'\r\n\r\n' + body)
+            result = dict(source=peer[0], port=peer[1], path=exact[0]['path'], at=time.monotonic()), 'GET', 'other'
+        else:
+            method, version, path_class = l3_request_line(head)
+            wire = ('%s 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\nConnection: close\r\n\r\n'
+                    % (version, len(L3_BODY))).encode('ascii')
+            stream.sendall(wire if method == 'HEAD' else wire + L3_BODY)
+            result = dict(source=peer[0], port=peer[1], method=method, path_class=path_class,
+                          at=time.monotonic()), method, path_class
+        try:
+            stream.unwrap()
+        except (OSError, ssl.SSLError):
+            pass
+    return result
+
+
+class HttpsLog:
+    """What the HTTPS target of an L3 run saw: counters by (source, method, path class), the first lines whole.
+
+    Written by one thread per connection. A refused connection is a row with its reason, as in the other
+    logs. Too many distinct counters or too many lines is a loss of detail, counted in the last element of
+    `document()`; it is never an error of the observer.
+    """
+
+    def __init__(self):
+        self.lock, self.rows, self.counts = threading.Lock(), [], {}
+        self.rows_dropped = self.counts_dropped = 0
+
+    def served(self, row, method, path_class):
+        with self.lock:
+            key = (row['source'], method, path_class)
+            if key in self.counts or len(self.counts) < HTTPS_COUNT_KEYS:
+                self.counts[key] = self.counts.get(key, 0) + 1
+            else:
+                self.counts_dropped += 1
+            if sum('reason' not in entry for entry in self.rows) < HTTPS_LOG_ENTRIES:
+                self.rows.append(row)
+            else:
+                self.rows_dropped += 1
+
+    def refused(self, error):
+        with self.lock:
+            refuse(self.rows, 'https', 4, error)
+
+    def document(self):
+        """The rows, then one `counts` element: what `https.json` holds in an L3 run."""
+        with self.lock:
+            counts = [dict(source=source, method=method, path_class=path_class, count=count)
+                      for (source, method, path_class), count in sorted(self.counts.items())]
+            return self.rows + [dict(kind='counts', counts=counts, rows_dropped=self.rows_dropped,
+                                     counts_dropped=self.counts_dropped)]
+
+
+def l3_worker(connection, peer, context, request, log):
+    try:
+        row, method, path_class = l3_exchange(connection, peer, context, request)
+    except Exception as error:
+        log.refused(error)
+    else:
+        log.served(row, method, path_class)
+    finally:
+        connection.close()
+
+
+class HttpsWorkers:
+    """The connections of the HTTPS target in an L3 run, each on a thread of its own so that none delays the capture."""
+
+    def __init__(self, context, request, log):
+        self.context, self.request, self.log, self.threads = context, request, log, []
+
+    def accept(self, listener):
+        try:
+            # Ready to read does not promise a connection still there: never wait in the observer's loop.
+            listener.setblocking(False)
+            connection, peer = listener.accept()
+        except BlockingIOError:
+            return
+        except OSError as error:
+            self.log.refused(error)
+            return
+        self.threads = [thread for thread in self.threads if thread.is_alive()]
+        if len(self.threads) >= HTTPS_CONNECTIONS:
+            connection.close()
+            self.log.refused(ValueError('connection-limit'))
+            return
+        self.threads.append(threading.Thread(target=l3_worker, args=(connection, peer, self.context, self.request,
+                                                                     self.log), daemon=True))
+        self.threads[-1].start()
+
+    def drain(self, timeout):
+        """Let the connections in flight finish, so that the log is written whole."""
+        end = time.monotonic() + timeout
+        for thread in self.threads:
+            thread.join(max(0, end - time.monotonic()))
+
+
 def refuse(rows, service, family, error):
     """Log a refused exchange of a target: which service, which family and why.
 
@@ -1010,6 +1164,9 @@ def serve(request, directory):
     failure, place = Failure(), 'setup'
     tunnel = tunnel_of(request)
     https_log, node, node_state, context, servers = [], None, None, None, None
+    # An L3 run counts what the script asks of the HTTPS target; its connections run on threads.
+    https_requests = HttpsLog() if l3_mode(request) else None
+    https_workers = None
     dns = request.get('dns') is True
     dns_log, dns_stop, dns_threads, dns_sockets = DnsLog(), threading.Event(), [], []
     selector = selectors.DefaultSelector()
@@ -1060,6 +1217,8 @@ def serve(request, directory):
         raw.write(struct.pack('<IHHIIII', 0xa1b2c3d4, 2, 4, 0, 0, 2048, 1))
         place = 'setup'
         context, servers = bind_targets(request, tunnel, selector, sockets, dns_sockets)
+        if https_requests is not None and context is not None:
+            https_workers = HttpsWorkers(context, request, https_requests)
         if tunnel is not None:
             # Alive and listening, before the observer says it is ready.
             check_lab_fixtures(tunnel, request.get('certificates'))
@@ -1086,6 +1245,9 @@ def serve(request, directory):
                 # capture goes on. Only what the observer itself does (capture, limits, deadline) stops it.
                 if service == 'https':
                     place = 'https'
+                    if https_workers is not None:
+                        https_workers.accept(key.fileobj)
+                        continue
                     connection = None
                     try:
                         connection, peer = key.fileobj.accept()
@@ -1167,7 +1329,10 @@ def serve(request, directory):
                     node_state = dict(alive_at_finish=alive, exit_code=code)
                 except Exception as error:
                     failure.note('node', error)
-            settle(lambda: write(directory / 'https.json', https_log))
+            if https_workers is not None:
+                https_workers.drain(2 * REQUEST_TIMEOUT)
+            settle(lambda: write(directory / 'https.json',
+                                 https_requests.document() if https_requests is not None else https_log))
             settle(write_node_log)
             extra['node'] = node_state or dict(alive_at_finish=False, exit_code=None)
         settle(lambda: write(directory / 'targets.json', logs))

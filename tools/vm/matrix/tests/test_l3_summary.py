@@ -142,7 +142,7 @@ class RunTests(Flow):
         self.assertEqual(1, result['exit_code'])
 
     def test_a_fixture_the_observer_did_not_see_answer_is_two(self):
-        for fixture in ('node', 'https', 'dns'):
+        for fixture in ('node', 'https', 'dns', 'doh'):
             with self.subTest(fixture=fixture):
                 case = RunTests()
                 case.setUp()
@@ -156,10 +156,19 @@ class RunTests(Flow):
                 finally:
                     case.doCleanups()
 
-    def test_doh_is_reported_but_the_group_does_not_need_it(self):
-        result = self.go(Machines(self, fixtures={'doh': False}))
-        self.assertEqual(0, result['exit_code'])
-        self.assertFalse(result['lab']['qualification']['fixtures']['doh']['answered'])
+    def test_the_https_target_without_an_answer_through_the_node_is_not_a_working_fixture(self):
+        for seen in ('direct-only', 'node-only'):
+            with self.subTest(seen=seen):
+                result = self.go_again(fixtures={'https': seen})
+                https = result['lab']['qualification']['fixtures']['https']
+                self.assertEqual((2, ['fixtures-not-seen:https'], False),
+                                 (result['exit_code'], result['group']['unproven'], https['answered']))
+                self.assertEqual((seen == 'direct-only', seen == 'node-only'), (https['direct'], https['via_node']))
+
+    def test_the_https_target_that_answered_both_paths_is_a_working_fixture(self):
+        result = self.go(Machines(self))
+        self.assertEqual((0, dict(answered=True, direct=True, via_node=True, requests=6)),
+                         (result['exit_code'], result['lab']['qualification']['fixtures']['https']))
 
     def test_a_disk_that_cannot_be_trusted_is_two_and_a_failure_still_counts(self):
         result = self.go(Machines(self, fault='incomplete'))
@@ -193,7 +202,7 @@ def synthetic(**changes):
         missing_labels=[], qualification=dict(
             evidence=dict(verified=True), observer=dict(reasons=[]),
             fixtures=dict(node=dict(alive_at_finish=True), https=dict(answered=True), dns=dict(answered=True),
-                          doh=dict(answered=False)))))
+                          doh=dict(answered=True)))))
     result.update(changes)
     return result
 

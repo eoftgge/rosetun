@@ -59,8 +59,9 @@ class FakeCapture:
 class Observer:
     """One `serve` run in a thread, with loopback sockets standing in for the target namespace."""
 
-    def __init__(self, case, *, tunnel=False, dns=False, duration=30, capture=None, request_timeout=.3, **request):
-        self.case, self.entry = case, case.entry
+    def __init__(self, case, *, tunnel=False, dns=False, duration=30, capture=None, request_timeout=.3,
+                 context=None, **request):
+        self.case, self.entry, self.context = case, case.entry, context
         self.directory = Path(tempfile.mkdtemp())
         case.addCleanup(self.cleanup)
         nonces = iter(f'{i:024x}' for i in range(20))
@@ -104,7 +105,8 @@ class Observer:
         listener((4, 'marker'), socket.SOCK_DGRAM)
         if tunnel is not None:
             listener((4, 'https'), socket.SOCK_STREAM)
-        return (object() if tunnel is not None else None), ((None,) * 4 if request.get('dns') is True else None)
+        return ((self.context or object()) if tunnel is not None else None), (
+            (None,) * 4 if request.get('dns') is True else None)
 
     def cleanup(self):
         (self.directory / 'stop').touch()
@@ -703,11 +705,16 @@ class TargetLogTests(unittest.TestCase):
     def test_the_fixtures_of_a_run_count_answers_of_the_https_target_and_not_refusals(self):
         refusal = dict(service='https', family=4, reason='timeout')
         served = dict(source=wire.CLIENTS[4], port=40000, path='/p', at=1.0)
-        for rows, answered, requests in (([], False, 0), ([refusal], False, 0), ([refusal, served], True, 1),
-                                         ([served, served], True, 2)):
+        relayed = dict(served, source=wire.EGRESS)
+        # It works only when both the test machine and the exit of the node were answered.
+        for rows, answered, direct, via_node, requests in (
+                ([], False, False, False, 0), ([refusal], False, False, False, 0),
+                ([refusal, served], False, True, False, 1), ([served, served], False, True, False, 2),
+                ([refusal, served, relayed], True, True, True, 2)):
             with self.subTest(rows=len(rows)):
                 block = l3_lab.fixtures_block({}, {'https.json': rows})
-                self.assertEqual(dict(answered=answered, requests=requests), block['https'])
+                self.assertEqual(dict(answered=answered, direct=direct, via_node=via_node, requests=requests),
+                                 block['https'])
 
 
 class WaitTests(ObserverCase):

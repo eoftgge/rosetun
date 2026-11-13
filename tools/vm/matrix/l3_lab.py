@@ -18,8 +18,8 @@ import uuid
 from . import lab as labmod
 from .evidence import ReadbackError, write_file
 from .execution import lab_of, preflight
-from .lab_protocol import (LOG_LIMIT, PORTS, TARGETS, EVIDENCE_PCAP_LIMIT, classify_windows, https_exchanges,
-                           marker_run_id, probes)
+from .lab_protocol import (LOG_LIMIT, PORTS, TARGETS, EVIDENCE_PCAP_LIMIT, CLIENTS, EGRESS, classify_windows,
+                           https_exchanges, marker_run_id, probes)
 from .orchestrator import _RETAINED_LEASES, failure, save
 from .resources import StandLease, completion_verified, create_run, resource_path, EXECUTION_FILES
 
@@ -83,6 +83,27 @@ def legacy_block(raw, assessment):
     return block
 
 
+def https_fixture(log):
+    """The HTTPS target worked when it answered the test machine directly and answered the node's exit.
+
+    The counters of an L3 run (the `counts` element of `https.json`) say who was answered, however many
+    requests there were. A log without them is the one of stage 7b1, whose rows are the answers. A refusal
+    row (it has a `reason`) says the target turned a client away, not that it answered.
+    """
+    counts = next((row for row in log if type(row) is dict and row.get('kind') == 'counts'), None)
+    if counts is not None and type(counts.get('counts')) is list:
+        entries = [(row.get('source'), row['count']) for row in counts['counts']
+                   if type(row) is dict and type(row.get('count')) is int and row['count'] > 0]
+    else:
+        entries = [(row.get('source'), 1) for row in log if type(row) is dict and 'reason' not in row]
+    sources = {}
+    for source, count in entries:
+        if type(source) is str:
+            sources[source] = sources.get(source, 0) + count
+    direct, via_node = sources.get(CLIENTS[4], 0) > 0, sources.get(EGRESS, 0) > 0
+    return dict(answered=direct and via_node, direct=direct, via_node=via_node, requests=sum(sources.values()))
+
+
 def fixtures_block(health, logs):
     """What the lab's fixtures were seen to do: from the observer's own files, never from the guest."""
     def rows(name):
@@ -90,11 +111,9 @@ def fixtures_block(health, logs):
         return value if type(value) is list else []
     node = health.get('node') if type(health) is dict and type(health.get('node')) is dict else {}
     dns = [row for row in rows('dns.json') if type(row) is dict]
-    # A refusal row (it has a `reason`) says the target turned a client away, not that it answered.
-    served = [row for row in rows('https.json') if type(row) is dict and 'reason' not in row]
     return dict(node=dict(alive_at_finish=node.get('alive_at_finish') is True,
                           exit_code=node.get('exit_code') if type(node.get('exit_code')) is int else None),
-                https=dict(answered=bool(served), requests=len(served)),
+                https=https_fixture(rows('https.json')),
                 dns=dict(answered=any(row.get('transport') in ('udp', 'tcp') for row in dns),
                          requests=sum(row.get('transport') in ('udp', 'tcp') for row in dns)),
                 doh=dict(answered=any(row.get('transport') == 'doh' for row in dns),
