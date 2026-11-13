@@ -5,6 +5,7 @@ use crate::{RuleSetError, Store};
 
 pub fn apply(store: &Store, id: &RuleSetId, preview: &Preview, replace: bool, default_target: bool) -> Result<(), RuleSetError> {
     store.modify(|config| {
+        if !preview.is_current(config) { return Err(RuleSetError::ImportChanged); }
         let index = config.rule_sets.iter().position(|set| &set.id == id).ok_or(RuleSetError::SetNotFound)?;
         for list in &preview.lists {
             if !config.lists.iter().any(|existing| existing.id == list.id) { config.lists.push(list.clone()); }

@@ -186,6 +186,9 @@ pub(crate) enum WorkerEvent {
     },
     #[cfg(windows)]
     BrowsedExecutable(Option<PathBuf>),
+    RulesRead(Result<Option<String>, String>),
+    RulesWritten(Result<(), String>),
+    ImportRules(Result<(), RuleSetError>),
     AddRule(Result<Rule, RuleSetError>),
     AddRules(Result<AddedRules, RuleSetError>),
     UpdateRule(Result<(), RuleSetError>),

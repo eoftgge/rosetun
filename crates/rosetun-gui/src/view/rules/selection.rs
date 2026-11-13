@@ -10,6 +10,9 @@ pub(super) fn clear_selection_on_click_away(
         || state.rules.screen.name.is_some()
         || state.rules.screen.add.is_some()
         || state.rules.screen.delete_set.is_some()
+        || state.rules.exchange.export.is_some()
+        || state.rules.exchange.import.is_some()
+        || state.rules.exchange.error.is_some()
         || ctx.dragged_id().is_some()
         || actions.iter().any(|action| {
             matches!(
@@ -111,6 +114,9 @@ pub(super) fn selection_shortcuts(
         || state.rules.screen.name.is_some()
         || state.rules.screen.add.is_some()
         || state.rules.screen.delete_set.is_some()
+        || state.rules.exchange.export.is_some()
+        || state.rules.exchange.import.is_some()
+        || state.rules.exchange.error.is_some()
         || ctx.memory(egui::Memory::top_modal_layer).is_some()
         || egui::Popup::is_any_open(ctx)
     {

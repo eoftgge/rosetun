@@ -62,6 +62,7 @@ impl Saved {
                 Job::SetDefaultTarget(id, target) => WorkerEvent::SetDefaultTarget(
                     rosetun_core::set_default_target(store, &id, target),
                 ),
+                Job::ImportRules(set, preview, replace, default_target) => WorkerEvent::ImportRules(rosetun_core::rules_exchange::apply(store,&set,&preview,replace,default_target)),
                 Job::AddRule(set, matcher, target) => {
                     WorkerEvent::AddRule(rosetun_core::add_rule(store, &set, matcher, &target))
                 }
@@ -563,4 +564,63 @@ fn revert_makes_the_session_set_active_again_while_it_exists() {
     saved.act(&mut state, Action::ConfirmDeleteSet);
     assert!(state.pending_reconnect(SessionPart::Rules));
     assert!(!state.can_revert_rules(), "the session set is gone");
+}
+
+fn import_document() -> String {
+    r#"{"format":"rosetun-rules","version":1,"exported_by":"test","system":"windows","default_target":"direct","rules":[{"enabled":true,"matcher":{"domain":{"exact":"import.example.com"}},"target":"proxy"}],"lists":[]}"#.into()
+}
+#[test]
+fn import_preview_requires_confirmation_and_defaults_to_keeping_the_default() {
+    let mut state=rules_state(); let before=state.config.clone();
+    state.reduce(WorkerEvent::RulesRead(Ok(Some(import_document()))));
+    let preview=state.rules.exchange.import.as_ref().unwrap();
+    assert_eq!(preview.add.rules.len(),1); assert!(!preview.default_target); assert_eq!(state.config,before);
+    state.act(Action::CancelRulesExchange); assert!(state.rules.exchange.import.is_none());
+}
+#[test]
+fn adding_and_replacing_an_import_are_one_undo_step() {
+    for replace in [false,true] {
+        let mut state=rules_state(); let before=state.config.clone(); let mut saved=Saved::new(&state);
+        state.reduce(WorkerEvent::RulesRead(Ok(Some(import_document()))));
+        saved.act(&mut state,Action::ConfirmRulesImport(replace));
+        let count=state.selected_rules().unwrap().rules.len();
+        assert_eq!(count,if replace {1} else {before.active_rules().unwrap().rules.len()+1});
+        assert_eq!(state.rules.history.undo_len(),1);
+        assert_eq!(state.selected_rules().unwrap().default_target,before.active_rules().unwrap().default_target);
+        saved.act(&mut state,Action::UndoRules); assert_eq!(state.config,before);
+        saved.act(&mut state,Action::RedoRules); assert_eq!(state.selected_rules().unwrap().rules.len(),count);
+    }
+}
+#[test]
+fn invalid_imports_report_a_reason_and_do_not_change_rules() {
+    let mut state=rules_state(); let before=state.config.clone();
+    state.reduce(WorkerEvent::RulesRead(Ok(Some("{}".into()))));
+    assert!(state.rules.exchange.error.is_some()); assert!(state.rules.exchange.import.is_none()); assert_eq!(state.config,before);
+}
+#[test]
+fn exported_list_links_require_an_explicit_choice() {
+    use rosetun_config::{List,ListFormat,ListSource};
+    let mut state=rules_state(); let id=ListId::new("999");
+    state.config.lists.push(List { id:id.clone(),name:"Sites".into(),source:ListSource::Url("https://lists.example.com/private-token".into()),format:ListFormat::Text,updated_at:None,size:None,sha256:None,categories:vec![] });
+    let set_id=state.rules.screen.selected_set.clone().unwrap();
+    state.config.rule_sets.iter_mut().find(|set| set.id == set_id).unwrap().rules.push(Rule { id:RuleId::new("999"),enabled:true,matcher:RuleMatcher::List { list:id,category:None },target:RuleTarget::Proxy,exit:None });
+    for consent in [false,true] {
+        assert!(state.act(Action::OpenRulesExport(false)).is_none());
+        assert_eq!(state.rules.exchange.export.as_ref().unwrap().hosts,["lists.example.com"]);
+        let Some(Job::WriteRules(text,_))=state.act(Action::ConfirmRulesExport(consent)) else { panic!("export job"); };
+        assert_eq!(text.contains("private-token"),consent);
+        state.reduce(WorkerEvent::RulesWritten(Ok(())));
+    }
+}
+#[test]
+fn importing_lists_and_the_default_can_be_undone_together() {
+    let mut state=rules_state(); let before=state.config.clone(); let mut saved=Saved::new(&state);
+    let text=r#"{"format":"rosetun-rules","version":1,"exported_by":"test","system":"linux","default_target":"direct","lists":[{"name":"Sites","format":"text"}],"rules":[{"enabled":true,"matcher":{"list":{"list":0,"category":null}},"target":"proxy"}]}"#;
+    state.reduce(WorkerEvent::RulesRead(Ok(Some(text.into()))));
+    state.rules.exchange.import.as_mut().unwrap().default_target=true;
+    saved.act(&mut state,Action::ConfirmRulesImport(false));
+    assert_eq!(state.config.lists.len(),before.lists.len()+1);
+    assert_eq!(state.selected_rules().unwrap().default_target,RuleTarget::Direct);
+    saved.act(&mut state,Action::UndoRules); assert_eq!(state.config,before);
+    saved.act(&mut state,Action::RedoRules); assert_eq!(state.config.lists.len(),before.lists.len()+1);
 }

@@ -73,11 +73,15 @@ pub enum Warning { OtherSystem, NeedsList, NeedsFile, ExitReplaced, BroadDirect 
 pub struct EntryReport { pub index: usize, pub warnings: Vec<Warning>, pub invalid: bool }
 #[derive(Clone)]
 pub struct Preview {
+    expected: Box<AppConfig>,
     pub rules: Vec<Rule>,
     pub lists: Vec<List>,
     pub duplicates: usize,
     pub entries: Vec<EntryReport>,
     pub default_target: Option<RuleTarget>,
+}
+impl Preview {
+    pub fn is_current(&self, config: &AppConfig) -> bool { self.expected.as_ref() == config }
 }
 impl std::fmt::Debug for Preview {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -160,6 +164,8 @@ pub fn parse(text: &str) -> Result<Document, ExchangeError> {
     if document.rules.len() > MAX_RULES || document.lists.len() > MAX_RULES { return Err(ExchangeError::Count); }
     if document.default_target == Some(RuleTarget::Exit) { return Err(ExchangeError::Invalid); }
     for list in &document.lists {
+        if let Some(Source::File { original_name }) = &list.source
+            && (original_name.is_empty() || matches!(original_name.as_str(), "." | "..") || original_name.contains(['/', '\\'])) { return Err(ExchangeError::Invalid); }
         if let Some(Source::Url(value)) = &list.source {
             let url = url::Url::parse(value).map_err(|_| ExchangeError::Invalid)?;
             if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() { return Err(ExchangeError::Invalid); }
@@ -215,6 +221,7 @@ fn normalize(matcher: Matcher, lists: &[ListId], from: System, to: System, warni
 fn same_rule(a: &Rule, b: &Rule, system: System) -> bool {
     let matcher = match (&a.matcher, &b.matcher) {
         (RuleMatcher::Process(ProcessMatch::Name(a)), RuleMatcher::Process(ProcessMatch::Name(b))) if system == System::Windows => a.eq_ignore_ascii_case(b),
+        (RuleMatcher::Process(ProcessMatch::Path(a)), RuleMatcher::Process(ProcessMatch::Path(b))) if system == System::Windows => a.to_string_lossy().eq_ignore_ascii_case(&b.to_string_lossy()),
         _ => a.matcher == b.matcher,
     };
     matcher && a.target == b.target && a.exit == b.exit
@@ -229,13 +236,12 @@ pub fn broad_direct(rule: &Rule) -> bool {
 }
 /// Builds the entire preview without changing settings or fetching lists.
 pub fn preview(document: &Document, config: &AppConfig, set: &RuleSet, replace: bool, system: System) -> Preview {
-    let mut result = Preview { rules: Vec::new(), lists: Vec::new(), duplicates: 0, entries: Vec::new(), default_target: document.default_target };
+    let mut result = Preview { expected: Box::new(config.clone()), rules: Vec::new(), lists: Vec::new(), duplicates: 0, entries: Vec::new(), default_target: document.default_target };
     let ids: Vec<_> = document.lists.iter().map(|shared| {
-        if let Some(Source::Url(url)) = &shared.source {
-            if let Some(list) = config.lists.iter().find(|list| list.format == shared.format && matches!(&list.source, ListSource::Url(existing) if existing == url)) { return list.id.clone(); }
-        }
-        let id = ListId::new(fresh_id());
         let source = shared.source.clone().unwrap_or(Source::File { original_name: "list-required".into() });
+        let stored_source = match &source { Source::Url(url) => ListSource::Url(url.clone()), Source::File { original_name } => ListSource::File { original_name: original_name.clone() } };
+        if let Some(list) = config.lists.iter().chain(&result.lists).find(|list| list.format == shared.format && list.source == stored_source && (matches!(source, Source::Url(_)) || list.name == shared.name)) { return list.id.clone(); }
+        let id = ListId::new(fresh_id());
         {
             result.lists.push(List { id: id.clone(), name: shared.name.clone(), format: shared.format,
                 source: match &source { Source::Url(url) => ListSource::Url(url.clone()), Source::File { original_name } => ListSource::File { original_name: original_name.clone() } },
@@ -254,7 +260,7 @@ pub fn preview(document: &Document, config: &AppConfig, set: &RuleSet, replace: 
                     if entry.format.has_categories() {
                         let category = category.as_deref()?;
                         let base = category.split('@').next()?;
-                        if base.is_empty() { return None; }
+                        if base.is_empty() || !base.bytes().all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte,b'_'|b'-')) { return None; }
                         if !entry.categories.iter().any(|existing| existing == base) { entry.categories.push(base.into()); }
                     }
                     if !matches!(entry.validate_category(category.as_deref()), Ok(()) | Err(crate::ListCategoryError::Unknown)) { return None; }
@@ -262,6 +268,10 @@ pub fn preview(document: &Document, config: &AppConfig, set: &RuleSet, replace: 
             }
             if let RuleMatcher::List { list, .. } = &matcher {
                 let source = ids.iter().position(|id| id == list).and_then(|index| document.lists.get(index));
+                if let Some(entry) = config.lists.iter().find(|entry| &entry.id == list) {
+                    let RuleMatcher::List { category, .. } = &matcher else { return None; };
+                    if !matches!(entry.validate_category(category.as_deref()), Ok(()) | Err(crate::ListCategoryError::Unknown)) { return None; }
+                }
                 match source.and_then(|list| list.source.as_ref()) {
                     None => report.warnings.push(Warning::NeedsList),
                     Some(Source::File { .. }) => report.warnings.push(Warning::NeedsFile),
@@ -363,6 +373,45 @@ mod tests {
         config.lists[0].source=ListSource::File { original_name:"sites.txt".into() };
         let text=export(&config,&original,None,true,System::Windows).unwrap();
         let result=preview(&parse(&text).unwrap(),&config,&set(),false,System::Linux); assert!(!result.rules[0].enabled); assert!(result.entries[0].warnings.contains(&Warning::NeedsFile)); assert!(text.contains("sites.txt"));
+    }
+
+    #[test]
+    fn server_descriptions_never_disclose_node_credentials_and_require_an_exact_match() {
+        let (mut config, _) = crate::from_json(include_bytes!("../tests/fixtures/v8.json")).unwrap();
+        let sub=&config.subscriptions[0]; let node=&sub.nodes[0];
+        let selection=crate::Selection { subscription:sub.id.clone(),node:node.id.clone() };
+        let host=node.server.clone(); let port=node.port.to_string();
+        let id=ExitId::new("999");
+        config.exits.clear();
+        config.exits.push(crate::Exit { id:id.clone(),name:"Example exit".into(),target:ExitTarget::Node { selection,fallback:None } });
+        let mut original=set(); let mut entry=rule(RuleMatcher::Domain(DomainMatch::Exact("example.com".into()))); entry.target=RuleTarget::Exit; entry.exit=Some(id); original.rules.push(entry);
+        let text=export(&config,&original,None,true,System::Windows).unwrap();
+        for secret in [host.as_str(),port.as_str(),"test-secret","fixture-password","public_key","private_key","password","server:","999"] { assert!(!text.contains(secret),"unexpected secret: {secret}"); }
+        let document=parse(&text).unwrap(); let matched=preview(&document,&config,&set(),false,System::Windows);
+        assert_eq!(matched.rules[0].target,RuleTarget::Exit);
+        config.subscriptions[0].name="Different provider".into();
+        let missing=preview(&document,&config,&set(),false,System::Windows); assert_eq!(missing.rules[0].target,RuleTarget::Proxy);
+    }
+
+    #[test]
+    fn selected_exports_omit_the_default_and_unused_lists() {
+        let config=AppConfig::default(); let mut original=set();
+        original.rules=vec![rule(RuleMatcher::IpCidr("2001:db8::/32".into()))];
+        let text=export(&config,&original,Some(&[]),false,System::Linux).unwrap();
+        let document=parse(&text).unwrap(); assert!(document.default_target.is_none()); assert!(document.rules.is_empty()); assert!(document.lists.is_empty());
+    }
+    #[test]
+    fn foreign_program_paths_are_disabled_but_names_are_translated() {
+        let document=doc(vec![serde_json::json!({"enabled":true,"matcher":{"process":{"name":"FireFox.exe"}},"target":"proxy"}),serde_json::json!({"enabled":true,"matcher":{"process":{"path":"C:\\Apps\\firefox.exe"}},"target":"proxy"})]);
+        let result=preview(&document,&AppConfig::default(),&set(),false,System::Linux);
+        assert!(result.rules[0].enabled); assert_eq!(result.rules[0].matcher,RuleMatcher::Process(ProcessMatch::Name("FireFox".into())));
+        assert!(!result.rules[1].enabled); assert!(result.entries[1].warnings.contains(&Warning::OtherSystem));
+    }
+    #[test]
+    fn canonical_domains_and_repeated_rows_are_deduplicated() {
+        let document=doc(vec![serde_json::json!({"enabled":true,"matcher":{"domain":{"suffix":"ПРИМЕР.example"}},"target":"proxy"}),serde_json::json!({"enabled":false,"matcher":{"domain":{"suffix":"xn--e1afmkfd.example"}},"target":"proxy"})]);
+        let result=preview(&document,&AppConfig::default(),&set(),false,System::Linux);
+        assert_eq!(result.rules.len(),1); assert_eq!(result.duplicates,1);
     }
     #[test]
     fn missing_exit_falls_back_with_a_warning_and_wide_direct_is_flagged() {

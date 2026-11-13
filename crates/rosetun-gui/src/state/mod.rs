@@ -399,6 +399,11 @@ pub(crate) enum Action {
     SetDefaultTarget(RuleTarget),
     AddTemplate(RuleTemplate),
     RemoveTemplate(RuleTemplate),
+    OpenRulesExport(bool),
+    ConfirmRulesExport(bool),
+    ReadRulesImport(bool),
+    ConfirmRulesImport(bool),
+    CancelRulesExchange,
     OpenAddRule,
     /// From the Traffic tab: the add-rule dialog of the active set with this condition.
     OpenAddRuleFor(RuleMatcher),
@@ -529,6 +534,9 @@ pub(crate) enum Job {
     RenameRuleSet(RuleSetId, String),
     DeleteRuleSet(RuleSetId),
     SetDefaultTarget(RuleSetId, RuleTarget),
+    WriteRules(String, bool),
+    ReadRules(bool),
+    ImportRules(RuleSetId, rosetun_config::rules_exchange::Preview, bool, bool),
     LoadProcesses(u64),
     #[cfg(windows)]
     BrowseExecutable,
@@ -625,6 +633,7 @@ impl State {
     /// not matter here: a button left waiting would stay disabled for good. A
     /// task still running elsewhere reports as usual.
     fn task_not_started(&mut self) {
+        self.rules.exchange.busy = false;
         self.operations = Operations::default();
         self.connect_in_flight = false;
         self.cancel_in_flight = false;
@@ -634,6 +643,9 @@ impl State {
     pub(crate) fn reduce(&mut self, event: WorkerEvent) {
         self.finish_rule_step(&event);
         match event {
+            WorkerEvent::RulesRead(result) => self.reduce_rules_read(result),
+            WorkerEvent::RulesWritten(result) => self.reduce_rules_written(result),
+            WorkerEvent::ImportRules(result) => self.finish_import_rules(result),
             WorkerEvent::TaskNotStarted => self.task_not_started(),
             WorkerEvent::Config { generation, config } => {
                 if generation <= self.config_generation {
@@ -887,6 +899,7 @@ impl State {
             | Action::RequestDeleteExit(_)
             | Action::CancelDeleteExit
             | Action::ConfirmDeleteExit) => return self.act_exits(action),
+            action @ (Action::OpenRulesExport(_) | Action::ConfirmRulesExport(_) | Action::ReadRulesImport(_) | Action::ConfirmRulesImport(_) | Action::CancelRulesExchange) => return self.act_rules_exchange(action),
             action @ (Action::OpenRules
             | Action::OpenActiveRules
             | Action::ChooseRuleSet(_)

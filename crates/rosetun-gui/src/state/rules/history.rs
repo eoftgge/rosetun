@@ -20,6 +20,7 @@ pub(crate) const UNDO_NOTICE_MS: u64 = 8_000;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum UndoNotice {
     RulesDeleted(usize),
+    RulesImported(usize),
     SetDeleted,
     RulesMoved(usize),
     Reverted,
@@ -102,6 +103,7 @@ fn step_outcome(event: &WorkerEvent) -> Option<StepOutcome> {
             });
         }
         WorkerEvent::SelectRuleSet(result) => result.is_ok(),
+        WorkerEvent::ImportRules(result) => result.is_ok(),
         WorkerEvent::AddRule(result) => result.is_ok(),
         WorkerEvent::AddRules(result) => result.is_ok(),
         WorkerEvent::RenameRuleSet(result)
@@ -138,6 +140,7 @@ impl State {
                 });
                 return;
             }
+            Job::ImportRules(id, preview, _, _) => (Some(id), false, Some(UndoNotice::RulesImported(preview.rules.len()))),
             Job::DeleteRuleSet(id) => (Some(id), true, Some(UndoNotice::SetDeleted)),
             Job::AddRules(_, _, _) if self.session.keep_temporary.is_some() => return,
             Job::RenameRuleSet(id, _)
@@ -171,8 +174,10 @@ impl State {
             _ => return,
         };
         let ids: Vec<_> = id.into_iter().cloned().collect();
+        let mut before = RuleSetsSnapshot::of(&self.config, &ids, with_active);
+        if matches!(job, Job::ImportRules(..)) { before.lists = Some(self.config.lists.clone()); }
         self.rules.history.pending = Some(Pending::Edit {
-            before: RuleSetsSnapshot::of(&self.config, &ids, with_active),
+            before,
             notice,
         });
     }
@@ -187,6 +192,7 @@ impl State {
             (Some(Pending::Edit { before, notice }), StepOutcome::Done) => Some((before, notice)),
             (Some(Pending::CreateSet { active }), StepOutcome::Created(id)) => Some((
                 RuleSetsSnapshot {
+                    lists: None,
                     sets: vec![SetSnapshot {
                         index: 0,
                         id,
@@ -242,6 +248,7 @@ impl State {
             .position(|set| set.id == applied.id)?;
         let switched = self.config.active_rule_set.as_ref() != Some(&applied.id);
         (switched || &self.config.rule_sets[index] != applied).then(|| RuleSetsSnapshot {
+                    lists: None,
             sets: vec![SetSnapshot {
                 id: applied.id.clone(),
                 index,

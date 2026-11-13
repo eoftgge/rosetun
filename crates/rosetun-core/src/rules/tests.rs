@@ -271,6 +271,7 @@ fn restoring_leaves_out_rules_of_missing_lists_and_blocks_missing_exits() {
         },
     ];
     let snapshot = RuleSetsSnapshot {
+                    lists: None,
         sets: vec![SetSnapshot {
             id: set.id.clone(),
             index: 0,

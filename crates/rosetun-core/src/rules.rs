@@ -17,6 +17,8 @@ pub enum RuleSetError {
     Store(#[from] StoreError),
     #[error("rule set does not exist")]
     SetNotFound,
+    #[error("rules changed; review the import again")]
+    ImportChanged,
     #[error("rule does not exist")]
     RuleNotFound,
     #[error("rule set name must not be empty")]
@@ -141,6 +143,7 @@ pub fn restore_rules_and_dns(
 /// Rule sets as they stood before an edit, so that the edit can be undone.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuleSetsSnapshot {
+    pub lists: Option<Vec<rosetun_config::List>>,
     pub sets: Vec<SetSnapshot>,
     /// The active set, when the edit could change which one it is.
     pub active: Option<Option<RuleSetId>>,
@@ -169,6 +172,7 @@ impl RuleSetsSnapshot {
             })
             .collect();
         Self {
+            lists: None,
             sets,
             active: with_active.then(|| config.active_rule_set.clone()),
         }
@@ -200,7 +204,10 @@ pub fn restore_rule_sets(
 ) -> Result<RestoredRuleSets, RuleSetError> {
     store.modify(|config| {
         let ids: Vec<_> = snapshot.sets.iter().map(|entry| entry.id.clone()).collect();
-        let previous = RuleSetsSnapshot::of(config, &ids, snapshot.active.is_some());
+        let mut previous = RuleSetsSnapshot::of(config, &ids, snapshot.active.is_some());
+        if let Some(lists) = &snapshot.lists {
+            previous.lists = Some(std::mem::replace(&mut config.lists, lists.clone()));
+        }
         let mut dropped = 0;
         for entry in &snapshot.sets {
             let current = config.rule_sets.iter().position(|set| set.id == entry.id);
