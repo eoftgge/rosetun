@@ -90,6 +90,11 @@ def identity(request):
         raise ValueError('invalid-duration')
     if 'windows' in request and request['windows'] is not True:
         raise ValueError('invalid-windows')
+    if 'certificates' in request:
+        pinned = request['certificates']
+        if (type(pinned) is not dict or set(pinned) != {'https_sha256', 'doh_sha256'}
+                or any(type(v) is not str or not re.fullmatch('[0-9a-f]{64}', v) for v in pinned.values())):
+            raise ValueError('invalid-certificates')
     window = request['markers']
     tunnel = tunnel_of(request)
     if request.get('windows') is True:
@@ -418,9 +423,15 @@ def start_process(config, directory, name, address, port):
     raise Refused(name + '-not-listening')
 
 
-def check_lab_fixtures(tunnel):
+def pinned(certificates, key):
+    """The hash keyword for a certificate the controller pinned; the other runs pin none."""
+    value = (certificates or {}).get(key)
+    return {} if value is None else dict(sha256=value)
+
+
+def check_lab_fixtures(tunnel, certificates=None):
     fixture(NODE_BINARY, 'missing-sing-box', sha256=tunnel['sing_box_sha256'])
-    fixture(HTTPS_CERT, 'missing-https-certificate')
+    fixture(HTTPS_CERT, 'missing-https-certificate', **pinned(certificates, 'https_sha256'))
     fixture(HTTPS_KEY, 'missing-https-key', private=True)
 
 
@@ -461,8 +472,8 @@ class EvidenceWriter:
             self.stream.close()
 
 
-def check_dns_fixtures():
-    fixture(DOH_CERT, 'missing-doh-certificate')
+def check_dns_fixtures(certificates=None):
+    fixture(DOH_CERT, 'missing-doh-certificate', **pinned(certificates, 'doh_sha256'))
     fixture(DOH_KEY, 'missing-doh-key', private=True)
 
 
@@ -470,9 +481,9 @@ def setup(request, iface, directory):
     # The role, VM, boot and one-shot run claim are checked before any mutation.
     tunnel = tunnel_of(request)
     if tunnel is not None:
-        check_lab_fixtures(tunnel)
+        check_lab_fixtures(tunnel, request.get('certificates'))
     if request.get('dns') is True:
-        check_dns_fixtures()
+        check_dns_fixtures(request.get('certificates'))
     if request.get('evidence_disk') is True:
         evidence_device()
     command('/usr/sbin/ip', 'addr', 'add', GATEWAYS[4] + '/24', 'dev', iface)
@@ -785,7 +796,7 @@ def serve(request, directory):
                     raise OSError('router-setns')
         if tunnel is not None:
             # Alive and listening, before the observer says it is ready.
-            check_lab_fixtures(tunnel)
+            check_lab_fixtures(tunnel, request.get('certificates'))
             node = start_process(node_config(tunnel), directory, 'node', GATEWAYS[4], tunnel['port'])
         if dns:
             dns_threads = [threading.Thread(target=dns_loop, args=(udp, tcp, dns_log, dns_stop), daemon=True),
@@ -930,7 +941,8 @@ def main(request):
     saved = json.loads((directory / 'identity.json').read_bytes())
     if any(saved[k] != request[k] for k in ('lab_id', 'role', 'vm_uuid', 'boot_id', 'probes', 'markers')):
         raise ValueError('wrong-run')
-    if any(saved.get(key) != request.get(key) for key in ('tunnel', 'dns', 'evidence_disk', 'duration_seconds', 'windows')):
+    if any(saved.get(key) != request.get(key) for key in ('tunnel', 'dns', 'evidence_disk', 'duration_seconds', 'windows',
+                                                       'certificates')):
         raise ValueError('wrong-run')
     if request['role'] == 'lab' and operation == 'serve':
         if request.get('interface') != iface:

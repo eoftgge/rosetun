@@ -71,6 +71,15 @@ class MarkerTests(unittest.TestCase):
                 found = wire.parse_window_marker(data, RUN)
                 self.assertIsNone(found) if data != prefix + b'.0.open.x.' else self.assertEqual((0, 'open', 'x.'), found)
 
+    def test_the_marker_run_id_is_derived_from_the_guest_run_id_as_the_script_does_it(self):
+        # run-l3.sh: printf '%s' "rosetun-lab-run:$RUN_ID" | sha256sum | cut -c1-32
+        derived = wire.marker_run_id('20261113T101010Z-0a1b2c3d')
+        self.assertEqual('fe3f3647391e07fa763fa4469adde5fa', derived)
+        self.assertNotEqual(derived, wire.marker_run_id('20261113T101010Z-0a1b2c3e'))
+        marker = wire.window_marker(derived, 3, 'open', 'connect_ks')
+        self.assertEqual((3, 'open', 'connect_ks'), wire.parse_window_marker(wire.marker_query(marker), derived))
+        self.assertEqual(b'rosetun-lab-marker:' + derived.encode() + b'.3.open.connect_ks', wire.marker_query(marker))
+
     def test_the_markers_of_stage_6b_keep_their_bytes(self):
         m = wire.markers(RUN, iter(['0' * 24, '1' * 24]).__next__)[0]
         self.assertEqual(b'rosetun-lab-marker:' + RUN.encode() + b'.' + b'0' * 24 + b'.open', wire.marker_query(m))

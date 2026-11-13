@@ -237,7 +237,7 @@ class ExecutionConfigTests(unittest.TestCase):
             execution.validate(config)
 
     def test_unknown_suite_schema_and_extra_fields_are_refused(self):
-        for change in (dict(suite='linux-l4'), dict(suite=None), dict(schema='rosetun.matrix.execution.v3'),
+        for change in (dict(suite='linux-l4'), dict(suite=None), dict(schema='rosetun.matrix.execution.v4'),
                        dict(boot_id=BOOT)):
             with self.subTest(change=change), self.assertRaises(ValueError):
                 execution.validate(dict(self.v2(), **change))

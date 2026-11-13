@@ -16,6 +16,8 @@ from .resources import _identifier, _state_path, inspect_runs
 
 SCHEMA = 'rosetun.matrix.execution.v1'
 SCHEMA_V2 = 'rosetun.matrix.execution.v2'
+# Version 3 is version 2 for the L3 suite plus the block that makes it a run inside the lab.
+SCHEMA_V3 = 'rosetun.matrix.execution.v3'
 SUITES = ('linux-l2', 'linux-l3')
 FIELDS = {'schema', 'mode', 'platform', 'state_directory', 'stand_id', 'image', 'qemu',
           'xorriso', 'content_directory', 'source_checkout', 'accounts', 'timeouts', 'deadlines'}
@@ -50,16 +52,40 @@ def validate_l3(block):
     return block
 
 
+def lab_of(config):
+    """The lab block of a version 3 configuration, else None: versions 1 and 2 never run in the lab."""
+    return config.get('lab') if config.get('schema') == SCHEMA_V3 else None
+
+
+def validate_lab(block, l3, job_timeout):
+    """The lab machine's image, the pinned fixtures of stage 7b1 and the certificates of stage 7b2a."""
+    from .lab import validate_tunnel
+    from .lab_protocol import GATEWAYS, JOB_TIMEOUT_SECONDS, TARGETS
+    exact(block, ('image', 'tunnel', 'https_cert_sha256', 'doh_cert_sha256'))
+    exact(block['image'], [f.name for f in fields(ImageDescriptor)])
+    validate_tunnel(block['tunnel'])
+    for name in ('https_cert_sha256', 'doh_cert_sha256'):
+        if type(block[name]) is not str or not re.fullmatch('[0-9a-f]{64}', block[name]):
+            raise ValueError('lab certificate hashes must be 64 lowercase hex digits')
+    # The node and the HTTPS target are the lab's own: the requests and job.env must name them.
+    if (l3['host_address'], l3['probe_address'], l3['node_port']) != (
+            GATEWAYS[4], TARGETS[4], block['tunnel']['node_port']):
+        raise ValueError('L3 addresses and node port must be those of the lab')
+    if job_timeout > JOB_TIMEOUT_SECONDS:
+        raise ValueError('the lab capture covers a job of at most ' + str(JOB_TIMEOUT_SECONDS) + ' seconds')
+
+
 def validate(config):
-    if type(config) is not dict or config.get('schema') not in (SCHEMA, SCHEMA_V2):
+    if type(config) is not dict or config.get('schema') not in (SCHEMA, SCHEMA_V2, SCHEMA_V3):
         raise ValueError('unsupported execution schema')
     if config['schema'] == SCHEMA:
         exact(config, FIELDS)
     else:
         suite = config.get('suite')
-        if suite not in SUITES:
+        if suite not in SUITES or (config['schema'] == SCHEMA_V3 and suite != 'linux-l3'):
             raise ValueError('unsupported execution suite')
-        exact(config, FIELDS | {'suite'} | ({'l3'} if suite == 'linux-l3' else set()))
+        exact(config, FIELDS | {'suite'} | ({'l3'} if suite == 'linux-l3' else set())
+              | ({'lab'} if config['schema'] == SCHEMA_V3 else set()))
         if suite == 'linux-l3':
             config['l3'] = validate_l3(config['l3'])
     if config['mode'] != 'exploratory':
@@ -87,6 +113,8 @@ def validate(config):
         raise ValueError('deadline exceeds supported stage limit')
     if config['deadlines']['execution'] != config['timeouts']['job'] + 180:
         raise ValueError('execution deadline must equal job timeout plus 180 seconds')
+    if config['schema'] == SCHEMA_V3:
+        validate_lab(config['lab'], config['l3'], config['timeouts']['job'])
     _identifier(config['stand_id'])
     for name in ('state_directory', 'content_directory', 'source_checkout'):
         _state_path(config[name])
@@ -108,6 +136,9 @@ def preflight(config, *, dry_run=False):
     from .linux_l2 import validate_package
     suite = suite_of(config)
     l3 = config.get('l3')
+    lab = lab_of(config)
+    if lab:
+        ImageDescriptor(**lab['image']).validate(state)
     extra = dict(profile='l3', sing_box_sha256=l3['sing_box_sha256'], without_requests=True) if l3 else {}
     package = validate_package(config['content_directory'], checkout=config['source_checkout'],
                                immutable=True, check_source=not dry_run, **extra)
@@ -139,9 +170,27 @@ def preflight(config, *, dry_run=False):
                    'no network', 'dry-run does not execute binary version checks']
     if l3:
         actions.insert(2, 'write the six L3 lab requests into the run directory')
-        limitations += ['the VM has no network: preflight.baseline is expected to FAIL and the '
-                        'remaining scenarios to ERROR',
-                        'the sing-box binary is hashed, never executed, on the controller']
+        if not lab:
+            limitations += ['the VM has no network: preflight.baseline is expected to FAIL and the '
+                            'remaining scenarios to ERROR']
+        limitations += ['the sing-box binary is hashed, never executed, on the controller']
+    if lab:
+        actions = ['lease', 'create the test run and the lab run with their identities',
+                   'overlays of both machines', 'evidence disk of the lab machine (64 MiB, zeroed)',
+                   'write the six L3 lab requests into the test run', 'ISO of the test run',
+                   'start the lab machine paused, resume, observe boot',
+                   'lab setup: VPN node, HTTPS target, resolver, DoH, capture to the evidence disk',
+                   'start the test machine paused, resume, observe boot',
+                   'import once', 'verify receipt', 'submit run-l3.sh once (with LAB_MARKER_ADDRESS)',
+                   'wait job timeout + 125 seconds', 'collect at most twice', 'finish the capture',
+                   'close both machines', 'read and verify the evidence disk',
+                   'split the capture into windows found from the markers',
+                   'cross-check the kill switch group against the windows', 'summary']
+        limitations = ['no controller restart recovery', 'no automatic file cleanup',
+                       'dry-run does not execute binary version checks',
+                       'only the kill switch group is judged; the other scenarios run and are reported',
+                       'some scenarios outside the group are expected to FAIL until stages 7c to 7e',
+                       'the sing-box binary is hashed, never executed, on the controller']
     return dict(schema='rosetun.matrix.execution-plan.v1', dry_run=dry_run, suite=suite,
                 configuration=config, content_hashes=package['hashes'],
                 controller_checkout=str(controller), controller_source=controller_source,

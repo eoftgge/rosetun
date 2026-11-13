@@ -554,8 +554,14 @@ class FacadeTests(test_lab.QgaFacadeTests):
         self.guest.call('probe', [])
         self.assertNotIn('evidence_disk', self.requests()[1])
         with self.assertRaisesRegex(ValueError, 'invalid-lab-option'):
-            self.guest.call('probe', [], options={'dns': True})
+            self.guest.call('probe', [], options={'shell': True})
         self.assertEqual(2, len(self.requests()))
+
+    def test_the_options_of_a_full_run_reach_the_request_too(self):
+        pinned = dict(https_sha256='a' * 64, doh_sha256='b' * 64)
+        self.guest.call('probe', [], options={'dns': True, 'windows': True, 'certificates': pinned})
+        request = self.requests()[0]
+        self.assertEqual((True, True, pinned), (request['dns'], request['windows'], request['certificates']))
 
     def test_a_longer_lifetime_keeps_the_facade_usable_for_a_long_capture(self):
         long = lab.Guest(self.vm, 'test', 'a' * 32, clock=lambda: self.clock, sleep=lambda _: None, lifetime=90 + 1800)

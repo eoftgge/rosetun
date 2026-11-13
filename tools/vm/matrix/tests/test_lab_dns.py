@@ -338,6 +338,37 @@ class RequestTests(Base):
         self.assertEqual([(self.entry.DOH_CERT, 'missing-doh-certificate', {}),
                           (self.entry.DOH_KEY, 'missing-doh-key', dict(private=True))], calls)
 
+    def test_pinned_certificates_are_checked_by_hash_and_unpinned_ones_as_before(self):
+        pinned = dict(https_sha256='a' * 64, doh_sha256='b' * 64)
+        calls = []
+        with patch.object(self.entry, 'fixture', lambda path, reason, **kw: calls.append((reason, kw))):
+            self.entry.check_dns_fixtures(pinned)
+            self.entry.check_lab_fixtures(self.request['tunnel'], pinned)
+            self.entry.check_dns_fixtures()
+            self.entry.check_lab_fixtures(self.request['tunnel'])
+        self.assertEqual(('missing-doh-certificate', dict(sha256='b' * 64)), calls[0])
+        self.assertEqual(('missing-https-certificate', dict(sha256='a' * 64)), calls[3])
+        self.assertEqual(('missing-doh-certificate', {}), calls[5])
+        self.assertEqual(('missing-https-certificate', {}), calls[8])
+
+    def test_a_certificate_that_differs_from_its_pin_is_a_refusal_before_any_network_change(self):
+        request = dict(self.request, dns=True, certificates=dict(https_sha256='a' * 64, doh_sha256='b' * 64))
+        def fixture(path, reason, **kw):
+            if kw.get('sha256') == 'b' * 64:
+                raise self.entry.Refused(reason + '-hash')
+        with patch.object(self.entry, 'command', side_effect=AssertionError('network change')),                 patch.object(self.entry, 'fixture', fixture):
+            with self.assertRaisesRegex(self.entry.Refused, 'missing-doh-certificate-hash'):
+                self.entry.setup(request, 'enp7s0', Path('unused'))
+
+    def test_the_request_may_pin_the_two_certificates_and_nothing_else(self):
+        plain = {k: v for k, v in self.request.items() if k != 'tunnel'}
+        good = dict(https_sha256='a' * 64, doh_sha256='b' * 64)
+        for value in (dict(https_sha256='a' * 64), dict(good, extra='c' * 64), dict(good, doh_sha256='B' * 64),
+                      dict(good, doh_sha256='b' * 63), [], None, 'a' * 64):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, 'invalid-certificates'):
+                self.identity(dict(plain, certificates=value))
+        self.assertEqual('enp7s0', self.identity(dict(plain, certificates=good)))
+
     def run_setup(self, request):
         commands = []
         with tempfile.TemporaryDirectory() as temp:

@@ -1,6 +1,7 @@
 """Fixed lab wire contract, strict offline evidence qualification and leak verdict."""
 import base64
 import binascii
+import hashlib
 import ipaddress
 import math
 import re
@@ -159,6 +160,16 @@ def answer(probe):
     if probe['service'].startswith('dns'):
         return q[:2] + b'\x84\x00\x00\x01\x00\x01\x00\x00\x00\x00' + q[12:] + b'\xc0\x0c\x00\x01\x00\x01\x00\x00\x00\x00\x00\x04\xcb\x00\x71\x02'
     return b'rosetun-lab:' + token(probe)
+
+
+def marker_run_id(guest_run_id):
+    """The 32 hexadecimal digits a window marker carries, derived from the guest's run ID.
+
+    The marker grammar wants 32 hexadecimal digits and the script in the guest knows only its
+    own run ID (`YYYYMMDDTHHMMSSZ-xxxxxxxx`). Both sides compute the same digits from it;
+    run-l3.sh does it with `sha256sum`, and the lab machine's run uses them as its lab ID.
+    """
+    return hashlib.sha256(b'rosetun-lab-run:' + guest_run_id.encode('ascii')).hexdigest()[:32]
 
 
 def window_marker(run_id, index, word, label):

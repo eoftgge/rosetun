@@ -42,6 +42,8 @@ def main(argv=None):
     run.add_argument('suite', choices=['linux-l2', 'linux-l3'])
     run.add_argument('--config', required=True)
     run.add_argument('--dry-run', action='store_true')
+    run.add_argument('--lab', action='store_true',
+                     help='run linux-l3 inside the two-machine lab (needs an execution.v3 configuration)')
     plan = commands.add_parser("plan", help="write a deterministic catalog snapshot to stdout")
     plan.add_argument("suite", choices=[*SUITES, "windows-list", "windows-proxy"])
     plan.add_argument("--without-host-node", action="store_true", help="plan the limited Windows Proxy variant")
@@ -69,15 +71,18 @@ def main(argv=None):
             result = plan_lab(config, **options) if args.dry_run else lab_smoke(config, canary=args.canary, **options)
             code = 0 if args.dry_run else result['exit_code']
         elif args.command == 'run':
-            from .execution import load_execution, preflight, suite_of
+            from .execution import lab_of, load_execution, preflight, suite_of
             config = load_execution(args.config)
             if suite_of(config) != args.suite:
                 raise ValueError('configuration is for another suite')
+            # A version 3 configuration is the lab's and nothing else's; versions 1 and 2 never are.
+            if args.lab != (lab_of(config) is not None):
+                raise ValueError('--lab and the lab block of the configuration go together')
             if args.dry_run:
                 result, code = preflight(config, dry_run=True), 0
             else:
-                from . import orchestrator
-                result = (orchestrator.run_linux_l3 if args.suite == 'linux-l3'
+                from . import l3_lab, orchestrator
+                result = (l3_lab.run_linux_l3_lab if args.lab else orchestrator.run_linux_l3 if args.suite == 'linux-l3'
                           else orchestrator.run_linux_l2)(config)
                 code = result['exit_code']
         elif args.command == "recover" and args.archive:
