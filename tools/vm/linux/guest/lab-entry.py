@@ -52,6 +52,9 @@ HTTPS_COUNT_KEYS = 64
 HTTPS_HEAD_LIMIT = 4096
 # The client's log in the helper's answer, which as a whole may not pass LOG_LIMIT.
 CLIENT_LOG_LIMIT = 4096
+# How much of the node's own log is read back, and the line that stands where older lines were dropped.
+NODE_LOG_READ = 1024 * 1024
+NODE_LOG_CUT = b'[earlier lines dropped]\n'
 L3_BODY = b'rosetun-lab-target\n'
 REFUSAL_ROWS = 8
 TUNNEL_KEYS = {'port', 'method', 'password', 'sing_box_sha256', 'ca_sha256', 'https'}
@@ -464,8 +467,11 @@ def probe_all(request):
 
 
 def node_config(tunnel):
-    """The node: one Shadowsocks inbound on the lab address, direct out, no DNS and no other inbound."""
-    return {'log': {'level': 'warn', 'timestamp': False},
+    """The node: one Shadowsocks inbound on the lab address, direct out, no DNS and no other inbound.
+
+    Its log is at `info` so that it names every connection it takes and the destination it opens.
+    """
+    return {'log': {'level': 'info', 'timestamp': False},
             'inbounds': [{'type': 'shadowsocks', 'tag': 'node-in', 'listen': GATEWAYS[4],
                           'listen_port': tunnel['port'], 'method': tunnel['method'],
                           'password': tunnel['password']}],
@@ -498,10 +504,8 @@ def dns_client_config(tunnel):
     return config
 
 
-def scrub_log(raw):
-    """A bounded sing-box log with every address outside the documentation ranges blanked."""
-    text = raw[:LOG_LIMIT].decode('utf-8', 'replace')
-
+def blank_foreign_addresses(text):
+    """The text with every address outside the documentation ranges replaced by `[address]`."""
     def keep(match):
         try:
             address = ipaddress.ip_address(match.group(0))
@@ -509,8 +513,48 @@ def scrub_log(raw):
             return '[address]'
         return match.group(0) if any(address in net for net in LAB_NETWORKS) else '[address]'
 
-    text = re.sub(r'[0-9]{1,3}(?:\.[0-9]{1,3}){3}|[0-9a-fA-F]*:[0-9a-fA-F:]*:[0-9a-fA-F]*', keep, text)
+    return re.sub(r'[0-9]{1,3}(?:\.[0-9]{1,3}){3}|[0-9a-fA-F]*:[0-9a-fA-F:]*:[0-9a-fA-F]*', keep, text)
+
+
+def scrub_log(raw):
+    """A bounded sing-box log with every address outside the documentation ranges blanked."""
+    text = blank_foreign_addresses(raw[:LOG_LIMIT].decode('utf-8', 'replace'))
     return text.encode('utf-8')[:LOG_LIMIT]
+
+
+def node_log(raw, cut=False):
+    """The node's log as `node.log` keeps it: the last lines that fit `LOG_LIMIT`, addresses blanked.
+
+    At `info` the node writes a line for every connection, so a long run overflows. The oldest
+    lines go and one line in front says so; that line is part of the text and is not a fault of the
+    observer. `cut` says the first line of `raw` is the tail of a longer one.
+    """
+    lines = re.findall(r'[^\n]*\n|[^\n]+', blank_foreign_addresses(raw.decode('utf-8', 'replace')))
+    dropped = bool(cut)
+    if cut:
+        lines = lines[1:]
+    kept, size = [], len(NODE_LOG_CUT)
+    for line in reversed(lines):
+        size += len(line.encode('utf-8'))
+        if size > LOG_LIMIT:
+            dropped = True
+            break
+        kept.append(line)
+    text = ''.join(reversed(kept))
+    if dropped:
+        text = NODE_LOG_CUT.decode('ascii') + text
+    return text.encode('utf-8')[:LOG_LIMIT]
+
+
+def read_tail(path, limit):
+    """The last `limit` bytes of a file (empty if it is missing) and whether earlier bytes were left out."""
+    if not path.exists():
+        return b'', False
+    size = path.stat().st_size
+    with path.open('rb') as stream:
+        if size > limit:
+            stream.seek(size - limit)
+        return stream.read(limit), size > limit
 
 
 def short_code(error, limit=48):
@@ -1240,8 +1284,7 @@ def serve(request, directory):
 
     def write_node_log():
         with (directory / 'node.log').open('xb') as stream:
-            stream.write(scrub_log((directory / 'node.stderr').read_bytes()
-                                   if (directory / 'node.stderr').exists() else b''))
+            stream.write(node_log(*read_tail(directory / 'node.stderr', NODE_LOG_READ)))
 
     try:
         place = 'capture'

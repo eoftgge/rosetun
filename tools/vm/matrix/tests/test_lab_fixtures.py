@@ -195,6 +195,11 @@ class ConfigTests(Base):
         self.assertEqual({'final': 'direct'}, config['route'])
         self.assertNotIn('dns', config)
 
+    def test_the_node_logs_at_info_and_the_clients_stay_at_warn(self):
+        self.assertEqual('info', self.entry.node_config(self.tunnel)['log']['level'])
+        self.assertEqual('warn', self.entry.client_config(self.tunnel)['log']['level'])
+        self.assertEqual('warn', self.entry.dns_client_config(self.tunnel)['log']['level'])
+
     def test_the_client_listens_on_loopback_only_and_leaves_through_the_node(self):
         config = self.entry.client_config(self.tunnel)
         self.assertEqual([dict(type='socks', tag='socks-in', listen='127.0.0.1',
@@ -223,6 +228,51 @@ class LogTests(Base):
         text = self.entry.scrub_log(b'x' * (wire.LOG_LIMIT * 2))
         self.assertEqual(wire.LOG_LIMIT, len(text))
         self.assertTrue(self.entry.scrub_log(b'\xff\xfe broken'))
+
+
+class NodeLogTests(Base):
+    LINES = (b'INFO inbound/shadowsocks[node-in]: inbound connection from 192.0.2.2:43000\n'
+             b'INFO inbound/shadowsocks[node-in]: inbound connection to 203.0.113.2:443\n'
+             b'INFO [1 2ms] outbound/direct[direct]: outbound connection to 203.0.113.2:443\n')
+
+    def test_a_short_node_log_is_the_scrubbed_log_without_a_mark(self):
+        self.assertEqual(self.entry.scrub_log(self.LINES), self.entry.node_log(self.LINES))
+        self.assertNotIn(self.entry.NODE_LOG_CUT, self.entry.node_log(self.LINES))
+        self.assertEqual(b'', self.entry.node_log(b''))
+
+    def test_the_node_log_names_the_destinations_and_blanks_foreign_addresses(self):
+        raw = self.LINES + (b'INFO [3 1ms] outbound/direct[direct]: outbound connection to 8.8.8.8:53\n'
+                            b'ERROR [4 1ms] outbound/direct[direct]: dial tcp 2606:4700::1111:443: timeout\n')
+        text = self.entry.node_log(raw).decode()
+        self.assertIn('inbound connection to 203.0.113.2:443', text)
+        self.assertIn('outbound connection to 203.0.113.2:443', text)
+        for gone in ('8.8.8.8', '2606:4700::1111'):
+            self.assertNotIn(gone, text)
+        self.assertEqual(2, text.count('[address]'))
+
+    def test_a_long_node_log_keeps_its_last_lines_whole_behind_a_mark(self):
+        rows = [b'INFO outbound connection to 203.0.113.%d:%d\n' % (n % 250, 1000 + n) for n in range(2000)]
+        raw = b''.join(rows)
+        self.assertGreater(len(raw), wire.LOG_LIMIT)
+        kept = self.entry.node_log(raw)
+        self.assertLessEqual(len(kept), wire.LOG_LIMIT)
+        self.assertTrue(kept.startswith(self.entry.NODE_LOG_CUT))
+        body = kept[len(self.entry.NODE_LOG_CUT):]
+        self.assertTrue(raw.endswith(body))
+        self.assertTrue(body.startswith(b'INFO '))
+        self.assertEqual(rows[-1], body.splitlines(True)[-1])
+
+    def test_the_partial_first_line_of_a_cut_tail_is_dropped_and_the_cut_is_marked(self):
+        kept = self.entry.node_log(b'0:443\n' + self.LINES, cut=True)
+        self.assertEqual(self.entry.NODE_LOG_CUT + self.LINES, kept)
+
+    def test_the_tail_of_a_file_is_read_with_the_fact_that_earlier_bytes_were_left_out(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / 'node.stderr'
+            self.assertEqual((b'', False), self.entry.read_tail(path, 10))
+            path.write_bytes(b'0123456789abcdef')
+            self.assertEqual((b'0123456789abcdef', False), self.entry.read_tail(path, 16))
+            self.assertEqual((b'6789abcdef', True), self.entry.read_tail(path, 10))
 
 
 class ProcessTests(Base):
