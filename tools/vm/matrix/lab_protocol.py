@@ -140,6 +140,39 @@ def https_exchanges(run_id, nonce_factory):
     return result
 
 
+DNS_CHECK_DOH = 'dns-doh-singbox'
+
+
+def dns_checks(run_id, nonce_factory):
+    """The two name lookups of `lab-smoke --dns`.
+
+    `plain` is a probe-like exchange (service `dns-plain`): a stdlib A question over UDP from the
+    test machine to the resolver. `doh` is an HTTPS exchange to the target, made by a sing-box
+    client that must resolve its name through the DoH target and the node first. Each name is
+    `<run>.<nonce>.lab.test`, so a row of the resolver's log tells which lookup it was.
+    """
+    plain = dict(run_id=run_id, nonce=nonce_factory(), family=4, service='dns-plain', protocol='udp',
+                 source=CLIENTS[4], target=RESOLVER, port=53)
+    doh = dict(run_id=run_id, nonce=nonce_factory(), kind=DNS_CHECK_DOH, family=4, protocol='tcp',
+               source=CLIENTS[4], target=TARGETS[4], port=HTTPS_PORT)
+    doh['path'] = '/' + run_id + '/' + doh['nonce']
+    return dict(plain=plain, doh=doh)
+
+
+def dns_name(check):
+    return token(check).decode('ascii')
+
+
+def plain_reply_ok(check, reply):
+    """Whether `reply` is the resolver's answer to the plain question: the one fixed address."""
+    question = query(check)[12:]
+    if len(reply) != 12 + len(question) + 16 or reply[:2] != query(check)[:2]:
+        return False
+    flags, questions, answers = struct.unpack_from('!HHH', reply, 2)
+    return (flags & 0x800f == 0x8000 and questions == 1 and answers == 1 and reply[12:12 + len(question)] == question
+            and reply[-4:] == bytes(map(int, DNS_ANSWER.split('.'))))
+
+
 def https_answer(exchange):
     return b'rosetun-lab-https:' + (exchange['run_id'] + '.' + exchange['nonce']).encode('ascii')
 
@@ -347,6 +380,9 @@ def parse_evidence_header(block, run_id):
 
 
 def _needle(probe, direction):
+    if probe['service'] == 'dns-plain':
+        # The resolver's reply is its own message, not the 6a answer; it repeats the question.
+        return query(probe)[12:-4]
     if direction == 'request':
         return query(probe)[12:-4] if probe['service'].startswith('dns') else token(probe)
     return answer(probe)

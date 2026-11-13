@@ -22,7 +22,8 @@ from .resources import (StandLease, create_run, completion_verified, resource_pa
                         EXECUTION_FILES, _identifier, _state_path)
 from .orchestrator import save, failure, _RETAINED_LEASES
 from .lab_protocol import (MACS, CAPTURE_LIMIT, LOG_LIMIT, PORTS, CANARY_PORT, HTTPS_PORT, SOCKS_PORT, EGRESS,
-                           probes, markers, qualify, leak_verdict, https_exchanges, https_answer,
+                           probes, markers, qualify, leak_verdict, https_exchanges, https_answer, dns_checks, dns_name,
+                           plain_reply_ok, DNS_CHECK_DOH, DOH_NAME, RESOLVER, DOH_ADDRESS,
                            DURATION, DURATION_MAX, EVIDENCE_SIZE, EVIDENCE_PCAP_LIMIT, EVIDENCE_HEADER_SIZE,
                            EVIDENCE_SERIAL, parse_evidence_header)
 
@@ -81,11 +82,13 @@ def validate(config):
     return config
 
 
-def plan_lab(config, *, tunnel=False, evidence_disk=False):
+def plan_lab(config, *, tunnel=False, evidence_disk=False, dns=False):
     """Read only: no lease, directories, subprocesses or sockets."""
     validate(config)
     if tunnel and config['schema'] != SCHEMA_V2:
         raise ValueError('lab-tunnel-requires-v2')
+    if dns and not tunnel:
+        raise ValueError('lab-dns-requires-tunnel')
     state = _state_path(config['state_directory'])
     QemuConfig(**config['qemu']).validate()
     for role in MACS:
@@ -94,6 +97,9 @@ def plan_lab(config, *, tunnel=False, evidence_disk=False):
                 topology='test -> inherited AF_UNIX stream pair -> lab -> guest namespace',
                 roles=MACS, capture_limit=CAPTURE_LIMIT, duration_seconds=60,
                 qualification='UNRUN', security_invariants='UNVERIFIED', release_gate=False)
+    if dns:
+        plan['dns'] = dict(resolver=RESOLVER, doh=DOH_ADDRESS, doh_name=DOH_NAME,
+                           exchanges=['dns-plain', DNS_CHECK_DOH])
     if evidence_disk:
         plan['evidence_disk'] = dict(size_bytes=EVIDENCE_SIZE, pcap_limit_bytes=EVIDENCE_PCAP_LIMIT,
                                      serial=EVIDENCE_SERIAL, role='lab')
@@ -232,7 +238,8 @@ class Guest:
             if tunnel is not None:
                 request['tunnel'] = tunnel
             if options:
-                if not set(options) <= {'evidence_disk', 'duration_seconds', 'dns', 'windows', 'certificates'}:
+                if not set(options) <= {'evidence_disk', 'duration_seconds', 'dns', 'dns_check', 'windows',
+                                        'certificates'}:
                     raise ValueError('invalid-lab-option')
                 request.update(options)
             self.vm.qga.jobs_enabled = True
@@ -364,6 +371,36 @@ def tunnel_summary(exchanges, reports, log, health, categories):
         client_exit=client if type(client) is int else None)
 
 
+def dns_summary(checks, reports, dns_log, https_log):
+    """What the DNS check proved, from the helper's answers and the resolver's and target's own logs."""
+    reports = reports if type(reports) is dict else {}
+    plain, doh = checks['plain'], checks['doh']
+    rows = [row for row in dns_log if type(row) is dict]
+    reached = [row for row in https_log if type(row) is dict and row.get('path') == doh['path']]
+    sent = reports.get('plain')
+    answered = reports.get('doh')
+    plain_rows = [row for row in rows if row.get('name') == dns_name(plain)]
+    doh_rows = [row for row in rows if row.get('name') == dns_name(doh)]
+    code = reports.get('client_exit')
+    return dict(
+        plain=(type(sent) is dict and plain_reply_ok(plain, bytes.fromhex(sent.get('response', '')))
+               and len(plain_rows) == 1 and (plain_rows[0].get('source'), plain_rows[0].get('transport'),
+                                             plain_rows[0].get('type')) == (plain['source'], 'udp', 'A')),
+        doh_via_node=(type(answered) is dict and answered.get('response') == https_answer(doh).hex()
+                      and len(doh_rows) >= 1 and all((row.get('source'), row.get('transport')) == (EGRESS, 'doh')
+                                                     for row in doh_rows)
+                      and len(reached) == 1 and reached[0].get('source') == EGRESS),
+        doh_requests=sum(row.get('transport') == 'doh' for row in rows),
+        client_exit=code if type(code) is int else None,
+        client_log=reports.get('client_log') if type(reports.get('client_log')) is str else None)
+
+
+def dns_ok(result):
+    """The DNS check, when it was asked for: both lookups proven by the logs of the lab."""
+    block = result.get('dns')
+    return block is None or (block['plain'] is True and block['doh_via_node'] is True)
+
+
 def tunnel_ok(result):
     """Everything a tunnel run needs beyond the ordinary or canary condition."""
     block = result.get('tunnel')
@@ -372,8 +409,8 @@ def tunnel_ok(result):
 
 
 def lab_smoke(config, *, canary=False, tunnel=False, evidence_disk=False, duration_seconds=None,
-              adapters=None, clock=time.monotonic, sleep=time.sleep):
-    plan_lab(config, tunnel=tunnel)
+              dns=False, adapters=None, clock=time.monotonic, sleep=time.sleep):
+    plan_lab(config, tunnel=tunnel, dns=dns)
     if duration_seconds is not None and (type(duration_seconds) is not int
                                          or not DURATION <= duration_seconds <= DURATION_MAX):
         raise ValueError('lab-duration-out-of-range')
@@ -383,8 +420,10 @@ def lab_smoke(config, *, canary=False, tunnel=False, evidence_disk=False, durati
     window = markers(lab_id, lambda: secrets.token_hex(12))
     exchanges = https_exchanges(lab_id, lambda: secrets.token_hex(12)) if tunnel else []
     extra = dict(tunnel=tunnel_request(config, exchanges)) if tunnel else {}
+    checks = dns_checks(lab_id, lambda: secrets.token_hex(12)) if dns else None
     request_options = {**({'evidence_disk': True} if evidence_disk else {}),
-               **({'duration_seconds': duration_seconds} if duration_seconds is not None else {})}
+               **({'duration_seconds': duration_seconds} if duration_seconds is not None else {}),
+               **({'dns': True, 'dns_check': checks} if dns else {})}
     if request_options:
         extra['options'] = request_options
     result = dict(schema='rosetun.matrix.lab-summary.v1', lab_id=lab_id, readiness={},
@@ -401,6 +440,8 @@ def lab_smoke(config, *, canary=False, tunnel=False, evidence_disk=False, durati
         # Stage 6a and 6b summaries gain nothing; only a tunnel run carries these.
         result.update(https=exchanges, tunnel=dict(direct=False, via_node=False, tunnel_frames=0,
                       node=dict(alive_at_finish=False, exit_code=None), client_exit=None))
+    if dns:
+        result['dns'] = dict(plain=False, doh_via_node=False, doh_requests=0, client_exit=None, client_log=None)
     lease, pair, runs, vms = None, None, {}, {}
     try:
         adapters.host()
@@ -421,7 +462,7 @@ def lab_smoke(config, *, canary=False, tunnel=False, evidence_disk=False, durati
             save(run, 'execution-summary.json', result, initial=True)
             adapters.prepare(run, ImageDescriptor(**config[role + '_image']), QemuConfig(**config['qemu']))
         pair = adapters.pair(lease, runs, lab_id, **({'tunnel': True} if tunnel else {}),
-                             **({'evidence_disk': True} if evidence_disk else {}))
+                             **({'evidence_disk': True} if evidence_disk else {}), **({'dns': True} if dns else {}))
         for role in MACS:
             vm = adapters.start(runs[role], lab=pair)
             vms[role] = vm
@@ -437,11 +478,12 @@ def lab_smoke(config, *, canary=False, tunnel=False, evidence_disk=False, durati
         ready = lab.call('setup', expected, window, **extra)
         if ready.get('capture_ready') is not True:
             raise ValueError('capture-not-ready')
-        sent, reports = {}, None
+        sent, reports, dns_reports = {}, None, None
         try:
             probed = test.call('probe', expected, window, canary=canary, **extra)
             replies, marker_replies, sent = probed['replies'], probed['marker_replies'], probed['marker_sent']
             reports = probed.get('https')
+            dns_reports = probed.get('dns')
         except Exception as error:
             result['errors'].append(failure('probe', error))
             replies, marker_replies = [], []
@@ -453,6 +495,8 @@ def lab_smoke(config, *, canary=False, tunnel=False, evidence_disk=False, durati
             files = (('capture.pcap', CAPTURE_LIMIT),) + files
         if tunnel:
             files += (('https.json', LOG_LIMIT), ('node.log', LOG_LIMIT))
+        if dns:
+            files += (('dns.json', LOG_LIMIT),)
         for name, limit in files:
             raw = lab.read(name, limit)
             try:
@@ -493,12 +537,15 @@ def lab_smoke(config, *, canary=False, tunnel=False, evidence_disk=False, durati
                                direct_report.get('client_port') if type(direct_report) is dict else None)))
         if evidence_disk:
             options['limit'] = EVIDENCE_PCAP_LIMIT
-        verdict = leak_verdict(evidence['capture.pcap'], expected, window, health, ready['capture_ready'],
-                               marker_replies, **options)
+        # The plain lookup is a probe by its tuple and its question; everything else of DNS is a leak.
+        verdict = leak_verdict(evidence['capture.pcap'], expected + ([checks['plain']] if dns else []), window,
+                               health, ready['capture_ready'], marker_replies, **options)
         verdict['window'] = dict(verdict['window'], test_clock_sent=sent)
         result.update(verdict)
         if tunnel:
             result['tunnel'] = tunnel_summary(exchanges, reports, log, health, verdict['categories'])
+        if dns:
+            result['dns'] = dns_summary(checks, dns_reports, json.loads(evidence['dns.json']), log)
         result['qualification'] = qualify(expected, replies, json.loads(evidence['targets.json']),
                     evidence['capture.pcap'], ready['capture_ready'], health,
                     **({'limit': EVIDENCE_PCAP_LIMIT} if evidence_disk else {}))
@@ -537,7 +584,7 @@ def lab_smoke(config, *, canary=False, tunnel=False, evidence_disk=False, durati
             if result['exit_code'] != 130:
                 result['exit_code'] = 0 if (result['completed'] and not result['errors']
                                             and result['qualification']['qualified'] and expected_leak(result)
-                                            and tunnel_ok(result)) else 2
+                                            and tunnel_ok(result) and dns_ok(result)) else 2
             for run in runs.values():
                 try:
                     save(run, 'execution-summary.json', result)

@@ -2662,6 +2662,60 @@ splits the capture. `windows_expected` lists the expected windows as
    similar answers (this proves the DoH certificate chain and name). The
    controller has no command that holds such a run open yet.
 
+### `lab-smoke --dns`: the resolver and DoH with sing-box
+
+Stage 7b2a switched the resolver and the DoH target on only for a request with `dns: true`, which no
+command sent. `lab-smoke --tunnel --dns` (also with `--evidence-disk` and `--dry-run`; without
+`--tunnel` it is refused before anything starts) sends that request to both helpers and adds two
+exchanges to the test, after `https-tunnel` and before the closing marker. The question this
+answers on the stand: does the DoH client of sing-box 1.14.3 accept a server that speaks only
+HTTP/1.1? Every connection of stage 7b2b depends on it.
+
+- `dns-plain`: a stdlib `A` question over UDP from `192.0.2.2` to `203.0.113.53:53` for
+  `<run>.<nonce>.lab.test`. The answer must be the one fixed address `203.0.113.2`. In the
+  observer these frames are a `probe` by their tuple and the question they carry (as the exchanges
+  of 6a); any other frame to the resolver or to `203.0.113.3`, and any other UDP 53, is `unexpected`.
+- `dns-doh-singbox`: a second throwaway sing-box client of the test machine, with the DNS server of
+  Rosetun (`render.rs::dns_section`: `type` `https`, `server` `203.0.113.3`, `tls.server_name`
+  `doh.lab.test`, `detour` to the node), Shadowsocks out to the node, and one rule
+  `{"action": "resolve", "server": "dns-proxy"}`. The helper asks its SOCKS inbound for
+  `<run>.<nonce>.lab.test:443` as a domain and then speaks TLS with `server_hostname`
+  `203.0.113.2` (the certificate of the target is for the IP). The target answers with the nonce.
+
+The whole client configuration:
+
+```json
+{"log": {"level": "warn", "timestamp": false},
+ "inbounds": [{"type": "socks", "tag": "socks-in", "listen": "127.0.0.1", "listen_port": 10808}],
+ "outbounds": [{"type": "shadowsocks", "tag": "node", "server": "192.0.2.1", "server_port": 8388,
+                "method": "aes-128-gcm", "password": "<lab-only password of the template>"}],
+ "dns": {"servers": [{"type": "https", "tag": "dns-proxy", "server": "203.0.113.3",
+                      "tls": {"server_name": "doh.lab.test"}, "detour": "node"}]},
+ "route": {"rules": [{"action": "resolve", "server": "dns-proxy"}], "final": "node"}}
+```
+
+It differs from what Rosetun renders in three places: the outbound is tagged `node`, not `proxy`;
+the inbound is SOCKS, not TUN; and the `resolve` rule names the server, where Rosetun's bare
+`resolve` only prepares address rules. The DNS server entry is the same, with the default port 443
+and path `/dns-query`. One open point: whether sing-box sends the resolved address or still the
+domain to the Shadowsocks server after `resolve` was not checked offline. If it sends the domain, the
+node would have to resolve it itself and fail, and `dns.json` would show no DoH question: the check
+then fails, which is the answer.
+
+`--dns` exits 0 only when everything `--tunnel` needs holds and also: `dns.json` has exactly one
+`udp` question for the `dns-plain` name from `192.0.2.2`; every question for the `dns-doh-singbox`
+name came by `doh` from `203.0.113.1` (through the node) and there is at least one; the target logged
+exactly one request for the `dns-doh-singbox` path, from `203.0.113.1`; the helper saw both answers;
+`leak` is `NONE`. The summary gains `dns` (`plain`, `doh_via_node`, `doh_requests`, `client_exit` and
+the first 4 KiB of the client's log with addresses outside the documentation ranges blanked).
+Summaries without `--dns` are unchanged, as are the requests of every other run.
+
+**Reinstall.** `linux/guest/lab-entry.py` and `matrix/lab_protocol.py` changed: the owner installs
+them in **both** images again and updates the descriptors.
+
+Manual check: `lab-smoke --tunnel --dns --evidence-disk`, exit 0. If `dns-doh-singbox` fails, keep
+`node.log`, the `dns` block with the client's log, and `dns.json` of the lab run.
+
 ## Stage 7b2b: the L3 kill switch group in the lab
 
 Stage 7b2b runs the real Linux L3 stage through the lab: `run linux-l3 --lab` starts the lab

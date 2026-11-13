@@ -26,7 +26,8 @@ from lab_protocol import (MACS, CLIENTS, GATEWAYS, TARGETS, PORTS, SERVICES, CAP
                           RESOLVER, DOH_ADDRESS, DNS_LOG_ENTRIES, DOH_BODY_LIMIT, DOH_HEAD_LIMIT,
                           dns_reply, doh_reply, parse_request_head, http_response,
                           EVIDENCE_PCAP_LIMIT, EVIDENCE_HEADER_SIZE, DURATION_MAX, evidence_header,
-                          WINDOW_LIMIT, ACK_PREFIX, parse_window_marker)
+                          WINDOW_LIMIT, ACK_PREFIX, parse_window_marker, DNS_CHECK_DOH, DOH_NAME,
+                          dns_name, plain_reply_ok)
 
 ROOT = Path('/run/rosetun-lab')
 ENTRY = '/usr/local/libexec/rosetun-lab/entry'
@@ -90,6 +91,8 @@ def identity(request):
         raise ValueError('invalid-duration')
     if 'windows' in request and request['windows'] is not True:
         raise ValueError('invalid-windows')
+    if 'dns_check' in request:
+        dns_check_of(request)
     if 'certificates' in request:
         pinned = request['certificates']
         if (type(pinned) is not dict or set(pinned) != {'https_sha256', 'doh_sha256'}
@@ -111,9 +114,33 @@ def identity(request):
                 or (m['family'], m['service'], m['protocol']) != (4, 'marker', 'udp')
                 or m['source'] != CLIENTS[4] or m['target'] != TARGETS[4] or m['port'] != PORTS['marker']):
             raise ValueError('foreign-marker')
-    if tunnel is not None and len({m['nonce'] for m in window + expected + tunnel['https']}) != len(window) + 10:
+    checks = dns_check_of(request) if 'dns_check' in request else None
+    extra = [checks['plain'], checks['doh']] if checks else []
+    if tunnel is not None and len({m['nonce'] for m in window + expected + tunnel['https'] + extra}) != (
+            len(window) + 10 + len(extra)):
         raise ValueError('invalid-tunnel')
     return iface
+
+
+def dns_check_of(request):
+    """The validated `dns_check` block: it needs the resolver, the DoH target and the tunnel."""
+    checks = request['dns_check']
+    if (request.get('dns') is not True or 'tunnel' not in request or type(checks) is not dict
+            or set(checks) != {'plain', 'doh'} or not all(type(v) is dict for v in checks.values())):
+        raise ValueError('invalid-dns-check')
+    plain, doh = checks['plain'], checks['doh']
+    for e in (plain, doh):
+        if (e.get('run_id') != request['lab_id'] or type(e.get('nonce')) is not str or len(e['nonce']) != 24
+                or any(c not in '0123456789abcdef' for c in e['nonce']) or e.get('family') != 4
+                or e.get('source') != CLIENTS[4]):
+            raise ValueError('foreign-dns-check')
+    if (set(plain) != {'run_id', 'nonce', 'family', 'service', 'protocol', 'source', 'target', 'port'}
+            or (plain['service'], plain['protocol'], plain['target'], plain['port']) != ('dns-plain', 'udp', RESOLVER, 53)):
+        raise ValueError('foreign-dns-check')
+    if (set(doh) != HTTPS_KEYS or (doh['kind'], doh['protocol'], doh['target'], doh['port'])
+            != (DNS_CHECK_DOH, 'tcp', TARGETS[4], HTTPS_PORT) or doh['path'] != '/' + doh['run_id'] + '/' + doh['nonce']):
+        raise ValueError('foreign-dns-check')
+    return checks
 
 
 def tunnel_of(request):
@@ -319,6 +346,49 @@ def probe_tunnel(request):
                 tunnel=dict(via_node, response=tunnel_response.hex()), client_exit=client_exit)
 
 
+def socks_connect_domain(sock, name, port):
+    """The SOCKS5 handshake and one CONNECT to a domain name: the client has to resolve it."""
+    sock.sendall(b'\x05\x01\x00')
+    if receive(sock, 2) != b'\x05\x00':
+        raise ValueError('socks-method-refused')
+    raw = name.encode('ascii')
+    sock.sendall(b'\x05\x01\x00\x03' + bytes([len(raw)]) + raw + struct.pack('!H', port))
+    head = receive(sock, 4)
+    if head[:3] != b'\x05\x00\x00' or head[3] not in (1, 4):
+        raise ValueError('socks-connect-refused')
+    receive(sock, (4 if head[3] == 1 else 16) + 2)
+
+
+def probe_dns(request):
+    """dns-plain over UDP, then dns-doh-singbox: a sing-box client that resolves through the node and DoH."""
+    checks = request['dns_check']
+    plain, doh = checks['plain'], checks['doh']
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        sock.settimeout(2)
+        sock.bind((plain['source'], 0))
+        sock.connect((plain['target'], plain['port']))
+        sock.send(query(plain))
+        reply = sock.recv(512)
+    if not plain_reply_ok(plain, reply):
+        raise ValueError('unexpected-resolver-answer')
+    directory = ROOT / request['lab_id']
+    directory.mkdir(mode=0o700, exist_ok=True)
+    client = start_process(dns_client_config(request['tunnel']), directory, 'dns-client', '127.0.0.1', SOCKS_PORT)
+    context = ssl.create_default_context()
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.settimeout(5)
+            sock.connect(('127.0.0.1', SOCKS_PORT))
+            socks_connect_domain(sock, dns_name(doh), doh['port'])
+            doh_response = https_get(sock, doh, context)
+    finally:
+        _, client_exit = stop_process(client)
+        stderr = directory / 'dns-client.stderr'
+        client_log = scrub_log(stderr.read_bytes() if stderr.exists() else b'')[:4096]
+    return dict(plain=dict(plain, response=reply.hex()), doh=dict(doh, response=doh_response.hex()),
+                client_exit=client_exit, client_log=client_log)
+
+
 def probe_all(request):
     """The exchanges between an opening and a closing marker, each answered by the target."""
     opening, closing = request['markers']
@@ -333,6 +403,7 @@ def probe_all(request):
     marker_replies.append(exchange_marker(opening))
     replies = probe_exchanges(request)
     https = probe_tunnel(request) if tunnel is not None else None
+    dns = probe_dns(request) if 'dns_check' in request else None
     if request['canary']:
         send_canary()
     # Let the last connection finish closing on the wire before the window ends.
@@ -340,7 +411,7 @@ def probe_all(request):
     sent['close'] = time.monotonic()
     marker_replies.append(exchange_marker(closing))
     return dict(replies=replies, marker_replies=marker_replies, marker_sent=sent,
-                **({'https': https} if https is not None else {}))
+                **({'https': https} if https is not None else {}), **({'dns': dns} if dns is not None else {}))
 
 
 def node_config(tunnel):
@@ -362,6 +433,20 @@ def client_config(tunnel):
                            'server_port': tunnel['port'], 'method': tunnel['method'],
                            'password': tunnel['password']}],
             'route': {'final': 'node'}}
+
+
+def dns_client_config(tunnel):
+    """The client of the DNS check: Rosetun's DNS server (`render.rs::dns_section`) and a resolving rule.
+
+    The DoH server is the lab's, reached through the node (`detour`) with the name its
+    certificate carries. The one rule resolves with that server, so a name asked of the
+    SOCKS inbound is looked up through the node and DoH before anything is sent.
+    """
+    config = client_config(tunnel)
+    config['dns'] = {'servers': [{'type': 'https', 'tag': 'dns-proxy', 'server': DOH_ADDRESS,
+                                  'tls': {'server_name': DOH_NAME}, 'detour': 'node'}]}
+    config['route'] = {'rules': [{'action': 'resolve', 'server': 'dns-proxy'}], 'final': 'node'}
+    return config
 
 
 def scrub_log(raw):
@@ -701,7 +786,8 @@ def https_exchange(connection, peer, context, request):
             data.extend(block)
             if len(data) > 1024:
                 raise ValueError('request-limit')
-        matches = [e for e in request['tunnel']['https']
+        known = request['tunnel']['https'] + ([request['dns_check']['doh']] if 'dns_check' in request else [])
+        matches = [e for e in known
                    if bytes(data) == b'GET ' + e['path'].encode('ascii') + b' HTTP/1.0\r\n\r\n']
         if len(matches) != 1 or peer[0] not in (CLIENTS[4], EGRESS):
             raise ValueError('unexpected-request')
@@ -941,8 +1027,8 @@ def main(request):
     saved = json.loads((directory / 'identity.json').read_bytes())
     if any(saved[k] != request[k] for k in ('lab_id', 'role', 'vm_uuid', 'boot_id', 'probes', 'markers')):
         raise ValueError('wrong-run')
-    if any(saved.get(key) != request.get(key) for key in ('tunnel', 'dns', 'evidence_disk', 'duration_seconds', 'windows',
-                                                       'certificates')):
+    if any(saved.get(key) != request.get(key) for key in ('tunnel', 'dns', 'dns_check', 'evidence_disk',
+                                                       'duration_seconds', 'windows', 'certificates')):
         raise ValueError('wrong-run')
     if request['role'] == 'lab' and operation == 'serve':
         if request.get('interface') != iface:
