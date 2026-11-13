@@ -15,13 +15,16 @@ import stat
 import struct
 import subprocess
 import sys
+import threading
 import time
 import uuid
 
 from lab_protocol import (MACS, CLIENTS, GATEWAYS, TARGETS, PORTS, SERVICES, CAPTURE_LIMIT,
                           LOG_LIMIT, DURATION, interface, query, answer, token,
                           CANARY_PORT, CANARY_TCP_TARGET, marker_query, marker_answer,
-                          HTTPS_PORT, HTTPS_KINDS, EGRESS, SOCKS_PORT, https_answer, LAB_NETWORKS)
+                          HTTPS_PORT, HTTPS_KINDS, EGRESS, SOCKS_PORT, https_answer, LAB_NETWORKS,
+                          RESOLVER, DOH_ADDRESS, DNS_LOG_ENTRIES, DOH_BODY_LIMIT, DOH_HEAD_LIMIT,
+                          dns_reply, doh_reply, parse_request_head, http_response)
 
 ROOT = Path('/run/rosetun-lab')
 ENTRY = '/usr/local/libexec/rosetun-lab/entry'
@@ -31,6 +34,11 @@ NODE_BINARY = LIBEXEC / 'sing-box'
 HTTPS_CERT = LIBEXEC / 'https-cert.pem'
 HTTPS_KEY = LIBEXEC / 'https-key.pem'
 CA_CERT = Path('/usr/local/share/ca-certificates/rosetun-lab-ca.crt')
+# Stage 7b2a: the DoH target's certificate (SAN doh.lab.test and 203.0.113.3), signed by the same lab CA.
+DOH_CERT = LIBEXEC / 'doh-cert.pem'
+DOH_KEY = LIBEXEC / 'doh-key.pem'
+DOH_REQUESTS = 16
+DOH_CONNECTIONS = 8
 HTTPS_LOG_ENTRIES = 16
 TUNNEL_KEYS = {'port', 'method', 'password', 'sing_box_sha256', 'ca_sha256', 'https'}
 HTTPS_KEYS = {'run_id', 'nonce', 'kind', 'family', 'protocol', 'source', 'target', 'port', 'path'}
@@ -69,6 +77,8 @@ def identity(request):
             raise ValueError('foreign-probe')
     if type(request['canary']) is not bool:
         raise ValueError('invalid-canary')
+    if 'dns' in request and request['dns'] is not True:
+        raise ValueError('invalid-dns')
     window = request['markers']
     tunnel = tunnel_of(request)
     if (type(window) is not list or [m.get('word') for m in window] != ['open', 'close']
@@ -399,11 +409,18 @@ def check_lab_fixtures(tunnel):
     fixture(HTTPS_KEY, 'missing-https-key', private=True)
 
 
+def check_dns_fixtures():
+    fixture(DOH_CERT, 'missing-doh-certificate')
+    fixture(DOH_KEY, 'missing-doh-key', private=True)
+
+
 def setup(request, iface, directory):
     # The role, VM, boot and one-shot run claim are checked before any mutation.
     tunnel = tunnel_of(request)
     if tunnel is not None:
         check_lab_fixtures(tunnel)
+    if request.get('dns') is True:
+        check_dns_fixtures()
     command('/usr/sbin/ip', 'addr', 'add', GATEWAYS[4] + '/24', 'dev', iface)
     command('/usr/sbin/ip', '-6', 'addr', 'add', GATEWAYS[6] + '/64', 'dev', iface, 'nodad')
     command('/usr/sbin/ip', 'link', 'set', iface, 'up')
@@ -418,6 +435,9 @@ def setup(request, iface, directory):
     command(*ns, '/usr/sbin/ip', 'link', 'set', 'lo', 'up')
     command(*ns, '/usr/sbin/ip', 'addr', 'add', TARGETS[4] + '/24', 'dev', 'rt-target')
     command(*ns, '/usr/sbin/ip', '-6', 'addr', 'add', TARGETS[6] + '/64', 'dev', 'rt-target', 'nodad')
+    if request.get('dns') is True:
+        for address in (RESOLVER, DOH_ADDRESS):
+            command(*ns, '/usr/sbin/ip', 'addr', 'add', address + '/24', 'dev', 'rt-target')
     command(*ns, '/usr/sbin/ip', 'link', 'set', 'rt-target', 'up')
     command(*ns, '/usr/sbin/ip', 'route', 'add', '192.0.2.0/24', 'via', '203.0.113.1')
     command(*ns, '/usr/sbin/ip', '-6', 'route', 'add', '2001:db8:6a:1::/64', 'via', '2001:db8:6a:2::1')
@@ -435,6 +455,155 @@ def setup(request, iface, directory):
             return
         time.sleep(.1)
     raise ValueError('capture-ready-timeout')
+
+
+class DnsLog:
+    """The rows of dns.json: source, transport, name and type, bounded by count and size."""
+
+    def __init__(self):
+        self.rows, self.lock, self.overflow = [], threading.Lock(), False
+
+    def record(self, source, transport, entry):
+        with self.lock:
+            self.rows.append(dict(source=source, transport=transport, name=entry[0], type=entry[1]))
+            if len(self.rows) > DNS_LOG_ENTRIES or len(json.dumps(self.rows)) > LOG_LIMIT:
+                self.rows.pop()
+                self.overflow = True
+
+
+def dns_datagram(sock, log):
+    data, peer = sock.recvfrom(1024)
+    reply, entry = dns_reply(data)
+    if reply is not None:
+        sock.sendto(reply, peer)
+    if entry is not None:
+        log.record(peer[0], 'udp', entry)
+
+
+def dns_stream(listener, log):
+    connection, peer = listener.accept()
+    with connection:
+        connection.settimeout(1)
+        size = int.from_bytes(receive(connection, 2), 'big')
+        if size > 1024:
+            raise ValueError('request-limit')
+        reply, entry = dns_reply(receive(connection, size))
+        if reply is not None:
+            connection.sendall(struct.pack('!H', len(reply)) + reply)
+        if entry is not None:
+            log.record(peer[0], 'tcp', entry)
+
+
+def dns_loop(udp, tcp, log, stop):
+    """Answer every question on port 53 until told to stop; a bad client never ends the loop."""
+    selector = selectors.DefaultSelector()
+    selector.register(udp, selectors.EVENT_READ, dns_datagram)
+    selector.register(tcp, selectors.EVENT_READ, dns_stream)
+    try:
+        while not stop.is_set():
+            for key, _ in selector.select(.1):
+                try:
+                    key.data(key.fileobj, log)
+                except (OSError, ValueError):
+                    pass
+    finally:
+        selector.close()
+
+
+def read_doh_request(stream, buffer):
+    """(method, target, headers, body) of the next request, or None when the peer is done.
+
+    Raises ValueError for a request that cannot be answered as one. A body over the
+    limit is reported as None without being read.
+    """
+    while b'\r\n\r\n' not in buffer:
+        if len(buffer) > DOH_HEAD_LIMIT:
+            raise ValueError('http-head-limit')
+        block = stream.recv(4096)
+        if not block:
+            if buffer:
+                raise ValueError('short-request')
+            return None
+        buffer.extend(block)
+    head, _, rest = bytes(buffer).partition(b'\r\n\r\n')
+    buffer[:] = rest
+    method, target, headers = parse_request_head(head)
+    if 'transfer-encoding' in headers or not headers.get('content-length', '0').isdecimal():
+        raise ValueError('bad-http-request')
+    size = int(headers.get('content-length', '0'))
+    if size > DOH_BODY_LIMIT:
+        return method, target, headers, None
+    while len(buffer) < size:
+        block = stream.recv(4096)
+        if not block:
+            raise ValueError('short-request')
+        buffer.extend(block)
+    body = bytes(buffer[:size])
+    del buffer[:size]
+    return method, target, headers, body
+
+
+def doh_connection(stream, peer, log):
+    """One TLS connection of the DoH target: a few requests, one answer each, HTTP/1.1 only."""
+    buffer = bytearray()
+    for count in range(DOH_REQUESTS):
+        try:
+            request = read_doh_request(stream, buffer)
+        except (ValueError, OSError):
+            stream.sendall(http_response(400, {}, b'', close=True))
+            return
+        if request is None:
+            return
+        method, target, headers, body = request
+        if body is None:
+            status, extra, payload, entry = 413, {}, b'', None
+        else:
+            status, extra, payload, entry = doh_reply(method, target, headers, body)
+        if entry is not None:
+            log.record(peer[0], 'doh', entry)
+        close = (status != 200 or headers.get('connection', '').lower() == 'close'
+                 or count == DOH_REQUESTS - 1)
+        stream.sendall(http_response(status, extra, payload, close=close))
+        if close:
+            return
+
+
+def doh_worker(connection, peer, context, log):
+    try:
+        connection.settimeout(5)
+        with context.wrap_socket(connection, server_side=True) as stream:
+            doh_connection(stream, peer, log)
+    except (OSError, ssl.SSLError, ValueError):
+        pass
+    finally:
+        connection.close()
+
+
+def doh_loop(listener, context, log, stop):
+    listener.settimeout(.2)
+    workers = []
+    while not stop.is_set():
+        try:
+            connection, peer = listener.accept()
+        except socket.timeout:
+            continue
+        except OSError:
+            return
+        workers = [worker for worker in workers if worker.is_alive()]
+        if len(workers) >= DOH_CONNECTIONS:
+            connection.close()
+            continue
+        workers.append(threading.Thread(target=doh_worker, args=(connection, peer, context, log), daemon=True))
+        workers[-1].start()
+
+
+def doh_context():
+    """TLS 1.2 or newer, HTTP/1.1 only, the DoH certificate of the image."""
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    context.set_alpn_protocols(['http/1.1'])
+    context.load_cert_chain(str(DOH_CERT), str(DOH_KEY))
+    return context
 
 
 def accept_marker(request, marks, data, source):
@@ -483,6 +652,8 @@ def serve(request, directory):
     logs, error, dropped, marks, ended = [], False, 0, [], None
     tunnel = tunnel_of(request)
     https_log, node, node_state, context = [], None, None, None
+    dns = request.get('dns') is True
+    dns_log, dns_stop, dns_threads, dns_sockets = DnsLog(), threading.Event(), [], []
     selector = selectors.DefaultSelector()
     capture = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(3))
     capture.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 262144)
@@ -533,6 +704,18 @@ def serve(request, directory):
                     stream.bind((TARGETS[4], HTTPS_PORT))
                     stream.listen(4)
                     selector.register(stream, selectors.EVENT_READ, (4, 'https'))
+                if dns:
+                    # Served by threads of their own, so a slow client never delays the capture.
+                    doh_tls = doh_context()
+                    udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                    tcp = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    doh = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    dns_sockets.extend((udp, tcp, doh))
+                    udp.bind((RESOLVER, 53))
+                    tcp.bind((RESOLVER, 53))
+                    tcp.listen(4)
+                    doh.bind((DOH_ADDRESS, 443))
+                    doh.listen(4)
             finally:
                 if libc.setns(original.fileno(), 0) != 0:
                     raise OSError('router-setns')
@@ -540,6 +723,11 @@ def serve(request, directory):
             # Alive and listening, before the observer says it is ready.
             check_lab_fixtures(tunnel)
             node = start_process(node_config(tunnel), directory, 'node', GATEWAYS[4], tunnel['port'])
+        if dns:
+            dns_threads = [threading.Thread(target=dns_loop, args=(udp, tcp, dns_log, dns_stop), daemon=True),
+                           threading.Thread(target=doh_loop, args=(doh, doh_tls, dns_log, dns_stop), daemon=True)]
+            for thread in dns_threads:
+                thread.start()
         write(directory / 'ready.json', {'capture_ready': True})
         while time.monotonic() < deadline and not (directory / 'stop').exists():
             for key, _ in selector.select(.1):
@@ -624,7 +812,15 @@ def serve(request, directory):
         capture.close()
         for stream in sockets:
             stream.close()
+        dns_stop.set()
+        for thread in dns_threads:
+            thread.join(2)
+        for stream in dns_sockets:
+            stream.close()
         extra = {}
+        if dns:
+            write(directory / 'dns.json', dns_log.rows)
+            error = error or dns_log.overflow
         if tunnel is not None:
             if node is not None and node_state is None:
                 alive, code = stop_process(node)
@@ -662,7 +858,7 @@ def main(request):
     saved = json.loads((directory / 'identity.json').read_bytes())
     if any(saved[k] != request[k] for k in ('lab_id', 'role', 'vm_uuid', 'boot_id', 'probes', 'markers')):
         raise ValueError('wrong-run')
-    if saved.get('tunnel') != request.get('tunnel'):
+    if any(saved.get(key) != request.get(key) for key in ('tunnel', 'dns')):
         raise ValueError('wrong-run')
     if request['role'] == 'lab' and operation == 'serve':
         if request.get('interface') != iface:

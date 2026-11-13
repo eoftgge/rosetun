@@ -1,6 +1,9 @@
 """Fixed lab wire contract, strict offline evidence qualification and leak verdict."""
+import base64
+import binascii
 import ipaddress
 import math
+import re
 import struct
 from typing import NamedTuple
 
@@ -24,6 +27,22 @@ HTTPS_KINDS = ('https-direct', 'https-tunnel')
 EGRESS = '203.0.113.1'
 # The throwaway client of the test machine listens here, on loopback only.
 SOCKS_PORT = 10808
+# Stage 7b2a: the lab's resolver and DoH target, both inside the routed namespace.
+RESOLVER = '203.0.113.53'
+DOH_ADDRESS = '203.0.113.3'
+DOH_NAME = 'doh.lab.test'
+DOH_PATH = '/dns-query'
+DOH_CONTENT_TYPE = 'application/dns-message'
+DNS_ANSWER = TARGETS[4]
+DNS_TTL = 60
+DNS_LOG_ENTRIES = 256
+DNS_NAME_LOG = 96
+# RFC 8484 allows far more; a lab query is a few dozen bytes.
+DOH_BODY_LIMIT = 512
+DOH_HEAD_LIMIT = 8192
+DNS_TYPES = {1: 'A', 28: 'AAAA'}
+HTTP_REASONS = {200: 'OK', 400: 'Bad Request', 404: 'Not Found', 405: 'Method Not Allowed',
+                413: 'Payload Too Large', 415: 'Unsupported Media Type'}
 LAB_NETWORKS = tuple(ipaddress.ip_network(n) for n in (
     '192.0.2.0/24', '198.51.100.0/24', '203.0.113.0/24', '2001:db8::/32'))
 
@@ -128,6 +147,124 @@ def marker_query(marker):
 
 def marker_answer(marker):
     return b'rosetun-lab-ack:' + marker_query(marker)
+
+
+class DnsRefusal(ValueError):
+    """A query the resolver answers with an error code (or not at all when `rcode` is None)."""
+
+    def __init__(self, reason, rcode):
+        super().__init__(reason)
+        self.rcode = rcode
+
+
+def dns_question(packet):
+    """(identifier, flags, name, type, class, question bytes) of a one-question query."""
+    if len(packet) < 12:
+        raise DnsRefusal('short-dns-message', None)
+    identifier, flags, count = struct.unpack_from('!HHH', packet)
+    if flags & 0x8000:
+        raise DnsRefusal('dns-response', None)
+    if flags & 0x7800:
+        raise DnsRefusal('dns-opcode', 4)
+    if count != 1:
+        raise DnsRefusal('dns-question-count', 1)
+    labels, offset = [], 12
+    while True:
+        if offset >= len(packet):
+            raise DnsRefusal('truncated-dns-question', 1)
+        size = packet[offset]
+        if size == 0:
+            offset += 1
+            break
+        if size & 0xc0:
+            raise DnsRefusal('compressed-dns-question', 1)
+        if offset + 1 + size > len(packet):
+            raise DnsRefusal('truncated-dns-question', 1)
+        labels.append(packet[offset + 1:offset + 1 + size])
+        offset += 1 + size
+        if offset - 12 > 255:
+            raise DnsRefusal('dns-name-too-long', 1)
+    if offset + 4 > len(packet):
+        raise DnsRefusal('truncated-dns-question', 1)
+    qtype, qclass = struct.unpack_from('!HH', packet, offset)
+    name = b'.'.join(labels).decode('ascii', 'replace')
+    return identifier, flags, name, qtype, qclass, packet[12:offset + 4]
+
+
+def dns_reply(packet):
+    """(reply or None, (name, type) or None) for one query; the lab answers and recurses to nothing.
+
+    An A question of class IN gets the one fixed address, any other question an empty
+    NOERROR. A message that cannot be read is answered with an error code only when its
+    identifier can be echoed; a response is never answered.
+    """
+    try:
+        identifier, flags, name, qtype, qclass, question = dns_question(packet)
+    except DnsRefusal as refusal:
+        if refusal.rcode is None:
+            return None, None
+        return packet[:2] + struct.pack('!HHHHH', 0x8000 | refusal.rcode, 0, 0, 0, 0), None
+    # Recursion is neither offered (RA clear) nor done; RD is echoed as DNS asks.
+    header = 0x8400 | (flags & 0x0100)
+    answered = qtype == 1 and qclass == 1
+    reply = struct.pack('!HHHHHH', identifier, header, 1, 1 if answered else 0, 0, 0) + question
+    if answered:
+        reply += b'\xc0\x0c' + struct.pack('!HHIH', 1, 1, DNS_TTL, 4) + ipaddress.ip_address(DNS_ANSWER).packed
+    return reply, (name[:DNS_NAME_LOG], DNS_TYPES.get(qtype, str(qtype)))
+
+
+def parse_request_head(head):
+    """(method, target, headers) of an HTTP/1.1 request head without its blank line."""
+    try:
+        lines = head.decode('ascii').split('\r\n')
+    except UnicodeDecodeError:
+        raise ValueError('bad-http-request') from None
+    parts = lines[0].split(' ')
+    if len(parts) != 3 or parts[2] != 'HTTP/1.1' or not parts[1].startswith('/') or not parts[0].isalpha():
+        raise ValueError('bad-http-request')
+    headers = {}
+    for line in lines[1:]:
+        name, separator, value = line.partition(':')
+        if not separator or not name or name != name.strip() or name.lower() in headers:
+            raise ValueError('bad-http-request')
+        headers[name.lower()] = value.strip()
+    return parts[0], parts[1], headers
+
+
+def doh_reply(method, target, headers, body):
+    """(status, headers, body, log entry) of the DoH target for one parsed request (RFC 8484)."""
+    path, _, query = target.partition('?')
+    if path != DOH_PATH:
+        return 404, {}, b'', None
+    if method == 'POST':
+        if headers.get('content-type', '').split(';')[0].strip().lower() != DOH_CONTENT_TYPE:
+            return 415, {}, b'', None
+        message = body
+    elif method == 'GET':
+        values = [part[4:] for part in query.split('&') if part.startswith('dns=')]
+        if len(values) != 1 or not re.fullmatch(r'[A-Za-z0-9_-]*={0,2}', values[0]):
+            return 400, {}, b'', None
+        if len(values[0]) > (DOH_BODY_LIMIT + 2) // 3 * 4:
+            return 413, {}, b'', None
+        try:
+            message = base64.urlsafe_b64decode(values[0].rstrip('=') + '=' * (-len(values[0].rstrip('=')) % 4))
+        except (binascii.Error, ValueError):
+            return 400, {}, b'', None
+    else:
+        return 405, {'allow': 'GET, POST'}, b'', None
+    if len(message) > DOH_BODY_LIMIT:
+        return 413, {}, b'', None
+    reply, entry = dns_reply(message)
+    if entry is None:
+        return 400, {}, b'', None
+    return 200, {'content-type': DOH_CONTENT_TYPE, 'cache-control': 'max-age=0'}, reply, entry
+
+
+def http_response(status, headers, body, *, close):
+    """The bytes of an HTTP/1.1 response with an exact length and an explicit connection state."""
+    fields = {**headers, 'content-length': str(len(body)), 'connection': 'close' if close else 'keep-alive'}
+    head = 'HTTP/1.1 %d %s\r\n' % (status, HTTP_REASONS[status])
+    return (head + ''.join('%s: %s\r\n' % item for item in fields.items()) + '\r\n').encode('ascii') + body
 
 
 def _needle(probe, direction):
