@@ -27,7 +27,7 @@ from lab_protocol import (MACS, CLIENTS, GATEWAYS, TARGETS, PORTS, SERVICES, CAP
                           dns_reply, doh_reply, parse_request_head, http_response,
                           EVIDENCE_PCAP_LIMIT, EVIDENCE_HEADER_SIZE, DURATION_MAX, evidence_header,
                           WINDOW_LIMIT, ACK_PREFIX, parse_window_marker, DNS_CHECK_DOH, DOH_NAME,
-                          dns_name, plain_reply_ok)
+                          dns_name, plain_reply_ok, REASON_LIMIT)
 
 ROOT = Path('/run/rosetun-lab')
 ENTRY = '/usr/local/libexec/rosetun-lab/entry'
@@ -52,6 +52,10 @@ lstat = os.lstat
 
 class Refused(ValueError):
     """A fixed, data-free reason the helper prints instead of a bare failure."""
+
+
+class ExchangeFailed(Refused):
+    """An exchange of the test machine failed. The text is `name:family:reason:<elapsed>ms`."""
 
 
 def command(*args):
@@ -212,44 +216,45 @@ def receive(stream, size):
     return bytes(data)
 
 
+def probe_one(p):
+    family = socket.AF_INET if p['family'] == 4 else socket.AF_INET6
+    tcp = p['protocol'] == 'tcp'
+    with socket.socket(family, socket.SOCK_STREAM if tcp else socket.SOCK_DGRAM) as stream:
+        stream.settimeout(2)
+        stream.bind((p['source'], 0))
+        stream.connect((p['target'], p['port']))
+        data = query(p)
+        if p['service'] == 'http':
+            data = b'GET /' + data + b' HTTP/1.0\r\n\r\n'
+        elif p['service'] == 'dns-tcp':
+            data = struct.pack('!H', len(data)) + data
+        stream.sendall(data)
+        if p['service'] == 'dns-tcp':
+            length = int.from_bytes(receive(stream, 2), 'big')
+            if length > 1024:
+                raise ValueError('dns-response-limit')
+            response = receive(stream, length)
+        elif p['service'] == 'http':
+            response = bytearray()
+            while True:
+                block = stream.recv(1024)
+                if not block:
+                    break
+                response.extend(block)
+                if len(response) > 2048:
+                    raise ValueError('http-response-limit')
+            head, response = bytes(response).split(b'\r\n\r\n', 1)
+            if not head.startswith(b'HTTP/1.0 200 OK\r\n'):
+                raise ValueError('http-status')
+        else:
+            response = stream.recv(1024)
+        if response != answer(p):
+            raise ValueError('unexpected-target-answer')
+        return {**p, 'response': response.hex()}
+
+
 def probe_exchanges(request):
-    replies = []
-    for p in request['probes']:
-        family = socket.AF_INET if p['family'] == 4 else socket.AF_INET6
-        tcp = p['protocol'] == 'tcp'
-        with socket.socket(family, socket.SOCK_STREAM if tcp else socket.SOCK_DGRAM) as stream:
-            stream.settimeout(2)
-            stream.bind((p['source'], 0))
-            stream.connect((p['target'], p['port']))
-            data = query(p)
-            if p['service'] == 'http':
-                data = b'GET /' + data + b' HTTP/1.0\r\n\r\n'
-            elif p['service'] == 'dns-tcp':
-                data = struct.pack('!H', len(data)) + data
-            stream.sendall(data)
-            if p['service'] == 'dns-tcp':
-                length = int.from_bytes(receive(stream, 2), 'big')
-                if length > 1024:
-                    raise ValueError('dns-response-limit')
-                response = receive(stream, length)
-            elif p['service'] == 'http':
-                response = bytearray()
-                while True:
-                    block = stream.recv(1024)
-                    if not block:
-                        break
-                    response.extend(block)
-                    if len(response) > 2048:
-                        raise ValueError('http-response-limit')
-                head, response = bytes(response).split(b'\r\n\r\n', 1)
-                if not head.startswith(b'HTTP/1.0 200 OK\r\n'):
-                    raise ValueError('http-status')
-            else:
-                response = stream.recv(1024)
-            if response != answer(p):
-                raise ValueError('unexpected-target-answer')
-            replies.append({**p, 'response': response.hex()})
-    return replies
+    return [exchange(p['service'], p['family'], lambda p=p: probe_one(p)) for p in request['probes']]
 
 
 def exchange_marker(marker):
@@ -325,21 +330,28 @@ def probe_tunnel(request):
     tunnel = request['tunnel']
     direct, via_node = tunnel['https']
     context = ssl.create_default_context()
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.settimeout(2)
-        sock.bind((direct['source'], 0))
-        sock.connect((direct['target'], direct['port']))
-        client_port = sock.getsockname()[1]
-        direct_response = https_get(sock, direct, context)
-    directory = ROOT / request['lab_id']
-    directory.mkdir(mode=0o700, exist_ok=True)
-    client = start_process(client_config(tunnel), directory, 'client', '127.0.0.1', SOCKS_PORT)
-    try:
+
+    def get_direct():
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.settimeout(2)
+            sock.bind((direct['source'], 0))
+            sock.connect((direct['target'], direct['port']))
+            return sock.getsockname()[1], https_get(sock, direct, context)
+
+    def get_through_node():
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             sock.settimeout(2)
             sock.connect(('127.0.0.1', SOCKS_PORT))
             socks_connect(sock, via_node['target'], via_node['port'])
-            tunnel_response = https_get(sock, via_node, context)
+            return https_get(sock, via_node, context)
+
+    client_port, direct_response = exchange(direct['kind'], 4, get_direct)
+    directory = ROOT / request['lab_id']
+    directory.mkdir(mode=0o700, exist_ok=True)
+    client = exchange('client', 4, lambda: start_process(client_config(tunnel), directory, 'client',
+                                                         '127.0.0.1', SOCKS_PORT))
+    try:
+        tunnel_response = exchange(via_node['kind'], 4, get_through_node)
     finally:
         _, client_exit = stop_process(client)
     return dict(direct=dict(direct, response=direct_response.hex(), client_port=client_port),
@@ -363,24 +375,33 @@ def probe_dns(request):
     """dns-plain over UDP, then dns-doh-singbox: a sing-box client that resolves through the node and DoH."""
     checks = request['dns_check']
     plain, doh = checks['plain'], checks['doh']
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-        sock.settimeout(2)
-        sock.bind((plain['source'], 0))
-        sock.connect((plain['target'], plain['port']))
-        sock.send(query(plain))
-        reply = sock.recv(512)
-    if not plain_reply_ok(plain, reply):
-        raise ValueError('unexpected-resolver-answer')
-    directory = ROOT / request['lab_id']
-    directory.mkdir(mode=0o700, exist_ok=True)
-    client = start_process(dns_client_config(request['tunnel']), directory, 'dns-client', '127.0.0.1', SOCKS_PORT)
-    context = ssl.create_default_context()
-    try:
+
+    def ask_plain():
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.settimeout(2)
+            sock.bind((plain['source'], 0))
+            sock.connect((plain['target'], plain['port']))
+            sock.send(query(plain))
+            answered = sock.recv(512)
+        if not plain_reply_ok(plain, answered):
+            raise ValueError('unexpected-resolver-answer')
+        return answered
+
+    def get_doh():
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             sock.settimeout(5)
             sock.connect(('127.0.0.1', SOCKS_PORT))
             socks_connect_domain(sock, dns_name(doh), doh['port'])
-            doh_response = https_get(sock, doh, context)
+            return https_get(sock, doh, context)
+
+    reply = exchange(plain['service'], 4, ask_plain)
+    directory = ROOT / request['lab_id']
+    directory.mkdir(mode=0o700, exist_ok=True)
+    client = exchange('dns-client', 4, lambda: start_process(dns_client_config(request['tunnel']), directory,
+                                                             'dns-client', '127.0.0.1', SOCKS_PORT))
+    context = ssl.create_default_context()
+    try:
+        doh_response = exchange(doh['kind'], 4, get_doh)
     finally:
         _, client_exit = stop_process(client)
         stderr = directory / 'dns-client.stderr'
@@ -400,16 +421,16 @@ def probe_all(request):
         fixture(CA_CERT, 'missing-ca-certificate', sha256=tunnel['ca_sha256'])
     # The clock below is this machine's and is only logged; verdicts never compare it.
     sent['open'] = time.monotonic()
-    marker_replies.append(exchange_marker(opening))
+    marker_replies.append(exchange('marker-open', 4, lambda: exchange_marker(opening)))
     replies = probe_exchanges(request)
     https = probe_tunnel(request) if tunnel is not None else None
     dns = probe_dns(request) if 'dns_check' in request else None
     if request['canary']:
-        send_canary()
+        exchange('canary', 4, send_canary)
     # Let the last connection finish closing on the wire before the window ends.
     time.sleep(.2)
     sent['close'] = time.monotonic()
-    marker_replies.append(exchange_marker(closing))
+    marker_replies.append(exchange('marker-close', 4, lambda: exchange_marker(closing)))
     return dict(replies=replies, marker_replies=marker_replies, marker_sent=sent,
                 **({'https': https} if https is not None else {}), **({'dns': dns} if dns is not None else {}))
 
@@ -462,6 +483,40 @@ def scrub_log(raw):
 
     text = re.sub(r'[0-9]{1,3}(?:\.[0-9]{1,3}){3}|[0-9a-fA-F]*:[0-9a-fA-F:]*:[0-9a-fA-F]*', keep, text)
     return text.encode('utf-8')[:LOG_LIMIT]
+
+
+def short_code(error, limit=48):
+    """A lowercase code of `[a-z0-9:._-]` for an exception, never an address outside the lab ranges.
+
+    The helper's own fixed words pass as they are, an OS error becomes its errno name and
+    anything else is its message with every foreign address blanked and the rest flattened.
+    """
+    if isinstance(error, (subprocess.TimeoutExpired, TimeoutError, socket.timeout)):
+        return 'timeout'
+    if isinstance(error, subprocess.CalledProcessError):
+        return 'exit-%d' % abs(error.returncode)
+    text = str(error)
+    if isinstance(error, ssl.SSLError):
+        text = 'ssl-' + (error.reason or 'error')
+    elif isinstance(error, OSError) and error.errno in errno.errorcode:
+        return errno.errorcode[error.errno].lower()
+    text = scrub_log(text.encode('utf-8', 'replace')).decode('utf-8', 'replace').lower()
+    return re.sub(r'[^a-z0-9:._-]+', '-', text).strip('-')[:limit] or type(error).__name__.lower()[:limit]
+
+
+def reason_of(error):
+    """`Class:code` for `error_reason` of `health.json`, at most 96 characters."""
+    return (type(error).__name__ + ':' + short_code(error))[:REASON_LIMIT]
+
+
+def exchange(name, family, operation):
+    """Run one exchange of the test machine; a failure names it, its family, why and how long it took."""
+    started = time.monotonic()
+    try:
+        return operation()
+    except Exception as error:
+        elapsed = int((time.monotonic() - started) * 1000)
+        raise ExchangeFailed('%s:%s:%s:%dms' % (name, family, short_code(error), elapsed)) from None
 
 
 def listening(address, port, table='/proc/net/tcp'):
@@ -611,13 +666,15 @@ class DnsLog:
     """The rows of dns.json: source, transport, name and type, bounded by count and size."""
 
     def __init__(self):
-        self.rows, self.lock, self.overflow = [], threading.Lock(), False
+        self.rows, self.lock, self.overflow, self.overflow_in = [], threading.Lock(), False, None
 
     def record(self, source, transport, entry):
         with self.lock:
             self.rows.append(dict(source=source, transport=transport, name=entry[0], type=entry[1]))
             if len(self.rows) > DNS_LOG_ENTRIES or len(json.dumps(self.rows)) > LOG_LIMIT:
                 self.rows.pop()
+                # The first overflow names the server that was asked; DoH has its own place.
+                self.overflow_in = self.overflow_in or ('doh' if transport == 'doh' else 'dns')
                 self.overflow = True
 
 
@@ -806,24 +863,148 @@ def record_https(log, row):
         raise ValueError('https-log-limit')
 
 
+class Failure:
+    """The first thing that went wrong in the observer: where, when on the lab's clock, and why."""
+
+    def __init__(self):
+        self.where = self.at = self.reason = None
+
+    def note(self, where, error):
+        if self.reason is None:
+            self.where, self.at, self.reason = where, time.monotonic(), reason_of(error)
+
+    def __bool__(self):
+        return self.reason is not None
+
+
+def guarded(where, failure, target, *args):
+    """Run a server thread so that how it ended is noted instead of lost."""
+    try:
+        target(*args)
+    except BaseException as error:
+        failure.note(where, error)
+
+
+# Where an exchange service of the target is named when the observer stops in it.
+EXCHANGE_PLACES = {'http': 'http', 'udp': 'udp', 'dns-udp': 'udp', 'dns-tcp': 'dns-tcp'}
+
+
+def open_capture(interface):
+    """The raw socket of the lab's ingress interface, non-blocking, with a 256 KiB receive buffer."""
+    capture = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(3))
+    capture.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 262144)
+    capture.bind((interface, 0))
+    capture.setblocking(False)
+    return capture
+
+
+def bind_targets(request, tunnel, selector, sockets, dns_sockets):
+    """Bind every service of the routed namespace and register the ones the loop reads.
+
+    Returns the TLS context of the HTTPS target and, with DNS, the servers the threads run
+    as (UDP, TCP, DoH listener, DoH context).
+    """
+    context = servers = None
+    # Switch only this process's thread into the disposable target namespace.
+    with open('/proc/self/ns/net', 'rb') as original, open('/run/netns/rtlab', 'rb') as target:
+        libc = ctypes.CDLL(None, use_errno=True)
+        if libc.setns(target.fileno(), 0) != 0:
+            raise OSError('target-setns')
+        try:
+            for family in (4, 6):
+                for service in SERVICES:
+                    tcp = service in ('http', 'dns-tcp')
+                    stream = socket.socket(socket.AF_INET if family == 4 else socket.AF_INET6,
+                                           socket.SOCK_STREAM if tcp else socket.SOCK_DGRAM)
+                    sockets.append(stream)
+                    stream.bind((TARGETS[family], PORTS[service]))
+                    if tcp:
+                        stream.listen(4)
+                    selector.register(stream, selectors.EVENT_READ, (family, service))
+            stream = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sockets.append(stream)
+            stream.bind((TARGETS[4], PORTS['marker']))
+            selector.register(stream, selectors.EVENT_READ, (4, 'marker'))
+            if tunnel is not None:
+                context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+                context.minimum_version = ssl.TLSVersion.TLSv1_2
+                context.load_cert_chain(str(HTTPS_CERT), str(HTTPS_KEY))
+                stream = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sockets.append(stream)
+                stream.bind((TARGETS[4], HTTPS_PORT))
+                stream.listen(4)
+                selector.register(stream, selectors.EVENT_READ, (4, 'https'))
+            if request.get('dns') is True:
+                # Served by threads of their own, so a slow client never delays the capture.
+                doh_tls = doh_context()
+                udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                tcp = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                doh = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                dns_sockets.extend((udp, tcp, doh))
+                udp.bind((RESOLVER, 53))
+                tcp.bind((RESOLVER, 53))
+                tcp.listen(4)
+                doh.bind((DOH_ADDRESS, 443))
+                doh.listen(4)
+                servers = (udp, tcp, doh, doh_tls)
+        finally:
+            if libc.setns(original.fileno(), 0) != 0:
+                raise OSError('router-setns')
+    return context, servers
+
+
+def answer_exchange(listener, family, service, request):
+    """Read one request of a target service, answer it and return the row for the target log."""
+    tcp = service in ('http', 'dns-tcp')
+    connection = None
+    try:
+        if tcp:
+            connection, peer = listener.accept()
+            connection.settimeout(1)
+            if service == 'dns-tcp':
+                size = int.from_bytes(receive(connection, 2), 'big')
+                if size > 1024:
+                    raise ValueError('request-limit')
+                data = receive(connection, size)
+            else:
+                data = connection.recv(1024)
+        else:
+            data, peer = listener.recvfrom(1024)
+        matches = [p for p in request['probes'] if p['family'] == family and p['service'] == service
+                   and p['source'] == peer[0] and (query(p) == data if service != 'http'
+                   else data == b'GET /' + token(p) + b' HTTP/1.0\r\n\r\n')]
+        if len(matches) != 1:
+            raise ValueError('unexpected-request')
+        p = matches[0]
+        response = answer(p)
+        if service == 'http':
+            wire = b'HTTP/1.0 200 OK\r\nContent-Length: ' + str(len(response)).encode() + b'\r\n\r\n' + response
+        elif service == 'dns-tcp':
+            wire = struct.pack('!H', len(response)) + response
+        else:
+            wire = response
+        if tcp:
+            connection.sendall(wire)
+        else:
+            listener.sendto(wire, peer)
+        return {**p, 'response': response.hex()}
+    finally:
+        if connection is not None:
+            connection.close()
+
+
 def serve(request, directory):
     deadline = time.monotonic() + request.get('duration_seconds', DURATION)
-    logs, error, dropped, marks, ended = [], False, 0, [], None
+    logs, dropped, marks, ended, started = [], 0, [], None, None
+    failure, place = Failure(), 'setup'
     tunnel = tunnel_of(request)
-    https_log, node, node_state, context = [], None, None, None
+    https_log, node, node_state, context, servers = [], None, None, None, None
     dns = request.get('dns') is True
     dns_log, dns_stop, dns_threads, dns_sockets = DnsLog(), threading.Event(), [], []
     selector = selectors.DefaultSelector()
-    capture = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(3))
-    capture.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 262144)
-    capture.bind((request['interface'], 0))
-    capture.setblocking(False)
-    started = time.monotonic()
-    selector.register(capture, selectors.EVENT_READ, 'capture')
+    capture = raw = None
     disk = request.get('evidence_disk') is True
     limit = EVIDENCE_PCAP_LIMIT if disk else CAPTURE_LIMIT
-    raw = EvidenceWriter(evidence_device(), request['lab_id']) if disk else (directory / 'capture.pcap').open('xb')
-    raw.write(struct.pack('<IHHIIII', 0xa1b2c3d4, 2, 4, 0, 0, 2048, 1))
     count = 24
     sockets = []
 
@@ -835,68 +1016,63 @@ def serve(request, directory):
         raw.write(struct.pack('<IIII', int(now), int(now % 1 * 1000000), len(frame), len(frame)) + frame)
         count += 16 + len(frame)
 
+    def settle(operation):
+        """Run a closing step; its failure is noted and the steps after it still run."""
+        try:
+            operation()
+        except Exception as error:
+            failure.note('finish', error)
+
+    def close_pcap():
+        if raw is None:
+            return
+        if disk:
+            raw.finish(complete=not failure)
+            return
+        try:
+            raw.flush()
+            os.fsync(raw.fileno())
+        finally:
+            raw.close()
+
+    def write_node_log():
+        with (directory / 'node.log').open('xb') as stream:
+            stream.write(scrub_log((directory / 'node.stderr').read_bytes()
+                                   if (directory / 'node.stderr').exists() else b''))
+
     try:
-        # Switch only this process's thread into the disposable target namespace.
-        with open('/proc/self/ns/net', 'rb') as original, open('/run/netns/rtlab', 'rb') as target:
-            libc = ctypes.CDLL(None, use_errno=True)
-            if libc.setns(target.fileno(), 0) != 0:
-                raise OSError('target-setns')
-            try:
-                for family in (4, 6):
-                    for service in SERVICES:
-                        tcp = service in ('http', 'dns-tcp')
-                        stream = socket.socket(socket.AF_INET if family == 4 else socket.AF_INET6,
-                                               socket.SOCK_STREAM if tcp else socket.SOCK_DGRAM)
-                        sockets.append(stream)
-                        stream.bind((TARGETS[family], PORTS[service]))
-                        if tcp:
-                            stream.listen(4)
-                        selector.register(stream, selectors.EVENT_READ, (family, service))
-                stream = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                sockets.append(stream)
-                stream.bind((TARGETS[4], PORTS['marker']))
-                selector.register(stream, selectors.EVENT_READ, (4, 'marker'))
-                if tunnel is not None:
-                    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-                    context.minimum_version = ssl.TLSVersion.TLSv1_2
-                    context.load_cert_chain(str(HTTPS_CERT), str(HTTPS_KEY))
-                    stream = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    sockets.append(stream)
-                    stream.bind((TARGETS[4], HTTPS_PORT))
-                    stream.listen(4)
-                    selector.register(stream, selectors.EVENT_READ, (4, 'https'))
-                if dns:
-                    # Served by threads of their own, so a slow client never delays the capture.
-                    doh_tls = doh_context()
-                    udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                    tcp = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    doh = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    dns_sockets.extend((udp, tcp, doh))
-                    udp.bind((RESOLVER, 53))
-                    tcp.bind((RESOLVER, 53))
-                    tcp.listen(4)
-                    doh.bind((DOH_ADDRESS, 443))
-                    doh.listen(4)
-            finally:
-                if libc.setns(original.fileno(), 0) != 0:
-                    raise OSError('router-setns')
+        place = 'capture'
+        capture = open_capture(request['interface'])
+        started = time.monotonic()
+        selector.register(capture, selectors.EVENT_READ, 'capture')
+        raw = EvidenceWriter(evidence_device(), request['lab_id']) if disk else (directory / 'capture.pcap').open('xb')
+        raw.write(struct.pack('<IHHIIII', 0xa1b2c3d4, 2, 4, 0, 0, 2048, 1))
+        place = 'setup'
+        context, servers = bind_targets(request, tunnel, selector, sockets, dns_sockets)
         if tunnel is not None:
             # Alive and listening, before the observer says it is ready.
             check_lab_fixtures(tunnel, request.get('certificates'))
+            place = 'node'
             node = start_process(node_config(tunnel), directory, 'node', GATEWAYS[4], tunnel['port'])
+            place = 'setup'
         if dns:
-            dns_threads = [threading.Thread(target=dns_loop, args=(udp, tcp, dns_log, dns_stop), daemon=True),
-                           threading.Thread(target=doh_loop, args=(doh, doh_tls, dns_log, dns_stop), daemon=True)]
+            udp, tcp, doh, doh_tls = servers
+            dns_threads = [threading.Thread(target=guarded, args=('dns', failure, dns_loop, udp, tcp, dns_log, dns_stop),
+                                            daemon=True),
+                           threading.Thread(target=guarded, args=('doh', failure, doh_loop, doh, doh_tls, dns_log, dns_stop),
+                                            daemon=True)]
             for thread in dns_threads:
                 thread.start()
         write(directory / 'ready.json', {'capture_ready': True})
         while time.monotonic() < deadline and not (directory / 'stop').exists():
             for key, _ in selector.select(.1):
                 if key.data == 'capture':
+                    place = 'capture'
                     record(capture.recv(2049))
                     continue
                 family, service = key.data
                 if service == 'https':
+                    place = 'https'
                     connection, peer = key.fileobj.accept()
                     try:
                         record_https(https_log, https_exchange(connection, peer, context, request))
@@ -904,6 +1080,7 @@ def serve(request, directory):
                         connection.close()
                     continue
                 if service == 'marker':
+                    place = 'marker'
                     data, peer = key.fileobj.recvfrom(1024)
                     if request.get('windows') is True:
                         index, word, label = accept_window_marker(request, marks, data, peer[0])
@@ -914,51 +1091,20 @@ def serve(request, directory):
                     key.fileobj.sendto(marker_answer(marker), peer)
                     marks.append(dict(word=marker['word'], nonce=marker['nonce'], at=time.monotonic()))
                     continue
-                tcp = service in ('http', 'dns-tcp')
-                connection = None
-                try:
-                    if tcp:
-                        connection, peer = key.fileobj.accept()
-                        connection.settimeout(1)
-                        if service == 'dns-tcp':
-                            size = int.from_bytes(receive(connection, 2), 'big')
-                            if size > 1024:
-                                raise ValueError('request-limit')
-                            data = receive(connection, size)
-                        else:
-                            data = connection.recv(1024)
-                    else:
-                        data, peer = key.fileobj.recvfrom(1024)
-                    matches = [p for p in request['probes'] if p['family'] == family and p['service'] == service
-                               and p['source'] == peer[0] and (query(p) == data if service != 'http'
-                               else data == b'GET /' + token(p) + b' HTTP/1.0\r\n\r\n')]
-                    if len(matches) != 1:
-                        raise ValueError('unexpected-request')
-                    p = matches[0]
-                    response = answer(p)
-                    if service == 'http':
-                        wire = b'HTTP/1.0 200 OK\r\nContent-Length: ' + str(len(response)).encode() + b'\r\n\r\n' + response
-                    elif service == 'dns-tcp':
-                        wire = struct.pack('!H', len(response)) + response
-                    else:
-                        wire = response
-                    if tcp:
-                        connection.sendall(wire)
-                    else:
-                        key.fileobj.sendto(wire, peer)
-                    logs.append({**p, 'response': response.hex()})
-                    if len(logs) > 8 or len(json.dumps(logs)) > LOG_LIMIT:
-                        raise ValueError('target-log-limit')
-                finally:
-                    if connection is not None:
-                        connection.close()
+                place = EXCHANGE_PLACES[service]
+                logs.append(answer_exchange(key.fileobj, family, service, request))
+                if len(logs) > 8 or len(json.dumps(logs)) > LOG_LIMIT:
+                    raise ValueError('target-log-limit')
+        place = 'finish'
         if time.monotonic() >= deadline:
             raise ValueError('capture-deadline')
         if node is not None:
             # Whether the node was still there at finish, then its exit code.
+            place = 'node'
             alive, code = stop_process(node)
             node_state = dict(alive_at_finish=alive, exit_code=code)
         # Frames queued since the last poll still belong to the window.
+        place = 'capture'
         while True:
             try:
                 frame = capture.recv(2049)
@@ -968,17 +1114,13 @@ def serve(request, directory):
         ended = time.monotonic()
         # Linux PACKET_STATISTICS reports kernel drops, not just process success.
         _, dropped = struct.unpack('II', capture.getsockopt(263, 6, 8))
-    except BaseException:
-        error = True
+    except BaseException as error:
+        failure.note(place, error)
     finally:
-        if disk:
-            raw.finish(complete=not error)
-        else:
-            raw.flush()
-            os.fsync(raw.fileno())
-            raw.close()
+        settle(close_pcap)
         selector.close()
-        capture.close()
+        if capture is not None:
+            capture.close()
         for stream in sockets:
             stream.close()
         dns_stop.set()
@@ -988,23 +1130,27 @@ def serve(request, directory):
             stream.close()
         extra = {}
         if dns:
-            write(directory / 'dns.json', dns_log.rows)
-            error = error or dns_log.overflow
+            settle(lambda: write(directory / 'dns.json', dns_log.rows))
+            if dns_log.overflow:
+                failure.note(dns_log.overflow_in, ValueError('dns-log-limit'))
         if tunnel is not None:
             if node is not None and node_state is None:
-                alive, code = stop_process(node)
-                node_state = dict(alive_at_finish=alive, exit_code=code)
-            write(directory / 'https.json', https_log)
-            with (directory / 'node.log').open('xb') as stream:
-                stream.write(scrub_log((directory / 'node.stderr').read_bytes()
-                                       if (directory / 'node.stderr').exists() else b''))
+                try:
+                    alive, code = stop_process(node)
+                    node_state = dict(alive_at_finish=alive, exit_code=code)
+                except Exception as error:
+                    failure.note('node', error)
+            settle(lambda: write(directory / 'https.json', https_log))
+            settle(write_node_log)
             extra['node'] = node_state or dict(alive_at_finish=False, exit_code=None)
-        write(directory / 'targets.json', logs)
+        settle(lambda: write(directory / 'targets.json', logs))
         # Times are this machine's monotonic clock; a failed run records no end.
-        write(directory / 'health.json', dict(error=error, dropped=dropped, finished=True,
-                                              capture_started=started, capture_ended=ended, markers=marks,
-                                              **extra))
-    if error or dropped:
+        health = dict(error=bool(failure), dropped=dropped, finished=True, capture_started=started,
+                      capture_ended=ended, markers=marks, **extra)
+        if failure:
+            health.update(error_reason=failure.reason, error_at=failure.at, error_in=failure.where)
+        write(directory / 'health.json', health)
+    if failure or dropped:
         raise ValueError('observer-unverified')
 
 

@@ -25,7 +25,7 @@ from .lab_protocol import (MACS, CAPTURE_LIMIT, LOG_LIMIT, PORTS, CANARY_PORT, H
                            probes, markers, qualify, leak_verdict, https_exchanges, https_answer, dns_checks, dns_name,
                            plain_reply_ok, DNS_CHECK_DOH, DOH_NAME, RESOLVER, DOH_ADDRESS,
                            DURATION, DURATION_MAX, EVIDENCE_SIZE, EVIDENCE_PCAP_LIMIT, EVIDENCE_HEADER_SIZE,
-                           EVIDENCE_SERIAL, parse_evidence_header)
+                           EVIDENCE_SERIAL, parse_evidence_header, HELPER_REASON)
 
 ENTRY = '/usr/local/libexec/rosetun-lab/entry'
 SCHEMA_V1, SCHEMA_V2 = 'rosetun.matrix.lab.v1', 'rosetun.matrix.lab.v2'
@@ -199,14 +199,28 @@ class LabPair:
         self.closed = True
 
 
-def refusal(status):
-    """'lab-helper-failed', plus the helper's own fixed reason when it printed one."""
+class HelperFailed(ValueError):
+    """A guest helper exited nonzero. `helper_reason` is the code it printed, or None."""
+
+    def __init__(self, message, helper_reason=None):
+        super().__init__(message)
+        self.helper_reason = helper_reason
+
+
+def helper_code(status):
+    """The code after `lab-helper-failed:` in the helper's stderr, or None when there is none that fits."""
     try:
         text = base64.b64decode(status.get('err-data', ''), validate=True).decode('ascii')
     except (ValueError, UnicodeDecodeError):
-        return 'lab-helper-failed'
-    match = re.fullmatch(r'lab-helper-failed:([a-z0-9-]{1,64})\s*', text)
-    return 'lab-helper-failed-' + match[1] if match else 'lab-helper-failed'
+        return None
+    match = re.fullmatch(r'lab-helper-failed:(' + HELPER_REASON.pattern + r')\s*', text)
+    return match[1] if match else None
+
+
+def refusal(status):
+    """'lab-helper-failed', plus the helper's own fixed reason when it printed a plain one."""
+    code = helper_code(status)
+    return 'lab-helper-failed-' + code if code and re.fullmatch('[a-z0-9-]{1,64}', code) else 'lab-helper-failed'
 
 
 class Guest:
@@ -251,7 +265,7 @@ class Guest:
                 status = self.rpc('guest-exec-status', response)
                 if status.get('exited') is True:
                     if status.get('exitcode') != 0 or status.get('out-truncated') or status.get('err-truncated'):
-                        raise ValueError(refusal(status))
+                        raise HelperFailed(refusal(status), helper_code(status))
                     raw = base64.b64decode(status.get('out-data', ''), validate=True)
                     if len(raw) > LOG_LIMIT:
                         raise ValueError('lab-helper-output-limit')

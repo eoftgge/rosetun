@@ -712,6 +712,8 @@ class OrchestrationTests(unittest.TestCase):
                 if operation == 'probe':
                     if fault == 'target-unavailable':
                         raise ValueError('target-unavailable')
+                    if fault == 'exchange-failed':
+                        raise lab.HelperFailed('lab-helper-failed', 'http:6:timeout:5003ms')
                     return dict(replies=[{**p, 'response': wire.answer(p).hex()} for p in expected],
                                 marker_replies=[] if fault == 'marker-reply-lost' else
                                 [{**m, 'response': wire.marker_answer(m).hex()} for m in window],
@@ -776,6 +778,12 @@ class OrchestrationTests(unittest.TestCase):
                     self.assertFalse(result['qualification']['qualified'])
                 else:
                     self.assertFalse(result['completed'])
+
+    def test_a_failed_exchange_reaches_the_summary_with_the_name_the_helper_gave_it(self):
+        result = self.scenario('exchange-failed')
+        self.assertEqual([dict(stage='probe', kind='HelperFailed', reason='lab-helper-failed',
+                               helper_reason='http:6:timeout:5003ms')], result['errors'])
+        self.assertEqual((2, False), (result['exit_code'], result['qualification']['qualified']))
 
     def test_a_seen_leak_fails_the_run_and_a_missing_window_is_never_no_leak(self):
         leaked = self.scenario('leak')

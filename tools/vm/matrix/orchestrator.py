@@ -10,6 +10,7 @@ import uuid
 
 from .evidence import write_file
 from .execution import preflight
+from .lab_protocol import HELPER_REASON
 from .resources import (StandLease, create_run, resource_path, EXECUTION_FILES,
                         completion_verified)
 
@@ -19,9 +20,14 @@ _RETAINED_LEASES = []
 
 def failure(stage, error):
     reason = str(error)
-    return dict(stage=stage, kind=type(error).__name__,
-                reason=reason if type(error).__module__.startswith('tools.vm.matrix.')
-                and re.fullmatch(r'[A-Za-z0-9_-]{1,96}', reason) else 'operation-failed')
+    ours = type(error).__module__.startswith('tools.vm.matrix.')
+    row = dict(stage=stage, kind=type(error).__name__,
+               reason=reason if ours and re.fullmatch(r'[A-Za-z0-9_-]{1,96}', reason) else 'operation-failed')
+    # The code a guest helper printed, when it fits the fixed alphabet: it says which exchange failed.
+    helper = getattr(error, 'helper_reason', None)
+    if ours and type(helper) is str and HELPER_REASON.fullmatch(helper):
+        row['helper_reason'] = helper
+    return row
 
 
 def save(run, name, value, *, initial=False):

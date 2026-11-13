@@ -2360,6 +2360,40 @@ Owner qualification on the prepared stand, after reinstalling the helper:
 6. Read the saved pcap in Wireshark: the frame counts per category match
    `categories` in the summary.
 
+### Why a lab helper failed
+
+A run that ends `UNVERIFIED` or with `operation-failed` has to say where. Two
+records do.
+
+- **Observer.** When `serve` stops on an error, `health.json` carries three fields
+  next to `error: true`. `error_reason` is the exception class and a short code
+  (`ValueError:capture-limit`, `OSError:eio`), at most 96 characters and with no
+  address outside the documentation ranges. `error_at` is the lab machine's own
+  monotonic clock: compare it with `capture_started` and the marker times, never
+  with the test machine's. `error_in` is where the observer was: `capture`,
+  `marker`, `http`, `udp` (also for `dns-udp`), `dns-tcp`, `https`, `dns`, `doh`,
+  `node`, `setup` or `finish`. Only the first failure is kept. `finish` covers the
+  deadline and the closing steps (the pcap header, `dns.json`, `https.json`,
+  `node.log`, `targets.json`, which no longer hide the health record when they
+  fail); a server thread of DNS or DoH that dies, and an overflow of `dns.json`,
+  are `dns` or `doh`. A clean run has none of the three fields.
+- **Test machine.** An exchange that fails makes the helper print
+  `lab-helper-failed:<name>:<family>:<reason>:<elapsed>ms`, for example
+  `lab-helper-failed:http:6:timeout:5003ms`. The name is the service (`http`,
+  `udp`, `dns-udp`, `dns-tcp`), `https-direct`, `https-tunnel`, `dns-plain`,
+  `dns-doh-singbox`, `marker-open`, `marker-close`, `canary`, or `client` and
+  `dns-client` for starting the throwaway sing-box. The reason is the helper's own
+  fixed word, an errno name (`econnrefused`) or `timeout`. Refusals before the first
+  marker keep their plain reason (`missing-sing-box`).
+
+The controller copies a code that fits `[a-z0-9:._-]{1,96}` into the error row of
+the summary as `helper_reason`. `reason` stays what it was (`lab-helper-failed`, or
+`lab-helper-failed-<word>` for a plain refusal), and a code outside the alphabet is
+not copied at all.
+
+This changes the helper bytes: the owner installs `linux/guest/lab-entry.py` and
+`matrix/lab_protocol.py` in both images again and updates the descriptors.
+
 ## Stage 7b1: lab VPN node and HTTPS target
 
 Stage 7b1 gives the lab two more fixtures and a way to qualify them: a VPN node

@@ -14,6 +14,12 @@ GATEWAYS = {4: '192.0.2.1', 6: '2001:db8:6a:1::1'}
 TARGETS = {4: '203.0.113.2', 6: '2001:db8:6a:2::2'}
 CAPTURE_LIMIT = 131072
 LOG_LIMIT = 32768
+# What a helper prints after `lab-helper-failed:` and what the observer records in `health.json`:
+# lowercase words, never an address outside the documentation ranges.
+HELPER_REASON = re.compile(r'[a-z0-9:._-]{1,96}')
+REASON_LIMIT = 96
+# Where the observer was when it stopped, as `error_in` of `health.json`.
+OBSERVER_PLACES = ('capture', 'marker', 'http', 'udp', 'dns-tcp', 'https', 'dns', 'doh', 'node', 'setup', 'finish')
 # Stage 7b2a: phase windows. Window N is bracketed by `open` and `close` markers that carry
 # its index and the short name of the phase it observes.
 WINDOW_WORDS = ('open', 'close')
