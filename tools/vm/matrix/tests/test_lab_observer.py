@@ -14,7 +14,8 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from tools.vm.matrix import lab, orchestrator, lab_protocol as wire
+from tools.vm.matrix import l3_lab, lab, orchestrator, lab_protocol as wire
+from tools.vm.matrix.tests import test_lab as frames
 from tools.vm.matrix.tests.test_lab_fixtures import load_entry, runpy_main, tunnel_block
 
 LOOPBACK = '127.0.0.1'
@@ -149,19 +150,50 @@ class Observer:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as stream:
             stream.sendto(data, self.addresses[key])
 
-    def poke(self, service, family=4):
-        """The one valid request of a probe, sent without waiting for the answer."""
+    def request_of(self, service, family=4):
+        """The probe of a service and the bytes the test machine sends for it."""
         probe = next(p for p in self.request['probes'] if p['service'] == service and p['family'] == family)
         data = wire.query(probe)
         if service == 'http':
             data = b'GET /' + wire.token(probe) + b' HTTP/1.0\r\n\r\n'
         elif service == 'dns-tcp':
             data = struct.pack('!H', len(data)) + data
+        return probe, data
+
+    def poke(self, service, family=4):
+        """The one valid request of a probe, sent without waiting for the answer."""
+        probe, data = self.request_of(service, family)
         if probe['protocol'] == 'tcp':
             with socket.create_connection(self.addresses[(family, service)], 3) as stream:
                 stream.sendall(data)
         else:
             self.sendto((family, service), data)
+
+    def ask(self, service, family=4):
+        """One valid exchange as the test machine makes it; returns the probe and the target's bytes."""
+        probe, data = self.request_of(service, family)
+        if probe['protocol'] == 'udp':
+            return probe, self.send_datagram((family, service), data)
+        return probe, self.talk((family, service), data)
+
+    def talk(self, key, data):
+        """Send `data` over a new connection and read until the target closes it."""
+        received = bytearray()
+        with socket.create_connection(self.addresses[key], 3) as stream:
+            stream.settimeout(5)
+            stream.sendall(data)
+            try:
+                while True:
+                    block = stream.recv(1024)
+                    if not block:
+                        break
+                    received.extend(block)
+            except ConnectionError:
+                pass
+        return bytes(received)
+
+    def artifact(self, name):
+        return json.loads((self.directory / name).read_text())
 
     def marker(self, word):
         marker = next(m for m in self.window if m['word'] == word)
@@ -435,6 +467,243 @@ class PlacesTests(ObserverCase):
         health = observer.finish()
         self.assertEqual(('capture', 'PermissionError:eperm', None), (
             health['error_in'], health['error_reason'], health['capture_started']))
+
+
+class ExchangeIsolationTests(ObserverCase):
+    """One bad exchange is that exchange's failure; the capture, the markers and the next exchange go on."""
+
+    def refused(self, service, family, reason):
+        return dict(service=service, family=family, reason=reason)
+
+    def test_a_request_no_probe_matches_is_refused_on_every_service_and_the_next_one_is_answered(self):
+        junk = b'rosetun-lab-nonsense'
+        for family in (4, 6):
+            for service in wire.SERVICES:
+                with self.subTest(service=service, family=family):
+                    observer = Observer(self)
+                    observer.start().wait_ready()
+                    if service == 'http':
+                        observer.talk((family, service), b'GET /nonsense HTTP/1.0\r\n\r\n')
+                    elif service == 'dns-tcp':
+                        observer.talk((family, service), struct.pack('!H', len(junk)) + junk)
+                    else:
+                        observer.sendto((family, service), junk)
+                    probe, response = observer.ask(service, family)
+                    health = observer.finish()
+                    self.assertIn(wire.answer(probe), response)
+                    self.assertEqual([self.refused(service, family, 'unexpected-request'),
+                                      dict(probe, response=wire.answer(probe).hex())],
+                                     observer.artifact('targets.json'))
+                    self.assertEqual((False, None), (health['error'], observer.error))
+                    self.assertNotIn('error_in', health)
+
+    def test_a_connection_that_never_sends_times_out_and_the_observer_goes_on(self):
+        observer = Observer(self)
+        observer.start().wait_ready()
+        began = time.monotonic()
+        self.assertEqual(b'', observer.talk((6, 'http'), b''))
+        self.assertGreaterEqual(time.monotonic() - began, .9)
+        probe, response = observer.ask('http', 6)
+        health = observer.finish()
+        self.assertIn(wire.answer(probe), response)
+        self.assertEqual(self.refused('http', 6, 'timeout'), observer.artifact('targets.json')[0])
+        self.assertEqual((False, None), (health['error'], observer.error))
+
+    def test_a_dns_request_cut_short_is_refused_with_its_reason(self):
+        observer = Observer(self)
+        observer.start().wait_ready()
+        observer.talk((4, 'dns-tcp'), struct.pack('!H', 40) + b'abc')
+        observer.talk((4, 'dns-tcp'), struct.pack('!H', 4000))
+        probe, response = observer.ask('dns-tcp', 4)
+        health = observer.finish()
+        self.assertEqual([self.refused('dns-tcp', 4, 'timeout'), self.refused('dns-tcp', 4, 'request-limit')],
+                         observer.artifact('targets.json')[:2])
+        self.assertFalse(health['error'])
+
+    def test_a_marker_with_wrong_content_or_in_the_wrong_order_is_refused_and_the_window_still_closes(self):
+        observer = Observer(self)
+        observer.start().wait_ready()
+        closing = next(m for m in observer.window if m['word'] == 'close')
+        observer.sendto((4, 'marker'), b'rosetun-lab-marker:nonsense')
+        observer.sendto((4, 'marker'), wire.marker_query(closing))
+        opened, opening = observer.marker('open')
+        closed, closing = observer.marker('close')
+        health = observer.finish()
+        self.assertEqual((wire.marker_answer(opening), wire.marker_answer(closing)), (opened, closed))
+        self.assertEqual(['open', 'close'], [row['word'] for row in health['markers']])
+        self.assertEqual([self.refused('marker', 4, 'unexpected-marker')] * 2, observer.artifact('targets.json'))
+        self.assertEqual((False, None), (health['error'], observer.error))
+
+    def test_a_phase_marker_that_does_not_parse_is_refused_too(self):
+        observer = Observer(self, windows=True)
+        observer.start().wait_ready()
+        observer.sendto((4, 'marker'), b'rosetun-lab-marker:not-a-window')
+        observer.sendto((4, 'marker'), b'')
+        observer.thread.join(.3)
+        health = observer.finish()
+        self.assertEqual([self.refused('marker', 4, 'unexpected-marker')] * 2, observer.artifact('targets.json'))
+        self.assertEqual(([], False), (health['markers'], health['error']))
+
+    def test_a_bad_client_of_the_https_target_is_refused_in_its_log_and_the_next_one_is_served(self):
+        observer = Observer(self, tunnel=True)
+        served, calls = dict(source=wire.CLIENTS[4], port=40000, path='/p', at=1.0), []
+        finished = threading.Event()
+
+        def https_exchange(connection, peer, context, request):
+            calls.append(peer)
+            if len(calls) == 1:
+                raise ValueError('unexpected-request')
+            finished.set()
+            return served
+        self.enterContext(patch.object(self.entry, 'https_exchange', https_exchange))
+        observer.start().wait_ready()
+        for _ in range(2):
+            socket.create_connection(observer.addresses[(4, 'https')], 3).close()
+        self.assertTrue(finished.wait(5))
+        health = observer.finish()
+        self.assertEqual([self.refused('https', 4, 'unexpected-request'), served], observer.artifact('https.json'))
+        self.assertEqual((False, None), (health['error'], observer.error))
+
+    def test_a_flood_of_refusals_is_bounded_and_never_stops_the_observer(self):
+        observer = Observer(self)
+        observer.start().wait_ready()
+        for _ in range(30):
+            observer.sendto((4, 'udp'), b'rosetun-lab-nonsense')
+        probe, _ = observer.ask('udp', 4)
+        health = observer.finish()
+        rows = observer.artifact('targets.json')
+        self.assertEqual([self.refused('udp', 4, 'unexpected-request')] * 8, rows[:8])
+        self.assertEqual(9, len(rows))
+        self.assertEqual(dict(probe, response=wire.answer(probe).hex()), rows[8])
+        self.assertFalse(health['error'])
+
+    def test_more_answered_exchanges_than_the_run_has_still_stop_the_observer(self):
+        observer = Observer(self)
+        observer.start().wait_ready()
+        for _ in range(9):
+            observer.ask('udp', 4)
+        observer.thread.join(10)
+        health = observer.finish()
+        self.assertEqual((True, 'udp', 'ValueError:target-log-limit'),
+                         (health['error'], health['error_in'], health['error_reason']))
+        self.assertEqual('observer-unverified', str(observer.error))
+
+    def test_refusals_never_make_room_for_answers_in_the_limits(self):
+        observer = Observer(self)
+        observer.start().wait_ready()
+        for _ in range(8):
+            observer.sendto((4, 'udp'), b'rosetun-lab-nonsense')
+        for _ in range(8):
+            observer.ask('udp', 4)
+        health = observer.finish()
+        self.assertEqual(16, len(observer.artifact('targets.json')))
+        self.assertFalse(health['error'])
+
+
+class ObserverErrorTests(ObserverCase):
+    """What the observer itself cannot do stops it, whatever the exchanges did."""
+
+    def test_a_pcap_that_cannot_be_written_stops_the_observer_and_the_verdict_is_unverified(self):
+        with tempfile.TemporaryDirectory() as temp:
+            device = Path(temp) / 'evidence'
+            device.write_bytes(bytes(wire.EVIDENCE_HEADER_SIZE + 4096))
+            observer = Observer(self, evidence_disk=True)
+            writes = []
+            real = self.entry.EvidenceWriter.write
+
+            def write(writer, data):
+                writes.append(len(data))
+                if len(writes) > 1:
+                    raise OSError(errno.EIO, 'Input/output error')
+                real(writer, data)
+            self.enterContext(patch.object(self.entry, 'evidence_device', lambda: device))
+            self.enterContext(patch.object(self.entry.EvidenceWriter, 'write', write))
+            observer.start().wait_ready()
+            observer.capture.feed(frames.marker_exchange(observer.window[0])[0])
+            observer.thread.join(10)
+            health = observer.finish()
+        self.assertEqual((True, 'capture', 'OSError:eio'), (health['error'], health['error_in'], health['error_reason']))
+        self.assertEqual('observer-unverified', str(observer.error))
+        complete = frames.pcap(observer.probes, observer.window)
+        replies = [dict(m, response=wire.marker_answer(m).hex()) for m in observer.window]
+        verdict = wire.leak_verdict(complete, observer.probes, observer.window, health, True, replies)
+        self.assertEqual('UNVERIFIED', verdict['leak'])
+        self.assertIn('observer-health', verdict['observer_reasons'])
+
+    def test_a_capture_over_its_limit_stops_the_observer_too(self):
+        observer = Observer(self)
+        with patch.object(self.entry, 'CAPTURE_LIMIT', 30):
+            observer.start().wait_ready()
+            observer.capture.feed(b'\x00' * 20)
+            observer.thread.join(10)
+        health = observer.finish()
+        self.assertEqual((True, 'capture', 'ValueError:capture-limit'),
+                         (health['error'], health['error_in'], health['error_reason']))
+
+    def test_kernel_drops_are_not_an_exception_and_still_make_the_record_unclean(self):
+        observer = Observer(self, capture=FakeCapture(drops=3))
+        health = observer.run()
+        self.assertEqual((False, 3), (health['error'], health['dropped']))
+        self.assertEqual('observer-unverified', str(observer.error))
+
+
+class StalledExchangeTests(ObserverCase):
+    """The failure of the lab smoke: one exchange stalls in the middle of the window."""
+
+    def test_the_capture_goes_on_after_a_stalled_http_connection_and_the_run_is_not_qualified(self):
+        observer = Observer(self)
+        http4 = next(p for p in observer.probes if (p['service'], p['family']) == ('http', 4))
+        udp4 = next(p for p in observer.probes if (p['service'], p['family']) == ('udp', 4))
+        opening, closing = observer.window
+        observer.start().wait_ready()
+        # What the router sees: the window, the request of the stalled exchange, one whole exchange.
+        for frame in (frames.marker_exchange(opening) + frames.exchange(http4)[:1] + frames.exchange(udp4)
+                      + frames.marker_exchange(closing)):
+            observer.capture.feed(frame)
+        opened, _ = observer.marker('open')
+        observer.talk((4, 'http'), b'')
+        _, answered = observer.ask('udp', 4)
+        closed, _ = observer.marker('close')
+        health = observer.finish()
+        raw = (observer.directory / 'capture.pcap').read_bytes()
+        targets = observer.artifact('targets.json')
+        self.assertEqual((wire.marker_answer(opening), wire.marker_answer(closing)), (opened, closed))
+        self.assertEqual(wire.answer(udp4), answered)
+        self.assertEqual((False, 0, True, None), (health['error'], health['dropped'], health['finished'], observer.error))
+        self.assertEqual(['open', 'close'], [row['word'] for row in health['markers']])
+        # The probes of this run come from loopback; the capture's frames use the lab's addresses.
+        self.assertEqual([dict(service='http', family=4, reason='timeout'),
+                          dict(udp4, source=LOOPBACK, response=wire.answer(udp4).hex())], targets)
+        replies = [dict(m, response=wire.marker_answer(m).hex()) for m in observer.window]
+        verdict = wire.leak_verdict(raw, observer.probes, observer.window, health, True, replies)
+        self.assertEqual(('NONE', []), (verdict['leak'], verdict['observer_reasons']))
+        sent = [dict(p, response=wire.answer(p).hex()) for p in observer.probes if p is not http4]
+        result = wire.qualify(observer.probes, sent, targets, raw, True, health)
+        self.assertFalse(result['qualified'])
+
+
+class TargetLogTests(unittest.TestCase):
+    def test_a_refusal_row_is_never_an_answered_exchange_of_the_target(self):
+        nonces = iter(f'{i:024x}' for i in range(8))
+        expected = wire.probes('a' * 32, nonces.__next__)
+        window = wire.markers('a' * 32, iter(f'{i:024x}' for i in range(20, 22)).__next__)
+        raw = frames.pcap(expected, window)
+        health = frames.healthy(window)
+        answered = [dict(p, response=wire.answer(p).hex()) for p in expected]
+        refusal = dict(service='http', family=4, reason='timeout')
+        self.assertTrue(wire.qualify(expected, answered, answered, raw, True, health)['qualified'])
+        for logs in (answered[1:] + [refusal], answered + [refusal], [refusal] + answered[1:], answered[1:]):
+            with self.subTest(rows=len(logs)):
+                self.assertFalse(wire.qualify(expected, answered, logs, raw, True, health)['qualified'])
+
+    def test_the_fixtures_of_a_run_count_answers_of_the_https_target_and_not_refusals(self):
+        refusal = dict(service='https', family=4, reason='timeout')
+        served = dict(source=wire.CLIENTS[4], port=40000, path='/p', at=1.0)
+        for rows, answered, requests in (([], False, 0), ([refusal], False, 0), ([refusal, served], True, 1),
+                                         ([served, served], True, 2)):
+            with self.subTest(rows=len(rows)):
+                block = l3_lab.fixtures_block({}, {'https.json': rows})
+                self.assertEqual(dict(answered=answered, requests=requests), block['https'])
 
 
 if __name__ == '__main__':

@@ -45,6 +45,7 @@ EVIDENCE_DEVICE = Path('/dev/disk/by-id/virtio-rosetun-lab-evidence')
 DOH_REQUESTS = 16
 DOH_CONNECTIONS = 8
 HTTPS_LOG_ENTRIES = 16
+REFUSAL_ROWS = 8
 TUNNEL_KEYS = {'port', 'method', 'password', 'sing_box_sha256', 'ca_sha256', 'https'}
 HTTPS_KEYS = {'run_id', 'nonce', 'kind', 'family', 'protocol', 'source', 'target', 'port', 'path'}
 lstat = os.lstat
@@ -857,9 +858,19 @@ def https_exchange(connection, peer, context, request):
     return dict(source=peer[0], port=peer[1], path=matches[0]['path'], at=time.monotonic())
 
 
+def refuse(rows, service, family, error):
+    """Log a refused exchange of a target: which service, which family and why.
+
+    The row has no `response`, so the controller can never read it as an answered
+    exchange. At most `REFUSAL_ROWS` are kept, which keeps a stream of bad clients bounded.
+    """
+    if sum('reason' in row for row in rows) < REFUSAL_ROWS:
+        rows.append(dict(service=service, family=family, reason=short_code(error)))
+
+
 def record_https(log, row):
     log.append(row)
-    if len(log) > HTTPS_LOG_ENTRIES or len(json.dumps(log)) > LOG_LIMIT:
+    if sum('reason' not in entry for entry in log) > HTTPS_LOG_ENTRIES or len(json.dumps(log)) > LOG_LIMIT:
         raise ValueError('https-log-limit')
 
 
@@ -1071,29 +1082,45 @@ def serve(request, directory):
                     record(capture.recv(2049))
                     continue
                 family, service = key.data
+                # A bad exchange is the exchange's failure: it is closed and logged as a refusal, and the
+                # capture goes on. Only what the observer itself does (capture, limits, deadline) stops it.
                 if service == 'https':
                     place = 'https'
-                    connection, peer = key.fileobj.accept()
+                    connection = None
                     try:
-                        record_https(https_log, https_exchange(connection, peer, context, request))
+                        connection, peer = key.fileobj.accept()
+                        row = https_exchange(connection, peer, context, request)
+                    except Exception as error:
+                        refuse(https_log, 'https', 4, error)
+                    else:
+                        record_https(https_log, row)
                     finally:
-                        connection.close()
+                        if connection is not None:
+                            connection.close()
                     continue
                 if service == 'marker':
                     place = 'marker'
-                    data, peer = key.fileobj.recvfrom(1024)
-                    if request.get('windows') is True:
-                        index, word, label = accept_window_marker(request, marks, data, peer[0])
-                        key.fileobj.sendto(ACK_PREFIX.encode('ascii') + data, peer)
-                        marks.append(dict(word=word, index=index, label=label, at=time.monotonic()))
-                        continue
-                    marker = accept_marker(request, marks, data, peer[0])
-                    key.fileobj.sendto(marker_answer(marker), peer)
-                    marks.append(dict(word=marker['word'], nonce=marker['nonce'], at=time.monotonic()))
+                    try:
+                        data, peer = key.fileobj.recvfrom(1024)
+                        if request.get('windows') is True:
+                            index, word, label = accept_window_marker(request, marks, data, peer[0])
+                            key.fileobj.sendto(ACK_PREFIX.encode('ascii') + data, peer)
+                            marks.append(dict(word=word, index=index, label=label, at=time.monotonic()))
+                        else:
+                            marker = accept_marker(request, marks, data, peer[0])
+                            key.fileobj.sendto(marker_answer(marker), peer)
+                            marks.append(dict(word=marker['word'], nonce=marker['nonce'], at=time.monotonic()))
+                    except Exception as error:
+                        refuse(logs, 'marker', 4, error)
                     continue
                 place = EXCHANGE_PLACES[service]
-                logs.append(answer_exchange(key.fileobj, family, service, request))
-                if len(logs) > 8 or len(json.dumps(logs)) > LOG_LIMIT:
+                try:
+                    row = answer_exchange(key.fileobj, family, service, request)
+                except Exception as error:
+                    refuse(logs, service, family, error)
+                    continue
+                logs.append(row)
+                if sum('reason' not in entry for entry in logs) > 8 or len(json.dumps(logs)) > LOG_LIMIT:
                     raise ValueError('target-log-limit')
         place = 'finish'
         if time.monotonic() >= deadline:

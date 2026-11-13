@@ -2391,6 +2391,27 @@ the summary as `helper_reason`. `reason` stays what it was (`lab-helper-failed`,
 `lab-helper-failed-<word>` for a plain refusal), and a code outside the alphabet is
 not copied at all.
 
+#### One exchange does not stop the observer
+
+An error in one connection or datagram of a target service (`http`, `udp`,
+`dns-udp`, `dns-tcp`), of the HTTPS target, or a marker with the wrong content or in
+the wrong order, is that exchange's failure. The connection is closed, the target's
+log gets a refusal row `{"service", "family", "reason"}` (`targets.json`;
+`https.json` for the HTTPS target; at most eight rows per log, so a stream of bad
+clients stays bounded), and the capture goes on. The exchange does not qualify:
+the log has no answered row for it, or has a refusal row, so `qualified` is false.
+`leak` is judged from the capture as always, and the markers the observer did serve
+stay in `health.json`. A refusal row has no `response` and is never counted as an
+answered exchange: not in the limit of eight answered rows of `targets.json`, not in
+the sixteen of `https.json`, not in the `https` block of an L3 summary.
+
+What still stops the observer, with `error: true` and `UNVERIFIED`, is its own
+work: the capture socket, writing the pcap, the evidence disk, the size limits
+(the capture, more than eight answered rows, sixteen in `https.json`, `dns.json`)
+and the deadline. A failed exchange is a failed exchange; a failed observation is
+unknown. The servers of DNS and DoH already answered a bad client on their own
+threads and are unchanged.
+
 This changes the helper bytes: the owner installs `linux/guest/lab-entry.py` and
 `matrix/lab_protocol.py` in both images again and updates the descriptors.
 

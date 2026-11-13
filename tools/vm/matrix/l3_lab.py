@@ -90,10 +90,11 @@ def fixtures_block(health, logs):
         return value if type(value) is list else []
     node = health.get('node') if type(health) is dict and type(health.get('node')) is dict else {}
     dns = [row for row in rows('dns.json') if type(row) is dict]
+    # A refusal row (it has a `reason`) says the target turned a client away, not that it answered.
+    served = [row for row in rows('https.json') if type(row) is dict and 'reason' not in row]
     return dict(node=dict(alive_at_finish=node.get('alive_at_finish') is True,
                           exit_code=node.get('exit_code') if type(node.get('exit_code')) is int else None),
-                https=dict(answered=any(type(row) is dict for row in rows('https.json')),
-                           requests=len(rows('https.json'))),
+                https=dict(answered=bool(served), requests=len(served)),
                 dns=dict(answered=any(row.get('transport') in ('udp', 'tcp') for row in dns),
                          requests=sum(row.get('transport') in ('udp', 'tcp') for row in dns)),
                 doh=dict(answered=any(row.get('transport') == 'doh' for row in dns),
