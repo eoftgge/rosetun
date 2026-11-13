@@ -2171,14 +2171,25 @@ is infrastructure failure/UNVERIFIED, never 'no leaks'; interrupted runs use 130
 
 Fixed limits: capture 60 seconds, 128 KiB total pcap, 2048-byte full frames
 (no silent truncation), kernel receive buffer requested 256 KiB; logs/health and
-helper JSON each 32 KiB, eight accepted target requests, socket I/O 1 second
-(server) / 2 seconds (client), guest command timeout 5 seconds, boot wait 120
+helper JSON each 32 KiB, eight accepted target requests, socket waits 5 seconds
+(a server for a request, a client for an answer, the test machine for the echo of a
+marker; `REQUEST_TIMEOUT`, `RESPONSE_TIMEOUT` and `MARKER_TIMEOUT` in
+`lab_protocol.py`, once 1 and 2 seconds), guest command timeout 5 seconds, boot wait 120
 seconds per VM, guest facade 90 seconds, 40 status polls at 0.5 seconds per call,
 file reads 16 KiB and the unchanged QGA 128-RPC ceiling. Normal VM close retains
 the existing bounded lifecycle behavior. Kernel PACKET_STATISTICS drops, write
 errors, overflow, capture deadline, incomplete files, missing required traffic and
 nonzero helper status all prevent qualification. TCP handling is deliberately
 small and can reject short/split requests as infrastructure failure.
+
+**Nested virtualization.** On a stand that runs KVM inside another hypervisor (WSL2
+on Hyper-V), give each machine two vCPUs: set `vcpus = 2` in the `[qemu]` table of
+the lab configuration (`qemu.vcpus`). With one vCPU per machine a guest can stop for a
+second or more while the other one answers, which is the suspected cause of lab
+smokes that passed in one run and failed in the next with a connection that never
+closed. This is a recommendation for the stand: the default of `vcpus` and the
+lab example files stay at 1. A server that waits for a request holds the whole observer
+loop for up to the wait above, so a stalled client costs a few seconds, not the run.
 
 Owner repeat qualification:
 

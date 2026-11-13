@@ -29,6 +29,12 @@ MARKER_PREFIX = 'rosetun-lab-marker:'
 ACK_PREFIX = 'rosetun-lab-ack:'
 _WINDOW_MARKER = re.compile(rb'rosetun-lab-marker:([0-9a-f]{32})\.(0|[1-9][0-9]{0,2})\.(open|close)\.([a-z0-9_.-]{1,48})')
 DURATION = 60
+# Every wait of a lab socket, in seconds: a server for a request, a client for an answer, the test
+# machine for the echo of a marker. Nested virtualization with one vCPU per machine can stall a
+# guest for a second or more, which the old waits (1 for a server, 2 for a client) did not allow.
+REQUEST_TIMEOUT = 5
+RESPONSE_TIMEOUT = 5
+MARKER_TIMEOUT = 5
 # The longest legacy L3 job (run-l3.sh) plus the time to finish and read the evidence.
 JOB_TIMEOUT_SECONDS = 1800
 DURATION_MAX = JOB_TIMEOUT_SECONDS + 300

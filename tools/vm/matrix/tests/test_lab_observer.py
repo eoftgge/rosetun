@@ -3,6 +3,7 @@ import base64
 import errno
 import json
 from pathlib import Path
+import re
 import socket
 import ssl
 import struct
@@ -15,6 +16,7 @@ import unittest
 from unittest.mock import patch
 
 from tools.vm.matrix import l3_lab, lab, orchestrator, lab_protocol as wire
+from tools.vm.matrix.tests import test_lab as frames
 from tools.vm.matrix.tests import test_lab as frames
 from tools.vm.matrix.tests.test_lab_fixtures import load_entry, runpy_main, tunnel_block
 
@@ -57,7 +59,7 @@ class FakeCapture:
 class Observer:
     """One `serve` run in a thread, with loopback sockets standing in for the target namespace."""
 
-    def __init__(self, case, *, tunnel=False, dns=False, duration=30, capture=None, **request):
+    def __init__(self, case, *, tunnel=False, dns=False, duration=30, capture=None, request_timeout=.3, **request):
         self.case, self.entry = case, case.entry
         self.directory = Path(tempfile.mkdtemp())
         case.addCleanup(self.cleanup)
@@ -75,7 +77,9 @@ class Observer:
         self.capture = capture or FakeCapture()
         self.addresses, self.error, self.thread = {}, None, None
         self.node = SimpleNamespace(name='node')
-        for target in (patch.object(self.entry, 'open_capture', lambda interface: self.capture),
+        # The real wait is five seconds; a stalled client in a test should not take that long.
+        for target in (patch.object(self.entry, 'REQUEST_TIMEOUT', request_timeout),
+                       patch.object(self.entry, 'open_capture', lambda interface: self.capture),
                        patch.object(self.entry, 'bind_targets', self.bind),
                        patch.object(self.entry, 'check_lab_fixtures'),
                        patch.object(self.entry, 'start_process', lambda *args: self.node),
@@ -502,7 +506,7 @@ class ExchangeIsolationTests(ObserverCase):
         observer.start().wait_ready()
         began = time.monotonic()
         self.assertEqual(b'', observer.talk((6, 'http'), b''))
-        self.assertGreaterEqual(time.monotonic() - began, .9)
+        self.assertGreaterEqual(time.monotonic() - began, .25)
         probe, response = observer.ask('http', 6)
         health = observer.finish()
         self.assertIn(wire.answer(probe), response)
@@ -704,6 +708,85 @@ class TargetLogTests(unittest.TestCase):
             with self.subTest(rows=len(rows)):
                 block = l3_lab.fixtures_block({}, {'https.json': rows})
                 self.assertEqual(dict(answered=answered, requests=requests), block['https'])
+
+
+class WaitTests(ObserverCase):
+    """The waits of the lab sockets are one set of constants, five seconds each."""
+
+    class Recording:
+        """A socket that records the waits it was given and answers with `reply`."""
+        waits, reply = [], b''
+
+        def __init__(self, *args):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def settimeout(self, value):
+            self.waits.append(value)
+
+        def bind(self, address):
+            pass
+
+        def connect(self, address):
+            pass
+
+        def sendall(self, data):
+            pass
+
+        def recv(self, size):
+            return self.reply
+
+        def close(self):
+            pass
+
+        def accept(self):
+            return self, (LOOPBACK, 40000)
+
+    def test_a_server_and_a_client_wait_five_seconds_for_a_request_and_for_an_answer(self):
+        self.assertEqual((5, 5, 5), (wire.REQUEST_TIMEOUT, wire.RESPONSE_TIMEOUT, wire.MARKER_TIMEOUT))
+        for name in ('REQUEST_TIMEOUT', 'RESPONSE_TIMEOUT', 'MARKER_TIMEOUT'):
+            self.assertIs(getattr(wire, name), getattr(self.entry, name))
+
+    def test_no_socket_wait_of_the_helper_is_a_literal(self):
+        source = (Path(lab.__file__).parents[1] / 'linux/guest/lab-entry.py').read_text(encoding='utf-8')
+        waits = re.findall(r'\.settimeout\(([^)]*)\)', source)
+        # The one literal is the DoH listener's poll of its stop flag, not a wait for a peer.
+        names = {'REQUEST_TIMEOUT', 'RESPONSE_TIMEOUT', 'MARKER_TIMEOUT'}
+        self.assertEqual(['.2'], [w for w in waits if w not in names])
+
+    def test_each_side_takes_its_own_constant(self):
+        recording = self.Recording
+        udp4 = next(p for p in wire.probes('a' * 32, iter(f'{i:024x}' for i in range(8)).__next__)
+                    if (p['service'], p['family']) == ('udp', 4))
+        marker = wire.markers('a' * 32, iter(f'{i:024x}' for i in range(2)).__next__)[0]
+        with patch.object(self.entry, 'REQUEST_TIMEOUT', 11), patch.object(self.entry, 'RESPONSE_TIMEOUT', 12), \
+                patch.object(self.entry, 'MARKER_TIMEOUT', 13), patch.object(self.entry.socket, 'socket', recording):
+            recording.waits, recording.reply = [], wire.marker_answer(marker)
+            self.entry.exchange_marker(marker)
+            self.assertEqual([13], recording.waits)
+            recording.waits, recording.reply = [], wire.answer(udp4)
+            self.entry.probe_one(udp4)
+            self.assertEqual([12], recording.waits)
+            http4 = dict(udp4, service='http', protocol='tcp')
+            # The server of a TCP service waits for the request on the connection it accepted.
+            recording.waits, recording.reply = [], b'GET /' + wire.token(http4) + b' HTTP/1.0\r\n\r\n'
+            row = self.entry.answer_exchange(recording(), 4, 'http', dict(probes=[dict(http4, source=LOOPBACK)]))
+            self.assertEqual([11], recording.waits)
+            self.assertEqual(wire.answer(http4).hex(), row['response'])
+
+    def test_a_server_gives_up_on_a_silent_client_after_its_wait_and_not_before(self):
+        observer = Observer(self, request_timeout=.5)
+        observer.start().wait_ready()
+        began = time.monotonic()
+        self.assertEqual(b'', observer.talk((4, 'http'), b''))
+        elapsed = time.monotonic() - began
+        observer.finish()
+        self.assertTrue(.4 <= elapsed < 3, elapsed)
 
 
 if __name__ == '__main__':

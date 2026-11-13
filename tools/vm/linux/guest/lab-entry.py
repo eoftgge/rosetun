@@ -27,7 +27,7 @@ from lab_protocol import (MACS, CLIENTS, GATEWAYS, TARGETS, PORTS, SERVICES, CAP
                           dns_reply, doh_reply, parse_request_head, http_response,
                           EVIDENCE_PCAP_LIMIT, EVIDENCE_HEADER_SIZE, DURATION_MAX, evidence_header,
                           WINDOW_LIMIT, ACK_PREFIX, parse_window_marker, DNS_CHECK_DOH, DOH_NAME,
-                          dns_name, plain_reply_ok, REASON_LIMIT)
+                          dns_name, plain_reply_ok, REASON_LIMIT, REQUEST_TIMEOUT, RESPONSE_TIMEOUT, MARKER_TIMEOUT)
 
 ROOT = Path('/run/rosetun-lab')
 ENTRY = '/usr/local/libexec/rosetun-lab/entry'
@@ -221,7 +221,7 @@ def probe_one(p):
     family = socket.AF_INET if p['family'] == 4 else socket.AF_INET6
     tcp = p['protocol'] == 'tcp'
     with socket.socket(family, socket.SOCK_STREAM if tcp else socket.SOCK_DGRAM) as stream:
-        stream.settimeout(2)
+        stream.settimeout(RESPONSE_TIMEOUT)
         stream.bind((p['source'], 0))
         stream.connect((p['target'], p['port']))
         data = query(p)
@@ -260,7 +260,7 @@ def probe_exchanges(request):
 
 def exchange_marker(marker):
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as stream:
-        stream.settimeout(2)
+        stream.settimeout(MARKER_TIMEOUT)
         stream.bind((marker['source'], 0))
         stream.connect((marker['target'], marker['port']))
         stream.sendall(marker_query(marker))
@@ -334,14 +334,14 @@ def probe_tunnel(request):
 
     def get_direct():
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            sock.settimeout(2)
+            sock.settimeout(RESPONSE_TIMEOUT)
             sock.bind((direct['source'], 0))
             sock.connect((direct['target'], direct['port']))
             return sock.getsockname()[1], https_get(sock, direct, context)
 
     def get_through_node():
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            sock.settimeout(2)
+            sock.settimeout(RESPONSE_TIMEOUT)
             sock.connect(('127.0.0.1', SOCKS_PORT))
             socks_connect(sock, via_node['target'], via_node['port'])
             return https_get(sock, via_node, context)
@@ -379,7 +379,7 @@ def probe_dns(request):
 
     def ask_plain():
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-            sock.settimeout(2)
+            sock.settimeout(RESPONSE_TIMEOUT)
             sock.bind((plain['source'], 0))
             sock.connect((plain['target'], plain['port']))
             sock.send(query(plain))
@@ -390,7 +390,7 @@ def probe_dns(request):
 
     def get_doh():
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            sock.settimeout(5)
+            sock.settimeout(RESPONSE_TIMEOUT)
             sock.connect(('127.0.0.1', SOCKS_PORT))
             socks_connect_domain(sock, dns_name(doh), doh['port'])
             return https_get(sock, doh, context)
@@ -691,7 +691,7 @@ def dns_datagram(sock, log):
 def dns_stream(listener, log):
     connection, peer = listener.accept()
     with connection:
-        connection.settimeout(1)
+        connection.settimeout(REQUEST_TIMEOUT)
         size = int.from_bytes(receive(connection, 2), 'big')
         if size > 1024:
             raise ValueError('request-limit')
@@ -778,7 +778,7 @@ def doh_connection(stream, peer, log):
 
 def doh_worker(connection, peer, context, log):
     try:
-        connection.settimeout(5)
+        connection.settimeout(REQUEST_TIMEOUT)
         with context.wrap_socket(connection, server_side=True) as stream:
             doh_connection(stream, peer, log)
     except (OSError, ssl.SSLError, ValueError):
@@ -834,7 +834,7 @@ def accept_window_marker(request, marks, data, source):
 
 def https_exchange(connection, peer, context, request):
     """One request to the HTTPS target; the log row names who asked and from which port."""
-    connection.settimeout(1)
+    connection.settimeout(REQUEST_TIMEOUT)
     with context.wrap_socket(connection, server_side=True) as stream:
         data = bytearray()
         while b'\r\n\r\n' not in data:
@@ -971,7 +971,7 @@ def answer_exchange(listener, family, service, request):
     try:
         if tcp:
             connection, peer = listener.accept()
-            connection.settimeout(1)
+            connection.settimeout(REQUEST_TIMEOUT)
             if service == 'dns-tcp':
                 size = int.from_bytes(receive(connection, 2), 'big')
                 if size > 1024:
