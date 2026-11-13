@@ -8,6 +8,7 @@ mod lists;
 mod ping;
 mod resolve;
 mod rules;
+pub mod rules_exchange;
 #[cfg(target_os = "linux")]
 mod scope;
 mod selection;

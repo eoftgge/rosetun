@@ -9,6 +9,10 @@ mod node;
 mod prefix;
 mod report;
 mod rule;
+mod rule_input;
+pub mod rules_exchange;
+
+pub use rule_input::{IpCidrError, RuleInputError, parse_domain_input, parse_ip_cidr};
 mod runtime;
 mod settings;
 mod subscription;
