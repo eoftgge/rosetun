@@ -563,8 +563,8 @@ def start(run, *, timeout=5, executor=execute, lab=None):
                      if config.qga else ('qemu-stderr.log', 'completion.json')):
             run.register({'id': name.split('.')[0], 'kind': 'file', 'path': name})
         if config.qga:
-            from .linux_l2 import EVIDENCE_FILES
-            for index, name in enumerate(EVIDENCE_FILES):
+            from .linux_l2 import evidence_files
+            for index, name in enumerate(evidence_files(stage)):
                 relative = 'linux-' + stage + '/' + name
                 run.register({'id': 'linux-' + stage + '-' + str(index), 'kind': 'file', 'path': relative})
                 path = resource_path(run.directory, relative)

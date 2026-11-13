@@ -18,7 +18,7 @@ from tools.vm.matrix.tests.test_jobs import GUEST
 from tools.vm.matrix.tests.test_l2_media import helper
 from tools.vm.matrix.tests.test_linux_l2 import CHECKOUT, SOURCE
 from tools.vm.matrix.tests.test_matrix import summarize, synthetic_inputs
-from tools.vm.matrix.tests.test_qga import BOOT
+from tools.vm.matrix.tests.test_qga import BOOT, read
 
 L3 = l2.PROFILES['l3']
 ELF = b'\x7fELF\x02\x01' + b'\0' * 10 + b'\x02\0\x3e\0'
@@ -72,7 +72,7 @@ def register_evidence(run, stage):
     """What lifecycle.start reserves for the stage's job evidence (the fixture's run already started)."""
     from tools.vm.matrix.resources import _atomic_manifest
     record = run._read()
-    for index, name in enumerate(l2.EVIDENCE_FILES):
+    for index, name in enumerate(l2.evidence_files(stage)):
         relative = 'linux-' + stage + '/' + name
         record['resources'].append(dict(id='linux-' + stage + '-' + str(index), kind='file', path=relative))
         path = run.directory / relative
@@ -714,6 +714,67 @@ class L3ImportTests(unittest.TestCase):
         self.assertEqual(0, (self.vm.run.directory / 'linux-l2/1/report.json').stat().st_size)
         paths = [a['path'] for n, a in self.agent.client.commands if n == 'guest-exec']
         self.assertEqual([delivery.HELPER, l2.LAUNCHER], paths)
+
+    def test_the_helper_journal_is_kept_when_there_is_one_and_never_changes_the_assessment(self):
+        self.obj.stage()
+        with patch.object(l2, 'source_identity', return_value=SOURCE):
+            job = self.obj.linux_l2_job(checkout=CHECKOUT, enabled=True)
+        job.submit()
+        plan, report, status = synthetic_inputs('linux-l3')
+        report['run_id'] = GUEST
+        report['guest'] = dict(boot_id=BOOT, boot_id_at_end=BOOT)
+        status.update(run_id=GUEST, boot_id=BOOT)
+        self.fixture.files.update({'report.json': json.dumps(report).encode(),
+                                   'status.json': json.dumps(status).encode()})
+        saved = self.vm.run.directory / 'linux-l3/1/helper-journal.txt'
+        # A guest answers in blocks; the fixture's own peer sends a file whole.
+        offset, opened = [0], self.agent.client.responses['guest-file-open']
+
+        def opening():
+            offset[0] = 0
+            return opened()
+
+        def reading():
+            data = self.fixture.current
+            count = min(self.agent.client.commands[-1][1]['count'], l2.BLOCK)
+            block = data[offset[0]:offset[0] + count]
+            offset[0] += len(block)
+            return read(block, eof=offset[0] == len(data))
+
+        self.agent.client.responses.update({'guest-file-open': opening, 'guest-file-read': reading})
+
+        def collect():
+            job.polls = job.calls = self.agent.calls = 0
+            return job.collect()
+
+        without = collect()
+        self.assertEqual(b'', saved.read_bytes())
+        # A file the guest wrote is saved as it is, in more than one block.
+        text = b'42.000000 host rosetun-helper[1]: connected\n' * 2000
+        self.fixture.files['helper-journal.txt'] = text
+        with_journal = collect()
+        self.assertEqual(text, saved.read_bytes())
+        self.assertEqual(without['assessment'], with_journal['assessment'])
+        self.assertEqual(without['verification'], with_journal['verification'])
+        self.assertEqual(without['accepted'], with_journal['accepted'])
+        # One more byte than the limit: the first bytes stay and nothing else changes.
+        self.fixture.files['helper-journal.txt'] = b'x' * (l2.JOURNAL_LIMIT + 1)
+        oversized = collect()
+        self.assertEqual(b'x' * (l2.JOURNAL_LIMIT + 1), saved.read_bytes())
+        self.assertEqual(without['assessment'], oversized['assessment'])
+        rows = [json.loads(line) for line in (self.vm.run.directory / 'job-evidence.jsonl').read_text().splitlines()]
+        journal = [row for row in rows if row['operation'] == 'l2-file' and row.get('file') == 'journal']
+        self.assertTrue(journal[0]['absent'])
+        self.assertEqual((True, len(text)), (journal[1]['complete'], journal[1]['size']))
+        self.assertFalse(journal[2]['complete'])
+        self.assertTrue(journal[3]['over_limit'])
+        self.assertEqual(4, len(journal))
+
+    def test_only_the_l3_stage_reserves_a_place_for_the_journal(self):
+        self.assertEqual(l2.EVIDENCE_FILES, l2.evidence_files('l2'))
+        self.assertEqual(l2.EVIDENCE_FILES + tuple(f'{i}/helper-journal.txt' for i in range(1, l2.POLLS + 1)),
+                         l2.evidence_files('l3'))
+        self.assertEqual(256 * 1024, l2.JOURNAL_LIMIT)
 
     def test_the_importer_installs_l3_content_and_names_the_profile_in_the_receipt(self):
         class Adapter:

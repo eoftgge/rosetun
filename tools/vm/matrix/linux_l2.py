@@ -17,6 +17,7 @@ from .config import make_plan, validate_plan
 from .evidence import write_file
 from .jobs import JobError, LAUNCHER, SmokeJob, _uuid
 from .lifecycle import _guest_serialized
+from .qga import QgaError
 from .report import assess, _unique_object, _invalid_constant
 from .resources import _identifier, _no_links, _regular_file
 
@@ -87,6 +88,16 @@ POLLS = 4
 EVIDENCE_FILES = ('plan.json', 'package.json', 'assessment.json') + tuple(
     f'{i}/{name}.json' for i in range(1, POLLS + 1)
     for name in ('status', 'report', 'status-after'))
+# The L3 job also saves the service's journal beside its report. It is evidence only: its absence or its
+# size changes nothing in the assessment.
+JOURNAL = 'helper-journal.txt'
+JOURNAL_LIMIT = 256 * 1024
+JOURNAL_FILES = tuple(f'{i}/{JOURNAL}' for i in range(1, POLLS + 1))
+
+
+def evidence_files(stage):
+    """The files a stage's job may write under `linux-<stage>/`, all reserved before the VM runs."""
+    return EVIDENCE_FILES + (JOURNAL_FILES if stage == 'l3' else ())
 
 
 def _json(raw):
@@ -475,14 +486,24 @@ class LinuxL2Job:
         return self.snapshot()
 
     def _read(self, name):
-        if name not in ('status', 'report', 'status-after'):
+        """The bytes of one result file; the journal is optional and gives None when the guest has none."""
+        if name not in ('status', 'report', 'status-after', 'journal'):
             raise JobError('l2-unknown-result-file')
-        suffix = 'report.json' if name == 'report' else 'status.json'
+        suffix = {'report': 'report.json', 'journal': JOURNAL}.get(name, 'status.json')
+        saved = f'{self.polls}/' + (JOURNAL if name == 'journal' else name + '.json')
         path = '/var/lib/rosetun-l2/' + self.identity['guest_run_id'] + '/report/' + suffix
         pending = self.vm.qga.session_id + ':open:' + str(self.calls)
         self.handles[pending] = 'unconfirmed'
         self._evidence('l2-open-intent', file=name)
-        handle = self._rpc('guest-file-open', dict(path=path, mode='r'))
+        try:
+            handle = self._rpc('guest-file-open', dict(path=path, mode='r'))
+        except QgaError as error:
+            # The guest answered and refused: no file, so no handle. Any other failure leaves it unconfirmed.
+            if name != 'journal' or str(error) != 'qga-rpc-rejected':
+                raise
+            self.handles[pending] = 'rejected'
+            self._evidence('l2-file', file=name, complete=False, size=0, absent=True)
+            return None
         if type(handle) is not int or not 0 <= handle < 2**63:
             self.vm.qga.invalidate()
             raise JobError('l2-invalid-handle')
@@ -490,7 +511,7 @@ class LinuxL2Job:
         key = self.vm.qga.session_id + ':' + str(handle)
         self.handles[key] = 'open'
         data, complete = bytearray(), False
-        limit = REPORT_LIMIT if name == 'report' else 8192
+        limit = {'report': REPORT_LIMIT, 'journal': JOURNAL_LIMIT}.get(name, 8192)
         try:
             for _ in range(limit // BLOCK + 2):
                 requested = min(BLOCK, limit - len(data) + 1)
@@ -515,7 +536,7 @@ class LinuxL2Job:
             raise JobError('l2-read-block-limit')
         finally:
             try:
-                self._save(f'{self.polls}/{name}.json', data)
+                self._save(saved, data)
                 self._evidence('l2-file', file=name, complete=complete, size=len(data),
                                sha256=hashlib.sha256(data).hexdigest())
             finally:
@@ -525,6 +546,16 @@ class LinuxL2Job:
                         self.vm.qga.invalidate()
                         raise JobError('l2-invalid-close')
                     self.handles[key] = 'closed'
+
+    def _journal(self):
+        """Keep the service's journal when the guest has one; a missing or oversized file changes nothing."""
+        try:
+            self._read('journal')
+        except JobError as error:
+            if str(error) != 'l2-result-size-limit':
+                raise
+            # The first bytes are retained, the limit and one more; the assessment does not depend on them.
+            self._evidence('l2-file', file='journal', complete=False, over_limit=True)
 
     @_guest_serialized
     def collect(self):
@@ -555,6 +586,8 @@ class LinuxL2Job:
             raw_report = self._read('report')
             if self._read('status-after') != raw_status:
                 raise JobError('l2-results-changed')
+            if self.profile.name == 'l3':
+                self._journal()
             self._fresh_boot()
             result = assess(_json(raw_report), status, self.plan)
             self._save('assessment.json', json.dumps(result, sort_keys=True).encode())

@@ -186,6 +186,8 @@ class ExecutionTests(unittest.TestCase):
         self.assertEqual(assess(self.report, self.status, self.job.plan), result['assessment'])
         self.assertTrue(result['assessment']['acceptance']['accepted'])
         self.assertFalse(result['release_gate'])
+        self.assertFalse(any(n == 'guest-file-open' and a['path'].endswith('/helper-journal.txt')
+                             for n, a in self.agent.client.commands))
         self.assertEqual(self.files['report.json'], (self.vm.run.directory / 'linux-l2/1/report.json').read_bytes())
         saved = assess_files(self.vm.run.directory / 'linux-l2/1/report.json', self.vm.run.directory / 'linux-l2/plan.json')
         saved.pop('sources')

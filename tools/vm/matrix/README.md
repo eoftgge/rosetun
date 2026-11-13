@@ -146,7 +146,16 @@ automatic resubmit. The existing `start.sh` uses autonomous `systemd-run` with
 `ExecStopPost` cleanup/finalization. Controller crash recovery is not provided.
 
 Collection exposes only this run's `report/status.json` and `report/report.json`;
-there are no arbitrary paths or extra diagnostics. It first requires a finished
+there are no arbitrary paths or extra diagnostics. The one exception is the L3
+profile: it also reads the service journal `run-l3.sh` saves as
+`report/helper-journal.txt` (its last 400 lines, written before the report), as a third,
+optional file of at most 256 KiB, read the same way and saved as
+`linux-l3/<n>/helper-journal.txt` (a place for each of the four attempts is reserved
+before the VM runs). It is read after the status and the report agree and before the
+last boot check, and it is evidence only: a guest that has no such file, or one over the
+limit (the first 256 KiB and one byte are kept, and the journal says so), changes neither the
+assessment nor the verification. A transport failure while reading it fails the attempt like
+any other. The L2 collection does not read it. Collection first requires a finished
 status with matching guest run/boot, reads the report, then requires identical
 finished status bytes and another fresh QGA boot check. The legacy producer
 publishes report once under a finalization lock, then publishes finished status;
