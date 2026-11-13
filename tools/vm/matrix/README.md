@@ -2534,6 +2534,20 @@ v5: the owner qualifies 6a and 6b again on v5 (see below).
   services (no port 123, no established TCP). A unit that shows up in either list
   and is not named here is judged by the same question: does it open a connection
   without being asked? If it does, mask it.
+- **What the stand showed.** `apt-listchanges.timer` and `apt-listchanges.service` are masked
+  too: they made background DNS queries, which are extra traffic in the capture like the units
+  above. And the default IPv4 route through `192.0.2.1` is required, not a convenience: without
+  it Rosetun finds no physical interface (`physical_default_interface` in
+  `crates/rosetun-routing/src/platform/linux/physical.rs` reads the default route of the main
+  table) and the group of stage 7b2b stopped at seven passes.
+
+Check the test image on the stand before a qualification, after a boot:
+
+```sh
+ip route                      # a default route via 192.0.2.1
+systemctl list-timers --all   # none of the masked timers, nothing that calls out
+cat /etc/resolv.conf          # exactly: nameserver 203.0.113.53
+```
 
 Certificates, with a term and the IP SAN (the guest clocks must be inside the
 validity period: check `date` in both images after preparing them):
