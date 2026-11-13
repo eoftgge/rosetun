@@ -45,7 +45,28 @@
 <p>A known sing-box error on Linux sometimes attributes a connection to the wrong program (<a href="https://github.com/SagerNet/sing-box/issues/4501">SagerNet/sing-box#4501</a>, open; Windows is not affected). So a <strong>Direct</strong> rule for a program can now and then let another program&#x27;s connection past the tunnel, also with the kill switch on, because the kill switch lets the engine out. A connection whose program is not found matches no rule by program and goes by the rules after them. If this matters, use rules by site and IP instead, and keep <strong>Through VPN</strong> as the default with no <strong>Direct</strong> rule by program.</p>
                 <nav class="doc-pager" aria-label="Previous and next"><a rel="prev" href="../modes/">← TUN and System proxy</a><a rel="next" href="../local-network/">Local network →</a></nav>
             </div>
-        </main>
+        <section id="exchange">
+<h2>Export and import</h2>
+<p>In Rules, choose Export for the whole set or the selected rows. Copy the document to the clipboard or save a JSON file on Windows. Linux currently supports the clipboard only. Import from the same menu, review the rules and choose Add or Replace. Duplicates are skipped. The whole import, including the default rule and list references, can be undone with Ctrl+Z.</p>
+<p>Import always shows a preview: destinations, duplicates, invalid rules, disabled rules and unavailable servers. The default rule stays unchanged unless you select its separate checkbox. Broad Direct rules carry a warning. A rules document cannot be imported through a <code>rosetun://</code> link.</p>
+<p>List contents are never included. URL sources are included only after you confirm the displayed hosts; links can contain access keys. Without consent, list rules arrive disabled and require a list. File lists arrive disabled and require the named file. Import does not download a list.</p>
+<p>Program names are translated between Windows and Linux: <code>firefox.exe</code> becomes <code>firefox</code>, with Linux case preserved. Paths from another system remain disabled. A server is matched by its exact name, subscription name and country. An absent or ambiguous match falls back to Through VPN with a warning.</p>
+<p>The exchange format is independent of settings: <code>format: "rosetun-rules"</code>, <code>version: 1</code>, application version, source system, optional default target, rules and referenced lists. Internal rule/list/server IDs, server addresses, ports, keys, passwords, list contents, hashes and update times are omitted. List references use zero-based document indexes. Unknown document fields and unsupported versions are rejected; invalid individual rules are reported and skipped. Limits: 4 MiB and 10,000 rules or lists.</p>
+<pre><code>{
+  "format": "rosetun-rules",
+  "version": 1,
+  "exported_by": "0.6.0",
+  "system": "windows",
+  "default_target": "proxy",
+  "rules": [
+    {"enabled": true, "matcher": {"domain": {"suffix": "example.com"}}, "target": "proxy"},
+    {"enabled": true, "matcher": {"ip_cidr": "192.0.2.0/24"}, "target": "block"}
+  ],
+  "lists": []
+}</code></pre>
+<p>CLI: <code>rosetun rules export [--selected-ids 1,2] [--with-list-urls] [FILE|-]</code>; <code>rosetun rules import [--replace] [--yes] FILE|-</code>. Export defaults to standard output. Import prints a preview and asks before saving; <code>--yes</code> approves the rules and keeps the existing default. A separate interactive question approves a default change. When reading a document from standard input, confirmation uses the terminal. Treat a document containing list links as a secret and review Direct rules before importing.</p>
+</section>
+</main>
         <footer class="wrap">
             <span>Rosetun</span>
             <a href="https://github.com/eoftgge/rosetun">GitHub</a>
