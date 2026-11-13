@@ -2523,6 +2523,145 @@ pinned version is exercised only by this qualification; no offline test starts i
    connection to `203.0.113.2:443`.
 7. Repeat `run linux-l2` and the 7a run on v5: results as before.
 
+## Stage 7b2a: lab DNS, evidence disk and phase windows
+
+Stage 7b2a prepares the lab for a full Linux L3 run without running it: a
+resolver and a DoH target, a separate disk for the capture, and observation
+windows per phase. Rosetun and `run-l3.sh` are untouched and L3 does not run
+through the lab yet. Security invariants stay **UNVERIFIED**, the release gate
+stays false. The helper changes: the owner installs `linux/guest/lab-entry.py`
+and `matrix/lab_protocol.py` in **both** images and updates the descriptors.
+
+### Lab resolver and DoH target
+
+Only when the helper request carries `dns: true`. Both live in the `rtlab`
+namespace, on addresses added to `rt-target` by `setup`:
+
+| Service | Address | What it does |
+| --- | --- | --- |
+| Resolver | `203.0.113.53` UDP and TCP 53 | Every `A` question of class `IN` gets one answer, `203.0.113.2`; `AAAA` and every other type or class get an empty `NOERROR`. No recursion (RA clear). A message that cannot be read gets `FORMERR`, another opcode `NOTIMP`; a response or less than a header gets no answer. |
+| DoH | `203.0.113.3:443`, path `/dns-query` | RFC 8484 `POST` (`application/dns-message`) and `GET` (`?dns=` base64url), the same responder. Wrong path 404, other method 405, other content type 415, body or `dns` value over 512 bytes 413, unreadable message 400. HTTP/1.1 only, ALPN `http/1.1`, at most 16 requests per connection. |
+
+Both write `dns.json` beside the other lab artifacts: one row per question with
+`source`, `transport` (`udp`, `tcp`, `doh`), `name` (cut at 96 characters) and
+`type`. At most 256 rows and `LOG_LIMIT`; an overflow makes the observer
+unclean. The servers run on threads of their own, so a slow client never delays
+the capture.
+
+Whether the DoH client of sing-box 1.14.3 accepts an HTTP/1.1 server is checked
+only on the stand. If it does not, that blocks the stage; HTTP/2 is not
+implemented without a separate decision.
+
+The DoH certificate is signed by the same lab CA as the HTTPS target and has
+both names. Install `doh-cert.pem` and `doh-key.pem` (root, mode `0600` for the
+key) beside the other fixtures on the lab image only:
+
+```sh
+openssl ecparam -name prime256v1 -genkey -noout -out doh-key.pem
+openssl req -new -key doh-key.pem -subj '/CN=doh.lab.test' -out doh.csr
+printf 'subjectAltName=DNS:doh.lab.test,IP:203.0.113.3\nbasicConstraints=CA:FALSE\nkeyUsage=digitalSignature\nextendedKeyUsage=serverAuth\n' > doh.ext
+openssl x509 -req -in doh.csr -CA rosetun-lab-ca.crt -CAkey lab-ca.key -CAcreateserial \
+  -sha256 -days 825 -extfile doh.ext -out doh-cert.pem
+```
+
+A missing or unsafe file is a refusal (`missing-doh-certificate`,
+`missing-doh-key`) before anything in the guest changes.
+
+### Addition to the prepared image contract v5
+
+The **test** image resolves through the lab: `/etc/resolv.conf` holds exactly
+`nameserver 203.0.113.53`, no other server and no local caching resolver
+(`systemd-resolved`, `dnsmasq` and the like are absent or masked). Without it
+`dig example.com A` of the baseline check has nothing to ask.
+
+### Evidence disk
+
+`lab-smoke --evidence-disk` (also with `--tunnel`, `--canary` and `--dry-run`)
+gives the lab machine a second disk and keeps the capture there instead of
+behind QGA, whose reads stop near 2 MiB per session.
+
+- The controller creates `evidence.img` in the lab run directory as a registered
+  resource: raw, writable, exactly 64 MiB, zeroed. QEMU gets it as a second
+  `virtio-blk` device with `serial=rosetun-lab-evidence`, added to the lab
+  machine's arguments only. The test machine does not see it, and the launch
+  plan stored at preparation is unchanged; without the flag every launch
+  argument is what it was before.
+- The helper finds the disk only at
+  `/dev/disk/by-id/virtio-rosetun-lab-evidence` and refuses without it
+  (`missing-evidence-disk`, `evidence-disk-not-a-block-device`) before it
+  changes anything.
+- Format: a 4096-byte header, then the pcap. Header (little endian): magic
+  `RTLABEV1`, version `1`, completion flag, the 32-character lab run ID, pcap
+  length (8 bytes), SHA-256 of the pcap, zeros. The helper writes the pcap as a
+  stream, syncs it, writes the header last and syncs the device. A run that
+  failed leaves the flag clear. The pcap limit is 60 MiB; the 128 KiB limit of
+  stage 6a stays for runs without the disk.
+- The controller reads the image only after it stopped the lab machine and its
+  completion is verified. It checks magic, version, run ID, flag, header
+  padding, the image size, the length, the SHA-256 and that only zeros follow the
+  pcap, then writes `capture.pcap` of the run with `evidence.write_file`. Any
+  difference gives `leak` `UNVERIFIED` with the reason (`evidence-truncated`,
+  `evidence-size`, `evidence-sha256`, `evidence-incomplete`, `evidence-run-id`,
+  `evidence-trailing-bytes`, `evidence-magic`, `evidence-version`,
+  `evidence-length`, `evidence-header-padding`), exit 2 and no partial analysis.
+  The summary gains `evidence_disk` (`verified`, `reason`, `pcap_bytes`,
+  `pcap_sha256`) only with the flag.
+- The capture duration is a request field, `duration_seconds`, from 60 (the
+  default) to 2100 (the job limit of `run-l3.sh` plus 300). The facade of the
+  guest (`Guest.deadline`, 90 seconds from its creation) no longer bounds the
+  capture: `setup` starts `serve` and checks it with a short call, and `serve`
+  ends with `finish` or at its own deadline. A caller that waits longer passes
+  `lifetime` to `Guest`.
+
+### Phase windows
+
+For a run that needs many observation windows (L3 has about twenty: one per
+protected session) the request carries `windows: true` and no markers of its
+own. The test machine's script sends one UDP datagram per boundary to
+`203.0.113.2:9100`:
+
+```text
+rosetun-lab-marker:<run>.<index>.<word>.<label>
+```
+
+`index` counts windows from zero, `word` is `open` or `close`, `label` is
+`[a-z0-9_.-]{1,48}` (in L3 the scenario function's name). The nonce of stage 6b
+is gone: the run ID makes it fresh and the index orders it. The helper answers
+`rosetun-lab-ack:` plus the datagram and logs `word`, `index`, `label` and its
+own time in `health.json`; it accepts any index, in the order they come, up to
+100 windows. The two-marker mode with nonces of 6a and 6b is unchanged.
+
+`lab_protocol.classify_windows(raw, run, windows_expected, health=..., ready=...)`
+splits the capture. `windows_expected` lists the expected windows as
+`{label, expected}`; `expected` may only be `NONE` for now. `tunnel_port`,
+`allowances`, `https` and `probes` are per run.
+
+- A window runs from its opening to its closing marker. Inside it the rules of
+  6b apply: any `unexpected` frame is `DETECTED`.
+- `NONE` needs both markers asked and answered once each, in order; indexes in
+  sequence from zero without a gap; the expected label; a whole capture; a clean
+  observer; and a `health.json` marker log equal to the markers seen on the wire.
+- A frame outside every window is counted in `outside_window` (category
+  `outside-window`, with the first 16 described) and changes no verdict. This is
+  where baseline traffic before the first window goes.
+- A window without its closing marker is `UNVERIFIED`. A repeated, skipped or
+  reversed index, an `open` inside an open window and a `close` without its
+  `open` make every window from that place on `UNVERIFIED`; a leak already seen
+  stays `DETECTED`. A marker of another run is an `unexpected` frame.
+
+### Owner qualification
+
+1. Make the DoH certificate, install it and the helper in both images, put the
+   resolver into the test image, update the descriptors.
+2. `lab-smoke`, `--canary`, `--tunnel` as before: the same results.
+3. `lab-smoke --tunnel --evidence-disk`: the capture comes from the disk, its
+   SHA-256 in `evidence_disk` equals that of `capture.pcap`, `leak` `NONE`.
+4. From the test console while a lab run with `dns: true` is up:
+   `dig example.com A` answers `203.0.113.2`, and
+   `curl --doh-url https://203.0.113.3/dns-query https://example.com/` or
+   similar answers (this proves the DoH certificate chain and name). The
+   controller has no command that holds such a run open yet.
+
 ## Stage 7a: Linux L3 delivery without network
 
 `run linux-l3` delivers the L3 package to one VM and runs the existing
