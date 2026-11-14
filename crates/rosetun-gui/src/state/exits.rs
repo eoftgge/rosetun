@@ -29,6 +29,15 @@ pub(crate) struct ExitDialog {
     pub(crate) focus: bool,
     pub(crate) busy: bool,
     pub(crate) error: Option<String>,
+    /// Checking a path clones the configuration, so the exits this draft can
+    /// connect through are found once per target, not on every frame.
+    via_candidates: Option<ViaCandidates>,
+}
+
+struct ViaCandidates {
+    target: ExitTarget,
+    editing: Option<ExitId>,
+    exits: Vec<ExitId>,
 }
 
 impl ExitDialog {
@@ -46,6 +55,7 @@ impl ExitDialog {
             focus: true,
             busy: false,
             error: None,
+            via_candidates: None,
         }
     }
 
@@ -90,6 +100,40 @@ impl ExitDialog {
                 fallback: self.fallback_country.clone().filter(|_| self.fallback),
             }),
         }
+    }
+
+    /// The exits this draft can connect through, in the configuration's order;
+    /// empty until a target is chosen.
+    pub(crate) fn via_candidates(&mut self, config: &AppConfig) -> &[ExitId] {
+        let Some(target) = self.target() else {
+            return &[];
+        };
+        let fresh = self.via_candidates.as_ref().is_some_and(|cached| {
+            cached.target == target && cached.editing == self.editing
+        });
+        if !fresh {
+            let exits = config
+                .exits
+                .iter()
+                .filter(|parent| {
+                    crate::destinations::exit_path_supported(
+                        config,
+                        self.editing.as_ref(),
+                        &target,
+                        Some(&parent.id),
+                    )
+                })
+                .map(|parent| parent.id.clone())
+                .collect();
+            self.via_candidates = Some(ViaCandidates {
+                target,
+                editing: self.editing.clone(),
+                exits,
+            });
+        }
+        self.via_candidates
+            .as_ref()
+            .map_or(&[], |cached| cached.exits.as_slice())
     }
 
     /// Whether Save is allowed; `full` is `destinations::exits_full`.
