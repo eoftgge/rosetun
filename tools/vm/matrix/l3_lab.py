@@ -23,7 +23,6 @@ from .lab_protocol import (LOG_LIMIT, PORTS, TARGETS, EVIDENCE_PCAP_LIMIT, CLIEN
                            probes)
 from .orchestrator import _RETAINED_LEASES, failure, save
 from .l3_align import align
-from .linux_l2 import JOURNAL_FULL
 from .resources import StandLease, completion_verified, create_run, resource_path, EXECUTION_FILES
 
 SCHEMA = 'rosetun.matrix.l3-summary.v1'
@@ -35,15 +34,6 @@ LAB_FILES = (('targets.json', LOG_LIMIT), ('health.json', LOG_LIMIT), ('https.js
 ROUTE_FILE = ('route-flows.json', ROUTE_FLOWS_LIMIT)
 # The capture outlives the job by this much: it also covers the boot and the import of the test machine.
 CAPTURE_SLACK = 300
-
-
-def reserve_journal(run):
-    """Register the place of the whole service journal in the test run: only a diagnostic run has one."""
-    relative = 'linux-l3/' + JOURNAL_FULL
-    run.register(dict(id='linux-l3-journal-full', kind='file', path=relative))
-    path = resource_path(run.directory, relative)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.touch(exist_ok=False)
 
 
 class Adapters:
@@ -317,9 +307,9 @@ def run_linux_l3_lab(config, *, diagnostic=False, adapters=None, clock=time.mono
         # requests and the media accept only the resources of a freshly prepared run: so it comes last.
         # The evidence disk is made with the pair; it belongs to the lab machine alone.
         pair = step('evidence-disk', lambda: adapters.pair(lease, runs, lab_id, tunnel=True, evidence_disk=True,
-                                                           dns=True, **({'route_flows': True} if diagnostic else {})))
-        if diagnostic:
-            step('journal-reserve', lambda: reserve_journal(runs['test']))
+                                                           dns=True,
+                                                           **({'route_flows': True, 'journal_full': True}
+                                                              if diagnostic else {})))
         if clock() >= deadline:
             raise TimeoutError('preparation deadline')
 

@@ -154,6 +154,9 @@ class DryRunTests(unittest.TestCase):
 class JointStartTests(unittest.TestCase):
     """The real `lifecycle.start` for both machines of the run, on a fake process and fake endpoints."""
 
+    # What the pair is asked for besides the tunnel, the disk and DNS: nothing, or what a diagnostic run asks for.
+    pair_options = {}
+
     def setUp(self):
         unix = patch.object(socket, 'AF_UNIX', 1, create=True)
         unix.start()
@@ -176,7 +179,7 @@ class JointStartTests(unittest.TestCase):
         self.fixture.run, self.fixture.calls = self.runs['lab'], []
         self.fixture.prepare()
         self.pair = lab.LabPair(self.fixture.lease, self.runs, 'lab-test', tunnel=True, evidence_disk=True, dns=True,
-                                pair_factory=lambda *args: (Endpoint(), Endpoint()))
+                                pair_factory=lambda *args: (Endpoint(), Endpoint()), **self.pair_options)
         self.addCleanup(self.pair.close)
 
     def launch(self, role):
@@ -238,6 +241,19 @@ class JointStartTests(unittest.TestCase):
         self.assertFalse(test_paths & {'evidence.img', 'dns.json', 'capture.pcap', 'health.json'})
         self.assertTrue(any(path.startswith('l3-requests/') for path in test_paths))
 
+    def test_the_diagnostic_files_are_registered_only_for_a_pair_asked_for_them_and_both_machines_start(self):
+        asked = bool(self.pair_options)
+        paths = {role: {entry['path'] for entry in run._read()['resources']} for role, run in self.runs.items()}
+        self.assertEqual(asked, 'route-flows.json' in paths['lab'])
+        self.assertEqual(asked, 'linux-l3/helper-journal-full.txt' in paths['test'])
+        self.assertNotIn('route-flows.json', paths['test'])
+        self.assertNotIn('linux-l3/helper-journal-full.txt', paths['lab'])
+        self.assertEqual(asked, (self.runs['test'].directory / 'linux-l3' / l2.JOURNAL_FULL).is_file())
+        # The real `lifecycle.start` accepts exactly the resources that were registered, and no others.
+        first, _ = self.launch('lab')
+        second, _ = self.launch('test')
+        self.assertEqual({first, second}, self.fixture.lease._active)
+
     def test_either_machine_may_start_first(self):
         for order in (('test', 'lab'), ('lab', 'test')):
             with self.subTest(order=order):
@@ -248,6 +264,18 @@ class JointStartTests(unittest.TestCase):
                     self.assertEqual(set(vms), case.fixture.lease._active)
                 finally:
                     case.doCleanups()
+
+
+class DiagnosticJointStartTests(JointStartTests):
+    """The same real `lifecycle.start`, with the places only a diagnostic run asks for registered in the runs."""
+    pair_options = dict(route_flows=True, journal_full=True)
+
+    def test_the_place_of_the_whole_journal_is_the_file_the_job_saves(self):
+        self.assertEqual({'lab-journal-full': 'linux-l3/' + l2.JOURNAL_FULL}, lab.JOURNAL_ARTIFACTS)
+        self.assertEqual(lab.JOURNAL_ARTIFACTS, {k: v for k, v in self.pair.resources(self.runs['test']).items()
+                                                 if k.startswith('lab-journal')})
+        self.assertEqual({'lab-dns-client-log': 'client.log', 'lab-journal-full': 'linux-l3/' + l2.JOURNAL_FULL},
+                         self.pair.resources(self.runs['test']))
 
 
 class Machines:
@@ -371,7 +399,7 @@ class Machines:
             machines.note('journal-full')
             if machines.fixtures.get('journal') == 'unavailable':
                 raise ValueError('l2-journal-command-failed')
-            (machines.runs['test'].directory / 'linux-l3' / l3_lab.JOURNAL_FULL).write_bytes(
+            (machines.runs['test'].directory / 'linux-l3' / l2.JOURNAL_FULL).write_bytes(
                 b'12.000000 host rosetun-helper[1]: started\n')
         job.full_journal = full_journal
 
@@ -665,7 +693,8 @@ class DiagnosticTests(Flow):
     def test_a_diagnostic_run_counts_the_flows_behind_the_node_and_keeps_the_file(self):
         machines = Machines(self)
         result = self.go(machines, diagnostic=True)
-        self.assertEqual(dict(tunnel=True, evidence_disk=True, dns=True, route_flows=True), machines.pair_options)
+        self.assertEqual(dict(tunnel=True, evidence_disk=True, dns=True, route_flows=True, journal_full=True),
+                         machines.pair_options)
         for call in machines.calls:
             self.assertIs(True, call[4]['route_flows'])
         names = [e for e in machines.events if type(e) is str]
@@ -691,7 +720,8 @@ class DiagnosticTests(Flow):
         ordinary = Machines(self)
         result = self.go(ordinary)
         self.assertNotIn('journal-full', ordinary.events)
-        self.assertFalse({'journal-reserve', 'journal-full'} & {row['stage'] for row in result['stages']})
+        self.assertNotIn('journal-full', {row['stage'] for row in result['stages']})
+        self.assertNotIn('journal_full', ordinary.pair_options)
         self.assertNotIn('linux-l3/helper-journal-full.txt', {entry['path'] for entry in result['evidence']})
         self.assertNotIn('journal_full_error', result)
 
@@ -699,7 +729,6 @@ class DiagnosticTests(Flow):
         machines = Machines(self)
         result = self.go(machines, diagnostic=True)
         stages = [row['stage'] for row in result['stages']]
-        self.assertEqual(stages.index('evidence-disk') + 1, stages.index('journal-reserve'))
         self.assertEqual([stages.index('collect') + 1], [stages.index('journal-full')])
         self.assertLess(stages.index('journal-full'), stages.index('lab-finish'))
         self.assertIn(('test', 'linux-l3/helper-journal-full.txt'),
@@ -714,7 +743,7 @@ class DiagnosticTests(Flow):
                          tuple(result['journal_full_error'][k] for k in ('stage', 'kind')))
         self.assertEqual([], result['errors'])
         self.assertEqual((2, True, True), (result['exit_code'], result['completed'], result['group']['passed']))
-        self.assertEqual(0, (machines.runs['test'].directory / 'linux-l3' / l3_lab.JOURNAL_FULL).stat().st_size)
+        self.assertEqual(0, (machines.runs['test'].directory / 'linux-l3' / l2.JOURNAL_FULL).stat().st_size)
 
     def test_only_a_diagnostic_run_lines_the_scenarios_up_with_the_flows(self):
         ordinary = Machines(self)

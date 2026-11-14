@@ -36,6 +36,10 @@ TUNNEL_ARTIFACTS = {'lab-https': 'https.json', 'lab-node': 'node.log'}
 DNS_ARTIFACTS = {'lab-dns': 'dns.json'}
 # Only a diagnostic L3 run counts the flows behind the node.
 ROUTE_ARTIFACTS = {'lab-route-flows': 'route-flows.json'}
+# Only a diagnostic L3 run keeps the whole journal of the service, and it keeps it in the run of the test machine
+# (`JOURNAL_FULL` of `linux_l2` under `linux-l3/`). It is registered here because `lifecycle.start` accepts exactly
+# the resources that preparation and the lab pair registered, and no others.
+JOURNAL_ARTIFACTS = {'lab-journal-full': 'linux-l3/helper-journal-full.txt'}
 # The DNS check's throwaway client of the test machine: its log is saved in the test run, whatever came of the check.
 DNS_CLIENT_LOG = {'lab-dns-client-log': 'client.log'}
 # The helper_reason of a failed helper that printed no code of its own (an older helper, a cut or foreign stderr).
@@ -117,7 +121,7 @@ def plan_lab(config, *, tunnel=False, evidence_disk=False, dns=False):
 class LabPair:
     """Capability for two particular runs under their original lease."""
     def __init__(self, lease, runs, lab_id, *, pair_factory=socket.socketpair, tunnel=False, evidence_disk=False,
-                 dns=False, route_flows=False):
+                 dns=False, route_flows=False, journal_full=False):
         lease._check_live()
         if set(runs) != set(MACS) or lease._active or runs['test'] is runs['lab']:
             raise ValueError('invalid-lab-members')
@@ -129,6 +133,7 @@ class LabPair:
         self.evidence_disk = evidence_disk is True
         self.dns = dns is True
         self.route_flows = route_flows is True
+        self.journal_full = journal_full is True
         self.sockets = {}
         self.used = set()
         self.closed = False
@@ -141,6 +146,7 @@ class LabPair:
                 raise ValueError('lab-linkage-mismatch')
             for identifier, name in self.resources(run).items():
                 run.register(dict(id=identifier, kind='file', path=name))
+                resource_path(run.directory, name).parent.mkdir(parents=True, exist_ok=True)
                 resource_path(run.directory, name).touch(exist_ok=False)
                 if name == EVIDENCE_IMAGE:
                     # Fixed and zeroed: a sparse file, so the helper can never grow or shrink it.
@@ -158,7 +164,8 @@ class LabPair:
 
     def resources(self, run):
         if self.role(run) != 'lab':
-            return DNS_CLIENT_LOG if getattr(self, 'dns', False) else {}
+            files = DNS_CLIENT_LOG if getattr(self, 'dns', False) else {}
+            return {**files, **JOURNAL_ARTIFACTS} if getattr(self, 'journal_full', False) else files
         files = {**ARTIFACTS, **TUNNEL_ARTIFACTS} if self.tunnel else ARTIFACTS
         # Unbound calls with a stand-in object exist in older tests, which know no disk or DNS.
         if getattr(self, 'dns', False):
