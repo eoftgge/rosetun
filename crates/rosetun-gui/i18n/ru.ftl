@@ -1331,8 +1331,8 @@ rules-transfer-linux = На Linux доступен только буфер об�
 rules-transfer-include = Включить
 rules-transfer-without = Без ссылок
 rules-transfer-url-warning = Ссылки на списки могут содержать ключ доступа. Включить их?
-rules-transfer-to-file = Сохранить в файл
-rules-transfer-to-clipboard = Без отметки: в буфер обмена
+rules-transfer-to-file = В файл
+rules-transfer-to-clipboard = В буфер обмена
 rules-transfer-preview = Импорт правил
 rules-transfer-add = Добавить
 rules-transfer-replace = Заменить
@@ -1358,3 +1358,5 @@ rules-transfer-added = { $count ->
    *[other] Добавлено { $n } правил
 }
 rules-transfer-duplicate-add = Дубликат: пропускается при добавлении
+rules-transfer-copied = Правила скопированы в буфер обмена
+rules-transfer-saved = Правила сохранены в файл

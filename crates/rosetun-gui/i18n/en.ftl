@@ -1302,8 +1302,8 @@ rules-transfer-linux = On Linux, use the clipboard
 rules-transfer-include = Include
 rules-transfer-without = Without links
 rules-transfer-url-warning = List links can contain access keys. Include them?
-rules-transfer-to-file = Save to file
-rules-transfer-to-clipboard = Unchecked: copy to clipboard
+rules-transfer-to-file = To file
+rules-transfer-to-clipboard = To clipboard
 rules-transfer-preview = Import rules
 rules-transfer-add = Add
 rules-transfer-replace = Replace
@@ -1328,3 +1328,5 @@ rules-transfer-added = { $count ->
    *[other] Added { $n } rules
 }
 rules-transfer-duplicate-add = Duplicate: skipped when adding
+rules-transfer-copied = Rules copied to clipboard
+rules-transfer-saved = Rules saved to file

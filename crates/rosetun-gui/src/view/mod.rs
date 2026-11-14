@@ -178,6 +178,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
         connection::lockdown_dialog(ctx, state, &mut actions);
     }
     if state.screen == Screen::Rules {
+        rules::exchange::show(ctx, state, &mut actions);
         rules::name_dialog(ctx, state, &mut actions);
         rules::delete_dialog(ctx, state, &mut actions);
         exits::exit_dialog(ctx, state, &mut actions);

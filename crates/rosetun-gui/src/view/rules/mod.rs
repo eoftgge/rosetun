@@ -43,7 +43,7 @@ struct ToolbarRects {
 }
 
 mod dialogs;
-mod exchange;
+pub(crate) mod exchange;
 mod selection;
 mod sets;
 mod table;
@@ -107,8 +107,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
         state.config.interface.reduce_motion,
     );
     widgets::appear(ui, shown, |ui| tab_body(ui, state, actions));
-    undo_notice(ui.ctx(), state, actions);
-    exchange::show(ui.ctx(), state, actions);
+    if state.rules.exchange.notice.is_none() { undo_notice(ui.ctx(), state, actions); }
 }
 
 fn undo_notice(ctx: &egui::Context, state: &State, actions: &mut Vec<Action>) {
@@ -168,45 +167,6 @@ fn tab_body(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
     let mut apply_clicked = false;
     let mut revert_clicked = false;
     ui.heading(tr!("rules-tab-title"));
-    ui.horizontal(|ui| {
-        ui.menu_button(tr!("rules-transfer-export"), |ui| {
-            if widgets::outline_button(ui, tr!("rules-transfer-all"), state.can_edit_rules())
-                .clicked()
-            {
-                state.rules.exchange.selected = false;
-                actions.push(Action::OpenRulesExport(false));
-                ui.close();
-            }
-            if widgets::outline_button(
-                ui,
-                tr!("rules-transfer-selected"),
-                state.can_edit_rules() && !state.rules.screen.selected_rules.is_empty(),
-            )
-            .clicked()
-            {
-                state.rules.exchange.selected = true;
-                actions.push(Action::OpenRulesExport(false));
-                ui.close();
-            }
-        });
-        ui.menu_button(tr!("rules-transfer-import"), |ui| {
-            if widgets::outline_button(ui, tr!("rules-transfer-clipboard"), state.can_edit_rules())
-                .clicked()
-            {
-                actions.push(Action::ReadRulesImport(false));
-                ui.close();
-            }
-            #[cfg(windows)]
-            if widgets::outline_button(ui, tr!("rules-transfer-file"), state.can_edit_rules())
-                .clicked()
-            {
-                actions.push(Action::ReadRulesImport(true));
-                ui.close();
-            }
-            #[cfg(target_os = "linux")]
-            ui.label(tr!("rules-transfer-linux"));
-        });
-    });
     ui.add(
         egui::Label::new(RichText::new(tr!("rules-subtitle")).color(theme::palette().text_muted))
             .wrap(),

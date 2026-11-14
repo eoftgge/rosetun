@@ -7,16 +7,16 @@ use super::{Action, Job, State};
 
 #[derive(Default)]
 pub(crate) struct ExchangeState {
-    pub(crate) selected: bool,
     pub(crate) export: Option<Export>,
     pub(crate) import: Option<Import>,
     pub(crate) error: Option<String>,
     pub(crate) busy: bool,
+    pub(crate) notice: Option<String>,
 }
 pub(crate) struct Export {
     config: AppConfig,
     set: RuleSetId,
-    selected: Option<Vec<rosetun_config::RuleId>>,
+    pub(crate) selected: Option<Vec<rosetun_config::RuleId>>,
     pub(crate) hosts: Vec<String>,
     pub(crate) file: bool,
 }
@@ -42,14 +42,13 @@ impl State {
                 self.rules.exchange.export = None;
                 self.rules.exchange.import = None;
                 self.rules.exchange.error = None;
+                self.rules.exchange.notice = None;
             }
-            Action::OpenRulesExport(file) if self.can_edit_rules() => {
+            Action::OpenRulesExport(selected) if self.can_edit_rules() => {
+                self.rules.exchange.notice = None;
                 let set = self.selected_rules()?;
-                let selected = self
-                    .rules
-                    .exchange
-                    .selected
-                    .then(|| self.selected_rule_ids());
+                let selected = selected.then(|| self.selected_rule_ids());
+                if selected.as_ref().is_some_and(Vec::is_empty) { return None; }
                 let text = match rules_exchange::export(
                     &self.config,
                     set,
@@ -79,7 +78,7 @@ impl State {
                     set: set.id.clone(),
                     selected,
                     hosts,
-                    file,
+                    file: cfg!(windows),
                 });
                 self.rules.exchange.error = None;
             }
@@ -106,6 +105,7 @@ impl State {
             }
             Action::ReadRulesImport(file) if self.can_edit_rules() && !self.rules.exchange.busy => {
                 self.rules.exchange.error = None;
+                self.rules.exchange.notice = None;
                 self.rules.exchange.busy = true;
                 return Some(Job::ReadRules(file));
             }
@@ -162,9 +162,19 @@ impl State {
             set: set.id.clone(),
         });
     }
-    pub(crate) fn reduce_rules_written(&mut self, result: Result<(), String>) {
+    pub(crate) fn reduce_rules_written(&mut self, result: Result<crate::worker::RulesExportOutcome, String>) {
+        use crate::worker::RulesExportOutcome;
         self.rules.exchange.busy = false;
-        self.rules.exchange.error = result.err().map(|_| tr!("rules-transfer-write-error"));
+        self.rules.exchange.error = None;
+        self.rules.exchange.notice = None;
+        match result {
+            Ok(RulesExportOutcome::Copied) => self.rules.exchange.notice = Some(tr!("rules-transfer-copied")),
+            #[cfg(windows)]
+            Ok(RulesExportOutcome::Saved) => self.rules.exchange.notice = Some(tr!("rules-transfer-saved")),
+            #[cfg(windows)]
+            Ok(RulesExportOutcome::Cancelled) => {},
+            Err(_) => self.rules.exchange.error = Some(tr!("rules-transfer-write-error")),
+        }
     }
     pub(crate) fn finish_import_rules(&mut self, result: Result<(), rosetun_core::RuleSetError>) {
         self.rules.exchange.busy = false;

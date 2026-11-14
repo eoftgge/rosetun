@@ -664,7 +664,7 @@ fn exported_list_links_require_an_explicit_choice() {
             panic!("export job");
         };
         assert_eq!(text.contains("private-token"), consent);
-        state.reduce(WorkerEvent::RulesWritten(Ok(())));
+        state.reduce(WorkerEvent::RulesWritten(Ok(crate::worker::RulesExportOutcome::Copied)));
     }
 }
 #[test]
@@ -717,4 +717,19 @@ fn undoing_an_import_preserves_lists_added_after_it() {
     assert_eq!(state.config.lists, vec![unrelated.clone()]);
     saved.act(&mut state, Action::RedoRules);
     assert!(state.config.lists.contains(&unrelated));
+}
+
+#[cfg(windows)]
+#[test]
+fn export_reports_saving_and_failure_but_not_a_cancelled_save_dialog() {
+    use crate::worker::RulesExportOutcome;
+    let mut state = rules_state();
+    state.reduce(WorkerEvent::RulesWritten(Ok(RulesExportOutcome::Saved)));
+    assert!(state.rules.exchange.notice.is_some());
+    state.reduce(WorkerEvent::RulesWritten(Ok(RulesExportOutcome::Cancelled)));
+    assert!(state.rules.exchange.notice.is_none());
+    assert!(state.rules.exchange.error.is_none());
+    state.reduce(WorkerEvent::RulesWritten(Err("write".into())));
+    assert!(state.rules.exchange.error.is_some());
+    assert!(state.rules.exchange.notice.is_none());
 }

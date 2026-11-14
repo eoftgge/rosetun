@@ -212,8 +212,9 @@ impl WorkerDispatcher {
         });
     }
     pub(crate) fn write_rules(&self, text: String, file: bool) {
+        let clipboard = self.clipboard.clone();
         self.spawn_task("rosetun-export-rules", move |publisher| {
-            let result = write_rules_document(text, file);
+            let result = write_rules_document(text, file, &clipboard);
             emit(
                 &publisher.tx,
                 &publisher.repaint,
@@ -232,7 +233,7 @@ impl WorkerDispatcher {
         });
     }
 }
-fn write_rules_document(text: String, file: bool) -> Result<(), String> {
+fn write_rules_document(text: String, file: bool, clipboard: &Mutex<Option<arboard::Clipboard>>) -> Result<RulesExportOutcome, String> {
     if file {
         #[cfg(windows)]
         {
@@ -242,15 +243,17 @@ fn write_rules_document(text: String, file: bool) -> Result<(), String> {
                 .set_file_name("rules.json")
                 .save_file()
             else {
-                return Ok(());
+                return Ok(RulesExportOutcome::Cancelled);
             };
-            return std::fs::write(path, text).map_err(|_| "write".into());
+            return std::fs::write(path, text).map(|()| RulesExportOutcome::Saved).map_err(|_| "write".into());
         }
         #[cfg(not(windows))]
         return Err("file dialogs unavailable".into());
     }
-    arboard::Clipboard::new()
-        .and_then(|mut clipboard| clipboard.set_text(text))
+    let mut clipboard = clipboard.lock().map_err(|_| "clipboard")?;
+    if clipboard.is_none() { *clipboard = Some(arboard::Clipboard::new().map_err(|_| "clipboard")?); }
+    clipboard.as_mut().ok_or("clipboard")?.set_text(text)
+        .map(|()| RulesExportOutcome::Copied)
         .map_err(|_| "clipboard".into())
 }
 fn read_rules_document(file: bool) -> Result<Option<String>, String> {

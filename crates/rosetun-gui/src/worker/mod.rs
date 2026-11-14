@@ -103,6 +103,9 @@ pub(crate) struct FailureInterference {
     pub(crate) traffic_tools: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RulesExportOutcome { Copied, #[cfg(windows)] Saved, #[cfg(windows)] Cancelled }
+
 pub(crate) enum WorkerEvent {
     /// The system refused a thread, so the task's own result will never come.
     TaskNotStarted,
@@ -187,7 +190,7 @@ pub(crate) enum WorkerEvent {
     #[cfg(windows)]
     BrowsedExecutable(Option<PathBuf>),
     RulesRead(Result<Option<String>, String>),
-    RulesWritten(Result<(), String>),
+    RulesWritten(Result<RulesExportOutcome, String>),
     ImportRules(Result<(), RuleSetError>),
     AddRule(Result<Rule, RuleSetError>),
     AddRules(Result<AddedRules, RuleSetError>),
@@ -280,6 +283,8 @@ pub(crate) enum WorkerEvent {
 #[derive(Clone)]
 pub(crate) struct WorkerDispatcher {
     publisher: ConfigPublisher,
+    /// Linux serves clipboard content while this owner remains alive.
+    clipboard: Arc<Mutex<Option<arboard::Clipboard>>>,
     /// The desktop's proxy settings; one change at a time.
     desktop_proxy: Arc<DesktopProxyKeeper>,
     /// Requests for the connection list, served over one kept pipe connection.
@@ -509,6 +514,7 @@ pub(crate) fn start(store: Store, tx: Sender<WorkerEvent>, repaint: Repaint) -> 
         })
         .expect("could not spawn helper watcher");
     WorkerDispatcher {
+        clipboard: Arc::new(Mutex::new(None)),
         desktop_proxy,
         publisher,
         connections: Arc::default(),
