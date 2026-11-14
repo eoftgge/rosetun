@@ -382,12 +382,21 @@ fn rule_set_picker(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
     }
     let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
     widgets::menu_popup(&response).show(|ui| {
-        ui.set_min_width(
-            response
-                .rect
-                .width()
-                .max(widgets::MenuWidth::Compact.points()),
+        let mut labels = vec![tr!("default-rules")];
+        labels.extend(
+            state
+                .config
+                .rule_sets
+                .iter()
+                .map(|rules| state.text(&rules.name)),
         );
+        widgets::menu_content_width(
+            ui,
+            &labels.iter().map(String::as_str).collect::<Vec<_>>(),
+            response.rect.width(),
+        );
+        // Keep the selected item's checkmark clear of the longest label.
+        ui.set_width(ui.min_rect().width() + 24.0);
         if widgets::menu_item(
             ui,
             widgets::MenuItem {
