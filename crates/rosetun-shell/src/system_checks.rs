@@ -88,8 +88,10 @@ fn string_value(name: &str) -> io::Result<Option<String>> {
                 return Err(io::Error::other("invalid proxy setting text"));
             }
             let text: Vec<u16> = bytes
-                .chunks_exact(2)
-                .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|&pair| u16::from_le_bytes(pair))
                 .collect();
             let text = text.strip_suffix(&[0]).unwrap_or(&text);
             String::from_utf16(text).map_err(|_| io::Error::other("invalid proxy setting text"))

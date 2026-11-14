@@ -52,8 +52,8 @@ fn local_executable(path: &Path) -> Option<String> {
 /// channel comes back with every alpha byte zero and is opaque.
 #[cfg_attr(not(any(windows, test)), expect(dead_code, reason = "Windows only"))]
 fn straight_rgba(mut pixels: Vec<u8>) -> Vec<u8> {
-    let opaque = pixels.chunks_exact(4).all(|pixel| pixel[3] == 0);
-    for pixel in pixels.chunks_exact_mut(4) {
+    let opaque = pixels.as_chunks::<4>().0.iter().all(|pixel| pixel[3] == 0);
+    for pixel in pixels.as_chunks_mut::<4>().0 {
         pixel.swap(0, 2);
         let alpha = u16::from(pixel[3]);
         if opaque {
@@ -387,7 +387,13 @@ mod tests {
         let icon = program_icon(path, 32).unwrap();
         assert_eq!((icon.width, icon.height), (32, 32));
         assert_eq!(icon.rgba.len(), 32 * 32 * 4);
-        assert!(icon.rgba.chunks_exact(4).any(|pixel| pixel[3] > 0));
+        assert!(
+            icon.rgba
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .any(|pixel| pixel[3] > 0)
+        );
     }
 
     #[cfg(windows)]
