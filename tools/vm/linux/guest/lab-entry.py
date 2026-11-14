@@ -56,6 +56,11 @@ CLIENT_LOG_LIMIT = 4096
 # How much of the node's own log is read back, and the line that stands where older lines were dropped.
 NODE_LOG_READ = 1024 * 1024
 NODE_LOG_CUT = b'[earlier lines dropped]\n'
+# What identifies a connection in a line of the node's log, the longest line kept and the room kept for the
+# line that says how many lines were left out of the middle.
+NODE_LOG_ID = re.compile(r'\[\d+(?: [^\]]*)?\]')
+NODE_LOG_LINE = 512
+NODE_LOG_GAP = 64
 L3_BODY = b'rosetun-lab-target\n'
 REFUSAL_ROWS = 8
 TUNNEL_KEYS = {'port', 'method', 'password', 'sing_box_sha256', 'ca_sha256', 'https'}
@@ -524,27 +529,44 @@ def scrub_log(raw):
 
 
 def node_log(raw, cut=False):
-    """The node's log as `node.log` keeps it: the last lines that fit `LOG_LIMIT`, addresses blanked.
+    """The node's log as `node.log` keeps it: repeated lines folded, addresses blanked, the beginning and the end kept.
 
-    At `info` the node writes a line for every connection, so a long run overflows. The oldest
-    lines go and one line in front says so; that line is part of the text and is not a fault of the
-    observer. `cut` says the first line of `raw` is the tail of a longer one.
+    At `info` the node writes a line for every connection and most of them say the same. Lines that are
+    equal once the numbers that identify a connection (`[3365492301 2ms]` becomes `[#]`) are removed fold
+    into the place of the first, with how many there were and the numbers of the first and the last of
+    them. If what is left is still over `LOG_LIMIT`, the beginning and the end are kept around one line
+    saying how many lines were left out. `cut` says that `raw` is only the tail of the file: its first
+    line is the tail of a longer one and a line in front says that earlier ones are gone. That line is
+    part of the text and is not a fault of the observer.
     """
-    lines = re.findall(r'[^\n]*\n|[^\n]+', blank_foreign_addresses(raw.decode('utf-8', 'replace')))
-    dropped = bool(cut)
+    lines = re.findall(r'[^\n]+', blank_foreign_addresses(raw.decode('utf-8', 'replace')))
     if cut:
         lines = lines[1:]
-    kept, size = [], len(NODE_LOG_CUT)
-    for line in reversed(lines):
-        size += len(line.encode('utf-8'))
-        if size > LOG_LIMIT:
-            dropped = True
-            break
-        kept.append(line)
-    text = ''.join(reversed(kept))
-    if dropped:
-        text = NODE_LOG_CUT.decode('ascii') + text
-    return text.encode('utf-8')[:LOG_LIMIT]
+    folded = {}
+    for number, line in enumerate(lines, 1):
+        key = NODE_LOG_ID.sub('[#]', line)[:NODE_LOG_LINE]
+        entry = folded.setdefault(key, [number, number, 0])
+        entry[1], entry[2] = number, entry[2] + 1
+    rows = [(key + (f'  [x{count}, lines {first}-{last}]' if count > 1 else '') + '\n', count)
+            for key, (first, last, count) in folded.items()]
+    lead = NODE_LOG_CUT.decode('ascii') if cut else ''
+    if len(lead) + sum(len(row.encode('utf-8')) for row, _ in rows) > LOG_LIMIT:
+        head, tail, size = [], [], len(lead) + NODE_LOG_GAP
+        for row, _ in rows:
+            size += len(row.encode('utf-8'))
+            if size > LOG_LIMIT // 4:
+                break
+            head.append(row)
+        size = 0
+        for row, _ in reversed(rows[len(head):]):
+            size += len(row.encode('utf-8'))
+            if size > LOG_LIMIT - LOG_LIMIT // 4 - len(lead) - NODE_LOG_GAP:
+                break
+            tail.append(row)
+        left = sum(count for _, count in rows[len(head):len(rows) - len(tail)])
+        rows = [(row, 0) for row in head] + [(f'[{left} lines dropped here]\n', 0)] + [
+            (row, 0) for row in reversed(tail)]
+    return (lead + ''.join(row for row, _ in rows)).encode('utf-8')[:LOG_LIMIT]
 
 
 def read_tail(path, limit):

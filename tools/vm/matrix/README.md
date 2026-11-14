@@ -2497,7 +2497,7 @@ in the controller's error), never a skip, and nothing in the guest changes first
 | Role | What the helper does when the request has a `tunnel` block |
 | --- | --- |
 | Lab, `setup` | Checks the engine (hash), the certificate and the key. In the observer, before `capture_ready`: serves HTTPS on `203.0.113.2:443` in `rtlab`, writes the node's configuration itself (one Shadowsocks inbound on `192.0.2.1:<port>`, `direct` outbound, no DNS, no other inbound), starts sing-box and waits until it is alive and listening. |
-| Lab, `finish` | Records whether the node was still alive, stops it and records its exit code in `health.json` (`node`). Saves `https.json` (source, client port, path, lab monotonic time; at most 16 rows) and `node.log` (sing-box's own log at level `info`, so that it names every connection the node takes and the destination it opens; every address outside the documentation ranges blanked; at most `LOG_LIMIT`, and when the log is longer the last whole lines are kept behind one line, `[earlier lines dropped]`, which is part of the text and never a reason of the observer). |
+| Lab, `finish` | Records whether the node was still alive, stops it and records its exit code in `health.json` (`node`). Saves `https.json` (source, client port, path, lab monotonic time; at most 16 rows) and `node.log` (sing-box's own log at level `info`, so that it names every connection the node takes and the destination it opens; every address outside the documentation ranges blanked; repeated lines folded as described under "The node log" below; at most `LOG_LIMIT`; the marks in it are part of the text and never a reason of the observer). |
 | Test, `probe` | Checks the engine and the CA file (hash) before the opening marker. After the eight exchanges and before the closing marker: `https-direct` (stdlib `ssl`, system store, `server_hostname` the IP), then a throwaway sing-box client, `https-tunnel` through a hand-written SOCKS5 handshake, and the client is stopped. Returns the client port of `https-direct`, both answers and the client's exit code. |
 
 Without a `tunnel` block the requests and the answers of stages 6a and 6b are
@@ -3059,6 +3059,21 @@ digests). The package check accepts the diagnostic kind as a whole, never a mixt
 The summary says `"diagnostic": true`, `group.unproven` has `diagnostic-run`, and the exit code is never
 below 2: a finding is still shown in `outcome` and `group.findings`, but the run counts toward no
 qualification (130 stays 130). Nothing else is judged differently.
+
+#### The node log
+
+`node.log` is the log of the lab node at level `info`, which has a line for every connection and most
+of them say the same. The helper folds it: once every address outside the documentation ranges is
+blanked and the numbers that identify a connection are removed (`[3365492301 2ms]` becomes `[#]`), lines
+that are equal become one, in the place of the first, followed by `[xN, lines A-B]`: how many there were
+and the numbers of the first and the last of them in the log. Ports stay, so two connections from
+different client ports are two lines. A line longer than 512 characters is cut.
+
+If what is left still does not fit `LOG_LIMIT` (32 KiB), the beginning and the end are kept (a quarter
+of the room for the beginning) around one line, `[N lines dropped here]`, where `N` is how many lines of
+the log were left out of the middle. If the helper itself could read only the last MiB of the file,
+`[earlier lines dropped]` stands first. These lines are part of the text and never a reason of the
+observer.
 
 #### The flows behind the node
 

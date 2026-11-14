@@ -234,37 +234,79 @@ class NodeLogTests(Base):
     LINES = (b'INFO inbound/shadowsocks[node-in]: inbound connection from 192.0.2.2:43000\n'
              b'INFO inbound/shadowsocks[node-in]: inbound connection to 203.0.113.2:443\n'
              b'INFO [1 2ms] outbound/direct[direct]: outbound connection to 203.0.113.2:443\n')
+    FOLDED = LINES.replace(b'[1 2ms]', b'[#]')
 
-    def test_a_short_node_log_is_the_scrubbed_log_without_a_mark(self):
-        self.assertEqual(self.entry.scrub_log(self.LINES), self.entry.node_log(self.LINES))
+    def distinct(self, count):
+        return [b'INFO [%d 1ms] outbound/direct[direct]: outbound connection to 203.0.113.%d:%d\n'
+                % (n, n % 250, 1000 + n) for n in range(count)]
+
+    def test_a_short_node_log_keeps_every_line_without_a_mark_and_without_the_connection_numbers(self):
+        self.assertEqual(self.FOLDED, self.entry.node_log(self.LINES))
         self.assertNotIn(self.entry.NODE_LOG_CUT, self.entry.node_log(self.LINES))
         self.assertEqual(b'', self.entry.node_log(b''))
 
     def test_the_node_log_names_the_destinations_and_blanks_foreign_addresses(self):
-        raw = self.LINES + (b'INFO [3 1ms] outbound/direct[direct]: outbound connection to 8.8.8.8:53\n'
+        raw = self.LINES + (b'INFO [3 1ms] outbound/direct[direct]: outbound connection to 10.0.0.1:53\n'
                             b'ERROR [4 1ms] outbound/direct[direct]: dial tcp 2606:4700::1111:443: timeout\n')
         text = self.entry.node_log(raw).decode()
         self.assertIn('inbound connection to 203.0.113.2:443', text)
         self.assertIn('outbound connection to 203.0.113.2:443', text)
-        for gone in ('8.8.8.8', '2606:4700::1111'):
+        for gone in ('10.0.0.1', '2606:4700::1111'):
             self.assertNotIn(gone, text)
         self.assertEqual(2, text.count('[address]'))
 
-    def test_a_long_node_log_keeps_its_last_lines_whole_behind_a_mark(self):
-        rows = [b'INFO outbound connection to 203.0.113.%d:%d\n' % (n % 250, 1000 + n) for n in range(2000)]
+    def test_lines_that_differ_only_in_the_connection_number_fold_into_the_first_with_a_count(self):
+        raw = b''.join(b'INFO [%d %dms] outbound/direct[direct]: outbound connection to 203.0.113.2:80\n' % (n, n)
+                       for n in range(3000, 3050))
+        self.assertEqual(b'INFO [#] outbound/direct[direct]: outbound connection to 203.0.113.2:80'
+                         b'  [x50, lines 1-50]\n', self.entry.node_log(raw))
+
+    def test_lines_that_differ_only_in_an_address_outside_the_lab_fold_after_it_is_blanked(self):
+        raw = (b'WARN [1 1ms] dns: lookup failed on 10.0.0.1\n' b'WARN [2 1ms] dns: lookup failed on 10.0.0.2\n')
+        self.assertEqual(b'WARN [#] dns: lookup failed on [address]  [x2, lines 1-2]\n', self.entry.node_log(raw))
+
+    def test_a_port_is_not_a_connection_number_and_keeps_lines_apart(self):
+        raw = (b'INFO inbound connection from 192.0.2.2:43000\n' b'INFO inbound connection from 192.0.2.2:43001\n')
+        self.assertEqual(raw, self.entry.node_log(raw))
+
+    def test_folded_lines_stay_in_the_order_of_their_first_appearance_and_name_where_they_ended(self):
+        raw = b'A [1 1ms]\nB [2 1ms]\nA [3 1ms]\nB [4 1ms]\nC [5 1ms]\nA [6 1ms]\n'
+        self.assertEqual(b'A [#]  [x3, lines 1-6]\nB [#]  [x2, lines 2-4]\nC [#]\n', self.entry.node_log(raw))
+
+    def test_a_long_log_of_distinct_lines_keeps_its_beginning_and_its_end_around_the_count_of_what_went(self):
+        rows = self.distinct(2000)
         raw = b''.join(rows)
         self.assertGreater(len(raw), wire.LOG_LIMIT)
         kept = self.entry.node_log(raw)
         self.assertLessEqual(len(kept), wire.LOG_LIMIT)
-        self.assertTrue(kept.startswith(self.entry.NODE_LOG_CUT))
-        body = kept[len(self.entry.NODE_LOG_CUT):]
-        self.assertTrue(raw.endswith(body))
-        self.assertTrue(body.startswith(b'INFO '))
-        self.assertEqual(rows[-1], body.splitlines(True)[-1])
+        lines = kept.splitlines()
+        self.assertTrue(lines[0].startswith(b'INFO [#] outbound/direct[direct]: outbound connection to 203.0.113.0:1000'))
+        self.assertTrue(lines[-1].endswith(b'203.0.113.%d:%d' % (1999 % 250, 2999)))
+        (gap,) = [i for i, line in enumerate(lines) if line.endswith(b'lines dropped here]')]
+        dropped = int(lines[gap][1:].split()[0])
+        self.assertEqual(2000, dropped + len(lines) - 1)
+        self.assertLess(gap, len(lines) // 2)
+
+    def test_a_long_log_of_repeats_is_not_cut_at_all(self):
+        raw = b'INFO [%d 1ms] outbound connection to 203.0.113.2:80\n' * 1
+        raw = b''.join(raw % n for n in range(5000))
+        self.assertGreater(len(raw), wire.LOG_LIMIT)
+        self.assertEqual(b'INFO [#] outbound connection to 203.0.113.2:80  [x5000, lines 1-5000]\n',
+                         self.entry.node_log(raw))
+
+    def test_one_very_long_line_is_cut_and_the_whole_stays_inside_the_limit(self):
+        kept = self.entry.node_log(b'ERROR ' + b'x' * 100000 + b'\n')
+        self.assertEqual(self.entry.NODE_LOG_LINE + 1, len(kept))
 
     def test_the_partial_first_line_of_a_cut_tail_is_dropped_and_the_cut_is_marked(self):
         kept = self.entry.node_log(b'0:443\n' + self.LINES, cut=True)
-        self.assertEqual(self.entry.NODE_LOG_CUT + self.LINES, kept)
+        self.assertEqual(self.entry.NODE_LOG_CUT + self.FOLDED, kept)
+
+    def test_a_cut_tail_that_is_still_too_long_has_both_marks(self):
+        kept = self.entry.node_log(b'0:443\n' + b''.join(self.distinct(2000)), cut=True)
+        self.assertTrue(kept.startswith(self.entry.NODE_LOG_CUT))
+        self.assertIn(b'lines dropped here]\n', kept)
+        self.assertLessEqual(len(kept), wire.LOG_LIMIT)
 
     def test_the_tail_of_a_file_is_read_with_the_fact_that_earlier_bytes_were_left_out(self):
         with tempfile.TemporaryDirectory() as temp:
