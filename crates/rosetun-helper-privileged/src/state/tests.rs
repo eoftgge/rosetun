@@ -9296,8 +9296,16 @@ fn a_first_hop_through_xray_connects_and_b_gets_no_direct_path() {
     assert_eq!(last_exit_target(&controls), RuleTarget::Exit);
     let session = helper.session().unwrap();
     assert!(session.xray_chain);
-    assert!(session.last_extra_endpoints.contains_key(&ExitId::new("parent")));
-    assert!(!session.last_extra_endpoints.contains_key(&ExitId::new("child")));
+    assert!(
+        session
+            .last_extra_endpoints
+            .contains_key(&ExitId::new("parent"))
+    );
+    assert!(
+        !session
+            .last_extra_endpoints
+            .contains_key(&ExitId::new("child"))
+    );
 }
 
 #[test]

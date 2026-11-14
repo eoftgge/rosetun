@@ -108,9 +108,10 @@ impl ExitDialog {
         let Some(target) = self.target() else {
             return &[];
         };
-        let fresh = self.via_candidates.as_ref().is_some_and(|cached| {
-            cached.target == target && cached.editing == self.editing
-        });
+        let fresh = self
+            .via_candidates
+            .as_ref()
+            .is_some_and(|cached| cached.target == target && cached.editing == self.editing);
         if !fresh {
             let exits = config
                 .exits

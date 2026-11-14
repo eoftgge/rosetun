@@ -448,9 +448,8 @@ pub(crate) fn exit_dialog(ctx: &egui::Context, state: &mut State, actions: &mut 
                     );
                     let candidates = dialog.via_candidates(config).to_vec();
                     // A saved path that no longer works stays changeable.
-                    let nothing_to_pick = dialog.target().is_some()
-                        && candidates.is_empty()
-                        && dialog.via.is_none();
+                    let nothing_to_pick =
+                        dialog.target().is_some() && candidates.is_empty() && dialog.via.is_none();
                     ui.add_enabled_ui(!busy && !nothing_to_pick, |ui| {
                         widgets::drop_down(ui, "exit_via", None, selected, |ui| {
                             ui.selectable_value(&mut dialog.via, None, tr!("exit-via-direct"));
