@@ -61,7 +61,37 @@ pub(crate) const RULE_CAPABILITIES: RuleCapabilities = RuleCapabilities {
     exits: true,
 };
 
+fn validate_exit_chains(request: &RenderRequest<'_>) -> Result<(), EngineError> {
+    let mut indices = std::collections::HashSet::new();
+    for extra in request.extra {
+        if !indices.insert(extra.index) {
+            return Err(EngineError::Unsupported("duplicate outbound index".into()));
+        }
+        if let Some(via) = extra.via {
+            let parent = request
+                .extra
+                .iter()
+                .find(|entry| entry.exit == via)
+                .ok_or_else(|| EngineError::Unsupported("missing first hop".into()))?;
+            if parent.exit == extra.exit
+                || parent.via.is_some()
+                || parent.socks.is_some()
+                || extra.socks.is_some()
+                || request.settings.tls_fragment.enabled
+                || rosetun_config::uses_xray(parent.node, request.settings)
+                || rosetun_config::uses_xray(extra.node, request.settings)
+                || !matches!(extra.node.outbound, Outbound::Http(_) | Outbound::Socks5(_))
+                || matches!(parent.node.outbound, Outbound::Unknown { .. })
+            {
+                return Err(EngineError::Unsupported("unsupported exit chain".into()));
+            }
+        }
+    }
+    Ok(())
+}
+
 pub fn render(request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError> {
+    validate_exit_chains(request)?;
     let lan = request.settings.allow_lan.then_some(request.lan_segment);
     let (route, unsupported) = route_section_with_lists(
         request.rules,
@@ -80,12 +110,17 @@ pub fn render(request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError
         Some(socks) => socks_outbound(socks, TAG_PROXY),
         None => proxy_outbound(request.node, TAG_PROXY)?,
     });
-    for (index, extra) in request.extra.iter().enumerate() {
-        let tag = exit_tag(index);
-        outbounds.push(match extra.socks {
+    for extra in request.extra {
+        let tag = exit_tag(extra.index);
+        let mut outbound = match extra.socks {
             Some(socks) => socks_outbound(socks, &tag),
             None => proxy_outbound(extra.node, &tag)?,
-        });
+        };
+        if let Some(via) = extra.via {
+            outbound["detour"] = exit_outbound(via, request.extra).unwrap().into();
+            outbound["network"] = "tcp".into();
+        }
+        outbounds.push(outbound);
     }
     outbounds.push(json!({ "type": "direct", "tag": TAG_DIRECT }));
     let mut config = json!({
@@ -589,6 +624,16 @@ fn route_section_with_lists(
             _ => route_rule(rule),
         };
         if let Some(mut value) = value {
+            if rule.target == RuleTarget::Exit
+                && extra
+                    .iter()
+                    .any(|node| Some(node.exit) == rule.exit.as_ref() && node.via.is_some())
+            {
+                let mut blocked = value.clone();
+                blocked.insert("network".into(), "udp".into());
+                blocked.insert("action".into(), "reject".into());
+                route_rules.push(Value::Object(blocked));
+            }
             value.extend(action);
             route_rules.push(Value::Object(value));
         } else {
@@ -753,8 +798,8 @@ fn route_action(rule: &Rule, extra: &[ExtraOutbound<'_>]) -> Option<Map<String, 
 fn exit_outbound(exit: &ExitId, extra: &[ExtraOutbound<'_>]) -> Option<String> {
     extra
         .iter()
-        .position(|node| node.exit == exit)
-        .map(exit_tag)
+        .find(|node| node.exit == exit)
+        .map(|node| exit_tag(node.index))
 }
 
 #[cfg(test)]
@@ -763,6 +808,75 @@ mod tests {
         ExitId, Hysteria2Params, ListId, NodeId, Rule, RuleSetId, RuleTemplate, StreamSettings,
         TlsParams,
     };
+
+    #[test]
+    fn native_chain_routes_to_b_and_blocks_udp_without_fallback() {
+        let main = shadowsocks_node("main", "203.0.113.1");
+        let first = shadowsocks_node("first", "192.0.2.1");
+        let mut last = shadowsocks_node("last", "198.51.100.2");
+        last.outbound = Outbound::Socks5(Default::default());
+        let a = ExitId::new("a");
+        let b = ExitId::new("b");
+        let extra = [
+            ExtraOutbound {
+                index: 2,
+                via: Some(&a),
+                exit: &b,
+                node: &last,
+                socks: None,
+            },
+            ExtraOutbound {
+                index: 5,
+                via: None,
+                exit: &a,
+                node: &first,
+                socks: None,
+            },
+        ];
+        let mut rules = RuleSet::new(RuleSetId::new("chain"), "Chain", RuleTarget::Direct);
+        rules.rules.push(exit_rule(
+            "b",
+            RuleMatcher::Domain(DomainMatch::Suffix("example.com".into())),
+            "b",
+        ));
+        let settings = Settings::default();
+        let request = RenderRequest {
+            node: &main,
+            socks: None,
+            extra: &extra,
+            rules: &rules,
+            lists: &[],
+            settings: &settings,
+            lan_segment: &[],
+            lan_servers: &[],
+            control: None,
+            verbose_log: false,
+            local_proxy: None,
+        };
+        let rendered = render(&request).unwrap();
+        assert!(rendered.unsupported.is_empty());
+        let value: Value = serde_json::from_slice(&rendered.body).unwrap();
+        let actual = json!({"b": value["outbounds"][1], "rules": value["route"]["rules"].as_array().unwrap().iter().filter(|rule| !rule["domain_suffix"].is_null()).collect::<Vec<_>>()});
+        let golden: Value =
+            serde_json::from_str(include_str!("../tests/fixtures/native-chain.json")).unwrap();
+        assert_eq!(actual, golden);
+        let mut invalid = extra;
+        invalid[1].via = Some(&b);
+        assert!(
+            render(&RenderRequest {
+                extra: &invalid,
+                ..request
+            })
+            .is_err()
+        );
+        assert!(
+            render(&RenderRequest {
+                extra: &extra[..1],
+                ..request
+            })
+            .is_err()
+        );
+    }
 
     #[test]
     fn rules_by_program_are_offered_on_every_system() {
@@ -1092,6 +1206,8 @@ mod tests {
             node: &node,
             socks: None,
             extra: &[ExtraOutbound {
+                index: 0,
+                via: None,
                 exit: &work_exit,
                 node: &work,
                 socks: None,
@@ -1157,11 +1273,15 @@ mod tests {
         settings.tun.ipv4 = "198.51.100.1/30".into();
         let extra = [
             ExtraOutbound {
+                index: 0,
+                via: None,
                 exit: &work_exit,
                 node: &work,
                 socks: None,
             },
             ExtraOutbound {
+                index: 1,
+                via: None,
                 exit: &media_exit,
                 node: &media,
                 socks: Some(SocksProxy {
@@ -1458,6 +1578,8 @@ mod tests {
         let work_exit = ExitId::new("work-exit");
         let rules = RuleSet::new(RuleSetId::new("rules"), "Rules", RuleTarget::Proxy);
         let extra = [ExtraOutbound {
+            index: 0,
+            via: None,
             exit: &work_exit,
             node: &work,
             socks: Some(SocksProxy {

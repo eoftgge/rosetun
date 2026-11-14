@@ -1,0 +1,7 @@
+{
+  "b": {"tag":"exit-2","type":"socks","version":"5","server":"198.51.100.2","server_port":443,"detour":"exit-5","network":"tcp"},
+  "rules": [
+    {"domain_suffix":["example.com"],"network":"udp","action":"reject"},
+    {"domain_suffix":["example.com"],"action":"route","outbound":"exit-2"}
+  ]
+}

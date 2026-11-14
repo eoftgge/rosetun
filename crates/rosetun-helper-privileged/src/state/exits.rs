@@ -188,7 +188,10 @@ impl<'a> ExtraNodes<'a> {
         self.nodes
             .iter()
             .zip(&socks.extra)
-            .map(|((exit, node), socks)| ExtraOutbound {
+            .enumerate()
+            .map(|(index, ((exit, node), socks))| ExtraOutbound {
+                index,
+                via: None,
                 exit,
                 node,
                 socks: socks.as_ref().map(socks_proxy),
