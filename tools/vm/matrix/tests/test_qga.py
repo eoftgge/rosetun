@@ -9,7 +9,7 @@ from importlib.metadata import version, PackageNotFoundError
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from tools.vm.matrix.qga import Qga, QgaError, REQUIRED
+from tools.vm.matrix.qga import Qga, QgaError, REQUIRED, LINE_LIMIT, DIAGNOSTIC_LINE_LIMIT, DIAGNOSTIC_RELAY_LIMIT
 
 BOOT = '12345678-1234-4234-8234-123456789abc'
 
@@ -283,6 +283,55 @@ class QgaTests(unittest.TestCase):
             adapter.read_boot_id(1)
 
 
+class LineLimitTests(unittest.TestCase):
+    def connected(self, **options):
+        seen = []
+
+        class Recording(Client):
+            def __init__(self, **kwargs):
+                super().__init__(**kwargs)
+                seen.append(kwargs)
+        class Wide(Relay):
+            def __init__(self, stream, **kwargs):
+                super().__init__(stream)
+
+        adapter = Qga(Stream(b'\xff{"return":123}\n'), client_factory=Recording, relay_factory=Wide, **options)
+        self.addCleanup(adapter.close)
+        with patch('secrets.randbits', return_value=123):
+            adapter.connect(1)
+        return seen
+
+    def test_an_ordinary_session_reads_lines_of_at_most_64_kib(self):
+        self.assertEqual([{'readbuflen': 65536}], self.connected())
+        self.assertEqual(65536, LINE_LIMIT)
+
+    def test_a_session_may_ask_for_the_one_longer_limit_and_for_no_other(self):
+        self.assertEqual([{'readbuflen': DIAGNOSTIC_LINE_LIMIT}], self.connected(line_limit=DIAGNOSTIC_LINE_LIMIT))
+        for value in (0, 65537, DIAGNOSTIC_LINE_LIMIT + 1, None, '65536', True):
+            with self.subTest(value=value), self.assertRaisesRegex(QgaError, '^invalid-qga-line-limit$'):
+                Qga(Stream(b''), line_limit=value)
+
+    def test_a_session_with_the_longer_line_also_gets_the_longer_relay_and_no_other_does(self):
+        relays = []
+
+        class Recording(Relay):
+            def __init__(self, stream, **kwargs):
+                super().__init__(stream)
+                relays.append(kwargs)
+        for options in ({}, dict(line_limit=DIAGNOSTIC_LINE_LIMIT)):
+            adapter = Qga(Stream(b'\xff{"return":123}\n'), client_factory=Client, relay_factory=Recording, **options)
+            self.addCleanup(adapter.close)
+            with patch('secrets.randbits', return_value=123):
+                adapter.connect(1)
+        self.assertEqual([{}, {'limit': DIAGNOSTIC_RELAY_LIMIT}], relays)
+        self.assertGreater(DIAGNOSTIC_RELAY_LIMIT, 2 * DIAGNOSTIC_LINE_LIMIT - 1)
+
+    def test_the_longer_limit_holds_the_largest_reply_the_agent_can_capture_in_base64(self):
+        from tools.vm.matrix import linux_l2
+        longest = 4 * ((linux_l2.JOURNAL_FULL_OUTPUT + 2) // 3)
+        self.assertGreater(DIAGNOSTIC_LINE_LIMIT, longest + 4096)
+
+
 try:
     INSTALLED = version('qemu.qmp') == '0.0.6' and hasattr(socket, 'AF_UNIX')
 except PackageNotFoundError:
@@ -356,3 +405,59 @@ class InstalledQgaTests(unittest.TestCase):
         self.assertEqual([], errors)
         self.assertEqual(['guest-sync-delimited', 'guest-info', 'guest-ping',
                           'guest-file-open', 'guest-file-read', 'guest-file-close'], seen)
+
+
+@unittest.skipUnless(INSTALLED, 'optional qemu.qmp 0.0.6 is not installed')
+class InstalledLongReplyTests(unittest.TestCase):
+    """The real client against a synthetic agent that answers `guest-exec-status` with one long line."""
+
+    def ask(self, size, **options):
+        parent, peer = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+
+        def request():
+            data = bytearray()
+            while True:
+                byte = peer.recv(1)
+                if not byte:
+                    raise EOFError
+                if byte in (b'\xff', b'\n') and not data:
+                    continue
+                data.extend(byte)
+                try:
+                    return json.loads(data)
+                except ValueError:
+                    pass
+
+        def server():
+            try:
+                peer.settimeout(10)
+                sync = request()
+                peer.sendall(b'\xff' + json.dumps({'return': sync['arguments']['id']}).encode() + b'\n')
+                rpc = request()
+                reply = {'return': {'exited': True, 'exitcode': 0, 'out-data': 'A' * size}, 'id': rpc['id']}
+                peer.sendall(json.dumps(reply).encode() + b'\n')
+                peer.recv(1)
+            except (OSError, EOFError):
+                pass
+            finally:
+                peer.close()
+        thread = threading.Thread(target=server, daemon=True)
+        thread.start()
+        adapter = Qga(parent, **options)
+        try:
+            adapter.connect(5)
+            return adapter._rpc('guest-exec-status', 20, {'pid': 1})
+        finally:
+            adapter.close()
+            thread.join(4)
+
+    def test_a_reply_over_the_ordinary_limit_ends_the_exchange_and_the_session(self):
+        self.assertEqual(1000, len(self.ask(1000)['out-data']))
+        with self.assertRaisesRegex(QgaError, '^qga-exchange-failed$'):
+            self.ask(70000)
+        with self.assertRaisesRegex(QgaError, '^qga-exchange-failed$'):
+            self.ask(1400000)
+
+    def test_a_session_with_the_longer_limit_reads_a_reply_of_a_megabyte_and_more(self):
+        self.assertEqual(1400000, len(self.ask(1400000, line_limit=DIAGNOSTIC_LINE_LIMIT)['out-data']))
+        self.assertEqual(9000000, len(self.ask(9000000, line_limit=DIAGNOSTIC_LINE_LIMIT)['out-data']))

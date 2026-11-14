@@ -20,7 +20,7 @@ from functools import wraps
 from datetime import datetime, timezone
 
 from .qmp_adapter import Qmp
-from .qga import Qga, QgaError
+from .qga import Qga, QgaError, LINE_LIMIT, DIAGNOSTIC_LINE_LIMIT
 from .diagnostics import StderrSink
 
 from .images import ImageDescriptor, image_chain, local_file
@@ -105,6 +105,7 @@ class Vm:
         self.qmp = None
         self.qga = None
         self.qga_endpoint = None
+        self.qga_line_limit = LINE_LIMIT
         self._guest_lock = threading.Lock()
         self.qga_recoveries = 0
         self._sync_seed = secrets.randbits(63)
@@ -161,7 +162,9 @@ class Vm:
             raise LifecycleError('qga-old-session-not-closed', self)
         stream = self.qga_endpoint.dup()
         self.launch_sockets.append(stream)
-        self.qga = Qga(stream, sync_id=(self._sync_seed + self.qga_recoveries) % 2**63)
+        # Only a session that asks for a longer line says so, so that nothing else is told of the option.
+        extra = {} if self.qga_line_limit == LINE_LIMIT else dict(line_limit=self.qga_line_limit)
+        self.qga = Qga(stream, sync_id=(self._sync_seed + self.qga_recoveries) % 2**63, **extra)
         self.launch_sockets.remove(stream)
 
     @_guest_serialized
@@ -592,6 +595,9 @@ def start(run, *, timeout=5, executor=execute, lab=None):
             raise
         raise LifecycleError('vm-start-failed') from None
     vm = Vm(run, timeout)
+    if lab is not None and getattr(lab, 'journal_full', False) and lab.role(run) == 'test':
+        # The whole journal of the service comes back in one reply, which the ordinary limit would end.
+        vm.qga_line_limit = DIAGNOSTIC_LINE_LIMIT
     vm.vm_uuid = plan['uuid']
     vm._l2_media = media
     run._lease._active.add(vm)

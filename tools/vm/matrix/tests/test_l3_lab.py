@@ -16,6 +16,7 @@ from unittest.mock import patch
 
 from tools.vm.matrix import (cli, execution, l2_media as media, l3_lab, l3_requests, l3_summary, lab, lab_protocol as wire,
                              lifecycle, linux_l2 as l2, qemu)
+from tools.vm.matrix.qga import DIAGNOSTIC_LINE_LIMIT
 from tools.vm.matrix.resources import EXECUTION_FILES, create_run, read_manifest
 from tools.vm.matrix.tests import (test_lifecycle, test_linux_l2, test_orchestrator_l3 as l3tests, test_qemu,
                                    test_stage_profiles)
@@ -193,7 +194,7 @@ class JointStartTests(unittest.TestCase):
 
         class Agent:
             def __init__(self, stream, **kwargs):
-                self.stream, self.closed = stream, False
+                self.stream, self.closed, self.kwargs = stream, False, kwargs
 
             def close(self):
                 self.stream.close()
@@ -253,6 +254,16 @@ class JointStartTests(unittest.TestCase):
         first, _ = self.launch('lab')
         second, _ = self.launch('test')
         self.assertEqual({first, second}, self.fixture.lease._active)
+
+    def test_only_the_test_machine_of_a_diagnostic_pair_reads_long_lines_from_its_agent(self):
+        first, _ = self.launch('lab')
+        second, _ = self.launch('test')
+        self.assertNotIn('line_limit', first.qga.kwargs)
+        asked = bool(self.pair_options)
+        self.assertEqual(asked, 'line_limit' in second.qga.kwargs)
+        if asked:
+            self.assertEqual(DIAGNOSTIC_LINE_LIMIT, second.qga.kwargs['line_limit'])
+            self.assertEqual(DIAGNOSTIC_LINE_LIMIT, second.qga_line_limit)
 
     def test_either_machine_may_start_first(self):
         for order in (('test', 'lab'), ('lab', 'test')):

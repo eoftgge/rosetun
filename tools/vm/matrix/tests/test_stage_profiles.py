@@ -919,6 +919,14 @@ class L3ImportTests(unittest.TestCase):
         self.assertFalse(self.vm.qga.valid)
         self.assertEqual(b'', self.whole.read_bytes())
 
+    def test_the_reply_that_carries_the_output_may_take_longer_than_an_ordinary_call(self):
+        job = self.collected_job()
+        self.answer(b'x\n')
+        with patch.object(self.vm.qga, '_rpc', wraps=self.vm.qga._rpc) as calls:
+            job.full_journal()
+        seconds = {call.args[0]: call.args[1] for call in calls.call_args_list}
+        self.assertEqual((l2.JOURNAL_FULL_REPLY_SECONDS, 5), (seconds['guest-exec-status'], seconds['guest-exec']))
+
     def test_a_command_that_never_exits_is_asked_about_a_bounded_number_of_times(self):
         job = self.collected_job()
         self.agent.client.responses['guest-exec-status'] = {'exited': False}

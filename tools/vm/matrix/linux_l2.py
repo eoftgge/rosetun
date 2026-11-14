@@ -105,6 +105,8 @@ JOURNAL_FULL_COMMAND = ('/usr/bin/journalctl', ('-b', '-u', 'rosetun-helper.serv
 JOURNAL_FULL_OUTPUT = 16 * 1024 * 1024
 JOURNAL_FULL_POLLS = 30
 JOURNAL_FULL_GRACE = 300
+# The reply that carries the output is a megabyte or more, so it gets longer than the five seconds of an ordinary call.
+JOURNAL_FULL_REPLY_SECONDS = 30
 JOURNAL_MARK_ROOM = 64
 _PRINTABLE = bytes(range(0x20, 0x7f)) + b'\n'
 _CLEAN = bytes(b if b in _PRINTABLE else ord('?') for b in range(256))
@@ -472,12 +474,12 @@ class LinuxL2Job:
             raise JobError('l2-job-deadline')
         vm.qga.deadline = min(self.deadline + self.grace, time.monotonic() + 60)
 
-    def _rpc(self, name, args):
+    def _rpc(self, name, args, timeout=5):
         self._begin()
         if self.calls >= 112 or (self.calls >= 111 and name != 'guest-file-close'):
             raise JobError('l2-rpc-budget')
         self.calls += 1
-        return self.vm.qga._rpc(name, 5, args)
+        return self.vm.qga._rpc(name, timeout, args)
 
     def _fresh_boot(self):
         self._begin()
@@ -653,7 +655,7 @@ class LinuxL2Job:
                 self.vm.qga.invalidate()
                 raise JobError('l2-invalid-journal-pid')
             for _ in range(JOURNAL_FULL_POLLS):
-                status = self._rpc('guest-exec-status', dict(pid=started['pid']))
+                status = self._rpc('guest-exec-status', dict(pid=started['pid']), JOURNAL_FULL_REPLY_SECONDS)
                 if type(status) is not dict or type(status.get('exited')) is not bool:
                     raise JobError('l2-invalid-exec-status')
                 if status['exited']:

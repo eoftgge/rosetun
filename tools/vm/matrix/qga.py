@@ -20,6 +20,16 @@ REQUIRED = ('guest-sync-delimited', 'guest-ping', 'guest-info',
             'guest-file-open', 'guest-file-read', 'guest-file-close')
 
 
+# The longest line of the agent's reply that the client reads, and the longer one the test machine of a
+# diagnostic run allows itself: the reply that carries the output of `journalctl` is one line, the output
+# arrives base64-encoded and the agent captures up to 16 MiB, so it needs 4/3 of that and some room.
+LINE_LIMIT = 65536
+DIAGNOSTIC_LINE_LIMIT = 24 * 1024 * 1024
+# The relay between the agent's socket and the client also stops a session that passes a megabyte in one direction
+# (`ByteRelay`), so the session that reads the long reply is given the room for it and for what comes before it.
+DIAGNOSTIC_RELAY_LIMIT = 2 * DIAGNOSTIC_LINE_LIMIT
+
+
 class QgaError(ValueError):
     pass
 
@@ -31,7 +41,10 @@ def _timeout(value):
 
 
 class Qga:
-    def __init__(self, stream, *, client_factory=None, relay_factory=ByteRelay, sync_id=None):
+    def __init__(self, stream, *, client_factory=None, relay_factory=ByteRelay, sync_id=None, line_limit=LINE_LIMIT):
+        if line_limit not in (LINE_LIMIT, DIAGNOSTIC_LINE_LIMIT):
+            raise QgaError('invalid-qga-line-limit')
+        self.line_limit = line_limit
         self.stream = stream
         self.client_factory = client_factory
         self.relay_factory = relay_factory
@@ -97,11 +110,13 @@ class Qga:
             else:
                 raise QgaError('qga-sync-byte-limit')
             self.loop = asyncio.new_event_loop()
-            self.client = factory(readbuflen=65536)
+            self.client = factory(readbuflen=self.line_limit)
             self.client.await_greeting = False
             self.client.negotiate = False
             self.client.events.accept = lambda event: False
-            self.relay = self.relay_factory(self.stream)
+            # Only a session that asked for the longer line is told of the longer relay, as with the line.
+            options = {} if self.line_limit == LINE_LIMIT else dict(limit=DIAGNOSTIC_RELAY_LIMIT)
+            self.relay = self.relay_factory(self.stream, **options)
             self.valid = True
             remaining = deadline - time.monotonic()
             remaining = _timeout(remaining)
