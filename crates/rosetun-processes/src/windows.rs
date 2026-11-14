@@ -168,8 +168,10 @@ pub(super) fn file_description(path: &Path) -> Option<String> {
     let mut languages: Vec<(u16, u16)> = query(&block, r"\VarFileInfo\Translation", 2)
         .map(|units| {
             units
-                .chunks_exact(2)
-                .map(|pair| (pair[0], pair[1]))
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|&[language, codepage]| (language, codepage))
                 .collect()
         })
         .unwrap_or_default();
