@@ -2256,6 +2256,16 @@ finally {
     }
 }
 
+# The legacy stand has no independent A/B/target observers or physical B/DNS capture.
+foreach ($scenario in @(Import-Csv -LiteralPath (Join-Path $PSScriptRoot 'two-hop-scenarios.tsv') -Delimiter "`t")) {
+    $results.Add([pscustomobject]@{
+        Result = 'UNRUN'
+        Scenario = "$($scenario.id) ($($scenario.mode))"
+        Check = $scenario.expectation
+        Note = 'Isolated A/B/target observers and physical B/DNS capture are not provisioned'
+    })
+}
+
 # Result first, so a long note cannot push it off the screen.
 $results | Format-Table Result, Scenario, Check, Note -AutoSize
 

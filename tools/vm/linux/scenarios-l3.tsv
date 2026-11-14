@@ -38,3 +38,22 @@ crash.five-kills	yes	real-service	crash	-	the helper killed five times in a row:
 stop.removes-table	yes	real-service	stop	-	systemctl stop during a kill-switch session removes the table and the direct path answers
 upgrade.restart	yes	real-service	upgrade	-	file replacement and repeated restart-for-upgrade keep zero packets on the physical interface, report the hold and allow reconnect
 upgrade.unprotected	yes	real-service	upgrade	-	an idle upgrade restart reports no hold and direct HTTPS still answers
+two-hop.positive.http.ipv4	no	not-run	two-hop	-	tun: HTTP B at an IPV4 literal: target observes B; B observes A; client physical capture contains neither direct B connections nor DNS for B; independent traffic follows the existing rules
+two-hop.positive.http.ipv6	no	not-run	two-hop	-	tun: HTTP B at an IPV6 literal: target observes B; B observes A; client physical capture contains neither direct B connections nor DNS for B; independent traffic follows the existing rules
+two-hop.positive.https.ipv4	no	not-run	two-hop	-	tun: HTTPS B at an IPV4 literal: target observes B; B observes A; client physical capture contains neither direct B connections nor DNS for B; independent traffic follows the existing rules
+two-hop.positive.https.ipv6	no	not-run	two-hop	-	tun: HTTPS B at an IPV6 literal: target observes B; B observes A; client physical capture contains neither direct B connections nor DNS for B; independent traffic follows the existing rules
+two-hop.positive.socks5.ipv4	no	not-run	two-hop	-	tun: SOCKS5 B at an IPV4 literal: target observes B; B observes A; client physical capture contains neither direct B connections nor DNS for B; independent traffic follows the existing rules
+two-hop.positive.socks5.ipv6	no	not-run	two-hop	-	tun: SOCKS5 B at an IPV6 literal: target observes B; B observes A; client physical capture contains neither direct B connections nor DNS for B; independent traffic follows the existing rules
+two-hop.domain-b	no	not-run	two-hop	-	tun: domain B is rejected before engine or protection changes; no physical DNS query for B; independent traffic follows the existing rules
+two-hop.a-unavailable	no	not-run	two-hop	-	tun: A unavailable: selected traffic fails without reaching B directly or reaching the target through A or Direct; independent traffic follows the existing rules
+two-hop.b-unavailable	no	not-run	two-hop	-	tun: B unavailable: selected traffic fails without reaching the target through A or Direct; independent traffic follows the existing rules
+two-hop.b-auth	no	not-run	two-hop	-	tun: incorrect B credentials: selected traffic fails without a bypass; independent traffic follows the existing rules
+two-hop.https-certificate	no	not-run	two-hop	-	tun: untrusted or mismatched HTTPS B certificate: selected traffic fails without a bypass; independent traffic follows the existing rules
+two-hop.udp-quic	no	not-run	two-hop	-	tun: UDP and QUIC selected for B are blocked without a bypass; independent traffic follows the existing rules
+two-hop.apply-rollback-reconnect	no	not-run	two-hop	-	tun: change A for B using Apply; reject a candidate; restore the previous path; reconnect preserves that path and temporary rules; independent traffic follows the existing rules
+two-hop.engine-restart	no	not-run	two-hop	-	tun: kill the engine: protection stays active and reconnect restores A then B; independent traffic follows the existing rules
+two-hop.dependency-removed	no	not-run	two-hop	-	tun: remove A through an imported configuration: reject the invalid configuration without clearing B via; independent traffic follows the existing rules
+two-hop.lockdown	no	not-run	two-hop	-	tun: Lockdown on and off: selected traffic retains A then B; failure has no bypass; independent traffic follows the existing rules
+two-hop.allow-lan	no	not-run	two-hop	-	tun: allow_lan on and off: B is never authorized for direct client egress, including a LAN-address B; independent traffic follows the existing rules
+two-hop.target-subscription-fallback	no	not-run	two-hop	-	tun: change B target, update its subscription and exercise country fallback: helper rejects unsupported actual endpoints before replacing the running session; independent traffic follows the existing rules
+two-hop.xray-fragment	no	not-run	two-hop	-	tun: Xray or fragmentation with the chain is rejected before replacing the running session; independent traffic follows the existing rules
