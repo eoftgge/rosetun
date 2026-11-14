@@ -3109,6 +3109,29 @@ which step; nothing else of the run changes.
 
 Reinstall the helper (`linux/guest/lab-entry.py` and `matrix/lab_protocol.py`) in both images.
 
+#### The whole service journal
+
+`run-l3.sh` saves the last 400 lines of the journal of `rosetun-helper.service` beside its report, and
+a window of the run may be older than that. A diagnostic run therefore asks the test machine for the
+whole journal of the boot, once, right after the report has been collected and before the lab machine
+finishes: one fixed command through the guest agent, no argument from anywhere else,
+
+```text
+/usr/bin/journalctl -b -u rosetun-helper.service -o short-monotonic --no-pager
+```
+
+The output is cleaned the way the short journal is (every byte but a newline and printable ASCII becomes
+`?`) and kept as `linux-l3/helper-journal-full.txt` in the run of the test machine, with its SHA-256 in
+the summary's `evidence`. At most 1 MiB is kept: a longer journal keeps its first and its last whole
+lines around one line, `[N bytes left out]`. The time is `short-monotonic`, seconds since the boot of
+the test machine, so it is not the wall clock of anything else.
+
+The place of the file is registered only for a diagnostic run, and the call may start after the deadline
+of the job (by up to 300 seconds), which no other call of the job may. If the guest cannot give the
+journal (the command fails or does not end, or the agent refuses), `journal_full_error` of the summary
+says at which step and nothing else of the run changes: the results already collected, the assessment
+and the exit code stay as they were.
+
 ### Owner qualification
 
 1. `run linux-l3 --lab --dry-run`, then the ordinary command. Expect the group `PASS`, the

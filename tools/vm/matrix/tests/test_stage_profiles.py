@@ -81,6 +81,16 @@ def register_evidence(run, stage):
     _atomic_manifest(run.directory, record)
 
 
+def register_whole_journal(run):
+    """What the controller reserves before the machines start for a diagnostic run (this fixture's run has started)."""
+    from tools.vm.matrix.resources import _atomic_manifest
+    record = run._read()
+    relative = 'linux-l3/' + l2.JOURNAL_FULL
+    record['resources'].append(dict(id='linux-l3-journal-full', kind='file', path=relative))
+    (run.directory / relative).touch(exist_ok=False)
+    _atomic_manifest(run.directory, record)
+
+
 class ProfileTableTests(unittest.TestCase):
     def test_l3_is_exactly_what_start_sh_requires_and_l2_is_unchanged(self):
         required = lines_of('tools/vm/linux/guest/start.sh', 'L3_START_REQUIRED')
@@ -600,6 +610,35 @@ class L3MediaTests(unittest.TestCase):
         self.assertEqual([], self.fixture.commands)
 
 
+class JournalTextTests(unittest.TestCase):
+    def test_everything_but_newlines_and_printable_ascii_becomes_a_question_mark(self):
+        raw = bytes(range(256))
+        cleaned = l2.clean_journal(raw)
+        self.assertEqual(256, len(cleaned))
+        for byte, kept in zip(raw, cleaned):
+            self.assertEqual(byte if byte == 10 or 0x20 <= byte <= 0x7e else ord('?'), kept)
+
+    def test_a_journal_that_fits_is_the_journal(self):
+        self.assertEqual(b'a\nb\n', l2.bound_journal(b'a\nb\n'))
+        self.assertEqual(b'x' * 10, l2.bound_journal(b'x' * 10, 10))
+
+    def test_a_journal_that_does_not_fit_keeps_whole_lines_of_each_end_and_counts_the_bytes_between(self):
+        lines = [b'line %03d\n' % n for n in range(500)]
+        raw = b''.join(lines)
+        kept = l2.bound_journal(raw, 1000)
+        self.assertLessEqual(len(kept), 1000)
+        before, _, rest = kept.partition(b'[')
+        mark, _, after = rest.partition(b']\n')
+        self.assertEqual(b'%d bytes left out' % (len(raw) - len(before) - len(after)), mark)
+        self.assertTrue(raw.startswith(before) and raw.endswith(after))
+        self.assertTrue(before.endswith(b'\n') and after.startswith(b'line '))
+
+    def test_a_journal_without_a_single_newline_is_cut_without_looping_or_raising(self):
+        kept = l2.bound_journal(b'x' * 5000, 1000)
+        self.assertLessEqual(len(kept), 1000)
+        self.assertIn(b'bytes left out]', kept)
+
+
 class L3ImportTests(unittest.TestCase):
     def setUp(self):
         self.fixture = test_jobs.JobsTests()
@@ -795,6 +834,118 @@ class L3ImportTests(unittest.TestCase):
         self.assertFalse(journal[2]['complete'])
         self.assertTrue(journal[3]['over_limit'])
         self.assertEqual(4, len(journal))
+
+    def collected_job(self):
+        """A submitted and collected L3 job, with the place of the whole journal reserved beside the others."""
+        self.obj.stage()
+        with patch.object(l2, 'source_identity', return_value=SOURCE):
+            job = self.obj.linux_l2_job(checkout=CHECKOUT, enabled=True)
+        job.submit()
+        plan, report, status = synthetic_inputs('linux-l3')
+        report['run_id'] = GUEST
+        report['guest'] = dict(boot_id=BOOT, boot_id_at_end=BOOT)
+        status.update(run_id=GUEST, boot_id=BOOT)
+        self.fixture.files.update({'report.json': json.dumps(report).encode(),
+                                   'status.json': json.dumps(status).encode()})
+        job.collect()
+        register_whole_journal(self.vm.run)
+        job.calls = self.agent.calls = 0
+        return job
+
+    def answer(self, text, **changes):
+        status = {'exited': True, 'exitcode': 0, 'out-data': base64.b64encode(text).decode()}
+        self.agent.client.responses['guest-exec-status'] = status | changes
+
+    @property
+    def whole(self):
+        return self.vm.run.directory / 'linux-l3' / l2.JOURNAL_FULL
+
+    def test_the_whole_journal_is_one_fixed_command_run_once_cleaned_and_kept_beside_the_others(self):
+        job = self.collected_job()
+        raw = b'42.000000 host rosetun-helper[1]: connected\n\x1b[31mred\x00\xff\n' * 3
+        self.answer(raw)
+        before = list(self.agent.client.commands)
+        result = job.full_journal()
+        executed = [args for name, args in self.agent.client.commands[len(before):] if name == 'guest-exec']
+        self.assertEqual([dict(path='/usr/bin/journalctl', arg=['-b', '-u', 'rosetun-helper.service', '-o',
+                                                                 'short-monotonic', '--no-pager'],
+                               **{'capture-output': True})], executed)
+        cleaned = l2.clean_journal(raw)
+        self.assertEqual(cleaned, self.whole.read_bytes())
+        self.assertIn(b'?[31mred??\n', cleaned)
+        self.assertEqual(dict(size=len(cleaned), source_size=len(raw), complete=True), result)
+        self.assertEqual(b'', (self.vm.run.directory / 'linux-l3/1/helper-journal.txt').read_bytes())
+        rows = [json.loads(line) for line in (self.vm.run.directory / 'job-evidence.jsonl').read_text().splitlines()]
+        row = [r for r in rows if r['operation'] == 'l2-file' and r.get('file') == 'journal-full'][-1]
+        self.assertEqual((True, len(cleaned), hashlib.sha256(cleaned).hexdigest()),
+                         (row['complete'], row['size'], row['sha256']))
+
+    def test_a_journal_over_the_limit_keeps_its_first_and_last_lines_and_says_how_much_went(self):
+        job = self.collected_job()
+        lines = [b'%d.000000 host helper: line %d\n' % (n, n) for n in range(60000)]
+        raw = b''.join(lines)
+        self.assertGreater(len(raw), l2.JOURNAL_FULL_LIMIT)
+        self.answer(raw)
+        result = job.full_journal()
+        kept = self.whole.read_bytes()
+        self.assertLessEqual(len(kept), l2.JOURNAL_FULL_LIMIT)
+        self.assertFalse(result['complete'])
+        before, _, rest = kept.partition(b'[')
+        mark, _, after = rest.partition(b']\n')
+        self.assertEqual(b'%d bytes left out' % (len(raw) - len(before) - len(after)), mark)
+        self.assertTrue(raw.startswith(before) and raw.endswith(after))
+        self.assertTrue(before.endswith(b'\n') and after.endswith(lines[-1]))
+
+    def test_a_command_that_fails_or_an_answer_that_is_wrong_keeps_nothing_and_raises(self):
+        done = {'exited': True, 'exitcode': 0, 'out-data': 'eAo='}
+        wrong = {'exit': dict(done, exitcode=1), 'no-exit-code': {'exited': True, 'out-data': 'eAo='},
+                 'not-base64': dict(done, **{'out-data': '!!!'}), 'not-text': dict(done, **{'out-data': 5}),
+                 'too-big': dict(done, **{'out-data': 'A' * (4 * l2.JOURNAL_FULL_OUTPUT // 3 + 8)}),
+                 'no-state': {'exitcode': 0}}
+        job = self.collected_job()
+        for name, status in wrong.items():
+            with self.subTest(name):
+                job.calls = self.agent.calls = 0
+                self.agent.client.responses['guest-exec-status'] = status
+                with self.assertRaises(JobError):
+                    job.full_journal()
+                self.assertEqual(b'', self.whole.read_bytes())
+
+    def test_a_pid_that_is_not_one_poisons_the_session_and_a_command_that_never_ends_times_out(self):
+        job = self.collected_job()
+        self.agent.client.responses['guest-exec'] = {'pid': 'one'}
+        with self.assertRaisesRegex(JobError, 'invalid-journal-pid'):
+            job.full_journal()
+        self.assertFalse(self.vm.qga.valid)
+        self.assertEqual(b'', self.whole.read_bytes())
+
+    def test_a_command_that_never_exits_is_asked_about_a_bounded_number_of_times(self):
+        job = self.collected_job()
+        self.agent.client.responses['guest-exec-status'] = {'exited': False}
+        with patch.object(l2.time, 'sleep') as sleeping, patch.object(l2, 'JOURNAL_FULL_POLLS', 3):
+            with self.assertRaisesRegex(JobError, 'journal-timeout'):
+                job.full_journal()
+        self.assertEqual(3, sleeping.call_count)
+        self.assertEqual(3, sum(name == 'guest-exec-status' for name, _ in self.agent.client.commands[-6:]))
+
+    def test_the_whole_journal_may_be_asked_for_after_the_deadline_of_the_job_and_nothing_else_may(self):
+        job = self.collected_job()
+        job.deadline = l2.time.monotonic() - 100
+        with self.assertRaisesRegex(JobError, 'job-deadline'):
+            job._begin()
+        self.answer(b'late\n')
+        self.assertTrue(job.full_journal()['complete'])
+        self.assertEqual(0, job.grace)
+        with self.assertRaisesRegex(JobError, 'job-deadline'):
+            job._begin()
+
+    def test_the_whole_journal_never_changes_what_was_collected(self):
+        job = self.collected_job()
+        assessment, verification = job.assessment, job.verification
+        self.agent.client.responses['guest-exec-status'] = dict(exited=True, exitcode=2)
+        with self.assertRaises(JobError):
+            job.full_journal()
+        self.assertEqual((assessment, verification), (job.assessment, job.verification))
 
     def test_only_the_l3_stage_reserves_a_place_for_the_journal(self):
         self.assertEqual(l2.EVIDENCE_FILES, l2.evidence_files('l2'))

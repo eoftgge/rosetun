@@ -93,6 +93,36 @@ EVIDENCE_FILES = ('plan.json', 'package.json', 'assessment.json') + tuple(
 JOURNAL = 'helper-journal.txt'
 JOURNAL_LIMIT = 256 * 1024
 JOURNAL_FILES = tuple(f'{i}/{JOURNAL}' for i in range(1, POLLS + 1))
+# A diagnostic L3 run also asks the guest for the whole journal of the service, once, after the report is
+# collected: one fixed command, so no argument comes from anywhere. Its output is bounded, cleaned as the short
+# journal is (`run-l3.sh` pipes that one through `tr -c '\n -~' '?'`) and kept in one file beside the four polls.
+JOURNAL_FULL = 'helper-journal-full.txt'
+JOURNAL_FULL_LIMIT = 1024 * 1024
+JOURNAL_FULL_COMMAND = ('/usr/bin/journalctl', ('-b', '-u', 'rosetun-helper.service', '-o', 'short-monotonic',
+                                                '--no-pager'))
+# What the guest agent may hand back before it is refused outright (it caps its own capture at 16 MiB), how
+# often the command is asked about, how much longer than the job the call may start and the room for the mark.
+JOURNAL_FULL_OUTPUT = 16 * 1024 * 1024
+JOURNAL_FULL_POLLS = 30
+JOURNAL_FULL_GRACE = 300
+JOURNAL_MARK_ROOM = 64
+_PRINTABLE = bytes(range(0x20, 0x7f)) + b'\n'
+_CLEAN = bytes(b if b in _PRINTABLE else ord('?') for b in range(256))
+
+
+def clean_journal(raw):
+    """Every byte but a newline and printable ASCII becomes `?`, as `tr -c '\\n -~' '?'` does in `run-l3.sh`."""
+    return raw.translate(_CLEAN)
+
+
+def bound_journal(data, limit=JOURNAL_FULL_LIMIT):
+    """`data` if it fits `limit`, else its first and its last whole lines around a line saying how many bytes went."""
+    if len(data) <= limit:
+        return data
+    half = (limit - JOURNAL_MARK_ROOM) // 2
+    head, tail = data[:half], data[len(data) - half:]
+    head, tail = head[:head.rfind(b'\n') + 1], tail[tail.find(b'\n') + 1:]
+    return head + b'[%d bytes left out]\n' % (len(data) - len(head) - len(tail)) + tail
 
 
 def evidence_files(stage):
@@ -414,6 +444,7 @@ class LinuxL2Job:
         self.verification = 'UNVERIFIED'
         self.pid = self.session = None
         self.calls = self.polls = 0
+        self.grace = 0
         self.handles = {}
         self.assessment = None
         self.deadline = time.monotonic() + int(env['JOB_TIMEOUT_SECONDS']) + 180
@@ -437,9 +468,9 @@ class LinuxL2Job:
         if (vm.process.poll() is not None or not vm.qga.valid or vm.qga.closed or
                 vm.reset_pending or vm.last_boot_id != self.identity['boot_id']):
             raise JobError('l2-channel-or-boot-unverified')
-        if time.monotonic() >= self.deadline:
+        if time.monotonic() >= self.deadline + self.grace:
             raise JobError('l2-job-deadline')
-        vm.qga.deadline = min(self.deadline, time.monotonic() + 60)
+        vm.qga.deadline = min(self.deadline + self.grace, time.monotonic() + 60)
 
     def _rpc(self, name, args):
         self._begin()
@@ -603,6 +634,51 @@ class LinuxL2Job:
             raise JobError('l2-result-UNVERIFIED') from None
         self._evidence('l2-collected')
         return self.snapshot()
+
+    @_guest_serialized
+    def full_journal(self):
+        """Keep the whole journal of the service for this boot (a diagnostic run, after `collect`).
+
+        The one command of `JOURNAL_FULL_COMMAND`, run once through the guest agent with its output captured.
+        Nothing of the guest's answer is used but that output, and nothing of the assessment depends on it: a
+        failure raises a `JobError` for the controller to note and changes no result already collected.
+        """
+        self.grace = JOURNAL_FULL_GRACE
+        try:
+            self._fresh_boot()
+            path, arguments = JOURNAL_FULL_COMMAND
+            started = self._rpc('guest-exec', dict(path=path, arg=list(arguments), **{'capture-output': True}))
+            if (type(started) is not dict or set(started) != {'pid'} or type(started['pid']) is not int
+                    or not 0 < started['pid'] < 2**31):
+                self.vm.qga.invalidate()
+                raise JobError('l2-invalid-journal-pid')
+            for _ in range(JOURNAL_FULL_POLLS):
+                status = self._rpc('guest-exec-status', dict(pid=started['pid']))
+                if type(status) is not dict or type(status.get('exited')) is not bool:
+                    raise JobError('l2-invalid-exec-status')
+                if status['exited']:
+                    break
+                time.sleep(.5)
+            else:
+                raise JobError('l2-journal-timeout')
+            if status.get('exitcode') != 0:
+                self._evidence('l2-file', file='journal-full', complete=False, exitcode=status.get('exitcode'))
+                raise JobError('l2-journal-command-failed')
+            encoded = status.get('out-data', '')
+            if type(encoded) is not str or len(encoded) > 4 * JOURNAL_FULL_OUTPUT // 3 + 4:
+                raise JobError('l2-journal-output-invalid')
+            try:
+                raw = base64.b64decode(encoded, validate=True)
+            except ValueError:
+                raise JobError('l2-journal-output-invalid') from None
+            data = bound_journal(clean_journal(raw))
+            self._save(JOURNAL_FULL, data)
+            cut = len(data) != len(raw) or status.get('out-truncated') is True
+            self._evidence('l2-file', file='journal-full', complete=not cut, size=len(data), source_size=len(raw),
+                           sha256=hashlib.sha256(data).hexdigest())
+            return dict(size=len(data), source_size=len(raw), complete=not cut)
+        finally:
+            self.grace = 0
 
     def snapshot(self):
         return dict(identity=self.identity, submission=self.submission, launcher=self.launcher,

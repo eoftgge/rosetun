@@ -367,6 +367,14 @@ class Machines:
         job.submit, job.collect = submit, collect
         job.snapshot = lambda: dict(accepted=False, polls=job.polls)
 
+        def full_journal():
+            machines.note('journal-full')
+            if machines.fixtures.get('journal') == 'unavailable':
+                raise ValueError('l2-journal-command-failed')
+            (machines.runs['test'].directory / 'linux-l3' / l3_lab.JOURNAL_FULL).write_bytes(
+                b'12.000000 host rosetun-helper[1]: started\n')
+        job.full_journal = full_journal
+
         def pair(*args, **kwargs):
             machines.note('evidence-disk')
             machines.pair_options = kwargs
@@ -678,6 +686,35 @@ class DiagnosticTests(Flow):
         self.assertNotIn('route-flows.json', result['lab']['artifacts_sha256'])
         names = [e for e in machines.events if type(e) is str]
         self.assertEqual(['read-route-flows.json', 'close-test', 'close-lab'], names[-3:])
+
+    def test_only_a_diagnostic_run_reserves_and_keeps_the_whole_service_journal(self):
+        ordinary = Machines(self)
+        result = self.go(ordinary)
+        self.assertNotIn('journal-full', ordinary.events)
+        self.assertFalse({'journal-reserve', 'journal-full'} & {row['stage'] for row in result['stages']})
+        self.assertNotIn('linux-l3/helper-journal-full.txt', {entry['path'] for entry in result['evidence']})
+        self.assertNotIn('journal_full_error', result)
+
+    def test_a_diagnostic_run_keeps_the_whole_journal_after_the_report_and_before_the_lab_finishes(self):
+        machines = Machines(self)
+        result = self.go(machines, diagnostic=True)
+        stages = [row['stage'] for row in result['stages']]
+        self.assertEqual(stages.index('evidence-disk') + 1, stages.index('journal-reserve'))
+        self.assertEqual([stages.index('collect') + 1], [stages.index('journal-full')])
+        self.assertLess(stages.index('journal-full'), stages.index('lab-finish'))
+        self.assertIn(('test', 'linux-l3/helper-journal-full.txt'),
+                      {(e['role'], e['path']) for e in result['evidence']})
+        self.assertNotIn('journal_full_error', result)
+        self.assertEqual([], result['errors'])
+
+    def test_a_journal_the_guest_cannot_give_is_noted_and_changes_nothing_collected(self):
+        machines = Machines(self, fixtures=dict(journal='unavailable'))
+        result = self.go(machines, diagnostic=True)
+        self.assertEqual(('journal-full', 'ValueError'),
+                         tuple(result['journal_full_error'][k] for k in ('stage', 'kind')))
+        self.assertEqual([], result['errors'])
+        self.assertEqual((2, True, True), (result['exit_code'], result['completed'], result['group']['passed']))
+        self.assertEqual(0, (machines.runs['test'].directory / 'linux-l3' / l3_lab.JOURNAL_FULL).stat().st_size)
 
     def test_an_interrupted_diagnostic_run_stays_130(self):
         result = dict(diagnostic=True, legacy=dict(scenarios=[]), errors=[], completed=True,

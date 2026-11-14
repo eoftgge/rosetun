@@ -22,6 +22,7 @@ from .lab_protocol import (LOG_LIMIT, PORTS, TARGETS, EVIDENCE_PCAP_LIMIT, CLIEN
                            ROUTE_FLOW_LIMIT, ROUTE_FLOWS_LIMIT, classify_windows, https_exchanges, marker_run_id,
                            probes)
 from .orchestrator import _RETAINED_LEASES, failure, save
+from .linux_l2 import JOURNAL_FULL
 from .resources import StandLease, completion_verified, create_run, resource_path, EXECUTION_FILES
 
 SCHEMA = 'rosetun.matrix.l3-summary.v1'
@@ -33,6 +34,15 @@ LAB_FILES = (('targets.json', LOG_LIMIT), ('health.json', LOG_LIMIT), ('https.js
 ROUTE_FILE = ('route-flows.json', ROUTE_FLOWS_LIMIT)
 # The capture outlives the job by this much: it also covers the boot and the import of the test machine.
 CAPTURE_SLACK = 300
+
+
+def reserve_journal(run):
+    """Register the place of the whole service journal in the test run: only a diagnostic run has one."""
+    relative = 'linux-l3/' + JOURNAL_FULL
+    run.register(dict(id='linux-l3-journal-full', kind='file', path=relative))
+    path = resource_path(run.directory, relative)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.touch(exist_ok=False)
 
 
 class Adapters:
@@ -307,6 +317,8 @@ def run_linux_l3_lab(config, *, diagnostic=False, adapters=None, clock=time.mono
         # The evidence disk is made with the pair; it belongs to the lab machine alone.
         pair = step('evidence-disk', lambda: adapters.pair(lease, runs, lab_id, tunnel=True, evidence_disk=True,
                                                            dns=True, **({'route_flows': True} if diagnostic else {})))
+        if diagnostic:
+            step('journal-reserve', lambda: reserve_journal(runs['test']))
         if clock() >= deadline:
             raise TimeoutError('preparation deadline')
 
@@ -375,6 +387,12 @@ def run_linux_l3_lab(config, *, diagnostic=False, adapters=None, clock=time.mono
             step('collect-final', job.collect)
         result['execution'] = job.snapshot()
         seen['raw_report'] = saved_report(runs['test'], job)
+        if diagnostic:
+            # The report is in; a journal the guest cannot give is noted and changes nothing already collected.
+            try:
+                step('journal-full', job.full_journal)
+            except Exception as error:
+                result['journal_full_error'] = failure('journal-full', error)
 
         # The capture ends here; the lab machine says what it saw.
         guest, _ = step('lab-finish', lambda: lab_call('finish'))
