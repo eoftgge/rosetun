@@ -2,7 +2,6 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use base64::Engine as _;
 use rosetun_config::{
     Node, NodeId, Outbound, Rule, RuleMatcher, RuleSet, RuleSetId, RuleTarget, Selection, Settings,
     StreamSettings, SubscriptionId, TrojanParams,
