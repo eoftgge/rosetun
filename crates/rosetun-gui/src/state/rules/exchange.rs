@@ -48,7 +48,9 @@ impl State {
                 self.rules.exchange.notice = None;
                 let set = self.selected_rules()?;
                 let selected = selected.then(|| self.selected_rule_ids());
-                if selected.as_ref().is_some_and(Vec::is_empty) { return None; }
+                if selected.as_ref().is_some_and(Vec::is_empty) {
+                    return None;
+                }
                 let text = match rules_exchange::export(
                     &self.config,
                     set,
@@ -162,17 +164,24 @@ impl State {
             set: set.id.clone(),
         });
     }
-    pub(crate) fn reduce_rules_written(&mut self, result: Result<crate::worker::RulesExportOutcome, String>) {
+    pub(crate) fn reduce_rules_written(
+        &mut self,
+        result: Result<crate::worker::RulesExportOutcome, String>,
+    ) {
         use crate::worker::RulesExportOutcome;
         self.rules.exchange.busy = false;
         self.rules.exchange.error = None;
         self.rules.exchange.notice = None;
         match result {
-            Ok(RulesExportOutcome::Copied) => self.rules.exchange.notice = Some(tr!("rules-transfer-copied")),
+            Ok(RulesExportOutcome::Copied) => {
+                self.rules.exchange.notice = Some(tr!("rules-transfer-copied"));
+            }
             #[cfg(windows)]
-            Ok(RulesExportOutcome::Saved) => self.rules.exchange.notice = Some(tr!("rules-transfer-saved")),
+            Ok(RulesExportOutcome::Saved) => {
+                self.rules.exchange.notice = Some(tr!("rules-transfer-saved"));
+            }
             #[cfg(windows)]
-            Ok(RulesExportOutcome::Cancelled) => {},
+            Ok(RulesExportOutcome::Cancelled) => {}
             Err(_) => self.rules.exchange.error = Some(tr!("rules-transfer-write-error")),
         }
     }

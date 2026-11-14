@@ -233,7 +233,11 @@ impl WorkerDispatcher {
         });
     }
 }
-fn write_rules_document(text: String, file: bool, clipboard: &Mutex<Option<arboard::Clipboard>>) -> Result<RulesExportOutcome, String> {
+fn write_rules_document(
+    text: String,
+    file: bool,
+    clipboard: &Mutex<Option<arboard::Clipboard>>,
+) -> Result<RulesExportOutcome, String> {
     if file {
         #[cfg(windows)]
         {
@@ -245,14 +249,21 @@ fn write_rules_document(text: String, file: bool, clipboard: &Mutex<Option<arboa
             else {
                 return Ok(RulesExportOutcome::Cancelled);
             };
-            return std::fs::write(path, text).map(|()| RulesExportOutcome::Saved).map_err(|_| "write".into());
+            return std::fs::write(path, text)
+                .map(|()| RulesExportOutcome::Saved)
+                .map_err(|_| "write".into());
         }
         #[cfg(not(windows))]
         return Err("file dialogs unavailable".into());
     }
     let mut clipboard = clipboard.lock().map_err(|_| "clipboard")?;
-    if clipboard.is_none() { *clipboard = Some(arboard::Clipboard::new().map_err(|_| "clipboard")?); }
-    clipboard.as_mut().ok_or("clipboard")?.set_text(text)
+    if clipboard.is_none() {
+        *clipboard = Some(arboard::Clipboard::new().map_err(|_| "clipboard")?);
+    }
+    clipboard
+        .as_mut()
+        .ok_or("clipboard")?
+        .set_text(text)
         .map(|()| RulesExportOutcome::Copied)
         .map_err(|_| "clipboard".into())
 }

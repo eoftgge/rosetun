@@ -107,7 +107,9 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
         state.config.interface.reduce_motion,
     );
     widgets::appear(ui, shown, |ui| tab_body(ui, state, actions));
-    if state.rules.exchange.notice.is_none() { undo_notice(ui.ctx(), state, actions); }
+    if state.rules.exchange.notice.is_none() {
+        undo_notice(ui.ctx(), state, actions);
+    }
 }
 
 fn undo_notice(ctx: &egui::Context, state: &State, actions: &mut Vec<Action>) {

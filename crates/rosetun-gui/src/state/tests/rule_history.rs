@@ -664,7 +664,9 @@ fn exported_list_links_require_an_explicit_choice() {
             panic!("export job");
         };
         assert_eq!(text.contains("private-token"), consent);
-        state.reduce(WorkerEvent::RulesWritten(Ok(crate::worker::RulesExportOutcome::Copied)));
+        state.reduce(WorkerEvent::RulesWritten(Ok(
+            crate::worker::RulesExportOutcome::Copied,
+        )));
     }
 }
 #[test]

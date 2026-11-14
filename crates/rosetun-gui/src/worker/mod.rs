@@ -104,7 +104,13 @@ pub(crate) struct FailureInterference {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RulesExportOutcome { Copied, #[cfg(windows)] Saved, #[cfg(windows)] Cancelled }
+pub(crate) enum RulesExportOutcome {
+    Copied,
+    #[cfg(windows)]
+    Saved,
+    #[cfg(windows)]
+    Cancelled,
+}
 
 pub(crate) enum WorkerEvent {
     /// The system refused a thread, so the task's own result will never come.
