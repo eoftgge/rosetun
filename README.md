@@ -35,6 +35,8 @@ A system service protects against leaks independently of the engine.
 - Local network access and automatic reconnect.
 - Tray, notifications and CLI; English and Russian interfaces.
 
+Development builds: [two-hop proxy exits and limitations](TWO-HOP-EXITS.md). Network qualification is pending.
+
 ## Install
 
 Choose a file from the release linked above:
