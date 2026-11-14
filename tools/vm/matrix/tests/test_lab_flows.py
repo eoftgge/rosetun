@@ -59,6 +59,18 @@ class FlowTests(unittest.TestCase):
                          {k: v for k, v in flow.items() if k not in ('first_ms', 'last_ms')})
         self.assertEqual(0, self.flows(result, 1)['omitted'])
 
+    def test_every_window_has_the_lab_clock_at_the_request_that_opened_and_the_one_that_closed_it(self):
+        result = self.classify(self.two((), [out(GATEWAY, wire.NODE_PORT, flags=SYN)]))
+        self.assertEqual(dict(open_at=100.0, close_at=100.5), result['windows'][0]['clock'])
+        self.assertEqual(dict(open_at=101.0, close_at=101.75), result['windows'][1]['clock'])
+
+    def test_a_window_that_never_closed_has_no_closing_time_and_without_flows_there_is_no_clock(self):
+        result = self.classify(session(0, LABELS[0]) + marker_frames(1, 'open', LABELS[1]))
+        self.assertEqual(dict(open_at=100.0, close_at=100.5), result['windows'][0]['clock'])
+        self.assertEqual(dict(open_at=101.0, close_at=None), result['windows'][1]['clock'])
+        plain = self.classify(self.two(), flows=False)
+        self.assertNotIn('clock', plain['windows'][0])
+
     def test_a_connection_with_only_a_syn_is_a_syn_and_nothing_came_back(self):
         result = self.classify(self.two((), [out(GATEWAY, wire.NODE_PORT, flags=SYN),
                                              out(GATEWAY, wire.NODE_PORT, flags=SYN)]))
@@ -126,7 +138,7 @@ class FlowTests(unittest.TestCase):
         plain = self.classify(frames, flows=False)
         asked = self.classify(frames, flows=True)
         self.assertTrue(all('flows' not in window for window in plain['windows']))
-        self.assertEqual(plain, {**asked, 'windows': [{k: v for k, v in w.items() if k != 'flows'}
+        self.assertEqual(plain, {**asked, 'windows': [{k: v for k, v in w.items() if k not in ('flows', 'clock')}
                                                       for w in asked['windows']]})
         # The leak is still the verdict of the window; its connection is what the flows say it was.
         self.assertEqual(['NONE', 'DETECTED'], [w['leak'] for w in asked['windows']])

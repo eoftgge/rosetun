@@ -716,6 +716,35 @@ class DiagnosticTests(Flow):
         self.assertEqual((2, True, True), (result['exit_code'], result['completed'], result['group']['passed']))
         self.assertEqual(0, (machines.runs['test'].directory / 'linux-l3' / l3_lab.JOURNAL_FULL).stat().st_size)
 
+    def test_only_a_diagnostic_run_lines_the_scenarios_up_with_the_flows(self):
+        ordinary = Machines(self)
+        result = self.go(ordinary)
+        self.assertNotIn('alignment', result)
+        self.assertNotIn('alignment_error', result)
+
+    def test_a_diagnostic_run_lists_every_scenario_of_the_group_with_its_window_and_changes_no_verdict(self):
+        machines = Machines(self)
+        result = self.go(machines, diagnostic=True)
+        table = result['alignment']
+        self.assertEqual(list(l3_summary.GROUP), [entry['id'] for entry in table['scenarios']])
+        placed = {entry['id']: entry for entry in table['scenarios']}
+        self.assertIsNone(placed['preflight.identity']['interval_ms'])
+        self.assertEqual(2, placed['killswitch.tunnel-passes']['window'])
+        self.assertIsNotNone(placed['killswitch.tunnel-passes']['interval_ms'])
+        self.assertTrue(table['clock']['approximate'])
+        self.assertNotIn('alignment_error', result)
+        self.assertEqual((2, True, []), (result['exit_code'], result['group']['passed'], result['group']['findings']))
+
+    def test_an_alignment_that_fails_is_noted_and_changes_nothing_else(self):
+        machines = Machines(self)
+        with patch.object(l3_lab, 'align', side_effect=ValueError('synthetic')):
+            result = self.go(machines, diagnostic=True)
+        self.assertIsNone(result['alignment'])
+        self.assertEqual(('alignment', 'ValueError'),
+                         (result['alignment_error']['stage'], result['alignment_error']['kind']))
+        self.assertEqual([], result['errors'])
+        self.assertEqual((2, True), (result['exit_code'], result['completed']))
+
     def test_an_interrupted_diagnostic_run_stays_130(self):
         result = dict(diagnostic=True, legacy=dict(scenarios=[]), errors=[], completed=True,
                       lab=dict(windows=[], missing_labels=[], qualification=dict(

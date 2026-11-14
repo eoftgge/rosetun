@@ -1129,6 +1129,20 @@ class RouteFlows:
                     error=error, dropped=dropped)
 
 
+def _window_clock(row, times):
+    """When the lab machine captured the request that opened the window and the one that closed it.
+
+    Seconds since the epoch by the clock of the lab machine, which stamps every record of the capture;
+    None for one that is missing, repeated or has no time. The test machine's own clock is not in the capture.
+    """
+    seen = row.get('seen') or {}
+    clock = {}
+    for name, word in (('open_at', 'open'), ('close_at', 'close')):
+        positions = seen.get((word, 'request'), [])
+        clock[name] = times[positions[0]] if len(positions) == 1 and positions[0] < len(times) else None
+    return clock
+
+
 def _window_counts(names, tunnel_port):
     counts = dict(probe=0, marker=0, infrastructure=0, unexpected=0, foreign=0, unparsed=0)
     if names:
@@ -1324,8 +1338,8 @@ def classify_windows(raw, run, windows_expected, *, health, ready, allowances=()
             leak, reason = 'NONE', 'clean'
         results.append(dict(index=index, label=label, expected='NONE', leak=leak, leak_reason=reason,
                             observer_reasons=reasons, categories=row['categories'], unexpected=row['unexpected'],
-                            **({'flows': row['flows'].document() if row.get('flows') else dict(connections=[], omitted=0)}
-                               if flows else {})))
+                            **({'flows': row['flows'].document() if row.get('flows') else dict(connections=[], omitted=0),
+                                'clock': _window_clock(row, times)} if flows else {})))
     answer = dict(windows=results, outside_window=dict(categories=outside, frames=outside_frames),
                   extra_windows=extra, observer_reasons=shared)
     if found_mode:

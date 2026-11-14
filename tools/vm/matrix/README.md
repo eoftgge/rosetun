@@ -2961,6 +2961,10 @@ connections of the test machine did inside the window, from its opening marker t
   has `rst: ["back"]`.
 - At most 64 connections are kept per window, in the order of their first frame; `omitted` counts the
   others.
+- Each row of `lab.windows` also has `clock`: `open_at` and `close_at`, the time by the clock of the lab
+  machine (seconds since the epoch) at which the capture saw the request that opened the window and the
+  one that closed it, or null for one that is missing. They are what the scenarios are lined up with
+  (see below).
 
 `lab.https_refusals` lists the connections the HTTPS target turned away (`service`, `family` and the
 `reason` of the rows of `https.json` that have one, at most eight; any other field is dropped). The
@@ -3131,6 +3135,46 @@ of the job (by up to 300 seconds), which no other call of the job may. If the gu
 journal (the command fails or does not end, or the agent refuses), `journal_full_error` of the summary
 says at which step and nothing else of the run changes: the results already collected, the assessment
 and the exit code stay as they were.
+
+#### The scenarios against the flows
+
+A diagnostic run adds `alignment` to the summary: for each of the sixteen scenarios of the group, when it ran
+and which flows were open then, from the capture on `lab-wire` (the `flows` of its window) and from
+`route-flows.json`. It exists to tell, for one scenario, whether its connection reached the node, whether the
+node reached the target and whether the target answered. It judges nothing, and if it cannot be made
+(`alignment` is null) `alignment_error` says why and the rest of the summary is as it would have been.
+
+Everything in it is approximate, and each entry says `approximate: true`, because the report of the script
+has no start time for a scenario. It has its duration, and one time, when the script finished, by the clock of
+the test machine, to the second. So:
+
+- `report_begin` and `report_end` are the scenario's place by the test machine's clock, counted back from the
+  end of the report as if the scenarios had followed one another with no pause. They did not (a connect or a
+  restart is in no duration), so an earlier scenario is shown later than it ran by every pause after it.
+- `interval_ms` is where the scenario ran, by the clock of the lab machine, in milliseconds after the request
+  that opened its window: `begin` is the time of the scenarios of the window that ran before it, `end` is the
+  length of the window less the time of those after it, so it ran somewhere inside, and `slack` is what the
+  window had besides the durations of its scenarios (negative if the durations do not fit in it, a sign that
+  the window is not what the report ran in). A scenario that belongs to no window (`preflight.*`, `install.service`),
+  or whose window lacks a marker, has no interval and no flows. If several windows carry its label (the
+  script was run again), the first that has both markers is used and `windows_with_label` says how many there are.
+- `wire_flows` are the connections of the test machine in the window (the rows of `lab.windows[].flows`) and
+  `route_flows` those of `lab.route_flows`, whose `first_ms` and `last_ms` here are the times of the first and the
+  last packet in the same milliseconds, so the two lists can be read side by side. A flow is listed when its first
+  and last packet bracket any of the interval; one with no time is listed with `time_unknown`. At most 24 of each
+  kind are listed for a scenario and `wire_omitted` and `route_omitted` count the others. A route flow may have
+  begun before the window (a negative `first_ms`).
+- `clock` estimates how far the two machines' clocks are apart: `by_window` has, for each window of the group,
+  the time of its opening marker by the lab machine's clock less the time at which the test machine's clock puts
+  the window's first scenario, `offset_s` is the median of those and `spread_s` the difference of the largest
+  and the smallest. The pauses make an earlier window look later, so the later windows are the ones to trust and
+  a large spread means that the offset is not known better than that. The report counts to the second.
+
+Read it for `killswitch.tunnel-passes` like this: a flow to the node (`kind: node`) that lasts as long as the
+`curl` (about 15 s) with bytes both ways says the stream left the test machine; a flow of `route_flows` from
+`203.0.113.1` to `203.0.113.2:443` says the node opened its own connection, and its bytes and `rst` say how far
+that got; no such flow while the node's side of the wire shows bytes toward it means the node did not pass it
+on.
 
 ### Owner qualification
 

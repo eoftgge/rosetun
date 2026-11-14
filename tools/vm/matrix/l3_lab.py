@@ -22,6 +22,7 @@ from .lab_protocol import (LOG_LIMIT, PORTS, TARGETS, EVIDENCE_PCAP_LIMIT, CLIEN
                            ROUTE_FLOW_LIMIT, ROUTE_FLOWS_LIMIT, classify_windows, https_exchanges, marker_run_id,
                            probes)
 from .orchestrator import _RETAINED_LEASES, failure, save
+from .l3_align import align
 from .linux_l2 import JOURNAL_FULL
 from .resources import StandLease, completion_verified, create_run, resource_path, EXECUTION_FILES
 
@@ -503,6 +504,13 @@ def finish(result, lease, pair, runs, vms, closed, job, attempt, seen, interrupt
                               fixtures_block(seen['health'] or {}, parsed), seen['hashes'],
                               https_refusals(parsed.get('https.json')),
                               route_flows_block(parsed.get('route-flows.json')) if result.get('diagnostic') else False)
+    if result.get('diagnostic'):
+        # Which flows were open while each scenario ran; a diagnostic that judges nothing and may fail alone.
+        try:
+            result['alignment'] = align(result['legacy']['scenarios'], seen['raw_report'], result['lab'])
+        except Exception as error:
+            result['alignment'] = None
+            result['alignment_error'] = failure('alignment', error)
     from .l3_summary import decide
     decide(result, interrupted)
     if runs:
