@@ -2556,10 +2556,27 @@ v5: the owner qualifies 6a and 6b again on v5 (see below).
 Check the test image on the stand before a qualification, after a boot:
 
 ```sh
-ip route                      # a default route via 192.0.2.1
+ip route                      # a default route via 192.0.2.1; no 203.0.113.0/24 route
 systemctl list-timers --all   # none of the masked timers, nothing that calls out
 cat /etc/resolv.conf          # exactly: nameserver 203.0.113.53
 ```
+
+For L3, remove the legacy test image's `203.0.113.0/24 via 192.0.2.1`
+route. sing-tun preserves specific routes in the main table for non-DNS
+traffic, so that route sends the HTTPS probe onto the physical interface,
+where the kill switch drops it before it reaches the engine. Keep the IPv4
+default route through the lab. Do not change the restricted 6a images in place.
+To prepare a new copy of an already provisioned L3 test image, offline:
+
+```sh
+python tools/vm/linux/prepare-l3-image.py /srv/test-old.qcow2 /srv/test-new.qcow2 \
+  --source-sha256 OLD_SHA256 --descriptor /srv/test-new.image.json
+```
+
+This requires `qemu-img` and `guestfish`. The source must be a stopped,
+standalone qcow2 image. The tool preserves the source, verifies the network
+file after writing the copy, and creates a new image descriptor. Copy its
+fields into `[image]` in a new execution configuration before the dry-run.
 
 Certificates, with a term and the IP SAN (the guest clocks must be inside the
 validity period: check `date` in both images after preparing them):

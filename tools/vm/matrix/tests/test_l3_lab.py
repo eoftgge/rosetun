@@ -1013,7 +1013,7 @@ class LedgerSequenceTests(Flow):
     """
 
     class Stopped(Exception):
-        pass
+        __module__ = 'somewhere.else'
 
     def setUp(self):
         super().setUp()
@@ -1077,7 +1077,7 @@ class LedgerSequenceTests(Flow):
 
     def test_both_runs_are_prepared_and_the_pair_registers_its_files_last(self):
         result = self.go_to_the_start()
-        self.assertEqual([dict(stage='start-lab', kind='Stopped', reason='stopped-before-start')], result['errors'])
+        self.assertEqual([dict(stage='start-lab', kind='Stopped', reason='operation-failed')], result['errors'])
         stages = [row['stage'] for row in result['stages']]
         self.assertEqual(['prepare-lab', 'prepare-test', 'requests', 'media', 'evidence-disk', 'start-lab'],
                          stages[stages.index('prepare-lab'):])
