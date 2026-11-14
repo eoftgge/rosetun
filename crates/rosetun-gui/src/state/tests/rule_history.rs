@@ -735,3 +735,77 @@ fn export_reports_saving_and_failure_but_not_a_cancelled_save_dialog() {
     assert!(state.rules.exchange.error.is_some());
     assert!(state.rules.exchange.notice.is_none());
 }
+
+#[test]
+fn importing_into_a_new_named_set_is_atomic_and_undoable() {
+    let mut state = rules_state();
+    let before = state.config.clone();
+    let mut saved = Saved::new(&state);
+    state.reduce(WorkerEvent::RulesRead(Ok(Some(import_document()))));
+    state.rules.exchange.import.as_mut().unwrap().choose(None);
+    assert!(state.act(Action::ConfirmRulesImport(false)).is_none());
+    assert!(
+        state
+            .rules
+            .exchange
+            .import
+            .as_ref()
+            .unwrap()
+            .error
+            .is_some()
+    );
+    assert_eq!(state.config, before);
+    state.rules.exchange.import.as_mut().unwrap().name = "  Imported set  ".into();
+    saved.act(&mut state, Action::ConfirmRulesImport(false));
+    let set = state.selected_rules().unwrap();
+    assert_eq!(set.name, "Imported set");
+    assert_eq!(set.rules.len(), 1);
+    assert_eq!(state.config.rule_sets.len(), before.rule_sets.len() + 1);
+    assert_eq!(state.config.active_rule_set, before.active_rule_set);
+    let imported = state.config.clone();
+    assert_eq!(state.rules.history.undo_len(), 1);
+    saved.act(&mut state, Action::UndoRules);
+    assert_eq!(state.config, before);
+    saved.act(&mut state, Action::RedoRules);
+    assert_eq!(state.config, imported);
+}
+
+#[test]
+fn cancelling_a_new_set_import_does_not_create_a_set() {
+    let mut state = rules_state();
+    let before = state.config.clone();
+    state.reduce(WorkerEvent::RulesRead(Ok(Some(import_document()))));
+    let import = state.rules.exchange.import.as_mut().unwrap();
+    import.choose(None);
+    import.name = "Cancelled".into();
+    state.act(Action::CancelRulesExchange);
+    assert_eq!(state.config, before);
+    assert_eq!(state.rules.history.undo_len(), 0);
+}
+
+#[test]
+fn changing_import_destination_recalculates_duplicates_without_activating_it() {
+    let mut state = rules_state();
+    let other = RuleSetId::new("99");
+    state.config.rule_sets.push(rosetun_config::RuleSet::new(
+        other.clone(),
+        "Other",
+        RuleTarget::Proxy,
+    ));
+    let mut saved = Saved::new(&state);
+    state.reduce(WorkerEvent::RulesRead(Ok(Some(import_document()))));
+    saved.act(&mut state, Action::ConfirmRulesImport(false));
+    let before = state.config.clone();
+    state.reduce(WorkerEvent::RulesRead(Ok(Some(import_document()))));
+    let import = state.rules.exchange.import.as_mut().unwrap();
+    assert_eq!(import.add.duplicates, 1);
+    import.choose(Some(other.clone()));
+    assert_eq!(import.add.duplicates, 0);
+    assert_eq!(import.add.rules.len(), 1);
+    saved.act(&mut state, Action::ConfirmRulesImport(false));
+    assert_eq!(state.rules.screen.selected_set, Some(other));
+    assert_eq!(state.config.active_rule_set, before.active_rule_set);
+    assert_eq!(state.selected_rules().unwrap().rules.len(), 1);
+    saved.act(&mut state, Action::UndoRules);
+    assert_eq!(state.config, before);
+}

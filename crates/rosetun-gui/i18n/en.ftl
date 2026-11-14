@@ -1330,3 +1330,5 @@ rules-transfer-added = { $count ->
 rules-transfer-duplicate-add = Duplicate: skipped when adding
 rules-transfer-copied = Rules copied to clipboard
 rules-transfer-saved = Rules saved to file
+
+rules-transfer-destination = Import into

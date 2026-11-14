@@ -103,6 +103,7 @@ pub struct EntryReport {
 }
 #[derive(Clone)]
 pub struct Preview {
+    pub new_set: Option<RuleSet>,
     expected: Box<AppConfig>,
     pub rules: Vec<Rule>,
     pub indexes: Vec<usize>,
@@ -407,6 +408,7 @@ pub fn preview(
     system: System,
 ) -> Preview {
     let mut result = Preview {
+        new_set: None,
         expected: Box::new(config.clone()),
         rules: Vec::new(),
         indexes: Vec::new(),

@@ -12,6 +12,7 @@ pub(crate) struct ExchangeState {
     pub(crate) error: Option<String>,
     pub(crate) busy: bool,
     pub(crate) notice: Option<String>,
+    imported_set: Option<RuleSetId>,
 }
 pub(crate) struct Export {
     pub(crate) name: String,
@@ -22,11 +23,38 @@ pub(crate) struct Export {
     pub(crate) file: bool,
 }
 pub(crate) struct Import {
+    pub(crate) destination: Option<RuleSetId>,
+    pub(crate) name: String,
+    pub(crate) error: Option<String>,
+    document: Document,
+    draft: rosetun_config::RuleSet,
     pub(crate) add: Preview,
     pub(crate) replace: Preview,
     pub(crate) default_target: bool,
     config: AppConfig,
     set: RuleSetId,
+}
+impl Import {
+    pub(crate) fn choose(&mut self, destination: Option<RuleSetId>) {
+        let set = match &destination {
+            Some(id) => match self.config.rule_sets.iter().find(|set| &set.id == id) {
+                Some(set) => set,
+                None => return,
+            },
+            None => &self.draft,
+        };
+        self.set = set.id.clone();
+        self.add =
+            rules_exchange::preview(&self.document, &self.config, set, false, System::current());
+        self.replace =
+            rules_exchange::preview(&self.document, &self.config, set, true, System::current());
+        if destination.is_none() {
+            self.add.new_set = Some(self.draft.clone());
+            self.replace.new_set = Some(self.draft.clone());
+        }
+        self.destination = destination;
+        self.error = None;
+    }
 }
 fn exchange_error(error: rules_exchange::ExchangeError) -> String {
     match error {
@@ -116,16 +144,25 @@ impl State {
             Action::ConfirmRulesImport(replace)
                 if self.can_edit_rules() && !self.rules.exchange.busy =>
             {
+                let pending = self.rules.exchange.import.as_mut()?;
+                if pending.destination.is_none() && pending.name.trim().is_empty() {
+                    pending.error = Some(tr!("error-rule-set-name-empty"));
+                    return None;
+                }
                 let pending = self.rules.exchange.import.take()?;
                 if self.config != pending.config {
                     self.rules.exchange.error = Some(tr!("rules-transfer-changed"));
                     return None;
                 }
-                let preview = if replace {
+                let mut preview = if replace {
                     pending.replace
                 } else {
                     pending.add
                 };
+                if let Some(set) = &mut preview.new_set {
+                    set.name = pending.name.trim().to_owned();
+                }
+                self.rules.exchange.imported_set = Some(pending.set.clone());
                 self.rules.exchange.busy = true;
                 return self.start_rule_edit(Job::ImportRules(
                     pending.set,
@@ -159,6 +196,11 @@ impl State {
             return;
         };
         self.rules.exchange.import = Some(Import {
+            destination: Some(set.id.clone()),
+            name: String::new(),
+            error: None,
+            document: document.clone(),
+            draft: rosetun_core::rules_exchange::draft_set(&self.config),
             add: rules_exchange::preview(document, &self.config, set, false, System::current()),
             replace: rules_exchange::preview(document, &self.config, set, true, System::current()),
             default_target: false,
@@ -189,6 +231,11 @@ impl State {
     }
     pub(crate) fn finish_import_rules(&mut self, result: Result<(), rosetun_core::RuleSetError>) {
         self.rules.exchange.busy = false;
+        if let Some(id) = self.rules.exchange.imported_set.take()
+            && result.is_ok()
+        {
+            self.rules.screen.selected_set = Some(id);
+        }
         self.finish_rule_edit(result);
         self.rules.screen.clear_selection();
     }

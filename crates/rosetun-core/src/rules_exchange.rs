@@ -14,6 +14,23 @@ pub fn apply(
         if !preview.is_current(config) {
             return Err(RuleSetError::ImportChanged);
         }
+        if let Some(set) = &preview.new_set {
+            if &set.id != id
+                || config
+                    .rule_sets
+                    .iter()
+                    .any(|existing| existing.id == set.id)
+            {
+                return Err(RuleSetError::ImportChanged);
+            }
+            if set.name.trim().is_empty() {
+                return Err(RuleSetError::EmptyName);
+            }
+            let mut set = set.clone();
+            set.name = set.name.trim().to_owned();
+            set.rules.clear();
+            config.rule_sets.push(set);
+        }
         let index = config
             .rule_sets
             .iter()
@@ -34,4 +51,14 @@ pub fn apply(
         }
         Ok(())
     })
+}
+
+pub fn draft_set(config: &rosetun_config::AppConfig) -> rosetun_config::RuleSet {
+    rosetun_config::RuleSet::new(
+        RuleSetId::new(crate::rules::next_id(
+            config.rule_sets.iter().map(|set| set.id.as_str()),
+        )),
+        "",
+        rosetun_config::RuleTarget::Proxy,
+    )
 }

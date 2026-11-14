@@ -13,11 +13,14 @@ pub(super) fn clear_selection_on_click_away(
         || state.rules.exchange.export.is_some()
         || state.rules.exchange.import.is_some()
         || state.rules.exchange.error.is_some()
+        || egui::Popup::is_any_open(ctx)
         || ctx.dragged_id().is_some()
         || actions.iter().any(|action| {
             matches!(
                 action,
-                Action::SelectRule { .. }
+                Action::OpenRulesExport(_)
+                    | Action::ReadRulesImport(_)
+                    | Action::SelectRule { .. }
                     | Action::DropRule(_, _)
                     | Action::DropRules(_, _)
                     | Action::MoveSelectedRulesToTop

@@ -6,6 +6,12 @@ use crate::{theme, widgets};
 
 pub(crate) fn show(ctx: &egui::Context, state: &mut State, actions: &mut Vec<Action>) {
     let busy = state.rules.exchange.busy;
+    let destinations: Vec<_> = state
+        .config
+        .rule_sets
+        .iter()
+        .map(|set| (set.id.clone(), state.text(&set.name)))
+        .collect();
     if let Some(export) = &mut state.rules.exchange.export {
         let urls = !export.hosts.is_empty();
         let mut choice = widgets::FooterChoice::None;
@@ -70,16 +76,69 @@ pub(crate) fn show(ctx: &egui::Context, state: &mut State, actions: &mut Vec<Act
             widgets::FooterChoice::None => {}
         }
     } else if let Some(import) = &mut state.rules.exchange.import {
-        let choice = widgets::three_way_modal(
-            ctx,
-            widgets::ThreeWayModal {
-                id: "rules_import",
-                title: tr!("rules-transfer-preview"),
-                cancel: tr!("cancel"),
-                confirm: tr!("rules-transfer-add"),
-                other: tr!("rules-transfer-replace"),
-            },
-            |ui| {
+        let mut choice = widgets::FooterChoice::None;
+        let response =
+            widgets::Dialog::new("rules_import", widgets::DialogWidth::Standard).show(ctx, |ui| {
+                ui.heading(tr!("rules-transfer-preview"));
+                let selected = import
+                    .destination
+                    .as_ref()
+                    .and_then(|id| destinations.iter().find(|(set_id, _)| set_id == id))
+                    .map_or_else(|| tr!("new-set"), |(_, name)| name.clone());
+                let mut destination = import.destination.clone();
+                ui.label(tr!("rules-transfer-destination"));
+                widgets::drop_down(ui, "rules_import_destination", None, selected, |ui| {
+                    for (id, name) in &destinations {
+                        if widgets::menu_item(
+                            ui,
+                            widgets::MenuItem {
+                                label: name,
+                                enabled: !busy,
+                                selected: destination.as_ref() == Some(id),
+                                danger: false,
+                                note: None,
+                            },
+                        )
+                        .clicked()
+                        {
+                            destination = Some(id.clone());
+                            ui.close();
+                        }
+                    }
+                    ui.separator();
+                    if widgets::menu_item(
+                        ui,
+                        widgets::MenuItem {
+                            label: &tr!("new-set"),
+                            enabled: !busy,
+                            selected: destination.is_none(),
+                            danger: false,
+                            note: None,
+                        },
+                    )
+                    .clicked()
+                    {
+                        destination = None;
+                        ui.close();
+                    }
+                });
+                if destination != import.destination {
+                    import.choose(destination);
+                }
+                if import.destination.is_none() {
+                    ui.label(tr!("set-name"));
+                    if ui
+                        .add(widgets::TextField::new(&mut import.name).enabled(!busy))
+                        .changed()
+                    {
+                        import.error = None;
+                    }
+                }
+                if let Some(error) = &import.error {
+                    ui.colored_label(theme::ERROR, error);
+                }
+                ui.add_space(theme::space::M);
+
                 ui.label(format!(
                     "{} {} · {} {} · {} {} · {} {}",
                     tr!("rules-transfer-add"),
@@ -96,11 +155,13 @@ pub(crate) fn show(ctx: &egui::Context, state: &mut State, actions: &mut Vec<Act
                         .filter(|entry| entry.invalid)
                         .count()
                 ));
-                ui.label(format!(
-                    "{}: {}",
-                    tr!("rules-transfer-replace"),
-                    import.replace.rules.len()
-                ));
+                if import.destination.is_some() {
+                    ui.label(format!(
+                        "{}: {}",
+                        tr!("rules-transfer-replace"),
+                        import.replace.rules.len()
+                    ));
+                }
                 egui::ScrollArea::vertical()
                     .max_height(widgets::DialogWidth::Narrow.points())
                     .show(ui, |ui| {
@@ -197,13 +258,28 @@ pub(crate) fn show(ctx: &egui::Context, state: &mut State, actions: &mut Vec<Act
                         ui.colored_label(theme::ERROR, tr!("rules-transfer-broad"));
                     }
                 }
-            },
-        );
+                let mut footer = widgets::DialogFooter::new(
+                    if import.destination.is_none() {
+                        tr!("rules-transfer-import")
+                    } else {
+                        tr!("rules-transfer-add")
+                    },
+                    tr!("cancel"),
+                )
+                .busy(busy);
+                if import.destination.is_some() {
+                    footer = footer.other(tr!("rules-transfer-replace"));
+                }
+                choice = widgets::dialog_footer(ui, footer).choice();
+            });
+        if response.should_close() && choice == widgets::FooterChoice::None {
+            choice = widgets::FooterChoice::Cancel;
+        }
         match choice {
-            widgets::ThreeWayChoice::Confirm => actions.push(Action::ConfirmRulesImport(false)),
-            widgets::ThreeWayChoice::Other => actions.push(Action::ConfirmRulesImport(true)),
-            widgets::ThreeWayChoice::Cancel => actions.push(Action::CancelRulesExchange),
-            widgets::ThreeWayChoice::None => {}
+            widgets::FooterChoice::Primary => actions.push(Action::ConfirmRulesImport(false)),
+            widgets::FooterChoice::Other => actions.push(Action::ConfirmRulesImport(true)),
+            widgets::FooterChoice::Cancel => actions.push(Action::CancelRulesExchange),
+            widgets::FooterChoice::None => {}
         }
     } else if let Some(error) = &state.rules.exchange.error {
         let choice = widgets::confirm_modal(
@@ -416,6 +492,103 @@ mod tests {
                     .any(|(text, _)| text == &tr!("rules-transfer-without")
                         || text == &tr!("rules-transfer-include"))
             );
+        });
+    }
+    #[test]
+    fn opening_set_menu_and_exporting_keeps_selected_rules() {
+        i18n::in_language(Language::English, || {
+            let mut state = state();
+            state.rules.screen.selected_rules.insert(RuleId::new("1"));
+            let mut screen = TestScreen::new(egui::vec2(900.0, 720.0));
+            let mut show = |ui: &mut egui::Ui| {
+                let mut actions = Vec::new();
+                super::super::sets::set_controls(ui, &state, &mut actions);
+                super::super::selection::clear_selection_on_click_away(
+                    ui.ctx(),
+                    &state,
+                    &[],
+                    &mut actions,
+                );
+                for action in actions {
+                    state.act(action);
+                }
+            };
+            let (_, circles) = screen.settle_with_circles(&mut show);
+            let pos = circles
+                .iter()
+                .find(|(_, radius)| *radius < 3.0)
+                .expect("ellipsis dot")
+                .0;
+            for pressed in [true, false] {
+                screen.run(
+                    vec![
+                        egui::Event::PointerMoved(pos),
+                        egui::Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ],
+                    &mut show,
+                );
+            }
+            screen.click_text(
+                &format!(
+                    "{}: {}",
+                    tr!("rules-transfer-export"),
+                    tr!("rules-transfer-selected")
+                ),
+                &mut show,
+            );
+            assert_eq!(state.rules.screen.selected_rules.len(), 1);
+            assert_eq!(
+                state
+                    .rules
+                    .exchange
+                    .export
+                    .as_ref()
+                    .unwrap()
+                    .selected
+                    .as_ref()
+                    .unwrap(),
+                &[RuleId::new("1")]
+            );
+        });
+    }
+    #[test]
+    fn import_dialog_offers_a_named_new_set_without_replace() {
+        i18n::in_language(Language::English, || {
+            let mut state = state();
+            state.reduce(WorkerEvent::RulesRead(Ok(Some(r#"{"format":"rosetun-rules","version":1,"exported_by":"test","system":"windows","rules":[],"lists":[]}"#.into()))));
+            let mut screen = TestScreen::new(egui::vec2(900.0, 720.0));
+            let mut show = |ui: &mut egui::Ui| {
+                show(ui.ctx(), &mut state, &mut Vec::new());
+            };
+            screen.click_text("Main", &mut show);
+            let shown = screen.click_text(&tr!("new-set"), &mut show);
+            assert!(shown.iter().any(|(text, _)| text == &tr!("set-name")));
+            assert!(
+                shown
+                    .iter()
+                    .any(|(text, _)| text == &tr!("rules-transfer-import"))
+            );
+            assert!(
+                !shown
+                    .iter()
+                    .any(|(text, _)| text == &tr!("rules-transfer-replace"))
+            );
+            assert!(
+                state
+                    .rules
+                    .exchange
+                    .import
+                    .as_ref()
+                    .unwrap()
+                    .destination
+                    .is_none()
+            );
+            assert_eq!(state.config.rule_sets.len(), 1);
         });
     }
 }

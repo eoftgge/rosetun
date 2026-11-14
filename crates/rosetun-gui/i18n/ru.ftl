@@ -1360,3 +1360,5 @@ rules-transfer-added = { $count ->
 rules-transfer-duplicate-add = Дубликат: пропускается при добавлении
 rules-transfer-copied = Правила скопированы в буфер обмена
 rules-transfer-saved = Правила сохранены в файл
+
+rules-transfer-destination = Куда импортировать
