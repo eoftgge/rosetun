@@ -736,6 +736,7 @@ fn country_exit_uses_check_results_but_keeps_its_session_node() {
     state.config.subscriptions[0].nodes.extend([first, second]);
     let exit = ExitId::new("gb");
     state.config.exits.push(Exit {
+        via: None,
         id: exit.clone(),
         name: "GB exit".into(),
         target: ExitTarget::Country(CountryCode::parse("GB").unwrap()),
@@ -1461,6 +1462,7 @@ fn temporary_rule_through_a_new_exit_saves_the_exit_then_applies() {
     assert!(state.take_rule_resubmit().is_none());
 
     let exit = rosetun_config::Exit {
+        via: None,
         id: rosetun_config::ExitId::new("1"),
         name: "Netherlands".into(),
         target: rosetun_config::ExitTarget::Country(code),

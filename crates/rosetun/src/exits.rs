@@ -193,6 +193,7 @@ pub(crate) mod tests {
                 notices: Vec::new(),
             }],
             exits: vec![Exit {
+                via: None,
                 id: ExitId::new("nl"),
                 name: "Dutch".into(),
                 target: ExitTarget::Country(CountryCode::parse("NL").unwrap()),

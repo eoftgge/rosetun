@@ -11,6 +11,204 @@ fn server_check_available(kind: FailureKind) -> bool {
 mod tests {
     use super::*;
 
+    fn failed_state(kind: Option<FailureKind>, protected: bool) -> State {
+        use rosetun_config::{HwidScope, Selection, Subscription, SubscriptionId};
+
+        let node = rosetun_config::Node {
+            id: rosetun_config::NodeId::new("server"),
+            name: "Server".into(),
+            server: "server.example.com".into(),
+            port: 443,
+            outbound: Outbound::Vless(rosetun_config::VlessParams {
+                uuid: "00000000-0000-0000-0000-000000000000".into(),
+                flow: None,
+            }),
+            stream: rosetun_config::StreamSettings {
+                tls: TlsMode::Reality(rosetun_config::RealityParams {
+                    sni: Some("example.com".into()),
+                    public_key: "test-public-key".into(),
+                    short_id: None,
+                    fingerprint: None,
+                }),
+                ..Default::default()
+            },
+            raw: None,
+        };
+        let subscription = SubscriptionId::new("provider");
+        let mut state = State::default();
+        state.config_ready = true;
+        state.helper_available = true;
+        state.failure_details_open = true;
+        state.config.settings.xray = XrayUse::Off;
+        state.config.active = Some(Selection {
+            subscription: subscription.clone(),
+            node: node.id.clone(),
+        });
+        state.config.subscriptions.push(Subscription {
+            id: subscription,
+            name: "Provider".into(),
+            url: "https://example.com/subscription".into(),
+            nodes: vec![node],
+            auto_update: false,
+            updated_at_unix: None,
+            user_agent: None,
+            send_hwid: true,
+            hwid_scope: HwidScope::Machine,
+            info: None,
+            update_interval_hours: None,
+            support_url: None,
+            web_page_url: None,
+            announce: None,
+            notices: vec![],
+        });
+        state.status.state = if protected {
+            ConnectionState::FailedProtected {
+                reason: "connection failed".into(),
+                failure_kind: kind,
+            }
+        } else {
+            ConnectionState::Failed {
+                reason: "connection failed".into(),
+                failure_kind: kind,
+            }
+        };
+        state
+    }
+
+    #[test]
+    fn recovery_actions_keep_their_order_and_availability() {
+        use FailureAction::{Check, OtherServer, ProtectionOff, XrayAuto, XrayRelease};
+        for protected in [false, true] {
+            for (kind, expected) in [
+                (None, vec![]),
+                (Some(FailureKind::NoNetwork), vec![]),
+                (Some(FailureKind::ServerUnreachable), vec![Check]),
+                (Some(FailureKind::XrayStartFailed), vec![Check, XrayRelease]),
+                (
+                    Some(FailureKind::ServerRejected),
+                    vec![Check, XrayAuto, OtherServer],
+                ),
+            ] {
+                let mut state = failed_state(kind, protected);
+                let mut wanted: Vec<_> = expected.iter().map(|item| (*item, true)).collect();
+                if protected {
+                    wanted.push((ProtectionOff, true));
+                }
+                assert_eq!(available_failure_actions(&state), wanted);
+                state.operations.helper = true;
+                let busy: Vec<_> = expected
+                    .iter()
+                    .map(|item| (*item, *item == XrayRelease))
+                    .collect();
+                assert_eq!(available_failure_actions(&state), busy);
+                state.operations.helper = false;
+                state.config.active = None;
+                assert!(
+                    !available_failure_actions(&state)
+                        .iter()
+                        .any(|(item, _)| matches!(item, Check | XrayAuto | OtherServer))
+                );
+            }
+        }
+        let mut state = failed_state(Some(FailureKind::ServerRejected), true);
+        state.status.xray_use = Some(XrayUse::Auto);
+        assert_eq!(
+            available_failure_actions(&state),
+            vec![(Check, true), (ProtectionOff, true)]
+        );
+    }
+
+    fn text_rect(texts: &crate::test_ui::Texts, label: &str) -> egui::Rect {
+        texts
+            .iter()
+            .find(|(text, _)| text == label)
+            .unwrap_or_else(|| panic!("missing {label:?}"))
+            .1
+    }
+
+    #[test]
+    fn failure_details_and_actions_share_rows_in_both_languages() {
+        for language in [i18n::Language::English, i18n::Language::Russian] {
+            i18n::in_language(language, || {
+                for size in [egui::vec2(960.0, 640.0), egui::vec2(1200.0, 900.0)] {
+                    for kind in [
+                        None,
+                        Some(FailureKind::ServerUnreachable),
+                        Some(FailureKind::XrayStartFailed),
+                        Some(FailureKind::ServerRejected),
+                    ] {
+                        let state = failed_state(kind, true);
+                        let mut screen = crate::test_ui::TestScreen::new(size);
+                        let mut actions = Vec::new();
+                        let texts = screen.settle(|ui| {
+                            egui::CentralPanel::default()
+                                .show(ui, |ui| hero_card(ui, &state, &mut actions));
+                        });
+                        let hide = text_rect(&texts, &tr!("hide-details"));
+                        let copy = text_rect(&texts, &tr!("copy"));
+                        assert!((hide.center().y - copy.center().y).abs() < 1.0);
+                        assert!(copy.left() > hide.right());
+                        let items = available_failure_actions(&state);
+                        let rects: Vec<_> = items
+                            .iter()
+                            .map(|(item, _)| text_rect(&texts, &item.label()))
+                            .collect();
+                        for pair in rects.windows(2) {
+                            assert!(pair[1].center().y >= pair[0].center().y);
+                            if (pair[1].center().y - pair[0].center().y).abs() < 1.0 {
+                                assert!(pair[1].left() > pair[0].right());
+                            }
+                        }
+                        if kind == Some(FailureKind::ServerUnreachable) {
+                            assert!((rects[0].center().y - rects[1].center().y).abs() < 1.0);
+                        }
+                        assert!(rects[0].top() > copy.bottom());
+                    }
+                }
+            });
+        }
+    }
+
+    #[test]
+    fn recovery_buttons_wrap_only_when_the_row_runs_out_of_room() {
+        for language in [i18n::Language::English, i18n::Language::Russian] {
+            i18n::in_language(language, || {
+                let state = failed_state(Some(FailureKind::XrayStartFailed), true);
+                for width in [280.0, 1000.0] {
+                    let mut screen = crate::test_ui::TestScreen::new(egui::vec2(width, 640.0));
+                    let texts = screen.settle(|ui| {
+                        egui::CentralPanel::default()
+                            .show(ui, |ui| failure_actions(ui, &state, &mut Vec::new()));
+                    });
+                    let check = text_rect(&texts, &tr!("check-full"));
+                    let release = text_rect(&texts, &tr!("xray-open-release"));
+                    let protection = text_rect(&texts, &tr!("turn-off-protection"));
+                    if width > 900.0 {
+                        assert!((check.center().y - release.center().y).abs() < 1.0);
+                        assert!((check.center().y - protection.center().y).abs() < 1.0);
+                    } else {
+                        assert!(protection.center().y > check.center().y);
+                    }
+                }
+            });
+        }
+    }
+
+    #[test]
+    fn copied_details_show_feedback_then_restore_the_copy_link() {
+        let state = failed_state(Some(FailureKind::ServerUnreachable), true);
+        let mut screen = crate::test_ui::TestScreen::new(egui::vec2(960.0, 640.0));
+        let mut actions = Vec::new();
+        let mut show = |ui: &mut egui::Ui| {
+            egui::CentralPanel::default().show(ui, |ui| failure_details(ui, &state, &mut actions));
+        };
+        let copied = screen.click_text(&tr!("copy"), &mut show);
+        text_rect(&copied, &tr!("copied"));
+        screen.settle(&mut show);
+        let expired = screen.settle(&mut show);
+        text_rect(&expired, &tr!("copy"));
+    }
+
     #[test]
     fn hero_title_tells_an_unavailable_service_from_one_not_answered_yet() {
         let mut state = State::default();
@@ -269,150 +467,96 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                             | ConnectionState::FailedProtected { failure_kind, .. } =
                                 &status.state
                             {
-                                if let Some(kind) = failure_kind {
-                                    let (title, hint) = crate::i18n::connection_failure(
-                                        *kind,
-                                        state.config.active_node().map(|(_, node)| node),
-                                        status.xray_use.unwrap_or(state.config.settings.xray),
-                                        state.lockdown_active(),
-                                    );
-                                    let response = ui.colored_label(theme::ERROR, title);
-                                    if let Some(details) = state.failure_details() {
-                                        response.on_hover_text(details);
-                                    }
-                                    if *kind == FailureKind::NoNetwork
-                                        && matches!(
-                                            status.state,
-                                            ConnectionState::FailedProtected { .. }
-                                        )
-                                    {
-                                        ui.colored_label(theme::ERROR, tr!("no-network-protected"));
-                                    }
-                                    ui.add(
-                                        egui::Label::new(
-                                            RichText::new(hint)
-                                                .small()
-                                                .color(theme::palette().text_muted),
-                                        )
-                                        .wrap(),
-                                    );
-                                    failure_details(ui, state, actions);
-                                    let reality_off = *kind == FailureKind::ServerRejected
-                                        && status.xray_use.unwrap_or(state.config.settings.xray)
-                                            == XrayUse::Off
-                                        && state.config.active_node().is_some_and(|(_, node)| {
-                                            matches!(&node.outbound, Outbound::Vless(_))
-                                                && matches!(&node.stream.tls, TlsMode::Reality(_))
-                                        });
-                                    if reality_off {
-                                        ui.horizontal_wrapped(|ui| {
-                                            if widgets::button_fill(
-                                                ui,
-                                                tr!("xray-auto-connect"),
-                                                state.can_edit_settings()
-                                                    && !state.operations.helper,
-                                            )
-                                            .clicked()
-                                            {
-                                                actions.push(Action::EnableXrayAutoAndConnect);
-                                            }
-                                            if widgets::outline_button(
-                                                ui,
-                                                tr!("xray-other-server"),
-                                                !state.operations.helper,
-                                            )
-                                            .clicked()
-                                            {
-                                                actions.push(Action::RevealServer);
-                                            }
-                                        });
-                                    }
-                                    if *kind == FailureKind::XrayStartFailed
-                                        && widgets::outline_button(
-                                            ui,
-                                            tr!("xray-open-release"),
-                                            true,
-                                        )
-                                        .clicked()
-                                    {
-                                        display::open_web_link(
-                                            ui.ctx(),
-                                            "https://github.com/eoftgge/rosetun/releases",
+                                ui.vertical(|ui| {
+                                    ui.spacing_mut().item_spacing.y = theme::space::M;
+                                    if let Some(kind) = failure_kind {
+                                        let (title, hint) = crate::i18n::connection_failure(
+                                            *kind,
+                                            state.config.active_node().map(|(_, node)| node),
+                                            status.xray_use.unwrap_or(state.config.settings.xray),
+                                            state.lockdown_active(),
                                         );
-                                    }
-                                    if let Some(conflicts) = &state.failure_interference {
-                                        if !conflicts.other_vpns.is_empty() {
-                                            ui.add(
-                                                egui::Label::new(crate::i18n::other_vpn(
-                                                    &conflict_names(state, &conflicts.other_vpns),
-                                                ))
-                                                .wrap(),
+                                        let response = ui.colored_label(theme::ERROR, title);
+                                        if let Some(details) = state.failure_details() {
+                                            response.on_hover_text(details);
+                                        }
+                                        if *kind == FailureKind::NoNetwork
+                                            && matches!(
+                                                status.state,
+                                                ConnectionState::FailedProtected { .. }
+                                            )
+                                        {
+                                            ui.colored_label(
+                                                theme::ERROR,
+                                                tr!("no-network-protected"),
                                             );
                                         }
-                                        if !conflicts.traffic_tools.is_empty() {
-                                            ui.add(
-                                                egui::Label::new(crate::i18n::traffic_tool(
-                                                    &conflict_names(
-                                                        state,
-                                                        &conflicts.traffic_tools,
-                                                    ),
-                                                ))
-                                                .wrap(),
-                                            );
+                                        ui.add(
+                                            egui::Label::new(
+                                                RichText::new(hint)
+                                                    .small()
+                                                    .color(theme::palette().text_muted),
+                                            )
+                                            .wrap(),
+                                        );
+                                        failure_details(ui, state, actions);
+                                        if let Some(conflicts) = &state.failure_interference {
+                                            if !conflicts.other_vpns.is_empty() {
+                                                ui.add(
+                                                    egui::Label::new(crate::i18n::other_vpn(
+                                                        &conflict_names(
+                                                            state,
+                                                            &conflicts.other_vpns,
+                                                        ),
+                                                    ))
+                                                    .wrap(),
+                                                );
+                                            }
+                                            if !conflicts.traffic_tools.is_empty() {
+                                                ui.add(
+                                                    egui::Label::new(crate::i18n::traffic_tool(
+                                                        &conflict_names(
+                                                            state,
+                                                            &conflicts.traffic_tools,
+                                                        ),
+                                                    ))
+                                                    .wrap(),
+                                                );
+                                            }
                                         }
-                                    }
-                                    if server_check_available(*kind)
-                                        && let Some(selection) = &state.config.active
-                                        && widgets::outline_button(
-                                            ui,
-                                            tr!("check-full"),
-                                            !state.operations.helper,
-                                        )
-                                        .clicked()
-                                    {
-                                        actions.push(Action::FullCheckNode(
-                                            selection.subscription.clone(),
-                                            selection.node.clone(),
-                                        ));
-                                    }
-                                } else {
-                                    let text = if state.tunnel_held_by_windows() {
-                                        tr!("error-tunnel-held-by-windows")
                                     } else {
-                                        state.failure_details().unwrap_or_default()
-                                    };
-                                    ui.add(
-                                        egui::Label::new(
-                                            RichText::new(text).small().color(theme::ERROR),
-                                        )
-                                        .wrap(),
-                                    );
-                                    failure_details(ui, state, actions);
-                                }
-                                if let Some(warning) = &state.system_checks.failure_warning {
-                                    ui.horizontal_wrapped(|ui| {
-                                        ui.colored_label(
-                                            theme::WARNING,
-                                            tr!(
-                                                "system-check-found",
-                                                issue = i18n::check_issue(warning)
-                                            ),
+                                        let text = if state.tunnel_held_by_windows() {
+                                            tr!("error-tunnel-held-by-windows")
+                                        } else {
+                                            state.failure_details().unwrap_or_default()
+                                        };
+                                        ui.add(
+                                            egui::Label::new(
+                                                RichText::new(text).small().color(theme::ERROR),
+                                            )
+                                            .wrap(),
                                         );
-                                        if ui.link(tr!("system-check-more")).clicked() {
-                                            actions.push(Action::ShowSystemChecks);
-                                        }
-                                    });
-                                }
-                                if state.dns_hint_for_failure() {
-                                    crate::view::settings::dns_hint(ui, actions);
-                                }
-                            }
-                            if protection_action(status, state.operations.helper)
-                                == ProtectionAction::ConfirmDisconnect
-                                && widgets::outline_button(ui, tr!("turn-off-protection"), true)
-                                    .clicked()
-                            {
-                                actions.push(Action::RequestProtectionOff);
+                                        failure_details(ui, state, actions);
+                                    }
+                                    if let Some(warning) = &state.system_checks.failure_warning {
+                                        ui.horizontal_wrapped(|ui| {
+                                            ui.colored_label(
+                                                theme::WARNING,
+                                                tr!(
+                                                    "system-check-found",
+                                                    issue = i18n::check_issue(warning)
+                                                ),
+                                            );
+                                            if ui.link(tr!("system-check-more")).clicked() {
+                                                actions.push(Action::ShowSystemChecks);
+                                            }
+                                        });
+                                    }
+                                    if state.dns_hint_for_failure() {
+                                        crate::view::settings::dns_hint(ui, actions);
+                                    }
+                                    failure_actions(ui, state, actions);
+                                });
                             }
                         }
                         if server_button(ui, state) {
@@ -657,21 +801,138 @@ fn unfragmented_note(ui: &mut egui::Ui, status: &rosetun_config::Status) {
     .on_hover_text(hint);
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FailureAction {
+    Check,
+    XrayRelease,
+    XrayAuto,
+    OtherServer,
+    ProtectionOff,
+}
+
+impl FailureAction {
+    fn label(self) -> String {
+        match self {
+            Self::Check => tr!("check-full"),
+            Self::XrayRelease => tr!("xray-open-release"),
+            Self::XrayAuto => tr!("xray-auto-connect"),
+            Self::OtherServer => tr!("xray-other-server"),
+            Self::ProtectionOff => tr!("turn-off-protection"),
+        }
+    }
+}
+
+fn available_failure_actions(state: &State) -> Vec<(FailureAction, bool)> {
+    let Some(status) = state.visible_status() else {
+        return Vec::new();
+    };
+    let mut items = Vec::new();
+    if let ConnectionState::Failed {
+        failure_kind: Some(kind),
+        ..
+    }
+    | ConnectionState::FailedProtected {
+        failure_kind: Some(kind),
+        ..
+    } = &status.state
+    {
+        if server_check_available(*kind) && state.config.active.is_some() {
+            items.push((FailureAction::Check, !state.operations.helper));
+        }
+        if *kind == FailureKind::XrayStartFailed {
+            items.push((FailureAction::XrayRelease, true));
+        }
+        let reality_off = *kind == FailureKind::ServerRejected
+            && status.xray_use.unwrap_or(state.config.settings.xray) == XrayUse::Off
+            && state.config.active_node().is_some_and(|(_, node)| {
+                matches!(&node.outbound, Outbound::Vless(_))
+                    && matches!(&node.stream.tls, TlsMode::Reality(_))
+            });
+        if reality_off {
+            items.push((
+                FailureAction::XrayAuto,
+                state.can_edit_settings() && !state.operations.helper,
+            ));
+            items.push((FailureAction::OtherServer, !state.operations.helper));
+        }
+    }
+    if protection_action(status, state.operations.helper) == ProtectionAction::ConfirmDisconnect {
+        items.push((FailureAction::ProtectionOff, true));
+    }
+    items
+}
+
+fn failure_actions(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
+    let items = available_failure_actions(state);
+    if items.is_empty() {
+        return;
+    }
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = egui::vec2(theme::space::S, theme::space::S);
+        for (item, enabled) in items {
+            let response = if item == FailureAction::XrayAuto {
+                widgets::button_fill(ui, item.label(), enabled)
+            } else {
+                widgets::outline_button(ui, item.label(), enabled)
+            };
+            if response.clicked() {
+                match item {
+                    FailureAction::Check => {
+                        if let Some(selection) = &state.config.active {
+                            actions.push(Action::FullCheckNode(
+                                selection.subscription.clone(),
+                                selection.node.clone(),
+                            ));
+                        }
+                    }
+                    FailureAction::XrayRelease => {
+                        display::open_web_link(
+                            ui.ctx(),
+                            "https://github.com/eoftgge/rosetun/releases",
+                        );
+                    }
+                    FailureAction::XrayAuto => actions.push(Action::EnableXrayAutoAndConnect),
+                    FailureAction::OtherServer => actions.push(Action::RevealServer),
+                    FailureAction::ProtectionOff => actions.push(Action::RequestProtectionOff),
+                }
+            }
+        }
+    });
+}
+
 fn failure_details(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     let Some(details) = state.failure_details() else {
         return;
     };
     let open = state.failure_details_open;
-    if ui
-        .link(if open {
-            tr!("hide-details")
-        } else {
-            tr!("details")
-        })
-        .clicked()
-    {
-        actions.push(Action::ToggleFailureDetails);
-    }
+    ui.horizontal(|ui| {
+        if ui
+            .link(if open {
+                tr!("hide-details")
+            } else {
+                tr!("details")
+            })
+            .clicked()
+        {
+            actions.push(Action::ToggleFailureDetails);
+        }
+        if open {
+            let id = egui::Id::unique("failure_details_copied");
+            let now = ui.input(|input| input.time);
+            let copied = ui
+                .data(|data| data.get_temp::<f64>(id))
+                .is_some_and(|at| now - at < COPIED_FOR);
+            if ui
+                .link(if copied { tr!("copied") } else { tr!("copy") })
+                .clicked()
+            {
+                ui.ctx().copy_text(details.clone());
+                ui.data_mut(|data| data.insert_temp(id, now));
+                ui.ctx()
+                    .request_repaint_after(std::time::Duration::from_secs_f64(COPIED_FOR));
+            }
+        }
+    });
     if !open {
         return;
     }
@@ -684,18 +945,6 @@ fn failure_details(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
         .selectable(true)
         .wrap(),
     );
-    let id = egui::Id::unique("failure_details_copied");
-    let now = ui.input(|input| input.time);
-    let copied = ui
-        .data(|data| data.get_temp::<f64>(id))
-        .is_some_and(|at| now - at < COPIED_FOR);
-    if widgets::outline_button(ui, if copied { tr!("copied") } else { tr!("copy") }, true).clicked()
-    {
-        ui.ctx().copy_text(details);
-        ui.data_mut(|data| data.insert_temp(id, now));
-        ui.ctx()
-            .request_repaint_after(std::time::Duration::from_secs_f64(COPIED_FOR));
-    }
 }
 
 /// What the external IP line shows: the value, its colour and the reveal link,

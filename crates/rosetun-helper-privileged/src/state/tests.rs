@@ -5550,6 +5550,7 @@ fn invalid_extra_nodes_are_rejected_before_connect_and_apply() {
     other.id = NodeId::new("other");
     other.server = "192.0.2.10".into();
     let extra = ExtraNode {
+        via: None,
         exit: ExitId::new("other"),
         selection: Selection {
             subscription: SubscriptionId::new("sub"),
@@ -6852,6 +6853,7 @@ fn extra_node(exit: &str, server: &str) -> ExtraNode {
     node.id = NodeId::new(exit);
     node.server = server.into();
     ExtraNode {
+        via: None,
         exit: ExitId::new(exit),
         selection: Selection {
             subscription: SubscriptionId::new("sub"),
@@ -9191,4 +9193,152 @@ fn clients_at_once_do_not_block_each_other_and_leave_the_state_right() {
     assert!(session.request.is_none());
     drop(session);
     assert!(controls.spawns() > 0, "no client got anywhere");
+}
+
+#[test]
+fn forged_dependencies_are_invalid_and_valid_chains_are_unsupported() {
+    let mut request = connect_request();
+    request.extra_nodes = vec![
+        extra_node("parent", "192.0.2.1"),
+        extra_node("child", "192.0.2.2"),
+    ];
+    request.extra_nodes[1].via = Some(ExitId::new("parent"));
+    assert_eq!(
+        validate_request(&request).unwrap_err().code,
+        ErrorCode::UnsupportedRules
+    );
+    for id in ["missing", "child"] {
+        request.extra_nodes[1].via = Some(ExitId::new(id));
+        assert_eq!(
+            validate_request(&request).unwrap_err().code,
+            ErrorCode::InvalidRequest
+        );
+    }
+    request.extra_nodes[1].via = Some(ExitId::new("parent"));
+    request.extra_nodes[0].via = Some(ExitId::new("child"));
+    assert_eq!(
+        validate_request(&request).unwrap_err().code,
+        ErrorCode::InvalidRequest
+    );
+}
+
+fn native_exit_chain_request() -> ConnectRequest {
+    let mut request = exit_request("child", "198.51.100.2");
+    request.extra_nodes[0].node.outbound = rosetun_config::Outbound::Socks5(Default::default());
+    request.extra_nodes[0].node.stream = Default::default();
+    request.extra_nodes[0].via = Some(ExitId::new("parent"));
+    request.extra_nodes.push(extra_node("parent", "192.0.2.1"));
+    request
+}
+
+#[test]
+fn native_chain_apply_rollback_and_protected_reconnect_keep_the_path() {
+    let (helper, controls, _, _) = supervised_helper(true);
+    let request = native_exit_chain_request();
+    helper.connect(&request).unwrap();
+    assert_eq!(last_exit_target(&controls), RuleTarget::Exit);
+    let mut changed = request.clone();
+    changed.extra_nodes[1].node.server = "2001:db8::1".into();
+    helper.apply(&changed).unwrap();
+    assert_eq!(
+        last_extra_servers(&controls),
+        ["198.51.100.2", "2001:db8::1"]
+    );
+    let mut failing = changed.clone();
+    failing.extra_nodes[0].node.server = "2001:db8::2".into();
+    controls.fail_next(1);
+    assert!(helper.apply(&failing).is_err());
+    assert_eq!(helper.session().unwrap().request.as_ref(), Some(&changed));
+    controls.kill();
+    helper.supervise(Instant::now());
+    assert!(matches!(helper.status().state, ConnectionState::Connected));
+    assert_eq!(
+        last_extra_servers(&controls),
+        ["198.51.100.2", "2001:db8::1"]
+    );
+}
+
+#[test]
+fn chain_validation_precedes_spawn_and_protection_changes() {
+    let (helper, controls, prepared, _) = supervised_helper(true);
+    for mode in 0..4 {
+        let mut request = native_exit_chain_request();
+        match mode {
+            0 => request.extra_nodes[0].node.server = "b.invalid".into(),
+            1 => request.settings.tls_fragment.enabled = true,
+            2 => request.settings.engine = rosetun_config::EngineKind::Xray,
+            _ => request.extra_nodes[1].node = reality_request().node,
+        }
+        assert!(helper.connect(&request).is_err());
+        assert_eq!(controls.spawns(), 0);
+        assert_eq!(prepared.load(Ordering::Acquire), 0);
+    }
+}
+
+#[test]
+fn unavailable_first_hop_blocks_b_and_retains_independent_exit_identity() {
+    let mut request = native_exit_chain_request();
+    request.extra_nodes[1].node.server = "a.invalid".into();
+    request
+        .extra_nodes
+        .push(extra_node("independent", "203.0.113.3"));
+    let endpoints = exits::start_endpoints(
+        &request.extra_nodes,
+        StartMode::ProtectedReconnect,
+        &Default::default(),
+        NameLookup::System,
+    );
+    assert_eq!(
+        endpoints,
+        [
+            Some("198.51.100.2".parse().unwrap()),
+            None,
+            Some("203.0.113.3".parse().unwrap())
+        ]
+    );
+    let effective = request.effective_rule_set();
+    let extra = exits::ExtraNodes::new(&request.extra_nodes, &endpoints, &effective);
+    assert_eq!(
+        extra.rules(&effective).rules.last().unwrap().target,
+        RuleTarget::Block
+    );
+    let socks = exits::XraySocks::new(&request.node, &extra, &request.settings).unwrap();
+    let outbounds = extra.outbounds(&socks);
+    assert_eq!(outbounds.len(), 1);
+    assert_eq!(outbounds[0].index, 2);
+    assert_eq!(
+        exits::exit_tags(&request.extra_nodes, &endpoints)[0].1,
+        None
+    );
+}
+
+#[test]
+fn chain_b_never_populates_the_bootstrap_cache() {
+    let request = native_exit_chain_request();
+    let endpoints = exits::apply_endpoints(
+        &request.extra_nodes,
+        &Default::default(),
+        NameLookup::System,
+    );
+    let mut remembered = Default::default();
+    exits::remember(&mut remembered, &request.extra_nodes, &endpoints);
+    assert!(!remembered.contains_key(&ExitId::new("child")));
+    assert!(remembered.contains_key(&ExitId::new("parent")));
+}
+
+#[test]
+fn domain_b_is_never_looked_up_by_endpoint_preparation() {
+    let mut request = native_exit_chain_request();
+    request.extra_nodes[0].node.server = "b.invalid".into();
+    for lookup in [NameLookup::System, NameLookup::Direct] {
+        let remembered = Default::default();
+        assert_eq!(
+            exits::start_endpoints(&request.extra_nodes, StartMode::Fresh, &remembered, lookup)[0],
+            None
+        );
+        assert_eq!(
+            exits::apply_endpoints(&request.extra_nodes, &remembered, lookup)[0],
+            None
+        );
+    }
 }

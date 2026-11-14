@@ -10,7 +10,54 @@ pub(super) fn set_controls(ui: &mut egui::Ui, state: &State, actions: &mut Vec<A
         let menu =
             icons::icon_button_sized(ui, Icon::More, true, 38.0).on_hover_text(tr!("more-actions"));
         widgets::menu_popup(&menu).show(|ui| {
-            ui.set_min_width(180.0);
+            let commands = [
+                (
+                    format!(
+                        "{}: {}",
+                        tr!("rules-transfer-export"),
+                        tr!("rules-transfer-all")
+                    ),
+                    Action::OpenRulesExport(false),
+                    state.can_edit_rules(),
+                ),
+                (
+                    format!(
+                        "{}: {}",
+                        tr!("rules-transfer-export"),
+                        tr!("rules-transfer-selected")
+                    ),
+                    Action::OpenRulesExport(true),
+                    state.can_edit_rules() && !state.rules.screen.selected_rules.is_empty(),
+                ),
+                (
+                    format!(
+                        "{}: {}",
+                        tr!("rules-transfer-import"),
+                        tr!("rules-transfer-clipboard")
+                    ),
+                    Action::ReadRulesImport(false),
+                    state.can_edit_rules(),
+                ),
+                #[cfg(windows)]
+                (
+                    format!(
+                        "{}: {}",
+                        tr!("rules-transfer-import"),
+                        tr!("rules-transfer-file")
+                    ),
+                    Action::ReadRulesImport(true),
+                    state.can_edit_rules(),
+                ),
+            ];
+            let labels = [
+                tr!("make-active"),
+                tr!("new-set"),
+                tr!("rename"),
+                tr!("delete"),
+            ];
+            let mut menu_labels: Vec<_> = labels.iter().map(String::as_str).collect();
+            menu_labels.extend(commands.iter().map(|(label, _, _)| label.as_str()));
+            widgets::menu_content_width(ui, &menu_labels, widgets::MenuWidth::Wide.points());
             if !active
                 && widgets::menu_item(
                     ui,
@@ -57,6 +104,27 @@ pub(super) fn set_controls(ui: &mut egui::Ui, state: &State, actions: &mut Vec<A
                 actions.push(Action::OpenRenameSet);
                 ui.close();
             }
+            ui.separator();
+            for (label, action, enabled) in commands {
+                if widgets::menu_item(
+                    ui,
+                    widgets::MenuItem {
+                        label: &label,
+                        enabled,
+                        selected: false,
+                        danger: false,
+                        note: None,
+                    },
+                )
+                .clicked()
+                {
+                    actions.push(action);
+                    ui.close();
+                }
+            }
+            #[cfg(target_os = "linux")]
+            ui.label(tr!("rules-transfer-linux"));
+
             ui.separator();
             if widgets::menu_item(
                 ui,

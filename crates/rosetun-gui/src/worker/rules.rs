@@ -104,9 +104,15 @@ impl WorkerDispatcher {
         });
     }
 
-    pub(crate) fn save_exit(&self, id: Option<ExitId>, name: String, target: ExitTarget) {
+    pub(crate) fn save_exit(
+        &self,
+        id: Option<ExitId>,
+        name: String,
+        target: ExitTarget,
+        via: Option<ExitId>,
+    ) {
         self.spawn_complete("rosetun-save-exit", move |store| {
-            WorkerEvent::SaveExit(save_exit(store, id.as_ref(), &name, target))
+            WorkerEvent::SaveExit(save_exit(store, id.as_ref(), &name, target, via))
         });
     }
 
@@ -160,35 +166,105 @@ impl WorkerDispatcher {
     }
 }
 
-fn save_exit(
-    store: &Store,
-    id: Option<&ExitId>,
-    name: &str,
-    target: ExitTarget,
-) -> Result<(), ExitError> {
-    let id = match id {
-        Some(id) => {
-            rename_exit(store, id, name)?;
-            id.clone()
-        }
-        None => {
-            let new = match &target {
-                ExitTarget::Country(code) => NewExit::Country {
-                    code: code.clone(),
-                    name: name.to_owned(),
-                },
-                ExitTarget::Node { selection, .. } => NewExit::Node {
-                    selection: selection.clone(),
-                    name: name.to_owned(),
-                },
+impl WorkerDispatcher {
+    pub(crate) fn import_rules(
+        &self,
+        set: RuleSetId,
+        preview: rosetun_config::rules_exchange::Preview,
+        replace: bool,
+        default_target: bool,
+    ) {
+        self.spawn_complete("rosetun-import-rules", move |store| {
+            WorkerEvent::ImportRules(rosetun_core::rules_exchange::apply(
+                store,
+                &set,
+                &preview,
+                replace,
+                default_target,
+            ))
+        });
+    }
+    pub(crate) fn write_rules(&self, text: String, file: bool) {
+        let clipboard = self.clipboard.clone();
+        self.spawn_task("rosetun-export-rules", move |publisher| {
+            let result = write_rules_document(text, file, &clipboard);
+            emit(
+                &publisher.tx,
+                &publisher.repaint,
+                WorkerEvent::RulesWritten(result),
+            );
+        });
+    }
+    pub(crate) fn read_rules(&self, file: bool) {
+        self.spawn_task("rosetun-read-rules", move |publisher| {
+            let result = read_rules_document(file);
+            emit(
+                &publisher.tx,
+                &publisher.repaint,
+                WorkerEvent::RulesRead(result),
+            );
+        });
+    }
+}
+fn write_rules_document(
+    text: String,
+    file: bool,
+    clipboard: &Mutex<Option<arboard::Clipboard>>,
+) -> Result<RulesExportOutcome, String> {
+    if file {
+        #[cfg(windows)]
+        {
+            let Some(path) = rfd::FileDialog::new()
+                .set_title(tr!("rules-transfer-export"))
+                .add_filter("JSON", &["json"])
+                .set_file_name("rules.json")
+                .save_file()
+            else {
+                return Ok(RulesExportOutcome::Cancelled);
             };
-            let exit = create_exit(store, &new)?;
-            // A new node exit gets the node's country as its fallback; keep the user's choice.
-            if exit.target == target {
-                return Ok(());
-            }
-            exit.id
+            return std::fs::write(path, text)
+                .map(|()| RulesExportOutcome::Saved)
+                .map_err(|_| "write".into());
         }
-    };
-    change_exit_target(store, &id, target)
+        #[cfg(not(windows))]
+        return Err("file dialogs unavailable".into());
+    }
+    let mut clipboard = clipboard.lock().map_err(|_| "clipboard")?;
+    if clipboard.is_none() {
+        *clipboard = Some(arboard::Clipboard::new().map_err(|_| "clipboard")?);
+    }
+    clipboard
+        .as_mut()
+        .ok_or("clipboard")?
+        .set_text(text)
+        .map(|()| RulesExportOutcome::Copied)
+        .map_err(|_| "clipboard".into())
+}
+fn read_rules_document(file: bool) -> Result<Option<String>, String> {
+    if file {
+        #[cfg(windows)]
+        {
+            use std::io::Read;
+            let Some(path) = rfd::FileDialog::new()
+                .set_title(tr!("rules-transfer-import"))
+                .add_filter("JSON", &["json"])
+                .pick_file()
+            else {
+                return Ok(None);
+            };
+            let input = std::fs::File::open(path).map_err(|_| "read")?;
+            let mut text = String::new();
+            input
+                .take((rosetun_config::rules_exchange::MAX_DOCUMENT_BYTES + 1) as u64)
+                .read_to_string(&mut text)
+                .map_err(|_| "read")?;
+            return Ok(Some(text));
+        }
+        #[cfg(not(windows))]
+        return Err("file dialogs unavailable".into());
+    }
+    arboard::Clipboard::new()
+        .and_then(|mut clipboard| clipboard.get_text())
+        .map(Some)
+        .map_err(|_| "clipboard".into())
 }

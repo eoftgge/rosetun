@@ -45,55 +45,59 @@ impl Saved {
 
     fn run(&mut self, state: &mut State, job: Option<Job>) {
         let store = &self.store;
-        let event =
-            match job.expect("the action starts a job") {
-                Job::SelectRuleSet(id) => {
-                    WorkerEvent::SelectRuleSet(rosetun_core::select_rule_set(store, id.as_ref()))
-                }
-                Job::CreateRuleSet(name) => WorkerEvent::CreateRuleSet(
-                    rosetun_core::create_rule_set(store, &name, RuleTarget::Proxy),
-                ),
-                Job::RenameRuleSet(id, name) => {
-                    WorkerEvent::RenameRuleSet(rosetun_core::rename_rule_set(store, &id, &name))
-                }
-                Job::DeleteRuleSet(id) => {
-                    WorkerEvent::DeleteRuleSet(rosetun_core::delete_rule_set(store, &id))
-                }
-                Job::SetDefaultTarget(id, target) => WorkerEvent::SetDefaultTarget(
-                    rosetun_core::set_default_target(store, &id, target),
-                ),
-                Job::AddRule(set, matcher, target) => {
-                    WorkerEvent::AddRule(rosetun_core::add_rule(store, &set, matcher, &target))
-                }
-                Job::AddRules(set, matchers, target) => {
-                    WorkerEvent::AddRules(rosetun_core::add_rules(store, &set, matchers, &target))
-                }
-                Job::UpdateRule(set, rule, matcher, target) => WorkerEvent::UpdateRule(
-                    rosetun_core::update_rule(store, &set, &rule, matcher, &target),
-                ),
-                Job::SetRuleTarget(set, rule, target) => WorkerEvent::SetRuleTarget(
-                    rosetun_core::set_rule_target(store, &set, &rule, &target),
-                ),
-                Job::SetRuleEnabled(set, rule, enabled) => WorkerEvent::SetRuleEnabled(
-                    rosetun_core::set_rule_enabled(store, &set, &rule, enabled),
-                ),
-                Job::MoveRule(set, rule, to) => {
-                    WorkerEvent::MoveRule(rosetun_core::move_rule(store, &set, &rule, to))
-                }
-                Job::MoveRules(set, rules, to) => {
-                    WorkerEvent::MoveRules(rosetun_core::move_rules(store, &set, &rules, to))
-                }
-                Job::RemoveRule(set, rule) => {
-                    WorkerEvent::RemoveRule(rosetun_core::remove_rule(store, &set, &rule))
-                }
-                Job::RemoveRules(set, rules) => {
-                    WorkerEvent::RemoveRules(rosetun_core::remove_rules(store, &set, &rules))
-                }
-                Job::RestoreRuleSets(snapshot) => {
-                    WorkerEvent::RestoreRuleSets(rosetun_core::restore_rule_sets(store, &snapshot))
-                }
-                _ => panic!("not a rule job"),
-            };
+        let event = match job.expect("the action starts a job") {
+            Job::SelectRuleSet(id) => {
+                WorkerEvent::SelectRuleSet(rosetun_core::select_rule_set(store, id.as_ref()))
+            }
+            Job::CreateRuleSet(name) => WorkerEvent::CreateRuleSet(rosetun_core::create_rule_set(
+                store,
+                &name,
+                RuleTarget::Proxy,
+            )),
+            Job::RenameRuleSet(id, name) => {
+                WorkerEvent::RenameRuleSet(rosetun_core::rename_rule_set(store, &id, &name))
+            }
+            Job::DeleteRuleSet(id) => {
+                WorkerEvent::DeleteRuleSet(rosetun_core::delete_rule_set(store, &id))
+            }
+            Job::SetDefaultTarget(id, target) => {
+                WorkerEvent::SetDefaultTarget(rosetun_core::set_default_target(store, &id, target))
+            }
+            Job::ImportRules(set, preview, replace, default_target) => WorkerEvent::ImportRules(
+                rosetun_core::rules_exchange::apply(store, &set, &preview, replace, default_target),
+            ),
+            Job::AddRule(set, matcher, target) => {
+                WorkerEvent::AddRule(rosetun_core::add_rule(store, &set, matcher, &target))
+            }
+            Job::AddRules(set, matchers, target) => {
+                WorkerEvent::AddRules(rosetun_core::add_rules(store, &set, matchers, &target))
+            }
+            Job::UpdateRule(set, rule, matcher, target) => WorkerEvent::UpdateRule(
+                rosetun_core::update_rule(store, &set, &rule, matcher, &target),
+            ),
+            Job::SetRuleTarget(set, rule, target) => WorkerEvent::SetRuleTarget(
+                rosetun_core::set_rule_target(store, &set, &rule, &target),
+            ),
+            Job::SetRuleEnabled(set, rule, enabled) => WorkerEvent::SetRuleEnabled(
+                rosetun_core::set_rule_enabled(store, &set, &rule, enabled),
+            ),
+            Job::MoveRule(set, rule, to) => {
+                WorkerEvent::MoveRule(rosetun_core::move_rule(store, &set, &rule, to))
+            }
+            Job::MoveRules(set, rules, to) => {
+                WorkerEvent::MoveRules(rosetun_core::move_rules(store, &set, &rules, to))
+            }
+            Job::RemoveRule(set, rule) => {
+                WorkerEvent::RemoveRule(rosetun_core::remove_rule(store, &set, &rule))
+            }
+            Job::RemoveRules(set, rules) => {
+                WorkerEvent::RemoveRules(rosetun_core::remove_rules(store, &set, &rules))
+            }
+            Job::RestoreRuleSets(snapshot) => {
+                WorkerEvent::RestoreRuleSets(rosetun_core::restore_rule_sets(store, &snapshot))
+            }
+            _ => panic!("not a rule job"),
+        };
         self.generation += 1;
         state.reduce(WorkerEvent::Config {
             generation: self.generation,
@@ -563,4 +567,245 @@ fn revert_makes_the_session_set_active_again_while_it_exists() {
     saved.act(&mut state, Action::ConfirmDeleteSet);
     assert!(state.pending_reconnect(SessionPart::Rules));
     assert!(!state.can_revert_rules(), "the session set is gone");
+}
+
+fn import_document() -> String {
+    r#"{"format":"rosetun-rules","version":1,"exported_by":"test","system":"windows","default_target":"direct","rules":[{"enabled":true,"matcher":{"domain":{"exact":"import.example.com"}},"target":"proxy"}],"lists":[]}"#.into()
+}
+#[test]
+fn import_preview_requires_confirmation_and_defaults_to_keeping_the_default() {
+    let mut state = rules_state();
+    let before = state.config.clone();
+    state.reduce(WorkerEvent::RulesRead(Ok(Some(import_document()))));
+    let preview = state.rules.exchange.import.as_ref().unwrap();
+    assert_eq!(preview.add.rules.len(), 1);
+    assert!(!preview.default_target);
+    assert_eq!(state.config, before);
+    state.act(Action::CancelRulesExchange);
+    assert!(state.rules.exchange.import.is_none());
+}
+#[test]
+fn adding_and_replacing_an_import_are_one_undo_step() {
+    for replace in [false, true] {
+        let mut state = rules_state();
+        let before = state.config.clone();
+        let mut saved = Saved::new(&state);
+        state.reduce(WorkerEvent::RulesRead(Ok(Some(import_document()))));
+        saved.act(&mut state, Action::ConfirmRulesImport(replace));
+        let count = state.selected_rules().unwrap().rules.len();
+        assert_eq!(
+            count,
+            if replace {
+                1
+            } else {
+                before.active_rules().unwrap().rules.len() + 1
+            }
+        );
+        assert_eq!(state.rules.history.undo_len(), 1);
+        assert_eq!(
+            state.selected_rules().unwrap().default_target,
+            before.active_rules().unwrap().default_target
+        );
+        saved.act(&mut state, Action::UndoRules);
+        assert_eq!(state.config, before);
+        saved.act(&mut state, Action::RedoRules);
+        assert_eq!(state.selected_rules().unwrap().rules.len(), count);
+    }
+}
+#[test]
+fn invalid_imports_report_a_reason_and_do_not_change_rules() {
+    let mut state = rules_state();
+    let before = state.config.clone();
+    state.reduce(WorkerEvent::RulesRead(Ok(Some("{}".into()))));
+    assert!(state.rules.exchange.error.is_some());
+    assert!(state.rules.exchange.import.is_none());
+    assert_eq!(state.config, before);
+}
+#[test]
+fn exported_list_links_require_an_explicit_choice() {
+    use rosetun_config::{List, ListFormat, ListSource};
+    let mut state = rules_state();
+    let id = ListId::new("999");
+    state.config.lists.push(List {
+        id: id.clone(),
+        name: "Sites".into(),
+        source: ListSource::Url("https://lists.example.com/private-token".into()),
+        format: ListFormat::Text,
+        updated_at: None,
+        size: None,
+        sha256: None,
+        categories: vec![],
+    });
+    let set_id = state.rules.screen.selected_set.clone().unwrap();
+    state
+        .config
+        .rule_sets
+        .iter_mut()
+        .find(|set| set.id == set_id)
+        .unwrap()
+        .rules
+        .push(Rule {
+            id: RuleId::new("999"),
+            enabled: true,
+            matcher: RuleMatcher::List {
+                list: id,
+                category: None,
+            },
+            target: RuleTarget::Proxy,
+            exit: None,
+        });
+    for consent in [false, true] {
+        assert!(state.act(Action::OpenRulesExport(false)).is_none());
+        assert_eq!(
+            state.rules.exchange.export.as_ref().unwrap().hosts,
+            ["lists.example.com"]
+        );
+        let Some(Job::WriteRules(text, _)) = state.act(Action::ConfirmRulesExport(consent)) else {
+            panic!("export job");
+        };
+        assert_eq!(text.contains("private-token"), consent);
+        state.reduce(WorkerEvent::RulesWritten(Ok(
+            crate::worker::RulesExportOutcome::Copied,
+        )));
+    }
+}
+#[test]
+fn importing_lists_and_the_default_can_be_undone_together() {
+    let mut state = rules_state();
+    let before = state.config.clone();
+    let mut saved = Saved::new(&state);
+    let text = r#"{"format":"rosetun-rules","version":1,"exported_by":"test","system":"linux","default_target":"direct","lists":[{"name":"Sites","format":"text"}],"rules":[{"enabled":true,"matcher":{"list":{"list":0,"category":null}},"target":"proxy"}]}"#;
+    state.reduce(WorkerEvent::RulesRead(Ok(Some(text.into()))));
+    state.rules.exchange.import.as_mut().unwrap().default_target = true;
+    saved.act(&mut state, Action::ConfirmRulesImport(false));
+    assert_eq!(state.config.lists.len(), before.lists.len() + 1);
+    assert_eq!(
+        state.selected_rules().unwrap().default_target,
+        RuleTarget::Direct
+    );
+    saved.act(&mut state, Action::UndoRules);
+    assert_eq!(state.config, before);
+    saved.act(&mut state, Action::RedoRules);
+    assert_eq!(state.config.lists.len(), before.lists.len() + 1);
+}
+
+#[test]
+fn undoing_an_import_preserves_lists_added_after_it() {
+    let mut state = rules_state();
+    let mut saved = Saved::new(&state);
+    let text = r#"{"format":"rosetun-rules","version":1,"exported_by":"test","system":"linux","lists":[{"name":"Sites","format":"text"}],"rules":[{"enabled":true,"matcher":{"list":{"list":0,"category":null}},"target":"proxy"}]}"#;
+    state.reduce(WorkerEvent::RulesRead(Ok(Some(text.into()))));
+    saved.act(&mut state, Action::ConfirmRulesImport(false));
+    let unrelated = rosetun_config::List {
+        id: ListId::new("987654321"),
+        name: "Independent".into(),
+        source: rosetun_config::ListSource::File {
+            original_name: "independent.txt".into(),
+        },
+        format: rosetun_config::ListFormat::Text,
+        updated_at: None,
+        size: None,
+        sha256: None,
+        categories: vec![],
+    };
+    saved
+        .store
+        .modify::<_, rosetun_core::StoreError>(|config| {
+            config.lists.push(unrelated.clone());
+            Ok(())
+        })
+        .unwrap();
+    saved.act(&mut state, Action::UndoRules);
+    assert_eq!(state.config.lists, vec![unrelated.clone()]);
+    saved.act(&mut state, Action::RedoRules);
+    assert!(state.config.lists.contains(&unrelated));
+}
+
+#[cfg(windows)]
+#[test]
+fn export_reports_saving_and_failure_but_not_a_cancelled_save_dialog() {
+    use crate::worker::RulesExportOutcome;
+    let mut state = rules_state();
+    state.reduce(WorkerEvent::RulesWritten(Ok(RulesExportOutcome::Saved)));
+    assert!(state.rules.exchange.notice.is_some());
+    state.reduce(WorkerEvent::RulesWritten(Ok(RulesExportOutcome::Cancelled)));
+    assert!(state.rules.exchange.notice.is_none());
+    assert!(state.rules.exchange.error.is_none());
+    state.reduce(WorkerEvent::RulesWritten(Err("write".into())));
+    assert!(state.rules.exchange.error.is_some());
+    assert!(state.rules.exchange.notice.is_none());
+}
+
+#[test]
+fn importing_into_a_new_named_set_is_atomic_and_undoable() {
+    let mut state = rules_state();
+    let before = state.config.clone();
+    let mut saved = Saved::new(&state);
+    state.reduce(WorkerEvent::RulesRead(Ok(Some(import_document()))));
+    state.rules.exchange.import.as_mut().unwrap().choose(None);
+    assert!(state.act(Action::ConfirmRulesImport(false)).is_none());
+    assert!(
+        state
+            .rules
+            .exchange
+            .import
+            .as_ref()
+            .unwrap()
+            .error
+            .is_some()
+    );
+    assert_eq!(state.config, before);
+    state.rules.exchange.import.as_mut().unwrap().name = "  Imported set  ".into();
+    saved.act(&mut state, Action::ConfirmRulesImport(false));
+    let set = state.selected_rules().unwrap();
+    assert_eq!(set.name, "Imported set");
+    assert_eq!(set.rules.len(), 1);
+    assert_eq!(state.config.rule_sets.len(), before.rule_sets.len() + 1);
+    assert_eq!(state.config.active_rule_set, before.active_rule_set);
+    let imported = state.config.clone();
+    assert_eq!(state.rules.history.undo_len(), 1);
+    saved.act(&mut state, Action::UndoRules);
+    assert_eq!(state.config, before);
+    saved.act(&mut state, Action::RedoRules);
+    assert_eq!(state.config, imported);
+}
+
+#[test]
+fn cancelling_a_new_set_import_does_not_create_a_set() {
+    let mut state = rules_state();
+    let before = state.config.clone();
+    state.reduce(WorkerEvent::RulesRead(Ok(Some(import_document()))));
+    let import = state.rules.exchange.import.as_mut().unwrap();
+    import.choose(None);
+    import.name = "Cancelled".into();
+    state.act(Action::CancelRulesExchange);
+    assert_eq!(state.config, before);
+    assert_eq!(state.rules.history.undo_len(), 0);
+}
+
+#[test]
+fn changing_import_destination_recalculates_duplicates_without_activating_it() {
+    let mut state = rules_state();
+    let other = RuleSetId::new("99");
+    state.config.rule_sets.push(rosetun_config::RuleSet::new(
+        other.clone(),
+        "Other",
+        RuleTarget::Proxy,
+    ));
+    let mut saved = Saved::new(&state);
+    state.reduce(WorkerEvent::RulesRead(Ok(Some(import_document()))));
+    saved.act(&mut state, Action::ConfirmRulesImport(false));
+    let before = state.config.clone();
+    state.reduce(WorkerEvent::RulesRead(Ok(Some(import_document()))));
+    let import = state.rules.exchange.import.as_mut().unwrap();
+    assert_eq!(import.add.duplicates, 1);
+    import.choose(Some(other.clone()));
+    assert_eq!(import.add.duplicates, 0);
+    assert_eq!(import.add.rules.len(), 1);
+    saved.act(&mut state, Action::ConfirmRulesImport(false));
+    assert_eq!(state.rules.screen.selected_set, Some(other));
+    assert_eq!(state.config.active_rule_set, before.active_rule_set);
+    assert_eq!(state.selected_rules().unwrap().rules.len(), 1);
+    saved.act(&mut state, Action::UndoRules);
+    assert_eq!(state.config, before);
 }

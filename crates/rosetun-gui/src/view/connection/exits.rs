@@ -39,9 +39,16 @@ fn exit_row(ui: &mut egui::Ui, state: &State, row: &SessionExitRow<'_>) {
                 );
                 ui.add(
                     egui::Label::new(
-                        RichText::new(display::safe_text(&state.text(row.node)))
-                            .small()
-                            .color(theme::palette().text_dim),
+                        RichText::new(match row.via_node {
+                            Some(parent) => format!(
+                                "{} → {}",
+                                display::safe_text(parent),
+                                display::safe_text(row.node)
+                            ),
+                            None => display::safe_text(&state.text(row.node)),
+                        })
+                        .small()
+                        .color(theme::palette().text_dim),
                     )
                     .truncate(),
                 );
@@ -100,6 +107,7 @@ mod tests {
         state.status.state = ConnectionState::Connected;
         let nodes = &state.config.subscriptions[0].nodes;
         let extra = |id: &str, node: usize| ExtraNode {
+            via: None,
             exit: ExitId::new(id),
             selection: selection(nodes[node].id.as_str()),
             node: nodes[node].clone(),

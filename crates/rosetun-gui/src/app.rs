@@ -521,6 +521,12 @@ impl App {
             Job::LoadProcesses(request) => self.workers.load_processes(request),
             #[cfg(windows)]
             Job::BrowseExecutable => self.workers.browse_executable(),
+            Job::WriteRules(text, file) => self.workers.write_rules(text, file),
+            Job::ReadRules(file) => self.workers.read_rules(file),
+            Job::ImportRules(set, preview, replace, default_target) => {
+                self.workers
+                    .import_rules(set, preview, replace, default_target);
+            }
             Job::AddRule(set, matcher, target) => self.workers.add_rule(set, matcher, target),
             Job::AddRules(set, matchers, target) => self.workers.add_rules(set, matchers, target),
             Job::UpdateRule(set, rule, matcher, target) => {
@@ -530,7 +536,12 @@ impl App {
                 self.workers.set_rule_target(set, rule, target);
             }
             Job::CreateExit(exit) => self.workers.create_exit(exit),
-            Job::SaveExit { id, name, target } => self.workers.save_exit(id, name, target),
+            Job::SaveExit {
+                id,
+                name,
+                target,
+                via,
+            } => self.workers.save_exit(id, name, target, via),
             Job::RenameExit(id, name) => self.workers.rename_exit(id, name),
             Job::DeleteExit(id) => self.workers.delete_exit(id),
             Job::SetRuleEnabled(set, rule, enabled) => {

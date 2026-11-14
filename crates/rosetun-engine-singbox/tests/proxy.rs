@@ -87,6 +87,8 @@ fn proxy_routes_preserve_direct_rules_and_never_skip_udp_to_a_fallback() {
     let extra_node = proxy(true, false);
     let exit = ExitId::new("fixture");
     let extra = [ExtraOutbound {
+        index: 0,
+        via: None,
         exit: &exit,
         node: &extra_node,
         socks: None,

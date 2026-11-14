@@ -31,12 +31,17 @@ pub(super) fn start_endpoints(
 ) -> Vec<Option<IpAddr>> {
     extra
         .iter()
-        .map(|extra| match mode {
-            StartMode::Fresh => resolve_quiet(&extra.node.server, extra.node.port, lookup)
-                .and_then(|addresses| select_endpoint(&addresses))
-                .ok(),
-            StartMode::ProtectedReconnect => {
-                protected_endpoint(&extra.node, remembered.get(&extra.exit)).ok()
+        .map(|extra| {
+            if extra.via.is_some() {
+                return extra.node.server.parse::<IpAddr>().ok();
+            }
+            match mode {
+                StartMode::Fresh => resolve_quiet(&extra.node.server, extra.node.port, lookup)
+                    .and_then(|addresses| select_endpoint(&addresses))
+                    .ok(),
+                StartMode::ProtectedReconnect => {
+                    protected_endpoint(&extra.node, remembered.get(&extra.exit)).ok()
+                }
             }
         })
         .collect()
@@ -52,6 +57,9 @@ pub(super) fn apply_endpoints(
     extra
         .iter()
         .map(|extra| {
+            if extra.via.is_some() {
+                return extra.node.server.parse::<IpAddr>().ok();
+            }
             extra
                 .node
                 .server
@@ -75,43 +83,54 @@ pub(super) fn remember(
     extra: &[ExtraNode],
     endpoints: &[Option<IpAddr>],
 ) {
-    remembered.retain(|exit, _| extra.iter().any(|extra| extra.exit == *exit));
+    remembered.retain(|exit, _| {
+        extra
+            .iter()
+            .any(|extra| extra.exit == *exit && extra.via.is_none())
+    });
     for (extra, address) in extra.iter().zip(endpoints) {
-        if let Some(address) = address {
+        if let Some(address) = address.filter(|_| extra.via.is_none()) {
             remembered.insert(
                 extra.exit.clone(),
                 SuccessfulEndpoint {
                     server: normalize_server(&extra.node.server),
-                    address: *address,
+                    address,
                 },
             );
         }
     }
 }
 
-/// Each exit's outbound tag, numbered among the exits that have an address as
-/// [`ExtraNodes`] renders them; `None` for an exit without one.
+/// Each available exit's tag at its original request position; unavailable
+/// exits and children of unavailable first hops have no tag.
 pub(super) fn exit_tags(
     extra: &[ExtraNode],
     endpoints: &[Option<IpAddr>],
 ) -> Vec<(ExitId, Option<String>)> {
-    let mut next = 0;
     extra
         .iter()
         .enumerate()
-        .map(|(index, extra)| {
-            let tag = endpoints.get(index).copied().flatten().map(|_| {
-                next += 1;
-                exit_tag(next - 1)
-            });
-            (extra.exit.clone(), tag)
+        .map(|(index, entry)| {
+            let tag = available(extra, endpoints, index).then(|| exit_tag(index));
+            (entry.exit.clone(), tag)
         })
         .collect()
+}
+
+fn available(extra: &[ExtraNode], endpoints: &[Option<IpAddr>], index: usize) -> bool {
+    endpoints.get(index).copied().flatten().is_some()
+        && extra[index].via.as_ref().is_none_or(|via| {
+            extra
+                .iter()
+                .position(|entry| &entry.exit == via)
+                .is_some_and(|parent| endpoints.get(parent).copied().flatten().is_some())
+        })
 }
 
 /// Extra nodes that have an address, with that address substituted.
 pub(super) struct ExtraNodes<'a> {
     nodes: Vec<(&'a ExitId, Node)>,
+    identities: Vec<(usize, Option<&'a ExitId>)>,
     blocked: Option<RuleSet>,
     blocked_rules: usize,
 }
@@ -132,14 +151,21 @@ impl<'a> ExtraNodes<'a> {
         rules: &RuleSet,
     ) -> Self {
         let mut nodes = Vec::with_capacity(extra.len());
+        let mut identities = Vec::new();
         let mut unresolved = HashSet::new();
-        for (index, extra) in extra.iter().enumerate() {
-            match endpoints.get(index).copied().flatten() {
+        for (index, entry) in extra.iter().enumerate() {
+            match endpoints
+                .get(index)
+                .copied()
+                .flatten()
+                .filter(|_| available(extra, endpoints, index))
+            {
                 Some(address) => {
-                    nodes.push((&extra.exit, node_with_endpoint(&extra.node, address)));
+                    nodes.push((&entry.exit, node_with_endpoint(&entry.node, address)));
+                    identities.push((index, entry.via.as_ref()));
                 }
                 None => {
-                    unresolved.insert(&extra.exit);
+                    unresolved.insert(&entry.exit);
                 }
             }
         }
@@ -166,6 +192,7 @@ impl<'a> ExtraNodes<'a> {
         };
         Self {
             nodes,
+            identities,
             blocked,
             blocked_rules,
         }
@@ -188,7 +215,10 @@ impl<'a> ExtraNodes<'a> {
         self.nodes
             .iter()
             .zip(&socks.extra)
-            .map(|((exit, node), socks)| ExtraOutbound {
+            .enumerate()
+            .map(|(index, ((exit, node), socks))| ExtraOutbound {
+                index: self.identities[index].0,
+                via: self.identities[index].1,
                 exit,
                 node,
                 socks: socks.as_ref().map(socks_proxy),
@@ -268,7 +298,7 @@ impl XraySocks {
         }
         for (index, ((_, node), socks)) in extra.nodes.iter().zip(&self.extra).enumerate() {
             if let Some(socks) = socks {
-                tagged.push((exit_tag(index), node, socks));
+                tagged.push((exit_tag(extra.identities[index].0), node, socks));
             }
         }
         let nodes = tagged

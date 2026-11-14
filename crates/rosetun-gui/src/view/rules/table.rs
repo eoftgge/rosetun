@@ -484,23 +484,30 @@ pub(super) fn rule_row(
                         .on_hover_text(tr!("more-actions"));
                     if can_open {
                         let group = selected && state.rules.screen.selected_rules.len() >= 2;
-                        let menu_width = if group {
-                            ui.painter()
-                                .layout_no_wrap(
-                                    crate::i18n::delete_selected_rules(
-                                        state.rules.screen.selected_rules.len(),
-                                    ),
-                                    egui::TextStyle::Button.resolve(ui.style()),
-                                    theme::ERROR,
-                                )
-                                .size()
-                                .x
-                                + 40.0
-                        } else {
-                            160.0
-                        };
                         widgets::menu_popup(&menu).show(|ui| {
-                            ui.set_min_width(menu_width.max(160.0));
+                            let delete_group = crate::i18n::delete_selected_rules(
+                                state.rules.screen.selected_rules.len(),
+                            );
+                            let labels = if group {
+                                vec![
+                                    tr!("edit"),
+                                    tr!("move-selected-to-top"),
+                                    tr!("move-to-end"),
+                                    delete_group,
+                                ]
+                            } else {
+                                vec![
+                                    tr!("keep-permanently"),
+                                    tr!("edit"),
+                                    tr!("move-to-top"),
+                                    tr!("delete"),
+                                ]
+                            };
+                            widgets::menu_content_width(
+                                ui,
+                                &labels.iter().map(String::as_str).collect::<Vec<_>>(),
+                                widgets::MenuWidth::Compact.points(),
+                            );
                             if group {
                                 widgets::menu_item(
                                     ui,
@@ -723,6 +730,43 @@ fn rule_value(
             tr!("caption-list")
         }
         RuleCaption::Template => tr!("caption-template"),
+    };
+    let caption = if rule.enabled {
+        caption
+    } else {
+        match &rule.matcher {
+            RuleMatcher::Process(value)
+                if rosetun_config::rules_exchange::translate_process(
+                    value,
+                    rosetun_config::rules_exchange::System::current(),
+                    rosetun_config::rules_exchange::System::current(),
+                )
+                .1 =>
+            {
+                tr!("rules-transfer-other-system")
+            }
+            RuleMatcher::List { list, .. } => state
+                .config
+                .lists
+                .iter()
+                .find(|entry| &entry.id == list)
+                .map_or_else(
+                    || caption.clone(),
+                    |entry| match &entry.source {
+                        rosetun_config::ListSource::File { original_name }
+                            if entry.sha256.is_none() =>
+                        {
+                            if original_name == "list-required" {
+                                tr!("rules-transfer-needs-list")
+                            } else {
+                                format!("{}: {original_name}", tr!("rules-transfer-needs-file"))
+                            }
+                        }
+                        _ => caption.clone(),
+                    },
+                ),
+            _ => caption,
+        }
     };
     let missing = state.missing_list_rule(set, &rule.id);
     let exit_missing = rule.target == RuleTarget::Exit

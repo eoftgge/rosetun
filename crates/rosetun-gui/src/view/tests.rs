@@ -145,6 +145,7 @@ fn cases() -> Vec<Case> {
                 state.exits.delete = Some(DeleteExitDialog {
                     id: ExitId::new("exit"),
                     rules: 3,
+                    dependents: Vec::new(),
                     busy: false,
                     error: None,
                 });

@@ -42,7 +42,7 @@ const WIDGET_ONLY_CALLS: [&str; 3] = ["TextEdit::", "ComboBox::", "Modal::new("]
 
 /// Calls that take no number in a view: the width of a dialog is a role (`DialogWidth`), and any
 /// other width is a measure of the layout, not a literal.
-const VIEW_NUMBER_FREE_CALLS: [&str; 1] = ["set_width("];
+const VIEW_NUMBER_FREE_CALLS: [&str; 2] = ["set_width(", "set_min_width("];
 
 /// A constant named like this in a view would carry a dialog's width around the call above.
 const DIALOG_WIDTH_WORDS: [&str; 2] = ["DIALOG_WIDTH", "MODAL_WIDTH"];
@@ -63,7 +63,21 @@ struct Allowed {
     reason: &'static str,
 }
 
-const ALLOWED: [Allowed; 5] = [
+const ALLOWED: [Allowed; 7] = [
+    Allowed {
+        file: "view/settings.rs",
+        call: "set_min_width(",
+        function: None,
+        arguments: Some("(width-32.0).max(0.0)"),
+        reason: "the available card width minus its frame margins",
+    },
+    Allowed {
+        file: "view/connection/hero.rs",
+        call: "set_min_width(",
+        function: None,
+        arguments: Some("width-2.0*theme::space::M"),
+        reason: "the available server card width minus its frame margins",
+    },
     Allowed {
         file: "view/rules/table.rs",
         call: "add_space(",
@@ -957,4 +971,17 @@ fn the_fence_lets_through_only_the_listed_widths() {
         "view/exits.rs",
         &view_violations("fn exit_menu() {\n    ui.set_width(210.0);\n}\n")[0]
     ));
+}
+
+#[test]
+fn the_fence_rejects_literal_menu_minimum_widths() {
+    for width in ["200.0", "trigger.rect.width().max(180.0)"] {
+        let source = format!("fn menu(ui: &mut Ui) {{ ui.set_min_width({width}); }}");
+        let found = view_violations(&source);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].call, "set_min_width(");
+    }
+    assert!(
+        view_violations("fn menu() { ui.set_min_width(MenuWidth::Compact.points()); }").is_empty()
+    );
 }

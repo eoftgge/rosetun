@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt::Formatter;
 use std::time::Duration;
 
-pub const PROTOCOL_VERSION: u32 = 21;
+pub const PROTOCOL_VERSION: u32 = 22;
 const LOCAL_PROXY_PORT_BUSY: &str = "another program holds the local proxy port ";
 const TUNNEL_ADDRESS_IN_USE: &str = "the tunnel address is still held by the previous session";
 
@@ -145,12 +145,18 @@ pub enum ConnectRequestError {
     NodeNotFound,
     #[error("no node is selected")]
     SelectionMissing,
+    #[error("too many extra nodes")]
+    TooManyExtraNodes,
     #[error("the selected rule set does not exist")]
     RuleSetNotFound,
+    #[error("unsupported exit chain")]
+    UnsupportedExitChain,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExtraNode {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub via: Option<ExitId>,
     pub exit: ExitId,
     pub selection: Selection,
     pub node: Node,
@@ -218,6 +224,7 @@ impl ConnectRequest {
         exits: ExitContext<'_>,
     ) -> Result<Self, ConnectRequestError> {
         let (request, blocked) = Self::build(config, Vec::new(), exits)?;
+        request.validate_exit_chains()?;
         warn_blocked_exits(blocked);
         Ok(request)
     }
@@ -255,20 +262,12 @@ impl ConnectRequest {
             settings: config.settings.clone(),
             rule_templates,
         };
-        let referenced = |id: &ExitId| {
-            request
-                .rule_set
-                .enabled()
-                .chain(request.temporary_rules.iter().filter(|rule| rule.enabled))
-                .any(|rule| rule.target == RuleTarget::Exit && rule.exit.as_ref() == Some(id))
-        };
-        let used: Vec<_> = config
-            .exits
-            .iter()
-            .filter(|exit| referenced(&exit.id))
-            .cloned()
-            .collect();
-        let resolved = resolve_exits(&used, &config.subscriptions, exits.delays, exits.selected);
+        let resolved = resolve_exits(
+            &config.exits,
+            &config.subscriptions,
+            exits.delays,
+            exits.selected,
+        );
         let mut blocked = 0;
         for rule in request
             .rule_set
@@ -287,7 +286,12 @@ impl ConnectRequest {
                 blocked += 1;
                 continue;
             };
-            if selected == selection {
+            let via = config
+                .exits
+                .iter()
+                .find(|exit| exit.id == *id)
+                .and_then(|exit| exit.via.clone());
+            if selected == selection && via.is_none() {
                 rule.target = RuleTarget::Proxy;
                 rule.exit = None;
             } else if !request.extra_nodes.iter().any(|extra| extra.exit == *id) {
@@ -298,6 +302,7 @@ impl ConnectRequest {
                     .and_then(|sub| sub.node(&selected.node))
                 {
                     request.extra_nodes.push(ExtraNode {
+                        via: via.clone(),
                         exit: id.clone(),
                         selection: selected.clone(),
                         node: node.clone(),
@@ -309,7 +314,64 @@ impl ConnectRequest {
                 }
             }
         }
+        let dependencies: Vec<_> = request
+            .extra_nodes
+            .iter()
+            .filter_map(|extra| extra.via.clone())
+            .collect();
+        for id in dependencies {
+            if request.extra_nodes.iter().any(|extra| extra.exit == id) {
+                continue;
+            }
+            if let Some((_, Some(selected))) = resolved.iter().find(|(exit, _)| *exit == id)
+                && let Some((_, node)) = config.node_at(selected)
+            {
+                request.extra_nodes.push(ExtraNode {
+                    via: None,
+                    exit: id,
+                    selection: selected.clone(),
+                    node: node.clone(),
+                });
+            }
+        }
+        if request.extra_nodes.len() > MAX_EXTRA_NODES {
+            return Err(ConnectRequestError::TooManyExtraNodes);
+        }
+        request.validate_exit_chains()?;
         Ok((request, blocked))
+    }
+
+    /// Validates the actual endpoints and settings, never a client capability flag.
+    /// Domain B is refused: remote resolution would leave no address for LAN exclusions.
+    pub fn validate_exit_chains(&self) -> Result<(), ConnectRequestError> {
+        for extra in &self.extra_nodes {
+            if let Some(via) = &extra.via {
+                let parent = self
+                    .extra_nodes
+                    .iter()
+                    .find(|entry| &entry.exit == via)
+                    .ok_or(ConnectRequestError::UnsupportedExitChain)?;
+                if parent.exit == extra.exit
+                    || parent.via.is_some()
+                    || self.settings.engine != rosetun_config::EngineKind::SingBox
+                    || self.settings.tls_fragment.enabled
+                    || rosetun_config::uses_xray(&parent.node, &self.settings)
+                    || rosetun_config::uses_xray(&extra.node, &self.settings)
+                    || !matches!(
+                        extra.node.outbound,
+                        rosetun_config::Outbound::Http(_) | rosetun_config::Outbound::Socks5(_)
+                    )
+                    || matches!(
+                        parent.node.outbound,
+                        rosetun_config::Outbound::Unknown { .. }
+                    )
+                    || extra.node.server.parse::<std::net::IpAddr>().is_err()
+                {
+                    return Err(ConnectRequestError::UnsupportedExitChain);
+                }
+            }
+        }
+        Ok(())
     }
 
     pub fn for_apply(
@@ -337,6 +399,7 @@ impl ConnectRequest {
             // The mode, the port and sharing stay the config's: the service
             // changes them under the standing protection.
         }
+        request.validate_exit_chains()?;
         warn_blocked_exits(blocked);
         Ok(request)
     }
@@ -583,6 +646,43 @@ mod tests {
     use std::time::Duration;
 
     #[test]
+    fn chain_support_is_checked_from_endpoints_and_settings() {
+        let mut config = selected_config();
+        config.subscriptions[0].nodes[0].outbound =
+            rosetun_config::Outbound::Http(Default::default());
+        config.subscriptions[0].nodes[0].server = "192.0.2.1".into();
+        let mut request = ConnectRequest::from_config(&config).unwrap();
+        let node = request.node.clone();
+        request.extra_nodes = vec![
+            super::ExtraNode {
+                exit: ExitId::new("a"),
+                via: None,
+                node: node.clone(),
+                selection: request.selection.clone(),
+            },
+            super::ExtraNode {
+                exit: ExitId::new("b"),
+                via: Some(ExitId::new("a")),
+                node,
+                selection: request.selection.clone(),
+            },
+        ];
+        assert!(request.validate_exit_chains().is_ok());
+        request.extra_nodes[1].node.server = "b.invalid".into();
+        assert_eq!(
+            request.validate_exit_chains(),
+            Err(ConnectRequestError::UnsupportedExitChain)
+        );
+        request.extra_nodes[1].node.server = "2001:db8::2".into();
+        assert!(request.validate_exit_chains().is_ok());
+        request.settings.tls_fragment.enabled = true;
+        assert_eq!(
+            request.validate_exit_chains(),
+            Err(ConnectRequestError::UnsupportedExitChain)
+        );
+    }
+
+    #[test]
     fn a_busy_port_error_names_its_port() {
         let error = super::HelperError::local_proxy_port_busy(10808);
         assert_eq!(error.code, super::ErrorCode::LocalProxyPortBusy);
@@ -629,7 +729,7 @@ mod tests {
             serde_json::to_string(&super::ErrorCode::AccessDenied).unwrap(),
             "\"access_denied\""
         );
-        assert_eq!(super::PROTOCOL_VERSION, 21);
+        assert_eq!(super::PROTOCOL_VERSION, 22);
         assert_eq!(
             serde_json::to_string(&super::Request::OpenNetwork).unwrap(),
             "\"open_network\""
@@ -812,6 +912,86 @@ mod tests {
         }
     }
 
+    #[test]
+    fn dependencies_count_towards_the_extra_node_limit() {
+        let mut config = selected_config();
+        let selection = config.active.clone().unwrap();
+        let parent = ExitId::new("parent");
+        config.exits.push(Exit {
+            id: parent.clone(),
+            name: "Parent".into(),
+            via: None,
+            target: ExitTarget::Node {
+                selection: selection.clone(),
+                fallback: None,
+            },
+        });
+        let mut rules = Vec::new();
+        for index in 0..super::MAX_EXTRA_NODES {
+            let id = ExitId::new(format!("child-{index}"));
+            config.exits.push(Exit {
+                id: id.clone(),
+                name: "Child".into(),
+                via: Some(parent.clone()),
+                target: ExitTarget::Node {
+                    selection: selection.clone(),
+                    fallback: None,
+                },
+            });
+            rules.push(Rule {
+                id: RuleId::new(format!("rule-{index}")),
+                enabled: true,
+                matcher: RuleMatcher::Template(RuleTemplate::Youtube),
+                target: RuleTarget::Exit,
+                exit: Some(id),
+            });
+        }
+        assert!(matches!(
+            ConnectRequest::for_apply(&config, None, rules),
+            Err(ConnectRequestError::TooManyExtraNodes)
+        ));
+    }
+
+    #[test]
+    fn chained_exit_collects_its_parent_even_on_the_primary_node() {
+        let mut config = selected_config();
+        config.subscriptions[0].nodes[0].outbound =
+            rosetun_config::Outbound::Socks5(Default::default());
+        config.subscriptions[0].nodes[0].server = "192.0.2.1".into();
+        let selection = config.active.clone().unwrap();
+        let parent = ExitId::new("parent");
+        let child = ExitId::new("child");
+        for (id, via) in [
+            (parent.clone(), None),
+            (child.clone(), Some(parent.clone())),
+        ] {
+            config.exits.push(Exit {
+                id,
+                name: "Example".into(),
+                via,
+                target: ExitTarget::Node {
+                    selection: selection.clone(),
+                    fallback: None,
+                },
+            });
+        }
+        let rule = Rule {
+            id: RuleId::new("chain"),
+            enabled: true,
+            matcher: RuleMatcher::Template(RuleTemplate::Youtube),
+            target: RuleTarget::Exit,
+            exit: Some(child.clone()),
+        };
+        let request = ConnectRequest::for_apply(&config, None, vec![rule.clone()]).unwrap();
+        assert_eq!(request.extra_nodes.len(), 2);
+        assert_eq!(request.temporary_rules[0].target, RuleTarget::Exit);
+        assert_eq!(request.extra_nodes[0].via, Some(parent));
+        config.exits.remove(0);
+        let request = ConnectRequest::for_apply(&config, None, vec![rule]).unwrap();
+        assert_eq!(request.temporary_rules[0].target, RuleTarget::Block);
+        assert!(request.extra_nodes.is_empty());
+    }
+
     fn dangling_node_config() -> AppConfig {
         AppConfig {
             active: Some(Selection {
@@ -827,6 +1007,7 @@ mod tests {
         let mut config = selected_config();
         let exit_id = ExitId::new("1");
         config.exits.push(Exit {
+            via: None,
             id: exit_id.clone(),
             name: "Example exit".into(),
             target: ExitTarget::Country(CountryCode::parse("GB").unwrap()),
@@ -879,6 +1060,7 @@ mod tests {
         other.server = "192.0.2.10".into();
         config.subscriptions[0].nodes.push(other.clone());
         config.exits.push(Exit {
+            via: None,
             id: exit.clone(),
             name: "GB exit".into(),
             target: ExitTarget::Country(CountryCode::parse("GB").unwrap()),
@@ -923,6 +1105,7 @@ mod tests {
         let mut config = selected_config();
         let exit = ExitId::new("gb");
         config.exits.push(Exit {
+            via: None,
             id: exit.clone(),
             name: "GB exit".into(),
             target: ExitTarget::Country(CountryCode::parse("GB").unwrap()),
@@ -979,6 +1162,7 @@ mod tests {
         let mut config = selected_config();
         let exit = ExitId::new("main");
         config.exits.push(Exit {
+            via: None,
             id: exit.clone(),
             name: "Main exit".into(),
             target: ExitTarget::Node {

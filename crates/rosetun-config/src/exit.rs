@@ -57,6 +57,8 @@ pub struct Exit {
     pub id: ExitId,
     pub name: String,
     pub target: ExitTarget,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub via: Option<ExitId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -123,7 +125,7 @@ pub fn resolve_exits(
     delays: &[(Selection, Duration)],
     selected: &[(ExitId, Selection)],
 ) -> Vec<(ExitId, Option<Selection>)> {
-    exits
+    let mut resolved: Vec<_> = exits
         .iter()
         .map(|exit| {
             let previous = selected
@@ -147,7 +149,21 @@ pub fn resolve_exits(
             };
             (exit.id.clone(), node)
         })
-        .collect()
+        .collect();
+    for (index, exit) in exits.iter().enumerate() {
+        if let Some(via) = &exit.via {
+            let available = exits
+                .iter()
+                .position(|entry| &entry.id == via)
+                .is_some_and(|parent| {
+                    via != &exit.id && exits[parent].via.is_none() && resolved[parent].1.is_some()
+                });
+            if !available {
+                resolved[index].1 = None;
+            }
+        }
+    }
+    resolved
 }
 
 #[cfg(test)]

@@ -43,6 +43,7 @@ struct ToolbarRects {
 }
 
 mod dialogs;
+pub(crate) mod exchange;
 mod selection;
 mod sets;
 mod table;
@@ -106,7 +107,9 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
         state.config.interface.reduce_motion,
     );
     widgets::appear(ui, shown, |ui| tab_body(ui, state, actions));
-    undo_notice(ui.ctx(), state, actions);
+    if state.rules.exchange.notice.is_none() {
+        undo_notice(ui.ctx(), state, actions);
+    }
 }
 
 fn undo_notice(ctx: &egui::Context, state: &State, actions: &mut Vec<Action>) {
@@ -115,6 +118,9 @@ fn undo_notice(ctx: &egui::Context, state: &State, actions: &mut Vec<Action>) {
     };
     ctx.request_repaint_after(left);
     let text = match notice {
+        UndoNotice::RulesImported(count) => {
+            tr!("rules-transfer-added", count = count, n = count.to_string())
+        }
         UndoNotice::RulesDeleted(count) => i18n::rules_deleted(count),
         UndoNotice::SetDeleted => tr!("rule-set-deleted"),
         UndoNotice::RulesMoved(count) => i18n::rules_moved(count),

@@ -11,6 +11,7 @@ use crate::worker::WorkerEvent;
 
 mod address;
 mod dialog;
+pub(crate) mod exchange;
 mod history;
 mod recent;
 
@@ -62,6 +63,7 @@ impl RuleScreen {
 
 #[derive(Default)]
 pub(crate) struct RulesState {
+    pub(crate) exchange: exchange::ExchangeState,
     pub(crate) screen: RuleScreen,
     pub(crate) history: RuleHistory,
     next_process_request: u64,
@@ -196,6 +198,7 @@ impl State {
 
     pub(crate) fn can_edit_rules(&self) -> bool {
         self.config_ready
+            && !self.rules.exchange.busy
             && !self.operations.rules_edit
             && !self.operations.rules
             && !self.operations.helper

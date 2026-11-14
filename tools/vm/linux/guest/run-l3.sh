@@ -1319,6 +1319,13 @@ trap 'finalize' EXIT
 trap ': >"$STATE/aborted"; exit 143' TERM INT
 write_status running preflight
 
+# These observations require isolated A/B/target identities and captures at all three boundaries.
+while IFS=$'\t' read -r id _; do
+    case "$id" in
+        two-hop.*) record "$id" SKIP "UNRUN: isolated A/B/target observers and physical B/DNS capture are not provisioned" "$(l2_now_ms)" ;;
+    esac
+done <"$SCENARIOS"
+
 scenario_preflight
 if preflight_ok; then
     scenario_install

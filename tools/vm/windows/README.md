@@ -251,3 +251,21 @@ request order: `plain` means `proxy-share.json`, `strict` means
 | `lockdown.lan-on` | Lockdown takes its local network |
 | `lockdown.lan-connect` | a shared proxy connects |
 | `lockdown.host-allowed` | with its local network the host gets in |
+
+## Two-hop exits
+
+The owner runs qualification. Before Hyper-V, turn off Lockdown on the Windows host. The Linux VM needs a working recovery console.
+
+The two-hop catalog covers HTTP/HTTPS/SOCKS5, IPv4/IPv6, TUN and System proxy; A/B failures, authentication, TLS certificates, UDP/QUIC, Apply/rollback/reconnect, engine restart, missing dependencies, subscription/fallback changes, Lockdown and allow_lan. Domain B and Xray/fragmentation are refusal cases, not supported positive cases.
+
+**UNRUN:** this stand does not provision independently identifiable A, B and a target with synchronized server observations and physical client packet capture. The existing host node connection count or external-IP probe cannot prove the required transitions. The catalog records pending observations, not executable network qualification. Windows adds UNRUN rows from `two-hop-scenarios.tsv` to the failure matrix report. Linux L3 and Proxy list optional `not-run` scenarios, reported as SKIP with an explicit UNRUN reason and partial coverage. Existing independent traffic tests continue unchanged.
+
+To qualify a scenario, retain all of the following for the same marked request and observation interval:
+
+1. A target server log showing B's source address, B's inbound log showing A's source address, and A's inbound log showing the client. Use distinct addresses and a target controlled by the stand.
+2. A capture on the client's physical interface showing the connection to A, no direct connection to B, and no DNS query for B. First prove each observer sees a deliberately sent baseline, and capture before connect through disconnect, including Apply, engine restart and reconnect. Zero packets without a positive observer baseline is not evidence.
+3. For each refusal or outage, failed selected traffic and no target request from A or the client. Exercise new connections so a cached response or surviving stream cannot mask a failure. Check independent Direct/Proxy/Block rules against their existing baseline.
+4. For HTTPS, use a trusted test CA for the positive case, then a wrong name and an untrusted certificate for refusal. Use incorrect B credentials separately. Test a domain B as a refusal without a physical DNS query, including after subscription and fallback changes.
+5. Raw CLI output, request/configuration with secrets removed, engine/helper versions and commit, timestamped A/B/target logs, interface names, captures, and the matrix report. Return these artifacts if any observation differs. Keep raw secrets and personal network data out of commits.
+
+A matrix run whose two-hop rows remain UNRUN does not accept the feature. See [configuration and limits](../../../TWO-HOP-EXITS.md).

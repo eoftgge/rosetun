@@ -129,7 +129,7 @@ fn exit_row(
     resolved: Option<&Selection>,
     actions: &mut Vec<Action>,
 ) -> egui::Response {
-    let title = exit_title(exit);
+    let title = destinations::exit_path_label(&state.config, exit);
     let (detail, warning) = exit_detail(&state.config, exit, resolved);
     let rules = state.exit_rules(&exit.id);
     let can_edit = state.can_edit_rules();
@@ -394,57 +394,117 @@ pub(crate) fn exit_dialog(ctx: &egui::Context, state: &mut State, actions: &mut 
             } else {
                 tr!("new-exit")
             });
-            ui.add_space(theme::space::L);
-            ui.label(tr!("exit-name"));
-            let input = ui.add(widgets::TextField::new(&mut dialog.name).enabled(!busy));
-            if dialog.focus {
-                input.request_focus();
-                dialog.focus = false;
-            }
-            if input.changed() {
-                dialog.error = None;
-            }
-            ui.add_space(theme::space::M);
-            if let Some(kind) = widgets::segmented(
-                ui,
-                "exit_kind",
-                dialog.kind,
-                &[
-                    (ExitKind::Country, tr!("exit-kind-country")),
-                    (ExitKind::Node, tr!("exit-kind-node")),
-                ],
-                true,
-                !busy,
-            ) {
-                dialog.kind = kind;
-                dialog.error = None;
-            }
-            ui.add_space(theme::space::M);
-            let shown = widgets::appear_progress(
-                ui.ctx(),
-                egui::Id::unique("exit_kind_body"),
-                dialog.kind == ExitKind::Node,
-                crate::motion::reduced(),
-            );
-            widgets::appear(ui, shown, |ui| match dialog.kind {
-                ExitKind::Country => country_picker(ui, dialog, config, busy),
-                ExitKind::Node => node_picker(ui, dialog, config, busy),
-            });
-            if dialog.editing.is_none() && full {
-                ui.add_space(theme::space::S);
-                note(
-                    ui,
-                    tr!(
-                        "where-exits-full",
-                        count = rosetun_ipc::MAX_EXTRA_NODES.to_string()
-                    ),
-                    theme::WARNING,
-                );
-            }
-            if let Some(error) = &dialog.error {
-                ui.add_space(theme::space::S);
-                ui.add(egui::Label::new(RichText::new(error).color(theme::ERROR)).wrap());
-            }
+            egui::ScrollArea::vertical()
+                .id_salt("exit_dialog_body")
+                .max_height((ui.ctx().content_rect().height() - 180.0).max(100.0))
+                .show(ui, |ui| {
+                    ui.add_space(theme::space::L);
+                    ui.label(tr!("exit-name"));
+                    let input = ui.add(widgets::TextField::new(&mut dialog.name).enabled(!busy));
+                    if dialog.focus {
+                        input.request_focus();
+                        dialog.focus = false;
+                    }
+                    if input.changed() {
+                        dialog.error = None;
+                    }
+                    ui.add_space(theme::space::M);
+                    if let Some(kind) = widgets::segmented(
+                        ui,
+                        "exit_kind",
+                        dialog.kind,
+                        &[
+                            (ExitKind::Country, tr!("exit-kind-country")),
+                            (ExitKind::Node, tr!("exit-kind-node")),
+                        ],
+                        true,
+                        !busy,
+                    ) {
+                        dialog.kind = kind;
+                        dialog.error = None;
+                    }
+                    ui.add_space(theme::space::M);
+                    let shown = widgets::appear_progress(
+                        ui.ctx(),
+                        egui::Id::unique("exit_kind_body"),
+                        dialog.kind == ExitKind::Node,
+                        crate::motion::reduced(),
+                    );
+                    widgets::appear(ui, shown, |ui| match dialog.kind {
+                        ExitKind::Country => country_picker(ui, dialog, config, busy),
+                        ExitKind::Node => node_picker(ui, dialog, config, busy),
+                    });
+                    ui.add_space(theme::space::M);
+                    ui.label(tr!("exit-via"));
+                    let selected = dialog.via.as_ref().map_or_else(
+                        || tr!("exit-via-direct"),
+                        |id| {
+                            config
+                                .exits
+                                .iter()
+                                .find(|exit| &exit.id == id)
+                                .map_or_else(|| tr!("connection-exit-removed"), exit_title)
+                        },
+                    );
+                    ui.add_enabled_ui(!busy, |ui| {
+                        widgets::drop_down(ui, "exit_via", None, selected, |ui| {
+                            ui.selectable_value(&mut dialog.via, None, tr!("exit-via-direct"));
+                            if let Some(target) = dialog.target() {
+                                for parent in &config.exits {
+                                    if destinations::exit_path_supported(
+                                        config,
+                                        dialog.editing.as_ref(),
+                                        &target,
+                                        Some(&parent.id),
+                                    ) {
+                                        ui.selectable_value(
+                                            &mut dialog.via,
+                                            Some(parent.id.clone()),
+                                            exit_title(parent),
+                                        );
+                                    }
+                                }
+                            }
+                        });
+                    });
+                    if let Some(via) = &dialog.via {
+                        let parent = config
+                            .exits
+                            .iter()
+                            .find(|exit| &exit.id == via)
+                            .map_or_else(|| tr!("connection-exit-removed"), exit_title);
+                        note(
+                            ui,
+                            format!("{parent} → {}", display::safe_text(&dialog.name)),
+                            theme::palette().text_muted,
+                        );
+                        if dialog.target().is_some_and(|target| {
+                            !destinations::exit_path_supported(
+                                config,
+                                dialog.editing.as_ref(),
+                                &target,
+                                dialog.via.as_ref(),
+                            )
+                        }) {
+                            note(ui, tr!("exit-path-unsupported"), theme::WARNING);
+                        }
+                    }
+                    if dialog.editing.is_none() && full {
+                        ui.add_space(theme::space::S);
+                        note(
+                            ui,
+                            tr!(
+                                "where-exits-full",
+                                count = rosetun_ipc::MAX_EXTRA_NODES.to_string()
+                            ),
+                            theme::WARNING,
+                        );
+                    }
+                    if let Some(error) = &dialog.error {
+                        ui.add_space(theme::space::S);
+                        ui.add(egui::Label::new(RichText::new(error).color(theme::ERROR)).wrap());
+                    }
+                });
             let footer = widgets::DialogFooter::new(tr!("save"), tr!("cancel"))
                 .primary_enabled(dialog.can_save(full))
                 .busy(busy);
@@ -496,7 +556,7 @@ pub(crate) fn delete_dialog(ctx: &egui::Context, state: &State, actions: &mut Ve
             cancel: tr!("cancel"),
             confirm: tr!("delete"),
             busy: dialog.busy,
-            confirm_enabled: !dialog.busy,
+            confirm_enabled: !dialog.busy && dialog.dependents.is_empty(),
             width: widgets::DialogWidth::Narrow,
         },
         |ui| {
@@ -504,9 +564,17 @@ pub(crate) fn delete_dialog(ctx: &egui::Context, state: &State, actions: &mut Ve
                 ui.label(exit_title(exit));
             }
             ui.add_space(theme::space::M);
-            ui.add(
-                egui::Label::new(tr!("delete-exit-detail", n = dialog.rules.to_string())).wrap(),
-            );
+            if dialog.dependents.is_empty() {
+                ui.add(
+                    egui::Label::new(tr!("delete-exit-detail", n = dialog.rules.to_string()))
+                        .wrap(),
+                );
+            } else {
+                ui.add(
+                    egui::Label::new(tr!("exit-used-by", names = dialog.dependents.join(", ")))
+                        .wrap(),
+                );
+            }
             if let Some(error) = &dialog.error {
                 ui.add(egui::Label::new(RichText::new(error).color(theme::ERROR)).wrap());
             }

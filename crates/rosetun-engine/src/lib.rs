@@ -341,6 +341,10 @@ pub fn exit_tag(index: usize) -> String {
 /// [`exit_tag`] of its position in [`RenderRequest::extra`].
 #[derive(Clone, Copy)]
 pub struct ExtraOutbound<'a> {
+    /// Original request position, retained when unavailable nodes are omitted.
+    pub index: usize,
+    /// First hop; never a local SOCKS adapter for another engine.
+    pub via: Option<&'a ExitId>,
     pub exit: &'a ExitId,
     pub node: &'a Node,
     pub socks: Option<SocksProxy<'a>>,

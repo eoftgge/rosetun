@@ -1291,3 +1291,52 @@ proxy-credentials-note = If the proxy requires a login
 proxy-note-tcp = Calls and games will not work through this proxy.
 proxy-note-socks5 = Calls and games work if the server supports it.
 error-proxy-invalid = Check the proxy address, port, credentials and TLS settings.
+
+rules-transfer-export = Export
+rules-transfer-import = Import
+rules-transfer-all = All rules
+rules-transfer-selected = Selected rules
+rules-transfer-clipboard = From clipboard
+rules-transfer-file = From file
+rules-transfer-linux = On Linux, use the clipboard
+rules-transfer-include = Include
+rules-transfer-without = Without links
+rules-transfer-url-warning = List links can contain access keys. Include them?
+rules-transfer-to-file = To file
+rules-transfer-to-clipboard = To clipboard
+rules-transfer-preview = Import rules
+rules-transfer-add = Add
+rules-transfer-replace = Replace
+rules-transfer-duplicates = Duplicates
+rules-transfer-disabled = Disabled
+rules-transfer-invalid-rows = Invalid rules
+rules-transfer-other-system = For another system
+rules-transfer-needs-list = List required
+rules-transfer-needs-file = List file required
+rules-transfer-exit-replaced = Server not found. Use VPN
+rules-transfer-broad = Warning: this import sends all traffic or a broad group of sites directly
+rules-transfer-default = Replace default rule
+rules-transfer-size = Rules file is too large. Limit: 4 MiB
+rules-transfer-count = Too many rules or lists. Limit: 10,000
+rules-transfer-version = This rules file version is not supported
+rules-transfer-invalid = Invalid rules file or unknown fields
+rules-transfer-changed = Rules changed. Open the import again
+rules-transfer-read-error = Could not read rules
+rules-transfer-write-error = Could not save rules
+rules-transfer-added = { $count ->
+    [one] Added { $n } rule
+   *[other] Added { $n } rules
+}
+rules-transfer-duplicate-add = Duplicate: skipped when adding
+rules-transfer-copied = Rules copied to clipboard
+rules-transfer-saved = Rules saved to file
+
+rules-transfer-destination = Import into
+
+error-exit-referenced = another exit uses this exit
+error-exit-limit = too many exits for one connection
+
+exit-via = Connect through
+exit-via-direct = Directly
+exit-path-unsupported = This connection path is unavailable. Choose another exit or server.
+exit-used-by = Used by: { $names }. Change their connection path first.

@@ -9,6 +9,10 @@ mod node;
 mod prefix;
 mod report;
 mod rule;
+mod rule_input;
+pub mod rules_exchange;
+
+pub use rule_input::{IpCidrError, RuleInputError, parse_domain_input, parse_ip_cidr};
 mod runtime;
 mod settings;
 mod subscription;
@@ -49,7 +53,7 @@ use serde_json::{Map, Value};
 
 /// Bump for every serialized format change, including defaulted fields older releases drop on save.
 /// Add a Value migration and a new fixture; never edit fixtures of released formats.
-pub const CONFIG_VERSION: u32 = 8;
+pub const CONFIG_VERSION: u32 = 9;
 
 pub const EXIT_TRACE_IP: &str = "1.1.1.1";
 pub const EXIT_TRACE_PORT: u16 = 443;
@@ -299,6 +303,8 @@ pub enum ConfigError {
     InvalidListCategory,
     #[error("an exit ID is empty or duplicated")]
     InvalidExitId,
+    #[error("invalid exit dependency: missing, cyclic or longer than two nodes")]
+    InvalidExitDependency,
     #[error("a rule has an invalid exit reference")]
     InvalidRuleExit,
 }
@@ -342,6 +348,7 @@ pub fn from_json(bytes: &[u8]) -> Result<(AppConfig, Option<u32>), FormatError> 
             5 => migrate_5_to_6(config),
             6 => migrate_6_to_7(config),
             7 => migrate_7_to_8(config),
+            8 => migrate_8_to_9(config),
             _ => return Err(FormatError::UnexpectedValue),
         }
         version += 1;
@@ -355,6 +362,10 @@ pub fn from_json(bytes: &[u8]) -> Result<(AppConfig, Option<u32>), FormatError> 
         config,
         (original_version < CONFIG_VERSION).then_some(original_version),
     ))
+}
+
+fn migrate_8_to_9(_config: &mut Map<String, Value>) {
+    // Missing dependencies retain the standalone path.
 }
 
 fn migrate_7_to_8(_config: &mut Map<String, Value>) {
@@ -476,6 +487,14 @@ impl AppConfig {
         for exit in &self.exits {
             if exit.id.as_str().is_empty() || !exit_ids.insert(&exit.id) {
                 return Err(ConfigError::InvalidExitId);
+            }
+        }
+        for exit in &self.exits {
+            if let Some(via) = &exit.via {
+                let parent = self.exits.iter().find(|entry| &entry.id == via);
+                if via == &exit.id || parent.is_none_or(|entry| entry.via.is_some()) {
+                    return Err(ConfigError::InvalidExitDependency);
+                }
             }
         }
         if self

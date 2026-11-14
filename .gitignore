@@ -20,3 +20,4 @@ __pycache__/
 
 # Temporary directory
 /temp
+*.zip

@@ -805,6 +805,52 @@ mod tests {
     }
 
     #[test]
+    fn check_menu_does_not_inherit_a_stretched_link_width() {
+        for language in [i18n::Language::English, i18n::Language::Russian] {
+            i18n::in_language(language, || {
+                for width in [400.0, 800.0, 1200.0] {
+                    let ctx = egui::Context::default();
+                    theme::apply(&ctx);
+                    let state = State::default();
+                    let subscription = card_subscription();
+                    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                        ui.with_layout(egui::Layout::top_down_justified(egui::Align::Min), |ui| {
+                            ui.set_width(width);
+                            let trigger = menu_link(ui, &tr!("check-menu"), true);
+                            assert!(trigger.rect.width() >= width);
+                            widgets::menu_popup(&trigger).open(true).show(|ui| {
+                                check_menu_items(
+                                    ui,
+                                    &state,
+                                    &subscription,
+                                    None,
+                                    true,
+                                    &mut Vec::new(),
+                                );
+                                let longest = [tr!("check-quick"), tr!("check-full")]
+                                    .iter()
+                                    .map(|label| {
+                                        ui.painter()
+                                            .layout_no_wrap(
+                                                label.clone(),
+                                                egui::TextStyle::Button.resolve(ui.style()),
+                                                theme::palette().text,
+                                            )
+                                            .size()
+                                            .x
+                                    })
+                                    .fold(0.0, f32::max);
+                                assert!((ui.min_rect().width() - longest - 24.0).abs() < 1.0);
+                            });
+                        });
+                    });
+                    output.textures_delta.clear();
+                }
+            });
+        }
+    }
+
+    #[test]
     fn a_manual_proxy_menu_names_the_protocol_in_both_languages() {
         let cases = [
             ("http://192.0.2.1:8080", "HTTP"),

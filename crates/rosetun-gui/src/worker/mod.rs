@@ -19,11 +19,11 @@ use rosetun_core::{
     RuleSetError, RuleSetsSnapshot, SelectNodeError, SelectRuleSetError, SettingChange,
     SettingsError, Store, StoreError, SubscriptionUpdateResult, Timeouts, UpdateCheckError,
     UpdateReport, UpdateSubscriptionError, add_prepared_subscription, add_rule, add_rules,
-    change_exit_target, create_exit, create_rule_set, delete_exit, delete_rule_set, move_rule,
-    move_rules, move_subscription, ping_all, prepare_subscription, reconcile_lists, remove_rule,
-    remove_rules, remove_subscription, rename_exit, rename_rule_set, rename_subscription,
-    reset_settings, restore_rule_sets, restore_rules_and_dns, select_node, select_rule_set,
-    set_accent, set_default_target, set_dns, set_interface_scale, set_kill_switch, set_language,
+    create_exit, create_rule_set, delete_exit, delete_rule_set, move_rule, move_rules,
+    move_subscription, ping_all, prepare_subscription, reconcile_lists, remove_rule, remove_rules,
+    remove_subscription, rename_exit, rename_rule_set, rename_subscription, reset_settings,
+    restore_rule_sets, restore_rules_and_dns, save_exit, select_node, select_rule_set, set_accent,
+    set_default_target, set_dns, set_interface_scale, set_kill_switch, set_language,
     set_rule_enabled, set_rule_target, set_verbose_log, update_all, update_all_lists, update_list,
     update_rule, update_subscription,
 };
@@ -101,6 +101,15 @@ pub(crate) enum ConfigWorkerError {
 pub(crate) struct FailureInterference {
     pub(crate) other_vpns: Vec<String>,
     pub(crate) traffic_tools: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RulesExportOutcome {
+    Copied,
+    #[cfg(windows)]
+    Saved,
+    #[cfg(windows)]
+    Cancelled,
 }
 
 pub(crate) enum WorkerEvent {
@@ -186,6 +195,9 @@ pub(crate) enum WorkerEvent {
     },
     #[cfg(windows)]
     BrowsedExecutable(Option<PathBuf>),
+    RulesRead(Result<Option<String>, String>),
+    RulesWritten(Result<RulesExportOutcome, String>),
+    ImportRules(Result<(), RuleSetError>),
     AddRule(Result<Rule, RuleSetError>),
     AddRules(Result<AddedRules, RuleSetError>),
     UpdateRule(Result<(), RuleSetError>),
@@ -277,6 +289,8 @@ pub(crate) enum WorkerEvent {
 #[derive(Clone)]
 pub(crate) struct WorkerDispatcher {
     publisher: ConfigPublisher,
+    /// Linux serves clipboard content while this owner remains alive.
+    clipboard: Arc<Mutex<Option<arboard::Clipboard>>>,
     /// The desktop's proxy settings; one change at a time.
     desktop_proxy: Arc<DesktopProxyKeeper>,
     /// Requests for the connection list, served over one kept pipe connection.
@@ -506,6 +520,7 @@ pub(crate) fn start(store: Store, tx: Sender<WorkerEvent>, repaint: Repaint) -> 
         })
         .expect("could not spawn helper watcher");
     WorkerDispatcher {
+        clipboard: Arc::new(Mutex::new(None)),
         desktop_proxy,
         publisher,
         connections: Arc::default(),

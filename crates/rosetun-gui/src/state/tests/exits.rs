@@ -145,7 +145,10 @@ fn exit_dialog_saves_a_new_node_and_a_new_country() {
     dialog.kind = ExitKind::Node;
     dialog.name = " Work ".into();
     dialog.pick_node(&state.config, node("de"));
-    let Some(Job::SaveExit { id, name, target }) = state.act(Action::SubmitExitDialog) else {
+    let Some(Job::SaveExit {
+        id, name, target, ..
+    }) = state.act(Action::SubmitExitDialog)
+    else {
         panic!("expected a save job");
     };
     assert_eq!(id, Some(ExitId::new("1")));
@@ -250,4 +253,162 @@ fn deleted_exit_closes_its_dialogs_on_reload() {
         config,
     });
     assert!(state.exits.dialog.is_none());
+}
+
+fn chain_state() -> State {
+    let mut state = state_with_exits();
+    for node in &mut state.config.subscriptions[0].nodes {
+        node.outbound = rosetun_config::Outbound::Socks5(Default::default());
+        node.server = "192.0.2.20".into();
+    }
+    state.config.exits[1].via = Some(ExitId::new("1"));
+    state
+}
+
+#[test]
+fn exit_path_draft_cancel_and_save_keep_the_dependency() {
+    let mut state = chain_state();
+    state.act(Action::OpenEditExit(ExitId::new("2")));
+    assert_eq!(
+        state.exits.dialog.as_ref().unwrap().via,
+        Some(ExitId::new("1"))
+    );
+    state.exits.dialog.as_mut().unwrap().via = None;
+    state.act(Action::CancelExitDialog);
+    assert_eq!(state.config.exits[1].via, Some(ExitId::new("1")));
+    state.act(Action::OpenEditExit(ExitId::new("2")));
+    assert!(
+        matches!(state.act(Action::SubmitExitDialog), Some(Job::SaveExit { via: Some(id), .. }) if id == ExitId::new("1"))
+    );
+}
+
+#[test]
+fn vanished_parent_and_unsupported_target_do_not_clear_the_draft_path() {
+    let mut state = chain_state();
+    state.act(Action::OpenEditExit(ExitId::new("2")));
+    state.exits.dialog.as_mut().unwrap().kind = ExitKind::Node;
+    state
+        .exits
+        .dialog
+        .as_mut()
+        .unwrap()
+        .pick_node(&state.config, node("plain"));
+    state.config.subscriptions[0].nodes[2].server = "b.example.com".into();
+    assert!(state.act(Action::SubmitExitDialog).is_none());
+    state.config.exits.remove(0);
+    state.reconcile_exits();
+    assert!(state.act(Action::SubmitExitDialog).is_none());
+    let dialog = state.exits.dialog.as_ref().unwrap();
+    assert_eq!(dialog.via, Some(ExitId::new("1")));
+    assert!(dialog.error.is_some());
+}
+
+#[test]
+fn parent_deletion_names_its_children_and_cannot_be_confirmed() {
+    let mut state = chain_state();
+    state.act(Action::RequestDeleteExit(ExitId::new("1")));
+    assert_eq!(
+        state.exits.delete.as_ref().unwrap().dependents,
+        vec![state.config.exits[1].name.clone()]
+    );
+    assert!(state.act(Action::ConfirmDeleteExit).is_none());
+}
+
+#[test]
+fn path_choices_reject_self_third_hop_domains_xray_and_fragmentation() {
+    let mut state = chain_state();
+    let b = &state.config.exits[1];
+    let supported = |config: &AppConfig, via: &ExitId| {
+        crate::destinations::exit_path_supported(config, Some(&b.id), &b.target, Some(via))
+    };
+    assert!(supported(&state.config, &ExitId::new("1")));
+    assert!(!supported(&state.config, &ExitId::new("2")));
+    assert!(!crate::destinations::exit_path_supported(
+        &state.config,
+        None,
+        &b.target,
+        Some(&b.id)
+    ));
+    state.config.settings.tls_fragment.enabled = true;
+    assert!(!supported(&state.config, &ExitId::new("1")));
+    state.config.settings.tls_fragment.enabled = false;
+    state.config.settings.engine = rosetun_config::EngineKind::Xray;
+    assert!(!supported(&state.config, &ExitId::new("1")));
+}
+
+#[test]
+fn path_label_places_a_before_b() {
+    let mut state = chain_state();
+    state.config.exits[0].name = "A".into();
+    state.config.exits[1].name = "B".into();
+    assert_eq!(
+        crate::destinations::exit_path_label(&state.config, &state.config.exits[1]),
+        "A → B"
+    );
+}
+
+#[test]
+fn failed_path_apply_restores_the_path_and_preserves_temporary_rules() {
+    let mut state = chain_state();
+    state.helper_available = true;
+    state.session.temporary_rules_loaded = true;
+    state.config.active = Some(node("nl"));
+    state.config.active_rule_set = Some(RuleSetId::new("b"));
+    state.config.rule_sets[1]
+        .rules
+        .iter_mut()
+        .find(|rule| rule.target == RuleTarget::Exit)
+        .unwrap()
+        .exit = Some(ExitId::new("2"));
+    state.config.exits[1].via = None;
+    let request = ConnectRequest::from_config(&state.config).unwrap();
+    state.reduce(WorkerEvent::Connect(Ok(request)));
+    state.reduce(WorkerEvent::Status(Status {
+        state: ConnectionState::Connected,
+        node: Some(NodeId::new("nl")),
+        ..Status::default()
+    }));
+    state.session.temporary_rules_loaded = true;
+    let temporary = temporary_rule("temp", "temporary.example.com");
+    state.session.temporary_rules = vec![temporary.clone()];
+    state.config.exits[1].via = Some(ExitId::new("1"));
+    state.reduce(WorkerEvent::Config {
+        generation: state.config_generation + 1,
+        config: state.config.clone(),
+    });
+    assert!(state.can_change_temporary(), "cannot change temporary");
+    let candidate = ConnectRequest::from_config(&state.config).unwrap();
+    assert!(
+        candidate
+            .extra_nodes
+            .iter()
+            .any(|extra| extra.via.is_some()),
+        "candidate has no path: {candidate:?}"
+    );
+    assert!(state.has_pending_apply(), "no pending Apply");
+    assert!(state.apply_request().is_some(), "no Apply request");
+    let Some(Job::Apply(request)) = state.act(Action::Apply) else {
+        panic!("expected Apply");
+    };
+    assert_eq!(
+        request
+            .extra_nodes
+            .iter()
+            .find(|extra| extra.exit == ExitId::new("2"))
+            .unwrap()
+            .via,
+        Some(ExitId::new("1"))
+    );
+    assert_eq!(request.temporary_rules, vec![temporary.clone()]);
+    state.reduce(WorkerEvent::Apply(Err(HelperCommandError::Client(
+        ClientError::Helper(HelperError::new(
+            ErrorCode::UnsupportedRules,
+            "rejected path",
+        )),
+    ))));
+    let Some(Job::RestoreApplied(snapshot)) = state.take_restore() else {
+        panic!("expected rollback");
+    };
+    assert_eq!(snapshot.exits[1].via, None);
+    assert_eq!(state.session.temporary_rules, vec![temporary]);
 }

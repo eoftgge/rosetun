@@ -114,6 +114,7 @@ mod tests {
             std::process::id()
         )));
         let workers = WorkerDispatcher {
+            clipboard: Arc::default(),
             desktop_proxy: crate::worker::DesktopProxyKeeper::new(&store),
             publisher: ConfigPublisher {
                 store,

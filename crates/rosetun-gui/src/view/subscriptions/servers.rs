@@ -156,7 +156,7 @@ pub(super) fn check_menu_items(
     available: bool,
     actions: &mut Vec<Action>,
 ) {
-    ui.set_min_width(200.0);
+    widgets::menu_content_width(ui, &[&tr!("check-quick"), &tr!("check-full")], 0.0);
     let can_ping = state.can_ping();
     let ping = widgets::menu_item(
         ui,

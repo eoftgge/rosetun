@@ -102,6 +102,7 @@ fn config(language: Language, error: &ConfigError) -> String {
         | ConfigError::InvalidExitId
         | ConfigError::InvalidFragment
         | ConfigError::InvalidLocalProxyPort
+        | ConfigError::InvalidExitDependency
         | ConfigError::InvalidRuleExit => error.to_string(),
     }
 }
@@ -133,6 +134,9 @@ pub(crate) fn rule_set(language: Language, error: &RuleSetError) -> String {
             tr_in(language, "error-rule-set-not-found", &FluentArgs::new())
         }
         RuleSetError::RuleNotFound => tr_in(language, "error-rule-not-found", &FluentArgs::new()),
+        RuleSetError::ImportChanged => {
+            tr_in(language, "rules-transfer-changed", &FluentArgs::new())
+        }
         RuleSetError::EmptyName => tr_in(language, "error-rule-set-name-empty", &FluentArgs::new()),
         RuleSetError::DuplicateRule => tr_in(language, "error-duplicate-rule", &FluentArgs::new()),
         RuleSetError::ListNotFound => tr_in(language, "error-list-not-found", &FluentArgs::new()),
@@ -144,6 +148,7 @@ pub(crate) fn rule_set(language: Language, error: &RuleSetError) -> String {
 pub(crate) fn exit(language: Language, error: &ExitError) -> String {
     match error {
         ExitError::Store(error) => store(language, error),
+        ExitError::Referenced => tr_in(language, "error-exit-referenced", &FluentArgs::new()),
         ExitError::NotFound => tr_in(language, "error-exit-not-found", &FluentArgs::new()),
         ExitError::NodeNotFound => tr_in(language, "error-exit-node-not-found", &FluentArgs::new()),
         ExitError::EmptyName => tr_in(language, "error-exit-name-empty", &FluentArgs::new()),
@@ -690,6 +695,12 @@ pub(crate) fn connect_request(language: Language, error: &ConnectRequestError) -
     match error {
         ConnectRequestError::SelectionMissing | ConnectRequestError::NodeNotFound => {
             tr_in(language, "select-server", &FluentArgs::new())
+        }
+        ConnectRequestError::UnsupportedExitChain => {
+            tr_in(language, "error-code-unsupported-rules", &FluentArgs::new())
+        }
+        ConnectRequestError::TooManyExtraNodes => {
+            tr_in(language, "error-exit-limit", &FluentArgs::new())
         }
         ConnectRequestError::RuleSetNotFound => tr_in(
             language,

@@ -1587,6 +1587,20 @@ fn validate_request(request: &ConnectRequest) -> Result<(), HelperError> {
             "duplicate extra node for an exit",
         ));
     }
+    for extra in &request.extra_nodes {
+        if let Some(via) = &extra.via {
+            let parent = request.extra_nodes.iter().find(|entry| &entry.exit == via);
+            if via == &extra.exit || parent.is_none_or(|entry| entry.via.is_some()) {
+                return Err(HelperError::new(
+                    ErrorCode::InvalidRequest,
+                    "invalid exit dependency graph",
+                ));
+            }
+        }
+    }
+    request
+        .validate_exit_chains()
+        .map_err(|error| HelperError::new(ErrorCode::UnsupportedRules, error.to_string()))?;
     let rules = request.effective_rule_set();
     if rules.enabled().any(|rule| {
         rule.target == RuleTarget::Exit && rule.exit.as_ref().is_none_or(|id| !exits.contains(id))
@@ -2043,6 +2057,7 @@ impl Session {
         request: &ConnectRequest,
         options: StartOptions,
     ) -> Result<(), HelperError> {
+        validate_request(request)?;
         let StartOptions {
             mode,
             endpoint,
