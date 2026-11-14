@@ -14,6 +14,7 @@ pub(crate) struct ExchangeState {
     pub(crate) notice: Option<String>,
 }
 pub(crate) struct Export {
+    pub(crate) name: String,
     config: AppConfig,
     set: RuleSetId,
     pub(crate) selected: Option<Vec<rosetun_config::RuleId>>,
@@ -76,6 +77,7 @@ impl State {
                     }
                 }
                 self.rules.exchange.export = Some(Export {
+                    name: self.text(&set.name),
                     config: self.config.clone(),
                     set: set.id.clone(),
                     selected,

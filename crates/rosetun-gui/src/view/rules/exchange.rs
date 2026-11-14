@@ -12,6 +12,7 @@ pub(crate) fn show(ctx: &egui::Context, state: &mut State, actions: &mut Vec<Act
         let response =
             widgets::Dialog::new("rules_export", widgets::DialogWidth::Standard).show(ctx, |ui| {
                 ui.heading(tr!("rules-transfer-export"));
+                ui.label(&export.name);
                 ui.add_space(theme::space::M);
                 ui.label(if export.selected.is_some() {
                     tr!("rules-transfer-selected")
@@ -286,7 +287,7 @@ mod tests {
     }
 
     #[test]
-    fn exchange_commands_belong_to_the_rule_set_picker() {
+    fn the_rule_set_picker_only_selects_sets() {
         i18n::in_language(Language::English, || {
             let mut state = state();
             let mut screen = TestScreen::new(egui::vec2(1440.0, 1000.0));
@@ -315,11 +316,37 @@ mod tests {
                 ),
             ] {
                 assert!(
-                    shown.iter().any(|(text, _)| text == &label),
-                    "missing menu command: {label}"
+                    !shown.iter().any(|(text, _)| text == &label),
+                    "exchange command leaked into set picker: {label}"
                 );
             }
         });
+    }
+
+    #[test]
+    fn exporting_another_set_does_not_activate_it() {
+        let mut state = state();
+        let active = state.config.active_rule_set.clone();
+        let mut other = RuleSet::new(RuleSetId::new("2"), "Other", RuleTarget::Direct);
+        other.rules.push(Rule {
+            id: RuleId::new("2"),
+            enabled: true,
+            matcher: RuleMatcher::IpCidr("192.0.2.0/24".into()),
+            target: RuleTarget::Block,
+            exit: None,
+        });
+        state.config.rule_sets.push(other);
+        state.act(Action::ChooseRuleSet(RuleSetId::new("2")));
+        state.act(Action::OpenRulesExport(false));
+        assert_eq!(state.rules.exchange.export.as_ref().unwrap().name, "Other");
+        let Some(crate::state::Job::WriteRules(document, _)) =
+            state.act(Action::ConfirmRulesExport(false))
+        else {
+            panic!("export job");
+        };
+        assert!(document.contains("192.0.2.0/24"));
+        assert!(!document.contains("Sites"));
+        assert_eq!(state.config.active_rule_set, active);
     }
 
     #[test]

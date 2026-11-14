@@ -58,6 +58,74 @@ pub(super) fn set_controls(ui: &mut egui::Ui, state: &State, actions: &mut Vec<A
                 ui.close();
             }
             ui.separator();
+            let commands = [
+                (
+                    format!(
+                        "{}: {}",
+                        tr!("rules-transfer-export"),
+                        tr!("rules-transfer-all")
+                    ),
+                    Action::OpenRulesExport(false),
+                    state.can_edit_rules(),
+                ),
+                (
+                    format!(
+                        "{}: {}",
+                        tr!("rules-transfer-export"),
+                        tr!("rules-transfer-selected")
+                    ),
+                    Action::OpenRulesExport(true),
+                    state.can_edit_rules() && !state.rules.screen.selected_rules.is_empty(),
+                ),
+                (
+                    format!(
+                        "{}: {}",
+                        tr!("rules-transfer-import"),
+                        tr!("rules-transfer-clipboard")
+                    ),
+                    Action::ReadRulesImport(false),
+                    state.can_edit_rules(),
+                ),
+                #[cfg(windows)]
+                (
+                    format!(
+                        "{}: {}",
+                        tr!("rules-transfer-import"),
+                        tr!("rules-transfer-file")
+                    ),
+                    Action::ReadRulesImport(true),
+                    state.can_edit_rules(),
+                ),
+            ];
+            widgets::menu_content_width(
+                ui,
+                &commands
+                    .iter()
+                    .map(|(label, _, _)| label.as_str())
+                    .collect::<Vec<_>>(),
+                widgets::MenuWidth::Wide.points(),
+            );
+            for (label, action, enabled) in commands {
+                if widgets::menu_item(
+                    ui,
+                    widgets::MenuItem {
+                        label: &label,
+                        enabled,
+                        selected: false,
+                        danger: false,
+                        note: None,
+                    },
+                )
+                .clicked()
+                {
+                    actions.push(action);
+                    ui.close();
+                }
+            }
+            #[cfg(target_os = "linux")]
+            ui.label(tr!("rules-transfer-linux"));
+
+            ui.separator();
             if widgets::menu_item(
                 ui,
                 widgets::MenuItem {
@@ -180,72 +248,5 @@ fn set_picker(ui: &mut egui::Ui, state: &State, set: &RuleSet, actions: &mut Vec
                 ui.close();
             }
         }
-        ui.separator();
-        let commands = [
-            (
-                format!(
-                    "{}: {}",
-                    tr!("rules-transfer-export"),
-                    tr!("rules-transfer-all")
-                ),
-                Action::OpenRulesExport(false),
-                state.can_edit_rules(),
-            ),
-            (
-                format!(
-                    "{}: {}",
-                    tr!("rules-transfer-export"),
-                    tr!("rules-transfer-selected")
-                ),
-                Action::OpenRulesExport(true),
-                state.can_edit_rules() && !state.rules.screen.selected_rules.is_empty(),
-            ),
-            (
-                format!(
-                    "{}: {}",
-                    tr!("rules-transfer-import"),
-                    tr!("rules-transfer-clipboard")
-                ),
-                Action::ReadRulesImport(false),
-                state.can_edit_rules(),
-            ),
-            #[cfg(windows)]
-            (
-                format!(
-                    "{}: {}",
-                    tr!("rules-transfer-import"),
-                    tr!("rules-transfer-file")
-                ),
-                Action::ReadRulesImport(true),
-                state.can_edit_rules(),
-            ),
-        ];
-        widgets::menu_content_width(
-            ui,
-            &commands
-                .iter()
-                .map(|(label, _, _)| label.as_str())
-                .collect::<Vec<_>>(),
-            width,
-        );
-        for (label, action, enabled) in commands {
-            if widgets::menu_item(
-                ui,
-                widgets::MenuItem {
-                    label: &label,
-                    enabled,
-                    selected: false,
-                    danger: false,
-                    note: None,
-                },
-            )
-            .clicked()
-            {
-                actions.push(action);
-                ui.close();
-            }
-        }
-        #[cfg(target_os = "linux")]
-        ui.label(tr!("rules-transfer-linux"));
     });
 }
