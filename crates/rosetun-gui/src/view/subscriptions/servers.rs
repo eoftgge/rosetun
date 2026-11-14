@@ -154,14 +154,9 @@ pub(super) fn check_menu_items(
     subscription: &Subscription,
     node: Option<&NodeId>,
     available: bool,
-    minimum_width: f32,
     actions: &mut Vec<Action>,
 ) {
-    widgets::menu_content_width(
-        ui,
-        &[&tr!("check-quick"), &tr!("check-full")],
-        minimum_width,
-    );
+    widgets::menu_content_width(ui, &[&tr!("check-quick"), &tr!("check-full")], 0.0);
     let can_ping = state.can_ping();
     let ping = widgets::menu_item(
         ui,
@@ -311,15 +306,7 @@ pub(super) fn server_row(
         && !state.operations.pinging.contains(&subscription.id)
         && !state.subscription_busy(&subscription.id);
     widgets::context_menu_popup(&response).show(|ui| {
-        check_menu_items(
-            ui,
-            state,
-            subscription,
-            Some(&node.id),
-            available,
-            0.0,
-            actions,
-        );
+        check_menu_items(ui, state, subscription, Some(&node.id), available, actions);
     });
     if !ui.is_rect_visible(rect) {
         return;

@@ -390,13 +390,11 @@ fn rule_set_picker(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                 .iter()
                 .map(|rules| state.text(&rules.name)),
         );
-        widgets::menu_content_width(
+        widgets::menu_choice_width(
             ui,
             &labels.iter().map(String::as_str).collect::<Vec<_>>(),
             rect.width(),
         );
-        // Keep the selected item's checkmark clear of the longest label.
-        ui.set_width(ui.min_rect().width() + 24.0);
         if widgets::menu_item(
             ui,
             widgets::MenuItem {

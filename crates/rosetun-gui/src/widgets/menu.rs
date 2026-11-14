@@ -5,6 +5,7 @@ use crate::theme;
 
 const ITEM_RADIUS_PX: f32 = theme::RADIUS_INNER as f32;
 const ITEM_SIDE_PADDING: f32 = theme::space::M;
+const CHECK_SPACE: f32 = 24.0;
 
 pub(crate) struct MenuItem<'a> {
     pub label: &'a str,
@@ -62,7 +63,7 @@ pub(crate) fn menu_item(ui: &mut egui::Ui, item: MenuItem<'_>) -> egui::Response
                     theme::DISABLED
                 },
             );
-            right -= 24.0;
+            right -= CHECK_SPACE;
         }
         if let Some(note) = item.note {
             let font = egui::TextStyle::Small.resolve(ui.style());
@@ -136,8 +137,18 @@ pub(crate) fn menu_width(ui: &mut egui::Ui, width: MenuWidth) {
     ui.set_width(width.points());
 }
 
-/// Sizes plain menu items to their labels, keeping room for the opening button.
+/// Sizes plain menu items to their labels and an explicit minimum.
+/// Use a painted button width for the minimum: a Response can span the whole parent row.
 pub(crate) fn menu_content_width(ui: &mut egui::Ui, labels: &[&str], minimum: f32) {
+    content_width(ui, labels, minimum, 0.0);
+}
+
+/// Sizes choices with room for a checkmark, even when the longest item is not selected.
+pub(crate) fn menu_choice_width(ui: &mut egui::Ui, labels: &[&str], minimum: f32) {
+    content_width(ui, labels, minimum, CHECK_SPACE);
+}
+
+fn content_width(ui: &mut egui::Ui, labels: &[&str], minimum: f32, trailing: f32) {
     let font = egui::TextStyle::Button.resolve(ui.style());
     let longest = labels
         .iter()
@@ -149,7 +160,7 @@ pub(crate) fn menu_content_width(ui: &mut egui::Ui, labels: &[&str], minimum: f3
         })
         .fold(0.0, f32::max);
     let padding = ui.spacing().button_padding.x.max(ITEM_SIDE_PADDING) + ITEM_SIDE_PADDING;
-    ui.set_width((longest + padding).max(minimum));
+    ui.set_width((longest + padding + trailing).max(minimum));
 }
 
 pub(crate) fn menu_popup(response: &egui::Response) -> egui::Popup<'_> {
@@ -194,46 +205,54 @@ mod tests {
                 theme::apply(&ctx);
                 let mut output = ctx.run_ui(egui::RawInput::default(), |ctx| {
                     egui::CentralPanel::default().show(ctx, |ui| {
-                        let trigger = ui.button("Check");
-                        menu_popup(&trigger).open(true).show(|ui| {
-                            let longest = labels
-                                .iter()
-                                .map(|label| {
-                                    ui.painter()
-                                        .layout_no_wrap(
-                                            label.clone(),
-                                            egui::TextStyle::Button.resolve(ui.style()),
-                                            theme::palette().text,
-                                        )
-                                        .size()
-                                        .x
-                                })
-                                .fold(0.0, f32::max);
-                            menu_content_width(ui, &labels.each_ref().map(String::as_str), minimum);
-                            for label in &labels {
-                                let item = menu_item(
+                        ui.with_layout(egui::Layout::top_down_justified(egui::Align::Min), |ui| {
+                            ui.set_width(800.0);
+                            let trigger = ui.button("Check");
+                            assert_eq!(trigger.rect.width(), 800.0);
+                            menu_popup(&trigger).open(true).show(|ui| {
+                                let longest = labels
+                                    .iter()
+                                    .map(|label| {
+                                        ui.painter()
+                                            .layout_no_wrap(
+                                                label.clone(),
+                                                egui::TextStyle::Button.resolve(ui.style()),
+                                                theme::palette().text,
+                                            )
+                                            .size()
+                                            .x
+                                    })
+                                    .fold(0.0, f32::max);
+                                menu_content_width(
                                     ui,
-                                    MenuItem {
-                                        label,
-                                        enabled: true,
-                                        selected: false,
-                                        danger: false,
-                                        note: None,
-                                    },
+                                    &labels.each_ref().map(String::as_str),
+                                    minimum,
                                 );
-                                assert!(
-                                    (item.rect.width()
-                                        - (longest
-                                            + ui.spacing()
-                                                .button_padding
-                                                .x
-                                                .max(ITEM_SIDE_PADDING)
-                                            + ITEM_SIDE_PADDING)
-                                            .max(minimum))
-                                    .abs()
-                                        < 1.0
-                                );
-                            }
+                                for label in &labels {
+                                    let item = menu_item(
+                                        ui,
+                                        MenuItem {
+                                            label,
+                                            enabled: true,
+                                            selected: false,
+                                            danger: false,
+                                            note: None,
+                                        },
+                                    );
+                                    assert!(
+                                        (item.rect.width()
+                                            - (longest
+                                                + ui.spacing()
+                                                    .button_padding
+                                                    .x
+                                                    .max(ITEM_SIDE_PADDING)
+                                                + ITEM_SIDE_PADDING)
+                                                .max(minimum))
+                                        .abs()
+                                            < 1.0
+                                    );
+                                }
+                            });
                         });
                     });
                 });

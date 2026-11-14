@@ -456,15 +456,7 @@ fn details(
                 let menu =
                     menu_link(ui, &tr!("check-menu"), enabled).on_hover_text(tr!("check-hint"));
                 widgets::menu_popup(&menu).show(|ui| {
-                    check_menu_items(
-                        ui,
-                        state,
-                        subscription,
-                        None,
-                        enabled,
-                        menu.rect.width(),
-                        actions,
-                    );
+                    check_menu_items(ui, state, subscription, None, enabled, actions);
                 });
             }
         },
@@ -809,6 +801,52 @@ mod tests {
             url: "local-proxy://card".into(),
             nodes: vec![rosetun_core::parse_proxy_uri(uri).unwrap()],
             ..card_subscription()
+        }
+    }
+
+    #[test]
+    fn check_menu_does_not_inherit_a_stretched_link_width() {
+        for language in [i18n::Language::English, i18n::Language::Russian] {
+            i18n::in_language(language, || {
+                for width in [400.0, 800.0, 1200.0] {
+                    let ctx = egui::Context::default();
+                    theme::apply(&ctx);
+                    let state = State::default();
+                    let subscription = card_subscription();
+                    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                        ui.with_layout(egui::Layout::top_down_justified(egui::Align::Min), |ui| {
+                            ui.set_width(width);
+                            let trigger = menu_link(ui, &tr!("check-menu"), true);
+                            assert!(trigger.rect.width() >= width);
+                            widgets::menu_popup(&trigger).open(true).show(|ui| {
+                                check_menu_items(
+                                    ui,
+                                    &state,
+                                    &subscription,
+                                    None,
+                                    true,
+                                    &mut Vec::new(),
+                                );
+                                let longest = [tr!("check-quick"), tr!("check-full")]
+                                    .iter()
+                                    .map(|label| {
+                                        ui.painter()
+                                            .layout_no_wrap(
+                                                label.clone(),
+                                                egui::TextStyle::Button.resolve(ui.style()),
+                                                theme::palette().text,
+                                            )
+                                            .size()
+                                            .x
+                                    })
+                                    .fold(0.0, f32::max);
+                                assert!((ui.min_rect().width() - longest - 24.0).abs() < 1.0);
+                            });
+                        });
+                    });
+                    output.textures_delta.clear();
+                }
+            });
         }
     }
 

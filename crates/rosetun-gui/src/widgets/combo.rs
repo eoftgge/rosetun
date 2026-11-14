@@ -176,4 +176,27 @@ mod tests {
         screen.click_text("Русский", |ui| show(&mut picked, ui));
         assert_eq!(picked, "Русский");
     }
+    #[test]
+    fn a_drop_down_popup_keeps_its_field_width_in_a_wide_parent() {
+        for width in [180.0, 400.0] {
+            let mut screen = TestScreen::new(egui::vec2(1200.0, 800.0));
+            let mut item_widths = Vec::new();
+            screen.click_text("English", |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    ui.with_layout(egui::Layout::top_down_justified(egui::Align::Min), |ui| {
+                        drop_down(ui, "language", Some(width), "English", |ui| {
+                            for label in ["English", "Русский"] {
+                                item_widths.push(ui.selectable_label(false, label).rect.width());
+                            }
+                        });
+                    });
+                });
+            });
+            assert!(!item_widths.is_empty());
+            assert!(
+                item_widths.iter().all(|item| *item <= width + 12.0),
+                "{item_widths:?}"
+            );
+        }
+    }
 }

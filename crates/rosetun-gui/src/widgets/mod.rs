@@ -39,7 +39,8 @@ pub(crate) use frames::{
     error_with_actions, modal_frame,
 };
 pub(crate) use menu::{
-    MenuItem, MenuWidth, context_menu_popup, menu_content_width, menu_item, menu_popup, menu_width,
+    MenuItem, MenuWidth, context_menu_popup, menu_choice_width, menu_content_width, menu_item,
+    menu_popup, menu_width,
 };
 pub(crate) use search::{
     MIN_SEARCH_WIDTH, SEARCH_WIDTH, search_field, search_field_with_suffix, search_width_beside,
