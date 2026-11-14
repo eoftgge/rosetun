@@ -103,7 +103,7 @@ To compare with another sing-box version, download its `sing-box-<version>-windo
 
 The owner runs qualification. Before Hyper-V, turn off Lockdown on the Windows host. The Linux VM needs a working recovery console.
 
-The two-hop catalog covers HTTP/HTTPS/SOCKS5, IPv4/IPv6, TUN and System proxy; A/B failures, authentication, TLS certificates, UDP/QUIC, Apply/rollback/reconnect, engine restart, missing dependencies, subscription/fallback changes, Lockdown and allow_lan. Domain B and Xray/fragmentation are refusal cases, not supported positive cases.
+The two-hop catalog covers HTTP/HTTPS/SOCKS5, IPv4/IPv6, TUN and System proxy; A/B failures, authentication, TLS certificates, UDP/QUIC, Apply/rollback/reconnect, engine restart, missing dependencies, subscription/fallback changes, Lockdown and allow_lan. A through Xray (VLESS REALITY with Xray Auto, `two-hop.positive.xray-first-hop`) is a positive case: sing-box reaches A through Xray's local SOCKS inbound. Domain B, B through Xray, the Xray-only engine and fragmentation are refusal cases.
 
 **UNRUN:** this stand does not provision independently identifiable A, B and a target with synchronized server observations and physical client packet capture. The existing host node connection count or external-IP probe cannot prove the required transitions. The catalog records pending observations, not executable network qualification. Windows adds UNRUN rows from `two-hop-scenarios.tsv` to the failure matrix report. Linux L3 and Proxy list optional `not-run` scenarios, reported as SKIP with an explicit UNRUN reason and partial coverage. Existing independent traffic tests continue unchanged.
 

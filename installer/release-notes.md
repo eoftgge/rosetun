@@ -2,7 +2,7 @@
 
 ## In development
 
-- **Two-hop proxy exits:** create A and B, select A under **Connect through** in B's editor, then point the desired rule at B. This affects the selected rule, not automatically all machine traffic. B supports HTTP/HTTPS CONNECT and SOCKS5 TCP with an IP-literal server; domain B, UDP/QUIC, Xray and fragmentation are unsupported. Network qualification is pending. See [instructions and limitations](../TWO-HOP-EXITS.md).
+- **Two-hop proxy exits:** create A and B, select A under **Connect through** in B's editor, then point the desired rule at B. This affects the selected rule, not automatically all machine traffic. B supports HTTP/HTTPS CONNECT and SOCKS5 TCP with an IP-literal server. A may run through Xray, so VLESS with REALITY works as A; domain B, UDP/QUIC, the Xray-only engine and fragmentation are unsupported. Network qualification is pending. See [instructions and limitations](../TWO-HOP-EXITS.md).
 
 Rosetun 0.5.1 fixes an Arch Linux compatibility issue in the nftables preflight check. On systems where `/usr/sbin` is a symbolic link to `/usr/bin`, Rosetun rejected the trusted `nft` executable and reported the kill switch and DNS lock as unavailable. This release accepts the standard Arch Linux executable location without relaxing the ownership and permission checks.
 

@@ -14,7 +14,7 @@ This changes traffic selected by that rule. It does not automatically route all 
 
 - Exactly two exits. No self-reference, cycles or third hop.
 - B supports HTTP CONNECT, HTTPS CONNECT and SOCKS5 TCP. Its server must be an IPv4 or IPv6 literal. HTTPS still verifies the certificate; configure the expected TLS server name where needed.
-- A must use a supported native sing-box outbound. Xray on either hop, a standalone Xray engine and TLS fragmentation are unsupported for this path.
+- A can be any node sing-box can reach, including one that runs through Xray (such as VLESS with REALITY when Xray is set to Auto): sing-box connects to A through Xray's local SOCKS inbound. B through Xray, the Xray-only engine and TLS fragmentation are unsupported for this path.
 - B's server cannot be a DNS name. It is rejected before connecting; there is no local bootstrap DNS lookup of B. Resolving A follows the existing bootstrap policy. Destination DNS follows the configured DNS policy, so this feature does not promise that all DNS traverses B.
 - UDP, including QUIC, selected by a rule through B is blocked. It does not fall back to A or Direct. Other rules retain their existing behaviour.
 - A missing dependency, unavailable endpoint, bad credentials or a failed HTTPS handshake does not select a shorter path. A changed subscription, country fallback or mode is checked again against the actual request by the helper.
