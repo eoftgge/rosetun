@@ -44,7 +44,7 @@ fn dib(rgba: &[u8], size: u32) -> Vec<u8> {
     image.extend_from_slice(&32_u16.to_le_bytes());
     image.extend_from_slice(&[0; 24]);
     for row in rgba.chunks_exact(row_bytes).rev() {
-        for pixel in row.chunks_exact(4) {
+        for pixel in row.as_chunks::<4>().0 {
             image.extend_from_slice(&[pixel[2], pixel[1], pixel[0], pixel[3]]);
         }
     }
