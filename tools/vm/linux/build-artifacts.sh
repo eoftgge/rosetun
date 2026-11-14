@@ -11,7 +11,7 @@
 # --proxy: the same, and the tool that changes the desktop's proxy as the GUI does.
 # With --deb: the package twice, as the new version and as an older one to upgrade
 # from; it needs what installer/linux/build-deb.sh needs.
-# OUTPUT_DIR must not exist yet. Needs Rust 1.96.0 (the project MSRV) and a C linker.
+# OUTPUT_DIR must not exist yet. Needs Rust 1.99.1 (the project toolchain) and a C linker.
 # CARGO_TARGET_DIR may point at a Linux filesystem directory to keep the build fast.
 
 set -eu
@@ -63,7 +63,7 @@ provenance() {
     printf '{\n  "schema": 1,\n  "stage": "%s",\n  "target": "x86_64-unknown-linux-gnu",\n' "$stage"
     printf '  "source_sha": "%s",\n  "source_dirty": %s,\n  "source_dirty_digest": "%s",\n' "$sha" "$dirty" "$digest"
     printf '  "toolchain": {"rustc": "%s", "cargo": "%s"},\n' \
-        "$(rustc +1.96.0 --version | tr -d '"')" "$(cargo +1.96.0 --version | tr -d '"')"
+        "$(rustc +1.99.1 --version | tr -d '"')" "$(cargo +1.99.1 --version | tr -d '"')"
     printf '  "built_on": {"os": "%s", "kernel": "%s", "arch": "%s"},\n' \
         "$(printf '%s' "${PRETTY_NAME-unknown}" | tr -d '"')" "$(uname -r | tr -d '"')" "$(uname -m)"
     printf '  "artifacts": {\n'
@@ -74,7 +74,7 @@ provenance() {
     printf '  }\n}\n'
 }
 
-target_dir=$(cargo +1.96.0 metadata --locked --format-version 1 --no-deps | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')
+target_dir=$(cargo +1.99.1 metadata --locked --format-version 1 --no-deps | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')
 
 if [ "$stage" = l5 ]; then
     # build_deb DESTINATION ARGS...: one package, under the name the stand expects.
@@ -93,8 +93,8 @@ if [ "$stage" = l5 ]; then
     build_deb rosetun-new.deb
     provenance rosetun-old.deb rosetun-new.deb >"$out/provenance.json"
 elif [ "$stage" = proxy ]; then
-    cargo +1.96.0 build -q --locked --release -p rosetun-helper-privileged -p rosetun
-    cargo +1.96.0 build -q --locked --release -p rosetun-shell --example desktop_proxy
+    cargo +1.99.1 build -q --locked --release -p rosetun-helper-privileged -p rosetun
+    cargo +1.99.1 build -q --locked --release -p rosetun-shell --example desktop_proxy
     for name in rosetun-helper-privileged rosetun examples/desktop_proxy; do
         [ -f "$target_dir/release/$name" ] || { echo "build-artifacts.sh: a build product was not found" >&2; exit 1; }
     done
@@ -104,7 +104,7 @@ elif [ "$stage" = proxy ]; then
     install -m 0755 -- "$target_dir/release/examples/desktop_proxy" "$out/desktop_proxy"
     provenance rosetun-helper-privileged rosetun desktop_proxy >"$out/provenance.json"
 elif [ "$stage" = l3 ]; then
-    cargo +1.96.0 build -q --locked --release -p rosetun-helper-privileged -p rosetun
+    cargo +1.99.1 build -q --locked --release -p rosetun-helper-privileged -p rosetun
     for name in rosetun-helper-privileged rosetun; do
         [ -f "$target_dir/release/$name" ] || { echo "build-artifacts.sh: a build product was not found" >&2; exit 1; }
     done
@@ -115,8 +115,8 @@ elif [ "$stage" = l3 ]; then
 else
     json=$(mktemp)
     trap 'rm -f -- "$json"' EXIT
-    cargo +1.96.0 build -q --locked -p rosetun-ipc --example l2_transport_fixture
-    cargo +1.96.0 test -q --locked --no-run --message-format=json -p rosetun-ipc -p rosetun-helper-privileged >"$json"
+    cargo +1.99.1 build -q --locked -p rosetun-ipc --example l2_transport_fixture
+    cargo +1.99.1 test -q --locked --no-run --message-format=json -p rosetun-ipc -p rosetun-helper-privileged >"$json"
 
     # Executables of the three targets, taken from cargo's own report.
     find_exe() {

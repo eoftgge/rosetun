@@ -64,7 +64,7 @@ runs, the job goes on in the guest; reconnect with
   its rights to the `pwsh` started in it.
 - The **Windows OpenSSH client** (`ssh`, `scp`, `ssh-keygen`), part of Windows.
 - **WSL with Debian** as an ordinary default user, with git, a C linker and
-  Rust 1.96.0 (the project MSRV):
+  Rust 1.99.1 (the project toolchain):
 
   ```powershell
   wsl --install -d Debian
@@ -73,7 +73,7 @@ runs, the job goes on in the guest; reconnect with
   ```sh
   sudo apt-get install git build-essential curl
   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
-  ~/.cargo/bin/rustup toolchain install 1.96.0
+  ~/.cargo/bin/rustup toolchain install 1.99.1
   ```
 
   You never work in WSL by hand: the host calls it. The build keeps a clone and
@@ -402,7 +402,7 @@ checking, restore `l2-clean` again.
    folder so it never mixes with the Windows one):
 
    ```powershell
-   wsl -d Debian --exec bash -lc 'cd /mnt/d/path/to/rosetun && export CARGO_TARGET_DIR=$HOME/.cache/rosetun-manual && cargo +1.96.0 build --release --locked -p rosetun-helper-privileged -p rosetun && mkdir -p target/linux-manual && cp $CARGO_TARGET_DIR/release/rosetun-helper-privileged $CARGO_TARGET_DIR/release/rosetun packaging/linux/rosetun-helper.service packaging/linux/rosetun-lockdown.service packaging/linux/io.github.eoftgge.rosetun.policy packaging/linux/rosetun.sysusers target/linux-manual/'
+   wsl -d Debian --exec bash -lc 'cd /mnt/d/path/to/rosetun && export CARGO_TARGET_DIR=$HOME/.cache/rosetun-manual && cargo +1.99.1 build --release --locked -p rosetun-helper-privileged -p rosetun && mkdir -p target/linux-manual && cp $CARGO_TARGET_DIR/release/rosetun-helper-privileged $CARGO_TARGET_DIR/release/rosetun packaging/linux/rosetun-helper.service packaging/linux/rosetun-lockdown.service packaging/linux/io.github.eoftgge.rosetun.policy packaging/linux/rosetun.sysusers target/linux-manual/'
    ```
 
 2. **Copy** them to the guest with the stand's key and pinned host key

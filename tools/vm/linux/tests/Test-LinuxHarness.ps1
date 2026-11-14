@@ -244,7 +244,7 @@ try {
     function Write-Provenance {
         param([string]$BuildSha, $Dirty, [string]$Digest)
         $value = [ordered]@{ schema = 1; target = 'x86_64-unknown-linux-gnu'; source_sha = $BuildSha; source_dirty = $Dirty; source_dirty_digest = $Digest
-            toolchain = @{ rustc = 'rustc 1.96.0' }; built_on = @{ os = 'Debian' }; artifacts = $hashes }
+            toolchain = @{ rustc = 'rustc 1.99.1' }; built_on = @{ os = 'Debian' }; artifacts = $hashes }
         [IO.File]::WriteAllText((Join-Path $dir 'provenance.json'), ($value | ConvertTo-Json -Depth 6))
     }
     Write-Provenance -BuildSha $sha -Dirty $false -Digest ('d' * 64)

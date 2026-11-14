@@ -33,9 +33,9 @@ missing=()
 command -v git >/dev/null 2>&1 || missing+=("git (sudo apt-get install git)")
 command -v cc >/dev/null 2>&1 || missing+=("a C linker (sudo apt-get install build-essential)")
 if ! command -v rustup >/dev/null 2>&1; then
-    missing+=("rustup (curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh, then rustup toolchain install 1.96.0)")
-elif ! rustup run 1.96.0 rustc --version >/dev/null 2>&1; then
-    missing+=("Rust 1.96.0 (rustup toolchain install 1.96.0)")
+    missing+=("rustup (curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh, then rustup toolchain install 1.99.1)")
+elif ! rustup run 1.99.1 rustc --version >/dev/null 2>&1; then
+    missing+=("Rust 1.99.1 (rustup toolchain install 1.99.1)")
 fi
 if [ "${#missing[@]}" -gt 0 ]; then
     printf 'build-in-wsl.sh: missing in WSL: %s\n' "${missing[@]}" >&2
