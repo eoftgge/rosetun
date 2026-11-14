@@ -43,6 +43,7 @@ pub(crate) struct SessionExitRow<'a> {
     /// `None` when the exit was deleted after the session started.
     pub(crate) exit: Option<&'a Exit>,
     pub(crate) node: &'a str,
+    pub(crate) via_node: Option<&'a str>,
     /// `None` until the delay check answers for this exit.
     pub(crate) outcome: Option<ExitOutcome>,
 }
@@ -431,6 +432,16 @@ impl State {
             .map(|extra| SessionExitRow {
                 exit: self.config.exits.iter().find(|exit| exit.id == extra.exit),
                 node: &extra.node.name,
+                via_node: extra
+                    .via
+                    .as_ref()
+                    .and_then(|via| {
+                        request
+                            .extra_nodes
+                            .iter()
+                            .find(|parent| &parent.exit == via)
+                    })
+                    .map(|parent| parent.node.name.as_str()),
                 outcome: delays
                     .iter()
                     .find(|delay| delay.exit == extra.exit)

@@ -186,6 +186,7 @@ fn complete_applied_restore(state: &mut State) -> AppliedSnapshot {
         restored.active_rule_set = None;
     }
     restored.settings.dns = snapshot.dns;
+    restored.exits = snapshot.exits;
     state.reduce(WorkerEvent::Config {
         generation: state.config_generation + 1,
         config: restored,

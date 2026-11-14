@@ -18,6 +18,7 @@ pub(crate) enum ExitKind {
 pub(crate) struct ExitDialog {
     pub(crate) editing: Option<ExitId>,
     pub(crate) name: String,
+    pub(crate) via: Option<ExitId>,
     pub(crate) kind: ExitKind,
     pub(crate) country: Option<CountryCode>,
     pub(crate) node: Option<Selection>,
@@ -34,6 +35,7 @@ impl ExitDialog {
     fn new() -> Self {
         Self {
             editing: None,
+            via: None,
             name: String::new(),
             kind: ExitKind::Country,
             country: None,
@@ -51,6 +53,7 @@ impl ExitDialog {
         let mut dialog = Self {
             editing: Some(exit.id.clone()),
             name: exit.name.clone(),
+            via: exit.via.clone(),
             ..Self::new()
         };
         match &exit.target {
@@ -110,6 +113,7 @@ pub(crate) struct DeleteExitDialog {
     pub(crate) id: ExitId,
     /// Saved and temporary rules that turn into Block.
     pub(crate) rules: usize,
+    pub(crate) dependents: Vec<String>,
     pub(crate) busy: bool,
     pub(crate) error: Option<String>,
 }
@@ -219,12 +223,22 @@ impl State {
                     return None;
                 }
                 let target = dialog.target()?;
+                if !crate::destinations::exit_path_supported(
+                    &self.config,
+                    dialog.editing.as_ref(),
+                    &target,
+                    dialog.via.as_ref(),
+                ) {
+                    dialog.error = Some(tr!("exit-path-unsupported"));
+                    return None;
+                }
                 dialog.busy = true;
                 dialog.error = None;
                 let job = Job::SaveExit {
                     id: dialog.editing.clone(),
                     name: dialog.name.trim().to_owned(),
                     target,
+                    via: dialog.via.clone(),
                 };
                 return self.start_rule_edit(job);
             }
@@ -266,12 +280,20 @@ impl State {
                     return None;
                 }
                 let rules = self.exit_rules(&id);
-                if rules == 0 {
+                let dependents: Vec<String> = self
+                    .config
+                    .exits
+                    .iter()
+                    .filter(|exit| exit.via.as_ref() == Some(&id))
+                    .map(|exit| crate::display::safe_text(&exit.name))
+                    .collect();
+                if rules == 0 && dependents.is_empty() {
                     return self.start_rule_edit(Job::DeleteExit(id));
                 }
                 self.exits.delete = Some(DeleteExitDialog {
                     id,
                     rules,
+                    dependents,
                     busy: false,
                     error: None,
                 });
@@ -293,6 +315,10 @@ impl State {
                 }
                 dialog.busy = true;
                 dialog.error = None;
+                if !dialog.dependents.is_empty() {
+                    dialog.busy = false;
+                    return None;
+                }
                 let job = Job::DeleteExit(dialog.id.clone());
                 return self.start_rule_edit(job);
             }

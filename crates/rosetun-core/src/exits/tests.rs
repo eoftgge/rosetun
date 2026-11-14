@@ -554,3 +554,48 @@ fn dependency_paths_remain_distinct_and_parents_cannot_be_deleted() {
     change_exit_target(&store, &child.id, ExitTarget::Country(country("US"))).unwrap();
     assert_eq!(store.load().unwrap().exits[1].via, Some(parent.id));
 }
+
+#[test]
+fn editor_save_is_atomic_when_a_dependency_disappears() {
+    let directory = TestDirectory::new();
+    let store = Store::at(directory.0.join("config.json"));
+    let a = exit_for_country(&store, country("NL"), "A").unwrap();
+    let b = exit_for_country(&store, country("DE"), "B").unwrap();
+    let before = fs::read(store.path()).unwrap();
+    assert!(
+        save_exit(
+            &store,
+            Some(&b.id),
+            "Changed",
+            ExitTarget::Country(country("FR")),
+            Some(ExitId::new("missing"))
+        )
+        .is_err()
+    );
+    assert_eq!(fs::read(store.path()).unwrap(), before);
+    save_exit(
+        &store,
+        Some(&b.id),
+        "Changed",
+        ExitTarget::Country(country("FR")),
+        Some(a.id.clone()),
+    )
+    .unwrap();
+    assert!(matches!(
+        delete_exit(&store, &a.id),
+        Err(ExitError::Referenced)
+    ));
+    let config = store.load().unwrap();
+    let snapshot = crate::AppliedSnapshot::from_config(&config);
+    save_exit(
+        &store,
+        Some(&b.id),
+        "B",
+        ExitTarget::Country(country("DE")),
+        None,
+    )
+    .unwrap();
+    let failed = crate::restore_rules_and_dns(&store, &snapshot).unwrap();
+    assert_eq!(store.load().unwrap().exits, config.exits);
+    assert_eq!(failed.exits[1].via, None);
+}

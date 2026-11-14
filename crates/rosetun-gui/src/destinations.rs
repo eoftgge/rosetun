@@ -7,6 +7,104 @@ use rosetun_core::resolve_exits;
 
 pub(crate) const MAX_NODE_RESULTS: usize = 20;
 
+/// Uses the IPC contract for every resolved path, including children of an edited A.
+pub(crate) fn exit_path_supported(
+    config: &AppConfig,
+    editing: Option<&ExitId>,
+    target: &ExitTarget,
+    via: Option<&ExitId>,
+) -> bool {
+    let mut draft = config.clone();
+    if let Some(id) = editing {
+        let Some(exit) = draft.exits.iter_mut().find(|exit| &exit.id == id) else {
+            return false;
+        };
+        exit.target = target.clone();
+        exit.via = via.cloned();
+    } else {
+        let mut id = String::from("draft");
+        while draft.exits.iter().any(|exit| exit.id.as_str() == id) {
+            id.push('_');
+        }
+        draft.exits.push(Exit {
+            id: ExitId::new(id),
+            name: String::from("Draft"),
+            target: target.clone(),
+            via: via.cloned(),
+        });
+    }
+    if !draft.exits.iter().any(|exit| exit.via.is_some()) {
+        return true;
+    }
+    if draft.validate().is_err() {
+        return false;
+    }
+    let resolved = resolve_exits(&draft.exits, &draft.subscriptions, &[], &[]);
+    let mut extra_nodes = Vec::new();
+    for exit in &draft.exits {
+        let involved = exit.via.is_some()
+            || draft
+                .exits
+                .iter()
+                .any(|child| child.via.as_ref() == Some(&exit.id));
+        if !involved {
+            continue;
+        }
+        let Some(selection) = resolved
+            .iter()
+            .find(|(id, _)| id == &exit.id)
+            .and_then(|(_, selection)| selection.as_ref())
+        else {
+            return false;
+        };
+        let Some((_, node)) = draft.node_at(selection) else {
+            return false;
+        };
+        extra_nodes.push(rosetun_ipc::ExtraNode {
+            exit: exit.id.clone(),
+            via: exit.via.clone(),
+            selection: selection.clone(),
+            node: node.clone(),
+        });
+    }
+    let Some(first) = extra_nodes.first() else {
+        return false;
+    };
+    let request = rosetun_ipc::ConnectRequest {
+        selection: first.selection.clone(),
+        node: first.node.clone(),
+        rule_set: rosetun_config::RuleSet::new(
+            rosetun_config::RuleSetId::new("draft"),
+            "Draft",
+            rosetun_config::RuleTarget::Proxy,
+        ),
+        extra_nodes,
+        temporary_rules: Vec::new(),
+        lists: Vec::new(),
+        settings: draft.settings,
+        rule_templates: Vec::new(),
+    };
+    request.validate_exit_chains().is_ok()
+}
+
+pub(crate) fn exit_path_label(config: &AppConfig, exit: &Exit) -> String {
+    let name = crate::display::safe_text(&exit.name);
+    match &exit.via {
+        Some(via) => {
+            let parent = config
+                .exits
+                .iter()
+                .find(|entry| &entry.id == via)
+                .map_or_else(
+                    || tr!("connection-exit-removed"),
+                    |entry| crate::display::safe_text(&entry.name),
+                );
+            format!("{parent} → {name}")
+        }
+        None => name,
+    }
+}
+
 pub(crate) fn exits_full(config: &AppConfig) -> bool {
     config.exits.len() >= rosetun_ipc::MAX_EXTRA_NODES
 }

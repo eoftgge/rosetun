@@ -554,6 +554,7 @@ pub(crate) enum Job {
         id: Option<ExitId>,
         name: String,
         target: ExitTarget,
+        via: Option<ExitId>,
     },
     RenameExit(ExitId, String),
     DeleteExit(ExitId),

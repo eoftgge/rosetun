@@ -58,7 +58,7 @@ enum ApplyRecovery {
     Restorable {
         edits: AppliedSnapshot,
         message: Option<String>,
-        blocked: Option<AppliedSnapshot>,
+        blocked: Option<Box<AppliedSnapshot>>,
     },
 }
 
@@ -73,7 +73,7 @@ impl ApplyRecovery {
     fn blocked(&self) -> Option<&AppliedSnapshot> {
         match self {
             Self::Blocked(candidate) => Some(candidate),
-            Self::Restorable { blocked, .. } => blocked.as_ref(),
+            Self::Restorable { blocked, .. } => blocked.as_deref(),
             Self::Clean => None,
         }
     }
@@ -101,7 +101,7 @@ impl ApplyRecovery {
 
     fn block(&mut self, candidate: Option<AppliedSnapshot>) {
         match self {
-            Self::Restorable { blocked, .. } => *blocked = candidate,
+            Self::Restorable { blocked, .. } => *blocked = candidate.map(Box::new),
             _ => *self = candidate.map_or(Self::Clean, Self::Blocked),
         }
     }
@@ -110,7 +110,7 @@ impl ApplyRecovery {
         *self = Self::Restorable {
             edits,
             message: Some(message),
-            blocked: self.blocked().cloned(),
+            blocked: self.blocked().cloned().map(Box::new),
         };
     }
 }

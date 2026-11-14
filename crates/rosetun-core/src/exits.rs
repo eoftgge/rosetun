@@ -167,6 +167,35 @@ pub fn change_exit_target(store: &Store, id: &ExitId, target: ExitTarget) -> Res
     })
 }
 
+/// Saves an editor draft atomically, including its connection path.
+pub fn save_exit(
+    store: &Store,
+    id: Option<&ExitId>,
+    name: &str,
+    target: ExitTarget,
+    via: Option<ExitId>,
+) -> Result<(), ExitError> {
+    store.modify(|config| {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(ExitError::EmptyName);
+        }
+        if let Some(id) = id {
+            let exit = config
+                .exits
+                .iter_mut()
+                .find(|exit| &exit.id == id)
+                .ok_or(ExitError::NotFound)?;
+            exit.name = name.to_owned();
+            exit.target = target;
+            exit.via = via;
+        } else {
+            get_or_create(config, target, name, via)?;
+        }
+        Ok(())
+    })
+}
+
 pub fn delete_exit(store: &Store, id: &ExitId) -> Result<usize, ExitError> {
     store.modify(|config| {
         if config

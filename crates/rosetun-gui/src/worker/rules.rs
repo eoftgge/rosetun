@@ -104,9 +104,15 @@ impl WorkerDispatcher {
         });
     }
 
-    pub(crate) fn save_exit(&self, id: Option<ExitId>, name: String, target: ExitTarget) {
+    pub(crate) fn save_exit(
+        &self,
+        id: Option<ExitId>,
+        name: String,
+        target: ExitTarget,
+        via: Option<ExitId>,
+    ) {
         self.spawn_complete("rosetun-save-exit", move |store| {
-            WorkerEvent::SaveExit(save_exit(store, id.as_ref(), &name, target))
+            WorkerEvent::SaveExit(save_exit(store, id.as_ref(), &name, target, via))
         });
     }
 
@@ -158,39 +164,6 @@ impl WorkerDispatcher {
             WorkerEvent::RestoreRuleSets(restore_rule_sets(store, &snapshot))
         });
     }
-}
-
-fn save_exit(
-    store: &Store,
-    id: Option<&ExitId>,
-    name: &str,
-    target: ExitTarget,
-) -> Result<(), ExitError> {
-    let id = match id {
-        Some(id) => {
-            rename_exit(store, id, name)?;
-            id.clone()
-        }
-        None => {
-            let new = match &target {
-                ExitTarget::Country(code) => NewExit::Country {
-                    code: code.clone(),
-                    name: name.to_owned(),
-                },
-                ExitTarget::Node { selection, .. } => NewExit::Node {
-                    selection: selection.clone(),
-                    name: name.to_owned(),
-                },
-            };
-            let exit = create_exit(store, &new)?;
-            // A new node exit gets the node's country as its fallback; keep the user's choice.
-            if exit.target == target {
-                return Ok(());
-            }
-            exit.id
-        }
-    };
-    change_exit_target(store, &id, target)
 }
 
 impl WorkerDispatcher {

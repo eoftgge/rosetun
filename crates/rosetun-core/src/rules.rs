@@ -101,6 +101,7 @@ fn destination_in(
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppliedSnapshot {
+    pub exits: Vec<rosetun_config::Exit>,
     pub rule_set: Option<RuleSet>,
     pub dns: DnsSettings,
     pub missing_rule_set: Option<RuleSetId>,
@@ -109,6 +110,7 @@ pub struct AppliedSnapshot {
 impl AppliedSnapshot {
     pub fn from_config(config: &AppConfig) -> Self {
         Self {
+            exits: config.exits.clone(),
             rule_set: config.active_rules().cloned(),
             dns: config.settings.dns.clone(),
             missing_rule_set: None,
@@ -136,6 +138,7 @@ pub fn restore_rules_and_dns(
         }
         config.active_rule_set = snapshot.rule_set.as_ref().map(|set| set.id.clone());
         config.settings.dns = snapshot.dns.clone();
+        config.exits = snapshot.exits.clone();
         Ok(previous)
     })
 }
