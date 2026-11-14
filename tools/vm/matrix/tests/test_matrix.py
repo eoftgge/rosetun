@@ -47,8 +47,8 @@ def summarize(report):
 
 class CatalogTests(unittest.TestCase):
     def test_all_existing_catalogs_keep_their_fields(self):
-        expected_counts = {"linux-l2": 34, "linux-l3": 39, "linux-l4": 26,
-                           "linux-l5": 17, "linux-proxy": 27}
+        expected_counts = {"linux-l2": 34, "linux-l3": 58, "linux-l4": 26,
+                           "linux-l5": 17, "linux-proxy": 46}
         for suite, filename in SUITES.items():
             with self.subTest(suite=suite):
                 rows = read_catalog(LINUX_ROOT / filename)
@@ -99,6 +99,48 @@ class CatalogTests(unittest.TestCase):
             bad[field] = value
             with self.subTest(field=field), self.assertRaises(ValueError):
                 validate_plan(bad)
+
+
+class NotRunClassTests(unittest.TestCase):
+    """The evidence class of a scenario that has no check yet: read by the catalog, kept by the plan, skipped by the report."""
+
+    def setUp(self):
+        self.plan, self.report, self.status = synthetic_inputs('linux-l3')
+        self.unrun = [row['id'] for row in read_catalog(LINUX_ROOT / 'scenarios-l3.tsv') if row['evidence'] == 'not-run']
+
+    def test_the_catalog_reads_the_class_as_it_is_and_the_plan_keeps_it_for_both_catalogs_that_have_it(self):
+        self.assertEqual(19, len(self.unrun))
+        for suite in ('linux-l3', 'linux-proxy'):
+            with self.subTest(suite=suite):
+                plan = make_plan(suite, 'test', {'mode': 'exploratory'})
+                rows = [row for row in plan['catalog'] if row['evidence'] == 'not-run']
+                self.assertEqual(self.unrun, [row['id'] for row in rows])
+                self.assertFalse(any(row['required'] for row in rows))
+                self.assertEqual({'two-hop'}, {row['group'] for row in rows})
+                validate_plan(plan)
+
+    def test_a_skip_of_an_optional_scenario_of_the_class_is_no_problem_and_the_run_is_partial(self):
+        result = assess(self.report, self.status, self.plan)
+        self.assertEqual(('PASS', []), (result['validation']['status'], result['validation']['problems']))
+        self.assertEqual(19, result['execution']['counts']['SKIP'])
+        self.assertEqual('partial', result['coverage'])
+        rows = {row['id']: row for row in result['rows']}
+        self.assertEqual({'SKIP'}, {rows[i]['execution'] for i in self.unrun})
+        self.assertEqual([[]], [rows[i]['problems'] for i in self.unrun[:1]])
+        self.assertTrue(result['acceptance']['accepted'])
+
+    def test_a_scenario_of_the_class_that_claims_a_pass_is_a_problem_of_the_report(self):
+        self.report['scenarios'][-1]['result'] = 'PASS'
+        from tools.vm.matrix.tests.test_matrix import summarize
+        summarize(self.report)
+        result = assess(self.report, self.status, self.plan)
+        self.assertEqual(['two-hop.xray-fragment: scenario without a check claims PASS'],
+                         result['validation']['problems'])
+
+    def test_a_class_the_catalog_does_not_declare_is_not_accepted_in_its_place(self):
+        self.plan['catalog'][-1]['evidence'] = 'not-run-typo'
+        with self.assertRaises(ValueError):
+            validate_plan(self.plan)
 
 
 class ReportTests(unittest.TestCase):

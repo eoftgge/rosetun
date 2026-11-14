@@ -10,6 +10,14 @@ GROUP = ('preflight.identity', 'preflight.accounts', 'preflight.no-foreign-servi
          'preflight.baseline', 'install.service', 'protection.reported', 'engine.identity', 'engine.files',
          'killswitch.direct-blocked', 'killswitch.tunnel-passes', 'lan.off', 'killswitch.foreign-table',
          'killswitch.engine-killed', 'killswitch.flush-restored', 'killswitch.disconnect')
+# The scenarios of the two-hop exits: they have no check yet (evidence class `not-run`, not required), `run-l3.sh`
+# records each as SKIP "UNRUN: ..." before any session opens, so they belong to no group and no window.
+TWO_HOP = ('two-hop.positive.http.ipv4', 'two-hop.positive.http.ipv6', 'two-hop.positive.https.ipv4',
+           'two-hop.positive.https.ipv6', 'two-hop.positive.socks5.ipv4', 'two-hop.positive.socks5.ipv6',
+           'two-hop.domain-b', 'two-hop.a-unavailable', 'two-hop.b-unavailable', 'two-hop.b-auth',
+           'two-hop.https-certificate', 'two-hop.udp-quic', 'two-hop.apply-rollback-reconnect',
+           'two-hop.engine-restart', 'two-hop.dependency-removed', 'two-hop.lockdown', 'two-hop.allow-lan',
+           'two-hop.target-subscription-fallback', 'two-hop.xray-fragment')
 # The label of the window each scenario ran in. A window is a protected session and its label is the
 # function of run-l3.sh that opened it (connect_with is called from that function), so scenarios that
 # share a session share a window: `identity` opens the session `files` ends, `connect_ks` opens the one
@@ -22,6 +30,7 @@ WINDOW_OF = {
     'killswitch.direct-blocked': 'connect_ks', 'killswitch.tunnel-passes': 'connect_ks',
     'lan.off': 'connect_ks', 'killswitch.foreign-table': 'connect_ks', 'killswitch.engine-killed': 'connect_ks',
     'killswitch.flush-restored': 'connect_ks', 'killswitch.disconnect': 'connect_ks',
+    **dict.fromkeys(TWO_HOP),
 }
 GROUP_LABELS = tuple(dict.fromkeys(label for label in WINDOW_OF.values() if label))
 # What the observer must have seen of the lab for the group to mean anything. DoH is required too: the

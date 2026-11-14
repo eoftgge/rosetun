@@ -38,9 +38,25 @@ def example():
     return config
 
 
-def scenario_ids():
+def scenario_rows():
     rows = [line.split('\t') for line in SCENARIOS.read_text(encoding='utf-8').splitlines()]
-    return [row[0] for row in rows[1:] if row and row[0]]
+    return [row for row in rows[1:] if row and row[0]]
+
+
+def scenario_ids():
+    return [row[0] for row in scenario_rows()]
+
+
+def unrun_ids():
+    """The scenarios the catalog marks `not-run`: `run-l3.sh` records them SKIP before anything else."""
+    return [row[0] for row in scenario_rows() if row[2] == 'not-run']
+
+
+def passing_rows():
+    """What a clean run of the script reports: every scenario passes, but the ones without a check, skipped."""
+    skipped = set(unrun_ids())
+    return {identifier: ('SKIP', 'UNRUN: not provisioned') if identifier in skipped else ('PASS', 'ok')
+            for identifier in scenario_ids()}
 
 
 class ConfigTests(unittest.TestCase):
@@ -507,13 +523,13 @@ class Machines:
         return b'[]'
 
     def report(self):
-        rows = self.rows or {identifier: ('PASS', 'ok') for identifier in scenario_ids()}
+        rows = self.rows or passing_rows()
         scenarios = [dict(id=identifier, group='x', evidence='real-service', expectation='x', result=result,
                           reason=reason, duration_ms=1) for identifier, (result, reason) in rows.items()]
         counts = {name: sum(row['result'] == name for row in scenarios) for name in ('PASS', 'FAIL', 'ERROR', 'SKIP')}
         overall = 'ERROR' if counts['ERROR'] else 'FAIL' if counts['FAIL'] else 'PASS'
         return json.dumps(dict(schema=1, run_id='x', summary=dict(
-            overall=overall, coverage='complete' if overall == 'PASS' and not counts['SKIP'] else 'none',
+            overall=overall, coverage=('none' if overall != 'PASS' else 'partial' if counts['SKIP'] else 'complete'),
             pass_=counts['PASS'], total=len(scenarios), **{k.lower(): v for k, v in counts.items()
                                                             if k != 'PASS'}),
             cleanup=dict(status='PASS', actions='', problems=''), scenarios=scenarios)).encode()
@@ -663,7 +679,8 @@ class OrderTests(Flow):
         self.assertEqual(['reported', 'identity', 'connect_ks', 'capabilities', 'lan_on'],
                          [w['label'] for w in result['lab']['windows']])
         self.assertEqual(['NONE'] * 5, [w['leak'] for w in result['lab']['windows']])
-        self.assertEqual(39, len(result['legacy']['scenarios']))
+        self.assertEqual(len(scenario_ids()), len(result['legacy']['scenarios']))
+        self.assertEqual(len(unrun_ids()), sum(r['result'] == 'SKIP' for r in result['legacy']['scenarios']))
         self.assertEqual('PASS', result['legacy']['summary']['overall'])
         self.assertEqual(64, len(result['legacy']['report_sha256']))
         self.assertTrue(result['lab']['qualification']['evidence']['verified'])
@@ -970,7 +987,7 @@ class EvidenceDiskTests(Flow):
         disk = result['lab']['qualification']['evidence']
         self.assertEqual((False, reason), (disk['verified'], disk['reason']))
         self.assertEqual([], result['lab']['windows'])
-        self.assertEqual(39, len(result['legacy']['scenarios']))
+        self.assertEqual(len(scenario_ids()), len(result['legacy']['scenarios']))
 
     def test_a_disk_of_another_run_is_an_error_with_its_reason_and_no_analysis(self):
         self.untrusted('other-run', 'evidence-run-id')

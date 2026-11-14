@@ -1083,7 +1083,10 @@ sensitive diagnostic data. CLI input errors produce a smaller assessment with
   complete legacy execution PASS is not full release verification.
 
 `transport-fixture`, `real-service`, `real-package` and other existing categories
-remain exactly what the TSV declares. They are not external packet capture.
+remain exactly what the TSV declares. The class `not-run` marks a scenario that has no
+check yet (the `two-hop.*` rows of the L3 and Proxy catalogs): it is never required, the
+script records it SKIP before any session opens, the assessor takes that SKIP as no
+problem (and a PASS of such a scenario as one), and the L3 summary lists it outside the group. They are not external packet capture.
 No evidence is not evidence of no leak. PCAP analysis, cryptographic attestation,
 an authenticated evidence store, autonomous guest jobs, network labs and scenario
 migration are not implemented. QEMU preparation, bounded QMP lifecycle and minimal
@@ -2848,7 +2851,8 @@ of the lab run.
 ## Stage 7b2b: the L3 kill switch group in the lab
 
 Stage 7b2b runs the real Linux L3 stage through the lab: `run linux-l3 --lab` starts the lab
-machine and the test machine of stages 7b1 and 7b2a together and runs **all 39 scenarios**, exactly
+machine and the test machine of stages 7b1 and 7b2a together and runs **all 58 scenarios** of the catalog
+(the 19 `two-hop.*` among them have no check and are recorded SKIP "UNRUN"), exactly
 as `run-l3.sh` runs them, on the test machine. The lab machine is the VPN node (`192.0.2.1:8388`),
 the HTTPS target (`203.0.113.2:443`), the resolver and the DoH target, and it records the wire to its
 evidence disk. Only the **kill switch group** is judged; the other scenarios run and appear in the
@@ -3213,9 +3217,10 @@ and the release gate stays false.
 | --- | --- |
 | `preflight.identity`, `preflight.accounts`, `preflight.no-foreign-service`, `preflight.tools` | PASS |
 | `preflight.baseline` | FAIL, the reason names the missing route to `203.0.113.2` |
+| the 19 `two-hop.*` (evidence class `not-run`, not required) | SKIP, "UNRUN: ..." |
 | the other 34 | ERROR, "not run" |
 
-The report is complete (39 rows), the cleanup is PASS, the assessment is not
+The report is complete (58 rows), the cleanup is PASS, the assessment is not
 accepted, and the summary has `completion` true and `delivery.state` `ready`.
 The assessor's `validation` shows `ERROR` with the single problem "guest reports
 an infrastructure error or aborted run", because the guest's own summary says
@@ -3329,8 +3334,8 @@ L2 run uses it too.
 1. Build `build-artifacts.sh --l3`, add the Linux `sing-box` of the supported
    version, copy the unit and rules, update the test image and the importer.
 2. `run linux-l3 --dry-run`, then the ordinary command.
-3. Expect 4 PASS, `preflight.baseline` FAIL (route to `203.0.113.2`), 34 ERROR
-   "not run", `completion` true, exit 1.
+3. Expect 4 PASS, `preflight.baseline` FAIL (route to `203.0.113.2`), 19 SKIP
+   (`two-hop.*`, "UNRUN"), 34 ERROR "not run", `completion` true, exit 1.
 4. Run the ordinary `run linux-l2` again on the same stand and image: the result
    must be as in the stage 5c qualification.
 

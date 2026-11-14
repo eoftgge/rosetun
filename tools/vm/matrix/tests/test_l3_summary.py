@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 
 from tools.vm.matrix import l3_summary as summary, lab_protocol as wire
-from tools.vm.matrix.tests.test_l3_lab import Flow, Machines, scenario_ids
+from tools.vm.matrix.tests.test_l3_lab import Flow, Machines, passing_rows, scenario_ids, scenario_rows, unrun_ids
 from tools.vm.matrix.tests.test_lab import icmp, ip_frame
 
 LEAK = ip_frame(wire.CLIENTS[4], wire.TARGETS[4], 1, icmp(8))
@@ -17,7 +17,7 @@ SESSIONS = ('killswitch.direct-blocked', 'killswitch.tunnel-passes', 'lan.off', 
 
 def results(**changes):
     """Every scenario passes, but for the ones named (id with dots as underscores) in `changes`."""
-    rows = {identifier: ('PASS', 'ok') for identifier in scenario_ids()}
+    rows = passing_rows()
     for key, value in changes.items():
         rows[key.replace('__', '.').replace('_', '-')] = value
     return rows
@@ -52,7 +52,7 @@ class RunTests(Flow):
     def test_the_scenarios_outside_the_group_are_listed_without_a_verdict(self):
         result = self.go(Machines(self, rows=results(rules__capabilities=('FAIL', 'x'),
                                                       inbound__reply=('FAIL', 'no sshd'))))
-        self.assertEqual(23, len(result['out_of_scope']))
+        self.assertEqual(len(scenario_ids()) - len(summary.GROUP), len(result['out_of_scope']))
         self.assertEqual({'out-of-scope'}, {row['agreement'] for row in result['out_of_scope']})
         self.assertFalse(any('window_verdict' in row for row in result['out_of_scope']))
         self.assertFalse({row['id'] for row in result['out_of_scope']} & set(summary.GROUP))
@@ -264,11 +264,23 @@ class TableTests(unittest.TestCase):
 
     def test_the_group_is_in_the_catalog_and_every_scenario_has_its_window_entry(self):
         ids = scenario_ids()
-        self.assertEqual(39, len(ids))
+        self.assertEqual(58, len(ids))
         self.assertTrue(set(summary.GROUP) <= set(ids))
-        self.assertEqual(set(summary.GROUP), set(summary.WINDOW_OF))
+        # The group has windows; the two-hop scenarios, which have no check yet, have none and are outside it.
+        self.assertEqual(set(summary.GROUP) | set(summary.TWO_HOP), set(summary.WINDOW_OF))
+        self.assertEqual({None}, {summary.WINDOW_OF[i] for i in summary.TWO_HOP})
+        self.assertFalse(set(summary.GROUP) & set(summary.TWO_HOP))
         self.assertEqual(('reported', 'identity', 'connect_ks'), summary.GROUP_LABELS)
         self.assertEqual([i for i in ids if i.startswith('preflight.')], list(summary.GROUP[:5]))
+
+    def test_the_two_hop_scenarios_are_exactly_the_rows_of_the_catalog_that_were_never_run(self):
+        self.assertEqual(sorted(summary.TWO_HOP), sorted(unrun_ids()))
+        self.assertEqual(19, len(summary.TWO_HOP))
+        for row in scenario_rows():
+            if row[0] in summary.TWO_HOP:
+                self.assertEqual(('no', 'not-run', 'two-hop'), (row[1], row[2], row[3]))
+        self.assertEqual(len(set(summary.TWO_HOP)), len(summary.TWO_HOP))
+        self.assertEqual(('reported', 'identity', 'connect_ks'), summary.GROUP_LABELS)
 
     def test_each_label_is_a_function_of_the_script_that_opens_a_session(self):
         text = SCRIPT.read_text(encoding='utf-8')
