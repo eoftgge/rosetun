@@ -696,6 +696,9 @@ pub(crate) fn connect_request(language: Language, error: &ConnectRequestError) -
         ConnectRequestError::SelectionMissing | ConnectRequestError::NodeNotFound => {
             tr_in(language, "select-server", &FluentArgs::new())
         }
+        ConnectRequestError::UnsupportedExitChain => {
+            tr_in(language, "error-code-unsupported-rules", &FluentArgs::new())
+        }
         ConnectRequestError::TooManyExtraNodes => {
             tr_in(language, "error-exit-limit", &FluentArgs::new())
         }

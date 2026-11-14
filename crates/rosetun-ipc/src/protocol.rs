@@ -149,6 +149,8 @@ pub enum ConnectRequestError {
     TooManyExtraNodes,
     #[error("the selected rule set does not exist")]
     RuleSetNotFound,
+    #[error("unsupported exit chain")]
+    UnsupportedExitChain,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -222,6 +224,7 @@ impl ConnectRequest {
         exits: ExitContext<'_>,
     ) -> Result<Self, ConnectRequestError> {
         let (request, blocked) = Self::build(config, Vec::new(), exits)?;
+        request.validate_exit_chains()?;
         warn_blocked_exits(blocked);
         Ok(request)
     }
@@ -334,7 +337,41 @@ impl ConnectRequest {
         if request.extra_nodes.len() > MAX_EXTRA_NODES {
             return Err(ConnectRequestError::TooManyExtraNodes);
         }
+        request.validate_exit_chains()?;
         Ok((request, blocked))
+    }
+
+    /// Validates the actual endpoints and settings, never a client capability flag.
+    /// Domain B is refused: remote resolution would leave no address for LAN exclusions.
+    pub fn validate_exit_chains(&self) -> Result<(), ConnectRequestError> {
+        for extra in &self.extra_nodes {
+            if let Some(via) = &extra.via {
+                let parent = self
+                    .extra_nodes
+                    .iter()
+                    .find(|entry| &entry.exit == via)
+                    .ok_or(ConnectRequestError::UnsupportedExitChain)?;
+                if parent.exit == extra.exit
+                    || parent.via.is_some()
+                    || self.settings.engine != rosetun_config::EngineKind::SingBox
+                    || self.settings.tls_fragment.enabled
+                    || rosetun_config::uses_xray(&parent.node, &self.settings)
+                    || rosetun_config::uses_xray(&extra.node, &self.settings)
+                    || !matches!(
+                        extra.node.outbound,
+                        rosetun_config::Outbound::Http(_) | rosetun_config::Outbound::Socks5(_)
+                    )
+                    || matches!(
+                        parent.node.outbound,
+                        rosetun_config::Outbound::Unknown { .. }
+                    )
+                    || extra.node.server.parse::<std::net::IpAddr>().is_err()
+                {
+                    return Err(ConnectRequestError::UnsupportedExitChain);
+                }
+            }
+        }
+        Ok(())
     }
 
     pub fn for_apply(
@@ -362,6 +399,7 @@ impl ConnectRequest {
             // The mode, the port and sharing stay the config's: the service
             // changes them under the standing protection.
         }
+        request.validate_exit_chains()?;
         warn_blocked_exits(blocked);
         Ok(request)
     }
@@ -606,6 +644,43 @@ pub enum ErrorCode {
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
+
+    #[test]
+    fn chain_support_is_checked_from_endpoints_and_settings() {
+        let mut config = selected_config();
+        config.subscriptions[0].nodes[0].outbound =
+            rosetun_config::Outbound::Http(Default::default());
+        config.subscriptions[0].nodes[0].server = "192.0.2.1".into();
+        let mut request = ConnectRequest::from_config(&config).unwrap();
+        let node = request.node.clone();
+        request.extra_nodes = vec![
+            super::ExtraNode {
+                exit: ExitId::new("a"),
+                via: None,
+                node: node.clone(),
+                selection: request.selection.clone(),
+            },
+            super::ExtraNode {
+                exit: ExitId::new("b"),
+                via: Some(ExitId::new("a")),
+                node,
+                selection: request.selection.clone(),
+            },
+        ];
+        assert!(request.validate_exit_chains().is_ok());
+        request.extra_nodes[1].node.server = "b.invalid".into();
+        assert_eq!(
+            request.validate_exit_chains(),
+            Err(ConnectRequestError::UnsupportedExitChain)
+        );
+        request.extra_nodes[1].node.server = "2001:db8::2".into();
+        assert!(request.validate_exit_chains().is_ok());
+        request.settings.tls_fragment.enabled = true;
+        assert_eq!(
+            request.validate_exit_chains(),
+            Err(ConnectRequestError::UnsupportedExitChain)
+        );
+    }
 
     #[test]
     fn a_busy_port_error_names_its_port() {
@@ -880,6 +955,9 @@ mod tests {
     #[test]
     fn chained_exit_collects_its_parent_even_on_the_primary_node() {
         let mut config = selected_config();
+        config.subscriptions[0].nodes[0].outbound =
+            rosetun_config::Outbound::Socks5(Default::default());
+        config.subscriptions[0].nodes[0].server = "192.0.2.1".into();
         let selection = config.active.clone().unwrap();
         let parent = ExitId::new("parent");
         let child = ExitId::new("child");

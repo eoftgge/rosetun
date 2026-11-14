@@ -7,7 +7,7 @@
 use std::net::IpAddr;
 
 use rosetun_config::ConnectionNetwork;
-use rosetun_engine::{EngineConnection, TrafficTotals};
+use rosetun_engine::{EngineConnection, EngineRoute, TrafficTotals};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -97,8 +97,14 @@ impl Raw {
         if host.is_empty() || self.id.is_empty() {
             return None;
         }
-        // sing-box reverses the chain, so the outbound the route chose is last.
-        let route = render::route_of(self.chains.last().map_or("", String::as_str));
+        // Transit copies have a separate namespace so they cannot claim the chosen exit.
+        let route = self
+            .chains
+            .iter()
+            .rev()
+            .map(|tag| render::route_of(tag))
+            .find(|route| !matches!(route, EngineRoute::Other))
+            .unwrap_or(EngineRoute::Other);
         Some(EngineConnection {
             id: self.id,
             start_unix_ms: parse_rfc3339_ms(&self.start)?,
@@ -209,6 +215,17 @@ mod tests {
         serde_json::from_str::<WithConnections>(body)
             .expect("snapshot parses")
             .connections()
+    }
+
+    #[test]
+    fn transit_hop_does_not_replace_the_selected_exit() {
+        for chains in [r#"["exit-2","hop-exit-5"]"#, r#"["hop-exit-5","exit-2"]"#] {
+            let body = entry("chain", "example.com", "exit-2").replace(r#"["exit-2"]"#, chains);
+            assert_eq!(
+                parse(&sample(&format!("[{body}]")))[0].route,
+                EngineRoute::Exit("exit-2".into())
+            );
+        }
     }
 
     #[test]

@@ -1598,12 +1598,9 @@ fn validate_request(request: &ConnectRequest) -> Result<(), HelperError> {
             }
         }
     }
-    if request.extra_nodes.iter().any(|extra| extra.via.is_some()) {
-        return Err(HelperError::new(
-            ErrorCode::UnsupportedRules,
-            "exit chains are not supported yet",
-        ));
-    }
+    request
+        .validate_exit_chains()
+        .map_err(|error| HelperError::new(ErrorCode::UnsupportedRules, error.to_string()))?;
     let rules = request.effective_rule_set();
     if rules.enabled().any(|rule| {
         rule.target == RuleTarget::Exit && rule.exit.as_ref().is_none_or(|id| !exits.contains(id))
@@ -2060,6 +2057,7 @@ impl Session {
         request: &ConnectRequest,
         options: StartOptions,
     ) -> Result<(), HelperError> {
+        validate_request(request)?;
         let StartOptions {
             mode,
             endpoint,

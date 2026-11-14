@@ -634,7 +634,8 @@ fn connect_request_error(error: rosetun_ipc::ConnectRequestError) -> String {
         | rosetun_ipc::ConnectRequestError::SelectionMissing => {
             "select an existing node with rosetun select <subscription-id> <node-id>".to_owned()
         }
-        rosetun_ipc::ConnectRequestError::RuleSetNotFound
+        rosetun_ipc::ConnectRequestError::UnsupportedExitChain
+        | rosetun_ipc::ConnectRequestError::RuleSetNotFound
         | rosetun_ipc::ConnectRequestError::TooManyExtraNodes => error.to_string(),
     }
 }

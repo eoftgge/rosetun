@@ -73,13 +73,15 @@ fn validate_exit_chains(request: &RenderRequest<'_>) -> Result<(), EngineError> 
                 .iter()
                 .find(|entry| entry.exit == via)
                 .ok_or_else(|| EngineError::Unsupported("missing first hop".into()))?;
-            if parent.exit == extra.exit
+            if request.settings.engine != rosetun_config::EngineKind::SingBox
+                || parent.exit == extra.exit
                 || parent.via.is_some()
                 || parent.socks.is_some()
                 || extra.socks.is_some()
                 || request.settings.tls_fragment.enabled
                 || rosetun_config::uses_xray(parent.node, request.settings)
                 || rosetun_config::uses_xray(extra.node, request.settings)
+                || extra.node.server.parse::<std::net::IpAddr>().is_err()
                 || !matches!(extra.node.outbound, Outbound::Http(_) | Outbound::Socks5(_))
                 || matches!(parent.node.outbound, Outbound::Unknown { .. })
             {
@@ -117,8 +119,21 @@ pub fn render(request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError
             None => proxy_outbound(extra.node, &tag)?,
         };
         if let Some(via) = extra.via {
-            outbound["detour"] = exit_outbound(via, request.extra).unwrap().into();
-            outbound["network"] = "tcp".into();
+            let first = exit_outbound(via, request.extra)
+                .ok_or_else(|| EngineError::Unsupported("missing first hop".into()))?;
+            outbound["detour"] = format!("hop-{first}").into();
+            if matches!(extra.node.outbound, Outbound::Socks5(_)) {
+                outbound["network"] = "tcp".into();
+            }
+        }
+        if request
+            .extra
+            .iter()
+            .any(|entry| entry.via == Some(extra.exit))
+        {
+            let mut hop = outbound.clone();
+            hop["tag"] = format!("hop-{tag}").into();
+            outbounds.push(hop);
         }
         outbounds.push(outbound);
     }
@@ -808,6 +823,69 @@ mod tests {
         ExitId, Hysteria2Params, ListId, NodeId, Rule, RuleSetId, RuleTemplate, StreamSettings,
         TlsParams,
     };
+
+    #[test]
+    fn native_http_and_https_chain_keep_tls_identity_and_verify_certificates() {
+        let main = shadowsocks_node("main", "203.0.113.1");
+        let a = ExitId::new("a");
+        let b = ExitId::new("b");
+        for secure in [false, true] {
+            let mut last = shadowsocks_node("b", "2001:db8::2");
+            last.outbound = Outbound::Http(Default::default());
+            if secure {
+                last.stream.tls = TlsMode::Tls(TlsParams {
+                    sni: Some("b.example.com".into()),
+                    ..Default::default()
+                });
+            }
+            let extra = [
+                ExtraOutbound {
+                    index: 0,
+                    via: None,
+                    exit: &a,
+                    node: &main,
+                    socks: None,
+                },
+                ExtraOutbound {
+                    index: 1,
+                    via: Some(&a),
+                    exit: &b,
+                    node: &last,
+                    socks: None,
+                },
+            ];
+            let settings = Settings::default();
+            let rules = RuleSet::new(RuleSetId::new("test"), "Test", RuleTarget::Proxy);
+            let request = RenderRequest {
+                node: &main,
+                socks: None,
+                extra: &extra,
+                rules: &rules,
+                lists: &[],
+                settings: &settings,
+                lan_segment: &[],
+                lan_servers: &[],
+                control: None,
+                verbose_log: false,
+                local_proxy: None,
+            };
+            let value: Value = serde_json::from_slice(&render(&request).unwrap().body).unwrap();
+            let last = value["outbounds"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|node| node["tag"] == "exit-1")
+                .unwrap();
+            assert_eq!(last["detour"], "hop-exit-0");
+            assert_eq!(last["server"], "2001:db8::2");
+            if secure {
+                assert_eq!(last["tls"]["server_name"], "b.example.com");
+                assert_ne!(last["tls"]["insecure"], true);
+            } else {
+                assert!(last["tls"].is_null());
+            }
+        }
+    }
 
     #[test]
     fn native_chain_routes_to_b_and_blocks_udp_without_fallback() {
