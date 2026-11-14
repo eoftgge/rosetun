@@ -251,6 +251,7 @@ fn connections_filter_matches_program_and_address_ignoring_case() {
 fn connection_routes_name_the_exit() {
     let mut state = connected_on_traffic();
     state.config.exits.push(rosetun_config::Exit {
+        via: None,
         id: rosetun_config::ExitId::new("work"),
         name: "Work".to_owned(),
         target: rosetun_config::ExitTarget::Country(

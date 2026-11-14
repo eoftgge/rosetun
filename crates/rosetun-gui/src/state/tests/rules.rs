@@ -977,6 +977,7 @@ fn editing_an_exit_rule_keeps_its_exit() {
     let mut state = state_with_rules();
     let exit = rosetun_config::ExitId::new("1");
     state.config.exits.push(rosetun_config::Exit {
+        via: None,
         id: exit.clone(),
         name: "Netherlands".into(),
         target: rosetun_config::ExitTarget::Country(

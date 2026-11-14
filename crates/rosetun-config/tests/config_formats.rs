@@ -19,6 +19,7 @@ const V4: &[u8] = include_bytes!("fixtures/v4.json");
 const V5: &[u8] = include_bytes!("fixtures/v5.json");
 const V6: &[u8] = include_bytes!("fixtures/v6.json");
 const V7: &[u8] = include_bytes!("fixtures/v7.json");
+const V9: &[u8] = include_bytes!("fixtures/v9.json");
 const V8: &[u8] = include_bytes!("fixtures/v8.json");
 
 fn current_config() -> AppConfig {
@@ -95,6 +96,7 @@ fn format_five_config() -> AppConfig {
     let country = CountryCode::parse("CN").unwrap();
     config.exits = vec![
         Exit {
+            via: None,
             id: ExitId::new("node-exit"),
             name: "Example node exit".to_owned(),
             target: ExitTarget::Node {
@@ -106,6 +108,7 @@ fn format_five_config() -> AppConfig {
             },
         },
         Exit {
+            via: None,
             id: ExitId::new("country-exit"),
             name: "Example country exit".to_owned(),
             target: ExitTarget::Country(country),
@@ -201,7 +204,7 @@ fn value(bytes: &[u8]) -> Value {
 #[test]
 fn released_configurations_migrate_to_the_expected_configuration() {
     assert_eq!(
-        CONFIG_VERSION, 8,
+        CONFIG_VERSION, 9,
         "released fixtures require format version seven"
     );
     let expected = expected_migrated_legacy_config();
@@ -263,7 +266,7 @@ fn current_configuration_fixture_guards_the_serialized_format() {
         port: 20808,
         share_on_lan: true,
     };
-    let (loaded, migrated_from) = from_json(V8).expect("current fixture should load");
+    let (loaded, migrated_from) = from_json(V9).expect("current fixture should load");
 
     assert_eq!(migrated_from, None);
     assert_eq!(loaded, expected);
@@ -294,8 +297,8 @@ fn current_configuration_fixture_guards_the_serialized_format() {
     );
     assert_eq!(
         serde_json::to_value(&expected).expect("serialize expected configuration"),
-        value(V8),
-        "the serialized configuration shape changed; bump CONFIG_VERSION, add a migration, and add a new fixture instead of changing v8.json"
+        value(V9),
+        "the serialized configuration shape changed; bump CONFIG_VERSION, add a migration, and add a new fixture instead of changing v9.json"
     );
 }
 
@@ -333,7 +336,7 @@ fn version_seven_migration_changes_only_the_version() {
     assert_eq!(migrated_from, Some(7));
     assert_eq!(config, format_seven_config());
     let mut expected = with_default_fragmentation(value(V7));
-    expected["version"] = json!(8);
+    expected["version"] = json!(CONFIG_VERSION);
     assert_eq!(serde_json::to_value(config).unwrap(), expected);
 }
 
@@ -344,7 +347,7 @@ fn version_five_loads_and_saves_as_version_seven() {
     assert_eq!(config, format_five_config());
 
     let mut expected = with_default_fragmentation(with_machine_scope(value(V5)));
-    expected["version"] = json!(8);
+    expected["version"] = json!(CONFIG_VERSION);
     expected["interface"]["accent"] = json!("rose");
     expected["interface"]["notifications"] = json!(true);
     expected["interface"]["quit_action"] = json!("ask");
@@ -367,7 +370,7 @@ fn version_six_keeps_the_machine_id_of_every_subscription() {
     );
 
     let mut expected = with_default_fragmentation(with_machine_scope(value(V6)));
-    expected["version"] = json!(8);
+    expected["version"] = json!(CONFIG_VERSION);
     expected["interface"]["accent"] = json!("rose");
     expected["interface"]["notifications"] = json!(true);
     expected["interface"]["quit_action"] = json!("ask");
@@ -664,6 +667,7 @@ fn exit_references_and_country_codes_are_validated() {
     let mut config = current_config();
     let id = ExitId::new("1");
     config.exits.push(Exit {
+        via: None,
         id: id.clone(),
         name: "Example exit".into(),
         target: ExitTarget::Country(CountryCode::parse("GB").unwrap()),
@@ -681,6 +685,7 @@ fn exit_references_and_country_codes_are_validated() {
         Err(ConfigError::InvalidRuleExit)
     ));
     config.exits.push(Exit {
+        via: None,
         id: id.clone(),
         name: "Example exit".into(),
         target: ExitTarget::Country(CountryCode::parse("GB").unwrap()),
@@ -767,7 +772,7 @@ fn a_format_eight_file_without_fragmentation_loads_with_it_off() {
         .unwrap()
         .remove("tls_fragment");
     let (config, migrated_from) = from_json(&serde_json::to_vec(&input).unwrap()).unwrap();
-    assert_eq!(migrated_from, None);
+    assert_eq!(migrated_from, Some(8));
     assert_eq!(config.settings.tls_fragment, TlsFragment::default());
     assert!(!config.settings.tls_fragment.enabled);
 }
@@ -797,4 +802,32 @@ fn out_of_range_fragmentation_in_a_file_is_refused() {
             "{field} {text} must be refused"
         );
     }
+}
+
+#[test]
+fn version_eight_migrates_without_adding_dependencies() {
+    let (config, migrated) = from_json(V8).unwrap();
+    assert_eq!(migrated, Some(8));
+    assert!(config.exits.iter().all(|exit| exit.via.is_none()));
+}
+
+#[test]
+fn dependencies_require_a_distinct_standalone_parent() {
+    let (mut config, _) = from_json(V9).unwrap();
+    let parent = config.exits[0].id.clone();
+    config.exits[1].via = Some(parent.clone());
+    config.validate().unwrap();
+    for invalid in [config.exits[1].id.clone(), ExitId::new("missing")] {
+        config.exits[1].via = Some(invalid);
+        assert!(matches!(config.validate(), Err(ConfigError::InvalidExitDependency)));
+    }
+    config.exits[1].via = Some(parent);
+    config.exits[0].via = Some(config.exits[1].id.clone());
+    assert!(matches!(config.validate(), Err(ConfigError::InvalidExitDependency)));
+    let mut third = config.exits[0].clone();
+    third.id = ExitId::new("third");
+    third.via = None;
+    config.exits[0].via = Some(third.id.clone());
+    config.exits.push(third);
+    assert!(matches!(config.validate(), Err(ConfigError::InvalidExitDependency)));
 }

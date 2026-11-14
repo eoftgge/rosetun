@@ -827,6 +827,7 @@ mod tests {
         let mut config = selected_config();
         let exit_id = ExitId::new("1");
         config.exits.push(Exit {
+            via: None,
             id: exit_id.clone(),
             name: "Example exit".into(),
             target: ExitTarget::Country(CountryCode::parse("GB").unwrap()),
@@ -879,6 +880,7 @@ mod tests {
         other.server = "192.0.2.10".into();
         config.subscriptions[0].nodes.push(other.clone());
         config.exits.push(Exit {
+            via: None,
             id: exit.clone(),
             name: "GB exit".into(),
             target: ExitTarget::Country(CountryCode::parse("GB").unwrap()),
@@ -923,6 +925,7 @@ mod tests {
         let mut config = selected_config();
         let exit = ExitId::new("gb");
         config.exits.push(Exit {
+            via: None,
             id: exit.clone(),
             name: "GB exit".into(),
             target: ExitTarget::Country(CountryCode::parse("GB").unwrap()),
@@ -979,6 +982,7 @@ mod tests {
         let mut config = selected_config();
         let exit = ExitId::new("main");
         config.exits.push(Exit {
+            via: None,
             id: exit.clone(),
             name: "Main exit".into(),
             target: ExitTarget::Node {

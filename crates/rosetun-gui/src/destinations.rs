@@ -188,6 +188,7 @@ pub(crate) mod tests {
 
     pub(crate) fn exit(id: &str, target: ExitTarget) -> Exit {
         Exit {
+            via: None,
             id: ExitId::new(id),
             name: "Example exit".into(),
             target,

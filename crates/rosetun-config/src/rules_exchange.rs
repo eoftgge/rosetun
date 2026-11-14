@@ -847,6 +847,7 @@ mod tests {
         let id = ExitId::new("999");
         config.exits.clear();
         config.exits.push(crate::Exit {
+            via: None,
             id: id.clone(),
             name: "Example exit".into(),
             target: ExitTarget::Node {

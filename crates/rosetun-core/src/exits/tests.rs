@@ -77,6 +77,7 @@ fn subscription(id: &str, nodes: &[(&str, &str)]) -> Subscription {
 
 fn exit(id: &str, target: ExitTarget) -> Exit {
     Exit {
+        via: None,
         id: ExitId::new(id),
         name: "Example exit".into(),
         target,
@@ -529,4 +530,18 @@ fn country_exit_uses_delay_or_subscription_order_and_keeps_previous_node() {
         resolve_exits(&[german], &nodes, &delays, &wrong_country)[0].1,
         Some(fast)
     );
+}
+
+#[test]
+fn dependency_paths_remain_distinct_and_parents_cannot_be_deleted() {
+    let directory = TestDirectory::new();
+    let store = Store::at(directory.0.join("config.json"));
+    let new = NewExit::Country { code: country("DE"), name: "Example".into() };
+    let parent = create_exit(&store, &new).unwrap();
+    let child = create_exit_via(&store, &new, Some(parent.id.clone())).unwrap();
+    assert_ne!(parent.id, child.id);
+    assert_eq!(create_exit_via(&store, &new, Some(parent.id.clone())).unwrap(), child);
+    assert!(matches!(delete_exit(&store, &parent.id), Err(ExitError::Referenced)));
+    change_exit_target(&store, &child.id, ExitTarget::Country(country("US"))).unwrap();
+    assert_eq!(store.load().unwrap().exits[1].via, Some(parent.id));
 }
