@@ -76,10 +76,8 @@ fn validate_exit_chains(request: &RenderRequest<'_>) -> Result<(), EngineError> 
             if request.settings.engine != rosetun_config::EngineKind::SingBox
                 || parent.exit == extra.exit
                 || parent.via.is_some()
-                || parent.socks.is_some()
                 || extra.socks.is_some()
                 || request.settings.tls_fragment.enabled
-                || rosetun_config::uses_xray(parent.node, request.settings)
                 || rosetun_config::uses_xray(extra.node, request.settings)
                 || extra.node.server.parse::<std::net::IpAddr>().is_err()
                 || !matches!(extra.node.outbound, Outbound::Http(_) | Outbound::Socks5(_))
@@ -951,6 +949,123 @@ mod tests {
             render(&RenderRequest {
                 extra: &extra[..1],
                 ..request
+            })
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn first_hop_through_xray_is_reached_by_a_hop_copy_of_its_socks_outbound() {
+        let main = shadowsocks_node("main", "203.0.113.1");
+        let first = shadowsocks_node("first", "192.0.2.1");
+        let a = ExitId::new("a");
+        let b = ExitId::new("b");
+        let socks = SocksProxy {
+            address: "127.0.0.1:10802".parse().unwrap(),
+            username: "fixture-user",
+            password: "fixture-password",
+        };
+        let settings = Settings::default();
+        let rules = RuleSet::new(RuleSetId::new("test"), "Test", RuleTarget::Proxy);
+        for (outbound, network) in [
+            (Outbound::Http(Default::default()), Value::Null),
+            (Outbound::Socks5(Default::default()), json!("tcp")),
+        ] {
+            let mut last = shadowsocks_node("last", "198.51.100.2");
+            last.outbound = outbound;
+            let extra = [
+                ExtraOutbound {
+                    index: 0,
+                    via: None,
+                    exit: &a,
+                    node: &first,
+                    socks: Some(socks),
+                },
+                ExtraOutbound {
+                    index: 1,
+                    via: Some(&a),
+                    exit: &b,
+                    node: &last,
+                    socks: None,
+                },
+            ];
+            let request = RenderRequest {
+                node: &main,
+                socks: None,
+                extra: &extra,
+                rules: &rules,
+                lists: &[],
+                settings: &settings,
+                lan_segment: &[],
+                lan_servers: &[],
+                control: None,
+                verbose_log: false,
+                local_proxy: None,
+            };
+            let value: Value = serde_json::from_slice(&render(&request).unwrap().body).unwrap();
+            let outbounds = value["outbounds"].as_array().unwrap();
+            let tagged = |tag: &str| {
+                outbounds
+                    .iter()
+                    .find(|outbound| outbound["tag"] == tag)
+                    .unwrap()
+                    .clone()
+            };
+            let (first, hop, last) = (tagged("exit-0"), tagged("hop-exit-0"), tagged("exit-1"));
+            assert_eq!(first["type"], "socks");
+            assert_eq!(first["server"], "127.0.0.1");
+            let mut copy = hop.clone();
+            copy["tag"] = "exit-0".into();
+            assert_eq!(copy, first);
+            assert_eq!(last["detour"], "hop-exit-0");
+            assert_eq!(last["server"], "198.51.100.2");
+            assert_eq!(last["network"], network);
+        }
+    }
+
+    #[test]
+    fn second_hop_through_xray_is_unsupported() {
+        let main = shadowsocks_node("main", "203.0.113.1");
+        let first = shadowsocks_node("first", "192.0.2.1");
+        let mut last = shadowsocks_node("last", "198.51.100.2");
+        last.outbound = Outbound::Http(Default::default());
+        let a = ExitId::new("a");
+        let b = ExitId::new("b");
+        let extra = [
+            ExtraOutbound {
+                index: 0,
+                via: None,
+                exit: &a,
+                node: &first,
+                socks: None,
+            },
+            ExtraOutbound {
+                index: 1,
+                via: Some(&a),
+                exit: &b,
+                node: &last,
+                socks: Some(SocksProxy {
+                    address: "127.0.0.1:10803".parse().unwrap(),
+                    username: "fixture-user",
+                    password: "fixture-password",
+                }),
+            },
+        ];
+        let settings = Settings::default();
+        let rules = RuleSet::new(RuleSetId::new("test"), "Test", RuleTarget::Proxy);
+        assert!(
+            render(&RenderRequest {
+                node: &main,
+                socks: None,
+                extra: &extra,
+                rules: &rules,
+                lists: &[],
+                settings: &settings,
+                lan_segment: &[],
+                lan_servers: &[],
+                control: None,
+                verbose_log: false,
+                local_proxy: None,
             })
             .is_err()
         );

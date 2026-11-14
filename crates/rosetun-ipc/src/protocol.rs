@@ -355,7 +355,6 @@ impl ConnectRequest {
                     || parent.via.is_some()
                     || self.settings.engine != rosetun_config::EngineKind::SingBox
                     || self.settings.tls_fragment.enabled
-                    || rosetun_config::uses_xray(&parent.node, &self.settings)
                     || rosetun_config::uses_xray(&extra.node, &self.settings)
                     || !matches!(
                         extra.node.outbound,
@@ -680,6 +679,57 @@ mod tests {
             request.validate_exit_chains(),
             Err(ConnectRequestError::UnsupportedExitChain)
         );
+    }
+
+    #[test]
+    fn a_first_hop_through_xray_is_accepted_only_where_sing_box_reaches_it() {
+        let mut config = selected_config();
+        config.subscriptions[0].nodes[0].outbound =
+            rosetun_config::Outbound::Http(Default::default());
+        config.subscriptions[0].nodes[0].server = "198.51.100.2".into();
+        let mut request = ConnectRequest::from_config(&config).unwrap();
+        let mut first = request.node.clone();
+        first.server = "192.0.2.1".into();
+        first.outbound = rosetun_config::Outbound::Vless(rosetun_config::VlessParams {
+            uuid: "00000000-0000-0000-0000-000000000000".into(),
+            flow: None,
+        });
+        first.stream.tls = rosetun_config::TlsMode::Reality(rosetun_config::RealityParams {
+            sni: Some("example.com".into()),
+            public_key: "test-public-key".into(),
+            short_id: None,
+            fingerprint: None,
+        });
+        assert_eq!(request.settings.xray, rosetun_config::XrayUse::Auto);
+        assert!(rosetun_config::uses_xray(&first, &request.settings));
+        request.extra_nodes = vec![
+            super::ExtraNode {
+                exit: ExitId::new("a"),
+                via: None,
+                node: first,
+                selection: request.selection.clone(),
+            },
+            super::ExtraNode {
+                exit: ExitId::new("b"),
+                via: Some(ExitId::new("a")),
+                node: request.node.clone(),
+                selection: request.selection.clone(),
+            },
+        ];
+        assert!(request.validate_exit_chains().is_ok());
+
+        let mut xray_engine = request.clone();
+        xray_engine.settings.engine = rosetun_config::EngineKind::Xray;
+        let mut fragmented = request.clone();
+        fragmented.settings.tls_fragment.enabled = true;
+        let mut domain_b = request.clone();
+        domain_b.extra_nodes[1].node.server = "b.example.com".into();
+        for rejected in [xray_engine, fragmented, domain_b] {
+            assert_eq!(
+                rejected.validate_exit_chains(),
+                Err(ConnectRequestError::UnsupportedExitChain)
+            );
+        }
     }
 
     #[test]

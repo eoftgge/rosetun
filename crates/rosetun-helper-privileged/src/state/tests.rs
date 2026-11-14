@@ -9261,18 +9261,43 @@ fn native_chain_apply_rollback_and_protected_reconnect_keep_the_path() {
 #[test]
 fn chain_validation_precedes_spawn_and_protection_changes() {
     let (helper, controls, prepared, _) = supervised_helper(true);
-    for mode in 0..4 {
+    for mode in 0..3 {
         let mut request = native_exit_chain_request();
         match mode {
             0 => request.extra_nodes[0].node.server = "b.invalid".into(),
             1 => request.settings.tls_fragment.enabled = true,
-            2 => request.settings.engine = rosetun_config::EngineKind::Xray,
-            _ => request.extra_nodes[1].node = reality_request().node,
+            _ => request.settings.engine = rosetun_config::EngineKind::Xray,
         }
         assert!(helper.connect(&request).is_err());
         assert_eq!(controls.spawns(), 0);
         assert_eq!(prepared.load(Ordering::Acquire), 0);
     }
+}
+
+#[test]
+fn a_first_hop_through_xray_connects_and_b_gets_no_direct_path() {
+    let (helper, controls, runner, binaries, _, _) = xray_chain_helper();
+    let mut request = native_exit_chain_request();
+    request.extra_nodes[1].node.stream.tls = reality_request().node.stream.tls;
+    request.extra_nodes[1].node.outbound =
+        rosetun_config::Outbound::Vless(rosetun_config::VlessParams {
+            uuid: "00000000-0000-0000-0000-000000000000".into(),
+            flow: None,
+        });
+    assert!(validate_request(&request).is_ok());
+    helper.connect(&request).unwrap();
+
+    assert_eq!(binaries.lock().unwrap()[0].len(), 2);
+    assert_eq!(runner.starts.load(Ordering::Acquire), 1);
+    assert_eq!(runner.endpoint_count.load(Ordering::Acquire), 1);
+    let config = runner.last_config();
+    assert!(config.contains("192.0.2.1"));
+    assert!(!config.contains("198.51.100.2"));
+    assert_eq!(last_exit_target(&controls), RuleTarget::Exit);
+    let session = helper.session().unwrap();
+    assert!(session.xray_chain);
+    assert!(session.last_extra_endpoints.contains_key(&ExitId::new("parent")));
+    assert!(!session.last_extra_endpoints.contains_key(&ExitId::new("child")));
 }
 
 #[test]
