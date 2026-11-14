@@ -34,6 +34,8 @@ ARTIFACTS = {'lab-capture': 'capture.pcap', 'lab-targets': 'targets.json', 'lab-
 TUNNEL_ARTIFACTS = {'lab-https': 'https.json', 'lab-node': 'node.log'}
 # Only a run with the lab resolver and DoH target has the log of their questions.
 DNS_ARTIFACTS = {'lab-dns': 'dns.json'}
+# Only a diagnostic L3 run counts the flows behind the node.
+ROUTE_ARTIFACTS = {'lab-route-flows': 'route-flows.json'}
 # The DNS check's throwaway client of the test machine: its log is saved in the test run, whatever came of the check.
 DNS_CLIENT_LOG = {'lab-dns-client-log': 'client.log'}
 # The helper_reason of a failed helper that printed no code of its own (an older helper, a cut or foreign stderr).
@@ -115,7 +117,7 @@ def plan_lab(config, *, tunnel=False, evidence_disk=False, dns=False):
 class LabPair:
     """Capability for two particular runs under their original lease."""
     def __init__(self, lease, runs, lab_id, *, pair_factory=socket.socketpair, tunnel=False, evidence_disk=False,
-                 dns=False):
+                 dns=False, route_flows=False):
         lease._check_live()
         if set(runs) != set(MACS) or lease._active or runs['test'] is runs['lab']:
             raise ValueError('invalid-lab-members')
@@ -126,6 +128,7 @@ class LabPair:
         self.tunnel = tunnel is True
         self.evidence_disk = evidence_disk is True
         self.dns = dns is True
+        self.route_flows = route_flows is True
         self.sockets = {}
         self.used = set()
         self.closed = False
@@ -160,6 +163,8 @@ class LabPair:
         # Unbound calls with a stand-in object exist in older tests, which know no disk or DNS.
         if getattr(self, 'dns', False):
             files = {**files, **DNS_ARTIFACTS}
+        if getattr(self, 'route_flows', False):
+            files = {**files, **ROUTE_ARTIFACTS}
         return {**files, **EVIDENCE_RESOURCES} if getattr(self, 'evidence_disk', False) else files
 
     def check_start(self, run):
@@ -259,7 +264,7 @@ class Guest:
                 request['tunnel'] = tunnel
             if options:
                 if not set(options) <= {'evidence_disk', 'duration_seconds', 'dns', 'dns_check', 'windows',
-                                        'certificates'}:
+                                        'certificates', 'route_flows'}:
                     raise ValueError('invalid-lab-option')
                 request.update(options)
             self.vm.qga.jobs_enabled = True
@@ -285,7 +290,8 @@ class Guest:
             raise ValueError('lab-helper-timeout')
 
     def read(self, name, limit):
-        if name not in (*ARTIFACTS.values(), *TUNNEL_ARTIFACTS.values(), *DNS_ARTIFACTS.values()):
+        if name not in (*ARTIFACTS.values(), *TUNNEL_ARTIFACTS.values(), *DNS_ARTIFACTS.values(),
+                        *ROUTE_ARTIFACTS.values()):
             raise ValueError('invalid-lab-artifact')
         with self.vm._guest_lock:
             handle = self.rpc('guest-file-open', {'path': '/run/rosetun-lab/' + self.lab_id + '/' + name, 'mode': 'r'})

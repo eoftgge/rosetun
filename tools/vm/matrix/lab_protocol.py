@@ -1024,6 +1024,111 @@ class _Flows:
         return dict(connections=list(self.table.values()), omitted=len(self.omitted))
 
 
+# The link between the lab node and the routed namespace, and the most flows kept of what crosses it.
+ROUTE_INTERFACE = 'rt-route'
+ROUTE_FLOW_LIMIT = 512
+# The bound of `route-flows.json`: 512 rows of at most about 400 bytes each, with room to spare.
+ROUTE_FLOWS_LIMIT = 256 * 1024
+
+
+def route_header(packet):
+    """(protocol, source, target, TCP flags, payload size) of a TCP or UDP packet of the routed link, else None.
+
+    The payload size comes from the length fields of the IP header and not from the bytes captured, since
+    a veth pair may hand over segments far larger than a frame. A fragment, any other protocol and a packet
+    whose headers do not fit are None.
+    """
+    if len(packet) < 14:
+        return None
+    ethertype, ip = int.from_bytes(packet[12:14], 'big'), packet[14:]
+    if ethertype == 0x0800 and len(ip) >= 20 and ip[0] >> 4 == 4 and (ip[0] & 15) >= 5:
+        start, proto = (ip[0] & 15) * 4, ip[9]
+        if ip[6] & 0x3f or ip[7]:
+            return None
+        span = (int.from_bytes(ip[2:4], 'big') or len(ip)) - start
+        source, target = ip[12:16], ip[16:20]
+    elif ethertype == 0x86dd and len(ip) >= 40 and ip[0] >> 4 == 6:
+        proto, start = ip[6], 40
+        while proto in (0, 43, 60):
+            if start + 8 > len(ip):
+                return None
+            proto, start = ip[start], start + (ip[start + 1] + 1) * 8
+        if proto == 44:
+            return None
+        length = int.from_bytes(ip[4:6], 'big')
+        span = (length + 40 if length else len(ip)) - start
+        source, target = ip[8:24], ip[24:40]
+    else:
+        return None
+    if proto not in (6, 17):
+        return None
+    data = ip[start:]
+    minimum = 20 if proto == 6 else 8
+    if len(data) < minimum:
+        return None
+    header = (data[12] >> 4) * 4 if proto == 6 else 8
+    if header < minimum or header > len(data) or span < header:
+        return None
+    return (proto, (str(ipaddress.ip_address(source)), int.from_bytes(data[0:2], 'big')),
+            (str(ipaddress.ip_address(target)), int.from_bytes(data[2:4], 'big')),
+            data[13] if proto == 6 else 0, span - header)
+
+
+class RouteFlows:
+    """The TCP and UDP flows that cross the link between the node and the routed namespace, by four-tuple.
+
+    A diagnostic count and nothing else: it judges no leak and feeds no verdict. Every flow has the frames and
+    the payload bytes each way, the time of its first and its last packet by the clock of the machine that
+    counts (seconds since the epoch, three decimals) and which of SYN, SYN-ACK, FIN and RST were seen. The side
+    that sent the first packet is the client, except that a SYN-ACK seen first names the other side. At most
+    `limit` flows are kept; the packets of any other are counted in `omitted_frames`.
+    """
+
+    def __init__(self, limit=ROUTE_FLOW_LIMIT):
+        self.limit, self.table = limit, {}
+        self.omitted_frames = self.other_frames = self.unparsed_frames = 0
+
+    def add(self, packet, now):
+        try:
+            header = route_header(packet)
+        except (ValueError, IndexError):
+            self.unparsed_frames += 1
+            return
+        if header is None:
+            self.other_frames += 1
+            return
+        proto, source, target, flags, size = header
+        side = 'out'
+        row = self.table.get((proto, source, target))
+        if row is None:
+            row, side = self.table.get((proto, target, source)), 'back'
+        if row is None:
+            if len(self.table) >= self.limit:
+                self.omitted_frames += 1
+                return
+            side = 'back' if proto == 6 and flags & TCP_SYN and flags & TCP_ACK else 'out'
+            client, server = (target, source) if side == 'back' else (source, target)
+            row = self.table[(proto, client, server)] = dict(
+                proto='tcp' if proto == 6 else 'udp', client=_endpoint(*client), server=_endpoint(*server),
+                frames_out=0, frames_back=0, bytes_out=0, bytes_back=0, first_at=round(now, 3),
+                last_at=round(now, 3), syn=False, syn_ack=False, fin=[], rst=[])
+        row['frames_' + side] += 1
+        row['bytes_' + side] += size
+        row['last_at'] = round(now, 3)
+        if proto == 6:
+            if flags & TCP_SYN:
+                row['syn_ack' if flags & TCP_ACK else 'syn'] = True
+            for name, bit in (('fin', TCP_FIN), ('rst', TCP_RST)):
+                if flags & bit and side not in row[name]:
+                    row[name].append(side)
+
+    def document(self, *, error=None, dropped=None):
+        """What `route-flows.json` holds. `error` is the reason counting stopped early; `dropped`, the kernel's drops."""
+        return dict(flows=list(self.table.values()), omitted_frames=self.omitted_frames,
+                    other_frames=self.other_frames, unparsed_frames=self.unparsed_frames,
+                    error=error, dropped=dropped)
+
+
 def _window_counts(names, tunnel_port):
     counts = dict(probe=0, marker=0, infrastructure=0, unexpected=0, foreign=0, unparsed=0)
     if names:

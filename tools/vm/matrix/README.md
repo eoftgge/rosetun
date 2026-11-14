@@ -3060,6 +3060,40 @@ The summary says `"diagnostic": true`, `group.unproven` has `diagnostic-run`, an
 below 2: a finding is still shown in `outcome` and `group.findings`, but the run counts toward no
 qualification (130 stays 130). Nothing else is judged differently.
 
+#### The flows behind the node
+
+A diagnostic run also asks the lab helper to count, on `rt-route` (the link between the node and the
+routed namespace of the targets), the TCP and UDP flows that cross it: what the node itself sends on
+to the HTTPS target and what comes back. The capture on the wire between the two machines shows a
+`curl` of the test machine only as bytes inside the connection to the node, so this is the one place
+that says whether the node opened its own connection to `203.0.113.2:443`. The count has a socket and a
+thread of its own and no part in the observer: if it cannot start or fails on the way, the file says so
+(`error`) and the capture, the verdicts and the exit code are as they would have been.
+
+The lab machine writes `route-flows.json` (at most 256 KiB, every address outside the documentation
+ranges blanked) and the controller keeps it beside `https.json` and passes it on as `lab.route_flows`,
+field by field and only in the shape the helper writes it (a row of another shape is counted in
+`rejected_rows`). If the file cannot be read, `lab.route_flows` is null and `route_flows_error` says at
+which step; nothing else of the run changes.
+
+```json
+{"flows": [{"proto": "tcp", "client": "203.0.113.1:51000", "server": "203.0.113.2:443",
+            "frames_out": 4, "frames_back": 3, "bytes_out": 120, "bytes_back": 400,
+            "first_at": 1760000000.5, "last_at": 1760000015.5,
+            "syn": true, "syn_ack": true, "fin": [], "rst": ["back"]}],
+ "omitted_frames": 0, "other_frames": 2, "unparsed_frames": 0, "error": null, "dropped": 0}
+```
+
+- The client is the side that sent the first packet (a SYN-ACK seen first names the other side). `out`
+  is toward the server, `back` from it; `bytes_*` are the payload sizes the IP headers declare.
+- `first_at` and `last_at` are seconds since the epoch by the clock of the lab machine, not of the test
+  machine and not of the capture on the wire.
+- At most 512 flows are kept, in the order of their first packet; the packets of any further one are
+  counted in `omitted_frames`. `other_frames` are packets that are not TCP or UDP (ARP, ICMP, fragments).
+  `dropped` is what the kernel dropped on the socket of the count.
+
+Reinstall the helper (`linux/guest/lab-entry.py` and `matrix/lab_protocol.py`) in both images.
+
 ### Owner qualification
 
 1. `run linux-l3 --lab --dry-run`, then the ordinary command. Expect the group `PASS`, the

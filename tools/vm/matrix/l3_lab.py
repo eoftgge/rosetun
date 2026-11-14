@@ -19,7 +19,8 @@ from . import lab as labmod
 from .evidence import ReadbackError, write_file
 from .execution import lab_of, preflight
 from .lab_protocol import (LOG_LIMIT, PORTS, TARGETS, EVIDENCE_PCAP_LIMIT, CLIENTS, EGRESS, HELPER_REASON,
-                           classify_windows, https_exchanges, marker_run_id, probes)
+                           ROUTE_FLOW_LIMIT, ROUTE_FLOWS_LIMIT, classify_windows, https_exchanges, marker_run_id,
+                           probes)
 from .orchestrator import _RETAINED_LEASES, failure, save
 from .resources import StandLease, completion_verified, create_run, resource_path, EXECUTION_FILES
 
@@ -28,6 +29,8 @@ ROLES = ('lab', 'test')
 # What the lab machine keeps beside the capture, and the bound of each file.
 LAB_FILES = (('targets.json', LOG_LIMIT), ('health.json', LOG_LIMIT), ('https.json', LOG_LIMIT),
              ('node.log', LOG_LIMIT), ('dns.json', LOG_LIMIT))
+# What only a diagnostic run reads besides: the flows behind the node, which are never needed to judge anything.
+ROUTE_FILE = ('route-flows.json', ROUTE_FLOWS_LIMIT)
 # The capture outlives the job by this much: it also covers the boot and the import of the test machine.
 CAPTURE_SLACK = 300
 
@@ -127,6 +130,51 @@ def https_refusals(log):
     return rows
 
 
+_ENDPOINT = re.compile(r'[0-9A-Za-z.:\[\]]{1,64}')
+_COUNTERS = ('frames_out', 'frames_back', 'bytes_out', 'bytes_back')
+
+
+def _count(value):
+    return type(value) is int and 0 <= value < 2**40
+
+
+def _seconds(value):
+    return type(value) in (int, float) and 0 <= value < 2**32
+
+
+def route_flows_block(document):
+    """The flows behind the node as the helper counted them, in the shape it writes and no other.
+
+    The document is the lab machine's: a row that is not of that shape is left out and counted in
+    `rejected_rows`, and nothing is passed on but the fields below. None when there is no document.
+    """
+    if type(document) is not dict or type(document.get('flows')) is not list:
+        return None
+    rows, rejected = [], 0
+    for row in document['flows']:
+        try:
+            ok = (type(row) is dict and row['proto'] in ('tcp', 'udp')
+                  and all(type(row[k]) is str and _ENDPOINT.fullmatch(row[k]) for k in ('client', 'server'))
+                  and all(_count(row[k]) for k in _COUNTERS) and all(_seconds(row[k]) for k in ('first_at', 'last_at'))
+                  and type(row['syn']) is bool and type(row['syn_ack']) is bool
+                  and all(type(row[k]) is list and len(row[k]) <= 2 and set(row[k]) <= {'out', 'back'}
+                          and len(set(row[k])) == len(row[k]) for k in ('fin', 'rst')))
+        except KeyError:
+            ok = False
+        if not ok or len(rows) >= ROUTE_FLOW_LIMIT:
+            rejected += 1
+            continue
+        rows.append({k: row[k] for k in ('proto', 'client', 'server', *_COUNTERS, 'first_at', 'last_at', 'syn',
+                                         'syn_ack', 'fin', 'rst')})
+    error, dropped = document.get('error'), document.get('dropped')
+    return dict(flows=rows, rejected_rows=rejected,
+                omitted_frames=document['omitted_frames'] if _count(document.get('omitted_frames')) else None,
+                other_frames=document['other_frames'] if _count(document.get('other_frames')) else None,
+                unparsed_frames=document['unparsed_frames'] if _count(document.get('unparsed_frames')) else None,
+                error=error if type(error) is str and HELPER_REASON.fullmatch(error) else None,
+                dropped=dropped if _count(dropped) else None)
+
+
 def fixtures_block(health, logs):
     """What the lab's fixtures were seen to do: from the observer's own files, never from the guest."""
     def rows(name):
@@ -143,16 +191,19 @@ def fixtures_block(health, logs):
                          requests=sum(row.get('transport') == 'doh' for row in dns)))
 
 
-def lab_block(lab_id, evidence_disk, verdict, fixtures, hashes, refusals=()):
+def lab_block(lab_id, evidence_disk, verdict, fixtures, hashes, refusals=(), route_flows=False):
     """The observer's side: the fixtures, the evidence disk and every window the markers named.
 
     `https_refusals` are the connections the HTTPS target turned away, and each window has its `flows`:
-    both are there to say what happened to a connection, and neither is judged.
+    both are there to say what happened to a connection, and neither is judged. A diagnostic run adds
+    `route_flows`, what crossed the link behind the node (`route_flows_block`, None if it was not read).
     """
     block = dict(lab_id=lab_id, qualification=dict(fixtures=fixtures, evidence=evidence_disk, observer=dict(
         ready=verdict is not None, reasons=verdict['observer_reasons'] if verdict else ['not-evaluated'])),
         windows=[], outside_window=None, missing_labels=[], extra_windows=[], artifacts_sha256=hashes,
         https_refusals=list(refusals))
+    if route_flows is not False:
+        block['route_flows'] = route_flows
     if verdict is not None:
         block.update(windows=verdict['windows'], outside_window=verdict['outside_window'],
                      missing_labels=verdict['missing_labels'], extra_windows=verdict['extra_windows'])
@@ -255,7 +306,7 @@ def run_linux_l3_lab(config, *, diagnostic=False, adapters=None, clock=time.mono
         # requests and the media accept only the resources of a freshly prepared run: so it comes last.
         # The evidence disk is made with the pair; it belongs to the lab machine alone.
         pair = step('evidence-disk', lambda: adapters.pair(lease, runs, lab_id, tunnel=True, evidence_disk=True,
-                                                           dns=True))
+                                                           dns=True, **({'route_flows': True} if diagnostic else {})))
         if clock() >= deadline:
             raise TimeoutError('preparation deadline')
 
@@ -264,7 +315,8 @@ def run_linux_l3_lab(config, *, diagnostic=False, adapters=None, clock=time.mono
         tunnel = labmod.tunnel_request(lab_config, exchanges)
         options = dict(evidence_disk=True, duration_seconds=capture_seconds(config), dns=True, windows=True,
                        certificates=dict(https_sha256=lab_config['https_cert_sha256'],
-                                         doh_sha256=lab_config['doh_cert_sha256']))
+                                         doh_sha256=lab_config['doh_cert_sha256']),
+                       **({'route_flows': True} if diagnostic else {}))
 
         def lab_call(operation):
             # A new facade each time: the capture's own deadline, not the facade's, bounds the run.
@@ -334,6 +386,17 @@ def run_linux_l3_lab(config, *, diagnostic=False, adapters=None, clock=time.mono
                 raise ValueError('lab-evidence-readback-failed') from None
             seen['hashes'][name] = hashlib.sha256(raw).hexdigest()
             seen['logs'][name] = raw
+        if diagnostic:
+            # Only a diagnosis needs the flows, so a file the lab cannot give changes nothing else of the run.
+            try:
+                raw = step('lab-read-' + ROUTE_FILE[0], lambda: guest.read(*ROUTE_FILE))
+                write_file(runs['lab'], ROUTE_FILE[0], raw, mode='overwrite', readback=True,
+                           forbid=runs['lab']._identity[2])
+            except Exception as error:
+                result['route_flows_error'] = failure('lab-read-' + ROUTE_FILE[0], error)
+            else:
+                seen['hashes'][ROUTE_FILE[0]] = hashlib.sha256(raw).hexdigest()
+                seen['logs'][ROUTE_FILE[0]] = raw
         # Both machines stop, and only then is the lab's disk read: nothing may still be writing.
         step('close-test', lambda: close_machine('test', False))
         step('close-lab', lambda: close_machine('lab', False))
@@ -420,7 +483,8 @@ def finish(result, lease, pair, runs, vms, closed, job, attempt, seen, interrupt
     parsed = {k: _json_or_none(v) for k, v in seen['logs'].items() if k.endswith('.json')}
     result['lab'] = lab_block(lab_id, seen['evidence_disk'], seen['verdict'],
                               fixtures_block(seen['health'] or {}, parsed), seen['hashes'],
-                              https_refusals(parsed.get('https.json')))
+                              https_refusals(parsed.get('https.json')),
+                              route_flows_block(parsed.get('route-flows.json')) if result.get('diagnostic') else False)
     from .l3_summary import decide
     decide(result, interrupted)
     if runs:

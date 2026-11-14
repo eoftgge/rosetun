@@ -449,6 +449,14 @@ class Machines:
                                for kind in kinds]).encode()
         if name == 'node.log':
             return b'inbound/shadowsocks[node-in]: connection from 192.0.2.2:43000\n'
+        if name == 'route-flows.json':
+            if self.fixtures.get('route') == 'unreadable':
+                raise ValueError('lab-artifact-size-limit')
+            return json.dumps(dict(flows=[dict(
+                proto='tcp', client='203.0.113.1:51000', server='203.0.113.2:443', frames_out=4, frames_back=3,
+                bytes_out=120, bytes_back=400, first_at=1000.5, last_at=1015.5, syn=True, syn_ack=True,
+                fin=[], rst=['back'])], omitted_frames=0, other_frames=2, unparsed_frames=0, error=None,
+                dropped=0)).encode()
         return b'[]'
 
     def report(self):
@@ -636,6 +644,40 @@ class DiagnosticTests(Flow):
         self.assertEqual([], result['group']['findings'])
         for run in machines.runs.values():
             self.assertTrue(json.loads((run.directory / 'execution-summary.json').read_bytes())['diagnostic'])
+
+    def test_an_ordinary_run_does_not_count_the_flows_behind_the_node(self):
+        machines = Machines(self)
+        result = self.go(machines)
+        self.assertNotIn('route_flows', machines.pair_options)
+        self.assertNotIn('route_flows', machines.calls[0][4])
+        self.assertNotIn('read-route-flows.json', machines.events)
+        self.assertNotIn('route_flows', result['lab'])
+        self.assertNotIn('route_flows_error', result)
+
+    def test_a_diagnostic_run_counts_the_flows_behind_the_node_and_keeps_the_file(self):
+        machines = Machines(self)
+        result = self.go(machines, diagnostic=True)
+        self.assertEqual(dict(tunnel=True, evidence_disk=True, dns=True, route_flows=True), machines.pair_options)
+        for call in machines.calls:
+            self.assertIs(True, call[4]['route_flows'])
+        names = [e for e in machines.events if type(e) is str]
+        self.assertEqual(['read-dns.json', 'read-route-flows.json', 'close-test', 'close-lab'], names[-4:])
+        (row,) = result['lab']['route_flows']['flows']
+        self.assertEqual((['back'], 400), (row['rst'], row['bytes_back']))
+        self.assertIn('route-flows.json', {e['path'] for e in result['evidence'] if e['role'] == 'lab'})
+        self.assertIn('route-flows.json', result['lab']['artifacts_sha256'])
+        self.assertEqual([], result['errors'])
+
+    def test_flows_the_lab_cannot_give_leave_the_rest_of_the_run_as_it_was(self):
+        machines = Machines(self, fixtures=dict(route='unreadable'))
+        result = self.go(machines, diagnostic=True)
+        self.assertIsNone(result['lab']['route_flows'])
+        self.assertEqual('lab-read-route-flows.json', result['route_flows_error']['stage'])
+        self.assertEqual([], result['errors'])
+        self.assertEqual((2, True, True), (result['exit_code'], result['completed'], result['group']['passed']))
+        self.assertNotIn('route-flows.json', result['lab']['artifacts_sha256'])
+        names = [e for e in machines.events if type(e) is str]
+        self.assertEqual(['read-route-flows.json', 'close-test', 'close-lab'], names[-3:])
 
     def test_an_interrupted_diagnostic_run_stays_130(self):
         result = dict(diagnostic=True, legacy=dict(scenarios=[]), errors=[], completed=True,

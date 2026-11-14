@@ -27,7 +27,8 @@ from lab_protocol import (MACS, CLIENTS, GATEWAYS, TARGETS, PORTS, SERVICES, CAP
                           dns_reply, doh_reply, parse_request_head, http_response,
                           EVIDENCE_PCAP_LIMIT, EVIDENCE_HEADER_SIZE, DURATION_MAX, evidence_header,
                           WINDOW_LIMIT, ACK_PREFIX, parse_window_marker, DNS_CHECK_DOH, DOH_NAME,
-                          dns_name, plain_reply_ok, REASON_LIMIT, REQUEST_TIMEOUT, RESPONSE_TIMEOUT, MARKER_TIMEOUT)
+                          dns_name, plain_reply_ok, REASON_LIMIT, REQUEST_TIMEOUT, RESPONSE_TIMEOUT, MARKER_TIMEOUT,
+                          ROUTE_INTERFACE, ROUTE_FLOWS_LIMIT, RouteFlows)
 
 ROOT = Path('/run/rosetun-lab')
 ENTRY = '/usr/local/libexec/rosetun-lab/entry'
@@ -215,9 +216,9 @@ def fixture(path, reason, *, sha256=None, private=False):
             raise Refused(reason + '-hash')
 
 
-def write(path, value):
+def write(path, value, limit=LOG_LIMIT):
     raw = json.dumps(value).encode()
-    if len(raw) > LOG_LIMIT:
+    if len(raw) > limit:
         raise ValueError('guest-log-limit')
     with path.open('xb') as stream:
         stream.write(raw)
@@ -803,6 +804,36 @@ def dns_loop(udp, tcp, log, stop):
         selector.close()
 
 
+def route_count(route, flows, stop, state):
+    """Count the packets of the link behind the node until told to stop.
+
+    A diagnostic and nothing the observer depends on: whatever goes wrong here ends the counting, is
+    noted in `state` and reaches neither the failure of the observer nor the capture.
+    """
+    selector = selectors.DefaultSelector()
+    try:
+        selector.register(route, selectors.EVENT_READ)
+        while not stop.is_set():
+            if not selector.select(.1):
+                continue
+            for _ in range(256):
+                try:
+                    packet = route.recv(2049)
+                except BlockingIOError:
+                    break
+                flows.add(packet, time.time())
+    except Exception:
+        state['error'] = 'route-count-failed'
+    finally:
+        selector.close()
+
+
+def write_route_flows(path, flows, state):
+    """`route-flows.json`: the document of the flows with every address outside the documentation ranges blanked."""
+    text = blank_foreign_addresses(json.dumps(flows.document(error=state.get('error'), dropped=state.get('dropped'))))
+    write(path, json.loads(text), ROUTE_FLOWS_LIMIT)
+
+
 def read_doh_request(stream, buffer):
     """(method, target, headers, body) of the next request, or None when the peer is done.
 
@@ -1250,6 +1281,9 @@ def serve(request, directory):
     dns_log, dns_stop, dns_threads, dns_sockets = DnsLog(), threading.Event(), [], []
     selector = selectors.DefaultSelector()
     capture = raw = None
+    # The diagnostic count of the link behind the node: its own socket and thread, and nothing the observer needs.
+    route = route_thread = None
+    route_flows, route_state, route_stop = RouteFlows(), {}, threading.Event()
     disk = request.get('evidence_disk') is True
     limit = EVIDENCE_PCAP_LIMIT if disk else CAPTURE_LIMIT
     count = 24
@@ -1311,6 +1345,14 @@ def serve(request, directory):
                                             daemon=True)]
             for thread in dns_threads:
                 thread.start()
+        if request.get('route_flows') is True:
+            try:
+                route = open_capture(ROUTE_INTERFACE)
+                route_thread = threading.Thread(target=route_count, args=(route, route_flows, route_stop, route_state),
+                                                daemon=True)
+                route_thread.start()
+            except Exception:
+                route_state['error'] = 'route-capture-unavailable'
         write(directory / 'ready.json', {'capture_ready': True})
         while time.monotonic() < deadline and not (directory / 'stop').exists():
             for key, _ in selector.select(.1):
@@ -1396,6 +1438,22 @@ def serve(request, directory):
         for stream in dns_sockets:
             stream.close()
         extra = {}
+        route_stop.set()
+        if route_thread is not None:
+            route_thread.join(2)
+        if route is not None:
+            try:
+                # Kernel drops of the route socket are a fact about the count, not a fault of the observer.
+                route_state['dropped'] = struct.unpack('II', route.getsockopt(263, 6, 8))[1]
+            except OSError:
+                pass
+            route.close()
+        if request.get('route_flows') is True:
+            # Written before health.json, which is what the finish waits for; a failure here is the diagnostic's own.
+            try:
+                write_route_flows(directory / 'route-flows.json', route_flows, route_state)
+            except Exception:
+                pass
         if dns:
             settle(lambda: write(directory / 'dns.json', dns_log.rows))
             if dns_log.overflow:
@@ -1444,7 +1502,8 @@ def main(request):
     if any(saved[k] != request[k] for k in ('lab_id', 'role', 'vm_uuid', 'boot_id', 'probes', 'markers')):
         raise ValueError('wrong-run')
     if any(saved.get(key) != request.get(key) for key in ('tunnel', 'dns', 'dns_check', 'evidence_disk',
-                                                       'duration_seconds', 'windows', 'certificates')):
+                                                       'duration_seconds', 'windows', 'certificates',
+                                                       'route_flows')):
         raise ValueError('wrong-run')
     if request['role'] == 'lab' and operation == 'serve':
         if request.get('interface') != iface:
