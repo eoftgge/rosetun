@@ -393,7 +393,7 @@ fn rule_set_picker(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
         widgets::menu_content_width(
             ui,
             &labels.iter().map(String::as_str).collect::<Vec<_>>(),
-            response.rect.width(),
+            rect.width(),
         );
         // Keep the selected item's checkmark clear of the longest label.
         ui.set_width(ui.min_rect().width() + 24.0);
@@ -473,6 +473,7 @@ mod tests {
         shown: Vec<Shown>,
         /// The cards' outlines in drawing order; the last two are the visible ones.
         cards: Vec<egui::Rect>,
+        menu_items: Vec<egui::Rect>,
         actions: Vec<Action>,
     }
 
@@ -558,6 +559,7 @@ mod tests {
         output.textures_delta.clear();
         let mut shown = Vec::new();
         let mut cards = Vec::new();
+        let mut menu_items = Vec::new();
         for shape in &output.shapes {
             match &shape.shape {
                 egui::Shape::Text(text) => shown.push(Shown {
@@ -568,12 +570,21 @@ mod tests {
                 egui::Shape::Rect(rect) if rect.fill == theme::palette().card => {
                     cards.push(rect.rect);
                 }
+                egui::Shape::Rect(rect)
+                    if rect.fill
+                        == theme::palette()
+                            .accent_dark
+                            .gamma_multiply(theme::alpha::SELECTED) =>
+                {
+                    menu_items.push(rect.rect);
+                }
                 _ => {}
             }
         }
         Frame {
             shown,
             cards,
+            menu_items,
             actions,
         }
     }
@@ -608,6 +619,53 @@ mod tests {
             vec![egui::Event::PointerMoved(pos), button(true)],
         );
         run(&ctx, state, window, 944.0, vec![button(false)]).actions
+    }
+
+    #[test]
+    fn rule_set_popup_fits_labels_in_a_wide_card() {
+        for language in [Language::English, Language::Russian] {
+            i18n::in_language(language, || {
+                let state = state(EXIT_NAME);
+                let ctx = egui::Context::default();
+                theme::apply(&ctx);
+                let window = egui::vec2(1440.0, 1000.0);
+                for _ in 0..20 {
+                    run(&ctx, &state, window, 1060.0, Vec::new());
+                }
+                let before = run(&ctx, &state, window, 1060.0, Vec::new());
+                let pos = before.find("Example set").rect.center();
+                for pressed in [true, false] {
+                    run(
+                        &ctx,
+                        &state,
+                        window,
+                        1060.0,
+                        vec![
+                            egui::Event::PointerMoved(pos),
+                            egui::Event::PointerButton {
+                                pos,
+                                button: egui::PointerButton::Primary,
+                                pressed,
+                                modifiers: egui::Modifiers::NONE,
+                            },
+                        ],
+                    );
+                }
+                for _ in 0..20 {
+                    run(&ctx, &state, window, 1060.0, Vec::new());
+                }
+                let after = run(&ctx, &state, window, 1060.0, Vec::new());
+                assert_eq!(after.cards, before.cards);
+                let item = after.menu_items.first().expect("selected menu item");
+                let label = after.find(&tr!("default-rules"));
+                assert!(!label.elided);
+                let spare = item.width() - label.rect.width();
+                assert!(
+                    (40.0..65.0).contains(&spare),
+                    "{language:?}: excess menu width {spare}"
+                );
+            });
+        }
     }
 
     #[test]
