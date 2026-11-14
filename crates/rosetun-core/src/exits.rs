@@ -36,20 +36,19 @@ fn get_or_create(
     name: &str,
     via: Option<ExitId>,
 ) -> Result<Exit, ExitError> {
-    if let Some(exit) = config
-        .exits
-        .iter()
-        .find(|exit| exit.via == via && match (&exit.target, &target) {
-            (
-                ExitTarget::Node {
-                    selection: existing,
-                    ..
-                },
-                ExitTarget::Node { selection, .. },
-            ) => existing == selection,
-            _ => exit.target == target,
-        })
-    {
+    if let Some(exit) = config.exits.iter().find(|exit| {
+        exit.via == via
+            && match (&exit.target, &target) {
+                (
+                    ExitTarget::Node {
+                        selection: existing,
+                        ..
+                    },
+                    ExitTarget::Node { selection, .. },
+                ) => existing == selection,
+                _ => exit.target == target,
+            }
+    }) {
         return Ok(exit.clone());
     }
     if config.exits.len() >= MAX_EXTRA_NODES {
@@ -115,9 +114,14 @@ pub fn exit_for_node(store: &Store, selection: &Selection, name: &str) -> Result
 }
 
 /// Creates or reuses an exit with the same target and dependency.
-pub fn create_exit_via(store: &Store, new: &NewExit, via: Option<ExitId>) -> Result<Exit, ExitError> {
+pub fn create_exit_via(
+    store: &Store,
+    new: &NewExit,
+    via: Option<ExitId>,
+) -> Result<Exit, ExitError> {
     store.modify(|config| {
         let mut draft = config.clone();
+        draft.exits.clear();
         let exit = exit_in(&mut draft, new)?;
         get_or_create(config, exit.target, &exit.name, via)
     })
@@ -125,7 +129,10 @@ pub fn create_exit_via(store: &Store, new: &NewExit, via: Option<ExitId>) -> Res
 
 pub fn change_exit_via(store: &Store, id: &ExitId, via: Option<ExitId>) -> Result<(), ExitError> {
     store.modify(|config| {
-        let exit = config.exits.iter_mut().find(|exit| &exit.id == id)
+        let exit = config
+            .exits
+            .iter_mut()
+            .find(|exit| &exit.id == id)
             .ok_or(ExitError::NotFound)?;
         exit.via = via;
         Ok(())
@@ -162,7 +169,11 @@ pub fn change_exit_target(store: &Store, id: &ExitId, target: ExitTarget) -> Res
 
 pub fn delete_exit(store: &Store, id: &ExitId) -> Result<usize, ExitError> {
     store.modify(|config| {
-        if config.exits.iter().any(|exit| exit.via.as_ref() == Some(id)) {
+        if config
+            .exits
+            .iter()
+            .any(|exit| exit.via.as_ref() == Some(id))
+        {
             return Err(ExitError::Referenced);
         }
         let index = config

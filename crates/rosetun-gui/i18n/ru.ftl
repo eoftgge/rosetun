@@ -1362,3 +1362,6 @@ rules-transfer-copied = Правила скопированы в буфер об
 rules-transfer-saved = Правила сохранены в файл
 
 rules-transfer-destination = Куда импортировать
+
+error-exit-referenced = это направление используется другим направлением
+error-exit-limit = слишком много направлений для одного подключения

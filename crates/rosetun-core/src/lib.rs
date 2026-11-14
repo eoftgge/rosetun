@@ -23,9 +23,9 @@ mod update;
 mod updates;
 
 pub use exit::{ExitInfo, ExitInfoError, exit_info};
-pub use exits::{create_exit_via, change_exit_via,
-    ExitError, NewExit, change_exit_target, create_exit, delete_exit, exit_for_country,
-    exit_for_node, exit_rule_count, rename_exit, resolve_exits,
+pub use exits::{
+    ExitError, NewExit, change_exit_target, change_exit_via, create_exit, create_exit_via,
+    delete_exit, exit_for_country, exit_for_node, exit_rule_count, rename_exit, resolve_exits,
 };
 pub use explain::{
     Destination, ExplainedRoute, Explanation, Reason, RuleSource, SessionLists, explain,

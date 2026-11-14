@@ -1332,3 +1332,6 @@ rules-transfer-copied = Rules copied to clipboard
 rules-transfer-saved = Rules saved to file
 
 rules-transfer-destination = Import into
+
+error-exit-referenced = another exit uses this exit
+error-exit-limit = too many exits for one connection

@@ -5550,6 +5550,7 @@ fn invalid_extra_nodes_are_rejected_before_connect_and_apply() {
     other.id = NodeId::new("other");
     other.server = "192.0.2.10".into();
     let extra = ExtraNode {
+        via: None,
         exit: ExitId::new("other"),
         selection: Selection {
             subscription: SubscriptionId::new("sub"),
@@ -6852,6 +6853,7 @@ fn extra_node(exit: &str, server: &str) -> ExtraNode {
     node.id = NodeId::new(exit);
     node.server = server.into();
     ExtraNode {
+        via: None,
         exit: ExitId::new(exit),
         selection: Selection {
             subscription: SubscriptionId::new("sub"),
@@ -9191,4 +9193,31 @@ fn clients_at_once_do_not_block_each_other_and_leave_the_state_right() {
     assert!(session.request.is_none());
     drop(session);
     assert!(controls.spawns() > 0, "no client got anywhere");
+}
+
+#[test]
+fn forged_dependencies_are_invalid_and_valid_chains_are_unsupported() {
+    let mut request = connect_request();
+    request.extra_nodes = vec![
+        extra_node("parent", "192.0.2.1"),
+        extra_node("child", "192.0.2.2"),
+    ];
+    request.extra_nodes[1].via = Some(ExitId::new("parent"));
+    assert_eq!(
+        validate_request(&request).unwrap_err().code,
+        ErrorCode::UnsupportedRules
+    );
+    for id in ["missing", "child"] {
+        request.extra_nodes[1].via = Some(ExitId::new(id));
+        assert_eq!(
+            validate_request(&request).unwrap_err().code,
+            ErrorCode::InvalidRequest
+        );
+    }
+    request.extra_nodes[1].via = Some(ExitId::new("parent"));
+    request.extra_nodes[0].via = Some(ExitId::new("child"));
+    assert_eq!(
+        validate_request(&request).unwrap_err().code,
+        ErrorCode::InvalidRequest
+    );
 }

@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt::Formatter;
 use std::time::Duration;
 
-pub const PROTOCOL_VERSION: u32 = 21;
+pub const PROTOCOL_VERSION: u32 = 22;
 const LOCAL_PROXY_PORT_BUSY: &str = "another program holds the local proxy port ";
 const TUNNEL_ADDRESS_IN_USE: &str = "the tunnel address is still held by the previous session";
 
@@ -145,12 +145,16 @@ pub enum ConnectRequestError {
     NodeNotFound,
     #[error("no node is selected")]
     SelectionMissing,
+    #[error("too many extra nodes")]
+    TooManyExtraNodes,
     #[error("the selected rule set does not exist")]
     RuleSetNotFound,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExtraNode {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub via: Option<ExitId>,
     pub exit: ExitId,
     pub selection: Selection,
     pub node: Node,
@@ -255,20 +259,12 @@ impl ConnectRequest {
             settings: config.settings.clone(),
             rule_templates,
         };
-        let referenced = |id: &ExitId| {
-            request
-                .rule_set
-                .enabled()
-                .chain(request.temporary_rules.iter().filter(|rule| rule.enabled))
-                .any(|rule| rule.target == RuleTarget::Exit && rule.exit.as_ref() == Some(id))
-        };
-        let used: Vec<_> = config
-            .exits
-            .iter()
-            .filter(|exit| referenced(&exit.id))
-            .cloned()
-            .collect();
-        let resolved = resolve_exits(&used, &config.subscriptions, exits.delays, exits.selected);
+        let resolved = resolve_exits(
+            &config.exits,
+            &config.subscriptions,
+            exits.delays,
+            exits.selected,
+        );
         let mut blocked = 0;
         for rule in request
             .rule_set
@@ -287,7 +283,12 @@ impl ConnectRequest {
                 blocked += 1;
                 continue;
             };
-            if selected == selection {
+            let via = config
+                .exits
+                .iter()
+                .find(|exit| exit.id == *id)
+                .and_then(|exit| exit.via.clone());
+            if selected == selection && via.is_none() {
                 rule.target = RuleTarget::Proxy;
                 rule.exit = None;
             } else if !request.extra_nodes.iter().any(|extra| extra.exit == *id) {
@@ -298,6 +299,7 @@ impl ConnectRequest {
                     .and_then(|sub| sub.node(&selected.node))
                 {
                     request.extra_nodes.push(ExtraNode {
+                        via: via.clone(),
                         exit: id.clone(),
                         selection: selected.clone(),
                         node: node.clone(),
@@ -308,6 +310,29 @@ impl ConnectRequest {
                     blocked += 1;
                 }
             }
+        }
+        let dependencies: Vec<_> = request
+            .extra_nodes
+            .iter()
+            .filter_map(|extra| extra.via.clone())
+            .collect();
+        for id in dependencies {
+            if request.extra_nodes.iter().any(|extra| extra.exit == id) {
+                continue;
+            }
+            if let Some((_, Some(selected))) = resolved.iter().find(|(exit, _)| *exit == id)
+                && let Some((_, node)) = config.node_at(selected)
+            {
+                request.extra_nodes.push(ExtraNode {
+                    via: None,
+                    exit: id,
+                    selection: selected.clone(),
+                    node: node.clone(),
+                });
+            }
+        }
+        if request.extra_nodes.len() > MAX_EXTRA_NODES {
+            return Err(ConnectRequestError::TooManyExtraNodes);
         }
         Ok((request, blocked))
     }
@@ -629,7 +654,7 @@ mod tests {
             serde_json::to_string(&super::ErrorCode::AccessDenied).unwrap(),
             "\"access_denied\""
         );
-        assert_eq!(super::PROTOCOL_VERSION, 21);
+        assert_eq!(super::PROTOCOL_VERSION, 22);
         assert_eq!(
             serde_json::to_string(&super::Request::OpenNetwork).unwrap(),
             "\"open_network\""
@@ -810,6 +835,83 @@ mod tests {
             active_rule_set: Some(rule_set_id),
             ..AppConfig::default()
         }
+    }
+
+    #[test]
+    fn dependencies_count_towards_the_extra_node_limit() {
+        let mut config = selected_config();
+        let selection = config.active.clone().unwrap();
+        let parent = ExitId::new("parent");
+        config.exits.push(Exit {
+            id: parent.clone(),
+            name: "Parent".into(),
+            via: None,
+            target: ExitTarget::Node {
+                selection: selection.clone(),
+                fallback: None,
+            },
+        });
+        let mut rules = Vec::new();
+        for index in 0..super::MAX_EXTRA_NODES {
+            let id = ExitId::new(format!("child-{index}"));
+            config.exits.push(Exit {
+                id: id.clone(),
+                name: "Child".into(),
+                via: Some(parent.clone()),
+                target: ExitTarget::Node {
+                    selection: selection.clone(),
+                    fallback: None,
+                },
+            });
+            rules.push(Rule {
+                id: RuleId::new(format!("rule-{index}")),
+                enabled: true,
+                matcher: RuleMatcher::Template(RuleTemplate::Youtube),
+                target: RuleTarget::Exit,
+                exit: Some(id),
+            });
+        }
+        assert!(matches!(
+            ConnectRequest::for_apply(&config, None, rules),
+            Err(ConnectRequestError::TooManyExtraNodes)
+        ));
+    }
+
+    #[test]
+    fn chained_exit_collects_its_parent_even_on_the_primary_node() {
+        let mut config = selected_config();
+        let selection = config.active.clone().unwrap();
+        let parent = ExitId::new("parent");
+        let child = ExitId::new("child");
+        for (id, via) in [
+            (parent.clone(), None),
+            (child.clone(), Some(parent.clone())),
+        ] {
+            config.exits.push(Exit {
+                id,
+                name: "Example".into(),
+                via,
+                target: ExitTarget::Node {
+                    selection: selection.clone(),
+                    fallback: None,
+                },
+            });
+        }
+        let rule = Rule {
+            id: RuleId::new("chain"),
+            enabled: true,
+            matcher: RuleMatcher::Template(RuleTemplate::Youtube),
+            target: RuleTarget::Exit,
+            exit: Some(child.clone()),
+        };
+        let request = ConnectRequest::for_apply(&config, None, vec![rule.clone()]).unwrap();
+        assert_eq!(request.extra_nodes.len(), 2);
+        assert_eq!(request.temporary_rules[0].target, RuleTarget::Exit);
+        assert_eq!(request.extra_nodes[0].via, Some(parent));
+        config.exits.remove(0);
+        let request = ConnectRequest::for_apply(&config, None, vec![rule]).unwrap();
+        assert_eq!(request.temporary_rules[0].target, RuleTarget::Block);
+        assert!(request.extra_nodes.is_empty());
     }
 
     fn dangling_node_config() -> AppConfig {

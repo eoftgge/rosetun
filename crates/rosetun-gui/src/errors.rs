@@ -102,6 +102,7 @@ fn config(language: Language, error: &ConfigError) -> String {
         | ConfigError::InvalidExitId
         | ConfigError::InvalidFragment
         | ConfigError::InvalidLocalProxyPort
+        | ConfigError::InvalidExitDependency
         | ConfigError::InvalidRuleExit => error.to_string(),
     }
 }
@@ -147,7 +148,8 @@ pub(crate) fn rule_set(language: Language, error: &RuleSetError) -> String {
 pub(crate) fn exit(language: Language, error: &ExitError) -> String {
     match error {
         ExitError::Store(error) => store(language, error),
-        ExitError::NotFound | ExitError::Referenced => tr_in(language, "error-exit-not-found", &FluentArgs::new()),
+        ExitError::Referenced => tr_in(language, "error-exit-referenced", &FluentArgs::new()),
+        ExitError::NotFound => tr_in(language, "error-exit-not-found", &FluentArgs::new()),
         ExitError::NodeNotFound => tr_in(language, "error-exit-node-not-found", &FluentArgs::new()),
         ExitError::EmptyName => tr_in(language, "error-exit-name-empty", &FluentArgs::new()),
         ExitError::TooMany => tr_in(
@@ -693,6 +695,9 @@ pub(crate) fn connect_request(language: Language, error: &ConnectRequestError) -
     match error {
         ConnectRequestError::SelectionMissing | ConnectRequestError::NodeNotFound => {
             tr_in(language, "select-server", &FluentArgs::new())
+        }
+        ConnectRequestError::TooManyExtraNodes => {
+            tr_in(language, "error-exit-limit", &FluentArgs::new())
         }
         ConnectRequestError::RuleSetNotFound => tr_in(
             language,

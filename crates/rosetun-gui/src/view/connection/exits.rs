@@ -100,6 +100,7 @@ mod tests {
         state.status.state = ConnectionState::Connected;
         let nodes = &state.config.subscriptions[0].nodes;
         let extra = |id: &str, node: usize| ExtraNode {
+            via: None,
             exit: ExitId::new(id),
             selection: selection(nodes[node].id.as_str()),
             node: nodes[node].clone(),

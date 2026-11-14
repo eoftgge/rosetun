@@ -1587,6 +1587,23 @@ fn validate_request(request: &ConnectRequest) -> Result<(), HelperError> {
             "duplicate extra node for an exit",
         ));
     }
+    for extra in &request.extra_nodes {
+        if let Some(via) = &extra.via {
+            let parent = request.extra_nodes.iter().find(|entry| &entry.exit == via);
+            if via == &extra.exit || parent.is_none_or(|entry| entry.via.is_some()) {
+                return Err(HelperError::new(
+                    ErrorCode::InvalidRequest,
+                    "invalid exit dependency graph",
+                ));
+            }
+        }
+    }
+    if request.extra_nodes.iter().any(|extra| extra.via.is_some()) {
+        return Err(HelperError::new(
+            ErrorCode::UnsupportedRules,
+            "exit chains are not supported yet",
+        ));
+    }
     let rules = request.effective_rule_set();
     if rules.enabled().any(|rule| {
         rule.target == RuleTarget::Exit && rule.exit.as_ref().is_none_or(|id| !exits.contains(id))

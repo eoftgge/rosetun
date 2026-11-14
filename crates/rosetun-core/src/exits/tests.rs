@@ -536,12 +536,21 @@ fn country_exit_uses_delay_or_subscription_order_and_keeps_previous_node() {
 fn dependency_paths_remain_distinct_and_parents_cannot_be_deleted() {
     let directory = TestDirectory::new();
     let store = Store::at(directory.0.join("config.json"));
-    let new = NewExit::Country { code: country("DE"), name: "Example".into() };
+    let new = NewExit::Country {
+        code: country("DE"),
+        name: "Example".into(),
+    };
     let parent = create_exit(&store, &new).unwrap();
     let child = create_exit_via(&store, &new, Some(parent.id.clone())).unwrap();
     assert_ne!(parent.id, child.id);
-    assert_eq!(create_exit_via(&store, &new, Some(parent.id.clone())).unwrap(), child);
-    assert!(matches!(delete_exit(&store, &parent.id), Err(ExitError::Referenced)));
+    assert_eq!(
+        create_exit_via(&store, &new, Some(parent.id.clone())).unwrap(),
+        child
+    );
+    assert!(matches!(
+        delete_exit(&store, &parent.id),
+        Err(ExitError::Referenced)
+    ));
     change_exit_target(&store, &child.id, ExitTarget::Country(country("US"))).unwrap();
     assert_eq!(store.load().unwrap().exits[1].via, Some(parent.id));
 }

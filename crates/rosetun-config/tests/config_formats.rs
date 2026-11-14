@@ -819,15 +819,24 @@ fn dependencies_require_a_distinct_standalone_parent() {
     config.validate().unwrap();
     for invalid in [config.exits[1].id.clone(), ExitId::new("missing")] {
         config.exits[1].via = Some(invalid);
-        assert!(matches!(config.validate(), Err(ConfigError::InvalidExitDependency)));
+        assert!(matches!(
+            config.validate(),
+            Err(ConfigError::InvalidExitDependency)
+        ));
     }
     config.exits[1].via = Some(parent);
     config.exits[0].via = Some(config.exits[1].id.clone());
-    assert!(matches!(config.validate(), Err(ConfigError::InvalidExitDependency)));
+    assert!(matches!(
+        config.validate(),
+        Err(ConfigError::InvalidExitDependency)
+    ));
     let mut third = config.exits[0].clone();
     third.id = ExitId::new("third");
     third.via = None;
     config.exits[0].via = Some(third.id.clone());
     config.exits.push(third);
-    assert!(matches!(config.validate(), Err(ConfigError::InvalidExitDependency)));
+    assert!(matches!(
+        config.validate(),
+        Err(ConfigError::InvalidExitDependency)
+    ));
 }
