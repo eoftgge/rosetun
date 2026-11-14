@@ -18,8 +18,8 @@ impl FailureCounters {
             Some(OutboundFailure::Closed) => &self.closed,
             None => return,
         };
-        let _ = counter.fetch_update(Ordering::Release, Ordering::Relaxed, |value| {
-            Some(value.saturating_add(1))
+        counter.update(Ordering::Release, Ordering::Relaxed, |value| {
+            value.saturating_add(1)
         });
     }
 
