@@ -52,7 +52,7 @@ struct ConnectionPermit(Arc<AtomicUsize>);
 impl ConnectionPermit {
     fn acquire(active: &Arc<AtomicUsize>) -> Option<Self> {
         active
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |count| {
                 (count < MAX_ACTIVE_CONNECTIONS).then_some(count + 1)
             })
             .ok()
