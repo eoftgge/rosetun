@@ -113,8 +113,10 @@ describes 0.5 directly, without per-page "since 0.5" notices.
 
 - **A page.** Add `content/docs/name.md` (Russian) and `name.en.md` (English) with the
   same `weight`, which sets the order of the documentation, the index and the pager. The
-  Russian page needs `aliases = ["/ru/docs/name/"]`. Add the page to the contents list in
-  `content/docs/_index.md` and `_index.en.md`.
+  Russian page needs `aliases = ["/ru/docs/name/"]`. Give each page an
+  `[extra] group`, the heading of its group in the contents, in the page's language. The contents of the
+  documentation index is built from the pages of the section, in the order of `weight`,
+  grouped by consecutive `group`; the pager follows the same order.
 - **Headings** need an explicit id (`## Title {#id}`) when the anchor must not change;
   Cyrillic headings always do. The "On this page" list is the page's `h2` headings. A
   different label goes into `[extra.toc_labels]` as `id = "Label"`. Front matter
@@ -127,6 +129,9 @@ describes 0.5 directly, without per-page "since 0.5" notices.
   `{%` or `{#` in `{% raw %}`. HTML stays in Markdown only where Markdown cannot say it:
   the diagram, a note paragraph, the table with row headers on the provider page, headings
   that must not get an id, and the home page links.
+- **The 404 page** (`templates/404.html`) is served at any missing address, so its links
+  start from the directory of the site (`/rosetun/...`) instead of being relative to the page.
+  It loads no script and links to the home page of both languages.
 - **The header, the footer and the language switch** are in `templates/base.html`; their
   labels are in `config.toml`. `check.py` fails when a page's header or footer differs
   from what its location requires.

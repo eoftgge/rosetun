@@ -59,7 +59,7 @@ Debian 13 is verified. Ubuntu 24.04+, Linux Mint 22+ and compatible derivatives 
 
 [Guide](https://eoftgge.github.io/rosetun/en/docs/) · [Help](https://eoftgge.github.io/rosetun/en/help/) · [For providers](https://eoftgge.github.io/rosetun/en/providers/).
 
-[Build from source](https://eoftgge.github.io/rosetun/en/docs/build/) · [Security](SECURITY.md).
+[Build from source](https://eoftgge.github.io/rosetun/en/docs/build/) · [Security](SECURITY.md) · [Security model](https://eoftgge.github.io/rosetun/en/docs/security/).
 
 ## Troubleshooting
 
