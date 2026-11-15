@@ -46,4 +46,4 @@ Rosetun: VPN-клиент для Windows и Linux. sing-box держит тун�
 
 ## Безопасность {#безопасность}
 
-Об уязвимостях сообщайте приватно, см. [SECURITY.md](https://github.com/eoftgge/rosetun/blob/master/SECURITY.md).
+Что считается уязвимостью, описано на странице [Модель безопасности](../security/); об уязвимостях сообщайте приватно, см. [SECURITY.md](https://github.com/eoftgge/rosetun/blob/master/SECURITY.md).

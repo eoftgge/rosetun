@@ -47,4 +47,4 @@ Rosetun is a VPN client for Windows and Linux. sing-box runs the tunnel, rules a
 
 ## Security {#security}
 
-See [SECURITY.md](https://github.com/eoftgge/rosetun/blob/master/SECURITY.md) for private vulnerability reporting.
+What counts as a vulnerability is on the [Security model](../security/) page; [SECURITY.md](https://github.com/eoftgge/rosetun/blob/master/SECURITY.md) explains private vulnerability reporting.
