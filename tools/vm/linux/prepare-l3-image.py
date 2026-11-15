@@ -17,9 +17,39 @@ NETWORK = '/etc/systemd/network/00-rosetun-lab.network'
 # `inbound.reply` of run-l3.sh reads the banner of sshd on PEER_HOST_ADDRESS, the guest's end of the veth to the
 # peer namespace. That address exists only while the scenario runs, hence FreeBind; it is never on the lab wire.
 SSHD_LISTEN = '198.51.100.1:22'
-SOCKET_DROPIN = '/etc/systemd/system/ssh.socket.d/rosetun-lab.conf'
-SOCKET_DROPIN_TEXT = f'[Socket]\nListenStream=\nListenStream={SSHD_LISTEN}\nFreeBind=yes\n'
-# Only read by sshd started as a daemon, which the image never does: a second bound in case someone starts it.
+# The packaged ssh.socket of Debian 13 (Accept=no) hands its socket to the daemon of ssh.service, so the image
+# uses units of its own: a socket that accepts each connection and hands it to `sshd -i`, which binds nothing.
+# Not named rosetun*: preflight.no-foreign-service of run-l3.sh refuses any unit with that prefix.
+SOCKET_UNIT = 'l3-lab-sshd.socket'
+SERVICE_UNIT = 'l3-lab-sshd@.service'
+SOCKET_TEXT = f"""[Unit]
+Description=sshd of the Rosetun L3 lab, for the peer namespace only
+Before=sockets.target
+
+[Socket]
+ListenStream={SSHD_LISTEN}
+FreeBind=yes
+Accept=yes
+
+[Install]
+WantedBy=sockets.target
+"""
+# The [Service] lines of the packaged sshd@.service.
+SERVICE_TEXT = """[Unit]
+Description=sshd of the Rosetun L3 lab, one connection
+After=nss-user-lookup.target auditd.service
+
+[Service]
+EnvironmentFile=-/etc/default/ssh
+ExecStart=-/usr/sbin/sshd -i $SSHD_OPTS
+StandardInput=socket
+RuntimeDirectory=sshd
+RuntimeDirectoryPreserve=yes
+RuntimeDirectoryMode=0755
+"""
+# The packaged units that could start sshd: masked, so neither a dependency nor a socket starts them.
+MASKED_UNITS = ('ssh.socket', 'ssh.service', 'sshd.service')
+# Not read by `sshd -i`; a second bound should someone start the daemon after unmasking it.
 SSHD_CONFIG = '/etc/ssh/sshd_config.d/rosetun-lab.conf'
 SSHD_CONFIG_TEXT = f'ListenAddress {SSHD_LISTEN}\n'
 DEB_STAGING = '/var/cache/rosetun-lab-debs'
@@ -34,12 +64,12 @@ printf '#!/bin/sh\\nexit 101\\n' >/usr/sbin/policy-rc.d
 chmod 0755 /usr/sbin/policy-rc.d
 dpkg -i {DEB_STAGING}/*.deb
 ssh-keygen -A
-systemctl disable ssh.service
-systemctl enable ssh.socket
+systemctl disable ssh.socket ssh.service
+systemctl mask {' '.join(MASKED_UNITS)}
+systemctl enable {SOCKET_UNIT}
 rm -rf {DEB_STAGING}
 '''
 UNIT_DIRECTORIES = ('etc', 'lib')
-SERVICE_NAMES = ('ssh.service', 'sshd.service')
 
 
 def network_for_l3(text):
@@ -107,28 +137,28 @@ def unit_settings(texts):
     return settings
 
 
-def socket_texts(root):
-    """ssh.socket as systemd would load it from a copy of /etc/systemd/system (etc) and /usr/lib/systemd/system (lib)."""
+def unit_texts(root, name, kind):
+    """A unit as systemd would load it from a copy of /etc/systemd/system (etc) and /usr/lib/systemd/system (lib):
+    the first file found, then every drop-in of `<name>.d` and `<kind>.d`, in the order of their names."""
     main = None
     for directory in UNIT_DIRECTORIES:
-        path = root / directory / 'ssh.socket'
+        path = root / directory / name
         # A link points into the image, not into this copy, so it is never followed.
         if path.is_symlink():
-            raise ValueError('sshd: ssh.socket is masked' if os.readlink(path) == '/dev/null'
-                             else 'sshd: ssh.socket is a link')
+            raise ValueError(f'sshd: {name} is a link')
         if path.is_file():
             main = path
             break
     if main is None:
-        raise ValueError('sshd: no ssh.socket unit')
+        raise ValueError(f'sshd: no {name}')
     dropins = {}
     for directory in reversed(UNIT_DIRECTORIES):
-        for folder in ('socket.d', 'ssh.socket.d'):
+        for folder in (kind + '.d', name + '.d'):
             for path in sorted((root / directory / folder).glob('*.conf')):
                 if path.is_symlink():
-                    raise ValueError(f'sshd: the drop-in {path.name} is a link')
+                    raise ValueError(f'sshd: the drop-in {path.name} of {name} is a link')
                 dropins[path.name] = path
-    return [main.read_text(encoding='utf-8')] + [dropins[name].read_text(encoding='utf-8') for name in sorted(dropins)]
+    return [main.read_text(encoding='utf-8')] + [dropins[key].read_text(encoding='utf-8') for key in sorted(dropins)]
 
 
 def check_sshd(root, ssh_files, leftovers):
@@ -138,28 +168,27 @@ def check_sshd(root, ssh_files, leftovers):
     in /etc/ssh, `leftovers` whether the policy-rc.d or the package directory of the installation is still there.
     """
     etc = root / 'etc'
-    if not (etc / 'sockets.target.wants' / 'ssh.socket').is_symlink():
-        raise ValueError('sshd: ssh.socket is not enabled')
-    for wants in etc.glob('*.wants'):
-        for name in SERVICE_NAMES:
-            if (wants / name).is_symlink() or (wants / name).exists():
-                raise ValueError(f'sshd: {name} is enabled in {wants.name}')
-    for requires in etc.glob('*.requires'):
-        for name in SERVICE_NAMES:
-            if (requires / name).is_symlink() or (requires / name).exists():
-                raise ValueError(f'sshd: {name} is required by {requires.name}')
-    alias = etc / 'sshd.service'
-    if alias.is_symlink() and os.readlink(alias) != '/dev/null':
-        raise ValueError('sshd: the alias sshd.service is enabled')
-    settings = unit_settings(socket_texts(root))
+    for name in MASKED_UNITS:
+        path = etc / name
+        if not (path.is_symlink() and os.readlink(path) == '/dev/null'):
+            raise ValueError(f'sshd: {name} is not masked')
+    if not (etc / 'sockets.target.wants' / SOCKET_UNIT).is_symlink():
+        raise ValueError(f'sshd: {SOCKET_UNIT} is not enabled')
+    for folder in (*etc.glob('*.wants'), *etc.glob('*.requires')):
+        for name in MASKED_UNITS:
+            if (folder / name).is_symlink() or (folder / name).exists():
+                raise ValueError(f'sshd: {name} is still linked in {folder.name}')
+    settings = unit_settings(unit_texts(root, SOCKET_UNIT, 'socket'))
     if settings['listen'] != [SSHD_LISTEN] or settings['other_listen']:
-        raise ValueError(f"sshd: ssh.socket listens on {settings['listen'] + settings['other_listen']}")
+        raise ValueError(f"sshd: {SOCKET_UNIT} listens on {settings['listen'] + settings['other_listen']}")
     if settings['free_bind'] != 'yes':
-        raise ValueError('sshd: ssh.socket has no FreeBind=yes')
+        raise ValueError(f'sshd: {SOCKET_UNIT} has no FreeBind=yes')
     # With Accept=yes systemd hands each connection to `sshd -i`; without it sshd would be a daemon that
     # binds its own sockets, and nothing here could vouch for where.
     if settings['accept'] != 'yes':
-        raise ValueError('sshd: ssh.socket does not accept connections itself (Accept=yes)')
+        raise ValueError(f'sshd: {SOCKET_UNIT} does not accept connections itself (Accept=yes)')
+    if unit_texts(root, SERVICE_UNIT, 'service') != [SERVICE_TEXT]:
+        raise ValueError(f'sshd: {SERVICE_UNIT} is not the one this tool writes, or has a drop-in')
     if not any(re.fullmatch(r'ssh_host_[a-z0-9]+_key', name) for name in ssh_files):
         raise ValueError('sshd: no host key')
     if any(leftovers):
@@ -174,7 +203,7 @@ def image_descriptor(destination, debs=None):
                       size_bytes=destination.stat().st_size, sha256=digest(destination),
                       format='qcow2', profile='bios-i440fx-v1')
     if debs is not None:
-        descriptor['sshd'] = dict(listen=SSHD_LISTEN, debs=debs)
+        descriptor['sshd'] = dict(listen=SSHD_LISTEN, socket=SOCKET_UNIT, debs=debs)
     return descriptor
 
 
@@ -189,12 +218,14 @@ def guestfish(image, *commands, writable=False):
 
 def install_sshd(image, directory, debs):
     with tempfile.TemporaryDirectory() as temp:
-        script, socket, config = (Path(temp) / name for name in ('install.sh', 'socket.conf', 'sshd.conf'))
-        for path, text in ((script, INSTALL_SCRIPT), (socket, SOCKET_DROPIN_TEXT), (config, SSHD_CONFIG_TEXT)):
+        script, socket, service, config = (Path(temp) / name for name in ('install.sh', 'socket', 'service', 'conf'))
+        for path, text in ((script, INSTALL_SCRIPT), (socket, SOCKET_TEXT), (service, SERVICE_TEXT),
+                           (config, SSHD_CONFIG_TEXT)):
             path.write_text(text, encoding='utf-8', newline='\n')
         guestfish(image, ['mkdir-p', DEB_STAGING],
                   *(['upload', str(directory / deb['name']), f"{DEB_STAGING}/{deb['name']}"] for deb in debs),
-                  ['mkdir-p', SOCKET_DROPIN.rsplit('/', 1)[0]], ['upload', str(socket), SOCKET_DROPIN],
+                  ['upload', str(socket), '/etc/systemd/system/' + SOCKET_UNIT],
+                  ['upload', str(service), '/etc/systemd/system/' + SERVICE_UNIT],
                   ['mkdir-p', SSHD_CONFIG.rsplit('/', 1)[0]], ['upload', str(config), SSHD_CONFIG],
                   ['upload', str(script), '/root/rosetun-lab-sshd.sh'], ['sh', 'sh /root/rosetun-lab-sshd.sh'],
                   ['rm', '/root/rosetun-lab-sshd.sh'], writable=True)

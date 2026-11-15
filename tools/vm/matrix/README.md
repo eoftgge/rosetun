@@ -3435,26 +3435,35 @@ lab image does not change. Hyper-V is not affected: its guest has its own sshd.
   include `openssh-server`. The tool never downloads and never reaches a network: it runs `dpkg -i` inside the
   image through guestfish, with a `policy-rc.d` that forbids starting anything while the maintainer scripts run.
   The name, SHA-256 and size of every package go into the descriptor (`sshd.debs`).
-- **Socket.** `ssh.socket` is enabled with a drop-in `/etc/systemd/system/ssh.socket.d/rosetun-lab.conf` that
-  resets the packaged `ListenStream` and sets `ListenStream=198.51.100.1:22` and `FreeBind=yes` (the address
-  does not exist at boot). `ssh.service` is disabled (no `.wants` link, no `sshd.service` alias). Never the
-  address on the lab wire (`192.0.2.2`), never `0.0.0.0`. `/etc/ssh/sshd_config.d/rosetun-lab.conf` sets
-  `ListenAddress 198.51.100.1:22` as a second bound for an sshd started by hand.
-- **Per connection.** The effective `ssh.socket` must have `Accept=yes`: systemd hands each connection to
-  `sshd -i`, and sshd binds nothing itself. If the packaged unit hands the listening socket to a daemon instead
-  (`Accept=no`), the tool refuses the image rather than vouch for an address it does not control.
+- **Units of its own.** The packaged `ssh.socket` of Debian 13 (openssh-server 1:10.0p1-7) listens on port 22
+  of every address with `Accept=no`, handing its socket to the daemon of `ssh.service`, so it is not used. The
+  tool writes two units to `/etc/systemd/system` and enables the socket:
+  - `l3-lab-sshd.socket`: `ListenStream=198.51.100.1:22`, `FreeBind=yes` (the address does not exist at boot),
+    `Accept=yes`, `WantedBy=sockets.target`;
+  - `l3-lab-sshd@.service`: the `[Service]` lines of the packaged `sshd@.service` (`sshd -i` with
+    `StandardInput=socket`, the `RuntimeDirectory` of sshd), so systemd hands each connection to `sshd -i` and
+    sshd binds nothing itself.
+
+  The names do not start with `rosetun`: `preflight.no-foreign-service` refuses any unit that does.
+  Never the address on the lab wire (`192.0.2.2`), never `0.0.0.0`.
+- **Packaged units masked.** `ssh.socket` and `ssh.service` are disabled and masked, and so is the alias
+  `sshd.service`: no dependency (`rescue-ssh.target` among them), socket or hand can start the daemon.
+  `/etc/ssh/sshd_config.d/rosetun-lab.conf` sets `ListenAddress 198.51.100.1:22`: `sshd -i` ignores it, it is a
+  second bound should the daemon ever be started.
 - **Keys.** The host keys are created in the image at installation (`ssh-keygen -A`), so every overlay of the
   image has the same ones. That is acceptable here: sshd is reachable only from the peer namespace inside the
   test machine, no client trusts or pins these keys, the scenario reads only the banner and the start of the key
   exchange, and the image never leaves the stand. The private keys are not secrets of anything else; do not
   reuse the image outside the lab.
 - **Check after writing.** The tool reads the copy back with `guestfish --ro` and refuses it unless
-  `ssh.socket` is enabled, `ssh.service` and its alias are not, the effective `ListenStream` list (the unit and
-  every drop-in in `socket.d` and `ssh.socket.d`, in order, an empty assignment resetting it) is exactly
-  `198.51.100.1:22` with no other `Listen*`, `FreeBind=yes`, `Accept=yes`, a host key exists, and neither the
-  `policy-rc.d` nor the package directory is left. A refused copy is deleted.
-- **Preflight.** No preflight looks at sshd: `preflight.no-foreign-service` checks units named `rosetun*`, the
-  helper's files, the table and the peer namespace. A listening socket opens no connection, so the quiet image
+  `ssh.socket`, `ssh.service` and `sshd.service` are links to `/dev/null` and linked from no `.wants` or
+  `.requires`; `l3-lab-sshd.socket` is enabled and its effective settings (the unit and every drop-in in
+  `socket.d` and `l3-lab-sshd.socket.d`, in order, an empty `ListenStream=` resetting the list) are exactly one
+  `ListenStream=198.51.100.1:22` with no other `Listen*`, `FreeBind=yes` and `Accept=yes`;
+  `l3-lab-sshd@.service` is exactly the text the tool writes, without a drop-in; a host key exists; and
+  neither the `policy-rc.d` nor the package directory is left. A refused copy is deleted.
+- **Preflight.** No preflight looks at sshd: `preflight.no-foreign-service` checks units named `rosetun*` (hence
+  the names above), the helper's files, the table and the peer namespace. A listening socket opens no connection, so the quiet image
   of v5 stays quiet.
 
 ```sh
@@ -3470,12 +3479,12 @@ descriptor as the record of the packages.
 Check the new image after a boot, before sealing it:
 
 ```sh
-systemctl is-enabled ssh.socket ssh.service   # enabled, disabled
-systemctl show -p Listen ssh.socket           # Listen=198.51.100.1:22 (Stream)
-ss -tlnp                                      # 198.51.100.1:22 held by systemd, nothing on 0.0.0.0:22
+systemctl is-enabled l3-lab-sshd.socket ssh.socket ssh.service   # enabled, masked, masked
+systemctl show -p Listen -p Accept l3-lab-sshd.socket            # Listen=198.51.100.1:22 (Stream), Accept=yes
+ss -tlnp                                  # 198.51.100.1:22 held by systemd, nothing on 0.0.0.0:22 or 192.0.2.2:22
 ```
 
-If the boot shows another address, stop: socket activation does not work this way in the image's release.
+If the boot shows another address or an sshd daemon, stop and send the output.
 
 ### What to reinstall
 
