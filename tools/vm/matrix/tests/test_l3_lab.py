@@ -3,6 +3,7 @@
 Everything here runs on fake machines and adapters; no VM, no QEMU and no network is started.
 """
 from dataclasses import asdict, replace
+import contextlib
 import copy
 import io
 import json
@@ -651,6 +652,21 @@ class OrderTests(Flow):
         self.assertEqual(l3_lab.marker_address(), options['l3']['lab_marker_address'])
         self.assertEqual(wire.marker_run_id(options['guest_run_id']), machines.lab_id)
 
+    def test_the_control_reaches_the_importer_and_the_summary_only_when_it_is_asked_for(self):
+        machines = Machines(self)
+        result = self.go(machines, control='stop-helper')
+        (options,) = machines.imports
+        self.assertEqual(('stop-helper', l3_lab.marker_address()),
+                         (options['l3']['lab_control'], options['l3']['lab_marker_address']))
+        self.assertEqual('stop-helper', result['control'])
+
+    def test_a_control_with_a_diagnostic_run_or_an_unknown_control_is_refused_before_anything_starts(self):
+        for options in (dict(control='stop-helper', diagnostic=True), dict(control='other')):
+            machines = Machines(self)
+            with self.subTest(options=options), self.assertRaisesRegex(ValueError, 'lab-control-invalid'):
+                self.go(machines, **options)
+            self.assertEqual([], machines.events)
+
     def test_the_runs_carry_the_lab_identity_and_the_summary_is_saved_in_both(self):
         machines = Machines(self)
         result = self.go(machines)
@@ -848,6 +864,28 @@ class DiagnosticTests(Flow):
         finally:
             base.doCleanups()
         self.assertEqual([dict(diagnostic=True), {}], seen)
+
+    def test_the_control_goes_only_with_the_lab_and_reaches_the_lab_run(self):
+        seen = []
+
+        def lab_run(config, **options):
+            seen.append(options)
+            return dict(exit_code=0)
+        base = DryRunTests()
+        base.setUp()
+        try:
+            with patch.object(l3_lab, 'run_linux_l3_lab', side_effect=lab_run):
+                self.assertEqual(2, base.go('--control', 'stop-helper')[0])
+                self.assertEqual(2, base.go('--lab', '--diagnostic', '--control', 'stop-helper')[0])
+                self.assertEqual([], seen)
+                with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as refused:
+                    base.go('--lab', '--control', 'other')
+                self.assertEqual(2, refused.exception.code)
+                self.assertEqual(0, base.go('--lab', '--control', 'stop-helper')[0])
+                base.go('--lab')
+        finally:
+            base.doCleanups()
+        self.assertEqual([dict(control='stop-helper'), {}], seen)
 
 
 class FlowSummaryTests(Flow):

@@ -5,6 +5,8 @@ scenarios are listed with what the script reported and are not judged. The relea
 false and the security invariants stay unverified.
 """
 
+from .lab_protocol import CLIENTS, HTTPS_PORT, TARGETS
+
 # The scenarios of stage 7b2b, by id in scenarios-l3.tsv: the only ones that are judged.
 GROUP = ('preflight.identity', 'preflight.accounts', 'preflight.no-foreign-service', 'preflight.tools',
          'preflight.baseline', 'install.service', 'protection.reported', 'engine.identity', 'engine.files',
@@ -44,6 +46,13 @@ REQUIRED_FIXTURES = ('node', 'https', 'dns', 'doh')
 # until it does, such windows are listed (`group.outside_leaks`, and DETECTED in `lab.windows`) and do
 # not decide the code. Set this to make any leak in any window exit 1.
 LEAK_OUTSIDE_THE_GROUP_FAILS = False
+# The positive control of stage 7c1: the script stops the service inside the window of the kill-switch
+# session and sends one direct request, so a run is a success only if the observer saw exactly that.
+CONTROLS = ('stop-helper',)
+CONTROL_WINDOW, CONTROL_SCENARIO = 'connect_ks', 'killswitch.direct-blocked'
+CONTROL_EXPECTATIONS = {
+    'stop-helper': f'window {CONTROL_WINDOW} DETECTED with a direct flow from the test machine to '
+                   f'{TARGETS[4]}:{HTTPS_PORT}, {CONTROL_SCENARIO} DISAGREE, an ordinary run would exit 1'}
 
 
 def window_verdict(windows):
@@ -78,6 +87,17 @@ def crosscheck(rows, windows):
                        agreement=agree(legacy, window_verdict(found)))
         table.append(row)
     return table
+
+
+def direct_flow_seen(windows):
+    """A TCP connection of the test machine straight to the HTTPS target that the target answered, in these windows."""
+    server = f'{TARGETS[4]}:{HTTPS_PORT}'
+    for window in windows:
+        for row in (window.get('flows') or {}).get('connections', []):
+            if (row.get('server') == server and str(row.get('client')).startswith(CLIENTS[4] + ':')
+                    and row.get('kind') == 'target' and row.get('syn') is True and row.get('syn_ack') is True):
+                return True
+    return False
 
 
 def missing_fixtures(fixtures):
@@ -157,3 +177,14 @@ def decide(result, interrupted):
     if result.get('diagnostic') and result['exit_code'] < 2:
         # A run that asked the engine for more detail is evidence for a diagnosis, never a qualification.
         result['exit_code'] = 2
+    control = result.get('control')
+    if control is not None:
+        # The ordinary code stays in the summary; the code of the run is the control's own.
+        direct = [window for window in windows if window['label'] == CONTROL_WINDOW]
+        row = next(row for row in table if row['id'] == CONTROL_SCENARIO)
+        met = (control in CONTROLS and result['exit_code'] == 1 and window_verdict(direct) == 'DETECTED'
+               and direct_flow_seen(direct) and row['agreement'] == 'DISAGREE' and result['completed'] is True)
+        result['control_result'] = dict(name=control, expected=CONTROL_EXPECTATIONS.get(control), met=met,
+                                        ordinary_exit_code=result['exit_code'])
+        if result['exit_code'] != 130:
+            result['exit_code'], result['outcome'] = (0, 'control-met') if met else (2, 'control-not-met')

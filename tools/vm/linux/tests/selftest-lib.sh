@@ -237,10 +237,10 @@ expect_not "run-l3.sh never deletes the service's own table" \
 # --- run-l3.sh: the lab window markers (only with LAB_MARKER_ADDRESS)
 l3=$here/../guest/run-l3.sh
 expect "run-l3.sh takes LAB_MARKER_ADDRESS as an optional key of job.env" \
-    grep -q 'DNS_PROBE_ADDRESS LAB_MARKER_ADDRESS || return 1' "$l3"
+    grep -q 'DNS_PROBE_ADDRESS LAB_MARKER_ADDRESS LAB_CONTROL || return 1' "$l3"
 expect "run-l3.sh sends no marker unless the address is set" grep -q '^    \[ -n "\$LAB_MARKER_ADDRESS" \] || return 0$' "$l3"
 expect "start.sh lets only an L3 stage read LAB_MARKER_ADDRESS" \
-    grep -q '^    \[ "\$stage" != l3 \] || keys+=(LAB_MARKER_ADDRESS)$' "$start"
+    grep -q '^    \[ "\$stage" != l3 \] || keys+=(LAB_MARKER_ADDRESS LAB_CONTROL)$' "$start"
 lab_functions=$work/lab-functions.sh
 awk '/^# -+ lab windows/ { on = 1 } /^connect_with\(\) \{/ { on = 0 } on' "$l3" >"$lab_functions"
 expect "the lab window functions were found in run-l3.sh" test -s "$lab_functions"

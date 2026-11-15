@@ -23,6 +23,7 @@ from .lab_protocol import (LOG_LIMIT, PORTS, TARGETS, EVIDENCE_PCAP_LIMIT, CLIEN
                            probes)
 from .orchestrator import _RETAINED_LEASES, failure, save
 from .l3_align import align
+from .l3_summary import CONTROLS
 from .resources import StandLease, completion_verified, create_run, resource_path, EXECUTION_FILES
 
 SCHEMA = 'rosetun.matrix.l3-summary.v1'
@@ -211,11 +212,17 @@ def lab_block(lab_id, evidence_disk, verdict, fixtures, hashes, refusals=(), rou
     return block
 
 
-def run_linux_l3_lab(config, *, diagnostic=False, adapters=None, clock=time.monotonic, sleep=time.sleep,
-                     progress=None):
-    """One L3 run in the lab. A diagnostic run asks the engine to name destinations and is never a qualification."""
+def run_linux_l3_lab(config, *, diagnostic=False, control=None, adapters=None, clock=time.monotonic,
+                     sleep=time.sleep, progress=None):
+    """One L3 run in the lab. A diagnostic run asks the engine to name destinations and is never a qualification.
+
+    A run with `control` is the positive control of the observer, not a qualification: the script stops the
+    service inside a window and the run succeeds only if the observer saw what that did.
+    """
     if config.get('suite') != 'linux-l3' or lab_of(config) is None:
         raise ValueError('configuration is not for the lab')
+    if control is not None and (control not in CONTROLS or diagnostic):
+        raise ValueError('lab-control-invalid')
     progress = progress or (lambda stage: print(stage, file=sys.stderr, flush=True))
     l3, lab_config = config['l3'], config['lab']
     result = dict(schema=SCHEMA, suite='linux-l3', mode='lab', identities={}, configuration=config, stages=[],
@@ -225,6 +232,8 @@ def run_linux_l3_lab(config, *, diagnostic=False, adapters=None, clock=time.mono
                   release_gate=False, exit_code=2)
     if diagnostic:
         result['diagnostic'] = True
+    if control is not None:
+        result['control'] = control
     lease = pair = job = attempt = lab_id = None
     runs, vms, closed = {}, {}, set()
     stage = 'preflight'
@@ -347,7 +356,7 @@ def run_linux_l3_lab(config, *, diagnostic=False, adapters=None, clock=time.mono
         attempt = step('import-create', lambda: adapters.importer(vm, enabled=True,
               guest_run_id=guest_run_id, import_id=identities['import_id'], **config['accounts'],
               **{k + '_timeout': v for k, v in config['timeouts'].items()},
-              l3=dict(l3, lab_marker_address=marker_address())))
+              l3=dict(l3, lab_marker_address=marker_address(), **({'lab_control': control} if control else {}))))
         attempt.deadline = min(attempt.deadline, clock() + config['deadlines']['import'])
         try:
             step('import', attempt.stage)

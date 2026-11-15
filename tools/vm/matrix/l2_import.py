@@ -63,6 +63,10 @@ class L2Import:
             # Only inside the lab, and last: the importer in the image takes it in that place.
             if l3.get('lab_marker_address') is not None:
                 env['LAB_MARKER_ADDRESS'] = l3['lab_marker_address']
+                if l3.get('lab_control') is not None:
+                    env['LAB_CONTROL'] = l3['lab_control']
+            elif l3.get('lab_control') is not None:
+                raise JobError('l3-job-env-lab-control')
             self.l3 = dict(l3)
         raw_env = ''.join(k + '=' + v + '\n' for k, v in env.items()).encode('ascii')
         l2.validate_env(raw_env, profile.name)

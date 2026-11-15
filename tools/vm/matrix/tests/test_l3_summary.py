@@ -6,8 +6,9 @@ import unittest
 from unittest.mock import patch
 
 from tools.vm.matrix import l3_summary as summary, lab_protocol as wire
-from tools.vm.matrix.tests.test_l3_lab import Flow, Machines, passing_rows, scenario_ids, scenario_rows, unrun_ids
-from tools.vm.matrix.tests.test_lab import icmp, ip_frame
+from tools.vm.matrix.tests.test_l3_lab import (Flow, Machines, passing_rows, scenario_ids, scenario_rows, unrun_ids,
+                                               wire_frame)
+from tools.vm.matrix.tests.test_lab import icmp, ip_frame, tcp
 
 LEAK = ip_frame(wire.CLIENTS[4], wire.TARGETS[4], 1, icmp(8))
 SCRIPT = Path(__file__).resolve().parents[2] / 'linux' / 'guest' / 'run-l3.sh'
@@ -320,6 +321,137 @@ class TableTests(unittest.TestCase):
         text = SCRIPT.read_text(encoding='utf-8')
         body = text.split('lab_mark() {' + chr(10), 1)[1].split(chr(10) + '}' + chr(10), 1)[0]
         self.assertEqual('[ -n "$LAB_MARKER_ADDRESS" ] || return 0', body.splitlines()[0].strip())
+
+
+DIRECT_FLOW = (wire_frame(wire.CLIENTS[4], wire.TARGETS[4], 6, tcp(40000, 443, flags=0x02)),
+               wire_frame(wire.TARGETS[4], wire.CLIENTS[4], 6, tcp(443, 40000, flags=0x12), reply=True))
+
+
+class ControlTests(Flow):
+    """The positive control `stop-helper`: a success only if the observer saw what the stopped service allowed."""
+
+    def agreements(self, result):
+        return {row['id']: row['agreement'] for row in result['crosscheck']}
+
+    def direct(self, label='connect_ks', frames=DIRECT_FLOW):
+        return [(name, frames if name == label else (), True) for name in
+                ('reported', 'identity', 'connect_ks', 'capabilities', 'lan_on')]
+
+    def control(self, spec=None, **options):
+        return self.go(Machines(self, windows=spec if spec is not None else self.direct(), **options),
+                       control='stop-helper')
+
+    def test_the_run_succeeds_when_the_window_shows_the_direct_flow_the_script_says_was_refused(self):
+        result = self.control()
+        self.assertEqual((0, 'control-met', 'stop-helper'), (result['exit_code'], result['outcome'], result['control']))
+        self.assertEqual(dict(name='stop-helper', expected=summary.CONTROL_EXPECTATIONS['stop-helper'], met=True,
+                              ordinary_exit_code=1), result['control_result'])
+        self.assertEqual('DISAGREE', self.agreements(result)['killswitch.direct-blocked'])
+        self.assertFalse(result['release_gate'])
+        self.assertEqual('UNVERIFIED', result['security_invariants'])
+
+    def test_the_same_windows_without_the_control_are_an_ordinary_run_that_found_something(self):
+        result = self.go(Machines(self, windows=self.direct()))
+        self.assertEqual((1, 'findings'), (result['exit_code'], result['outcome']))
+        self.assertNotIn('control', result)
+        self.assertNotIn('control_result', result)
+
+    def test_a_clean_window_where_the_control_means_a_leak_is_exit_two(self):
+        result = self.control(self.direct(frames=()))
+        self.assertEqual((2, 'control-not-met', False, 0), (result['exit_code'], result['outcome'],
+                                                          result['control_result']['met'],
+                                                          result['control_result']['ordinary_exit_code']))
+
+    def not_met(self, spec, ordinary):
+        # One run per test: the runs of a test share one state directory.
+        result = self.control(spec)
+        self.assertEqual((2, False, ordinary), (result['exit_code'], result['control_result']['met'],
+                                                result['control_result']['ordinary_exit_code']))
+        self.assertEqual([], result['errors'])
+
+    @staticmethod
+    def flow(source, target, port):
+        return (wire_frame(source, target, 6, tcp(40000, port, flags=0x02)),
+                wire_frame(target, source, 6, tcp(port, 40000, flags=0x12), reply=True))
+
+    def test_a_leak_that_is_not_a_flow_to_the_target_is_exit_two(self):
+        self.not_met(self.direct(frames=(LEAK,)), 1)
+
+    def test_a_syn_the_target_never_answered_is_exit_two(self):
+        self.not_met(self.direct(frames=DIRECT_FLOW[:1]), 1)
+
+    def test_a_flow_to_another_port_of_the_target_is_exit_two(self):
+        self.not_met(self.direct(frames=self.flow(wire.CLIENTS[4], wire.TARGETS[4], 8080)), 1)
+
+    def test_a_flow_to_another_address_is_exit_two(self):
+        self.not_met(self.direct(frames=self.flow(wire.CLIENTS[4], '198.51.100.7', 443)), 1)
+
+    def test_the_flow_in_the_window_of_the_first_session_does_not_count(self):
+        self.not_met(self.direct('reported'), 1)
+
+    def test_the_flow_in_the_window_of_the_identity_session_does_not_count(self):
+        self.not_met(self.direct('identity'), 1)
+
+    def test_the_flow_in_a_window_outside_the_group_does_not_count(self):
+        self.not_met(self.direct('capabilities'), 0)
+
+    def test_a_scenario_that_did_not_pass_cannot_disagree_with_the_window(self):
+        result = self.control(rows=results(killswitch__direct_blocked=('FAIL', 'the direct path answered')))
+        self.assertEqual('NOT_APPLICABLE', self.agreements(result)['killswitch.direct-blocked'])
+        self.assertEqual((2, False), (result['exit_code'], result['control_result']['met']))
+
+    def test_a_machine_that_did_not_stop_is_exit_two_whatever_the_observer_saw(self):
+        result = self.control()
+        self.assertEqual(0, result['exit_code'])
+        result['completed'] = False
+        summary.decide(result, False)
+        self.assertEqual((2, False), (result['exit_code'], result['control_result']['met']))
+
+    def test_an_interrupted_control_run_stays_130(self):
+        result = self.control()
+        summary.decide(result, True)
+        self.assertEqual((130, 'interrupted'), (result['exit_code'], result['outcome']))
+
+    def test_only_the_stop_helper_control_exists(self):
+        self.assertEqual(('stop-helper',), summary.CONTROLS)
+        with self.assertRaisesRegex(ValueError, 'lab-control-invalid'):
+            self.go(Machines(self), control='other')
+
+
+class ScriptControlTests(unittest.TestCase):
+    """`run-l3.sh`: the control acts in one place, and nothing changes without it."""
+
+    def setUp(self):
+        self.text = SCRIPT.read_text(encoding='utf-8')
+
+    def body(self, name):
+        return self.text.split(name + '() {' + chr(10), 1)[1].split(chr(10) + '}' + chr(10), 1)[0]
+
+    def test_the_control_stops_the_service_and_makes_one_direct_request_inside_the_kill_switch_window(self):
+        body = self.body('control_stop_helper')
+        self.assertEqual(['timeout "$UNIT_TIMEOUT_SECONDS" systemctl stop rosetun-helper.service',
+                          'direct_https >/dev/null'], [line.strip() for line in body.splitlines()])
+        scenario = self.body('scenario_kill_switch')
+        lines = [line.strip() for line in scenario.splitlines()]
+        gate = lines.index('if ! passed killswitch.direct-blocked; then')
+        control = lines.index('[ "$LAB_CONTROL" != stop-helper ] || control_stop_helper')
+        self.assertLess(gate, control)
+        # Between the passed check and the control nothing opens or closes a session, and there is one session.
+        self.assertNotIn('connect_with', ' '.join(lines[gate:control]))
+        self.assertEqual(1, scenario.count('connect_with request-kill-switch.json'))
+
+    def test_nothing_else_reads_the_control_and_without_it_the_script_acts_as_before(self):
+        reads = [line.strip() for line in self.text.splitlines() if 'LAB_CONTROL' in line]
+        self.assertEqual(4, len(reads))
+        self.assertIn("LAB_CONTROL=''", reads)
+        self.assertIn('[ "$LAB_CONTROL" != stop-helper ] || control_stop_helper', reads)
+        self.assertIn('[ -z "$LAB_CONTROL" ] || { [ "$LAB_CONTROL" = stop-helper ] && [ -n "$LAB_MARKER_ADDRESS" ]; } ||',
+                      reads)
+        self.assertTrue(any('DNS_PROBE_ADDRESS LAB_MARKER_ADDRESS LAB_CONTROL || return 1' in line for line in reads))
+
+    def test_the_job_may_name_the_control_only_for_an_l3_stage(self):
+        start = (SCRIPT.parent / 'start.sh').read_text(encoding='utf-8')
+        self.assertIn('[ "$stage" != l3 ] || keys+=(LAB_MARKER_ADDRESS LAB_CONTROL)', start)
 
 
 if __name__ == '__main__':

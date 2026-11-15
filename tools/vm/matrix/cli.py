@@ -8,6 +8,7 @@ import sys
 
 from .catalog import LINUX_ROOT, SUITES
 from .lab_protocol import CONTROLS
+from .l3_summary import CONTROLS as L3_CONTROLS
 from .config import load_profile, make_plan
 from .report import ASSESSMENT_SCHEMA, assess_files
 from .resources import ArchiveRefused, archive_run, inspect_runs, recovery_plan
@@ -49,6 +50,8 @@ def main(argv=None):
     run.add_argument('--dry-run', action='store_true')
     run.add_argument('--lab', action='store_true',
                      help='run linux-l3 inside the two-machine lab (needs an execution.v3 configuration)')
+    run.add_argument('--control', choices=L3_CONTROLS,
+                     help='with --lab: the positive control of the observer; exit 0 only if it saw what the control did')
     run.add_argument('--diagnostic', action='store_true',
                      help='with --lab: ask the engine to name destinations; the run is never a qualification (exit 2 or more)')
     plan = commands.add_parser("plan", help="write a deterministic catalog snapshot to stdout")
@@ -91,12 +94,15 @@ def main(argv=None):
                 raise ValueError('--lab and the lab block of the configuration go together')
             if args.diagnostic and not args.lab:
                 raise ValueError('--diagnostic needs --lab')
+            if args.control and (not args.lab or args.diagnostic or args.suite != 'linux-l3'):
+                raise ValueError('--control needs --lab and cannot go with --diagnostic')
             if args.dry_run:
                 result, code = preflight(config, dry_run=True), 0
             else:
                 from . import l3_lab, orchestrator
                 result = (l3_lab.run_linux_l3_lab if args.lab else orchestrator.run_linux_l3 if args.suite == 'linux-l3'
-                          else orchestrator.run_linux_l2)(config, **({'diagnostic': True} if args.diagnostic else {}))
+                          else orchestrator.run_linux_l2)(config, **({'diagnostic': True} if args.diagnostic else {}),
+                                                          **({'control': args.control} if args.control else {}))
                 code = result['exit_code']
         elif args.command == "recover" and args.archive:
             try:

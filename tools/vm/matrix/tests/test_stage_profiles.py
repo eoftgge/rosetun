@@ -381,6 +381,20 @@ class L3PackageTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'invalid'):
             l2.validate_env(raw + b'LAB_MARKER_ADDRESS=203.0.113.2:9100\nLAB_MARKER_ADDRESS=203.0.113.2:9100\n', 'l3')
 
+    def test_the_lab_control_is_optional_and_only_the_one_after_the_marker_address(self):
+        raw = (self.root / 'job.env').read_bytes()
+        marked = raw + b'LAB_MARKER_ADDRESS=203.0.113.2:9100\n'
+        self.assertEqual(15, len(l2.validate_env(marked + b'LAB_CONTROL=stop-helper\n', 'l3')))
+        for value in ('other', 'stop-helper ', '', 'STOP-HELPER'):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                l2.validate_env(marked + b'LAB_CONTROL=' + value.encode() + b'\n', 'l3')
+        with self.assertRaisesRegex(ValueError, 'lab-control'):
+            l2.validate_env(raw + b'LAB_CONTROL=stop-helper\n', 'l3')
+        with self.assertRaisesRegex(ValueError, 'fields'):
+            l2.validate_env(marked + b'LAB_CONTROL=stop-helper\n', 'l2')
+        with self.assertRaisesRegex(ValueError, 'invalid'):
+            l2.validate_env(marked + b'LAB_CONTROL=stop-helper\nLAB_CONTROL=stop-helper\n', 'l3')
+
     def test_requests_must_be_the_generator_output_for_one_node(self):
         path = self.root / 'artifacts/request-lan.json'
         saved = path.read_bytes()
@@ -708,6 +722,55 @@ class L3ImportTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 helper.request(encode(request_with(value)[0]))
         self.assertNotIn('LAB_MARKER_ADDRESS', self.obj.request['env'])
+
+    def test_a_lab_control_in_job_env_comes_after_the_marker_and_the_helper_in_the_image_agrees(self):
+        def request_with(marker, control):
+            request = copy.deepcopy(self.obj.request)
+            for key, value in (('LAB_MARKER_ADDRESS', marker), ('LAB_CONTROL', control)):
+                if value is not None:
+                    request['env'][key] = value
+            raw = ''.join(k + '=' + v + chr(10) for k, v in request['env'].items()).encode('ascii')
+            hashes = dict(request['hashes'], **{'job.env': hashlib.sha256(raw).hexdigest()})
+            request['identity']['manifest_sha256'] = hashlib.sha256(media.manifest(hashes, L3.payload)).hexdigest()
+            return request, raw
+
+        def encode(value):
+            return base64.b64encode(json.dumps(value).encode()).decode()
+        request, raw = request_with('203.0.113.2:9100', 'stop-helper')
+        self.assertEqual([b'LAB_MARKER_ADDRESS=203.0.113.2:9100', b'LAB_CONTROL=stop-helper'], raw.splitlines()[-2:])
+        l2.validate_env(raw, 'l3')
+        self.assertEqual(raw, helper.request(encode(request))[3])
+        for marker, control in (('203.0.113.2:9100', 'other'), (None, 'stop-helper'), ('203.0.113.2:9100', 'stop-helper ')):
+            with self.subTest(marker=marker, control=control), self.assertRaises(ValueError):
+                helper.request(encode(request_with(marker, control)[0]))
+        reordered = copy.deepcopy(request)
+        reordered['env'] = {k: reordered['env'][k] for k in (*list(reordered['env'])[:-2], 'LAB_CONTROL', 'LAB_MARKER_ADDRESS')}
+        raw = ''.join(k + '=' + v + chr(10) for k, v in reordered['env'].items()).encode('ascii')
+        hashes = dict(reordered['hashes'], **{'job.env': hashlib.sha256(raw).hexdigest()})
+        reordered['identity']['manifest_sha256'] = hashlib.sha256(media.manifest(hashes, L3.payload)).hexdigest()
+        with self.assertRaises(ValueError):
+            helper.request(encode(reordered))
+        self.assertNotIn('LAB_CONTROL', self.obj.request['env'])
+
+    def test_the_importer_writes_the_lab_control_after_the_marker_and_only_with_it(self):
+        package = self.vm.run.directory / 'l2-package'
+        plain = (package / 'job.env').read_bytes()
+        for ids, block in (('c', dict(L3_BLOCK, lab_marker_address='203.0.113.2:9100', lab_control='stop-helper')),
+                           ('d', dict(L3_BLOCK, lab_marker_address='203.0.113.2:9100'))):
+            del self.vm._l2_import
+            for name in ('job.env', 'manifest.sha256'):
+                (package / name).write_bytes(b'')
+            delivery.L2Import(self.vm, guest_run_id=GUEST, import_id=ids * 32, user_a='l2a', user_b='l2b',
+                              enabled=True, l3=block)
+            written = (package / 'job.env').read_bytes()
+            self.assertEqual(plain + b'LAB_MARKER_ADDRESS=203.0.113.2:9100\n'
+                             + (b'LAB_CONTROL=stop-helper\n' if 'lab_control' in block else b''), written)
+        del self.vm._l2_import
+        for name in ('job.env', 'manifest.sha256'):
+            (package / name).write_bytes(b'')
+        with self.assertRaises(ValueError):
+            delivery.L2Import(self.vm, guest_run_id=GUEST, import_id='e' * 32, user_a='l2a', user_b='l2b',
+                              enabled=True, l3=dict(L3_BLOCK, lab_control='stop-helper'))
 
     def test_the_importer_writes_the_lab_marker_last_only_when_it_is_given(self):
         package = self.vm.run.directory / 'l2-package'
