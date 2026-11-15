@@ -2,8 +2,8 @@ use eframe::egui::{self, RichText};
 #[cfg(any(windows, target_os = "linux"))]
 use rosetun_config::QuitAction;
 use rosetun_config::{
-    AccentPreset, ConnectionMode, ConnectionState, LanguageSetting, LocalProxySettings, TlsMode,
-    XrayUse,
+    AccentPreset, ConnectionMode, ConnectionState, DelayMode, LanguageSetting, LocalProxySettings,
+    TlsMode, XrayUse,
 };
 use rosetun_core::{CheckKind, CheckStatus, DnsPreset};
 
@@ -31,6 +31,8 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
             connection_mode(ui, state, actions);
             ui.add_space(theme::space::M);
             connection(ui, state, actions);
+            ui.add_space(theme::space::M);
+            delay_mode(ui, state, actions);
         }
         SettingsSection::Network => dns(ui, state, actions),
         SettingsSection::Advanced => advanced(ui, state, actions),
@@ -374,6 +376,54 @@ fn connection_mode(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
             });
         });
     });
+}
+
+/// How the delay on the connection screen is measured. A choice is saved at
+/// once and a running session measures again.
+fn delay_mode(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
+    let mode = state.config.interface.delay_mode;
+    widgets::settings_card(ui, |card| {
+        card.row_with_title(
+            |ui| {
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = theme::space::XXS;
+                    ui.label(RichText::new(tr!("delay")).color(theme::palette().text));
+                    widgets::row_detail(ui, &delay_mode_hint(mode), false);
+                });
+            },
+            None,
+            |ui| {
+                let options = DelayMode::ALL.map(|choice| (choice, delay_mode_label(choice)));
+                if let Some(chosen) = widgets::segmented(
+                    ui,
+                    "delay_mode",
+                    mode,
+                    &options,
+                    false,
+                    state.can_edit_settings(),
+                ) {
+                    actions.push(Action::SetDelayMode(chosen));
+                }
+            },
+        );
+    });
+}
+
+/// The name of a way to measure the delay.
+pub(crate) fn delay_mode_label(mode: DelayMode) -> String {
+    match mode {
+        DelayMode::Full => tr!("delay-mode-full"),
+        DelayMode::Repeated => tr!("delay-mode-repeated"),
+    }
+}
+
+/// What a way of measuring the delay means, in one thought: the detail of the
+/// setting and the hover hint of the delay on the connection screen.
+pub(crate) fn delay_mode_hint(mode: DelayMode) -> String {
+    match mode {
+        DelayMode::Full => tr!("delay-mode-full-hint"),
+        DelayMode::Repeated => tr!("delay-mode-repeated-hint"),
+    }
 }
 
 /// `None` for what the port field holds and cannot be saved.
@@ -2049,6 +2099,40 @@ mod pending_notice_tests {
                 assert!((lockdown.left() - kill_switch.left() - theme::space::XL).abs() <= 1.0);
                 assert_eq!(rect(tr!("allow-lan")).left(), kill_switch.left());
                 assert!(lockdown.top() > kill_switch.bottom());
+            });
+        }
+    }
+
+    #[test]
+    fn the_delay_mode_is_chosen_in_the_connection_settings() {
+        for language in LANGUAGES {
+            i18n::in_language(language, || {
+                let state = connected(ConnectionState::Connected);
+                let (size, nav) = WINDOWS[0];
+                let mut actions = Vec::new();
+                let mut screen = TestScreen::new(size);
+                let mut show = |ui: &mut egui::Ui| {
+                    page(ui, nav, |ui| delay_mode(ui, &state, &mut actions));
+                };
+                let shown = screen.settle(&mut show);
+                let other = DelayMode::ALL
+                    .into_iter()
+                    .find(|mode| *mode != state.config.interface.delay_mode)
+                    .unwrap();
+                for mode in DelayMode::ALL {
+                    let (_, rect) = shown
+                        .iter()
+                        .find(|(text, _)| *text == delay_mode_label(mode))
+                        .unwrap_or_else(|| panic!("no {mode:?} choice"));
+                    assert!(rect.right() <= size.x, "{mode:?}: {rect:?}");
+                }
+                screen.click_text(&delay_mode_label(other), &mut show);
+                drop(show);
+                assert!(
+                    actions.iter().any(
+                        |action| matches!(action, Action::SetDelayMode(mode) if *mode == other)
+                    )
+                );
             });
         }
     }

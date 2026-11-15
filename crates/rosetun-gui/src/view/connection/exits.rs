@@ -3,8 +3,7 @@ use rosetun_ipc::ExitOutcome;
 use super::*;
 use crate::state::SessionExitRow;
 use crate::view::exits::exit_title;
-
-use super::hero::delay_mode_hint;
+use crate::view::settings::delay_mode_hint;
 
 /// "Rules through other servers", with the gap above it: one row per exit of
 /// the running session. Returns whether the card was shown.

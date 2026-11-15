@@ -275,7 +275,7 @@ mod tests {
         }
     }
 
-    fn delay_state(mode: DelayMode) -> State {
+    fn delay_state(mode: rosetun_config::DelayMode) -> State {
         let mut state = State::default();
         state.config_ready = true;
         state.helper_available = true;
@@ -292,8 +292,11 @@ mod tests {
     }
 
     #[test]
-    fn the_delay_row_names_the_mode_in_both_languages_at_the_smallest_window() {
+    fn the_delay_row_shows_the_number_without_the_way_of_measuring() {
+        use rosetun_config::DelayMode;
+
         use crate::i18n::{self, Language};
+        use crate::view::settings::delay_mode_label;
         for language in [Language::English, Language::Russian] {
             i18n::in_language(language, || {
                 for mode in DelayMode::ALL {
@@ -304,52 +307,17 @@ mod tests {
                         egui::CentralPanel::default()
                             .show(ui, |ui| hero_card(ui, &state, &mut actions));
                     });
-                    let named = texts
-                        .iter()
-                        .find(|(text, _)| text == &delay_mode_label(mode))
-                        .unwrap_or_else(|| panic!("no mode name for {mode:?}"));
                     assert!(
                         texts
                             .iter()
                             .any(|(text, _)| text == &tr!("ping-ms", ms = "42"))
                     );
-                    assert!(named.1.right() <= 960.0, "{:?}", named.1);
-                    let other = DelayMode::ALL
-                        .into_iter()
-                        .find(|other| *other != mode)
-                        .unwrap();
-                    assert!(
-                        !texts
-                            .iter()
-                            .any(|(text, _)| text == &delay_mode_label(other))
-                    );
+                    for name in DelayMode::ALL.map(delay_mode_label) {
+                        assert!(!texts.iter().any(|(text, _)| *text == name), "{name}");
+                    }
                 }
             });
         }
-    }
-
-    #[test]
-    fn choosing_the_other_delay_mode_in_the_menu_asks_to_save_it() {
-        let state = delay_state(DelayMode::Repeated);
-        let mut actions = Vec::new();
-        let mut screen = crate::test_ui::TestScreen::new(egui::vec2(960.0, 640.0));
-        let mut show = |ui: &mut egui::Ui| {
-            egui::CentralPanel::default().show(ui, |ui| hero_card(ui, &state, &mut actions));
-        };
-        screen.click_text(&delay_mode_label(DelayMode::Repeated), &mut show);
-        let opened = screen.settle(&mut show);
-        assert!(
-            opened
-                .iter()
-                .any(|(text, _)| text == &delay_mode_label(DelayMode::Full))
-        );
-        screen.click_text(&delay_mode_label(DelayMode::Full), &mut show);
-        drop(show);
-        assert!(
-            actions
-                .iter()
-                .any(|action| matches!(action, Action::SetDelayMode(DelayMode::Full)))
-        );
     }
 }
 
@@ -759,7 +727,9 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                                     };
                                     let enabled =
                                         !matches!(state.tunnel_delay, TunnelDelay::Measuring);
-                                    let hint = delay_mode_hint(state.config.interface.delay_mode);
+                                    let hint = crate::view::settings::delay_mode_hint(
+                                        state.config.interface.delay_mode,
+                                    );
                                     let response = ui
                                         .add(
                                             egui::Label::new(RichText::new(text).color(color))
@@ -786,8 +756,6 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                                     if response.clicked() || refresh {
                                         actions.push(Action::MeasureDelay);
                                     }
-                                    ui.add_space(theme::space::S);
-                                    delay_mode_menu(ui, state, actions);
                                 });
                             }
                             if let Some(status) = visible_status.filter(|status| {
@@ -1060,81 +1028,6 @@ fn exit_line(exit: &ExitLookup, revealed: bool) -> (String, Color32, Option<Stri
 
 /// One line of the details list: a small label in a 96 px column, then the
 /// value, both centred on one row height.
-/// The name of a way to measure the delay: the menu's items and its trigger.
-pub(super) fn delay_mode_label(mode: DelayMode) -> String {
-    match mode {
-        DelayMode::Full => tr!("delay-mode-full"),
-        DelayMode::Repeated => tr!("delay-mode-repeated"),
-    }
-}
-
-/// What a way of measuring the delay means, in one thought.
-pub(super) fn delay_mode_hint(mode: DelayMode) -> String {
-    match mode {
-        DelayMode::Full => tr!("delay-mode-full-hint"),
-        DelayMode::Repeated => tr!("delay-mode-repeated-hint"),
-    }
-}
-
-/// The way the delay is measured, as a compact menu next to the number. A
-/// choice is saved at once and the check starts over.
-fn delay_mode_menu(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
-    let mode = state.config.interface.delay_mode;
-    let color = theme::palette().text_dim;
-    let label = ui.add(
-        egui::Label::new(RichText::new(delay_mode_label(mode)).small().color(color))
-            .sense(egui::Sense::hover()),
-    );
-    let (slot, _) = ui.allocate_exact_size(
-        egui::vec2(theme::space::M, label.rect.height()),
-        egui::Sense::hover(),
-    );
-    icons::paint(
-        ui.painter(),
-        slot.center(),
-        Icon::Chevron { open: 1.0 },
-        color,
-    );
-    let trigger = ui
-        .interact(
-            label.rect.union(slot),
-            ui.scope_id().with("delay_mode"),
-            egui::Sense::click(),
-        )
-        .on_hover_cursor(egui::CursorIcon::PointingHand)
-        .on_hover_text(delay_mode_hint(mode));
-    trigger.widget_info(|| {
-        egui::WidgetInfo::labeled(egui::Role::Button, true, delay_mode_label(mode))
-    });
-    let can_edit = state.can_edit_settings();
-    widgets::menu_popup(&trigger).show(|ui| {
-        let labels = DelayMode::ALL.map(delay_mode_label);
-        widgets::menu_choice_width(
-            ui,
-            &labels.iter().map(String::as_str).collect::<Vec<_>>(),
-            trigger.rect.width(),
-        );
-        for (choice, name) in DelayMode::ALL.into_iter().zip(&labels) {
-            if widgets::menu_item(
-                ui,
-                widgets::MenuItem {
-                    label: name,
-                    enabled: can_edit,
-                    selected: choice == mode,
-                    danger: false,
-                    note: None,
-                },
-            )
-            .on_hover_text(delay_mode_hint(choice))
-            .clicked()
-            {
-                actions.push(Action::SetDelayMode(choice));
-                ui.close();
-            }
-        }
-    });
-}
-
 fn detail_row<R>(
     ui: &mut egui::Ui,
     label: impl AsRef<str>,
