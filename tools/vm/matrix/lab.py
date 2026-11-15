@@ -590,9 +590,10 @@ def lab_smoke(config, *, canary=False, tunnel=False, evidence_disk=False, durati
         sent, reports, dns_reports = {}, None, None
 
         def intervene():
-            """Once the lab has marked the opening, and only then: stop what this control stops."""
+            """Once the lab has answered every exchange of the test machine, and only then: stop what this control stops."""
             nonlocal link_is_down
-            if result['control']['intervened'] or lab.call('window', expected, window, **extra).get('open_seen') is not True:
+            if (result['control']['intervened']
+                    or lab.call('window', expected, window, **extra).get('exchanges_done') is not True):
                 return
             result['control']['intervened'] = True
             if control == 'observer-stopped':
@@ -625,6 +626,9 @@ def lab_smoke(config, *, canary=False, tunnel=False, evidence_disk=False, durati
         except Exception as error:
             result['errors'].append(failure('probe', error))
             replies, marker_replies = [], []
+        if control in GUEST_CONTROLS and not result['control']['intervened']:
+            # The exchanges did not all finish while the test machine waited: nothing was stopped, so nothing is shown.
+            result['errors'].append(dict(stage='control', kind='ValueError', reason='exchanges-not-completed'))
         result['replies'] = replies
         lab.call('finish', expected, window, **extra)
         # The observer has stopped, so what the test machine sends once its link is back is not judged.

@@ -1296,6 +1296,13 @@ def answer_exchange(listener, family, service, request):
             connection.close()
 
 
+def exchanges_done(request, marks, logs):
+    """The moment a control may act: the opening is served and every expected exchange has its answer."""
+    answered = {row['nonce'] for row in logs if 'reason' not in row}
+    return (bool(marks) and marks[0]['word'] == 'open'
+            and {p['nonce'] for p in request['probes']} <= answered)
+
+
 def serve(request, directory):
     deadline = time.monotonic() + request.get('duration_seconds', DURATION)
     logs, dropped, marks, ended, started = [], 0, [], None, None
@@ -1420,8 +1427,6 @@ def serve(request, directory):
                             marker = accept_marker(request, marks, data, peer[0])
                             key.fileobj.sendto(marker_answer(marker), peer)
                             marks.append(dict(word=marker['word'], nonce=marker['nonce'], at=time.monotonic()))
-                            if 'control' in request and marker['word'] == 'open':
-                                (directory / 'open-seen').touch()
                     except Exception as error:
                         refuse(logs, 'marker', 4, error)
                     continue
@@ -1434,6 +1439,9 @@ def serve(request, directory):
                 logs.append(row)
                 if sum('reason' not in entry for entry in logs) > 8 or len(json.dumps(logs)) > LOG_LIMIT:
                     raise ValueError('target-log-limit')
+                # The control acts only once the last answer is out; the test machine's exchanges are over then.
+                if 'control' in request and exchanges_done(request, marks, logs):
+                    (directory / 'exchanges-done').touch()
         place = 'finish'
         if time.monotonic() >= deadline:
             raise ValueError('capture-deadline')
@@ -1541,7 +1549,7 @@ def main(request):
         serve(request, directory)
         return {}
     if request['role'] == 'lab' and operation == 'window' and 'control' in request:
-        return dict(open_seen=(directory / 'open-seen').exists())
+        return dict(exchanges_done=(directory / 'exchanges-done').exists())
     if request['role'] == 'lab' and operation == 'halt' and request.get('control') == 'observer-stopped':
         # The control stops the observer between the markers; `finish` then finds it stopped.
         (directory / 'stop').touch(exist_ok=False)

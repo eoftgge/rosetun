@@ -101,7 +101,9 @@ class Harness(unittest.TestCase):
                     return dict(capture_ready=True)
                 if operation == 'window':
                     windows[0] += 1
-                    return dict(open_seen=windows[0] >= 2 and fault != 'never-seen')
+                    # The lab answers its last exchange on the second poll, or on the fifth when it is slow.
+                    return dict(exchanges_done=windows[0] >= (5 if fault == 'slow-exchanges' else 2)
+                                and fault != 'never-seen')
                 if operation == 'halt':
                     return dict(halted=True)
                 if operation == 'finish':
@@ -175,11 +177,21 @@ class ControlRunTests(Harness):
         # The first poll found no marker and nothing was stopped; once it was stopped, nobody asked again.
         self.assertEqual(['setup', 'window', 'window', 'halt', 'finish'], self.lab_operations())
         self.assertTrue(result['control']['intervened'])
+        # The opening can be marked long before the last exchange is answered: nothing is stopped until then.
+        for control in STOPPED:
+            with self.subTest(control=control, fault='slow-exchanges'):
+                slow = self.scenario(control, fault='slow-exchanges')
+                self.assertEqual((0, True), (slow['exit_code'], slow['control']['intervened']))
+                self.assertEqual(['setup'] + ['window'] * 5 + (['halt'] if control == 'observer-stopped' else [])
+                                 + ['finish'], self.lab_operations())
+                self.assertEqual(2 if control == 'link-down' else 0, len(self.qmps['test'].links))
         for control in STOPPED:
             with self.subTest(control=control):
                 missed = self.scenario(control, fault='never-seen')
                 self.assertEqual((2, False, False), (missed['exit_code'], missed['control']['intervened'],
                                                      missed['control']['met']))
+                self.assertEqual([dict(stage='control', kind='ValueError', reason='exchanges-not-completed')],
+                                 missed['errors'])
                 self.assertEqual(['setup'] + ['window'] * 6 + ['finish'], self.lab_operations())
                 self.assertEqual([], self.qmps['test'].links)
 
@@ -310,7 +322,7 @@ class RequestTests(unittest.TestCase):
             if name == 'guest-exec-status':
                 return self.statuses.pop(0) if self.statuses else dict(
                     exited=True, exitcode=0, **{'out-data': base64.b64encode(json.dumps(
-                        dict(lab_id='a' * 32, boot_id=self.boot, open_seen=True)).encode()).decode()})
+                        dict(lab_id='a' * 32, boot_id=self.boot, exchanges_done=True)).encode()).decode()})
             return dict(pid=123)
         self.vm = SimpleNamespace(_check=lambda: None, _guest_lock=threading.Lock(), reset_pending=False,
                                   vm_uuid=self.boot, last_boot_id=self.boot, qga=SimpleNamespace(
@@ -429,15 +441,32 @@ class GuestControlTests(unittest.TestCase):
              patch.object(self.entry.time, 'sleep'):
             return self.entry.main(request)
 
-    def test_the_window_operation_says_whether_the_opening_was_seen_and_needs_a_control(self):
+    def test_the_window_operation_says_whether_every_exchange_was_answered_and_needs_a_control(self):
         directory, run, request = self.serve_dir(control='link-down')
         request['operation'] = 'window'
-        self.assertEqual(dict(open_seen=False), self.main(directory, request))
-        (run / 'open-seen').touch()
-        self.assertEqual(dict(open_seen=True), self.main(directory, request))
+        self.assertEqual(dict(exchanges_done=False), self.main(directory, request))
+        (run / 'exchanges-done').touch()
+        self.assertEqual(dict(exchanges_done=True), self.main(directory, request))
         directory, run, request = self.serve_dir()
         with self.assertRaises(ValueError):
             self.main(directory, dict(request, operation='window'))
+
+    def test_the_lab_is_done_only_after_the_opening_and_an_answer_to_every_expected_exchange(self):
+        probes = self.request['probes']
+        answered = [{**p, 'response': wire.answer(p).hex()} for p in probes]
+        opening = [dict(word='open', nonce='0' * 24, at=1.0)]
+        self.assertEqual(8, len(probes))
+        self.assertFalse(self.entry.exchanges_done(self.request, [], answered))
+        self.assertFalse(self.entry.exchanges_done(self.request, opening, []))
+        for count in range(len(probes)):
+            with self.subTest(answered=count):
+                self.assertFalse(self.entry.exchanges_done(self.request, opening, answered[:count]))
+        # A refused exchange is no answer, and neither is the same one twice.
+        refused = answered[:7] + [dict(service='udp', family=4, reason='unexpected-request')]
+        self.assertFalse(self.entry.exchanges_done(self.request, opening, refused))
+        self.assertFalse(self.entry.exchanges_done(self.request, opening, answered[:7] + answered[:1]))
+        self.assertTrue(self.entry.exchanges_done(self.request, opening, answered))
+        self.assertTrue(self.entry.exchanges_done(self.request, opening, refused + answered[7:]))
 
     def test_the_halt_operation_stops_the_observer_once_and_only_for_that_control(self):
         directory, run, request = self.serve_dir(control='observer-stopped')
