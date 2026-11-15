@@ -537,6 +537,104 @@ public static class RosetunOtherLogon {
     } -ArgumentList $Name, $Password, $GuestDir, $ProtocolVersion, $Commands
 }
 
+# The session's loopback delay entry serves only a client that holds one of its
+# accounts. Run as a standard local account, a connection with no account, with
+# a wrong password and with another outbound's password must all be refused;
+# the right account is accepted, which shows the probe can succeed at all. The
+# port and the accounts come from the rendered config, which only SYSTEM and
+# administrators can read.
+function Test-OtherAccountDelayEntry {
+    param([string]$Name, [string]$Password)
+    Invoke-RosetunGuest -ScriptBlock {
+        param($name, $password)
+        if (-not ('RosetunEntryLogon' -as [type])) {
+            Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+
+public static class RosetunEntryLogon {
+    [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    static extern bool LogonUserW(string user, string domain, string password,
+        int logonType, int provider, out IntPtr token);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern bool CloseHandle(IntPtr handle);
+
+    public static IntPtr Logon(string user, string password) {
+        IntPtr token;
+        if (!LogonUserW(user, ".", password, 2, 0, out token)) {
+            throw new Win32Exception(Marshal.GetLastWin32Error());
+        }
+        return token;
+    }
+}
+'@
+        }
+
+        $config = Get-Content -LiteralPath 'C:\rosetun\data\run\sing-box\config.json' -Raw |
+            ConvertFrom-Json
+        $entry = @($config.inbounds | Where-Object { $_.tag -eq 'delay-in' }) | Select-Object -First 1
+        if (-not $entry) { return [pscustomobject]@{ Found = $false } }
+        $users = @($entry.users)
+        $account = $users | Select-Object -First 1
+        $other = @($users | Where-Object { $_.username -ne $account.username }) |
+            Select-Object -First 1
+
+        # The first byte after the method choice: 0x00 is "no authentication needed".
+        function Test-Socks {
+            param([int]$Port, [string]$User, [string]$Pass, [bool]$WithAccount)
+            $client = [System.Net.Sockets.TcpClient]::new()
+            try {
+                $client.ReceiveTimeout = 5000
+                $client.SendTimeout = 5000
+                $client.Connect('127.0.0.1', $Port)
+                $stream = $client.GetStream()
+                $methods = if ($WithAccount) { [byte[]]@(5, 2, 0, 2) } else { [byte[]]@(5, 1, 0) }
+                $stream.Write($methods, 0, $methods.Length)
+                $choice = [byte[]]::new(2)
+                if ($stream.Read($choice, 0, 2) -lt 2) { return 'closed' }
+                if ($choice[1] -eq 0) { return 'open' }
+                if ($choice[1] -ne 2) { return 'refused' }
+                $user = [Text.Encoding]::UTF8.GetBytes($User)
+                $pass = [Text.Encoding]::UTF8.GetBytes($Pass)
+                $login = [byte[]](@(1, $user.Length) + $user + @($pass.Length) + $pass)
+                $stream.Write($login, 0, $login.Length)
+                $answer = [byte[]]::new(2)
+                if ($stream.Read($answer, 0, 2) -lt 2) { return 'closed' }
+                if ($answer[1] -eq 0) { return 'accepted' }
+                return 'refused'
+            }
+            catch { return 'closed' }
+            finally { $client.Dispose() }
+        }
+
+        $token = [RosetunEntryLogon]::Logon($name, $password)
+        $identity = [System.Security.Principal.WindowsIdentity]::new($token)
+        $context = $identity.Impersonate()
+        try {
+            $port = [int]$entry.listen_port
+            [pscustomobject]@{
+                Found = $true
+                NoAccount = Test-Socks -Port $port -User '' -Pass '' -WithAccount $false
+                WrongPassword = Test-Socks -Port $port -User $account.username `
+                    -Pass ('x' + $account.password) -WithAccount $true
+                OtherPassword = if ($other) {
+                    Test-Socks -Port $port -User $account.username -Pass $other.password `
+                        -WithAccount $true
+                } else { 'no other account' }
+                OwnAccount = Test-Socks -Port $port -User $account.username `
+                    -Pass $account.password -WithAccount $true
+            }
+        }
+        finally {
+            $context.Undo()
+            $identity.Dispose()
+            [RosetunEntryLogon]::CloseHandle($token) | Out-Null
+        }
+    } -ArgumentList $Name, $Password
+}
+
 $nodeStartedByMatrix = $false
 $blockedNodeStartedByMatrix = $false
 $xrayNode = $null
@@ -678,6 +776,15 @@ Test-Step 'connect' 'server check works while connected' -Note "exit $($probe.Ex
 $delay = Invoke-RosetunCli -Quiet 'delay'
 Test-Step 'connect' 'tunnel delay works' -Note "exit $($delay.ExitCode)" {
     $delay.ExitCode -eq 0 -and $delay.Output -match '(?m)^works \d+ ms$'
+}
+# The repeated delay is a request over a connection that is already open, so
+# it is lower than the full one by the connection and encryption round trips.
+$delayFull = Invoke-RosetunCli -Quiet 'delay' '--mode' 'full'
+$delayRepeated = Invoke-RosetunCli -Quiet 'delay' '--mode' 'repeated'
+Test-Step 'connect' 'full and repeated delay both work' `
+    -Note "full $($delayFull.Output.Trim()); repeated $($delayRepeated.Output.Trim())" {
+    $delayFull.ExitCode -eq 0 -and $delayFull.Output -match '(?m)^works \d+ ms$' -and
+        $delayRepeated.ExitCode -eq 0 -and $delayRepeated.Output -match '(?m)^works \d+ ms$'
 }
 # The same check as through Xray: if it fails here too, the test or the lab is at fault.
 Test-Step 'connect' 'UDP reaches the internet through the node (NTP)' { Test-RosetunUdpInternet }
@@ -1236,6 +1343,26 @@ try {
         Test-Step 'other account' "tunnel remains Connected after $command" {
             $result -and $result.StillConnected
         }
+    }
+    $entryResult = Test-OtherAccountDelayEntry -Name $otherAccountName -Password $otherPassword
+    $entryNote = $entryResult | ConvertTo-Json -Compress
+    Test-Step 'other account' 'the delay entry is listed in the session config' -Note $entryNote {
+        $entryResult.Found
+    }
+    Test-Step 'other account' 'the delay entry refuses a standard account with no account' `
+        -Note $entryNote {
+        $entryResult.Found -and $entryResult.NoAccount -in @('refused', 'closed')
+    }
+    Test-Step 'other account' 'the delay entry refuses a standard account with a wrong password' `
+        -Note $entryNote {
+        $entryResult.Found -and $entryResult.WrongPassword -in @('refused', 'closed')
+    }
+    Test-Step 'other account' "the delay entry refuses another outbound's password" `
+        -Note $entryNote {
+        $entryResult.Found -and $entryResult.OtherPassword -in @('refused', 'closed', 'no other account')
+    }
+    Test-Step 'other account' 'the delay entry accepts its own account' -Note $entryNote {
+        $entryResult.Found -and $entryResult.OwnAccount -eq 'accepted'
     }
     $adminDisconnect = Disconnect-RosetunTunnel
     Test-Step 'other account' 'administrator disconnects the tunnel' `
