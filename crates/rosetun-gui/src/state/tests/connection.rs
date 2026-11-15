@@ -1145,8 +1145,10 @@ fn config_with_the_mode(state: &State, mode: DelayMode, generation: u64) -> Work
 
 #[test]
 fn choosing_a_delay_mode_saves_it_and_the_same_mode_does_nothing() {
-    let mut state = State::default();
-    state.config_ready = true;
+    let mut state = State {
+        config_ready: true,
+        ..State::default()
+    };
     assert!(
         state
             .act(Action::SetDelayMode(DelayMode::Repeated))

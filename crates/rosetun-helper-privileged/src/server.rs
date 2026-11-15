@@ -4,7 +4,6 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use rosetun_config::DelayMode;
 use rosetun_ipc::{
     CodecError, Connection, ErrorCode, Frame, HelperError, Listener, PROTOCOL_VERSION, Request,
     Response,
@@ -512,6 +511,8 @@ mod read_tests;
 
 #[cfg(test)]
 mod tests {
+    use rosetun_config::DelayMode;
+
     use super::*;
 
     #[test]
