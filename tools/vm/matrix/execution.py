@@ -166,8 +166,8 @@ def preflight(config, *, dry_run=False):
     actions = ['lease', 'create run and identities', 'overlay', 'ISO', 'start paused',
                'resume', 'observe boot', 'import once', 'verify receipt', 'submit once',
                'wait job timeout + 125 seconds', 'collect at most twice', 'close', 'summary']
-    limitations = ['no controller restart recovery', 'no automatic file cleanup',
-                   'no network', 'dry-run does not execute binary version checks']
+    limitations = ['attach carries a run on only after its job was submitted; before that, recover --close',
+                   'no automatic file cleanup', 'no network', 'dry-run does not execute binary version checks']
     if l3:
         actions.insert(2, 'write the six L3 lab requests into the run directory')
         if not lab:

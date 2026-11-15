@@ -54,6 +54,9 @@ def main(argv=None):
                      help='with --lab: the positive control of the observer; exit 0 only if it saw what the control did')
     run.add_argument('--diagnostic', action='store_true',
                      help='with --lab: ask the engine to name destinations; the run is never a qualification (exit 2 or more)')
+    attach = commands.add_parser('attach', help='connect to a live run whose controller died and finish it')
+    attach.add_argument('--state-directory', required=True)
+    attach.add_argument('--run-id', required=True)
     plan = commands.add_parser("plan", help="write a deterministic catalog snapshot to stdout")
     plan.add_argument("suite", choices=[*SUITES, "windows-list", "windows-proxy"])
     plan.add_argument("--without-host-node", action="store_true", help="plan the limited Windows Proxy variant")
@@ -69,9 +72,11 @@ def main(argv=None):
             command.add_argument("--run-id")
             command.add_argument("--archive", action="store_true",
                                  help="move one run with no live VM process to archive/ (no deletion)")
+            command.add_argument("--close", action="store_true",
+                                 help="connect to one live run, quit its VM and record completion")
     args = parser.parse_args(argv)
-    if args.command == "recover" and bool(args.archive) != bool(args.run_id):
-        parser.error("--archive and --run-id must be given together")
+    if args.command == "recover" and (args.archive and args.close or bool(args.archive or args.close) != bool(args.run_id)):
+        parser.error("--run-id goes with exactly one of --archive and --close")
     if args.command == 'lab-smoke' and args.control and (args.canary or args.tunnel):
         parser.error('--control cannot go with --canary or --tunnel')
     try:
@@ -104,6 +109,13 @@ def main(argv=None):
                           else orchestrator.run_linux_l2)(config, **({'diagnostic': True} if args.diagnostic else {}),
                                                           **({'control': args.control} if args.control else {}))
                 code = result['exit_code']
+        elif args.command == 'attach':
+            from .orchestrator import attach_run
+            result = attach_run(args.state_directory, args.run_id)
+            code = result['exit_code']
+        elif args.command == "recover" and args.close:
+            from .orchestrator import close_run
+            result, code = close_run(args.state_directory, args.run_id)
         elif args.command == "recover" and args.archive:
             try:
                 result, code = archive_run(args.state_directory, args.run_id), 0
@@ -154,7 +166,7 @@ def main(argv=None):
                           security_invariants='UNVERIFIED', release_gate=False)
             print(json.dumps(result, sort_keys=True, indent=2))
             return 2
-        if args.command in ("runs", "recover"):
+        if args.command in ("runs", "recover", "attach"):
             print(json.dumps({"error": "resource state is unreadable or invalid", "cleanup_executed": False}))
             return 2
         # Parser and OS exceptions may include input data or local account paths.

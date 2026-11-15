@@ -13,6 +13,8 @@ import math
 import os
 from pathlib import Path
 import platform
+import select
+import signal
 import socket
 import stat
 import subprocess
@@ -145,6 +147,74 @@ def _open_control(path, timeout, alive, *, sleep=time.sleep, clock=time.monotoni
             raise
 
 
+class ForeignProcess:
+    """The QEMU of a run whose controller is gone, reached through a pidfd.
+
+    The process is recorded by pid, host boot and start time; it is accepted
+    only if all three still match, checked again after the pidfd is open, so a
+    reused pid is refused and a signal can never reach another process. Its
+    exit status belongs to its real parent: `returncode` stays None and
+    `poll()` answers EXITED once the pidfd reports the exit.
+    """
+
+    EXITED = 'exit-status-unobservable'
+
+    def __init__(self, resource):
+        from .resources import _process_status
+        self.pid = resource['pid']
+        self.returncode = None
+        self.fd = None
+        if _process_status(resource) != 'alive':
+            raise LifecycleError('vm-process-not-alive')
+        try:
+            self.fd = os.pidfd_open(self.pid)
+        except (OSError, AttributeError):
+            raise LifecycleError('vm-process-not-alive') from None
+        try:
+            same = (_process_status(resource) == 'alive'
+                    and os.readlink(f'/proc/{self.pid}/exe') == os.path.realpath(resource['executable']))
+        except OSError:
+            same = False
+        if not same:
+            self.close()
+            raise LifecycleError('vm-process-identity-mismatch')
+
+    def poll(self):
+        if self.fd is None:
+            return self.EXITED
+        ready, _, _ = select.select([self.fd], [], [], 0)
+        return self.EXITED if ready else None
+
+    def wait(self, timeout):
+        if self.fd is not None and not select.select([self.fd], [], [], timeout)[0]:
+            raise subprocess.TimeoutExpired('qemu', timeout)
+        return None
+
+    def terminate(self):
+        signal.pidfd_send_signal(self.fd, signal.SIGTERM)
+
+    def kill(self):
+        signal.pidfd_send_signal(self.fd, signal.SIGKILL)
+
+    def close(self):
+        if self.fd is not None:
+            fd, self.fd = self.fd, None
+            os.close(fd)
+
+
+def _journal_rows(run):
+    """The number of rows of a complete, consecutive lifecycle journal: the journal is its own counter."""
+    raw = resource_path(run.directory, 'lifecycle.jsonl').read_bytes()
+    if raw and not raw.endswith(b'\n'):
+        raise LifecycleError('lifecycle-journal-incomplete')
+    rows = raw.splitlines()
+    for index, line in enumerate(rows, 1):
+        row = _json(line)
+        if type(row) is not dict or row.get('sequence') != index or row.get('run_id') != run._identity[0]:
+            raise LifecycleError('lifecycle-journal-incomplete')
+    return len(rows)
+
+
 def _guest_serialized(method):
     @wraps(method)
     def call(self, *args, **kwargs):
@@ -169,6 +239,8 @@ class Vm:
         self.control_lock = None
         # The run's state on disk: the budgets below are recorded there before they are spent.
         self.state = None
+        # Connected again by a later controller: the child is not ours to reap.
+        self.attached = False
         self.qga_line_limit = LINE_LIMIT
         self._guest_lock = threading.Lock()
         self.qga_recoveries = 0
@@ -258,6 +330,25 @@ class Vm:
 
     @_guest_serialized
     def observe_guest(self):
+        return self._observe_guest()
+
+    @_guest_serialized
+    def attach_guest(self):
+        """Open an agent session for an attached VM; it is one of the run's recoveries."""
+        self._check()
+        if self.qga_path is None:
+            raise LifecycleError('qga-not-configured', self)
+        if self.qga is not None:
+            raise LifecycleError('qga-session-exists', self)
+        if self.qga_recoveries >= 4:
+            raise LifecycleError('qga-recovery-limit', self)
+        self._spend('qga_recoveries')
+        self.qga_recoveries += 1
+        self.qga_reason = 'attach'
+        try:
+            self._new_qga()
+        except (OSError, ValueError):
+            raise LifecycleError('qga-attach-failed', self) from None
         return self._observe_guest()
 
     def wait_initial_guest(self, *, timeout, clock=time.monotonic, sleep=time.sleep):
@@ -543,7 +634,7 @@ class Vm:
                     raise LifecycleError('vm-exit-unconfirmed', self)
                 self.process.wait(timeout=self.timeout)
             self.exited = True
-            self._event('exit', 'child-reaped', teardown=True)
+            self._event('exit', 'exit-observed' if self.attached else 'child-reaped', teardown=True)
             for stream in list(self.launch_sockets):
                 stream.close()
                 self.launch_sockets.remove(stream)
@@ -551,6 +642,9 @@ class Vm:
                 self.qmp.close()
             if self.qga is not None:
                 self.qga.close()
+                self._event('qga', 'closed', teardown=True)
+            elif self.attached and self.qga_path is not None:
+                # This controller never opened an agent session, so none is left open.
                 self._event('qga', 'closed', teardown=True)
             if self.stderr is not None:
                 self.stderr.close()
@@ -599,6 +693,8 @@ class Vm:
                         self._release_control_lock()
 
     def _release_control_lock(self):
+        if isinstance(self.process, ForeignProcess):
+            self.process.close()
         if self.control_lock is not None:
             lock, self.control_lock = self.control_lock, None
             try:
@@ -611,6 +707,70 @@ class Vm:
 
     def __exit__(self, *args):
         self.close()
+
+
+def attach(run, *, timeout=5):
+    """Connect again to the live VM of a run whose controller is gone.
+
+    Refuses and leaves the run as it was unless the recorded process is alive
+    with the same boot and start identity, this controller takes the run's
+    control lock and QMP answers with the recorded UUID. The budgets continue
+    from the run state; the journal continues from its last row.
+    """
+    timeout = _limit(timeout)
+    manifest = run._read()
+    resources = {r['id']: r for r in manifest['resources']}
+    processes = [r for r in manifest['resources'] if r['kind'] == 'process']
+    if (manifest['state'] not in ('starting', 'running', 'stopping') or len(processes) != 1
+            or resources.get('qmp-socket', {}).get('kind') != 'socket'):
+        raise LifecycleError('run-not-attachable')
+    try:
+        plan = _json(local_file(resource_path(run.directory, 'launch-plan.json')).read_bytes())
+        vm_uuid = plan['uuid']
+        # One in-memory copy per run: a second one would write back stale budgets.
+        state = run_state.of(run) or run_state.RunState.load(run)
+        events = _journal_rows(run)
+    except (KeyError, TypeError, OSError, ValueError):
+        raise LifecycleError('run-records-unusable') from None
+    if state.document['host']['boot_id'] != run_state.host_boot_id():
+        raise LifecycleError('host-boot-changed')
+    process = ForeignProcess(processes[0])
+    vm = Vm(run, timeout)
+    vm.process, vm.attached, vm.state, vm.vm_uuid, vm.events = process, True, state, vm_uuid, events
+    vm.qga_recoveries = state.budget('qga_recoveries')
+    vm.qga_observations = state.budget('qga_observations')
+    vm.last_boot_id = state.document['identities']['boot_id']
+    try:
+        vm.control_lock = lock_run(run.directory)
+    except (OSError, ValueError):
+        process.close()
+        raise LifecycleError('run-control-locked') from None
+    if 'qga-socket' in resources:
+        vm.qga_path = socket_path(run.directory, QGA_SOCKET)
+    run._lease._active.add(vm)
+    try:
+        stream = _open_control(socket_path(run.directory, QMP_SOCKET), timeout, vm._alive)
+        vm.launch_sockets.append(stream)
+        vm.qmp = vm._new_qmp(stream)
+        vm.launch_sockets.remove(stream)
+        vm.qmp.handshake(timeout)
+        if vm.qmp.command('query-uuid', timeout) != {'UUID': vm_uuid}:
+            raise LifecycleError('qmp-uuid-mismatch')
+        vm._event('attach', 'qmp-connected')
+    except BaseException as error:
+        # Leave the run as it was found: disconnect, give the lock back, never signal.
+        for control in (*vm.launch_sockets, vm.qmp):
+            if control is not None:
+                try:
+                    control.close()
+                except (OSError, ValueError):
+                    pass
+        run._lease._active.discard(vm)
+        vm._release_control_lock()
+        if not isinstance(error, Exception):
+            raise
+        raise LifecycleError(str(error) if isinstance(error, LifecycleError) else 'qmp-attach-failed') from None
+    return vm
 
 
 def start(run, *, timeout=5, executor=execute, lab=None):

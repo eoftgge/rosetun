@@ -332,7 +332,8 @@ class L3DryRunTests(unittest.TestCase):
         plan = json.loads(text)
         self.assertEqual('linux-l2', plan['suite'])
         self.assertFalse(any('requests' in action for action in plan['actions']))
-        self.assertEqual(['no controller restart recovery', 'no automatic file cleanup', 'no network',
+        self.assertEqual(['attach carries a run on only after its job was submitted; before that, recover --close',
+                          'no automatic file cleanup', 'no network',
                           'dry-run does not execute binary version checks'], plan['limitations'])
 
 

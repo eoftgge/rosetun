@@ -299,6 +299,8 @@ def recovery_plan(state_directory):
             "runs": runs, "actions": [
                 "retain evidence; independently establish ownership of invalid entries",
                 "verify process boot and creation identity before considering any PID action",
+                "when process_status is alive, attach --run-id R carries a run on after its job was submitted",
+                "when process_status is alive, recover --run-id R --close quits the VM and records completion",
                 "when process_status is absent, recover --run-id R --archive releases the stand"
             ] if runs else [], "cleanup_executed": False}
 
@@ -383,6 +385,7 @@ class StandLease:
         self._pid = None
         self._lock_path = None
         self._active = set()
+        self._recovery = False
 
     def _check_live(self):
         if self._stream is None or self._pid != os.getpid():
@@ -393,10 +396,12 @@ class StandLease:
         if (current.st_dev, current.st_ino) != (held.st_dev, held.st_ino):
             raise ValueError("stand lock file was replaced; retain resources")
 
-    def acquire(self):
+    def acquire(self, *, recovery=False):
+        """`recovery` takes the stand to finish runs that are already there; it never creates one."""
         if self._used:
             raise ValueError("lease cannot be re-entered")
         self._used = True
+        self._recovery = recovery is True
         stream, path = _lock_stand(self._root, self._stand)
         self._stream = stream
         self._pid = os.getpid()
@@ -404,8 +409,9 @@ class StandLease:
         try:
             self._check_live()
             # Old metadata never authorizes reuse, even after the OS lock is free.
-            if any(run["stand_id"] in (None, self._stand) and not run.get('completion_verified', False)
-                   for run in inspect_runs(self._root)):
+            if not self._recovery and any(
+                    run["stand_id"] in (None, self._stand) and not run.get('completion_verified', False)
+                    for run in inspect_runs(self._root)):
                 raise ValueError("stand has unresolved runs; inspect the recovery plan")
             stream.write(json.dumps({"stand_id": self._stand, "pid": os.getpid()}).encode())
             stream.truncate()
@@ -560,7 +566,7 @@ class PreparedRun:
         processes = [r for r in data['resources'] if r['kind'] == 'process']
         if (data['state'] != 'exited' or not processes
                 or [e['resource'] for e in exits] != processes
-                or any(type(e['returncode']) is not int for e in exits)):
+                or any(e['returncode'] is not None and type(e['returncode']) is not int for e in exits)):
             raise ValueError('completion-process-evidence-mismatch')
         journal = resource_path(self.directory, 'lifecycle.jsonl')
         proof = {'schema': 'rosetun.matrix.completion.v1', 'run_id': data['run_id'],
@@ -597,7 +603,8 @@ def completion_verified(directory, data):
             return False
         for item in proof['exits']:
             _keys(item, 'resource returncode')
-            if type(item['returncode']) is not int:
+            # None: an attached controller saw the exit but, not being the parent, never its status.
+            if item['returncode'] is not None and type(item['returncode']) is not int:
                 return False
         if [e['resource'] for e in proof['exits']] != processes:
             return False
@@ -620,6 +627,10 @@ def completion_verified(directory, data):
             _keys(row, 'schema sequence action result utc run_id stand_id vm_uuid')
             if row['schema'] != 'rosetun.matrix.lifecycle.v2' or datetime.fromisoformat(row['utc']).tzinfo is None:
                 return False
+        exit_rows = [row for row in rows if row['action'] == 'exit']
+        if (any(item['returncode'] is None for item in proof['exits'])
+                and (not exit_rows or exit_rows[-1]['result'] != 'exit-observed')):
+            return False
         plan_path = resource_path(directory, 'launch-plan.json')
         if plan_path.stat().st_size > 256 * 1024:
             return False
@@ -631,7 +642,7 @@ def completion_verified(directory, data):
             closures = [index for index, row in enumerate(rows)
                         if row['action'] == 'qga']
             exits = [index for index, row in enumerate(rows)
-                     if row['action'] == 'exit' and row['result'] == 'child-reaped']
+                     if row['action'] == 'exit' and row['result'] in ('child-reaped', 'exit-observed')]
             if ('qga-observations.jsonl' not in files or not closures or not exits
                     or rows[closures[-1]]['result'] != 'closed'
                     or not exits[-1] < closures[-1] < len(rows) - 1):
@@ -647,9 +658,29 @@ def completion_verified(directory, data):
         return False
 
 
+def bind_run(lease, run_id):
+    """The ledger of an existing run under a recovery lease, with the owner token its manifest records."""
+    lease._check_live()
+    if not lease._recovery:
+        raise ValueError("binding an existing run needs a recovery lease")
+    directory = lease._root / "runs" / _identifier(run_id)
+    _no_links(directory)
+    data = read_manifest(directory, run_id=run_id, stand_id=lease._stand)
+    return PreparedRun(lease, (run_id, lease._stand, data["owner_token"]))
+
+
+def stand_of(state_directory, run_id):
+    """The stand a run's manifest names, read without a lock; the caller reads it again under one."""
+    directory = _state_path(state_directory) / "runs" / _identifier(run_id)
+    _no_links(directory)
+    return read_manifest(directory, run_id=run_id)["stand_id"]
+
+
 def create_run(lease, run_id=None):
     """Exclusively create a preparation record; this is never a test result."""
     lease._check_live()
+    if getattr(lease, "_recovery", False):
+        raise ValueError("a recovery lease creates no runs")
     run_id = _identifier(uuid.uuid4().hex if run_id is None else run_id)
     if run_id.upper() in DEVICES:
         raise ValueError("reserved run identifier")

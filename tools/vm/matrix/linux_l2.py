@@ -19,7 +19,7 @@ from .jobs import JobError, LAUNCHER, SmokeJob, _uuid
 from .lifecycle import _guest_serialized
 from .qga import QgaError
 from .report import assess, _unique_object, _invalid_constant
-from .resources import _identifier, _no_links, _regular_file
+from .resources import _identifier, _no_links, _regular_file, resource_path
 
 BINARIES = ('l2_transport_fixture', 'rosetun_helper_privileged_tests', 'rosetun_ipc_tests')
 SOURCES = ('guest/launch.sh', 'guest/start.sh', 'guest/lib.sh', 'guest/run-l2.sh', 'scenarios.tsv')
@@ -398,6 +398,62 @@ class LinuxL2Job:
         self.profile = profile_of(profile)
         self.sing_box_sha256 = sing_box_sha256
         self._create(package_directory, checkout, enabled)
+
+    @classmethod
+    def restore(cls, vm):
+        """The job of an attached run, rebuilt from its saved plan, package record and run state.
+
+        Only collection follows: the job is never submitted again. The identity
+        saved at creation must name this run, VM, guest run and boot.
+        """
+        state = run_state.of(vm.run)
+        record = state.document['job'] if state is not None else None
+        if record is None:
+            raise JobError('l2-job-state-missing')
+        job = cls.__new__(cls)
+        job.vm = vm
+        try:
+            package = None
+            for name in PROFILES:
+                path = resource_path(vm.run.directory, 'linux-' + name + '/package.json')
+                if path.is_file() and path.stat().st_size:
+                    package = _json(path.read_bytes())
+                    break
+            if package is None:
+                raise JobError('l2-job-record-missing')
+            job.profile = profile_of(package.get('profile', 'l2'))
+            job._plan = resource_path(vm.run.directory, 'linux-' + job.profile.name + '/plan.json').read_bytes()
+            _json(job._plan)
+            identity = package['identity']
+            ids = state.document['identities']
+            if (type(identity) is not dict or identity.get('host_run_id') != vm.run._identity[0]
+                    or identity.get('vm_uuid') != vm.vm_uuid or identity.get('guest_run_id') != ids['guest_run_id']
+                    or identity.get('boot_id') != ids['boot_id'] or identity.get('stand_id') != vm.run._identity[1]):
+                raise JobError('l2-job-identity-mismatch')
+            deadline = state.document['deadlines']['job_deadline']
+        except (KeyError, TypeError, OSError, ValueError):
+            raise JobError('l2-job-record-unusable') from None
+        job.sing_box_sha256 = None
+        job._identity = tuple((k, identity[k]) for k in ('host_run_id', 'guest_run_id', 'stand_id', 'vm_uuid',
+                                                         'boot_id', 'job_id', 'manifest_sha256'))
+        job.submission, job.launcher, job.job = record['submission'], record['launcher'], record['job']
+        job.pid, job.session = record['pid'], record['session']
+        job.verification = 'UNVERIFIED'
+        job.calls, job.polls = state.budget('job_calls'), state.budget('job_polls')
+        job.grace = 0
+        job.handles = {}
+        job.assessment = None
+        # The deadline was recorded on the real-time clock; carry it over to this process's monotonic one.
+        job.deadline = time.monotonic() + (deadline - time.time())
+        vm._linux_l2_job = job
+        job._evidence('l2-restored')
+        return job
+
+    def load_assessment(self):
+        """The assessment a dead controller already saved; nothing is asked of the guest."""
+        raw = resource_path(self.vm.run.directory, 'linux-' + self.profile.name + '/assessment.json').read_bytes()
+        self.assessment = _json(raw)
+        self.verification = self.assessment['validation']['status']
 
     @property
     def _guest_lock(self):
