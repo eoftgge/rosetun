@@ -68,6 +68,11 @@ alt = 'Rosetun: правила маршрутизации'
 caption = 'Правила'
 
 [[extra.screens]]
+image = 'lists'
+alt = 'Rosetun: списки'
+caption = 'Списки: SRS, Xray geosite и geoip'
+
+[[extra.screens]]
 image = 'exits'
 alt = 'Rosetun: направления'
 caption = 'Направления'

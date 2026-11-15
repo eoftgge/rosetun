@@ -66,6 +66,11 @@ alt = 'Rosetun: Routing rules'
 caption = 'Routing Rules'
 
 [[extra.screens]]
+image = 'lists'
+alt = 'Rosetun: Lists'
+caption = 'Lists: SRS, Xray geosite and geoip'
+
+[[extra.screens]]
 image = 'exits'
 alt = 'Rosetun: Exit nodes'
 caption = 'Exit Nodes'
