@@ -17,7 +17,8 @@ TWO_HOP = ('two-hop.positive.http.ipv4', 'two-hop.positive.http.ipv6', 'two-hop.
            'two-hop.domain-b', 'two-hop.a-unavailable', 'two-hop.b-unavailable', 'two-hop.b-auth',
            'two-hop.https-certificate', 'two-hop.udp-quic', 'two-hop.apply-rollback-reconnect',
            'two-hop.engine-restart', 'two-hop.dependency-removed', 'two-hop.lockdown', 'two-hop.allow-lan',
-           'two-hop.target-subscription-fallback', 'two-hop.xray-fragment')
+           'two-hop.target-subscription-fallback', 'two-hop.xray-fragment',
+           'two-hop.positive.xray-first-hop')
 # The label of the window each scenario ran in. A window is a protected session and its label is the
 # function of run-l3.sh that opened it (connect_with is called from that function), so scenarios that
 # share a session share a window: `identity` opens the session `files` ends, `connect_ks` opens the one

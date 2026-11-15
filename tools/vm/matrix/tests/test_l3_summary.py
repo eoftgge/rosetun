@@ -264,7 +264,7 @@ class TableTests(unittest.TestCase):
 
     def test_the_group_is_in_the_catalog_and_every_scenario_has_its_window_entry(self):
         ids = scenario_ids()
-        self.assertEqual(58, len(ids))
+        self.assertEqual(59, len(ids))
         self.assertTrue(set(summary.GROUP) <= set(ids))
         # The group has windows; the two-hop scenarios, which have no check yet, have none and are outside it.
         self.assertEqual(set(summary.GROUP) | set(summary.TWO_HOP), set(summary.WINDOW_OF))
@@ -275,7 +275,7 @@ class TableTests(unittest.TestCase):
 
     def test_the_two_hop_scenarios_are_exactly_the_rows_of_the_catalog_that_were_never_run(self):
         self.assertEqual(sorted(summary.TWO_HOP), sorted(unrun_ids()))
-        self.assertEqual(19, len(summary.TWO_HOP))
+        self.assertEqual(20, len(summary.TWO_HOP))
         for row in scenario_rows():
             if row[0] in summary.TWO_HOP:
                 self.assertEqual(('no', 'not-run', 'two-hop'), (row[1], row[2], row[3]))

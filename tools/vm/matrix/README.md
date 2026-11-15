@@ -2868,8 +2868,8 @@ of the lab run.
 ## Stage 7b2b: the L3 kill switch group in the lab
 
 Stage 7b2b runs the real Linux L3 stage through the lab: `run linux-l3 --lab` starts the lab
-machine and the test machine of stages 7b1 and 7b2a together and runs **all 58 scenarios** of the catalog
-(the 19 `two-hop.*` among them have no check and are recorded SKIP "UNRUN"), exactly
+machine and the test machine of stages 7b1 and 7b2a together and runs **all 59 scenarios** of the catalog
+(the 20 `two-hop.*` among them have no check and are recorded SKIP "UNRUN"), exactly
 as `run-l3.sh` runs them, on the test machine. The lab machine is the VPN node (`192.0.2.1:8388`),
 the HTTPS target (`203.0.113.2:443`), the resolver and the DoH target, and it records the wire to its
 evidence disk. Only the **kill switch group** is judged; the other scenarios run and appear in the
@@ -3234,10 +3234,10 @@ and the release gate stays false.
 | --- | --- |
 | `preflight.identity`, `preflight.accounts`, `preflight.no-foreign-service`, `preflight.tools` | PASS |
 | `preflight.baseline` | FAIL, the reason names the missing route to `203.0.113.2` |
-| the 19 `two-hop.*` (evidence class `not-run`, not required) | SKIP, "UNRUN: ..." |
+| the 20 `two-hop.*` (evidence class `not-run`, not required) | SKIP, "UNRUN: ..." |
 | the other 34 | ERROR, "not run" |
 
-The report is complete (58 rows), the cleanup is PASS, the assessment is not
+The report is complete (59 rows), the cleanup is PASS, the assessment is not
 accepted, and the summary has `completion` true and `delivery.state` `ready`.
 The assessor's `validation` shows `ERROR` with the single problem "guest reports
 an infrastructure error or aborted run", because the guest's own summary says
@@ -3351,7 +3351,7 @@ L2 run uses it too.
 1. Build `build-artifacts.sh --l3`, add the Linux `sing-box` of the supported
    version, copy the unit and rules, update the test image and the importer.
 2. `run linux-l3 --dry-run`, then the ordinary command.
-3. Expect 4 PASS, `preflight.baseline` FAIL (route to `203.0.113.2`), 19 SKIP
+3. Expect 4 PASS, `preflight.baseline` FAIL (route to `203.0.113.2`), 20 SKIP
    (`two-hop.*`, "UNRUN"), 34 ERROR "not run", `completion` true, exit 1.
 4. Run the ordinary `run linux-l2` again on the same stand and image: the result
    must be as in the stage 5c qualification.
