@@ -10,7 +10,7 @@ overview = "Privacy and network access"
 Rosetun makes these network requests:
 
 - To the VPN server for the tunnel; **TCP ping** also makes a TCP connection attempt to each server being checked while the tunnel is down.
-- **URL test** and the delay on the connection screen send two HTTPS requests at once, to `https://cp.cloudflare.com/generate_204` and `https://www.gstatic.com/generate_204`, through the server being checked, the current server or each exit's server. URL test connects directly to each server, outside the tunnel. While connecting and while connected, the service sends the same requests through the current server to check that it works; this cannot be turned off.
+- **URL test** and a full delay on the connection screen send two HTTPS requests at once, to `https://cp.cloudflare.com/generate_204` and `https://www.gstatic.com/generate_204`, through the server being checked, the current server or each exit's server. URL test connects directly to each server, outside the tunnel. While connecting and while connected, the service sends the same requests through the current server to check that it works; this cannot be turned off. A repeated delay, the default, sends two requests in a row over one connection to `https://cp.cloudflare.com/generate_204` only, through the same servers.
 - To your subscription provider to fetch or update subscriptions, using `User-Agent: Rosetun/<version>` by default. Subscription URLs may contain credentials; an HTTP subscription sends its token without encryption. With **Send device ID** on, the default, the request also carries:
   | Header | Windows | Linux |
   |---|---|---|
