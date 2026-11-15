@@ -37,13 +37,13 @@ Limits:
 
 - Exactly two exits. An exit cannot connect through itself, and there are no cycles or third hops.
 - B is an HTTP, HTTPS or SOCKS5 proxy, and its server is an IPv4 or IPv6 address, not a name. HTTPS still verifies the certificate; set the expected TLS server name where it is needed.
-- A can be any server that sing-box can reach, including one that runs through Xray, such as VLESS with REALITY when Xray is set to **Automatically**. B through Xray, the **Without Xray** engine choice and TLS fragmentation do not work for this path.
+- A can be any server that sing-box can reach, including one that runs through Xray, such as VLESS with REALITY when Xray is set to **Automatically**. B through Xray and TLS fragmentation do not work for this path.
 - Rosetun does not look up B's name itself, so B's address must be given as a number. The name of A is resolved by the usual rules. DNS for the sites you open follows your DNS settings, so this feature does not promise that all DNS goes through B.
 - UDP, including QUIC, that a rule sends through B is blocked. It does not fall back to A or to a direct connection. Other rules keep their behaviour.
 - A missing exit, an unreachable proxy, wrong credentials or a failed HTTPS handshake never switches to a shorter path. After a changed subscription, a country fallback or a different mode, the service checks the path again.
 - B's delay measures the whole path A → B. The exit IP on the connection screen describes the main route, not B's public address.
 
-**Connect through** can be empty. The editor then says "Only HTTP and SOCKS5 proxies connect through another exit". That happens when the exit being edited is not an HTTP, HTTPS or SOCKS5 proxy, when no exit is chosen yet, when there is no other exit, or when every other exit would make a path that is not supported, such as a third hop or a cycle. Choose another exit or server if the editor says that the path is unavailable.
+**Connect through** can be empty. The editor then says "Only HTTP and SOCKS5 proxies connect through another exit". That happens when the exit being edited is not an HTTP, HTTPS or SOCKS5 proxy, when no exit is chosen yet, when there is no other exit, when TLS fragmentation is on, or when every other exit would make a path that is not supported, such as a third hop or a cycle. Choose another exit or server if the editor says that the path is unavailable.
 
 ## Export and import {#exchange}
 
