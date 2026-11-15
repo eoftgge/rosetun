@@ -227,9 +227,10 @@ fn tunnel_delay_starts_after_three_seconds_once_per_session() {
     ));
     assert_eq!(state.tunnel_delay, TunnelDelay::Measuring);
     assert!(state.take_tunnel_delay(1_004).is_none());
-    state.reduce(WorkerEvent::TunnelDelay(DelayMode::Repeated, Ok(main_delay(
-        ProbeOutcome::Works { millis: 85 },
-    ))));
+    state.reduce(WorkerEvent::TunnelDelay(
+        DelayMode::Repeated,
+        Ok(main_delay(ProbeOutcome::Works { millis: 85 })),
+    ));
     assert_eq!(
         state.tunnel_delay,
         TunnelDelay::Done(main_delay(ProbeOutcome::Works { millis: 85 }))
@@ -263,18 +264,24 @@ fn tunnel_delay_retries_busy_auto_measurements_after_ten_seconds() {
         state.take_tunnel_delay(1_003),
         Some(Job::TunnelDelay(DelayMode::Repeated))
     ));
-    state.reduce(WorkerEvent::TunnelDelay(DelayMode::Repeated, Err(HelperCommandError::Client(
-        ClientError::Helper(HelperError::new(ErrorCode::Busy, "")),
-    ))));
+    state.reduce(WorkerEvent::TunnelDelay(
+        DelayMode::Repeated,
+        Err(HelperCommandError::Client(ClientError::Helper(
+            HelperError::new(ErrorCode::Busy, ""),
+        ))),
+    ));
     assert_eq!(state.tunnel_delay, TunnelDelay::Idle);
     assert!(state.take_tunnel_delay(1_012).is_none());
     assert!(matches!(
         state.take_tunnel_delay(1_013),
         Some(Job::TunnelDelay(DelayMode::Repeated))
     ));
-    state.reduce(WorkerEvent::TunnelDelay(DelayMode::Repeated, Err(HelperCommandError::Client(
-        ClientError::Helper(HelperError::new(ErrorCode::Busy, "")),
-    ))));
+    state.reduce(WorkerEvent::TunnelDelay(
+        DelayMode::Repeated,
+        Err(HelperCommandError::Client(ClientError::Helper(
+            HelperError::new(ErrorCode::Busy, ""),
+        ))),
+    ));
     assert!(state.take_tunnel_delay(1_022).is_none());
     assert!(matches!(
         state.take_tunnel_delay(1_023),
@@ -295,9 +302,12 @@ fn tunnel_delay_manual_refresh_and_stale_completion() {
         Some(Job::TunnelDelay(DelayMode::Repeated))
     ));
     assert!(state.act(Action::MeasureDelay).is_none());
-    state.reduce(WorkerEvent::TunnelDelay(DelayMode::Repeated, Err(HelperCommandError::Client(
-        ClientError::Helper(HelperError::new(ErrorCode::Busy, "")),
-    ))));
+    state.reduce(WorkerEvent::TunnelDelay(
+        DelayMode::Repeated,
+        Err(HelperCommandError::Client(ClientError::Helper(
+            HelperError::new(ErrorCode::Busy, ""),
+        ))),
+    ));
     assert_eq!(state.tunnel_delay, TunnelDelay::Idle);
     assert!(state.operation_error.is_none());
     assert!(matches!(
@@ -305,9 +315,10 @@ fn tunnel_delay_manual_refresh_and_stale_completion() {
         Some(Job::TunnelDelay(DelayMode::Repeated))
     ));
     assert!(state.act(Action::MeasureDelay).is_none());
-    state.reduce(WorkerEvent::TunnelDelay(DelayMode::Repeated, Err(HelperCommandError::Client(
-        ClientError::Closed,
-    ))));
+    state.reduce(WorkerEvent::TunnelDelay(
+        DelayMode::Repeated,
+        Err(HelperCommandError::Client(ClientError::Closed)),
+    ));
     assert_eq!(
         state.tunnel_delay,
         TunnelDelay::Done(main_delay(ProbeOutcome::Fails))
@@ -319,9 +330,10 @@ fn tunnel_delay_manual_refresh_and_stale_completion() {
     state.reduce(WorkerEvent::Status(Status::default()));
     assert_eq!(state.tunnel_delay, TunnelDelay::Idle);
     assert!(state.act(Action::MeasureDelay).is_none());
-    state.reduce(WorkerEvent::TunnelDelay(DelayMode::Repeated, Ok(main_delay(
-        ProbeOutcome::Works { millis: 25 },
-    ))));
+    state.reduce(WorkerEvent::TunnelDelay(
+        DelayMode::Repeated,
+        Ok(main_delay(ProbeOutcome::Works { millis: 25 })),
+    ));
     assert_eq!(state.tunnel_delay, TunnelDelay::Idle);
 }
 
@@ -1135,7 +1147,11 @@ fn config_with_the_mode(state: &State, mode: DelayMode, generation: u64) -> Work
 fn choosing_a_delay_mode_saves_it_and_the_same_mode_does_nothing() {
     let mut state = State::default();
     state.config_ready = true;
-    assert!(state.act(Action::SetDelayMode(DelayMode::Repeated)).is_none());
+    assert!(
+        state
+            .act(Action::SetDelayMode(DelayMode::Repeated))
+            .is_none()
+    );
     assert!(matches!(
         state.act(Action::SetDelayMode(DelayMode::Full)),
         Some(Job::Setting(SettingChange::DelayMode(DelayMode::Full)))

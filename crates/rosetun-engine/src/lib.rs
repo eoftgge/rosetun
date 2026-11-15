@@ -756,10 +756,16 @@ mod tests {
         let inbound = DelayInbound::local([PROXY_TAG.to_owned(), exit_tag(1)]).unwrap();
         let main = inbound.account(UrlTestTarget::Session).unwrap();
         assert_eq!(main.tag, PROXY_TAG);
-        let exit = inbound.account(UrlTestTarget::SessionExit("exit-1")).unwrap();
+        let exit = inbound
+            .account(UrlTestTarget::SessionExit("exit-1"))
+            .unwrap();
         assert_eq!(exit.tag, "exit-1");
         assert_ne!(main.password, exit.password);
-        assert!(inbound.account(UrlTestTarget::SessionExit("exit-0")).is_none());
+        assert!(
+            inbound
+                .account(UrlTestTarget::SessionExit("exit-0"))
+                .is_none()
+        );
     }
 
     #[test]

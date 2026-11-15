@@ -523,9 +523,9 @@ impl Helper {
                 .iter()
                 .map(|(exit, tag)| {
                     let measure = &measure;
-                    let check = tag.as_deref().map(|tag| {
-                        scope.spawn(move || measure(UrlTestTarget::SessionExit(tag)))
-                    });
+                    let check = tag
+                        .as_deref()
+                        .map(|tag| scope.spawn(move || measure(UrlTestTarget::SessionExit(tag))));
                     (exit, check)
                 })
                 .collect::<Vec<_>>();

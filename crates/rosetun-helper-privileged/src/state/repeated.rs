@@ -72,7 +72,11 @@ fn send(agent: &Agent, url: &str, timeout: Duration) -> Result<(), ureq::Error> 
         .timeout_global(Some(timeout))
         .build()
         .call()?;
-    response.body_mut().with_config().limit(1024).read_to_vec()?;
+    response
+        .body_mut()
+        .with_config()
+        .limit(1024)
+        .read_to_vec()?;
     Ok(())
 }
 
@@ -269,7 +273,8 @@ pub(super) mod fake {
                 .lines()
                 .find_map(|line| {
                     let (name, value) = line.split_once(':')?;
-                    name.eq_ignore_ascii_case("host").then(|| value.trim().to_owned())
+                    name.eq_ignore_ascii_case("host")
+                        .then(|| value.trim().to_owned())
                 })
                 .unwrap_or_default();
             counts.seen.lock().unwrap().push(Seen {
@@ -347,9 +352,7 @@ mod tests {
             password: "another-password".to_owned(),
         };
         for account in [wrong_password, account("exit-0")] {
-            assert!(
-                repeated_delay(fake.address, &account, URL, Duration::from_secs(5)).is_err()
-            );
+            assert!(repeated_delay(fake.address, &account, URL, Duration::from_secs(5)).is_err());
         }
         assert_eq!(fake.connections.load(Ordering::Acquire), 0);
         assert_eq!(fake.refused.load(Ordering::Acquire), 2);

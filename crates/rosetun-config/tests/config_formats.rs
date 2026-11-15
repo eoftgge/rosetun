@@ -2,12 +2,11 @@ mod support;
 
 use rosetun_config::{
     AccentPreset, AppConfig, CONFIG_VERSION, ConfigError, ConnectionMode, CountryCode, DelayMode,
-    EngineKind,
-    Exit, ExitId, ExitTarget, FormatError, HwidScope, Hysteria2Params, List, ListFormat, ListId,
-    ListSource, LocalProxySettings, Node, NodeId, Outbound, QuitAction, RealityParams, Rule,
-    RuleId, RuleMatcher, RuleTarget, Selection, StreamSettings, SubscriptionId, TlsFragment,
-    TlsMode, TlsParams, Transport, VlessParams, XhttpExtra, XhttpMode, XhttpRange, XhttpXmux,
-    from_json,
+    EngineKind, Exit, ExitId, ExitTarget, FormatError, HwidScope, Hysteria2Params, List,
+    ListFormat, ListId, ListSource, LocalProxySettings, Node, NodeId, Outbound, QuitAction,
+    RealityParams, Rule, RuleId, RuleMatcher, RuleTarget, Selection, StreamSettings,
+    SubscriptionId, TlsFragment, TlsMode, TlsParams, Transport, VlessParams, XhttpExtra, XhttpMode,
+    XhttpRange, XhttpXmux, from_json,
 };
 use serde_json::{Value, json};
 

@@ -1,7 +1,7 @@
 use rosetun_config::{
-    AppConfig, DelayMode, ExitId, LiveConnection, LogLevel, Node, NodeId, ProtectionCapabilities, Rule,
-    RuleId, RuleSet, RuleSetId, RuleTarget, RuleTemplate, Selection, Settings, Status, Traffic,
-    resolve_exits,
+    AppConfig, DelayMode, ExitId, LiveConnection, LogLevel, Node, NodeId, ProtectionCapabilities,
+    Rule, RuleId, RuleSet, RuleSetId, RuleTarget, RuleTemplate, Selection, Settings, Status,
+    Traffic, resolve_exits,
 };
 use serde::{Deserialize, Serialize};
 use std::fmt::Formatter;
@@ -123,10 +123,9 @@ impl std::fmt::Debug for Request {
             Self::ForeignRules => f.write_str("ForeignRules"),
             Self::Connections => f.write_str("Connections"),
             Self::CloseConnection { .. } => f.write_str("CloseConnection"),
-            Self::TunnelDelay { mode } => f
-                .debug_struct("TunnelDelay")
-                .field("mode", mode)
-                .finish(),
+            Self::TunnelDelay { mode } => {
+                f.debug_struct("TunnelDelay").field("mode", mode).finish()
+            }
             Self::Disconnect => f.write_str("Disconnect"),
             Self::Reconnect => f.write_str("Reconnect"),
             Self::SetLockdown {

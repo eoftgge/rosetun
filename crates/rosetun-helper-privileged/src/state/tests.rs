@@ -1,6 +1,6 @@
 use rosetun_config::{
-    ConnectionMode, DelayMode, DomainMatch, EngineKind, ExitId, InstalledProtection, NodeId, Outbound,
-    ProtectionState, RequestedProtection, Rule, RuleId, RuleMatcher, RuleSet, RuleSetId,
+    ConnectionMode, DelayMode, DomainMatch, EngineKind, ExitId, InstalledProtection, NodeId,
+    Outbound, ProtectionState, RequestedProtection, Rule, RuleId, RuleMatcher, RuleSet, RuleSetId,
     RuleTarget, RuleTemplate, Selection, Settings, SubscriptionId, Traffic, VlessParams,
 };
 use rosetun_engine::errors::EngineError;
@@ -2668,7 +2668,10 @@ fn another_account_cannot_cancel_a_connect_holding_the_session() {
         ErrorCode::AccessDenied
     );
     assert_eq!(
-        helper.tunnel_delay_as(&other, DelayMode::Full).unwrap_err().code,
+        helper
+            .tunnel_delay_as(&other, DelayMode::Full)
+            .unwrap_err()
+            .code,
         ErrorCode::AccessDenied
     );
     assert!(!helper.cancelled.load(Ordering::Acquire));
@@ -5876,7 +5879,10 @@ impl EngineBackend for ProbeEngine {
 
     fn render(&self, request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError> {
         if let Some(delay) = request.control.and_then(|control| control.delay.clone()) {
-            DELAY_ENTRIES.lock().unwrap().push((self.dir.clone(), delay));
+            DELAY_ENTRIES
+                .lock()
+                .unwrap()
+                .push((self.dir.clone(), delay));
         }
         Ok(RenderedConfig {
             file_name: "config.json".to_owned(),
@@ -6466,7 +6472,11 @@ fn finish_probe_fixture(helper: &Helper, dir: PathBuf) {
 fn a_session_gets_an_entry_with_an_account_for_the_main_node_and_each_exit() {
     let (helper, dir, entry) = session_with_one_exit(Arc::new(AtomicUsize::new(0)));
     assert!(entry.address.ip().is_loopback());
-    let tags: Vec<_> = entry.accounts.iter().map(|account| account.tag.as_str()).collect();
+    let tags: Vec<_> = entry
+        .accounts
+        .iter()
+        .map(|account| account.tag.as_str())
+        .collect();
     assert_eq!(tags, ["proxy", "exit-0"]);
     assert_ne!(entry.accounts[0].password, entry.accounts[1].password);
     finish_probe_fixture(&helper, dir);

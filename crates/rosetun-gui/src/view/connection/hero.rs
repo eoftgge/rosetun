@@ -308,10 +308,21 @@ mod tests {
                         .iter()
                         .find(|(text, _)| text == &delay_mode_label(mode))
                         .unwrap_or_else(|| panic!("no mode name for {mode:?}"));
-                    assert!(texts.iter().any(|(text, _)| text == &tr!("ping-ms", ms = "42")));
+                    assert!(
+                        texts
+                            .iter()
+                            .any(|(text, _)| text == &tr!("ping-ms", ms = "42"))
+                    );
                     assert!(named.1.right() <= 960.0, "{:?}", named.1);
-                    let other = DelayMode::ALL.into_iter().find(|other| *other != mode).unwrap();
-                    assert!(!texts.iter().any(|(text, _)| text == &delay_mode_label(other)));
+                    let other = DelayMode::ALL
+                        .into_iter()
+                        .find(|other| *other != mode)
+                        .unwrap();
+                    assert!(
+                        !texts
+                            .iter()
+                            .any(|(text, _)| text == &delay_mode_label(other))
+                    );
                 }
             });
         }

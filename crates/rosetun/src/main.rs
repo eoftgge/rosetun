@@ -11,9 +11,9 @@ use tracing_subscriber::filter::filter_fn;
 use tracing_subscriber::prelude::*;
 
 use rosetun_config::{
-    ConnectionMode, ConnectionState, DelayMode, DomainMatch, FailureKind, InstalledProtection, NodeId,
-    ProcessMatch, ProtectionCapabilities, ProtectionState, RequestedProtection, Rule, RuleMatcher,
-    RuleTarget, Status, SubscriptionId, XrayUse,
+    ConnectionMode, ConnectionState, DelayMode, DomainMatch, FailureKind, InstalledProtection,
+    NodeId, ProcessMatch, ProtectionCapabilities, ProtectionState, RequestedProtection, Rule,
+    RuleMatcher, RuleTarget, Status, SubscriptionId, XrayUse,
 };
 use rosetun_core::{ListOperation, PreparedConnection, terminal_text};
 use rosetun_ipc::{

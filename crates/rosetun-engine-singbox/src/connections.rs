@@ -382,7 +382,10 @@ mod tests {
     fn the_delay_inbound_connections_are_hidden() {
         let own = entry("own", "cp.cloudflare.com", "proxy")
             .replace("tun/tun-in", "socks/delay-in")
-            .replace(r#""processPath":"C:\Program Files\Examplepp.exe""#, r#""processPath":"""#);
+            .replace(
+                r#""processPath":"C:\Program Files\Examplepp.exe""#,
+                r#""processPath":"""#,
+            );
         let other = entry("other", "example.com", "proxy").replace("tun/tun-in", "socks/mixed-in");
         let shown = parse(&sample(&format!("[{own},{other}]")));
         assert_eq!(shown.len(), 1);

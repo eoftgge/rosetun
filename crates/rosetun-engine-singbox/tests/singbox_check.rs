@@ -3,9 +3,9 @@ use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use rosetun_config::{
-    DnsSettings, ExitId, ListId, ListRef, Node, NodeId, Outbound, Rule, RuleId, RuleMatcher, RuleSet,
-    RuleSetId, RuleTarget, Settings, ShadowsocksParams, StreamSettings, UploadedListFormat,
-    list_tag,
+    DnsSettings, ExitId, ListId, ListRef, Node, NodeId, Outbound, Rule, RuleId, RuleMatcher,
+    RuleSet, RuleSetId, RuleTarget, Settings, ShadowsocksParams, StreamSettings,
+    UploadedListFormat, list_tag,
 };
 use rosetun_engine::{
     ControlEndpoint, EngineBackend, ExtraOutbound, PROXY_TAG, RenderRequest, SocksProxy, exit_tag,
@@ -75,10 +75,7 @@ fn sing_box_check_accepts_the_delay_entry_and_its_rules() {
     };
     let directory = TestDirectory::new();
     let node = example_node();
-    let (first, last) = (
-        ExitId::new("first"),
-        ExitId::new("last"),
-    );
+    let (first, last) = (ExitId::new("first"), ExitId::new("last"));
     let mut second = example_node();
     second.server = "198.51.100.2".into();
     second.outbound = Outbound::Http(rosetun_config::ProxyCredentials::default());
@@ -102,7 +99,11 @@ fn sing_box_check_accepts_the_delay_entry_and_its_rules() {
         .unwrap()
         .with_delay_inbound([PROXY_TAG.to_owned(), exit_tag(0), exit_tag(1)])
         .unwrap();
-    let mut rules = RuleSet::new(RuleSetId::new("example-rules"), "Example", RuleTarget::Proxy);
+    let mut rules = RuleSet::new(
+        RuleSetId::new("example-rules"),
+        "Example",
+        RuleTarget::Proxy,
+    );
     rules.rules.push(Rule {
         id: RuleId::new("example-rule"),
         enabled: true,

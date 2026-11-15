@@ -185,7 +185,8 @@ pub fn render(request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError
 /// comes in (UDP, an account of no outbound) is refused. An account whose
 /// outbound this config does not define is left out.
 fn delay_entry(delay: &DelayInbound, extra: &[ExtraOutbound<'_>]) -> Option<(Value, Vec<Value>)> {
-    let defined = |tag: &str| tag == TAG_PROXY || extra.iter().any(|node| exit_tag(node.index) == tag);
+    let defined =
+        |tag: &str| tag == TAG_PROXY || extra.iter().any(|node| exit_tag(node.index) == tag);
     let accounts: Vec<_> = delay
         .accounts
         .iter()
