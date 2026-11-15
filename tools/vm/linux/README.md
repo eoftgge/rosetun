@@ -698,9 +698,13 @@ not a failure: the host keeps polling.
 **SSH.** The host's SSH reaches the guest from the Default Switch, a private
 network: Lockdown without "Local network" cuts it off. The job never needs it,
 the host only polls and keeps polling through a failed connection. The window
-without the local network is short (`lockdown.direct-blocked` to
-`inbound.closed`); from `inbound.lan-open` on Lockdown keeps the local network,
-also across the first reboot. The cleanup runs `rosetun-helper-privileged
+without the local network is short (`lockdown.direct-blocked` up to
+`inbound.lan-open`); from there on Lockdown keeps the local network.
+Across the first reboot the boot set has no network to name (it opens only the
+private ranges of "Private networks behind the router", which this run does not
+choose), so by the code the host cannot connect from the boot until the helper is
+started in `reboot.service-completes` and reads the segment; the host keeps
+polling meanwhile. That has not been observed on the stand. The cleanup runs `rosetun-helper-privileged
 --reset-firewall` before it closes the report, so the host can always read it
 in the end. If the guest stays out of reach, the host's wait runs out and its
 checkpoint restore removes everything.
@@ -713,8 +717,9 @@ checkpoint restore removes everything.
 | `lockdown.direct-blocked` | `rosetun lockdown on --lan off` as root: status `lockdown: on`, `/var/lib/rosetun/lockdown` root's with mode 600, an input chain; HTTPS to the probe refused on the physical interface and by the route |
 | `lockdown.gui-scope`, `lockdown.cli-scope` | in the first account's `rosetun-gui.scope` / `rosetun-cli.scope` (`systemd-run --user --scope`), `rosetun status` (the hello makes the service look for the scope), then HTTPS to the probe and a UDP 53 datagram leave the physical interface |
 | `lockdown.other-process` | the same account outside a scope, and in `rosetun-other.scope`, is refused both |
-| `inbound.closed` | a peer namespace on a veth pair with link-local addresses (169.254.77.1 guest, .2 peer; link-local is part of "Local network") does not get sshd's banner |
-| `inbound.lan-open` | after `rosetun lockdown on --lan on` it does; HTTPS to the probe stays refused |
+| `inbound.closed` | without the local network the input chain accepts no source address, and a peer namespace on a veth pair with link-local addresses (169.254.77.1 guest, .2 peer) does not get sshd's banner. The peer is set up before Lockdown and must reach sshd then; if it cannot, the step is ERROR, since a refusal would prove nothing |
+| `inbound.lan-open` | after `rosetun lockdown on --lan on` the input chain permits the own segment of the physical interface only with `iifname "<interface>"` and accepts no source address without an interface; sshd accepts a **new SSH connection from the host** that began after the local network went on (the sshd journal, up to 45 s); HTTPS to the probe stays refused. The host's SSH is the proof on the real interface, so the step depends on it: the host opens a new connection about every 10 s only under `-Run` (or `-Collect` with `-WaitSeconds`). The guest looks for such a connection for 20 s before Lockdown; if none comes, the step is ERROR (the run is not polled), not PASS. A poll that was seen before but is missing after is FAIL |
+| `inbound.lan-link-local-closed` | with the local network the input chain permits link-local on the physical interface, and the link-local veth peer still does not get sshd's banner: link-local is open on physical interfaces only |
 | `lockdown.session` | a connect without the kill switch (the DNS-lock request) gets it from Lockdown: the tunnel answers, the physical interface is refused |
 | `lockdown.session-scope-closed` | during the session the GUI's scope is refused on the physical interface |
 | `lockdown.after-session` | after the disconnect the network stays closed and the GUI's scope gets out again |
