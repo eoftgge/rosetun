@@ -208,7 +208,10 @@ fn an_exit_is_named() {
 
     assert_eq!(
         line.text,
-        tr!("rule-check-lead", head = head("example.com", "Japan".into()))
+        tr!(
+            "rule-check-lead",
+            head = head("example.com", "Japan".into())
+        )
     );
 }
 

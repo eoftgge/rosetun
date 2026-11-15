@@ -92,12 +92,11 @@ fn source(text: &str) -> ListPayload {
 
 fn known_rule(answer: &Answer) -> (&RuleId, bool, &RuleSource, &ExplainedRoute) {
     let Answer::Known(Explanation::Routed {
-        reason:
-            Reason::Rule {
-                id,
-                temporary,
-                source,
-            },
+        reason: Reason::Rule {
+            id,
+            temporary,
+            source,
+        },
         route,
     }) = answer
     else {
@@ -206,7 +205,11 @@ fn a_program_is_found_by_name_and_by_path() {
         ),
     ]);
 
-    let name = check(&request, &none(), &Subject::ProgramName("example.exe".into()));
+    let name = check(
+        &request,
+        &none(),
+        &Subject::ProgramName("example.exe".into()),
+    );
     let path = check(
         &request,
         &none(),
@@ -230,7 +233,9 @@ fn a_list_rule_names_the_list() {
     lists.insert(
         &ListId::new("videos"),
         None,
-        Some(&source(r#"{"version":2,"rules":[{"domain_suffix":["example.com"]}]}"#)),
+        Some(&source(
+            r#"{"version":2,"rules":[{"domain_suffix":["example.com"]}]}"#,
+        )),
     );
 
     let answer = check(&request, &lists, &site("example.com"));
@@ -505,7 +510,9 @@ fn an_address_in_a_list_makes_a_site_uncertain() {
     lists.insert(
         &ListId::new("networks"),
         None,
-        Some(&source(r#"{"version":2,"rules":[{"ip_cidr":["198.51.100.0/24"]}]}"#)),
+        Some(&source(
+            r#"{"version":2,"rules":[{"ip_cidr":["198.51.100.0/24"]}]}"#,
+        )),
     );
 
     assert!(matches!(

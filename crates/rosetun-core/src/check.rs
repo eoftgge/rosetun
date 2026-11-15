@@ -170,9 +170,7 @@ fn host_of(input: &str) -> Option<Typed> {
     }
     let (authority, rest) = input.split_at(input.find(['/', '?', '#']).unwrap_or(input.len()));
     // A subnet such as `192.0.2.0/24` is a block of addresses, not one.
-    if authority.parse::<IpAddr>().is_ok()
-        && rest.strip_prefix('/').is_some_and(is_port)
-    {
+    if authority.parse::<IpAddr>().is_ok() && rest.strip_prefix('/').is_some_and(is_port) {
         return None;
     }
     let authority = authority.rsplit('@').next().unwrap_or(authority);
@@ -229,9 +227,9 @@ pub fn check(request: &ConnectRequest, lists: &SessionLists, subject: &Subject) 
     };
     let mut open = None;
     for (temporary, rule) in consulted(request, &rules) {
-        if decided_by.is_some_and(|(id, decided_temporary)| {
-            *id == rule.id && decided_temporary == temporary
-        }) {
+        if decided_by
+            .is_some_and(|(id, decided_temporary)| *id == rule.id && decided_temporary == temporary)
+        {
             break;
         }
         open = open.or_else(|| unknown_of(subject, rule, lists));
@@ -255,9 +253,9 @@ fn unknown_of(subject: &Subject, rule: &Rule, lists: &SessionLists) -> Option<Un
             let needs = lists.needs(list, category.as_deref());
             (needs.address, needs.path)
         }
-        RuleMatcher::Domain(_) | RuleMatcher::Process(ProcessMatch::Name(_)) | RuleMatcher::Template(_) => {
-            (false, false)
-        }
+        RuleMatcher::Domain(_)
+        | RuleMatcher::Process(ProcessMatch::Name(_))
+        | RuleMatcher::Template(_) => (false, false),
     };
     match subject {
         Subject::Site(_) if address => Some(Unknown::SiteAddress),

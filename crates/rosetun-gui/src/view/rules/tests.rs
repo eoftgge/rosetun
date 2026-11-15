@@ -837,7 +837,14 @@ fn exit_button_shows_the_exit_name_without_truncation() {
 
 fn check_line(rule: Option<(String, RuleId)>) -> crate::state::CheckLine {
     crate::state::CheckLine {
-        text: tr!("rule-check-lead-basis", head = "video.example.com → Direct".to_owned(), basis = tr!("rule-check-list", list = "A long list name for the check".to_owned())),
+        text: tr!(
+            "rule-check-lead-basis",
+            head = "video.example.com → Direct".to_owned(),
+            basis = tr!(
+                "rule-check-list",
+                list = "A long list name for the check".to_owned()
+            )
+        ),
         rule,
         hint: None,
         answer: true,
@@ -884,7 +891,10 @@ fn the_check_shows_its_answer_and_a_link_that_asks_for_the_rule() {
                 .unwrap();
             assert!(link.right() <= 960.0, "{language:?}: {link:?}");
             // The link follows the answer on its row.
-            assert!(link.right() > answer.right(), "{language:?}: {answer:?} {link:?}");
+            assert!(
+                link.right() > answer.right(),
+                "{language:?}: {answer:?} {link:?}"
+            );
             assert!(
                 (link.center().y - answer.center().y).abs() < 1.0,
                 "{language:?}: {answer:?} {link:?}"

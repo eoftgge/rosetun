@@ -25,9 +25,7 @@ pub(crate) enum Command {
         path: String,
     },
     /// Where the rules send a site, an IP address or a program.
-    Test {
-        input: String,
-    },
+    Test { input: String },
 }
 pub(crate) fn parse(args: &[&str]) -> Result<Command, String> {
     let usage = "rules export [--selected-ids ID,...] [--with-list-urls] [FILE|-], rules import [--replace] [--yes] FILE|- or rules test ADDRESS|PROGRAM";
@@ -285,7 +283,11 @@ fn answer(subject: &Subject) -> Result<String, String> {
         eprintln!("could not read the lists, rules on them are left open: {error}");
         SessionLists::default()
     });
-    Ok(describe(&config, subject, &check(&request, &lists, subject)))
+    Ok(describe(
+        &config,
+        subject,
+        &check(&request, &lists, subject),
+    ))
 }
 
 /// The running session's temporary rules and exits, or nothing when there is
@@ -397,7 +399,10 @@ fn reason_text(config: &AppConfig, reason: &Reason) -> String {
                         Some(category) => format!("{name}: {category}"),
                         None => name.to_owned(),
                     };
-                    format!("list \u{201c}{}\u{201d} · rule {number}", terminal_text(&name))
+                    format!(
+                        "list \u{201c}{}\u{201d} · rule {number}",
+                        terminal_text(&name)
+                    )
                 }
             }
         }
