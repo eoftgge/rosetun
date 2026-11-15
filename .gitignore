@@ -19,5 +19,8 @@
 /temp
 *.zip
 
+# The installer script copy with a BOM that build.ps1 gives to ISCC
+/installer/rosetun.build.iss
+
 # Caches
 __pycache__

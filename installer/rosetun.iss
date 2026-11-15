@@ -1,4 +1,4 @@
-﻿; Compiled by installer\build.ps1, which passes AppVersion, BuildDir, SingBoxDir, XrayDir and LicensesDir.
+; Compiled by installer\build.ps1, which passes AppVersion, BuildDir, SingBoxDir, XrayDir and LicensesDir.
 #ifndef AppVersion
   #error Run installer\build.ps1 instead of compiling this script directly
 #endif

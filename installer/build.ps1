@@ -233,9 +233,31 @@ if (-not $iscc -or -not (Test-Path -LiteralPath $iscc -PathType Leaf)) {
 
 New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
 $issPath = Join-Path $PSScriptRoot 'rosetun.iss'
-& $iscc /Qp "/DAppVersion=$version" "/DFileVersion=$fileVersion" "/DBuildDir=$buildDir" "/DSingBoxDir=$singBoxDir" "/DXrayDir=$xrayDir" "/DLicensesDir=$licensesDir" "/O$outputDir" $issPath
-if ($LASTEXITCODE -ne 0) {
-    throw "Compiling $issPath failed with ISCC exit code $LASTEXITCODE."
+# Inno Setup reads a script without a BOM as ANSI, which turns the Russian messages
+# into mojibake without any error. The source stays BOM-free for editors, so ISCC gets
+# a copy with a BOM. It sits next to the source, so every relative path in the script
+# resolves as before, and is Git-ignored.
+$compiledIssPath = Join-Path $PSScriptRoot 'rosetun.build.iss'
+$issBytes = [IO.File]::ReadAllBytes($issPath)
+$bomLength = if ($issBytes.Length -ge 3 -and $issBytes[0] -eq 0xEF -and $issBytes[1] -eq 0xBB -and $issBytes[2] -eq 0xBF) { 3 } else { 0 }
+# Strict decoding rejects a script that is not UTF-8; the BOM is cut off first so it is not doubled.
+$issText = [Text.UTF8Encoding]::new($false, $true).GetString($issBytes, $bomLength, $issBytes.Length - $bomLength)
+try {
+    # WriteAllText replaces a copy left behind by an interrupted build.
+    [IO.File]::WriteAllText($compiledIssPath, $issText, [Text.UTF8Encoding]::new($true))
+    $compiledBytes = [IO.File]::ReadAllBytes($compiledIssPath)
+    $compiledHasBom = $compiledBytes.Length -ge 3 -and $compiledBytes[0] -eq 0xEF -and $compiledBytes[1] -eq 0xBB -and $compiledBytes[2] -eq 0xBF
+    $nonAscii = $compiledBytes | Where-Object { $_ -gt 0x7F } | Select-Object -First 1
+    if ($null -ne $nonAscii -and -not $compiledHasBom) {
+        throw "$compiledIssPath has non-ASCII text but no UTF-8 BOM, so Inno Setup would read it as ANSI and corrupt the Russian messages."
+    }
+    & $iscc /Qp "/DAppVersion=$version" "/DFileVersion=$fileVersion" "/DBuildDir=$buildDir" "/DSingBoxDir=$singBoxDir" "/DXrayDir=$xrayDir" "/DLicensesDir=$licensesDir" "/O$outputDir" $compiledIssPath
+    if ($LASTEXITCODE -ne 0) {
+        throw "Compiling $issPath failed with ISCC exit code $LASTEXITCODE."
+    }
+}
+finally {
+    Remove-Item -LiteralPath $compiledIssPath -Force -ErrorAction SilentlyContinue
 }
 $setup = Join-Path $outputDir "rosetun-$version-setup.exe"
 if (-not (Test-Path -LiteralPath $setup -PathType Leaf)) {
