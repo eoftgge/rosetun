@@ -2375,11 +2375,13 @@ Owner qualification on the prepared stand, after reinstalling the helper:
    multicast listener traffic outside the table), the run is `DETECTED`; send the
    summary instead of widening the table.
 2. `lab-smoke --canary`: exit 0, `leak` `DETECTED`, `canary_flows` `["tcp", "udp"]`.
-3. From the test machine's console during capture, send one extra packet by hand
-   (for example `ping -c1 203.0.113.2`): exit 2, `leak` `DETECTED`.
-4. Stop the observer process on the lab machine in the middle of the window: `leak`
-   `UNVERIFIED`, never `NONE`.
-5. `set_link test-wire off` through QMP before the closing marker: `UNVERIFIED`.
+3. `lab-smoke --control extra-packet`: exit 0, the leak `DETECTED` (stage 7c1).
+4. `lab-smoke --control observer-stopped`: exit 0, `leak` `UNVERIFIED`, never `NONE`
+   (stage 7c1).
+5. `lab-smoke --control link-down`: exit 0, `leak` `UNVERIFIED` (stage 7c1).
+   Fallback without the commands: send one extra packet by hand from the test machine's console
+   during capture (exit 2, `DETECTED`), stop the observer in the middle of the window, or run
+   `set_link test-wire off` through QMP before the closing marker: `UNVERIFIED`.
 6. Read the saved pcap in Wireshark: the frame counts per category match
    `categories` in the summary.
 
@@ -2910,8 +2912,9 @@ file, no new line in a result or a note. With it, `lab_mark open` runs before `r
 helper removed a DNS lock, and at the end of the peer scenarios. The marker is one UDP datagram
 (bash `/dev/udp`) `rosetun-lab-marker:<run>.<index>.<word>.<label>`; the lab echoes it and the
 script waits at most two seconds for the echo. It is sent only while there is no table
-`inet rosetun` and the state is `Disconnected`; otherwise nothing is sent, nothing else changes, and
-the window stays open, which the observer calls unverified. Index and label of the open window live
+`inet rosetun` and the state is `Disconnected`, except that a closing marker also goes while the
+service is not active (a stopped service answers no status; stage 7c1). Otherwise nothing is sent,
+nothing else changes, and the window stays open, which the observer calls unverified. Index and label of the open window live
 in the run's state directory, so `finalize` and a restarted function still know them.
 
 `<run>` is 32 hexadecimal digits, the first 32 of `sha256("rosetun-lab-run:" + RUN_ID)` where
@@ -3202,11 +3205,99 @@ on.
 1. `run linux-l3 --lab --dry-run`, then the ordinary command. Expect the group `PASS`, the
    cross-check `AGREE`, exit 0, and keep the summary.
 2. Legacy L3 on Hyper-V with the new `run-l3.sh`: all `PASS`, as before.
-3. Positive control: during the window `connect_ks`, `systemctl stop rosetun-helper` from the
-   console of the test machine. The table goes, the probes of the script leave directly: that window
-   is `DETECTED`, exit 1.
-4. Stop the observer on the lab machine in the middle of the run: exit 2.
+3. Positive control: `run linux-l3 --lab --control stop-helper` (stage 7c1): exit 0.
+   Fallback by hand: during the window `connect_ks`, `systemctl stop rosetun-helper` from the console
+   of the test machine; the table goes, the probes of the script leave directly, that window is
+   `DETECTED`, exit 1.
+4. Stop the observer on the lab machine in the middle of the run: exit 2. (`lab-smoke --control
+   observer-stopped` shows the same for the observer itself.)
 5. Compare the rows of the group with a run on Hyper-V.
+
+## Stage 7c1: controls of the observer without a console, and the window after a stop
+
+Nothing here widens what the lab accepts. Stage 7b2b qualified on the stand (16 of 16, the cross-check
+`AGREE`, two runs alike), but that the observer *catches* a leak and does *not* say `NONE` without proof
+was shown only by the canary of 6b; the other controls needed the guest console or a hand-made QMP
+command, so a qualifying agent could not run them. This stage makes them commands. Every new window
+of stage 7c2 that says `NONE` leans on them.
+
+### The window after a stop
+
+Found by the first two runs of 7b2b: the window `stopped` was `DETECTED`. After `systemctl stop
+rosetun-helper.service` nothing answers `rosetun status`, so `lab_mark close` (which needed the state
+`Disconnected`) never went out, and the direct request that followed landed in the open window.
+`lab_mark close` now also goes when there is no table `inet rosetun` and either the state is
+`Disconnected` or the service is not active; `lab_mark open` is as before. Every other call
+(`disconnect`, `connect_with`, the end of the peer scenarios, `crash.open-network`,
+`crash.dns-lock-killed`) runs with the service active, so its condition is the old one. Without
+`LAB_MARKER_ADDRESS` nothing changes, on Hyper-V too.
+
+### `lab-smoke --control NAME`
+
+One key, not together with `--canary` or `--tunnel` (exit 2 from the parser). Each control exits 0 only
+when exactly its refusal was obtained and 2 otherwise; the summary has a block `control` with `name`,
+`expected` (in words), `intervened`, `link_restored` and `met`. Ordinary and `--canary` summaries have no
+such block and send the same requests to the guests as before.
+
+| `NAME` | What it does | Exit 0 only if |
+| --- | --- | --- |
+| `extra-packet` | sends the canary's packets, but the run is judged as an ordinary one | `leak` `DETECTED`, `canary_flows` `["tcp", "udp"]`, `canary_other` 0, both markers found and ordered, `observer_reasons` empty, no error, `qualified` |
+| `observer-stopped` | the controller stops the lab's observer between the markers | `leak` `UNVERIFIED` (never `NONE`), `window-markers-missing-or-repeated` in `observer_reasons`, the markers not found, and exactly one error: the closing exchange of the test machine (`marker-close`) |
+| `link-down` | the controller runs `set_link test-wire off` through QMP between the markers and `on` again before the machines close | the same as above, and `link_restored` true |
+
+For the last two the test machine waits `CONTROL_HOLD_SECONDS` (20) after its exchanges and before the
+closing marker, only when the request names the control (`control` in the request options, accepted
+only with these two names and no canary). The controller acts on the *event*: while the test machine's
+helper runs it polls the lab with the new read-only operation `window`, which says whether the lab
+served the opening marker (the observer touches `open-seen` only for a request with a control), and
+acts once, on the first yes. `observer-stopped` calls the new lab operation `halt`, which stops the
+observer the way `finish` does (`finish` then finds it stopped, but only for that control);
+`link-down` calls `Vm.set_link(False)` of the test machine. The link is brought back after `finish`
+(so that what the test machine sends once it is back is not judged), and in any case before the
+machines close, also when the run failed; a link that cannot be brought back is an error.
+
+`set_link` goes through the same QMP facade and lifecycle journal as `stop` and `cont`: the rows
+`link-down` and `link-up` (`intent`, `command-accepted`, `error`) stand in `lifecycle.jsonl` of the
+test run, and the facade takes `set_link` only with exactly `name` (`test-wire` or `lab-wire`) and
+`up` (a boolean). Both machines still end with `completion_verified`; if not, the exit is 2.
+
+### `run linux-l3 --lab --control stop-helper`
+
+The positive control of the L3 observer, one key, only with `--lab` and not with `--diagnostic` (both
+refused before anything starts). `job.env` gains an optional last key `LAB_CONTROL=stop-helper`, only
+together with `LAB_MARKER_ADDRESS` (the importer, the helper in the image and `run-l3.sh` all refuse
+anything else). In `scenario_kill_switch`, right after `killswitch.direct-blocked` is recorded PASS and
+in the same window `connect_ks`, `run-l3.sh` stops `rosetun-helper.service` and makes one `direct_https`.
+The scenarios after it run as usual and may fail: this is a control run, and the summary says so
+(`control: "stop-helper"`, `control_result`). Without `LAB_CONTROL` `run-l3.sh` does exactly what it did.
+
+Exit code of the run, in place of the ordinary one: 0 only when the window `connect_ks` is `DETECTED`,
+it holds a TCP flow from the test machine to `203.0.113.2:443` that the target answered (SYN and
+SYN-ACK), `killswitch.direct-blocked` is `DISAGREE` in the cross-check, an ordinary run would have exited
+1 and both machines are completed (`control_result.ordinary_exit_code` keeps that ordinary code). Anything
+else is 2, an interruption 130. A run with a control is never a qualification of the group.
+
+### Reinstall
+
+Changed in the images: `linux/guest/lab-entry.py` and `matrix/lab_protocol.py` in **both** images (the
+control request, the operations `window` and `halt`, the hold), and `linux/guest/stage-l2.py` in the
+**test** image (the optional `LAB_CONTROL`). `linux/guest/run-l3.sh` and `linux/guest/start.sh` reach the
+test machine through the package and need no reinstall. Update the image descriptors of both images
+(the new SHA-256 and size of each) before any qualification; the tunnel descriptors (`sing_box_sha256`,
+`ca_sha256`) do not change. The Hyper-V path needs the new `run-l3.sh` only when its owner takes it.
+
+### Owner qualification
+
+Each command in its own run on the clean checkpoint. Stop at the first unexpected result and send back
+the summaries and the retained artifacts.
+
+1. `lab-smoke --config <lab.toml>`, then `lab-smoke --config <lab.toml> --canary`: as in 6b.
+2. `lab-smoke --config <lab.toml> --control extra-packet`, then `--control observer-stopped`, then
+   `--control link-down`: exit 0 each; `control.met` true; `leak` `DETECTED`, `UNVERIFIED`, `UNVERIFIED`.
+3. `run linux-l3 --lab --config <l3.toml>`: 16 of 16, exit 0, the window `stopped` now `NONE` (it is
+   outside the group, so it is read in `lab.windows`).
+4. `run linux-l3 --lab --control stop-helper --config <l3.toml>`: exit 0, `control_result.met` true.
+5. `runs --state-directory <state>`: every run `completion_verified`.
 
 ## Stage 7a: Linux L3 delivery without network
 
