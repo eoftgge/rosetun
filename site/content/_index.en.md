@@ -77,8 +77,8 @@ caption = 'Exit Nodes'
 
 [[extra.screens]]
 image = 'settings'
-alt = 'Rosetun: Protection settings'
-caption = 'Protection Settings'
+alt = 'Rosetun: Settings'
+caption = 'Settings'
 +++
 
 {%- set r = load_data(path="data/release.json", required=false) -%}

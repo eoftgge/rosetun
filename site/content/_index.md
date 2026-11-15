@@ -79,8 +79,8 @@ caption = 'Направления'
 
 [[extra.screens]]
 image = 'settings'
-alt = 'Rosetun: настройки защиты'
-caption = 'Настройки защиты'
+alt = 'Rosetun: настройки'
+caption = 'Настройки'
 +++
 
 {%- set r = load_data(path="data/release.json", required=false) -%}
