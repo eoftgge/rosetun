@@ -25,7 +25,7 @@ from .lab_protocol import (MACS, CAPTURE_LIMIT, LOG_LIMIT, PORTS, CANARY_PORT, H
                            probes, markers, qualify, leak_verdict, https_exchanges, https_answer, dns_checks, dns_name,
                            plain_reply_ok, DNS_CHECK_DOH, DOH_NAME, RESOLVER, DOH_ADDRESS,
                            DURATION, DURATION_MAX, EVIDENCE_SIZE, EVIDENCE_PCAP_LIMIT, EVIDENCE_HEADER_SIZE,
-                           EVIDENCE_SERIAL, parse_evidence_header, HELPER_REASON)
+                           EVIDENCE_SERIAL, parse_evidence_header, HELPER_REASON, CONTROLS, GUEST_CONTROLS)
 
 ENTRY = '/usr/local/libexec/rosetun-lab/entry'
 SCHEMA_V1, SCHEMA_V2 = 'rosetun.matrix.lab.v1', 'rosetun.matrix.lab.v2'
@@ -51,6 +51,13 @@ EVIDENCE_IMAGE = 'evidence.img'
 EVIDENCE_RESOURCES = {'lab-evidence-disk': EVIDENCE_IMAGE}
 # The guest facade lives this long beyond the capture it waits for: setup, finish and the reads.
 GUEST_LIFETIME = 90
+# What a negative control of stage 7c1 has to end in, as the summary says it.
+CONTROL_EXPECTATIONS = {
+    'extra-packet': 'leak DETECTED, the canary flows tcp and udp and nothing else, the window proven',
+    'observer-stopped': 'leak UNVERIFIED and never NONE, the closing marker missing, the closing exchange refused',
+    'link-down': 'leak UNVERIFIED and never NONE, the closing marker missing, the link back before the end'}
+# A control that stops something between the markers makes the test machine wait; the polls of its helper allow for it.
+CONTROL_POLLS = 120
 
 
 def controls(run):
@@ -94,9 +101,11 @@ def validate(config):
     return config
 
 
-def plan_lab(config, *, tunnel=False, evidence_disk=False, dns=False):
+def plan_lab(config, *, tunnel=False, evidence_disk=False, dns=False, control=None):
     """Read only: no lease, directories, subprocesses or sockets."""
     validate(config)
+    if control is not None and (control not in CONTROLS or tunnel):
+        raise ValueError('lab-control-invalid')
     if tunnel and config['schema'] != SCHEMA_V2:
         raise ValueError('lab-tunnel-requires-v2')
     if dns and not tunnel:
@@ -115,6 +124,8 @@ def plan_lab(config, *, tunnel=False, evidence_disk=False, dns=False):
     if evidence_disk:
         plan['evidence_disk'] = dict(size_bytes=EVIDENCE_SIZE, pcap_limit_bytes=EVIDENCE_PCAP_LIMIT,
                                      serial=EVIDENCE_SERIAL, role='lab')
+    if control is not None:
+        plan['control'] = dict(name=control, expected=CONTROL_EXPECTATIONS[control])
     return plan
 
 
@@ -257,8 +268,8 @@ class Guest:
         self.vm.qga.deadline = time.monotonic() + min(5, self.deadline - self.clock())
         return self.vm.qga._rpc(name, 5, args)
 
-    def call(self, operation, expected, window=(), canary=False, tunnel=None, options=None):
-        if operation not in ({'setup', 'finish'} if self.role == 'lab' else {'probe'}):
+    def call(self, operation, expected, window=(), canary=False, tunnel=None, options=None, poll=None, attempts=40):
+        if operation not in ({'setup', 'finish', 'window', 'halt'} if self.role == 'lab' else {'probe'}):
             raise ValueError('invalid-lab-operation')
         with self.vm._guest_lock:
             self.vm.qga.deadline = time.monotonic() + 10
@@ -271,7 +282,7 @@ class Guest:
                 request['tunnel'] = tunnel
             if options:
                 if not set(options) <= {'evidence_disk', 'duration_seconds', 'dns', 'dns_check', 'windows',
-                                        'certificates', 'route_flows'}:
+                                        'certificates', 'route_flows', 'control'}:
                     raise ValueError('invalid-lab-option')
                 request.update(options)
             self.vm.qga.jobs_enabled = True
@@ -279,7 +290,7 @@ class Guest:
             response = self.rpc('guest-exec', {'path': ENTRY, 'arg': [json.dumps(request)], 'capture-output': True})
             if type(response) is not dict or set(response) != {'pid'} or type(response['pid']) is not int:
                 raise ValueError('invalid-lab-exec')
-            for _ in range(40):
+            for _ in range(attempts):
                 status = self.rpc('guest-exec-status', response)
                 if status.get('exited') is True:
                     if status.get('exitcode') != 0 or status.get('out-truncated') or status.get('err-truncated'):
@@ -293,6 +304,9 @@ class Guest:
                     if result.get('lab_id') != self.lab_id or result.get('boot_id') != self.vm.last_boot_id:
                         raise ValueError('lab-helper-identity-mismatch')
                     return result
+                # The other machine's control acts while this helper runs, from here and only once it has run.
+                if poll is not None:
+                    poll()
                 self.sleep(0.5)
             raise ValueError('lab-helper-timeout')
 
@@ -367,6 +381,32 @@ def expected_leak(result):
                 and result['canary_other'] == 0 and window['markers_found'] is True
                 and window['ordered'] is True and result['observer_reasons'] == [])
     return result['leak'] == 'NONE'
+
+
+def probe_error_is_the_closing_marker(row):
+    """The one refusal a control that stops something between the markers is meant to cause."""
+    reason = row.get('helper_reason') if type(row) is dict else None
+    return (type(reason) is str and reason.startswith('marker-close:4:')
+            and (row.get('stage'), row.get('kind')) == ('probe', 'HelperFailed'))
+
+
+def control_met(result):
+    """True only when the run ended in exactly the refusal its control is there to show."""
+    control = result.get('control')
+    if type(control) is not dict or control.get('name') not in CONTROLS:
+        return False
+    name = control['name']
+    window = result['window']
+    if name == 'extra-packet':
+        return (result['leak'] == 'DETECTED' and result['canary_flows'] == ['tcp', 'udp'] and result['canary_other'] == 0
+                and window['markers_found'] is True and window['ordered'] is True and result['observer_reasons'] == []
+                and result['errors'] == [] and result['qualification']['qualified'] is True)
+    # The closing marker never reached the observer, so the window stays open: not a clean run, never a leak-free one.
+    return (control['intervened'] is True and result['leak'] == 'UNVERIFIED'
+            and 'window-markers-missing-or-repeated' in result['observer_reasons']
+            and window['markers_found'] is False
+            and (name != 'link-down' or control['link_restored'] is True)
+            and len(result['errors']) == 1 and probe_error_is_the_closing_marker(result['errors'][0]))
 
 
 def tunnel_request(config, exchanges):
@@ -469,8 +509,10 @@ def tunnel_ok(result):
 
 
 def lab_smoke(config, *, canary=False, tunnel=False, evidence_disk=False, duration_seconds=None,
-              dns=False, adapters=None, clock=time.monotonic, sleep=time.sleep):
-    plan_lab(config, tunnel=tunnel, dns=dns)
+              dns=False, control=None, adapters=None, clock=time.monotonic, sleep=time.sleep):
+    plan_lab(config, tunnel=tunnel, dns=dns, control=control)
+    if control is not None and canary:
+        raise ValueError('lab-control-invalid')
     if duration_seconds is not None and (type(duration_seconds) is not int
                                          or not DURATION <= duration_seconds <= DURATION_MAX):
         raise ValueError('lab-duration-out-of-range')
@@ -483,7 +525,8 @@ def lab_smoke(config, *, canary=False, tunnel=False, evidence_disk=False, durati
     checks = dns_checks(lab_id, lambda: secrets.token_hex(12)) if dns else None
     request_options = {**({'evidence_disk': True} if evidence_disk else {}),
                **({'duration_seconds': duration_seconds} if duration_seconds is not None else {}),
-               **({'dns': True, 'dns_check': checks} if dns else {})}
+               **({'dns': True, 'dns_check': checks} if dns else {}),
+               **({'control': control} if control in GUEST_CONTROLS else {})}
     if request_options:
         extra['options'] = request_options
     result = dict(schema='rosetun.matrix.lab-summary.v1', lab_id=lab_id, readiness={},
@@ -496,6 +539,11 @@ def lab_smoke(config, *, canary=False, tunnel=False, evidence_disk=False, durati
                   errors=[], security_invariants='UNVERIFIED', release_gate=False, exit_code=2)
     if evidence_disk:
         result['evidence_disk'] = dict(verified=False, reason='not-read', pcap_bytes=0, pcap_sha256=None)
+    if control is not None:
+        # Only a control run has this block; the summaries of every other run stay as they were.
+        result['control'] = dict(name=control, expected=CONTROL_EXPECTATIONS[control], intervened=False,
+                                 link_restored=False, met=False)
+    link_is_down = False
     if tunnel:
         # Stage 6a and 6b summaries gain nothing; only a tunnel run carries these.
         result.update(https=exchanges, tunnel=dict(direct=False, via_node=False, tunnel_frames=0,
@@ -540,8 +588,30 @@ def lab_smoke(config, *, canary=False, tunnel=False, evidence_disk=False, durati
         if ready.get('capture_ready') is not True:
             raise ValueError('capture-not-ready')
         sent, reports, dns_reports = {}, None, None
+
+        def intervene():
+            """Once the lab has marked the opening, and only then: stop what this control stops."""
+            nonlocal link_is_down
+            if result['control']['intervened'] or lab.call('window', expected, window, **extra).get('open_seen') is not True:
+                return
+            result['control']['intervened'] = True
+            if control == 'observer-stopped':
+                lab.call('halt', expected, window, **extra)
+            else:
+                vms['test'].set_link(False)
+                link_is_down = True
+
+        def restore_link():
+            nonlocal link_is_down
+            if link_is_down:
+                vms['test'].set_link(True)
+                link_is_down = False
+                result['control']['link_restored'] = True
+
         try:
-            probed = test.call('probe', expected, window, canary=canary, **extra)
+            guest_control = ({'poll': intervene, 'attempts': CONTROL_POLLS} if control in GUEST_CONTROLS else {})
+            probed = test.call('probe', expected, window, canary=canary or control == 'extra-packet',
+                               **guest_control, **extra)
             replies, marker_replies, sent = probed['replies'], probed['marker_replies'], probed['marker_sent']
             reports = probed.get('https')
             dns_reports = probed.get('dns')
@@ -557,6 +627,8 @@ def lab_smoke(config, *, canary=False, tunnel=False, evidence_disk=False, durati
             replies, marker_replies = [], []
         result['replies'] = replies
         lab.call('finish', expected, window, **extra)
+        # The observer has stopped, so what the test machine sends once its link is back is not judged.
+        restore_link()
         evidence = {}
         files = (('targets.json', LOG_LIMIT), ('health.json', LOG_LIMIT))
         if not evidence_disk:
@@ -623,6 +695,14 @@ def lab_smoke(config, *, canary=False, tunnel=False, evidence_disk=False, durati
         if isinstance(error, KeyboardInterrupt):
             result['exit_code'] = 130
     finally:
+        if link_is_down:
+            # Never leave the wire cut on a machine that is about to be closed, whatever went wrong before.
+            try:
+                vms['test'].set_link(True)
+                link_is_down = False
+                result['control']['link_restored'] = True
+            except BaseException as error:
+                result['errors'].append(failure('link-restore', error))
         if lease is not None:
             # Includes a failed start's handle, never unrelated processes.
             for vm in list(lease._active):
@@ -650,7 +730,11 @@ def lab_smoke(config, *, canary=False, tunnel=False, evidence_disk=False, durati
                     result['errors'].append(dict(stage='completion', reason='ledger-read-failed'))
             result['completed'] = (set(result['completion']) == set(MACS)
                                    and all(result['completion'].values()) and result['channel_closed'])
-            if result['exit_code'] != 130:
+            if result['exit_code'] != 130 and control is not None:
+                # A control passes only on exactly its own refusal, and with both machines confirmed gone.
+                result['control']['met'] = control_met(result)
+                result['exit_code'] = 0 if result['completed'] and result['control']['met'] else 2
+            elif result['exit_code'] != 130:
                 result['exit_code'] = 0 if (result['completed'] and not result['errors']
                                             and result['qualification']['qualified'] and expected_leak(result)
                                             and tunnel_ok(result) and dns_ok(result)) else 2

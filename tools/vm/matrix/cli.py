@@ -7,6 +7,7 @@ import shutil
 import sys
 
 from .catalog import LINUX_ROOT, SUITES
+from .lab_protocol import CONTROLS
 from .config import load_profile, make_plan
 from .report import ASSESSMENT_SCHEMA, assess_files
 from .resources import ArchiveRefused, archive_run, inspect_runs, recovery_plan
@@ -34,6 +35,8 @@ def main(argv=None):
     lab.add_argument('--dry-run', action='store_true')
     lab.add_argument('--canary', action='store_true',
                      help='send a deliberate leak and succeed only if exactly that leak is detected')
+    lab.add_argument('--control', choices=CONTROLS,
+                     help='a negative control of the observer: exit 0 only on exactly the refusal it is there to show')
     lab.add_argument('--tunnel', action='store_true',
                      help='also qualify the lab VPN node and HTTPS target (needs a lab.v2 configuration)')
     lab.add_argument('--dns', action='store_true',
@@ -66,13 +69,16 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.command == "recover" and bool(args.archive) != bool(args.run_id):
         parser.error("--archive and --run-id must be given together")
+    if args.command == 'lab-smoke' and args.control and (args.canary or args.tunnel):
+        parser.error('--control cannot go with --canary or --tunnel')
     try:
         if args.command == 'lab-smoke':
             from .lab import load_lab, plan_lab, lab_smoke
             config = load_lab(args.config)
             options = {**({'tunnel': True} if args.tunnel else {}),
                        **({'evidence_disk': True} if args.evidence_disk else {}),
-                       **({'dns': True} if args.dns else {})}
+                       **({'dns': True} if args.dns else {}),
+                       **({'control': args.control} if args.control else {})}
             result = plan_lab(config, **options) if args.dry_run else lab_smoke(config, canary=args.canary, **options)
             code = 0 if args.dry_run else result['exit_code']
         elif args.command == 'run':

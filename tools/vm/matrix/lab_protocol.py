@@ -29,6 +29,12 @@ MARKER_PREFIX = 'rosetun-lab-marker:'
 ACK_PREFIX = 'rosetun-lab-ack:'
 _WINDOW_MARKER = re.compile(rb'rosetun-lab-marker:([0-9a-f]{32})\.(0|[1-9][0-9]{0,2})\.(open|close)\.([a-z0-9_.-]{1,48})')
 DURATION = 60
+# Stage 7c1: the negative controls of `lab-smoke --control`. The first needs nothing but the canary's packets;
+# the other two stop something between the markers, so the test machine waits there for this long, after its
+# exchanges and before the closing marker. The pause is only in a request that names such a control.
+CONTROLS = ('extra-packet', 'observer-stopped', 'link-down')
+GUEST_CONTROLS = ('observer-stopped', 'link-down')
+CONTROL_HOLD_SECONDS = 20
 # Every wait of a lab socket, in seconds: a server for a request, a client for an answer, the test
 # machine for the echo of a marker. Nested virtualization with one vCPU per machine can stall a
 # guest for a second or more, which the old waits (1 for a server, 2 for a client) did not allow.

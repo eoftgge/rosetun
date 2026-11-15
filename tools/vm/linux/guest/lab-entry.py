@@ -28,7 +28,7 @@ from lab_protocol import (MACS, CLIENTS, GATEWAYS, TARGETS, PORTS, SERVICES, CAP
                           EVIDENCE_PCAP_LIMIT, EVIDENCE_HEADER_SIZE, DURATION_MAX, evidence_header,
                           WINDOW_LIMIT, ACK_PREFIX, parse_window_marker, DNS_CHECK_DOH, DOH_NAME,
                           dns_name, plain_reply_ok, REASON_LIMIT, REQUEST_TIMEOUT, RESPONSE_TIMEOUT, MARKER_TIMEOUT,
-                          ROUTE_INTERFACE, ROUTE_FLOWS_LIMIT, RouteFlows)
+                          ROUTE_INTERFACE, ROUTE_FLOWS_LIMIT, RouteFlows, GUEST_CONTROLS, CONTROL_HOLD_SECONDS)
 
 ROOT = Path('/run/rosetun-lab')
 ENTRY = '/usr/local/libexec/rosetun-lab/entry'
@@ -120,6 +120,9 @@ def identity(request):
         raise ValueError('invalid-duration')
     if 'windows' in request and request['windows'] is not True:
         raise ValueError('invalid-windows')
+    if 'control' in request and (request['control'] not in GUEST_CONTROLS or request['canary'] is not False
+                                 or request.get('windows') is True or 'tunnel' in request):
+        raise ValueError('invalid-control')
     if 'dns_check' in request:
         dns_check_of(request)
     if 'certificates' in request:
@@ -464,6 +467,9 @@ def probe_all(request):
     dns = probe_dns(request) if 'dns_check' in request else None
     if request['canary']:
         exchange('canary', 4, send_canary)
+    if 'control' in request:
+        # The controller reaches in here: it waits for the lab to mark the opening and then stops something.
+        time.sleep(CONTROL_HOLD_SECONDS)
     # Let the last connection finish closing on the wire before the window ends.
     time.sleep(.2)
     sent['close'] = time.monotonic()
@@ -1414,6 +1420,8 @@ def serve(request, directory):
                             marker = accept_marker(request, marks, data, peer[0])
                             key.fileobj.sendto(marker_answer(marker), peer)
                             marks.append(dict(word=marker['word'], nonce=marker['nonce'], at=time.monotonic()))
+                            if 'control' in request and marker['word'] == 'open':
+                                (directory / 'open-seen').touch()
                     except Exception as error:
                         refuse(logs, 'marker', 4, error)
                     continue
@@ -1525,16 +1533,26 @@ def main(request):
         raise ValueError('wrong-run')
     if any(saved.get(key) != request.get(key) for key in ('tunnel', 'dns', 'dns_check', 'evidence_disk',
                                                        'duration_seconds', 'windows', 'certificates',
-                                                       'route_flows')):
+                                                       'route_flows', 'control')):
         raise ValueError('wrong-run')
     if request['role'] == 'lab' and operation == 'serve':
         if request.get('interface') != iface:
             raise ValueError('wrong-capture-interface')
         serve(request, directory)
         return {}
+    if request['role'] == 'lab' and operation == 'window' and 'control' in request:
+        return dict(open_seen=(directory / 'open-seen').exists())
+    if request['role'] == 'lab' and operation == 'halt' and request.get('control') == 'observer-stopped':
+        # The control stops the observer between the markers; `finish` then finds it stopped.
+        (directory / 'stop').touch(exist_ok=False)
+        for _ in range(50):
+            if (directory / 'health.json').exists():
+                return dict(halted=True)
+            time.sleep(.1)
+        raise ValueError('observer-stop-timeout')
     if request['role'] == 'lab' and operation == 'finish':
         time.sleep(.3)
-        (directory / 'stop').touch(exist_ok=False)
+        (directory / 'stop').touch(exist_ok=request.get('control') == 'observer-stopped')
         # A 60 MiB capture takes a while to reach the disk.
         for _ in range(150 if request.get('evidence_disk') is True else 50):
             if (directory / 'health.json').exists():

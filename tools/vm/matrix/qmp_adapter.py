@@ -133,10 +133,15 @@ class Qmp:
     def handshake(self, timeout):
         return self._run(self.client.connect(self.relay.client), timeout)
 
-    def command(self, name, timeout, *, event=None):
+    def command(self, name, timeout, *, event=None, arguments=None):
         if name not in ('query-status', 'query-uuid', 'query-kvm', 'stop', 'cont',
-                        'system_reset', 'system_powerdown', 'quit'):
+                        'system_reset', 'system_powerdown', 'quit', 'set_link'):
             raise ValueError('unsupported-qmp-command')
+        # Only the carrier of a lab wire takes arguments, and only these two.
+        if (arguments is not None) != (name == 'set_link') or (
+                arguments is not None and (set(arguments) != {'name', 'up'} or type(arguments['up']) is not bool
+                                           or arguments['name'] not in ('test-wire', 'lab-wire'))):
+            raise ValueError('invalid-qmp-arguments')
         self.last_command_accepted = False
         # The last of the 128 calls belongs to quit, so that an exhausted budget
         # cannot push teardown onto signals alone.
@@ -146,7 +151,8 @@ class Qmp:
 
         async def execute():
             if event is None:
-                value = await self.client.execute(name)
+                value = await (self.client.execute(name) if arguments is None
+                               else self.client.execute(name, dict(arguments)))
                 self.last_command_accepted = True
                 return value
             # Register before execute: events may arrive before the reply.

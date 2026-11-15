@@ -115,6 +115,7 @@ class Vm:
         self.qga_reason = 'initial'
         self.launch_sockets = []
         self.guest_observation = None
+        self.wire = None
         self.qga_observations = 0
         self.exited = False
         self.events = 0
@@ -324,6 +325,26 @@ class Vm:
         except (OSError, ValueError):
             self.operation_errors.append(name + '-unconfirmed')
             self._event(name, 'error')
+            raise LifecycleError('control-operation-unconfirmed', self) from None
+
+    def set_link(self, up):
+        """Raise or drop the carrier of this machine's lab wire; the journal says which and whether QEMU took it."""
+        if type(up) is not bool:
+            raise ValueError('invalid-link-state')
+        self._check()
+        if self.wire is None:
+            raise LifecycleError('vm-has-no-wire', self)
+        if self.process.poll() is not None:
+            raise LifecycleError('vm-child-has-exited')
+        action = 'link-up' if up else 'link-down'
+        self._reserve(3)  # intent, command-accepted, error
+        self._event(action, 'intent')
+        try:
+            self.qmp.command('set_link', self.timeout, arguments=dict(name=self.wire, up=up))
+            self._event(action, 'command-accepted')
+        except (OSError, ValueError):
+            self.operation_errors.append(action + '-unconfirmed')
+            self._event(action, 'error')
             raise LifecycleError('control-operation-unconfirmed', self) from None
 
     def pause(self):
@@ -599,6 +620,7 @@ def start(run, *, timeout=5, executor=execute, lab=None):
         # The whole journal of the service comes back in one reply, which the ordinary limit would end.
         vm.qga_line_limit = DIAGNOSTIC_LINE_LIMIT
     vm.vm_uuid = plan['uuid']
+    vm.wire = f'{lab.role(run)}-wire' if lab is not None else None
     vm._l2_media = media
     run._lease._active.add(vm)
     child = None
