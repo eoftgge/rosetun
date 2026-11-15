@@ -55,10 +55,13 @@ WINDOW_OF = {
 # did not (it stopped before its connect, or the session was lost), and its window is then the one judged.
 OWN_WINDOW_WHEN_OPENED = {'forward.blocked': ('forwarded', 0)}
 GROUP_LABELS = tuple(dict.fromkeys(window[0] for window in WINDOW_OF.values() if window))
-# How many windows each label of the group has in a run where every scenario passed. Another count changes
-# no code; it is shown in `lab.window_counts`.
+# How many windows each label of the group has in a run where every scenario passed (`lab.window_counts`).
+# Another count is a run whose sessions are not numbered as the script numbers them, so it cannot vouch for
+# itself (exit 2), and a leak in a window beyond the count is a finding like a leak in a judged window.
 WINDOWS_PER_LABEL = {'reported': 1, 'identity': 1, 'connect_ks': 1, 'capabilities': 2, 'restart_guarded': 1,
-                     'inbound': 1, 'forwarded': 1, 'killed': 1, 'five_kills': 1, 'upgraded': 1, 'stopped': 1}
+                     'inbound': 1, 'killed': 1, 'five_kills': 1, 'upgraded': 1, 'stopped': 1}
+# Labels whose session opens only now and then (OWN_WINDOW_WHEN_OPENED): at most this many windows.
+WINDOWS_AT_MOST = {'forwarded': 1}
 # What the observer must have seen of the lab for the group to mean anything. DoH is required too: the
 # helper's DNS check at connect (`check_cancellable` in `state/dns.rs`) goes through the DoH server that
 # `dns_section` of the sing-box render configures, so no scenario connects without it.
@@ -109,8 +112,8 @@ def judged_windows(window, windows):
     """The one window named by (label, number), as a list of zero or one.
 
     With fewer windows of the label than expected, nothing says which session is missing, so none of them is
-    judged: the scenario is unobserved rather than judged in another session's window. More than expected
-    changes nothing, because a session the script opens again comes after the ones it expects.
+    judged: the scenario is unobserved rather than judged in another session's window. With more, the expected
+    ones keep their numbers, because a session the script opens again comes after them.
     """
     label, number = window
     if [found['label'] for found in windows].count(label) < WINDOWS_PER_LABEL.get(label, number + 1):
@@ -145,10 +148,17 @@ def crosscheck(rows, windows):
 
 
 def window_counts(windows):
-    """For each label of the group: how many windows it was expected to have and how many the capture has."""
+    """For each label of the group, and each that may stand in for one: the windows expected and those seen."""
     seen = [window['label'] for window in windows]
-    return [dict(label=label, expected=WINDOWS_PER_LABEL[label], seen=seen.count(label),
+    rows = [dict(label=label, expected=WINDOWS_PER_LABEL[label], at_most=None, seen=seen.count(label),
                  as_expected=seen.count(label) == WINDOWS_PER_LABEL[label]) for label in GROUP_LABELS]
+    return rows + [dict(label=label, expected=None, at_most=limit, seen=seen.count(label),
+                        as_expected=seen.count(label) <= limit) for label, limit in WINDOWS_AT_MOST.items()]
+
+
+def window_limit(label):
+    """How many windows the label may have, or None for a label outside the group."""
+    return WINDOWS_PER_LABEL.get(label) if label in GROUP_LABELS else WINDOWS_AT_MOST.get(label)
 
 
 def direct_flow_seen(windows):
@@ -173,13 +183,15 @@ def decide(result, interrupted):
     0: the whole group passed, every cross-check row agrees or does not apply, the observer is clean,
     the fixtures answered, the evidence disk is verified and both machines completed.
     1: the run found something: a scenario of the group failed, a pass is contradicted by a window
-    (DISAGREE), or a judged window saw a leak (a leak in any other window, a second window of a label of
-    the group included, counts only if LEAK_OUTSIDE_THE_GROUP_FAILS). A seen leak and a failed check stand whatever else went wrong,
-    so 1 comes before 2.
+    (DISAGREE), or a leak in a judged window or in a window of a label of the group beyond its count (a
+    leak in any other window, the second `capabilities` included, counts only if
+    LEAK_OUTSIDE_THE_GROUP_FAILS). A seen leak and a failed check stand whatever else went wrong, so 1
+    comes before 2.
     2: nothing was found but the run cannot vouch for itself: a controller error, a machine that did
     not stop, no report, an unverified evidence disk, a fixture that did not answer, an unclean
-    observer, a pass nobody observed (UNOBSERVED, which includes a window that never closed), or a
-    scenario of the group that did not run. 130: interrupted.
+    observer, a pass nobody observed (UNOBSERVED, which includes a window that never closed), a
+    scenario of the group that did not run, or a label of the group with another count of windows than
+    expected. 130: interrupted.
     A diagnostic run (`diagnostic: true`) never exits below 2, whatever it found: what it found stays
     in `outcome` and `group`, but it is not counted toward a qualification.
     Scenarios outside the group, and windows outside it that cannot be verified, change nothing.
@@ -189,11 +201,13 @@ def decide(result, interrupted):
     windows = lab['windows']
     table = crosscheck(rows, windows)
     result['crosscheck'] = table
-    # Only the windows a row of the cross-check names are judged; any other, a second window of a label of
-    # the group among them, is listed like a window outside the group.
+    # The windows a row of the cross-check names are judged. A window of a label of the group beyond its
+    # count is a session nobody expected, under the kill switch: a leak in it is a finding all the same. A
+    # window within the count that no scenario of the group judges (the second `capabilities`) is outside.
     judged = {index for row in table for index in row['windows']}
-    for window, (_, number) in zip(windows, numbered(windows)):
-        window.update(number=number, judged=window['index'] in judged)
+    for window, (label, number) in zip(windows, numbered(windows)):
+        limit = window_limit(label)
+        window.update(number=number, judged=window['index'] in judged, beyond=limit is not None and number >= limit)
     lab['window_counts'] = window_counts(windows)
     result['out_of_scope'] = [dict(id=row['id'], legacy_result=row['result'], agreement='out-of-scope')
                               for row in legacy['scenarios'] if row['id'] not in GROUP]
@@ -206,9 +220,10 @@ def decide(result, interrupted):
         findings.append('group-scenario-failed')
     if any(row['agreement'] == 'DISAGREE' for row in table):
         findings.append('pass-contradicted-by-window')
-    if any(window['leak'] == 'DETECTED' and window['judged'] for window in windows):
+    if any(window['leak'] == 'DETECTED' and (window['judged'] or window['beyond']) for window in windows):
         findings.append('leak-in-group-window')
-    outside = [window['label'] for window in windows if window['leak'] == 'DETECTED' and not window['judged']]
+    outside = [window['label'] for window in windows
+               if window['leak'] == 'DETECTED' and not window['judged'] and not window['beyond']]
     if outside and LEAK_OUTSIDE_THE_GROUP_FAILS:
         findings.append('leak-outside-group')
     if result['errors']:
@@ -228,6 +243,10 @@ def decide(result, interrupted):
         unproven.append('observer-not-clean')
     if any(row['agreement'] == 'UNOBSERVED' for row in table):
         unproven.append('pass-not-observed')
+    for row in lab['window_counts']:
+        if not row['as_expected']:
+            wanted = row['expected'] if row['expected'] is not None else f"at-most-{row['at_most']}"
+            unproven.append(f"window-count:{row['label']}:expected={wanted},seen={row['seen']}")
     if result.get('diagnostic'):
         unproven.append('diagnostic-run')
     result['group'] = dict(scenarios=list(GROUP), results=results, passed=all(o == 'PASS' for o in results.values()),

@@ -3351,15 +3351,23 @@ scenario. `rules.capabilities` needs this: its function opens two sessions, the 
 alone and the second with a rule that sends a program direct, in which `rules.direct-other-account` (outside
 the group) then runs and which is `DETECTED` by design. The scenario is judged in `capabilities` 0 only.
 
-- A window beyond the expected ones (an implicit `disconnect`, a session opened again after a FAIL) is judged
-  by nothing; a leak in it is listed in `group.outside_leaks` like a leak outside the group and changes no code.
-  A session the script opens again always comes after the ones it expects, so the numbers of those stay right.
-- Fewer windows with a label than expected (`WINDOWS_PER_LABEL`): nothing tells which session is missing, so
-  no window of that label is judged and its scenarios are `UNOBSERVED` (exit 2), as for a label without any
-  window. A window is never judged for a scenario that belongs to another session.
-- `lab.window_counts` lists, for each label of the group, `expected`, `seen` and `as_expected`. Each row of
-  `lab.windows` also has `number` and `judged`. Neither changes the code; `in_group` keeps saying only whether
-  the label is one of the group's.
+- Each label of the group has an expected count of windows (`WINDOWS_PER_LABEL`: 2 for `capabilities`, 1 for
+  the others); `forwarded`, which opens only now and then, may have at most one (`WINDOWS_AT_MOST`).
+- A window beyond the count (a session opened again after a reconnect or a FAIL) is a session under the kill
+  switch that nobody expected: it is judged by no scenario, but a leak in it is a finding (exit 1,
+  `leak-in-group-window`), as in a judged window. A session the script opens again comes after the ones it
+  expects, so their numbers stay right.
+- A window within the count that no scenario of the group judges (today only `capabilities` 1, where
+  `rules.direct-other-account` runs, until stage 7c3) stays outside: a leak in it is listed in
+  `group.outside_leaks` and changes no code.
+- Any other count than expected, more or fewer, means the run is not numbered as the script numbers it, so it
+  cannot vouch for itself: without a finding the code is 2, with `window-count:<label>:expected=<n>,seen=<m>`
+  (`expected=at-most-1` for `forwarded`) in `group.unproven`. With fewer windows nothing tells which session is
+  missing, so no window of that label is judged and its scenarios are `UNOBSERVED`. A window is never judged
+  for a scenario that belongs to another session.
+- `lab.window_counts` lists each of these labels with `expected` (or `at_most`), `seen` and `as_expected`. Each
+  row of `lab.windows` also has `number`, `judged` and `beyond`; `in_group` keeps saying only whether the label
+  is one of the group's.
 - The control `stop-helper` of stage 7c1 reads the same judged window, `connect_ks` 0.
 
 ### The group and its windows
@@ -3418,8 +3426,8 @@ table as a hold, and its state reads `Disconnected`. The second `connect_with` t
 and its `lab_mark open` find the table and do nothing. The connect brings the tunnel up under the hold and
 lifts the hold only once it is connected, so the protection never lapses, and the one window runs from the
 first connect to the `disconnect` at the end. A second window with either label means the hold was gone at
-the second connect: `lab.window_counts` shows it, the extra window is judged by nothing, and a leak while the
-hold was gone falls in the first window, whose verdict stands.
+the second connect: the run cannot vouch for itself (exit 2), a leak in the extra window is a finding, and a
+leak while the hold was gone falls in the first window, whose verdict stands.
 
 If `crash.helper-killed` fails, `scenario_crash` returns with the window `killed` open; the first
 `disconnect` of `upgraded` lifts the hold and closes it before any direct request.
@@ -3494,8 +3502,10 @@ changes, so the lab image, its descriptor and the helpers stay as in stage 7c1.
 
 ### Exit codes
 
-Unchanged (see stage 7b2b). The group is larger, so a failure or a leak in any of the ten new scenarios or
-windows is now a finding (1), and a pass in a window that is unverified or missing is `UNOBSERVED` (2).
+The meanings of 0, 1, 2 and 130 are those of stage 7b2b. The group is larger, so a failure or a leak in any of
+the new scenarios or windows is now a finding (1), a leak in a window of a label of the group beyond its count
+is a finding too, and a pass in a window that is unverified or missing is `UNOBSERVED` (2). A new reason for 2:
+a label of the group with another count of windows than expected (`window-count:...`).
 `LEAK_OUTSIDE_THE_GROUP_FAILS` stays false.
 
 ### Qualification

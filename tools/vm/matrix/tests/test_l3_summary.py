@@ -156,20 +156,28 @@ class RunTests(Flow):
             result = self.go_again(windows=windows(leak_in='lan_on'))
         self.assertEqual((1, ['leak-outside-group']), (result['exit_code'], result['group']['findings']))
 
-    def test_of_two_windows_of_one_label_only_the_expected_one_is_judged(self):
+    def test_a_leak_in_a_window_beyond_the_count_of_a_label_of_the_group_is_a_finding(self):
         spec = windows()
         result = self.go(Machines(self, windows=spec[:3] + [('connect_ks', (LEAK,))] + spec[3:]))
         row = next(r for r in result['crosscheck'] if r['id'] == 'lan.off')
         self.assertEqual(([2], 0, 'NONE', 'AGREE'), (row['windows'], row['window_number'], row['window_verdict'],
                                                     row['agreement']))
         extra = result['lab']['windows'][3]
-        self.assertEqual(('connect_ks', 1, False, 'DETECTED'), (extra['label'], extra['number'], extra['judged'],
-                                                              extra['leak']))
-        self.assertEqual((0, ['connect_ks'], []), (result['exit_code'], result['group']['outside_leaks'],
-                                                  result['group']['findings']))
+        self.assertEqual(('connect_ks', 1, False, True, 'DETECTED'),
+                         (extra['label'], extra['number'], extra['judged'], extra['beyond'], extra['leak']))
+        self.assertEqual((1, [], ['leak-in-group-window']), (result['exit_code'], result['group']['outside_leaks'],
+                                                             result['group']['findings']))
         counts = {row['label']: row for row in result['lab']['window_counts']}
-        self.assertEqual(dict(label='connect_ks', expected=1, seen=2, as_expected=False), counts['connect_ks'])
+        self.assertEqual(dict(label='connect_ks', expected=1, at_most=None, seen=2, as_expected=False),
+                         counts['connect_ks'])
         self.assertTrue(counts['reported']['as_expected'])
+
+    def test_a_clean_window_beyond_the_count_leaves_the_run_unable_to_vouch(self):
+        spec = windows()
+        result = self.go(Machines(self, windows=spec[:3] + [('connect_ks', ())] + spec[3:]))
+        self.assertEqual((2, 'unverified', []), (result['exit_code'], result['outcome'], result['group']['findings']))
+        self.assertEqual(['window-count:connect_ks:expected=1,seen=2'], result['group']['unproven'])
+        self.assertEqual({'AGREE', 'NOT_APPLICABLE'}, set(self.agreements(result).values()))
 
     def test_a_leak_in_the_judged_window_of_a_label_with_two_windows_still_counts(self):
         spec = windows(leak_in='connect_ks')
@@ -453,6 +461,33 @@ class GroupOf7c2Tests(unittest.TestCase):
         close = body.index('lab_mark close')
         self.assertLess(next(n for n, line in enumerate(body) if line.startswith('! table_present')), close)
         self.assertLess(close, next(n for n, line in enumerate(body) if 'direct_https' in line))
+
+    def test_a_count_other_than_expected_without_a_finding_is_two_and_names_the_label(self):
+        for labels, reason in (([label for label in WINDOWS_7C2 if label != 'stopped'],
+                                'window-count:stopped:expected=1,seen=0'),
+                               (list(WINDOWS_7C2) + ['upgraded'], 'window-count:upgraded:expected=1,seen=2'),
+                               (list(WINDOWS_7C2) + ['forwarded', 'forwarded'],
+                                'window-count:forwarded:expected=at-most-1,seen=2')):
+            with self.subTest(reason=reason):
+                result, _ = self.decide(labels)
+                self.assertEqual(2, result['exit_code'])
+                self.assertIn(reason, result['group']['unproven'])
+                self.assertEqual([], result['group']['findings'])
+
+    def test_a_leak_in_a_second_window_of_a_label_that_may_have_one_is_a_finding(self):
+        labels = list(WINDOWS_7C2) + ['forwarded', 'forwarded']
+        result, table = self.decide(labels, {21: 'DETECTED'})
+        self.assertEqual((20, 'AGREE'), (table['forward.blocked']['windows'][0], table['forward.blocked']['agreement']))
+        self.assertEqual((1, ['leak-in-group-window'], []), (result['exit_code'], result['group']['findings'],
+                                                             result['group']['outside_leaks']))
+
+    def test_the_second_capabilities_window_with_the_expected_count_stays_outside(self):
+        result, table = self.decide(leaks={4: 'DETECTED'})
+        window = result['lab']['windows'][4]
+        self.assertEqual(('capabilities', 1, False, False), (window['label'], window['number'], window['judged'],
+                                                             window['beyond']))
+        self.assertEqual((0, ['capabilities'], [], []), (result['exit_code'], result['group']['outside_leaks'],
+                                                         result['group']['findings'], result['group']['unproven']))
 
     def test_an_unprotected_restart_has_no_window(self):
         result, table = self.decide()
