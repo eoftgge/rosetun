@@ -29,7 +29,7 @@ A known sing-box error on Linux sometimes attributes a connection to the wrong p
 
 ## Two-hop exits {#two-hop}
 
-Experimental: this feature has not been checked on a real network yet.
+Experimental.
 
 An exit can reach its server through another exit, so the traffic goes A → B. Both are proxy exits of the same connection.
 
