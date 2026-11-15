@@ -3009,7 +3009,6 @@ of direct traffic, which stage 7c3 adds, or a fixture the lab does not have yet:
   own network through by design, and no host in a private range exists in the lab. `lan.off` stays in the
   group: it runs in `connect_ks`.
 - `ipv6.neighbor` is skipped: the test machine has no IPv6 default router.
-- `rules.search-misses` reads the journal and opens no session (it runs in the window `restart_guarded`).
 - The 20 `two-hop.*` have no check yet.
 
 Until stage 7c2, `inbound.reply` failed here because the test image had no `sshd`; image contract v6 adds one.
@@ -3339,7 +3338,7 @@ artifacts.
 Until now the group was 16 scenarios: the preflight, the installation and three windows (`reported`,
 `identity`, `connect_ks`). The other sessions under the kill switch already ran in the lab, and in the two
 qualification runs of 7b2b their windows were `NONE`, but the exit code did not depend on them. This stage
-makes them part of the group: **26 scenarios**. Windows where direct traffic is expected (rules that send a
+makes them part of the group: **27 scenarios**. Windows where direct traffic is expected (rules that send a
 program direct, a DNS lock, Local network, `lan.on`) stay outside: they need declared expectations (stage
 7c3). Nothing is accepted: the release gate stays false and the security invariants stay **UNVERIFIED**.
 
@@ -3379,7 +3378,7 @@ the group) then runs and which is `DETECTED` by design. The scenario is judged i
 | `identity` | 0 | `engine.identity`, `engine.files` |
 | `connect_ks` | 0 | `killswitch.direct-blocked`, `killswitch.tunnel-passes`, `lan.off`, `killswitch.foreign-table`, `killswitch.engine-killed`, `killswitch.flush-restored`, `killswitch.disconnect` |
 | `capabilities` | 0 (of 2) | `rules.capabilities` |
-| `restart_guarded` | 0 | `rules.restart-guarded` |
+| `restart_guarded` | 0 | `rules.restart-guarded`, `rules.search-misses` |
 | `inbound` (or `forwarded`, see below) | 0 | `inbound.reply`, `forward.blocked` |
 | `killed` | 0 | `crash.helper-killed`, `crash.open-network` |
 | `five_kills` | 0 | `crash.five-kills` |
@@ -3410,6 +3409,7 @@ below the closing marker goes before the direct request that follows the session
 | --- | --- | --- | --- |
 | `rules.capabilities` | `capabilities` | 2 (two windows) | window 0 in the second `connect_with` (its `disconnect`, then `lab_mark close`); window 1 in the `connect_with` of `through_vpn_by_program` |
 | `rules.restart-guarded` | `restart_guarded` | 1 | the `disconnect` at the end of `scenario_program_rules`, after `rules.search-misses` |
+| `rules.search-misses` | `scenario_program_rules` (recorded inline, no `check`) | 0 | the same; it reads the journal inside the window |
 | `inbound.reply` | `inbound` | 1 | the `disconnect` of `forwarded`; if that fails, the `lab_mark close` after `forward.blocked` |
 | `forward.blocked` | `forwarded` | 0, or 1 when no session is open | as above, in the window `inbound` or its own |
 | `crash.helper-killed` | `killed` | 1 | `opened`, after `rosetun open-network` and `! table_present`, before `direct_https` |
@@ -3520,7 +3520,7 @@ summaries and the retained artifacts.
    on the new images: exit 0 each, as in 7c1.
 3. `run linux-l3 --config <l3.toml>` without the lab: 4 PASS, 1 FAIL (`preflight.baseline`), 20 SKIP,
    34 ERROR, exit 1, as in 7a.
-4. `run linux-l3 --lab --config <l3-lab.toml>`, twice in a row: the group 26 PASS (`inbound.reply` among them),
+4. `run linux-l3 --lab --config <l3-lab.toml>`, twice in a row: the group 27 PASS (`inbound.reply` among them),
    the cross-check without `DISAGREE` and without `UNOBSERVED`, `lab.window_counts` all `as_expected`, exit 0
    both times.
 5. `run linux-l3 --lab --control stop-helper --config <l3-lab.toml>`: exit 0, `control_result.met` true.

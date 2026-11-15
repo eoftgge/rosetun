@@ -16,6 +16,7 @@ SESSIONS = ('killswitch.direct-blocked', 'killswitch.tunnel-passes', 'lan.off', 
             'killswitch.engine-killed', 'killswitch.flush-restored', 'killswitch.disconnect')
 # The scenarios stage 7c2 adds to the group, in order, with the window each is judged in.
 ADDED = (('rules.capabilities', ('capabilities', 0)), ('rules.restart-guarded', ('restart_guarded', 0)),
+         ('rules.search-misses', ('restart_guarded', 0)),
          ('inbound.reply', ('inbound', 0)), ('forward.blocked', ('inbound', 0)),
          ('crash.helper-killed', ('killed', 0)), ('crash.open-network', ('killed', 0)),
          ('crash.five-kills', ('five_kills', 0)), ('upgrade.restart', ('upgraded', 0)),
@@ -62,7 +63,7 @@ class RunTests(Flow):
         agreements = self.agreements(result)
         self.assertEqual({'NOT_APPLICABLE'}, {agreements[i] for i in summary.GROUP if summary.WINDOW_OF[i] is None})
         self.assertEqual({'AGREE'}, {agreements[i] for i in summary.GROUP if summary.WINDOW_OF[i] is not None})
-        self.assertEqual(26, len(result['crosscheck']))
+        self.assertEqual(27, len(result['crosscheck']))
         self.assertEqual({True}, {row['as_expected'] for row in result['lab']['window_counts']})
         self.assertTrue(result['group']['passed'])
         self.assertEqual(([], []), (result['group']['findings'], result['group']['unproven']))
@@ -353,7 +354,7 @@ class GroupOf7c2Tests(unittest.TestCase):
     def test_the_table_of_the_added_windows_is_the_one_of_the_stage_in_its_order(self):
         self.assertEqual([identifier for identifier, _ in ADDED], list(summary.GROUP[16:]))
         self.assertEqual(list(ADDED), [(identifier, summary.WINDOW_OF[identifier]) for identifier in summary.GROUP[16:]])
-        self.assertEqual(26, len(summary.GROUP))
+        self.assertEqual(27, len(summary.GROUP))
         self.assertEqual(LABELS, summary.GROUP_LABELS)
         self.assertEqual({'forward.blocked': ('forwarded', 0)}, summary.OWN_WINDOW_WHEN_OPENED)
 
@@ -377,7 +378,7 @@ class GroupOf7c2Tests(unittest.TestCase):
         leaks[4] = 'DETECTED'
         result, table = self.decide(leaks=leaks)
         self.assertEqual(20, len(result['lab']['windows']))
-        self.assertEqual(26, len(table))
+        self.assertEqual(27, len(table))
         self.assertEqual({'AGREE', 'NOT_APPLICABLE'}, {row['agreement'] for row in table.values()})
         self.assertEqual({None}, {table[i]['window'] for i in summary.GROUP if table[i]['agreement'] != 'AGREE'})
         self.assertEqual((0, 'group-clean'), (result['exit_code'], result['outcome']))

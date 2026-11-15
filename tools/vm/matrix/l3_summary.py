@@ -13,8 +13,9 @@ GROUP = ('preflight.identity', 'preflight.accounts', 'preflight.no-foreign-servi
          'preflight.baseline', 'install.service', 'protection.reported', 'engine.identity', 'engine.files',
          'killswitch.direct-blocked', 'killswitch.tunnel-passes', 'lan.off', 'killswitch.foreign-table',
          'killswitch.engine-killed', 'killswitch.flush-restored', 'killswitch.disconnect',
-         'rules.capabilities', 'rules.restart-guarded', 'inbound.reply', 'forward.blocked', 'crash.helper-killed',
-         'crash.open-network', 'crash.five-kills', 'upgrade.restart', 'upgrade.unprotected', 'stop.removes-table')
+         'rules.capabilities', 'rules.restart-guarded', 'rules.search-misses', 'inbound.reply', 'forward.blocked',
+         'crash.helper-killed', 'crash.open-network', 'crash.five-kills', 'upgrade.restart', 'upgrade.unprotected',
+         'stop.removes-table')
 # The scenarios of the two-hop exits: they have no check yet (evidence class `not-run`, not required), `run-l3.sh`
 # records each as SKIP "UNRUN: ..." before any session opens, so they belong to no group and no window.
 TWO_HOP = ('two-hop.positive.http.ipv4', 'two-hop.positive.http.ipv6', 'two-hop.positive.https.ipv4',
@@ -44,6 +45,8 @@ WINDOW_OF = {
     # The first session of `capabilities` is under the kill switch; the second has a rule that sends a program
     # direct, and `rules.direct-other-account` (outside the group) runs in it.
     'rules.capabilities': ('capabilities', 0), 'rules.restart-guarded': ('restart_guarded', 0),
+    # Recorded after `rules.restart-guarded`, before the `disconnect` that closes its window.
+    'rules.search-misses': ('restart_guarded', 0),
     'inbound.reply': ('inbound', 0), 'forward.blocked': ('inbound', 0),
     # `opened` ends the session `killed` opened: the window closes once open-network removed the table.
     'crash.helper-killed': ('killed', 0), 'crash.open-network': ('killed', 0),
