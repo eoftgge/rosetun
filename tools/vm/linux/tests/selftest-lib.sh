@@ -267,7 +267,8 @@ PY
 . "$LAB_FUNCTIONS"
 STATE=$MARK_STATE RUN_ID=20261113T101010Z-0a1b2c3d
 table_present() { [ -f "$MARK_STATE/table" ]; }
-state_line() { cat "$MARK_STATE/state"; }
+state_line() { if [ -e "$MARK_STATE/service-stopped" ]; then :; else cat "$MARK_STATE/state"; fi; }
+systemctl() { [ ! -e "$MARK_STATE/service-stopped" ]; }
 connect_with() { lab_mark "$1"; }
 connect_ks() { connect_with open; }
 disconnect() { lab_mark close; }
@@ -299,6 +300,19 @@ SH
     expect "a refused marker leaves no window and uses no index" bash -c '[ ! -e "$1/lab-window" ] && [ "$(cat "$1/lab-index")" = 2 ]' _ "$mark_state"
     printf 'Disconnected\n' >"$mark_state/state"
     expect "an echo that never comes does not fail the caller" bash -c 'MARK_ADDRESS=127.0.0.1:9; export MARK_ADDRESS; mark connect_ks'
+    mark connect_ks
+    : >"$work/echo-log"
+    printf 'Connected\n' >"$mark_state/state"
+    expect "a closing marker waits while a service that answers is not Disconnected" bash -c 'mark disconnect; [ ! -s "$1" ]' _ "$work/echo-log"
+    : >"$mark_state/service-stopped"
+    : >"$mark_state/table"
+    expect "no closing marker is sent while the table is there, a stopped service or not" bash -c 'mark disconnect; [ ! -s "$1" ]' _ "$work/echo-log"
+    rm -f -- "$mark_state/table"
+    expect "an opening marker is not sent while the service is stopped" bash -c 'mark connect_ks; [ ! -s "$1" ]' _ "$work/echo-log"
+    expect "the window is still open after the refused markers" test -f "$mark_state/lab-window"
+    expect "a closing marker is sent once the service is stopped and the table is gone" bash -c 'mark disconnect; grep -q "\.close\.connect_ks$" "$1"' _ "$work/echo-log"
+    expect_not "the window is closed after that marker" test -e "$mark_state/lab-window"
+    rm -f -- "$mark_state/service-stopped"
     kill "$echo_pid" 2>/dev/null
     wait "$echo_pid" 2>/dev/null
 else

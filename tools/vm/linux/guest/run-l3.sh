@@ -143,7 +143,8 @@ wait_state() {
 # Only with a lab (LAB_MARKER_ADDRESS set). The lab's observer judges the traffic between
 # an `open` and a `close` marker, one pair per protected session. A marker is a UDP
 # datagram to the lab, so it can only go out while nothing of Rosetun is in the way: no
-# table inet rosetun and the state Disconnected. Otherwise nothing is sent and nothing
+# table inet rosetun and the state Disconnected (a close also goes while the service is
+# stopped, when there is no state to read). Otherwise nothing is sent and nothing
 # else changes; the window then stays open and the observer calls it unverified. These
 # functions never change a result, a note, CLI_OUT or the return code of their caller.
 
@@ -175,7 +176,10 @@ lab_send() {
 lab_mark() {
     [ -n "$LAB_MARKER_ADDRESS" ] || return 0
     table_present && return 0
-    [[ $(state_line) =~ ^Disconnected ]] || return 0
+    # A stopped service answers no status, so only a close may go without Disconnected.
+    if ! [[ $(state_line) =~ ^Disconnected ]]; then
+        [ "${1-}" = close ] && ! systemctl is-active --quiet rosetun-helper.service || return 0
+    fi
     local index label
     case ${1-} in
         open)
