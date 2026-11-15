@@ -1,6 +1,9 @@
 +++
 title = "How it works"
-weight = 10
+weight = 11
+
+[extra]
+group = "Protection and privacy"
 +++
 
 <pre class="diagram"><code>Windows

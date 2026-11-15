@@ -7,13 +7,15 @@
                 <p class="note">{{ release?.banner?[lang] or trans(key="banner", lang=lang) }}</p>
                 {%- set overview = item.extra?.overview %}
                 {%- set labels = item.extra?.toc_labels or {} %}
+                {%- block toc %}
                 <nav aria-label="{{ trans(key='toc', lang=lang) }}">
                     {%- if overview %}<a href="#details">{{ overview }}</a>{% endif %}
                     {%- for entry in item.toc %}
-                        {%- if not loop.first or overview %}{{ item.extra?.toc_separator or "" }}{% endif -%}
                         <a href="#{{ entry.id }}">{{ labels?[entry.id] or entry.title }}</a>
                     {%- endfor -%}
                 </nav>
+                {%- endblock toc %}
+                {%- block before %}{% endblock before %}
                 {% if overview %}<section id="details">
 {% endif -%}
                 {{ item.content | safe }}

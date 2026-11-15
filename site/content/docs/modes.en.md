@@ -3,6 +3,7 @@ title = "TUN and System proxy"
 weight = 3
 
 [extra]
+group = "Getting started"
 overview = "TUN and System proxy"
 +++
 

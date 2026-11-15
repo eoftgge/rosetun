@@ -4,6 +4,7 @@ weight = 2
 aliases = ["/ru/docs/protection/"]
 
 [extra]
+group = "Начало"
 overview = "Подключение и защита"
 +++
 

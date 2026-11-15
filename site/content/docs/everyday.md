@@ -1,9 +1,10 @@
 +++
 title = "На каждый день"
-weight = 13
+weight = 4
 aliases = ["/ru/docs/everyday/"]
 
 [extra]
+group = "Начало"
 overview = "На каждый день"
 +++
 

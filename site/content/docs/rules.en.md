@@ -1,6 +1,9 @@
 +++
 title = "Rules"
-weight = 4
+weight = 5
+
+[extra]
+group = "Setup"
 +++
 
 - **Routing rules** for programs, websites, IP addresses and subnets, and lists, with **Quick templates** and actions **Through VPN**, **Direct** and **Block**.

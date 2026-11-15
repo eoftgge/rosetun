@@ -1,9 +1,10 @@
 +++
 title = "Сборка из исходников"
-weight = 11
+weight = 14
 aliases = ["/ru/docs/build/"]
 
 [extra]
+group = "Справка"
 overview = "Сборка из исходников"
 +++
 

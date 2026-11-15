@@ -3,6 +3,7 @@ title = "Install"
 weight = 1
 
 [extra]
+group = "Getting started"
 toc_labels = { "debian-13" = "Debian 13" }
 +++
 

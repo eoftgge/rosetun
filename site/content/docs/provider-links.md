@@ -1,9 +1,10 @@
 +++
 title = "Ссылки для провайдеров"
-weight = 14
+weight = 15
 aliases = ["/ru/docs/provider-links/"]
 
 [extra]
+group = "Справка"
 overview = "Ссылки для провайдеров"
 +++
 

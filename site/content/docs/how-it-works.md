@@ -1,7 +1,10 @@
 +++
 title = "Как это устроено"
-weight = 10
+weight = 11
 aliases = ["/ru/docs/how-it-works/"]
+
+[extra]
+group = "Защита и приватность"
 +++
 
 <pre class="diagram"><code>Windows

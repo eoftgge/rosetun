@@ -1,8 +1,9 @@
 +++
 title = "Privacy and network access"
-weight = 8
+weight = 9
 
 [extra]
+group = "Protection and privacy"
 overview = "Privacy and network access"
 +++
 

@@ -1,2 +1,20 @@
 {% extends "doc_base.html" %}
-{#- The documentation index: the same layout, without a pager. -#}
+{#- The documentation index. The contents list is built from the pages of the section, in the order of their
+    `weight`, grouped by `extra.group`; a group runs from its first page to the page before the next group. -#}
+{% block toc %}
+                <nav aria-label="{{ trans(key='toc', lang=lang) }}"><a href="#contents">{{ trans(key="contents", lang=lang) }}</a> · {% for entry in item.toc %}<a href="#{{ entry.id }}">{{ labels?[entry.id] or entry.title }}</a>{% endfor %}</nav>
+{% endblock toc %}
+{% block before %}
+                <h2 id="contents">{{ trans(key="contents", lang=lang) }}</h2>
+                {%- set pages = item.pages %}
+                {%- set groups = [p.extra.group for p in pages] | unique %}
+                {%- for group in groups %}
+                {%- set members = [p for p in pages if p.extra.group == group] %}
+                <h3>{{ group }}</h3>
+                <ol start="{{ ([p for p in pages if p.extra.group in groups[:loop.index0]] | length) + 1 }}">
+                    {%- for p in members %}
+                    <li><a href="{{ root }}{{ p.permalink | replace(from=base, to="") | trim_start(pat="/") }}">{{ p.title }}</a></li>
+                    {%- endfor %}
+                </ol>
+                {%- endfor %}
+{% endblock before %}

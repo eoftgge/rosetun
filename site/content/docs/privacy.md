@@ -1,9 +1,10 @@
 +++
 title = "Приватность и сетевые обращения"
-weight = 8
+weight = 9
 aliases = ["/ru/docs/privacy/"]
 
 [extra]
+group = "Защита и приватность"
 overview = "Приватность и сетевые обращения"
 +++
 

@@ -4,6 +4,7 @@ weight = 1
 aliases = ["/ru/docs/install/"]
 
 [extra]
+group = "Начало"
 toc_labels = { "debian-13" = "Debian 13" }
 +++
 

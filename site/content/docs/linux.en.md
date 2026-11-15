@@ -1,8 +1,9 @@
 +++
 title = "Linux support"
-weight = 12
+weight = 13
 
 [extra]
+group = "Reference"
 overview = "Linux support"
 +++
 

@@ -1,9 +1,10 @@
 +++
 title = "Лицензии"
-weight = 15
+weight = 16
 aliases = ["/ru/docs/licenses/"]
 
 [extra]
+group = "Справка"
 overview = "Лицензии"
 +++
 

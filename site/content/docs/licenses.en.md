@@ -1,8 +1,9 @@
 +++
 title = "Licenses"
-weight = 15
+weight = 16
 
 [extra]
+group = "Reference"
 overview = "Licenses"
 +++
 

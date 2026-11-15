@@ -1,9 +1,10 @@
 +++
 title = "Локальная сеть"
-weight = 5
+weight = 6
 aliases = ["/ru/docs/local-network/"]
 
 [extra]
+group = "Настройка"
 overview = "Локальная сеть"
 +++
 

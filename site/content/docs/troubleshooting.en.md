@@ -1,8 +1,9 @@
 +++
 title = "Troubleshooting"
-weight = 9
+weight = 12
 
 [extra]
+group = "Reference"
 overview = "Troubleshooting"
 +++
 
@@ -19,6 +20,7 @@ overview = "Troubleshooting"
 - **The network is closed after an update or a crash**, and `rosetun status` says `network: held closed`. Connect, or open it: **Open network** on the connection screen, or `rosetun open-network`. Without a working service, use `reset-firewall` as above.
 - **A site does not open right after connecting:** browsers keep their own DNS cache. Rosetun clears the Windows DNS cache when it connects and disconnects, but not theirs. Restart the browser.
 - **Another VPN client** in TUN mode can prevent the tunnel from starting. Disconnect it and retry. A program that changes traffic, such as zapret, can disrupt the connection to the server: exclude the server addresses in its settings.
+- **Windows: "Windows still holds the tunnel of the last session".** Windows kept the adapter of the previous session, which can happen after fast startup. Restart the computer and connect again.
 - **Linux: No access to the Rosetun service.** Your account is not in the `rosetun` group yet, or your session started before it joined. Press **Add me**, or run `sudo usermod -aG rosetun "$USER"`, and restart the computer.
 - **Linux: Rosetun says another program changed the firewall rules.** `nftables.service` and firewalld can start with `flush ruleset`, which removes Rosetun's table. The service puts it back within seconds and `rosetun status` says when. If it says `firewall rules: cannot be checked or put back`, treat the network as unprotected and reconnect.
 - **Linux: KDE programs do not use the proxy.** Check that `~/.config/kioslaverc` has `ProxyType=1` under `[Proxy Settings]` and that `XDG_CURRENT_DESKTOP` contains `KDE`; otherwise Rosetun shows the address to enter yourself. KDE programs read the settings again by a signal and Chromium watches the file; restart other programs. The `rosetun` command never changes these settings.

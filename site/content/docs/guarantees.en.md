@@ -1,8 +1,9 @@
 +++
 title = "Protection guarantees"
-weight = 7
+weight = 8
 
 [extra]
+group = "Protection and privacy"
 overview = "Overview"
 +++
 

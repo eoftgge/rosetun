@@ -1,8 +1,9 @@
 +++
 title = "Local network"
-weight = 5
+weight = 6
 
 [extra]
+group = "Setup"
 overview = "Local network"
 +++
 

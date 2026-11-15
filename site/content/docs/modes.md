@@ -4,6 +4,7 @@ weight = 3
 aliases = ["/ru/docs/modes/"]
 
 [extra]
+group = "Начало"
 overview = "TUN и системный прокси"
 +++
 

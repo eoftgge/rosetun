@@ -1,9 +1,10 @@
 +++
 title = "Поддержка Linux"
-weight = 12
+weight = 13
 aliases = ["/ru/docs/linux/"]
 
 [extra]
+group = "Справка"
 overview = "Поддержка Linux"
 +++
 

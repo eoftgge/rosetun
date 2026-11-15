@@ -1,9 +1,10 @@
 +++
 title = "Подписки и серверы"
-weight = 6
+weight = 7
 aliases = ["/ru/docs/subscriptions/"]
 
 [extra]
+group = "Настройка"
 overview = "Подписки и серверы"
 +++
 

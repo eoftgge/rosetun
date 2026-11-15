@@ -3,6 +3,7 @@ title = "Connection and protection"
 weight = 2
 
 [extra]
+group = "Getting started"
 overview = "Connection and protection"
 +++
 

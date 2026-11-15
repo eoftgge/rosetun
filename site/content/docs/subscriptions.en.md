@@ -1,8 +1,9 @@
 +++
 title = "Subscriptions and servers"
-weight = 6
+weight = 7
 
 [extra]
+group = "Setup"
 overview = "Subscriptions and servers"
 +++
 

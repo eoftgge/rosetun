@@ -1,9 +1,10 @@
 +++
 title = "Гарантии защиты"
-weight = 7
+weight = 8
 aliases = ["/ru/docs/guarantees/"]
 
 [extra]
+group = "Защита и приватность"
 overview = "Обзор"
 +++
 

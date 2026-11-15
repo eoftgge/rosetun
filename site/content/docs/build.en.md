@@ -1,8 +1,9 @@
 +++
 title = "Build from source"
-weight = 11
+weight = 14
 
 [extra]
+group = "Reference"
 overview = "Build from source"
 +++
 

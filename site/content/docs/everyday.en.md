@@ -1,8 +1,9 @@
 +++
 title = "Everyday use"
-weight = 13
+weight = 4
 
 [extra]
+group = "Getting started"
 overview = "Everyday use"
 +++
 
