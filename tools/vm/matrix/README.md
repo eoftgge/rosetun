@@ -43,14 +43,109 @@ does not touch a run whose manifest is unreadable or belongs to another run
 (the refusal is `run-manifest-invalid`); those stay a manual case. Refusals
 print `archived: false` and a `reason`, and change nothing.
 
-On `alive` the VM is still running and holds the overlay. Stop that QEMU
-yourself (the controller is gone, so nothing else will), check that
+On `alive` the VM is still running and holds the overlay. For a run started
+with named control sockets (stage W and later), `recover --state-directory D
+--run-id R --close` quits it and records completion, or `attach` carries the
+run on (see "Stage W: run state on disk and reattach"). For an older run, stop
+that QEMU yourself (the controller is gone, so nothing else will), check that
 `recover` now shows `absent`, then archive. On `unknown` establish the
 process state by hand first. For a run with no process record, run
 `pgrep -af qemu-system` and look for the run's `root.qcow2` path in a command
 line. If one matches, it is that run's VM: stop it, then archive by hand
 once no such process is left. If none matches, the run has no VM; move it out
 of `runs/` yourself, since `--archive` refuses `unknown`.
+
+## Stage W: run state on disk and reattach
+
+A run no longer lives only in its controller's memory. A controller that dies
+(an SSH drop to the stand, a kill) leaves QEMU running; a new process can find
+the run, connect to it and finish it.
+
+### Channels
+
+- QMP and QGA are UNIX sockets that QEMU listens on (`server=on,wait=off`):
+  `runs/R/qmp.sock` and `runs/R/qga.sock`. The run directory is created 0700,
+  QEMU runs with umask 0177 so the sockets are 0600, and both are checked
+  (owner, mode, socket type, no symbolic link) before every connection. Both
+  paths are registered in `manifest.json` as resources of kind `socket` before
+  QEMU starts. A path longer than 107 bytes or with a comma is refused before
+  launch: keep the state directory short.
+- One controller at a time: it holds an OS lock on `runs/R/control.lock` from
+  before the spawn until completion. A second controller is refused
+  (`run-control-locked`); the stand lock refuses it earlier (`stand-locked`).
+  The lock goes with the process, so a dead controller never blocks.
+- A new agent session is a new connection to `qga.sock`; QEMU serves one client
+  per socket, so the old session is closed first. The lab wire between two
+  machines is unchanged: it is a data link, not a control channel.
+- QEMU's stderr goes to the controller that started it. After that controller
+  dies, `qemu-stderr.log` ends there; QEMU ignores the broken pipe.
+
+### `run-state.json`
+
+Schema `rosetun.matrix.run-state.v1`, written only by `evidence.py`, replaced
+atomically on every change (a scratch file `run-state.<random>.tmp` that a dead
+controller leaves behind is kept and never blocks the next write). Fields:
+
+- `phase`: `preparing`, `running`, `collecting`, `closing`, then `completed`
+  (verified completion) or `quarantined` with `reason`; `step` is the last
+  step with `status` `intent`, `done` or `error`; `transitions` keeps every one
+  (at most 256). Each controller step is written as an intent before it runs
+  and as done or error after it. A step left at intent is unknown.
+- `identities`: host run, guest run, import, lab, VM UUID, guest boot ID.
+- `host.boot_id` and `deadlines` (`job_deadline`, `wait_until`) as absolute
+  times on the host's real-time clock.
+- `budgets`: what the run has spent, recorded before it is spent:
+  `qmp_calls` (128, the last one reserved for `quit`), `qmp_events` (128),
+  `qmp_bytes_o`/`qmp_bytes_i` (1 MiB each way, recorded in 64 KiB steps),
+  `qga_recoveries` (4), `qga_observations` (32), `job_calls` (112), `job_polls`
+  (4). QGA calls (128) and QGA relay bytes stay per session, as before; every
+  new session is a counted recovery. The lifecycle journal counts its own rows.
+- `job`: submission, launcher and job state, guest PID, session.
+- `owner_digest` (SHA-256 of the owner token, as in `completion.json`),
+  `configuration_sha256`, `controller.commit` (the checkout's commit, or null),
+  `attachments`.
+
+No passwords, keys or node addresses; the owner token never appears.
+
+### Commands and exit codes
+
+`python -m tools.vm.matrix attach --state-directory S --run-id R` carries on a
+`run linux-l2` or `run linux-l3` (not `--lab`) whose controller died after the
+job was submitted (step `submit` or later). It takes the stand under a recovery
+lease (which never creates a run), checks the recorded QEMU (pid, host boot and
+start time, again through a pidfd), takes the run lock, connects to `qmp.sock`
+and compares `query-uuid`; then opens one agent session (a recovery), rebuilds
+the job from `linux-<stage>/plan.json`, `package.json` and the run state, waits
+until `wait_until`, collects (at most the polls left) and closes. A run killed
+while closing is only closed; an assessment already saved is read back, never
+collected again. The summary carries `attached: true` and `attachments`; the
+exit code is the one the original command would have given (0 accepted, 1 not
+accepted, 2 error or unverified completion, 130 interrupted). An ordinary run's
+summary carries `attached: false`, `attachments: 0`. **A qualification step
+of this README requires `attached: false`** until the owner decides otherwise.
+
+Refusals print `attached: false`, `refused: <reason>` and exit 2, and change
+nothing: `stand-locked`, `run-control-locked`, `vm-process-not-alive` (the
+recorded process is gone or its pid now belongs to another process),
+`vm-process-identity-mismatch`, `host-boot-changed`, `qmp-uuid-mismatch`,
+`controller-version-mismatch` (attach with the commit that started the run),
+`attach-phase-not-resumable` (died before submission: use `recover --close`),
+`attach-lab-run-not-resumable`, `run-already-finished`, `run-not-attachable`.
+
+`recover --state-directory S --run-id R --close` connects the same way, sends
+`quit`, waits for the exit through the pidfd and records completion. The run
+state ends `quarantined` with `closed-by-recover`, the summary gains that error
+and `attached: true`, and the ledger ends verified, so the stand is free:
+exit 0. A refusal prints `refused` and exits 1; a close that did not verify
+exits 2. An attached controller is not QEMU's parent: the exit status is not
+observable, so `completion.json` records `returncode: null` after an `exit
+exit-observed` journal row (accepted only together).
+
+### For the owner
+
+No new descriptors and no image changes: nothing to reinstall. Runs started
+before this stage have no sockets: `--close` refuses them (`run-not-attachable`)
+and the old manual way applies.
 
 ## Owner-prepared Linux L2 execution (stage 5a)
 
@@ -321,8 +416,8 @@ producer and TSV in both paths, not a second implementation of the checks.
 ## Optional Linux QGA observation (stages 4a and 4b.1)
 
 Set `QemuConfig(..., qga=True)` explicitly before `prepare`. Omitted/false keeps
-legacy launch plans unchanged. `start` creates a second private connected Unix
-socket pair and adds `-chardev socket,id=guestagent,fd=<child-fd>`,
+legacy launch plans unchanged. `start` adds a second listening socket in the
+run directory, `-chardev socket,id=guestagent,path=<run>/qga.sock,server=on,wait=off`,
 `-device virtio-serial-pci,id=guestserial` and
 `-device virtserialport,bus=guestserial.0,chardev=guestagent,name=org.qemu.guest_agent.0`.
 Only the two child descriptors are inherited; parent copies of child ends close
@@ -603,11 +698,13 @@ This adapter does not import legacy/deprecated interfaces or copy upstream code.
 
 `qmp_adapter.Qmp` uses public `QMPClient.connect(connected_socket)`, `execute`,
 `listener`, the extensible `EventListener.accept` hook and `disconnect`. JSON framing, request IDs and
-protocol negotiation belong to the library. A private connected Unix socket pair
-is retained; a bounded byte-only relay adds no listener. The relay caps each
-buffer at 64 KiB and each direction at 1 MiB per session; exceeding the budget
-closes the channel. QMP has a 64 KiB read limit, at most 128 commands and 128
-observed events per session. The library forbids removing its default listener;
+protocol negotiation belong to the library. Since stage W, QEMU listens on
+`qmp.sock` and `qga.sock` in the private run directory and the controller
+connects (it no longer inherits one end of a socket pair); a bounded byte-only
+relay adds no listener. The relay caps each buffer at 64 KiB and each direction
+at 1 MiB per run; exceeding the budget closes the channel. QMP has a 64 KiB read
+limit, at most 128 commands and 128 observed events per run, whichever
+controller spends them (recorded in `run-state.json`). The library forbids removing its default listener;
 its public accept hook counts all events and declines default retention, keeping
 that history empty. Operation listeners are temporary. Buffered replies are
 forwarded before a peer's EOF is propagated.
