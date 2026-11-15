@@ -2291,20 +2291,23 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert!(rectangles.iter().any(|rect| {
-            rect.corner_radius == egui::CornerRadius::same(3)
-                && rect.fill == theme::palette().card
+        let unchecked_box = rectangles.iter().any(|rect| {
+            rect.corner_radius == egui::CornerRadius::same(theme::RADIUS_CHECKBOX)
+                && rect.fill == theme::palette().input
                 && rect.stroke.color == theme::palette().border_strong
-        }));
-        assert!(rectangles.iter().any(|rect| {
-            rect.corner_radius == egui::CornerRadius::same(3)
+        });
+        let checked_box = rectangles.iter().any(|rect| {
+            rect.corner_radius == egui::CornerRadius::same(theme::RADIUS_CHECKBOX)
                 && rect.fill == theme::palette().accent_base
-        }));
-        assert!(output.shapes.iter().any(|shape| matches!(
+        });
+        let tick = output.shapes.iter().any(|shape| matches!(
             &shape.shape,
             egui::Shape::Path(path) if path.stroke.color == egui::epaint::ColorMode::Solid(Color32::WHITE)
-        )));
+        ));
         output.textures_delta.clear();
+        assert!(unchecked_box);
+        assert!(checked_box);
+        assert!(tick);
     }
 
     #[test]

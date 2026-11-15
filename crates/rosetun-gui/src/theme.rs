@@ -391,6 +391,9 @@ pub(crate) const RADIUS_INNER: u8 = 4;
 pub(crate) const RADIUS_TOGGLE: u8 = 11;
 /// The check box: chosen by the owner, smaller than a button's.
 pub(crate) const RADIUS_CHECKBOX: u8 = 3;
+/// The side of the check box: the height of a line of body text, so a box
+/// and its label read as one line.
+pub(crate) const CHECKBOX_SIDE: f32 = 16.0;
 
 /// The radius that turns a box of this height into a capsule.
 pub(crate) fn capsule(height: f32) -> u8 {
