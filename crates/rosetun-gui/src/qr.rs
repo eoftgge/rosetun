@@ -84,9 +84,11 @@ pub(crate) fn links_in_rgba(
         return Err(QrError::NotImage);
     }
     let luma = rgba
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|pixel| {
-            let [red, green, blue, alpha] = [pixel[0], pixel[1], pixel[2], pixel[3]].map(u32::from);
+            let [red, green, blue, alpha] = pixel.map(u32::from);
             let luma = (red * 299 + green * 587 + blue * 114) / 1000;
             // Over white, as the image looks on screen: a transparent background stays light.
             ((luma * alpha + 255 * (255 - alpha)) / 255) as u8

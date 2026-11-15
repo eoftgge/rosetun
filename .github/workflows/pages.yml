@@ -30,16 +30,25 @@ jobs:
         with:
           ref: ${{ (github.event_name == 'workflow_run' || github.event_name == 'release') && 'master' || github.ref }}
           persist-credentials: false
+      # The Zola version and the SHA-256 of its archive are pinned in tools/site/zola.toml;
+      # the script checks the hash before it unpacks anything.
+      - name: Install the pinned Zola
+        run: |
+          python3 tools/site/install_zola.py --directory "$RUNNER_TEMP/zola"
+          echo "$RUNNER_TEMP/zola" >> "$GITHUB_PATH"
       - name: Check site and bilingual documentation
         run: |
-          python3 tools/site/check.py site
+          zola --root site build --output-dir target/site
+          python3 tools/site/check.py target/site
+          zola --root site check --skip-external-links
           python3 -m unittest discover -s tools/site -p 'test_*.py'
       - name: Fill stable release data
         if: github.event_name != 'push' || github.ref_name == 'master'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          python3 tools/site/release.py --output _site
+          python3 tools/site/release.py
+          zola --root site build --output-dir _site
           python3 tools/site/check.py _site --rendered
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         if: github.event_name != 'push' || github.ref_name == 'master'

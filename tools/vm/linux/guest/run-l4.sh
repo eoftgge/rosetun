@@ -53,9 +53,11 @@ CLI=$PREFIX/rosetun
 HELPER=$PREFIX/rosetun-helper-privileged
 NFT=/usr/sbin/nft
 RECORD=/var/lib/rosetun/lockdown
-# The peer: a namespace on a veth pair with link-local addresses, which are part
-# of "Local network" (and of no real network), so the local network decides
-# whether it may reach the guest.
+# The peer: a namespace on a veth pair with link-local addresses. "Local network"
+# opens link-local only on the physical interfaces and the veth is none, so the
+# peer must never get past Lockdown, with the local network on or off. What the
+# local network does open, the own segment of the physical interface, is proved
+# by the host's own SSH connections instead.
 PEER_NS=rosetun-l4-peer
 PEER_HOST_IF=rl4-host
 PEER_IF=rl4-peer
@@ -68,6 +70,12 @@ HOST_ADDRESS='' NODE_PORT='' PROBE_ADDRESS='' DNS_PROBE_ADDRESS=''
 SCENARIO_TIMEOUT_SECONDS=30 UNIT_TIMEOUT_SECONDS=180 JOB_TIMEOUT_SECONDS=3000
 EXPECTED_ARCH=x86_64
 PHYS=''
+# When phase one began, in seconds since the epoch: the host's connections that
+# started the job are older, the ones that poll it are newer.
+PHASE_EPOCH=0
+# How long the host gets to open a new SSH connection once the local network is
+# on. It polls every ten seconds or so, so this holds several tries.
+HOST_CONNECT_SECONDS=45
 
 boot_id() { cat /proc/sys/kernel/random/boot_id; }
 
@@ -92,6 +100,9 @@ record() {
 }
 
 fail_reason=''
+# A check that could not be judged (the stand lacks what the proof needs) sets
+# this to ERROR; the default is FAIL.
+fail_result=''
 check() {
     local id=$1 note=$2 started
     shift 2
@@ -100,9 +111,10 @@ check() {
     if "$@"; then
         record "$id" PASS "$note" "$started"
     else
-        record "$id" FAIL "${fail_reason:-the condition did not hold}" "$started"
+        record "$id" "${fail_result:-FAIL}" "${fail_reason:-the condition did not hold}" "$started"
     fi
     fail_reason=''
+    fail_result=''
 }
 
 passed() { grep -q "\"id\":\"$1\".*\"result\":\"PASS\"" "$RESULTS"; }
@@ -283,6 +295,64 @@ peer_up() {
         { fail_reason="could not set up the peer namespace"; return 1; }
 }
 
+# The peer comes up while Lockdown is still off and must reach sshd then: a
+# refusal under Lockdown shows nothing about Lockdown if the peer never could.
+peer_control() {
+    if ! peer_up; then
+        printf '%s\n' "$fail_reason" >"$STATE/peer-control"
+        fail_reason=''
+        return
+    fi
+    if peer_reaches_ssh; then
+        printf 'ok\n' >"$STATE/peer-control"
+    else
+        printf 'sshd did not answer the peer\n' >"$STATE/peer-control"
+    fi
+}
+
+peer_was_wired() {
+    [ "$(cat "$STATE/peer-control" 2>/dev/null)" = ok ] && return 0
+    fail_result=ERROR
+    fail_reason="the peer did not reach sshd before Lockdown ($(cat "$STATE/peer-control" 2>/dev/null || echo 'no control ran')), so a refusal proves nothing"
+    return 1
+}
+
+# The input chain as nft prints it.
+input_chain() { "$NFT" list chain inet rosetun input 2>/dev/null; }
+
+# Whether the input chain accepts anything by source address.
+input_has_source_permits() { input_chain | grep -Eq '(ip|ip6) saddr .* accept'; }
+
+# sshd's accepted connections from the host since EPOCH, one line each. The unit
+# is ssh.service or sshd.service by distribution and the process sshd or
+# sshd-session by version, so the journal is read by identifier.
+host_accepts_since() {
+    journalctl --no-pager -o cat -t sshd -t sshd-session --since "@$1" 2>/dev/null |
+        grep -E "^Accepted [^ ]+ for [^ ]+ from ${HOST_ADDRESS//./\\.} port [0-9]+"
+}
+
+# wait_host_accept EPOCH SECONDS: until sshd accepts a connection from the host
+# that began after EPOCH.
+wait_host_accept() {
+    local deadline=$((SECONDS + $2))
+    while [ "$SECONDS" -lt "$deadline" ]; do
+        host_accepts_since "$1" | grep -q . && return 0
+        sleep 1
+    done
+    return 1
+}
+
+# Whether the host opens new SSH connections while the job runs, looked at while
+# the network is still open. Only -Run (or Collect with a wait) polls; without
+# that the positive step cannot be judged.
+note_host_polling() {
+    if wait_host_accept "$PHASE_EPOCH" 20; then
+        printf 'yes\n' >"$STATE/host-polls"
+    else
+        printf 'no\n' >"$STATE/host-polls"
+    fi
+}
+
 peer_down() {
     [ -f "$STATE/peer" ] || return 0
     ip link del "$PEER_HOST_IF" 2>/dev/null
@@ -459,6 +529,8 @@ scenario_install() {
 }
 
 scenario_enable() {
+    peer_control
+    note_host_polling
     denied() {
         cli 30 lockdown on
         [ "$CLI_RC" -ne 0 ] || { fail_reason="an ordinary account turned Lockdown on"; return 1; }
@@ -501,18 +573,45 @@ scenario_enable() {
     check lockdown.other-process "the same account outside the two scopes is refused" others
 
     inbound_closed() {
-        peer_up || return 1
+        peer_was_wired || return 1
+        ! input_has_source_permits || { fail_reason="the input chain accepts a source address under Lockdown without the local network"; return 1; }
         ! peer_reaches_ssh || { fail_reason="the peer reached sshd under Lockdown without the local network"; return 1; }
     }
-    check inbound.closed "without the local network the peer does not reach sshd" inbound_closed
+    check inbound.closed "without the local network the input chain permits no source and the peer reached sshd before Lockdown but not now" inbound_closed
 
     # From here on the local network stays on: the host's SSH comes back.
     inbound_lan() {
+        local input since
         lockdown_as_root on --lan on || return 1
-        peer_reaches_ssh || { fail_reason="the peer did not reach sshd with the local network"; return 1; }
-        expect_blocked "HTTPS to $PROBE_ADDRESS on $PHYS" direct_https
+        since=$(date +%s)
+        input=$(input_chain) || { fail_reason="could not list the input chain"; return 1; }
+        printf '%s\n' "$input" | grep -Eq "^[[:space:]]*iifname \"$PHYS\" ip saddr [^[:space:]].* accept\$" ||
+            { fail_reason="the input chain has no permit of the own segment on iifname \"$PHYS\" (a network wider than /16 stays closed)"; return 1; }
+        ! printf '%s\n' "$input" | grep -E '(ip|ip6) saddr .* accept' | grep -qv iifname ||
+            { fail_reason="the input chain permits a source address on any interface: $(printf '%s\n' "$input" | grep -E 'saddr .* accept' | grep -v iifname | head -n 1)"; return 1; }
+        expect_blocked "HTTPS to $PROBE_ADDRESS on $PHYS" direct_https || return 1
+        # The proof on the real interface: a connection from the host, which sits
+        # on the guest's own network, that began after the local network went on.
+        if [ "$(cat "$STATE/host-polls" 2>/dev/null)" != yes ]; then
+            fail_result=ERROR
+            fail_reason="the host opened no new SSH connection in the 20 seconds before Lockdown, so this run does not poll (it needs -Run, or Collect with a wait); the positive proof cannot be judged"
+            return 1
+        fi
+        wait_host_accept "$since" "$HOST_CONNECT_SECONDS" || {
+            fail_reason="the host polled before Lockdown, but sshd accepted no connection from $HOST_ADDRESS within ${HOST_CONNECT_SECONDS} seconds of the local network going on (accepted from: $(journalctl --no-pager -o cat -t sshd -t sshd-session --since "@$since" 2>/dev/null | sed -n 's/^Accepted [^ ]* for [^ ]* from \([^ ]*\) port.*/\1/p' | sort -u | tr '\n' ' '))"
+            return 1
+        }
     }
-    check inbound.lan-open "with the local network the peer reaches sshd, the internet stays closed" inbound_lan
+    check inbound.lan-open "with the local network the own segment of the physical interface is permitted on its interface only, the host's new SSH connection is accepted, the internet stays closed" inbound_lan
+
+    # Link-local is open on the physical interfaces only: the veth is none.
+    inbound_link_local() {
+        peer_was_wired || return 1
+        input_chain | grep -E '^[[:space:]]*iifname ' | grep -F '169.254.0.0/16' | grep -qF "\"$PHYS\"" ||
+            { fail_reason="the input chain does not permit link-local on $PHYS, so a refusal of the peer proves nothing"; return 1; }
+        ! peer_reaches_ssh || { fail_reason="the peer on a link-local veth reached sshd with the local network"; return 1; }
+    }
+    check inbound.lan-link-local-closed "with the local network link-local is permitted on the physical interface but the peer on a link-local veth does not reach sshd" inbound_link_local
     peer_down
 }
 
@@ -615,17 +714,35 @@ scenario_exit_denied() {
 
 # The first reboot: the helper does not start by itself, so after the boot only
 # the boot unit's set is in place until the resume phase starts the helper.
+# The Lockdown and helper units' journal of this boot, as the report keeps it.
+boot_journal() {
+    journalctl -b -u rosetun-lockdown.service --no-pager -o short-monotonic 2>/dev/null | tail -n 50
+    journalctl -b -u rosetun-helper.service --no-pager -o short-monotonic 2>/dev/null | tail -n 400
+}
+
+# Saves this boot's journal before a reboot. The report is written after the
+# last boot, which may have no helper at all, and the guest's journal need not
+# survive a reboot (no /var/log/journal), so the earlier boots are kept here.
+keep_boot_journal() {
+    local n
+    n=$(wc -l <"$STATE/boot-ids")
+    n=${n//[[:space:]]/}
+    { printf '== boot %s (%s) ==\n' "$n" "$(boot_id)"; boot_journal; } >"$STATE/journal-$n.txt"
+}
+
 reboot_now() {
     local phase=$1
     printf '%s\n' "$phase" >"$STATE/phase"
     : >"$STATE/rebooting"
     systemctl enable --quiet "$RESUME_UNIT" || return 1
+    keep_boot_journal
     write_status rebooting "$phase"
     sync
     systemctl --no-block reboot
 }
 
 phase_one() {
+    PHASE_EPOCH=$(date +%s)
     write_status running preflight
     scenario_preflight
     if ! preflight_ok; then
@@ -830,8 +947,12 @@ finalize() {
     started_cleanup=$(l2_now_ms)
     if [ -f "$STATE/installed" ]; then
         {
-            journalctl -b -u rosetun-lockdown.service --no-pager -o short-monotonic 2>/dev/null | tail -n 50
-            journalctl -b -u rosetun-helper.service --no-pager -o short-monotonic 2>/dev/null | tail -n 400
+            local saved
+            for saved in "$STATE"/journal-*.txt; do
+                [ -f "$saved" ] && { cat -- "$saved"; echo; }
+            done
+            printf '== boot %s (%s), the last ==\n' "$(wc -l <"$STATE/boot-ids" | tr -d '[:space:]')" "$(boot_id)"
+            boot_journal
         } | LC_ALL=C tr -c '\n -~' '?' | l2_atomic_write "$REPORT/helper-journal.txt" 0644
     fi
     cleanup
@@ -888,6 +1009,7 @@ load_job() {
         SCENARIO_TIMEOUT_SECONDS UNIT_TIMEOUT_SECONDS JOB_TIMEOUT_SECONDS HOST_ADDRESS NODE_PORT PROBE_ADDRESS DNS_PROBE_ADDRESS || return 1
     l2_valid_run_id "$RUN_ID" || { echo "invalid run id" >&2; return 1; }
     [ "$(basename -- "$RUN")" = "$RUN_ID" ] || { echo "run directory does not match the run id" >&2; return 1; }
+    [[ $HOST_ADDRESS =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || { echo "invalid host address" >&2; return 1; }
     [[ $PROBE_ADDRESS =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || { echo "invalid probe address" >&2; return 1; }
     [[ $DNS_PROBE_ADDRESS =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || { echo "invalid DNS probe address" >&2; return 1; }
     [[ $JOB_TIMEOUT_SECONDS =~ ^[0-9]{2,5}$ ]] || { echo "invalid job time limit" >&2; return 1; }

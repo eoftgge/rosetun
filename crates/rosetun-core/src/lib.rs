@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod check;
 mod exit;
 mod exits;
 mod explain;
@@ -22,6 +23,7 @@ mod text;
 mod update;
 mod updates;
 
+pub use check::{Answer, InputError, Subject, Unknown, check};
 pub use exit::{ExitInfo, ExitInfoError, exit_info};
 pub use exits::{
     ExitError, NewExit, change_exit_target, change_exit_via, create_exit, create_exit_via,

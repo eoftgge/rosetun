@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{#- The home page. Its texts are in the front matter of content/_index*.md, the verification part is the body. -#}
+{% block csp %}{{ config.extra.csp_home | safe }}{% endblock csp %}
+{% block title %}Rosetun{% endblock title %}
+{% block main %}
+            {%- set release = load_data(path="data/release.json", required=false) %}
+            <p class="note">{{ release?.banner?[lang] or trans(key="banner", lang=lang) }}</p>
+            <section class="hero" aria-labelledby="hero-title">
+                <div class="masthead">
+                    <img src="{{ root }}assets/banner.svg" width="1280" height="400" alt="Rosetun" />
+                </div>
+                <div class="hero-content">
+                    <h1 id="hero-title">{{ section.extra.headline }}</h1>
+                    <p class="lead">{{ section.extra.lead }}</p>
+                    <div class="download-row">
+                        <a class="button" href="{{ release?.download_url or 'https://github.com/eoftgge/rosetun/releases/latest' }}"><span aria-hidden="true">↓</span> {{ section.extra.download_windows }}</a>
+                        <a class="button" href="docs/install/#debian-13"><span aria-hidden="true">↓</span> {{ section.extra.download_linux }}</a>
+                    </div>
+                    <p class="download-platform">Windows 11 · x64 <span aria-hidden="true">·</span> Linux · amd64</p>
+                    <div class="download-links">
+                        <a href="https://github.com/eoftgge/rosetun/releases">{{ section.extra.all_releases }} <span aria-hidden="true">↗</span></a><a href="#verify">{{ section.extra.verify_download }} <span aria-hidden="true">↓</span></a>
+                    </div>
+                </div>
+            </section>
+            <section>
+                <p class="eyebrow">{{ section.extra.features_eyebrow }}</p>
+                <h2>{{ section.extra.features_title }}</h2>
+                <div class="features">
+                    {%- for feature in section.extra.features %}
+                    <article>
+                        <span class="number">{{ "0" ~ loop.index }}</span>
+                        <h3>{{ feature.title }}</h3>
+                        <p>{{ feature.text | safe }}</p>
+                    </article>
+                    {%- endfor %}
+                </div>
+                <p class="note">{{ section.extra.note | safe }}</p>
+            </section>
+
+            <section>
+                <h2>{{ section.extra.screens_title }}</h2>
+                <p>{{ section.extra.screens_lead }}</p>
+
+                <div class="screens">
+                    {%- for screen in section.extra.screens %}
+                    <figure>
+                        <a href="{{ root }}assets/screens/{{ screen.image }}.webp" class="screenshot">
+                            <img src="{{ root }}assets/screens/{{ screen.image }}.webp" alt="{{ screen.alt }}" loading="lazy">
+                        </a>
+                        <figcaption>{{ screen.caption }}</figcaption>
+                    </figure>
+                    {%- endfor %}
+                </div>
+            </section>
+
+            <dialog id="image-lightbox" class="image-lightbox" aria-label="{{ section.extra.lightbox_label }}">
+                <button type="button" class="lightbox-close" aria-label="{{ section.extra.lightbox_close }}">&times;</button>
+                <img alt="">
+            </dialog>
+
+            <section id="verify" class="verification">
+                {{ section.content | safe }}
+            </section>
+{% endblock main %}
+{% block scripts %}
+
+        <script src="{{ root }}assets/script.js" defer></script>
+{% endblock scripts %}

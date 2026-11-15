@@ -8,6 +8,9 @@ use super::text_field::{field_frame, field_height, field_vertical_margin, style_
 /// Search fields over the rules and connections lists share these widths.
 pub(crate) const SEARCH_WIDTH: f32 = 260.0;
 pub(crate) const MIN_SEARCH_WIDTH: f32 = 120.0;
+/// The field that asks where an address would go: its hint is longer than a
+/// search's, in both languages.
+pub(crate) const CHECK_FIELD_WIDTH: f32 = 340.0;
 
 /// The search field's width on the first row of a two-row toolbar, next to
 /// controls `beside` wide.

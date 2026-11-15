@@ -6,10 +6,10 @@ use std::sync::{Arc, TryLockError};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use rosetun_config::{ConnectionState, Node, uses_xray};
+use rosetun_config::{ConnectionState, DelayMode, Node, uses_xray};
 use rosetun_engine::{
-    ControlEndpoint, EngineBackend, EngineProcess, PROBE_TIMEOUT, ProbeRenderRequest, SocksProxy,
-    UrlTestTarget, url_test_any,
+    ControlEndpoint, DelayInbound, EngineBackend, EngineProcess, PROBE_TIMEOUT, PROBE_URLS,
+    ProbeRenderRequest, SocksProxy, UrlTestTarget, url_test_any,
 };
 use rosetun_engine_xray::SocksEndpoint;
 use rosetun_ipc::{
@@ -18,6 +18,7 @@ use rosetun_ipc::{
 };
 use rosetun_routing::RoutingGuard;
 
+use super::repeated::repeated_delay;
 use super::{
     Acquired, Caller, Helper, NameLookup, SESSION_WAIT, SessionHolder, lockdown,
     node_with_endpoint, resolve_quiet, select_endpoint, validate_tun_name, wait_for_engine_ready,
@@ -35,7 +36,7 @@ pub(super) struct DnsWorkerSlot;
 impl DnsWorkerSlot {
     pub(super) fn acquire() -> Option<Self> {
         DNS_WORKERS
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |count| {
                 (count < RESOLVE_WORKERS).then_some(count + 1)
             })
             .ok()
@@ -465,7 +466,15 @@ impl Helper {
         Ok(results)
     }
 
-    pub(crate) fn tunnel_delay_as(&self, caller: &Caller) -> Result<TunnelDelays, HelperError> {
+    /// Times the tunnel and every exit as `mode` says. A repeated check that
+    /// gets no answer is a failure like any other: the full check is never
+    /// tried instead, or the number under the repeated label would be the other
+    /// one.
+    pub(crate) fn tunnel_delay_as(
+        &self,
+        caller: &Caller,
+        mode: DelayMode,
+    ) -> Result<TunnelDelays, HelperError> {
         self.check_owner(caller)?;
         let session = self.session_for(SessionHolder::Probe)?;
         self.check_owner(caller)?;
@@ -498,33 +507,29 @@ impl Helper {
                     "the connected engine is unavailable",
                 )
             })?;
+        let measure = |target: UrlTestTarget<'_>| match mode {
+            DelayMode::Full => probe_outcome(url_test_any(
+                Arc::clone(&backend),
+                &control,
+                target,
+                PROBE_TIMEOUT,
+            )),
+            DelayMode::Repeated => repeated_outcome(control.delay.as_ref(), target),
+        };
         // The main node and every exit are checked at once, so the answer takes
         // as long as a single check.
         let delays = thread::scope(|scope| {
             let exits = exit_tags
                 .iter()
                 .map(|(exit, tag)| {
-                    let backend = Arc::clone(&backend);
-                    let control = &control;
-                    let check = tag.as_deref().map(|tag| {
-                        scope.spawn(move || {
-                            probe_outcome(url_test_any(
-                                backend,
-                                control,
-                                UrlTestTarget::SessionExit(tag),
-                                PROBE_TIMEOUT,
-                            ))
-                        })
-                    });
+                    let measure = &measure;
+                    let check = tag
+                        .as_deref()
+                        .map(|tag| scope.spawn(move || measure(UrlTestTarget::SessionExit(tag))));
                     (exit, check)
                 })
                 .collect::<Vec<_>>();
-            let proxy = probe_outcome(url_test_any(
-                Arc::clone(&backend),
-                &control,
-                UrlTestTarget::Session,
-                PROBE_TIMEOUT,
-            ));
+            let proxy = measure(UrlTestTarget::Session);
             let exits = exits
                 .into_iter()
                 .map(|(exit, check)| ExitDelay {
@@ -563,8 +568,25 @@ impl Helper {
     }
 
     #[cfg(test)]
-    pub fn tunnel_delay(&self) -> Result<TunnelDelays, HelperError> {
-        self.tunnel_delay_as(&super::test_caller())
+    pub fn tunnel_delay(&self, mode: DelayMode) -> Result<TunnelDelays, HelperError> {
+        self.tunnel_delay_as(&super::test_caller(), mode)
+    }
+}
+
+/// A repeated check of `target` through the session's entry. A session with no
+/// entry, or an entry with no account for `target`, has nothing to time.
+fn repeated_outcome(entry: Option<&DelayInbound>, target: UrlTestTarget<'_>) -> ProbeOutcome {
+    let Some((entry, account)) = entry.and_then(|entry| Some((entry, entry.account(target)?)))
+    else {
+        tracing::debug!("repeated delay: no entry for the target");
+        return ProbeOutcome::Fails;
+    };
+    match repeated_delay(entry.address, account, PROBE_URLS[0], PROBE_TIMEOUT) {
+        Ok(delay) => probe_outcome::<()>(Ok(delay)),
+        Err(reason) => {
+            tracing::debug!(%reason, "repeated delay gave no answer");
+            ProbeOutcome::Fails
+        }
     }
 }
 

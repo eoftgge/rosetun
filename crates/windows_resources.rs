@@ -20,7 +20,7 @@ pub(crate) fn icon_res(ico: &[u8]) -> Result<Vec<u8>, String> {
     write_resource(&mut resource, &[], 0, 0, 0, 0);
     let mut group = Vec::with_capacity(6 + count * 14);
     group.extend_from_slice(header);
-    for (index, entry) in entries.chunks_exact(16).enumerate() {
+    for (index, entry) in entries.as_chunks::<16>().0.iter().enumerate() {
         if entry[3] != 0 {
             return Err(format!(
                 "icon image {} has a nonzero reserved byte",
@@ -329,8 +329,10 @@ mod tests {
         } else if value_length != 0 {
             assert_eq!(kind, 1);
             let units = bytes[cursor..cursor + value_bytes]
-                .chunks_exact(2)
-                .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|&pair| u16::from_le_bytes(pair))
                 .collect::<Vec<_>>();
             assert_eq!(units.last(), Some(&0));
             strings.push((

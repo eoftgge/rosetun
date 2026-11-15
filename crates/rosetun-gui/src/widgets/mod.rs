@@ -43,7 +43,8 @@ pub(crate) use menu::{
     menu_popup, menu_width,
 };
 pub(crate) use search::{
-    MIN_SEARCH_WIDTH, SEARCH_WIDTH, search_field, search_field_with_suffix, search_width_beside,
+    CHECK_FIELD_WIDTH, MIN_SEARCH_WIDTH, SEARCH_WIDTH, search_field, search_field_with_suffix,
+    search_width_beside,
 };
 pub(crate) use segmented::{segmented, segmented_width};
 pub(crate) use settings_card::{RowOptions, SettingsCard, row_detail, settings_card};

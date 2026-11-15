@@ -1,0 +1,59 @@
+# Built with the Zola version pinned in tools/site/zola.toml.
+# The address is only the production default; every internal link is relative,
+# so a build for another address (a preview) needs only --base-url.
+base_url = "https://eoftgge.github.io/rosetun"
+title = "Rosetun"
+default_language = "ru"
+
+# Nothing that needs scripts or outside resources, and nothing the old site did not have.
+generate_feeds = false
+generate_sitemap = false
+generate_robots_txt = false
+build_search_index = false
+
+[markdown]
+external_links_external = false
+
+# Zola turns relative links that do not start with `../` or `#` into absolute
+# ones. Pages therefore link to each other as `../name/`, and the home page
+# keeps its own links as plain HTML.
+
+[translations]
+skip = "К содержимому"
+navigation = "Навигация"
+home = "Главная"
+documentation = "Документация"
+providers = "Для провайдеров"
+help = "Помощь"
+switch = "English"
+licenses = "Лицензии"
+security = "Сообщить об уязвимости"
+not_found = "Страница не найдена"
+contents = "Содержание"
+toc = "На этой странице"
+pager = "Назад и вперёд"
+banner = "Стабильный выпуск: см. загрузки."
+
+[languages.en]
+title = "Rosetun"
+
+[languages.en.translations]
+skip = "Skip to content"
+navigation = "Navigation"
+home = "Home"
+documentation = "Documentation"
+providers = "For providers"
+help = "Help"
+switch = "Русский"
+licenses = "Licenses"
+security = "Report a vulnerability"
+not_found = "Page not found"
+contents = "Contents"
+toc = "On this page"
+pager = "Previous and next"
+banner = "Stable release: see downloads."
+
+[extra]
+# Content-Security-Policy per kind of page: the home page alone loads a script.
+csp = "default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'"
+csp_home = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; base-uri 'self'; object-src 'none'; form-action 'self'"

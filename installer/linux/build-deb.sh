@@ -62,7 +62,7 @@ if [ -d "$HOME/.cargo/bin" ]; then PATH=$HOME/.cargo/bin:$PATH; fi
 for tool in cargo curl dpkg-deb dpkg-shlibdeps git gzip objdump python3 sha256sum tar unzip; do
     command -v "$tool" >/dev/null 2>&1 || die "$tool is missing"
 done
-export RUSTUP_TOOLCHAIN=${RUSTUP_TOOLCHAIN:-1.96.0}
+export RUSTUP_TOOLCHAIN=${RUSTUP_TOOLCHAIN:-1.99.1}
 
 repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)
 cd -- "$repo"

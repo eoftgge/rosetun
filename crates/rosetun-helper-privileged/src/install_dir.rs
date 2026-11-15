@@ -544,8 +544,10 @@ fn profiles_root(candidate: &Path, windows: &Path) -> Result<PathBuf, Failure> {
             return Err(inspection(candidate, "invalid ProfilesDirectory value"));
         }
         let units: Vec<u16> = bytes[..used as usize]
-            .chunks_exact(2)
-            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|&pair| u16::from_le_bytes(pair))
             .collect();
         let text = String::from_utf16(&units[..units.len() - 1])
             .map_err(|error| inspection(candidate, error))?;

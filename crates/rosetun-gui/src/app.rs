@@ -577,10 +577,11 @@ impl App {
             Job::PingNode(id, node) => self.workers.ping(id, Some(node)),
             Job::FullCheck(id) => self.workers.full_check(id, None),
             Job::FullCheckNode(id, node) => self.workers.full_check(id, Some(node)),
-            Job::TunnelDelay => self.workers.tunnel_delay(),
+            Job::TunnelDelay(mode) => self.workers.tunnel_delay(mode),
             Job::Connections => self.workers.connections(),
             Job::ProgramNames(paths) => self.workers.program_names(paths),
             Job::SessionLists { request, session } => self.workers.session_lists(request, *session),
+            Job::CheckLists { request, session } => self.workers.check_lists(request, *session),
             Job::CloseConnection(id) => self.workers.close_connection(id),
             Job::LookupExit { generation, route } => self.workers.lookup_exit(generation, route),
             Job::UpdateAll => self.workers.update_all(),
@@ -787,6 +788,9 @@ impl App {
             self.dispatch(job);
         }
         if let Some(job) = self.state.take_session_lists() {
+            self.dispatch(job);
+        }
+        if let Some(job) = self.state.take_check_lists() {
             self.dispatch(job);
         }
         if let Some(job) = self.state.take_system_proxy() {

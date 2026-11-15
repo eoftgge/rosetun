@@ -10,8 +10,9 @@ lockdown.direct-blocked	yes	real-service	lockdown	-	sudo rosetun lockdown on: st
 lockdown.gui-scope	yes	real-service	lockdown	-	without a session a program in the first account's rosetun-gui.scope gets HTTPS and UDP 53 out of the physical interface
 lockdown.cli-scope	yes	real-service	lockdown	-	without a session a program in the first account's rosetun-cli.scope gets HTTPS and UDP 53 out of the physical interface
 lockdown.other-process	yes	real-service	lockdown	-	the same account outside a scope, and in a scope of another name, is refused HTTPS and UDP 53
-inbound.closed	yes	real-service	inbound	-	without the local network a peer on a link-local veth does not reach the guest's sshd
-inbound.lan-open	yes	real-service	inbound	-	with the local network the peer reaches sshd while HTTPS to the probe stays refused
+inbound.closed	yes	real-service	inbound	-	without the local network the input chain accepts no source address, and a peer on a link-local veth that reached sshd before Lockdown does not reach it now
+inbound.lan-open	yes	real-service	inbound	-	with the local network the input chain permits the own segment on the physical interface only, sshd accepts a new SSH connection from the host that began after it went on, and HTTPS to the probe stays refused
+inbound.lan-link-local-closed	yes	real-service	inbound	-	with the local network link-local is permitted on the physical interface, and the peer on the link-local veth still does not reach sshd
 lockdown.session	yes	real-service	session	-	a connect without the kill switch under Lockdown gets the kill switch: the tunnel answers, the physical interface is refused
 lockdown.session-scope-closed	yes	real-service	session	-	during the session the GUI's scope is refused HTTPS on the physical interface
 lockdown.after-session	yes	real-service	session	-	after the disconnect the network stays closed and the GUI's scope gets out again

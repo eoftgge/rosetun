@@ -1,8 +1,8 @@
 use std::net::IpAddr;
 
 use rosetun_config::{
-    AccentPreset, ConnectionMode, DnsSettings, InterfaceSettings, LanguageSetting, QuitAction,
-    Settings, TlsFragment, XrayUse,
+    AccentPreset, ConnectionMode, DelayMode, DnsSettings, InterfaceSettings, LanguageSetting,
+    QuitAction, Settings, TlsFragment, XrayUse,
 };
 use url::Host;
 
@@ -68,6 +68,7 @@ pub enum SettingChange {
     AutoUpdateSubscriptions(bool),
     CheckUpdates(bool),
     QuitAction(QuitAction),
+    DelayMode(DelayMode),
 }
 
 pub fn change_setting(store: &Store, change: SettingChange) -> Result<(), SettingsError> {
@@ -92,6 +93,7 @@ pub fn change_setting(store: &Store, change: SettingChange) -> Result<(), Settin
             }
             SettingChange::CheckUpdates(enabled) => config.interface.check_updates = enabled,
             SettingChange::QuitAction(action) => config.interface.quit_action = action,
+            SettingChange::DelayMode(mode) => config.interface.delay_mode = mode,
         }
         Ok(())
     })
@@ -508,6 +510,10 @@ mod tests {
 
         change_setting(&store, SettingChange::QuitAction(QuitAction::KeepConnected)).unwrap();
         expected.interface.quit_action = QuitAction::KeepConnected;
+        assert_eq!(store.load().unwrap(), expected);
+
+        change_setting(&store, SettingChange::DelayMode(DelayMode::Full)).unwrap();
+        expected.interface.delay_mode = DelayMode::Full;
         assert_eq!(store.load().unwrap(), expected);
 
         skip_version(&store, Some("0.1.0-alpha.3".into())).unwrap();

@@ -40,30 +40,36 @@ pub const PROBE_URLS: [&str; 2] = [
 ];
 pub const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Outbound tag of the session's main node.
+pub const PROXY_TAG: &str = "proxy";
+
 /// A local-only control API that the engine serves for one session.
 #[derive(Clone, PartialEq, Eq)]
 pub struct ControlEndpoint {
     pub address: SocketAddr,
     pub secret: String,
+    /// The entry that times a repeated request; see [`DelayInbound`].
+    pub delay: Option<DelayInbound>,
 }
 
 impl ControlEndpoint {
     /// A free port on 127.0.0.1 and a random 256-bit secret.
     pub fn local() -> std::io::Result<Self> {
-        // Another process may claim this port before the engine starts listening.
-        let listener = TcpListener::bind("127.0.0.1:0")?;
-        let address = listener.local_addr()?;
-        drop(listener);
+        Ok(Self {
+            address: free_loopback_address()?,
+            secret: random_secret()?,
+            delay: None,
+        })
+    }
 
-        let mut bytes = [0u8; 32];
-        getrandom::fill(&mut bytes).map_err(|error| std::io::Error::other(error.to_string()))?;
-        let hex = b"0123456789abcdef";
-        let mut secret = String::with_capacity(64);
-        for byte in bytes {
-            secret.push(char::from(hex[usize::from(byte >> 4)]));
-            secret.push(char::from(hex[usize::from(byte & 0x0f)]));
-        }
-        Ok(Self { address, secret })
+    /// Adds [`DelayInbound`] accounts for the main node and for the outbounds
+    /// `tags` name.
+    pub fn with_delay_inbound(
+        mut self,
+        tags: impl IntoIterator<Item = String>,
+    ) -> std::io::Result<Self> {
+        self.delay = Some(DelayInbound::local(tags)?);
+        Ok(self)
     }
 }
 
@@ -72,6 +78,89 @@ impl std::fmt::Debug for ControlEndpoint {
         f.debug_struct("ControlEndpoint")
             .field("address", &self.address)
             .field("secret", &"<redacted>")
+            .field("delay", &self.delay)
+            .finish()
+    }
+}
+
+/// A free port on 127.0.0.1. Another process may claim it before the engine
+/// starts listening.
+fn free_loopback_address() -> std::io::Result<SocketAddr> {
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let address = listener.local_addr()?;
+    drop(listener);
+    Ok(address)
+}
+
+/// 256 random bits as 64 hexadecimal digits.
+fn random_secret() -> std::io::Result<String> {
+    let mut bytes = [0u8; 32];
+    getrandom::fill(&mut bytes).map_err(|error| std::io::Error::other(error.to_string()))?;
+    let hex = b"0123456789abcdef";
+    let mut secret = String::with_capacity(64);
+    for byte in bytes {
+        secret.push(char::from(hex[usize::from(byte >> 4)]));
+        secret.push(char::from(hex[usize::from(byte & 0x0f)]));
+    }
+    Ok(secret)
+}
+
+/// A loopback SOCKS5 entry the engine offers for timing a request through one
+/// outbound on a connection that stays open. Each outbound has an account of
+/// its own, so a client that holds one account reaches that outbound only.
+#[derive(Clone, PartialEq, Eq)]
+pub struct DelayInbound {
+    pub address: SocketAddr,
+    pub accounts: Vec<DelayAccount>,
+}
+
+/// The account for one outbound: the user name is its tag.
+#[derive(Clone, PartialEq, Eq)]
+pub struct DelayAccount {
+    pub tag: String,
+    pub password: String,
+}
+
+impl DelayInbound {
+    /// A free loopback port and a random password per tag.
+    pub fn local(tags: impl IntoIterator<Item = String>) -> std::io::Result<Self> {
+        let address = free_loopback_address()?;
+        let accounts = tags
+            .into_iter()
+            .map(|tag| {
+                Ok(DelayAccount {
+                    tag,
+                    password: random_secret()?,
+                })
+            })
+            .collect::<std::io::Result<Vec<_>>>()?;
+        Ok(Self { address, accounts })
+    }
+
+    /// The account that reaches `target`'s outbound.
+    pub fn account(&self, target: UrlTestTarget<'_>) -> Option<&DelayAccount> {
+        let tag = match target {
+            UrlTestTarget::Session => PROXY_TAG,
+            UrlTestTarget::SessionExit(tag) | UrlTestTarget::Probe(tag) => tag,
+        };
+        self.accounts.iter().find(|account| account.tag == tag)
+    }
+}
+
+impl std::fmt::Debug for DelayInbound {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DelayInbound")
+            .field("address", &self.address)
+            .field("accounts", &self.accounts.len())
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for DelayAccount {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DelayAccount")
+            .field("tag", &self.tag)
+            .field("password", &"<redacted>")
             .finish()
     }
 }
@@ -647,6 +736,52 @@ mod tests {
     }
 
     #[test]
+    fn each_delay_account_has_a_password_of_its_own() {
+        let inbound =
+            DelayInbound::local([PROXY_TAG.to_owned(), exit_tag(0), exit_tag(1)]).unwrap();
+        assert!(inbound.address.ip().is_loopback());
+        let mut passwords: Vec<_> = inbound
+            .accounts
+            .iter()
+            .map(|account| account.password.as_str())
+            .collect();
+        assert!(passwords.iter().all(|password| password.len() == 64));
+        passwords.sort_unstable();
+        passwords.dedup();
+        assert_eq!(passwords.len(), 3);
+    }
+
+    #[test]
+    fn a_target_reaches_the_account_of_its_own_outbound() {
+        let inbound = DelayInbound::local([PROXY_TAG.to_owned(), exit_tag(1)]).unwrap();
+        let main = inbound.account(UrlTestTarget::Session).unwrap();
+        assert_eq!(main.tag, PROXY_TAG);
+        let exit = inbound
+            .account(UrlTestTarget::SessionExit("exit-1"))
+            .unwrap();
+        assert_eq!(exit.tag, "exit-1");
+        assert_ne!(main.password, exit.password);
+        assert!(
+            inbound
+                .account(UrlTestTarget::SessionExit("exit-0"))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn the_delay_passwords_stay_out_of_debug_output() {
+        let control = ControlEndpoint::local()
+            .unwrap()
+            .with_delay_inbound([PROXY_TAG.to_owned()])
+            .unwrap();
+        let password = control.delay.as_ref().unwrap().accounts[0].password.clone();
+        let shown = format!("{control:?} {:?}", control.delay);
+        assert!(!shown.contains(&password));
+        assert!(!shown.contains(&control.secret));
+        assert!(shown.contains("<redacted>"));
+    }
+
+    #[test]
     fn without_rules_by_program_an_engine_keeps_to_the_network() {
         assert_eq!(rights(Vec::new()), EngineRights::Network);
         let site = RuleMatcher::Domain(DomainMatch::Exact("example.com".to_owned()));
@@ -785,6 +920,7 @@ mod tests {
         let control = ControlEndpoint {
             address: "127.0.0.1:12345".parse().unwrap(),
             secret: "test-secret".to_owned(),
+            delay: None,
         };
         url_test_any(
             backend,

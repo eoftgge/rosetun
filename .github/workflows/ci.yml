@@ -13,7 +13,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  RUST_TOOLCHAIN: '1.96.0'
+  RUST_TOOLCHAIN: '1.99.1'
   CARGO_TERM_COLOR: always
 
 jobs:
@@ -126,7 +126,7 @@ jobs:
         shell: pwsh
         run: |
           # Keep this in sync with rust-version in Cargo.toml.
-          rustup toolchain install 1.96 --profile minimal
+          rustup toolchain install 1.99 --profile minimal
           if ($LASTEXITCODE -ne 0) { throw 'Failed to install minimum supported Rust.' }
       - name: Check minimum supported Rust
-        run: cargo +1.96 check --workspace --all-targets --locked
+        run: cargo +1.99 check --workspace --all-targets --locked

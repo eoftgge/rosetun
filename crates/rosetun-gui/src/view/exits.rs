@@ -446,27 +446,30 @@ pub(crate) fn exit_dialog(ctx: &egui::Context, state: &mut State, actions: &mut 
                                 .map_or_else(|| tr!("connection-exit-removed"), exit_title)
                         },
                     );
-                    ui.add_enabled_ui(!busy, |ui| {
+                    let candidates = dialog.via_candidates(config).to_vec();
+                    // A saved path that no longer works stays changeable.
+                    let nothing_to_pick =
+                        dialog.target().is_some() && candidates.is_empty() && dialog.via.is_none();
+                    ui.add_enabled_ui(!busy && !nothing_to_pick, |ui| {
                         widgets::drop_down(ui, "exit_via", None, selected, |ui| {
                             ui.selectable_value(&mut dialog.via, None, tr!("exit-via-direct"));
-                            if let Some(target) = dialog.target() {
-                                for parent in &config.exits {
-                                    if destinations::exit_path_supported(
-                                        config,
-                                        dialog.editing.as_ref(),
-                                        &target,
-                                        Some(&parent.id),
-                                    ) {
-                                        ui.selectable_value(
-                                            &mut dialog.via,
-                                            Some(parent.id.clone()),
-                                            exit_title(parent),
-                                        );
-                                    }
-                                }
+                            for parent in config
+                                .exits
+                                .iter()
+                                .filter(|exit| candidates.contains(&exit.id))
+                            {
+                                ui.selectable_value(
+                                    &mut dialog.via,
+                                    Some(parent.id.clone()),
+                                    exit_title(parent),
+                                );
                             }
-                        });
+                        })
+                        .on_disabled_hover_text(tr!("exit-via-none"));
                     });
+                    if nothing_to_pick {
+                        note(ui, tr!("exit-via-none"), theme::palette().text_muted);
+                    }
                     if let Some(via) = &dialog.via {
                         let parent = config
                             .exits

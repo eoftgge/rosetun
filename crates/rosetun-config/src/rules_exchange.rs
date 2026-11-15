@@ -143,12 +143,10 @@ fn fresh_id() -> String {
         .unwrap_or_default()
         .as_nanos()
         .min(u128::from(u64::MAX - 1)) as u64;
-    NEXT_ID
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |previous| {
-            Some(time.max(previous + 1))
-        })
-        .map_or_else(|previous| previous, |previous| time.max(previous + 1))
-        .to_string()
+    let previous = NEXT_ID.update(Ordering::Relaxed, Ordering::Relaxed, |previous| {
+        time.max(previous + 1)
+    });
+    time.max(previous + 1).to_string()
 }
 fn server(config: &AppConfig, id: &ExitId) -> Option<Server> {
     let exit = config.exits.iter().find(|exit| &exit.id == id)?;

@@ -465,7 +465,12 @@ mod tests {
         for (x, y) in [(25, 12), (0, 0), (47, 47)] {
             assert_eq!(pixel(&rgba, 48, x, y), [0; 4], "({x}, {y})");
         }
-        let filled = rgba.chunks_exact(4).filter(|pixel| pixel[3] != 0).count();
+        let filled = rgba
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|pixel| pixel[3] != 0)
+            .count();
         let coverage = filled as f32 / (48 * 48) as f32;
         assert!((0.45..=0.75).contains(&coverage), "{coverage}");
         assert_eq!(
@@ -504,7 +509,12 @@ mod tests {
             for size in [16, 24, 32, 48, 256] {
                 let plain = rasterize(size, icon, None, &Palette::ROSE);
                 let backed = rose_icon_rgba(size, icon, &Palette::ROSE);
-                for (before, after) in plain.chunks_exact(4).zip(backed.chunks_exact(4)) {
+                for (before, after) in plain
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .zip(backed.as_chunks::<4>().0.iter())
+                {
                     assert!(after[3] >= before[3], "{icon:?} {size} px");
                     if before[3] == 255 {
                         assert_eq!(before, after, "{icon:?} {size} px: plate over the rose");
@@ -533,7 +543,7 @@ mod tests {
             );
         }
         let rgba = rose_icon_rgba(256, RoseIcon::App, &Palette::ROSE);
-        assert!(rgba.chunks_exact(4).any(|pixel| {
+        assert!(rgba.as_chunks::<4>().0.iter().any(|pixel| {
             pixel[..3] == Palette::ROSE.bg.to_array()[..3] && (1..255).contains(&pixel[3])
         }));
     }
@@ -579,13 +589,17 @@ mod tests {
             if state != TrayState::Connected {
                 assert!(
                     !rgba
-                        .chunks_exact(4)
-                        .any(|pixel| pixel == Palette::ROSE.accent_base.to_array())
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .any(|pixel| *pixel == Palette::ROSE.accent_base.to_array())
                 );
                 assert!(
                     !rgba
-                        .chunks_exact(4)
-                        .any(|pixel| pixel == Palette::ROSE.accent_dark.to_array())
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .any(|pixel| *pixel == Palette::ROSE.accent_dark.to_array())
                 );
             }
         }
@@ -649,7 +663,11 @@ mod tests {
                     "{state:?} {size} px"
                 );
                 let count = |wanted: &dyn Fn(&[u8]) -> bool| {
-                    rgba.chunks_exact(4).filter(|pixel| wanted(pixel)).count()
+                    rgba.as_chunks::<4>()
+                        .0
+                        .iter()
+                        .filter(|&pixel| wanted(pixel))
+                        .count()
                 };
                 assert!(
                     count(&|pixel| pixel == Palette::ROSE.bg.to_array()) >= 4,

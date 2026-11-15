@@ -274,6 +274,51 @@ mod tests {
             });
         }
     }
+
+    fn delay_state(mode: rosetun_config::DelayMode) -> State {
+        let mut state = State::default();
+        state.config_ready = true;
+        state.helper_available = true;
+        state.config.interface.delay_mode = mode;
+        state.status = rosetun_config::Status {
+            state: ConnectionState::Connected,
+            ..rosetun_config::Status::default()
+        };
+        state.tunnel_delay = TunnelDelay::Done(rosetun_ipc::TunnelDelays {
+            proxy: ProbeOutcome::Works { millis: 42 },
+            exits: Vec::new(),
+        });
+        state
+    }
+
+    #[test]
+    fn the_delay_row_shows_the_number_without_the_way_of_measuring() {
+        use rosetun_config::DelayMode;
+
+        use crate::i18n::{self, Language};
+        use crate::view::settings::delay_mode_label;
+        for language in [Language::English, Language::Russian] {
+            i18n::in_language(language, || {
+                for mode in DelayMode::ALL {
+                    let state = delay_state(mode);
+                    let mut actions = Vec::new();
+                    let mut screen = crate::test_ui::TestScreen::new(egui::vec2(960.0, 640.0));
+                    let texts = screen.settle(|ui| {
+                        egui::CentralPanel::default()
+                            .show(ui, |ui| hero_card(ui, &state, &mut actions));
+                    });
+                    assert!(
+                        texts
+                            .iter()
+                            .any(|(text, _)| text == &tr!("ping-ms", ms = "42"))
+                    );
+                    for name in DelayMode::ALL.map(delay_mode_label) {
+                        assert!(!texts.iter().any(|(text, _)| *text == name), "{name}");
+                    }
+                }
+            });
+        }
+    }
 }
 
 /// Without a status the service either has not answered yet (start-up) or
@@ -682,6 +727,9 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                                     };
                                     let enabled =
                                         !matches!(state.tunnel_delay, TunnelDelay::Measuring);
+                                    let hint = crate::view::settings::delay_mode_hint(
+                                        state.config.interface.delay_mode,
+                                    );
                                     let response = ui
                                         .add(
                                             egui::Label::new(RichText::new(text).color(color))
@@ -691,7 +739,7 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                                                     egui::Sense::hover()
                                                 }),
                                         )
-                                        .on_hover_text(tr!("delay-hint"));
+                                        .on_hover_text(&hint);
                                     let refresh =
                                         if matches!(state.tunnel_delay, TunnelDelay::Done(_)) {
                                             icons::icon_button_sized(
@@ -700,7 +748,7 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                                                 enabled,
                                                 18.0,
                                             )
-                                            .on_hover_text(tr!("delay-hint"))
+                                            .on_hover_text(&hint)
                                             .clicked()
                                         } else {
                                             false

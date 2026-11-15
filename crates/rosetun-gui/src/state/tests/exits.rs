@@ -337,6 +337,22 @@ fn path_choices_reject_self_third_hop_domains_xray_and_fragmentation() {
 }
 
 #[test]
+fn path_candidates_follow_the_draft_target() {
+    let mut state = chain_state();
+    state.config.subscriptions[0].nodes[2].server = "b.example.com".into();
+    state.act(Action::OpenEditExit(ExitId::new("2")));
+    let config = state.config.clone();
+    let dialog = state.exits.dialog.as_mut().unwrap();
+    assert_eq!(dialog.via_candidates(&config), [ExitId::new("1")]);
+    dialog.kind = ExitKind::Node;
+    assert!(dialog.via_candidates(&config).is_empty());
+    dialog.pick_node(&config, node("plain"));
+    assert!(dialog.via_candidates(&config).is_empty());
+    dialog.kind = ExitKind::Country;
+    assert_eq!(dialog.via_candidates(&config), [ExitId::new("1")]);
+}
+
+#[test]
 fn path_label_places_a_before_b() {
     let mut state = chain_state();
     state.config.exits[0].name = "A".into();

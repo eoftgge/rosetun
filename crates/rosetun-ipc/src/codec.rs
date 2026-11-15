@@ -46,9 +46,9 @@ mod tests {
     use std::io::BufReader;
 
     use rosetun_config::{
-        ConnectionState, DomainMatch, ExitId, Node, NodeId, Outbound, Rule, RuleId, RuleMatcher,
-        RuleSet, RuleSetId, RuleTarget, Selection, Settings, StreamSettings, SubscriptionId,
-        TrojanParams,
+        ConnectionState, DelayMode, DomainMatch, ExitId, Node, NodeId, Outbound, Rule, RuleId,
+        RuleMatcher, RuleSet, RuleSetId, RuleTarget, Selection, Settings, StreamSettings,
+        SubscriptionId, TrojanParams,
     };
 
     use super::*;
@@ -171,6 +171,27 @@ mod tests {
     }
 
     #[test]
+    fn a_delay_request_names_its_mode_and_an_unknown_mode_is_refused() {
+        for (mode, name) in [(DelayMode::Full, "full"), (DelayMode::Repeated, "repeated")] {
+            assert_eq!(
+                serde_json::to_string(&Request::TunnelDelay { mode }).unwrap(),
+                format!(r#"{{"tunnel_delay":{{"mode":"{name}"}}}}"#)
+            );
+        }
+        for refused in [
+            r#"{"tunnel_delay":{"mode":"instant"}}"#,
+            r#"{"tunnel_delay":{"mode":null}}"#,
+            r#"{"tunnel_delay":{}}"#,
+            r#""tunnel_delay""#,
+        ] {
+            assert!(
+                serde_json::from_str::<Request>(refused).is_err(),
+                "{refused} must be refused"
+            );
+        }
+    }
+
+    #[test]
     fn probe_requests_and_responses_survive_roundtrip() {
         let request = Frame::Request {
             id: 9,
@@ -190,11 +211,13 @@ mod tests {
             })),
         };
         assert_eq!(roundtrip(&request), request);
-        let delay_request = Frame::Request {
-            id: 10,
-            body: Request::TunnelDelay,
-        };
-        assert_eq!(roundtrip(&delay_request), delay_request);
+        for mode in DelayMode::ALL {
+            let delay_request = Frame::Request {
+                id: 10,
+                body: Request::TunnelDelay { mode },
+            };
+            assert_eq!(roundtrip(&delay_request), delay_request);
+        }
 
         let results = Frame::Response {
             id: 9,

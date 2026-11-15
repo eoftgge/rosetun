@@ -72,6 +72,9 @@ struct RawMetadata {
     host: String,
     #[serde(default)]
     process_path: String,
+    /// The inbound's type and tag, as `socks/delay-in`.
+    #[serde(default, rename = "type")]
+    inbound: String,
 }
 
 impl Raw {
@@ -81,6 +84,10 @@ impl Raw {
             "udp" => ConnectionNetwork::Udp,
             _ => return None,
         };
+        // Rosetun's own timing requests are not the user's traffic.
+        if self.metadata.inbound == format!("socks/{}", render::TAG_DELAY_INBOUND) {
+            return None;
+        }
         let port = self.metadata.destination_port.parse().ok()?;
         let process = Some(self.metadata.process_path).filter(|path| !path.is_empty());
         if render::is_exit_trace(process.as_deref(), &self.metadata.destination_ip, port) {
@@ -369,6 +376,20 @@ mod tests {
         let ids: Vec<_> = parse(&body).into_iter().map(|c| c.id).collect();
 
         assert_eq!(ids, ["port", "program"]);
+    }
+
+    #[test]
+    fn the_delay_inbound_connections_are_hidden() {
+        let own = entry("own", "cp.cloudflare.com", "proxy")
+            .replace("tun/tun-in", "socks/delay-in")
+            .replace(
+                r#""processPath":"C:\Program Files\Examplepp.exe""#,
+                r#""processPath":"""#,
+            );
+        let other = entry("other", "example.com", "proxy").replace("tun/tun-in", "socks/mixed-in");
+        let shown = parse(&sample(&format!("[{own},{other}]")));
+        assert_eq!(shown.len(), 1);
+        assert_eq!(shown[0].id, "other");
     }
 
     #[test]

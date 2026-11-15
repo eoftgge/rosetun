@@ -834,3 +834,97 @@ fn exit_button_shows_the_exit_name_without_truncation() {
         .collect();
     assert_eq!(texts, ["Нидерланды"]);
 }
+
+fn check_line(rule: Option<(String, RuleId)>) -> crate::state::CheckLine {
+    crate::state::CheckLine {
+        text: tr!(
+            "rule-check-lead-basis",
+            head = "video.example.com → Direct".to_owned(),
+            basis = tr!(
+                "rule-check-list",
+                list = "A long list name for the check".to_owned()
+            )
+        ),
+        rule,
+        hint: None,
+        answer: true,
+    }
+}
+
+#[test]
+fn the_check_shows_its_answer_and_a_link_that_asks_for_the_rule() {
+    for language in [i18n::Language::English, i18n::Language::Russian] {
+        i18n::in_language(language, || {
+            let mut screen = crate::test_ui::TestScreen::new(egui::vec2(960.0, 640.0));
+            let mut input = "video.example.com".to_owned();
+            let label = tr!("rule-check-number", number = "13".to_owned());
+            let mut actions = Vec::new();
+            let mut show = |ui: &mut egui::Ui| {
+                check::address_check(
+                    ui,
+                    true,
+                    &mut input,
+                    Some(check_line(Some((label.clone(), RuleId::new("one"))))),
+                    &mut actions,
+                );
+            };
+
+            let texts = screen.settle(&mut show);
+            let (_, link) = texts.iter().find(|(text, _)| *text == label).unwrap();
+            // The link's text starts after the answer, so its middle is not on it.
+            let pos = egui::pos2(link.right() - 4.0, link.center().y);
+            let button = |pressed| egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            };
+            screen.run(
+                vec![egui::Event::PointerMoved(pos), button(true)],
+                &mut show,
+            );
+            screen.run(vec![button(false)], &mut show);
+
+            let (_, answer) = texts
+                .iter()
+                .find(|(text, _)| text.starts_with("video.example.com →"))
+                .unwrap();
+            assert!(link.right() <= 960.0, "{language:?}: {link:?}");
+            // The link follows the answer on its row.
+            assert!(
+                link.right() > answer.right(),
+                "{language:?}: {answer:?} {link:?}"
+            );
+            assert!(
+                (link.center().y - answer.center().y).abs() < 1.0,
+                "{language:?}: {answer:?} {link:?}"
+            );
+            assert!(
+                matches!(actions.as_slice(), [Action::ShowCheckedRule(rule)] if rule.as_str() == "one"),
+                "{language:?}: one click asks for the rule once"
+            );
+        });
+    }
+}
+
+#[test]
+fn an_empty_check_keeps_the_height_of_a_line() {
+    let height = |line: Option<crate::state::CheckLine>| {
+        let mut screen = crate::test_ui::TestScreen::new(egui::vec2(960.0, 640.0));
+        let mut input = String::new();
+        let mut bottom = 0.0;
+        screen.settle(|ui| {
+            check::address_check(ui, true, &mut input, line.clone(), &mut Vec::new());
+            bottom = ui.min_rect().bottom();
+        });
+        bottom
+    };
+
+    let empty = height(None);
+    let answered = height(Some(check_line(None)));
+
+    assert!(
+        (empty - answered).abs() < 1.0,
+        "empty {empty}, answered {answered}"
+    );
+}

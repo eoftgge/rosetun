@@ -1,6 +1,6 @@
 use rosetun_config::{
-    ConnectionMode, DomainMatch, EngineKind, ExitId, InstalledProtection, NodeId, Outbound,
-    ProtectionState, RequestedProtection, Rule, RuleId, RuleMatcher, RuleSet, RuleSetId,
+    ConnectionMode, DelayMode, DomainMatch, EngineKind, ExitId, InstalledProtection, NodeId,
+    Outbound, ProtectionState, RequestedProtection, Rule, RuleId, RuleMatcher, RuleSet, RuleSetId,
     RuleTarget, RuleTemplate, Selection, Settings, SubscriptionId, Traffic, VlessParams,
 };
 use rosetun_engine::errors::EngineError;
@@ -1801,6 +1801,7 @@ impl FakeClashApi {
         let control = ControlEndpoint {
             address: listener.local_addr().unwrap(),
             secret: "test-secret".to_owned(),
+            delay: None,
         };
         let calls = Arc::new(AtomicUsize::new(0));
         let stop = Arc::new(AtomicBool::new(false));
@@ -2522,7 +2523,7 @@ fn session_owner_controls_connected_operations_and_releases_it_on_disconnect() {
     );
     helper.apply_as(&owner, &request).expect("owner applies");
     assert!(!matches!(
-        helper.tunnel_delay_as(&owner),
+        helper.tunnel_delay_as(&owner, DelayMode::Full),
         Err(HelperError {
             code: ErrorCode::AccessDenied,
             ..
@@ -2594,7 +2595,7 @@ fn another_account_cannot_change_or_read_an_active_session() {
         helper.apply_as(&other, &request),
         helper.temporary_rules_as(&other).map(|_| ()),
         helper.session_exits_as(&other).map(|_| ()),
-        helper.tunnel_delay_as(&other).map(|_| ()),
+        helper.tunnel_delay_as(&other, DelayMode::Full).map(|_| ()),
         helper.disconnect_as(&other),
     ] {
         assert_eq!(result.unwrap_err().code, ErrorCode::AccessDenied);
@@ -2614,7 +2615,7 @@ fn another_account_cannot_change_or_read_an_active_session() {
         request.temporary_rules
     );
     assert!(!matches!(
-        helper.tunnel_delay_as(&admin),
+        helper.tunnel_delay_as(&admin, DelayMode::Full),
         Err(HelperError {
             code: ErrorCode::AccessDenied,
             ..
@@ -2667,7 +2668,10 @@ fn another_account_cannot_cancel_a_connect_holding_the_session() {
         ErrorCode::AccessDenied
     );
     assert_eq!(
-        helper.tunnel_delay_as(&other).unwrap_err().code,
+        helper
+            .tunnel_delay_as(&other, DelayMode::Full)
+            .unwrap_err()
+            .code,
         ErrorCode::AccessDenied
     );
     assert!(!helper.cancelled.load(Ordering::Acquire));
@@ -5873,7 +5877,13 @@ impl EngineBackend for ProbeEngine {
         Ok(PathBuf::from("sing-box"))
     }
 
-    fn render(&self, _: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError> {
+    fn render(&self, request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError> {
+        if let Some(delay) = request.control.and_then(|control| control.delay.clone()) {
+            DELAY_ENTRIES
+                .lock()
+                .unwrap()
+                .push((self.dir.clone(), delay));
+        }
         Ok(RenderedConfig {
             file_name: "config.json".to_owned(),
             body: Vec::new(),
@@ -6336,12 +6346,12 @@ fn tunnel_delay_requires_connection_and_uses_its_control() {
 
     let (helper, stopped, dir) = probe_fixture(true, None);
     assert_eq!(
-        helper.tunnel_delay().unwrap_err().code,
+        helper.tunnel_delay(DelayMode::Full).unwrap_err().code,
         ErrorCode::InvalidState
     );
     helper.connect(&connect_request()).unwrap();
     assert_eq!(
-        helper.tunnel_delay().unwrap(),
+        helper.tunnel_delay(DelayMode::Full).unwrap(),
         TunnelDelays {
             proxy: ProbeOutcome::Works { millis: 23 },
             exits: Vec::new(),
@@ -6377,7 +6387,7 @@ fn tunnel_delay_checks_each_exit_by_its_tag() {
     helper.connect(&request).unwrap();
 
     assert_eq!(
-        helper.tunnel_delay().unwrap(),
+        helper.tunnel_delay(DelayMode::Full).unwrap(),
         TunnelDelays {
             proxy: ProbeOutcome::Works { millis: 23 },
             exits: vec![
@@ -6410,6 +6420,129 @@ fn tunnel_delay_checks_each_exit_by_its_tag() {
     helper.disconnect().unwrap();
     std::fs::remove_file(dir.join("config.json")).unwrap();
     std::fs::remove_dir(dir).unwrap();
+}
+
+/// The delay entry each fixture's engine was asked to render, by its directory.
+static DELAY_ENTRIES: Mutex<Vec<(PathBuf, rosetun_engine::DelayInbound)>> = Mutex::new(Vec::new());
+
+fn delay_entry_of(dir: &Path) -> rosetun_engine::DelayInbound {
+    DELAY_ENTRIES
+        .lock()
+        .unwrap()
+        .iter()
+        .rev()
+        .find(|(path, _)| path == dir)
+        .map(|(_, entry)| entry.clone())
+        .expect("the session rendered a delay entry")
+}
+
+fn accounts_of(entry: &rosetun_engine::DelayInbound) -> Vec<(String, String)> {
+    entry
+        .accounts
+        .iter()
+        .map(|account| (account.tag.clone(), account.password.clone()))
+        .collect()
+}
+
+fn session_with_one_exit(
+    completed: Arc<AtomicUsize>,
+) -> (Helper, PathBuf, rosetun_engine::DelayInbound) {
+    let (helper, _, dir) = probe_fixture_with_counter(true, None, false, false, completed);
+    let mut request = connect_request();
+    request.extra_nodes = vec![extra_node("first", "192.0.2.20")];
+    request.rule_set.rules.push(Rule {
+        id: RuleId::new("through-first"),
+        enabled: true,
+        matcher: RuleMatcher::IpCidr("198.51.100.0/24".into()),
+        target: RuleTarget::Exit,
+        exit: Some(ExitId::new("first")),
+    });
+    helper.connect(&request).unwrap();
+    let entry = delay_entry_of(&dir);
+    (helper, dir, entry)
+}
+
+fn finish_probe_fixture(helper: &Helper, dir: PathBuf) {
+    helper.disconnect().unwrap();
+    std::fs::remove_file(dir.join("config.json")).unwrap();
+    std::fs::remove_dir(dir).unwrap();
+}
+
+#[test]
+fn a_session_gets_an_entry_with_an_account_for_the_main_node_and_each_exit() {
+    let (helper, dir, entry) = session_with_one_exit(Arc::new(AtomicUsize::new(0)));
+    assert!(entry.address.ip().is_loopback());
+    let tags: Vec<_> = entry
+        .accounts
+        .iter()
+        .map(|account| account.tag.as_str())
+        .collect();
+    assert_eq!(tags, ["proxy", "exit-0"]);
+    assert_ne!(entry.accounts[0].password, entry.accounts[1].password);
+    finish_probe_fixture(&helper, dir);
+}
+
+#[test]
+fn a_repeated_delay_asks_the_entry_with_the_account_of_each_outbound() {
+    use rosetun_ipc::{ExitOutcome, ProbeOutcome};
+
+    let completed = Arc::new(AtomicUsize::new(0));
+    let (helper, dir, entry) = session_with_one_exit(Arc::clone(&completed));
+    // The entry takes the right accounts and then closes, so no check has a time.
+    let fake = super::repeated::fake::FakeEntry::start(
+        Some(entry.address),
+        accounts_of(&entry),
+        Vec::new(),
+        false,
+    );
+    let delays = helper.tunnel_delay(DelayMode::Repeated).unwrap();
+
+    assert_eq!(delays.proxy, ProbeOutcome::Fails);
+    assert_eq!(
+        delays.exits[0].outcome,
+        ExitOutcome::Probed(ProbeOutcome::Fails)
+    );
+    let mut users = fake.users.lock().unwrap().clone();
+    users.sort();
+    users.dedup();
+    assert_eq!(users, ["exit-0", "proxy"]);
+    assert_eq!(fake.refused.load(Ordering::Acquire), 0);
+    // A failed repeated check is never made up by the full one.
+    assert_eq!(completed.load(Ordering::Acquire), 0);
+    finish_probe_fixture(&helper, dir);
+}
+
+#[test]
+fn a_repeated_delay_without_an_answering_entry_does_not_fall_back_to_the_full_check() {
+    use rosetun_ipc::ProbeOutcome;
+
+    let completed = Arc::new(AtomicUsize::new(0));
+    let (helper, dir, _) = session_with_one_exit(Arc::clone(&completed));
+    // Nothing listens at the entry's address.
+    let delays = helper.tunnel_delay(DelayMode::Repeated).unwrap();
+    assert_eq!(delays.proxy, ProbeOutcome::Fails);
+    assert_eq!(completed.load(Ordering::Acquire), 0);
+
+    // The full check answers from the engine as before.
+    let delays = helper.tunnel_delay(DelayMode::Full).unwrap();
+    assert_eq!(delays.proxy, ProbeOutcome::Works { millis: 23 });
+    assert!(completed.load(Ordering::Acquire) > 0);
+    finish_probe_fixture(&helper, dir);
+}
+
+#[test]
+fn a_full_delay_leaves_the_entry_alone() {
+    let (helper, dir, entry) = session_with_one_exit(Arc::new(AtomicUsize::new(0)));
+    let fake = super::repeated::fake::FakeEntry::start(
+        Some(entry.address),
+        accounts_of(&entry),
+        Vec::new(),
+        false,
+    );
+    helper.tunnel_delay(DelayMode::Full).unwrap();
+    assert_eq!(fake.connections.load(Ordering::Acquire), 0);
+    assert_eq!(fake.refused.load(Ordering::Acquire), 0);
+    finish_probe_fixture(&helper, dir);
 }
 
 #[derive(Debug)]
@@ -9261,18 +9394,51 @@ fn native_chain_apply_rollback_and_protected_reconnect_keep_the_path() {
 #[test]
 fn chain_validation_precedes_spawn_and_protection_changes() {
     let (helper, controls, prepared, _) = supervised_helper(true);
-    for mode in 0..4 {
+    for mode in 0..3 {
         let mut request = native_exit_chain_request();
         match mode {
             0 => request.extra_nodes[0].node.server = "b.invalid".into(),
             1 => request.settings.tls_fragment.enabled = true,
-            2 => request.settings.engine = rosetun_config::EngineKind::Xray,
-            _ => request.extra_nodes[1].node = reality_request().node,
+            _ => request.settings.engine = rosetun_config::EngineKind::Xray,
         }
         assert!(helper.connect(&request).is_err());
         assert_eq!(controls.spawns(), 0);
         assert_eq!(prepared.load(Ordering::Acquire), 0);
     }
+}
+
+#[test]
+fn a_first_hop_through_xray_connects_and_b_gets_no_direct_path() {
+    let (helper, controls, runner, binaries, _, _) = xray_chain_helper();
+    let mut request = native_exit_chain_request();
+    request.extra_nodes[1].node.stream.tls = reality_request().node.stream.tls;
+    request.extra_nodes[1].node.outbound =
+        rosetun_config::Outbound::Vless(rosetun_config::VlessParams {
+            uuid: "00000000-0000-0000-0000-000000000000".into(),
+            flow: None,
+        });
+    assert!(validate_request(&request).is_ok());
+    helper.connect(&request).unwrap();
+
+    assert_eq!(binaries.lock().unwrap()[0].len(), 2);
+    assert_eq!(runner.starts.load(Ordering::Acquire), 1);
+    assert_eq!(runner.endpoint_count.load(Ordering::Acquire), 1);
+    let config = runner.last_config();
+    assert!(config.contains("192.0.2.1"));
+    assert!(!config.contains("198.51.100.2"));
+    assert_eq!(last_exit_target(&controls), RuleTarget::Exit);
+    let session = helper.session().unwrap();
+    assert!(session.xray_chain);
+    assert!(
+        session
+            .last_extra_endpoints
+            .contains_key(&ExitId::new("parent"))
+    );
+    assert!(
+        !session
+            .last_extra_endpoints
+            .contains_key(&ExitId::new("child"))
+    );
 }
 
 #[test]

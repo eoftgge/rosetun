@@ -1259,18 +1259,25 @@ fn process_row(ui: &mut egui::Ui, row: ProcessRow<'_>, enabled: bool) -> egui::R
     };
     match row.detail {
         Some(detail) => {
-            text_painter.text(
-                egui::pos2(text_left, rect.center().y - theme::space::XS),
-                egui::Align2::LEFT_BOTTOM,
-                row.name,
+            // The two lines are centred as one block: the name above the centre and the
+            // detail below it left the pair a few points high.
+            let name = text_painter.layout_no_wrap(
+                row.name.to_owned(),
                 theme::font::semibold(theme::font::CAPTION),
                 name_color,
             );
-            text_painter.text(
-                egui::pos2(text_left, rect.center().y),
-                egui::Align2::LEFT_TOP,
-                detail,
+            let detail = text_painter.layout_no_wrap(
+                detail.to_owned(),
                 egui::TextStyle::Small.resolve(ui.style()),
+                theme::palette().text_dim,
+            );
+            let gap = theme::space::XXS;
+            let top = rect.center().y - (name.size().y + gap + detail.size().y) / 2.0;
+            let detail_top = top + name.size().y + gap;
+            text_painter.galley(egui::pos2(text_left, top), name, name_color);
+            text_painter.galley(
+                egui::pos2(text_left, detail_top),
+                detail,
                 theme::palette().text_dim,
             );
         }
@@ -2284,20 +2291,23 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert!(rectangles.iter().any(|rect| {
-            rect.corner_radius == egui::CornerRadius::same(3)
-                && rect.fill == theme::palette().card
+        let unchecked_box = rectangles.iter().any(|rect| {
+            rect.corner_radius == egui::CornerRadius::same(theme::RADIUS_CHECKBOX)
+                && rect.fill == theme::palette().input
                 && rect.stroke.color == theme::palette().border_strong
-        }));
-        assert!(rectangles.iter().any(|rect| {
-            rect.corner_radius == egui::CornerRadius::same(3)
+        });
+        let checked_box = rectangles.iter().any(|rect| {
+            rect.corner_radius == egui::CornerRadius::same(theme::RADIUS_CHECKBOX)
                 && rect.fill == theme::palette().accent_base
-        }));
-        assert!(output.shapes.iter().any(|shape| matches!(
+        });
+        let tick = output.shapes.iter().any(|shape| matches!(
             &shape.shape,
             egui::Shape::Path(path) if path.stroke.color == egui::epaint::ColorMode::Solid(Color32::WHITE)
-        )));
+        ));
         output.textures_delta.clear();
+        assert!(unchecked_box);
+        assert!(checked_box);
+        assert!(tick);
     }
 
     #[test]

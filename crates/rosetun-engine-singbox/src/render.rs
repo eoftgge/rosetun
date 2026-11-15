@@ -5,15 +5,17 @@ use rosetun_config::{
 };
 use rosetun_engine::errors::EngineError;
 use rosetun_engine::{
-    EngineRights, EngineRoute, ExtraOutbound, LocalProxyListen, ProbeRenderRequest, RenderRequest,
-    RenderedConfig, RuleCapabilities, SocksProxy, exit_tag,
+    DelayInbound, EngineRights, EngineRoute, ExtraOutbound, LocalProxyListen, PROXY_TAG,
+    ProbeRenderRequest, RenderRequest, RenderedConfig, RuleCapabilities, SocksProxy, exit_tag,
 };
 use serde_json::{Map, Value, json};
 
-pub(crate) const TAG_PROXY: &str = "proxy";
+pub(crate) const TAG_PROXY: &str = PROXY_TAG;
 const TAG_DIRECT: &str = "direct";
 const TAG_DNS_PROXY: &str = "dns-proxy";
 const TAG_LOCAL_DNS: &str = "dns-in";
+/// The inbound that times a repeated request; see [`delay_entry`].
+pub(crate) const TAG_DELAY_INBOUND: &str = "delay-in";
 const DEFAULT_FINGERPRINT: &str = "chrome";
 /// The GUI's exit-country lookup is pinned to the main node by this program name.
 #[cfg(windows)]
@@ -76,10 +78,8 @@ fn validate_exit_chains(request: &RenderRequest<'_>) -> Result<(), EngineError> 
             if request.settings.engine != rosetun_config::EngineKind::SingBox
                 || parent.exit == extra.exit
                 || parent.via.is_some()
-                || parent.socks.is_some()
                 || extra.socks.is_some()
                 || request.settings.tls_fragment.enabled
-                || rosetun_config::uses_xray(parent.node, request.settings)
                 || rosetun_config::uses_xray(extra.node, request.settings)
                 || extra.node.server.parse::<std::net::IpAddr>().is_err()
                 || !matches!(extra.node.outbound, Outbound::Http(_) | Outbound::Socks5(_))
@@ -95,7 +95,7 @@ fn validate_exit_chains(request: &RenderRequest<'_>) -> Result<(), EngineError> 
 pub fn render(request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError> {
     validate_exit_chains(request)?;
     let lan = request.settings.allow_lan.then_some(request.lan_segment);
-    let (route, unsupported) = route_section_with_lists(
+    let (mut route, unsupported) = route_section_with_lists(
         request.rules,
         RULE_CAPABILITIES,
         lan,
@@ -138,13 +138,26 @@ pub fn render(request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError
         outbounds.push(outbound);
     }
     outbounds.push(json!({ "type": "direct", "tag": TAG_DIRECT }));
+    let mut inbounds = match request.local_proxy {
+        Some(listen) => local_proxy_inbounds(listen),
+        None => vec![tun_inbound(request.settings, lan)],
+    };
+    if let Some((inbound, rules)) = request
+        .control
+        .and_then(|control| control.delay.as_ref())
+        .and_then(|delay| delay_entry(delay, request.extra))
+    {
+        inbounds.push(inbound);
+        // First of all: nothing else may route what comes in here, and the
+        // user's rules and the sniffer never see it.
+        if let Some(route_rules) = route["rules"].as_array_mut() {
+            route_rules.splice(0..0, rules);
+        }
+    }
     let mut config = json!({
         "log": log_section(request),
         "dns": dns_section(&request.settings.dns)?,
-        "inbounds": match request.local_proxy {
-            Some(listen) => local_proxy_inbounds(listen),
-            None => vec![tun_inbound(request.settings, lan)],
-        },
+        "inbounds": inbounds,
         "outbounds": outbounds,
         "route": route,
     });
@@ -165,6 +178,50 @@ pub fn render(request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError
         unsupported,
         unsupported_probes: Vec::new(),
     })
+}
+
+/// The loopback SOCKS entry that times a repeated request, and its route
+/// rules. Each account reaches its own outbound over TCP; anything else that
+/// comes in (UDP, an account of no outbound) is refused. An account whose
+/// outbound this config does not define is left out.
+fn delay_entry(delay: &DelayInbound, extra: &[ExtraOutbound<'_>]) -> Option<(Value, Vec<Value>)> {
+    let defined =
+        |tag: &str| tag == TAG_PROXY || extra.iter().any(|node| exit_tag(node.index) == tag);
+    let accounts: Vec<_> = delay
+        .accounts
+        .iter()
+        .filter(|account| defined(&account.tag))
+        .collect();
+    if accounts.is_empty() {
+        return None;
+    }
+    let inbound = json!({
+        "type": "socks",
+        "tag": TAG_DELAY_INBOUND,
+        "listen": delay.address.ip().to_string(),
+        "listen_port": delay.address.port(),
+        "users": accounts
+            .iter()
+            .map(|account| json!({ "username": account.tag, "password": account.password }))
+            .collect::<Vec<_>>(),
+    });
+    let mut rules: Vec<Value> = accounts
+        .iter()
+        .map(|account| {
+            json!({
+                "inbound": [TAG_DELAY_INBOUND],
+                "auth_user": [account.tag],
+                "network": "tcp",
+                "action": "route",
+                "outbound": account.tag,
+            })
+        })
+        .collect();
+    rules.push(json!({
+        "inbound": [TAG_DELAY_INBOUND],
+        "action": "reject",
+    }));
+    Some((inbound, rules))
 }
 
 pub(crate) fn render_probe(
@@ -957,6 +1014,123 @@ mod tests {
     }
 
     #[test]
+    fn first_hop_through_xray_is_reached_by_a_hop_copy_of_its_socks_outbound() {
+        let main = shadowsocks_node("main", "203.0.113.1");
+        let first = shadowsocks_node("first", "192.0.2.1");
+        let a = ExitId::new("a");
+        let b = ExitId::new("b");
+        let socks = SocksProxy {
+            address: "127.0.0.1:10802".parse().unwrap(),
+            username: "fixture-user",
+            password: "fixture-password",
+        };
+        let settings = Settings::default();
+        let rules = RuleSet::new(RuleSetId::new("test"), "Test", RuleTarget::Proxy);
+        for (outbound, network) in [
+            (Outbound::Http(Default::default()), Value::Null),
+            (Outbound::Socks5(Default::default()), json!("tcp")),
+        ] {
+            let mut last = shadowsocks_node("last", "198.51.100.2");
+            last.outbound = outbound;
+            let extra = [
+                ExtraOutbound {
+                    index: 0,
+                    via: None,
+                    exit: &a,
+                    node: &first,
+                    socks: Some(socks),
+                },
+                ExtraOutbound {
+                    index: 1,
+                    via: Some(&a),
+                    exit: &b,
+                    node: &last,
+                    socks: None,
+                },
+            ];
+            let request = RenderRequest {
+                node: &main,
+                socks: None,
+                extra: &extra,
+                rules: &rules,
+                lists: &[],
+                settings: &settings,
+                lan_segment: &[],
+                lan_servers: &[],
+                control: None,
+                verbose_log: false,
+                local_proxy: None,
+            };
+            let value: Value = serde_json::from_slice(&render(&request).unwrap().body).unwrap();
+            let outbounds = value["outbounds"].as_array().unwrap();
+            let tagged = |tag: &str| {
+                outbounds
+                    .iter()
+                    .find(|outbound| outbound["tag"] == tag)
+                    .unwrap()
+                    .clone()
+            };
+            let (first, hop, last) = (tagged("exit-0"), tagged("hop-exit-0"), tagged("exit-1"));
+            assert_eq!(first["type"], "socks");
+            assert_eq!(first["server"], "127.0.0.1");
+            let mut copy = hop.clone();
+            copy["tag"] = "exit-0".into();
+            assert_eq!(copy, first);
+            assert_eq!(last["detour"], "hop-exit-0");
+            assert_eq!(last["server"], "198.51.100.2");
+            assert_eq!(last["network"], network);
+        }
+    }
+
+    #[test]
+    fn second_hop_through_xray_is_unsupported() {
+        let main = shadowsocks_node("main", "203.0.113.1");
+        let first = shadowsocks_node("first", "192.0.2.1");
+        let mut last = shadowsocks_node("last", "198.51.100.2");
+        last.outbound = Outbound::Http(Default::default());
+        let a = ExitId::new("a");
+        let b = ExitId::new("b");
+        let extra = [
+            ExtraOutbound {
+                index: 0,
+                via: None,
+                exit: &a,
+                node: &first,
+                socks: None,
+            },
+            ExtraOutbound {
+                index: 1,
+                via: Some(&a),
+                exit: &b,
+                node: &last,
+                socks: Some(SocksProxy {
+                    address: "127.0.0.1:10803".parse().unwrap(),
+                    username: "fixture-user",
+                    password: "fixture-password",
+                }),
+            },
+        ];
+        let settings = Settings::default();
+        let rules = RuleSet::new(RuleSetId::new("test"), "Test", RuleTarget::Proxy);
+        assert!(
+            render(&RenderRequest {
+                node: &main,
+                socks: None,
+                extra: &extra,
+                rules: &rules,
+                lists: &[],
+                settings: &settings,
+                lan_segment: &[],
+                lan_servers: &[],
+                control: None,
+                verbose_log: false,
+                local_proxy: None,
+            })
+            .is_err()
+        );
+    }
+
+    #[test]
     fn rules_by_program_are_offered_on_every_system() {
         const { assert!(RULE_CAPABILITIES.process_name && RULE_CAPABILITIES.process_path) };
     }
@@ -1206,6 +1380,7 @@ mod tests {
         let control = rosetun_engine::ControlEndpoint {
             address: "127.0.0.1:9090".parse().unwrap(),
             secret: "fixture-secret".into(),
+            delay: None,
         };
         let lists = [ListRef {
             tag: list_tag(&ListId::new("golden-list"), None),
@@ -1968,5 +2143,282 @@ mod tests {
         let (route, unsupported) = route_section(&set, RuleCapabilities::ALL, false);
         assert_eq!(unsupported, vec![template.id]);
         assert_eq!(route["rules"].as_array().unwrap().len(), OWN_RULES);
+    }
+
+    fn delay_control(tags: &[&str]) -> rosetun_engine::ControlEndpoint {
+        let accounts = tags
+            .iter()
+            .enumerate()
+            .map(|(index, tag)| rosetun_engine::DelayAccount {
+                tag: (*tag).to_owned(),
+                password: format!("fixture-password-{index}"),
+            })
+            .collect();
+        rosetun_engine::ControlEndpoint {
+            address: "127.0.0.1:9090".parse().unwrap(),
+            secret: "fixture-secret".into(),
+            delay: Some(rosetun_engine::DelayInbound {
+                address: "127.0.0.1:9091".parse().unwrap(),
+                accounts,
+            }),
+        }
+    }
+
+    fn delay_body(
+        control: &rosetun_engine::ControlEndpoint,
+        socks: Option<SocksProxy<'_>>,
+        extra: &[ExtraOutbound<'_>],
+        local_proxy: Option<&LocalProxyListen>,
+    ) -> Value {
+        let node = shadowsocks_node("main", "203.0.113.10");
+        let rules = local_proxy_rules();
+        let rendered = render(&RenderRequest {
+            node: &node,
+            socks,
+            extra,
+            rules: &rules,
+            lists: &[],
+            settings: &Settings::default(),
+            lan_segment: &[],
+            lan_servers: &[],
+            control: Some(control),
+            verbose_log: false,
+            local_proxy,
+        })
+        .unwrap();
+        serde_json::from_slice(&rendered.body).unwrap()
+    }
+
+    fn rules_of(value: &Value) -> &Vec<Value> {
+        value["route"]["rules"].as_array().unwrap()
+    }
+
+    fn mentions_the_delay_inbound(rule: &Value) -> bool {
+        rule["inbound"]
+            .as_array()
+            .is_some_and(|tags| tags.iter().any(|tag| tag == TAG_DELAY_INBOUND))
+    }
+
+    #[test]
+    fn a_session_with_a_control_endpoint_gets_one_loopback_entry_for_timing() {
+        let control = delay_control(&["proxy"]);
+        let value = delay_body(&control, None, &[], None);
+        let entries: Vec<_> = value["inbounds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|inbound| inbound["tag"] == TAG_DELAY_INBOUND)
+            .collect();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0]["type"], "socks");
+        assert_eq!(entries[0]["listen"], "127.0.0.1");
+        assert_eq!(entries[0]["listen_port"], 9091);
+        assert_eq!(
+            entries[0]["users"],
+            json!([{ "username": "proxy", "password": "fixture-password-0" }])
+        );
+    }
+
+    #[test]
+    fn the_entry_is_absent_without_a_control_endpoint_or_an_account() {
+        let node = shadowsocks_node("main", "203.0.113.10");
+        let rules = local_proxy_rules();
+        let settings = Settings::default();
+        let mut control = delay_control(&["proxy"]);
+        let has_entry = |control: Option<&rosetun_engine::ControlEndpoint>| {
+            let body = render(&RenderRequest {
+                node: &node,
+                socks: None,
+                extra: &[],
+                rules: &rules,
+                lists: &[],
+                settings: &settings,
+                lan_segment: &[],
+                lan_servers: &[],
+                control,
+                verbose_log: false,
+                local_proxy: None,
+            })
+            .unwrap()
+            .body;
+            String::from_utf8(body).unwrap().contains(TAG_DELAY_INBOUND)
+        };
+        assert!(has_entry(Some(&control)));
+        assert!(!has_entry(None));
+        control.delay.as_mut().unwrap().accounts.clear();
+        assert!(!has_entry(Some(&control)));
+        control.delay = None;
+        assert!(!has_entry(Some(&control)));
+    }
+
+    #[test]
+    fn every_outbound_gets_an_account_and_a_rule_before_the_users_rules() {
+        let first = shadowsocks_node("first", "192.0.2.1");
+        let second = shadowsocks_node("second", "198.51.100.2");
+        let (a, b) = (ExitId::new("a"), ExitId::new("b"));
+        let extra = [
+            ExtraOutbound {
+                index: 0,
+                via: None,
+                exit: &a,
+                node: &first,
+                socks: None,
+            },
+            ExtraOutbound {
+                index: 2,
+                via: None,
+                exit: &b,
+                node: &second,
+                socks: None,
+            },
+        ];
+        // `exit-1` has no node in this request, so its account has nothing to reach.
+        let control = delay_control(&["proxy", "exit-0", "exit-1", "exit-2"]);
+        let value = delay_body(&control, None, &extra, None);
+
+        let users = value["inbounds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|inbound| inbound["tag"] == TAG_DELAY_INBOUND)
+            .unwrap()["users"]
+            .clone();
+        let names: Vec<_> = users
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|user| user["username"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, ["proxy", "exit-0", "exit-2"]);
+
+        let rules = rules_of(&value);
+        for (position, tag) in ["proxy", "exit-0", "exit-2"].into_iter().enumerate() {
+            assert_eq!(rules[position]["inbound"], json!([TAG_DELAY_INBOUND]));
+            assert_eq!(rules[position]["auth_user"], json!([tag]));
+            assert_eq!(rules[position]["action"], "route");
+            assert_eq!(rules[position]["outbound"], tag);
+        }
+        assert_eq!(
+            rules[3],
+            json!({ "inbound": [TAG_DELAY_INBOUND], "action": "reject" })
+        );
+        // The sniffer and the user's rules come after, and none of them names the entry.
+        assert_eq!(rules[4]["action"], "sniff");
+        assert!(
+            rules[4..]
+                .iter()
+                .all(|rule| !mentions_the_delay_inbound(rule))
+        );
+    }
+
+    #[test]
+    fn the_entry_carries_tcp_only_and_refuses_all_else() {
+        let control = delay_control(&["proxy"]);
+        let value = delay_body(&control, None, &[], None);
+        let rules = rules_of(&value);
+        assert_eq!(rules[0]["network"], "tcp");
+        // No `network`, no `auth_user`: UDP and any other account fall here.
+        assert_eq!(rules[1].as_object().unwrap().len(), 2);
+        assert_eq!(rules[1]["action"], "reject");
+    }
+
+    #[test]
+    fn a_node_behind_xray_is_timed_through_the_same_outbound() {
+        let control = delay_control(&["proxy"]);
+        let socks = SocksProxy {
+            address: "127.0.0.1:10801".parse().unwrap(),
+            username: "fixture-user",
+            password: "fixture-password",
+        };
+        let value = delay_body(&control, Some(socks), &[], None);
+        let proxy = value["outbounds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|outbound| outbound["tag"] == "proxy")
+            .unwrap();
+        assert_eq!(proxy["type"], "socks");
+        assert_eq!(rules_of(&value)[0]["outbound"], "proxy");
+    }
+
+    #[test]
+    fn a_two_hop_exit_is_timed_through_its_own_outbound() {
+        let first = shadowsocks_node("first", "192.0.2.1");
+        let mut last = shadowsocks_node("last", "198.51.100.2");
+        last.outbound = Outbound::Http(Default::default());
+        let (a, b) = (ExitId::new("a"), ExitId::new("b"));
+        let extra = [
+            ExtraOutbound {
+                index: 0,
+                via: None,
+                exit: &a,
+                node: &first,
+                socks: None,
+            },
+            ExtraOutbound {
+                index: 1,
+                via: Some(&a),
+                exit: &b,
+                node: &last,
+                socks: None,
+            },
+        ];
+        let control = delay_control(&["proxy", "exit-0", "exit-1"]);
+        let value = delay_body(&control, None, &extra, None);
+        let rules = rules_of(&value);
+        assert_eq!(rules[2]["auth_user"], json!(["exit-1"]));
+        assert_eq!(rules[2]["outbound"], "exit-1");
+        let outbounds = value["outbounds"].as_array().unwrap();
+        let last = outbounds
+            .iter()
+            .find(|outbound| outbound["tag"] == "exit-1")
+            .unwrap();
+        assert_eq!(last["detour"], "hop-exit-0");
+    }
+
+    #[test]
+    fn the_proxy_mode_keeps_its_own_inbound_apart_from_the_entry() {
+        let control = delay_control(&["proxy"]);
+        let listen = LocalProxyListen {
+            addresses: vec!["127.0.0.1:10808".parse().unwrap()],
+            dns: "127.0.0.1:53535".parse().unwrap(),
+        };
+        let value = delay_body(&control, None, &[], Some(&listen));
+        let inbounds = value["inbounds"].as_array().unwrap();
+        assert_eq!(inbounds[0]["type"], "mixed");
+        assert_eq!(inbounds[0]["listen_port"], 10808);
+        assert!(inbounds[0].get("users").is_none());
+        assert_eq!(inbounds.last().unwrap()["tag"], TAG_DELAY_INBOUND);
+        assert!(
+            !inbounds
+                .iter()
+                .filter(|inbound| inbound["tag"] != TAG_DELAY_INBOUND)
+                .any(|inbound| inbound["listen_port"] == 9091)
+        );
+    }
+
+    #[test]
+    fn the_entry_passwords_stay_out_of_debug_output() {
+        let control = delay_control(&["proxy"]);
+        let node = shadowsocks_node("main", "203.0.113.10");
+        let rules = local_proxy_rules();
+        let request = RenderRequest {
+            node: &node,
+            socks: None,
+            extra: &[],
+            rules: &rules,
+            lists: &[],
+            settings: &Settings::default(),
+            lan_segment: &[],
+            lan_servers: &[],
+            control: Some(&control),
+            verbose_log: false,
+            local_proxy: None,
+        };
+        let shown = format!("{request:?} {control:?}");
+        assert!(!shown.contains("fixture-password"));
+        assert!(!shown.contains("fixture-secret"));
+        let rendered = render(&request).unwrap();
+        assert!(!format!("{rendered:?}").contains("fixture-password"));
     }
 }

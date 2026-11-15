@@ -14,7 +14,7 @@ use std::net::IpAddr;
 use regex_automata::meta::Regex;
 use rosetun_config::{
     ConnectionRoute, DomainMatch, ExitId, LINK_LOCAL_V4, LINK_LOCAL_V6, ListId, LiveConnection,
-    ProcessMatch, RuleId, RuleMatcher, RuleTarget, RuleTemplate, list_tag,
+    ProcessMatch, Rule, RuleId, RuleMatcher, RuleSet, RuleTarget, RuleTemplate, list_tag,
 };
 use rosetun_ipc::ConnectRequest;
 use serde_json::Value;
@@ -173,6 +173,28 @@ impl SessionLists {
     fn contains(&self, list: &ListId, category: Option<&str>) -> bool {
         self.contents.contains_key(&list_tag(list, category))
     }
+
+    /// What a readable list's rules look at besides the site name.
+    pub(crate) fn needs(&self, list: &ListId, category: Option<&str>) -> ListNeeds {
+        match self.contents.get(&list_tag(list, category)) {
+            Some(ListContent::Rules(rules)) => ListNeeds {
+                address: rules
+                    .iter()
+                    .any(|rule| rule.cidrs.iter().any(|cidr| cidr.reaches_public())),
+                path: rules.iter().any(|rule| rule.paths.is_some()),
+            },
+            _ => ListNeeds::default(),
+        }
+    }
+}
+
+/// What a list's rules need that a name alone does not give.
+#[derive(Debug, Default, Clone, Copy)]
+pub(crate) struct ListNeeds {
+    /// An address a public site could have.
+    pub(crate) address: bool,
+    /// A program's full path.
+    pub(crate) path: bool,
 }
 
 /// Reads the lists of the session's list rules as connecting prepares them.
@@ -225,21 +247,7 @@ pub fn explain(
         };
     }
     let rules = request.effective_rule_set();
-    let temporary_count = request.temporary_rules.len();
-    for (index, rule) in rules.rules.iter().enumerate() {
-        if !rule.enabled {
-            continue;
-        }
-        let temporary = index < temporary_count;
-        if rule.target == RuleTarget::Exit
-            && !rule
-                .exit
-                .as_ref()
-                .is_some_and(|exit| request.extra_nodes.iter().any(|extra| extra.exit == *exit))
-        {
-            // The renderer refuses it and the service never starts the session.
-            continue;
-        }
+    for (temporary, rule) in consulted(request, &rules) {
         let source = match &rule.matcher {
             RuleMatcher::Template(_) => continue,
             RuleMatcher::List { list, category } => {
@@ -302,6 +310,31 @@ pub fn explain(
         reason: Reason::Default,
         route: ExplainedRoute::of(rules.default_target, None),
     }
+}
+
+/// The rules the engine consults, in its order, each with whether it is one
+/// of the session's temporary rules. `rules` is the request's
+/// [`ConnectRequest::effective_rule_set`].
+pub(crate) fn consulted<'a>(
+    request: &'a ConnectRequest,
+    rules: &'a RuleSet,
+) -> impl Iterator<Item = (bool, &'a Rule)> {
+    let temporary_count = request.temporary_rules.len();
+    rules
+        .rules
+        .iter()
+        .enumerate()
+        .filter(|(_, rule)| rule.enabled)
+        .filter(|(_, rule)| {
+            // The renderer refuses an exit rule without its exit and the
+            // service never starts the session.
+            rule.target != RuleTarget::Exit
+                || rule
+                    .exit
+                    .as_ref()
+                    .is_some_and(|exit| request.extra_nodes.iter().any(|extra| extra.exit == *exit))
+        })
+        .map(move |(index, rule)| (index < temporary_count, rule))
 }
 
 /// [`explain`] for a connection the engine carries, or `None` when the rules
@@ -374,7 +407,7 @@ fn ends_with_program(path: &str, name: &str) -> bool {
 }
 
 /// The link-local networks the engine sends direct with "Local network" on.
-fn is_link_local(ip: IpAddr) -> bool {
+pub(crate) fn is_link_local(ip: IpAddr) -> bool {
     let ip = ip.to_canonical();
     LINK_LOCAL_V4
         .iter()
@@ -384,7 +417,7 @@ fn is_link_local(ip: IpAddr) -> bool {
 
 /// sing-box `ip_is_private`: not a public address in sing's
 /// `network.IsPublicAddr`.
-fn is_private(ip: IpAddr) -> bool {
+pub(crate) fn is_private(ip: IpAddr) -> bool {
     match ip.to_canonical() {
         IpAddr::V4(ip) => {
             ip.is_private()
@@ -404,13 +437,13 @@ fn is_private(ip: IpAddr) -> bool {
 }
 
 #[derive(Clone, Copy)]
-struct Cidr {
+pub(crate) struct Cidr {
     network: IpAddr,
     prefix: u8,
 }
 
 impl Cidr {
-    fn parse(text: &str) -> Option<Self> {
+    pub(crate) fn parse(text: &str) -> Option<Self> {
         let (network, prefix) = match text.split_once('/') {
             Some((ip, prefix)) => (ip.parse::<IpAddr>().ok()?, prefix.parse().ok()?),
             None => {
@@ -420,6 +453,21 @@ impl Cidr {
         };
         let bits = if network.is_ipv4() { 32 } else { 128 };
         (prefix <= bits).then_some(Self { network, prefix })
+    }
+
+    /// Whether the block holds an address a public site could have.
+    pub(crate) fn reaches_public(self) -> bool {
+        let last = match self.network {
+            IpAddr::V4(network) => {
+                let host = u32::MAX.checked_shr(u32::from(self.prefix)).unwrap_or(0);
+                IpAddr::V4((u32::from(network) | host).into())
+            }
+            IpAddr::V6(network) => {
+                let host = u128::MAX.checked_shr(u32::from(self.prefix)).unwrap_or(0);
+                IpAddr::V6((u128::from(network) | host).into())
+            }
+        };
+        !(is_private(self.network) && is_private(last))
     }
 
     fn contains(self, ip: IpAddr) -> bool {

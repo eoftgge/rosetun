@@ -1,12 +1,12 @@
 [English](README.md) | Русский
 
-<p align="center"><img src=".github/assets/banner.svg" alt="Rosetun: VPN-клиент для Windows и Linux" width="100%"></p>
+<p align="center"><img src="site/static/assets/banner.svg" alt="Rosetun: VPN-клиент для Windows и Linux" width="100%"></p>
 
 <p align="center">
-  <a href="https://eoftgge.github.io/rosetun/ru/"><img src="https://img.shields.io/badge/%D0%A1%D0%B0%D0%B9%D1%82%20%D0%BF%D1%80%D0%BE%D0%B5%D0%BA%D1%82%D0%B0-8C2338?style=for-the-badge" alt="Сайт проекта"></a>
-  <a href="https://eoftgge.github.io/rosetun/ru/docs/"><img src="https://img.shields.io/badge/%D0%94%D0%BE%D0%BA%D1%83%D0%BC%D0%B5%D0%BD%D1%82%D0%B0%D1%86%D0%B8%D1%8F-432D36?style=for-the-badge" alt="Документация"></a>
-  <a href="https://eoftgge.github.io/rosetun/ru/help/"><img src="https://img.shields.io/badge/%D0%9F%D0%BE%D0%BC%D0%BE%D1%89%D1%8C-432D36?style=for-the-badge" alt="Помощь"></a>
-  <a href="https://eoftgge.github.io/rosetun/ru/providers/"><img src="https://img.shields.io/badge/%D0%94%D0%BB%D1%8F%20%D0%BF%D1%80%D0%BE%D0%B2%D0%B0%D0%B9%D0%B4%D0%B5%D1%80%D0%BE%D0%B2-432D36?style=for-the-badge" alt="Для провайдеров"></a>
+  <a href="https://eoftgge.github.io/rosetun/"><img src="https://img.shields.io/badge/%D0%A1%D0%B0%D0%B9%D1%82%20%D0%BF%D1%80%D0%BE%D0%B5%D0%BA%D1%82%D0%B0-8C2338?style=for-the-badge" alt="Сайт проекта"></a>
+  <a href="https://eoftgge.github.io/rosetun/docs/"><img src="https://img.shields.io/badge/%D0%94%D0%BE%D0%BA%D1%83%D0%BC%D0%B5%D0%BD%D1%82%D0%B0%D1%86%D0%B8%D1%8F-432D36?style=for-the-badge" alt="Документация"></a>
+  <a href="https://eoftgge.github.io/rosetun/help/"><img src="https://img.shields.io/badge/%D0%9F%D0%BE%D0%BC%D0%BE%D1%89%D1%8C-432D36?style=for-the-badge" alt="Помощь"></a>
+  <a href="https://eoftgge.github.io/rosetun/providers/"><img src="https://img.shields.io/badge/%D0%94%D0%BB%D1%8F%20%D0%BF%D1%80%D0%BE%D0%B2%D0%B0%D0%B9%D0%B4%D0%B5%D1%80%D0%BE%D0%B2-432D36?style=for-the-badge" alt="Для провайдеров"></a>
 </p>
 
 <p align="center">
@@ -31,11 +31,10 @@ Rosetun: VPN-клиент для Windows и Linux на sing-box и Xray.
 - Экспериментальный Lockdown: защита и без подключения.
 - TUN и системный прокси.
 - Правила по программам, сайтам, IP и спискам; отдельные выходы.
+- Подключение через два направления: прокси-направление, которое подключается через другое (экспериментально).
 - Подписки провайдеров, QR-коды и ссылки `rosetun://`.
 - Локальная сеть и переподключение при обрыве.
 - Трей, уведомления, командная строка; русский и английский интерфейсы.
-
-В сборках для разработки: [подключение через два направления и ограничения](TWO-HOP-EXITS.md). Сетевая приёмка ещё не выполнена.
 
 ## Установка
 
@@ -50,25 +49,25 @@ sudo usermod -aG rosetun "$USER"
 sudo reboot
 ```
 
-Debian 13 проверен. Ubuntu 24.04+, Linux Mint 22+ и совместимые производные должны работать; см. [поддержку Linux и требования](https://eoftgge.github.io/rosetun/ru/docs/linux/).
+Debian 13 проверен. Ubuntu 24.04+, Linux Mint 22+ и совместимые производные должны работать; см. [поддержку Linux и требования](https://eoftgge.github.io/rosetun/docs/linux/).
 
-**Arch Linux:** соберите бинарный пакет по рецепту из этого репозитория; публикация в AUR и проверка работы пока не выполнены. [Установка и безопасное обновление](https://eoftgge.github.io/rosetun/ru/docs/install/#arch-linux).
+**Arch Linux:** соберите бинарный пакет по рецепту из этого репозитория; публикация в AUR и проверка работы пока не выполнены. [Установка и безопасное обновление](https://eoftgge.github.io/rosetun/docs/install/#arch-linux).
 
-[Проверка загрузки, обновление, удаление и выход из Lockdown](https://eoftgge.github.io/rosetun/ru/docs/install/).
+[Проверка загрузки, обновление, удаление и выход из Lockdown](https://eoftgge.github.io/rosetun/docs/install/).
 
 ## Документация
 
-[Руководство](https://eoftgge.github.io/rosetun/ru/docs/) · [Помощь](https://eoftgge.github.io/rosetun/ru/help/) · [Для провайдеров](https://eoftgge.github.io/rosetun/ru/providers/).
+[Руководство](https://eoftgge.github.io/rosetun/docs/) · [Помощь](https://eoftgge.github.io/rosetun/help/) · [Для провайдеров](https://eoftgge.github.io/rosetun/providers/).
 
-[Сборка из исходников](https://eoftgge.github.io/rosetun/ru/docs/build/) · [Безопасность](SECURITY.md).
+[Сборка из исходников](https://eoftgge.github.io/rosetun/docs/build/) · [Безопасность](SECURITY.md) · [модель безопасности](https://eoftgge.github.io/rosetun/docs/security/).
 
 ## Устранение неполадок
 
-[Инструкции для Windows и Linux, выход из Lockdown и журналы](https://eoftgge.github.io/rosetun/ru/docs/troubleshooting/).
+[Инструкции для Windows и Linux, выход из Lockdown и журналы](https://eoftgge.github.io/rosetun/docs/troubleshooting/).
 
 ## Лицензии
 
 Rosetun: **GPL-3.0-or-later**, © 2026 Sandaar. [LICENSE](LICENSE).
 sing-box: GPL-3.0-or-later; Xray-core: MPL-2.0; Wintun: [Prebuilt Binaries License](installer/third-party/wintun-prebuilt-binaries-license.txt); шрифты: OFL-1.1.
-[Полные уведомления, исходники компонентов и установленные лицензии](https://eoftgge.github.io/rosetun/ru/docs/licenses/).
+[Полные уведомления, исходники компонентов и установленные лицензии](https://eoftgge.github.io/rosetun/docs/licenses/).
 Rosetun не связан с sing-box, SagerNet или Project X.

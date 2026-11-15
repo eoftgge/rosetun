@@ -3,11 +3,13 @@ use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use rosetun_config::{
-    DnsSettings, ListId, ListRef, Node, NodeId, Outbound, Rule, RuleId, RuleMatcher, RuleSet,
-    RuleSetId, RuleTarget, Settings, ShadowsocksParams, StreamSettings, UploadedListFormat,
-    list_tag,
+    DnsSettings, ExitId, ListId, ListRef, Node, NodeId, Outbound, Rule, RuleId, RuleMatcher,
+    RuleSet, RuleSetId, RuleTarget, Settings, ShadowsocksParams, StreamSettings,
+    UploadedListFormat, list_tag,
 };
-use rosetun_engine::{EngineBackend, RenderRequest, SocksProxy};
+use rosetun_engine::{
+    ControlEndpoint, EngineBackend, ExtraOutbound, PROXY_TAG, RenderRequest, SocksProxy, exit_tag,
+};
 use rosetun_engine_singbox::SingBoxBackend;
 
 static NEXT_TEST_DIR: AtomicU64 = AtomicU64::new(0);
@@ -32,9 +34,7 @@ impl Drop for TestDirectory {
     }
 }
 
-#[test]
-#[ignore = "requires the pinned sing-box 1.14.3 binary"]
-fn sing_box_check_validates_local_rule_set_config() {
+fn pinned_binary() -> Option<PathBuf> {
     let binary = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../target/installer/sing-box")
         .join(if cfg!(windows) {
@@ -44,11 +44,133 @@ fn sing_box_check_validates_local_rule_set_config() {
         });
     if !binary.exists() {
         eprintln!("pinned sing-box binary is absent; syntax check skipped");
-        return;
+        return None;
     }
     let version = Command::new(&binary).arg("version").output().unwrap();
     assert!(version.status.success());
     assert!(String::from_utf8_lossy(&version.stdout).contains("1.14.3"));
+    Some(binary)
+}
+
+fn example_node() -> Node {
+    Node {
+        id: NodeId::new("example-node"),
+        name: "Example".into(),
+        server: "203.0.113.10".into(),
+        port: 8388,
+        outbound: Outbound::Shadowsocks(ShadowsocksParams {
+            method: "aes-128-gcm".into(),
+            password: "test-secret".into(),
+        }),
+        stream: StreamSettings::default(),
+        raw: None,
+    }
+}
+
+#[test]
+#[ignore = "requires the pinned sing-box 1.14.3 binary"]
+fn sing_box_check_accepts_the_delay_entry_and_its_rules() {
+    let Some(binary) = pinned_binary() else {
+        return;
+    };
+    let directory = TestDirectory::new();
+    let node = example_node();
+    let (first, last) = (ExitId::new("first"), ExitId::new("last"));
+    let mut second = example_node();
+    second.server = "198.51.100.2".into();
+    second.outbound = Outbound::Http(rosetun_config::ProxyCredentials::default());
+    let extra = [
+        ExtraOutbound {
+            index: 0,
+            via: None,
+            exit: &first,
+            node: &node,
+            socks: None,
+        },
+        ExtraOutbound {
+            index: 1,
+            via: Some(&first),
+            exit: &last,
+            node: &second,
+            socks: None,
+        },
+    ];
+    let control = ControlEndpoint::local()
+        .unwrap()
+        .with_delay_inbound([PROXY_TAG.to_owned(), exit_tag(0), exit_tag(1)])
+        .unwrap();
+    let mut rules = RuleSet::new(
+        RuleSetId::new("example-rules"),
+        "Example",
+        RuleTarget::Proxy,
+    );
+    rules.rules.push(Rule {
+        id: RuleId::new("example-rule"),
+        enabled: true,
+        matcher: RuleMatcher::Domain(rosetun_config::DomainMatch::Suffix("example.com".into())),
+        target: RuleTarget::Exit,
+        exit: Some(last.clone()),
+    });
+    let mut settings = Settings {
+        dns: DnsSettings {
+            server: "192.0.2.53".parse().unwrap(),
+            server_name: "dns.example.com".into(),
+            port: None,
+            path: Some("/dns-query".into()),
+        },
+        kill_switch: true,
+        ..Settings::default()
+    };
+    settings.tun.ipv4 = "198.51.100.1/30".into();
+    for (name, listen) in [
+        ("tunnel", None),
+        (
+            "proxy",
+            Some(rosetun_engine::LocalProxyListen {
+                addresses: vec!["127.0.0.1:10808".parse().unwrap()],
+                dns: "127.0.0.1:53535".parse().unwrap(),
+            }),
+        ),
+    ] {
+        let config = SingBoxBackend::new(&directory.0)
+            .render(&RenderRequest {
+                extra: &extra,
+                node: &node,
+                socks: None,
+                rules: &rules,
+                lists: &[],
+                settings: &settings,
+                lan_segment: &[],
+                lan_servers: &[],
+                control: Some(&control),
+                verbose_log: false,
+                local_proxy: listen.as_ref(),
+            })
+            .unwrap();
+        assert!(config.unsupported.is_empty());
+        let path = directory.0.join(format!("delay-{name}.json"));
+        std::fs::write(&path, config.body).unwrap();
+        let output = Command::new(&binary)
+            .arg("check")
+            .arg("-c")
+            .arg(&path)
+            .current_dir(&directory.0)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "the {name} configuration with the delay entry was rejected: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires the pinned sing-box 1.14.3 binary"]
+fn sing_box_check_validates_local_rule_set_config() {
+    let Some(binary) = pinned_binary() else {
+        return;
+    };
 
     let directory = TestDirectory::new();
     let list = ListId::new("example-list");
@@ -71,18 +193,7 @@ fn sing_box_check_validates_local_rule_set_config() {
         target: RuleTarget::Block,
         exit: None,
     });
-    let node = Node {
-        id: NodeId::new("example-node"),
-        name: "Example".into(),
-        server: "203.0.113.10".into(),
-        port: 8388,
-        outbound: Outbound::Shadowsocks(ShadowsocksParams {
-            method: "aes-128-gcm".into(),
-            password: "test-secret".into(),
-        }),
-        stream: StreamSettings::default(),
-        raw: None,
-    };
+    let node = example_node();
     let mut settings = Settings {
         dns: DnsSettings {
             server: "192.0.2.53".parse().unwrap(),

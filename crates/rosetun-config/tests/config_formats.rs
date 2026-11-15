@@ -1,12 +1,12 @@
 mod support;
 
 use rosetun_config::{
-    AccentPreset, AppConfig, CONFIG_VERSION, ConfigError, ConnectionMode, CountryCode, EngineKind,
-    Exit, ExitId, ExitTarget, FormatError, HwidScope, Hysteria2Params, List, ListFormat, ListId,
-    ListSource, LocalProxySettings, Node, NodeId, Outbound, QuitAction, RealityParams, Rule,
-    RuleId, RuleMatcher, RuleTarget, Selection, StreamSettings, SubscriptionId, TlsFragment,
-    TlsMode, TlsParams, Transport, VlessParams, XhttpExtra, XhttpMode, XhttpRange, XhttpXmux,
-    from_json,
+    AccentPreset, AppConfig, CONFIG_VERSION, ConfigError, ConnectionMode, CountryCode, DelayMode,
+    EngineKind, Exit, ExitId, ExitTarget, FormatError, HwidScope, Hysteria2Params, List,
+    ListFormat, ListId, ListSource, LocalProxySettings, Node, NodeId, Outbound, QuitAction,
+    RealityParams, Rule, RuleId, RuleMatcher, RuleTarget, Selection, StreamSettings,
+    SubscriptionId, TlsFragment, TlsMode, TlsParams, Transport, VlessParams, XhttpExtra, XhttpMode,
+    XhttpRange, XhttpXmux, from_json,
 };
 use serde_json::{Value, json};
 
@@ -266,6 +266,7 @@ fn current_configuration_fixture_guards_the_serialized_format() {
         port: 20808,
         share_on_lan: true,
     };
+    expected.interface.delay_mode = DelayMode::Full;
     let (loaded, migrated_from) = from_json(V9).expect("current fixture should load");
 
     assert_eq!(migrated_from, None);
@@ -303,8 +304,9 @@ fn current_configuration_fixture_guards_the_serialized_format() {
 }
 
 /// Settings saved by an older release have no fragmentation; loading adds it switched off.
-/// The format 8 fields an older file gets when it is loaded.
+/// The format 8 and 9 fields an older file gets when it is loaded.
 fn with_default_fragmentation(mut config: Value) -> Value {
+    config["interface"]["delay_mode"] = json!("repeated");
     config["settings"]["tls_fragment"] = serde_json::to_value(TlsFragment::default()).unwrap();
     config["settings"]["private_networks"] = json!(false);
     config["settings"]["connection_mode"] = json!("tun");
@@ -801,6 +803,45 @@ fn out_of_range_fragmentation_in_a_file_is_refused() {
             from_json(&serde_json::to_vec(&input).unwrap()).is_err(),
             "{field} {text} must be refused"
         );
+    }
+}
+
+#[test]
+fn every_delay_mode_keeps_its_stored_name() {
+    for (mode, name) in [(DelayMode::Full, "full"), (DelayMode::Repeated, "repeated")] {
+        assert_eq!(serde_json::to_value(mode).unwrap(), json!(name));
+        assert_eq!(name.parse::<DelayMode>(), Ok(mode));
+    }
+    assert!("both".parse::<DelayMode>().is_err());
+}
+
+#[test]
+fn the_delay_mode_defaults_to_repeated() {
+    assert_eq!(DelayMode::default(), DelayMode::Repeated);
+    assert_eq!(
+        AppConfig::default().interface.delay_mode,
+        DelayMode::Repeated
+    );
+}
+
+#[test]
+fn a_format_eight_file_migrates_with_the_repeated_delay_mode() {
+    let (config, migrated) = from_json(V8).unwrap();
+    assert_eq!(migrated, Some(8));
+    assert_eq!(config.interface.delay_mode, DelayMode::Repeated);
+    let saved = serde_json::to_value(&config).unwrap();
+    assert_eq!(saved["interface"]["delay_mode"], json!("repeated"));
+}
+
+#[test]
+fn an_unknown_delay_mode_reads_as_repeated_instead_of_failing() {
+    for unknown in [json!("instant"), json!(3), json!(null)] {
+        let mut input = value(V9);
+        input["interface"]["delay_mode"] = unknown;
+
+        let (config, _) =
+            from_json(&serde_json::to_vec(&input).unwrap()).expect("an unknown mode loads");
+        assert_eq!(config.interface.delay_mode, DelayMode::Repeated);
     }
 }
 

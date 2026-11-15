@@ -39,8 +39,10 @@ impl TrayPixmap {
     /// From straight RGBA, rows top to bottom.
     pub fn from_rgba(size: i32, rgba: &[u8]) -> Self {
         let argb = rgba
-            .chunks_exact(4)
-            .flat_map(|pixel| [pixel[3], pixel[0], pixel[1], pixel[2]])
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .flat_map(|&[red, green, blue, alpha]| [alpha, red, green, blue])
             .collect();
         Self { size, argb }
     }

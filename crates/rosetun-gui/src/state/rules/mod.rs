@@ -10,12 +10,14 @@ use crate::rules::{RuleFilter, visible_rules};
 use crate::worker::WorkerEvent;
 
 mod address;
+mod check;
 mod dialog;
 pub(crate) mod exchange;
 mod history;
 mod recent;
 
 pub(crate) use address::{AddressError, MAX_ADDRESSES};
+pub(crate) use check::{AddressCheck, CheckLine};
 #[cfg(test)]
 pub(crate) use dialog::PROCESS_LIST_STALE_MS;
 pub(crate) use dialog::{AddRuleDialog, ChosenProgram, MAX_PROGRAMS, RuleInputKind};
@@ -66,6 +68,8 @@ pub(crate) struct RulesState {
     pub(crate) exchange: exchange::ExchangeState,
     pub(crate) screen: RuleScreen,
     pub(crate) history: RuleHistory,
+    /// The "check an address or program" field and what it has read.
+    pub(crate) check: AddressCheck,
     next_process_request: u64,
 }
 
@@ -453,6 +457,7 @@ impl State {
                 }
             }
             Action::ClearRuleSelection => self.rules.screen.clear_selection(),
+            Action::ShowCheckedRule(rule) => self.show_checked_rule(rule),
             Action::StepRuleSelection { down } => {
                 if self.screen == Screen::Rules {
                     self.step_rule_selection(down);

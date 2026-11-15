@@ -477,8 +477,24 @@ impl State {
             return None;
         }
         self.delay_last_auto = Some(now);
+        Some(self.start_tunnel_delay())
+    }
+
+    fn start_tunnel_delay(&mut self) -> Job {
         self.tunnel_delay = TunnelDelay::Measuring;
-        Some(Job::TunnelDelay)
+        self.tunnel_delay_mode = self.config.interface.delay_mode;
+        Job::TunnelDelay(self.tunnel_delay_mode)
+    }
+
+    /// A number measured one way is never shown under the other way's name:
+    /// when the saved mode differs from the one asked, the check starts over,
+    /// at once if the tunnel is up.
+    pub(super) fn restart_delay_after_mode_change(&mut self) {
+        if self.tunnel_delay_mode != self.config.interface.delay_mode {
+            self.tunnel_delay = TunnelDelay::Idle;
+            self.tunnel_delay_mode = self.config.interface.delay_mode;
+            self.delay_last_auto = None;
+        }
     }
 
     pub(super) fn helper_result(&mut self, result: Result<(), HelperCommandError>) {
@@ -761,8 +777,10 @@ impl State {
                     ServiceGroupResult::Failed => ServiceGroup::Failed,
                 };
             }
-            WorkerEvent::TunnelDelay(result) => {
-                if !self.status_received
+            WorkerEvent::TunnelDelay(mode, result) => {
+                // An answer to a question the user has since changed.
+                if mode != self.tunnel_delay_mode
+                    || !self.status_received
                     || !matches!(
                         self.visible_status().map(|status| &status.state),
                         Some(ConnectionState::Connected)
@@ -909,8 +927,7 @@ impl State {
                     )
                     && !matches!(self.tunnel_delay, TunnelDelay::Measuring)
                 {
-                    self.tunnel_delay = TunnelDelay::Measuring;
-                    return Some(Job::TunnelDelay);
+                    return Some(self.start_tunnel_delay());
                 }
             }
             Action::SelectRuleSet(id) => {

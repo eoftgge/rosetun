@@ -11,9 +11,9 @@ use tracing_subscriber::filter::filter_fn;
 use tracing_subscriber::prelude::*;
 
 use rosetun_config::{
-    ConnectionMode, ConnectionState, DomainMatch, FailureKind, InstalledProtection, NodeId,
-    ProcessMatch, ProtectionCapabilities, ProtectionState, RequestedProtection, Rule, RuleMatcher,
-    RuleTarget, Status, SubscriptionId, XrayUse,
+    ConnectionMode, ConnectionState, DelayMode, DomainMatch, FailureKind, InstalledProtection,
+    NodeId, ProcessMatch, ProtectionCapabilities, ProtectionState, RequestedProtection, Rule,
+    RuleMatcher, RuleTarget, Status, SubscriptionId, XrayUse,
 };
 use rosetun_core::{ListOperation, PreparedConnection, terminal_text};
 use rosetun_ipc::{
@@ -33,7 +33,10 @@ enum Command {
     Probe {
         request_path: Option<String>,
     },
-    Delay,
+    Delay {
+        /// `None` takes the mode saved in the interface settings.
+        mode: Option<DelayMode>,
+    },
     Exits,
     Rules(rules::Command),
     Connections,
@@ -154,9 +157,9 @@ fn main() -> ExitCode {
             Ok(request) => with_helper(|client| probe(client, request)),
             Err(message) => local_result(Err(message)),
         },
-        Command::Delay => with_helper(delay),
+        Command::Delay { mode } => with_helper(|client| delay(client, mode)),
         Command::Exits => local_result(exits::run()),
-        Command::Rules(command) => local_result(rules::run(command)),
+        Command::Rules(command) => rules::run(command),
         Command::Connections => with_helper(connections::run),
         Command::CloseConnection { id } => with_helper(|client| connections::close(client, &id)),
         Command::Status => with_helper(status),
@@ -302,17 +305,20 @@ fn probe(client: &mut HelperClient, request: ConnectRequest) -> ExitCode {
     }
 }
 
-fn delay(client: &mut HelperClient) -> ExitCode {
-    match client.tunnel_delay() {
+fn delay(client: &mut HelperClient, mode: Option<DelayMode>) -> ExitCode {
+    let config = rosetun_core::Store::open_default()
+        .ok()
+        .and_then(|store| store.load().ok());
+    let mode = mode
+        .or_else(|| config.as_ref().map(|config| config.interface.delay_mode))
+        .unwrap_or_default();
+    match client.tunnel_delay(mode) {
         Ok(delays) => {
             match delays.proxy {
                 ProbeOutcome::Works { millis } => println!("works {millis} ms"),
                 _ => println!("fails"),
             }
             if !delays.exits.is_empty() {
-                let config = rosetun_core::Store::open_default()
-                    .ok()
-                    .and_then(|store| store.load().ok());
                 for line in exits::delay_lines(config.as_ref(), &delays.exits) {
                     println!("{line}");
                 }
@@ -933,7 +939,11 @@ fn parse_command_arguments(arguments: &[String]) -> Result<Command, String> {
         ["probe", path] => Ok(Command::Probe {
             request_path: Some((*path).to_owned()),
         }),
-        ["delay"] => Ok(Command::Delay),
+        ["delay"] => Ok(Command::Delay { mode: None }),
+        ["delay", "--mode", value] => value
+            .parse()
+            .map(|mode| Command::Delay { mode: Some(mode) })
+            .map_err(|_| "--mode takes full or repeated".to_owned()),
         ["exits"] => Ok(Command::Exits),
         ["rules", arguments @ ..] => rules::parse(arguments).map(Command::Rules),
         ["connections"] => Ok(Command::Connections),
@@ -975,7 +985,7 @@ fn parse_command_arguments(arguments: &[String]) -> Result<Command, String> {
         ["connect", ..] => Err("connect accepts zero or one request JSON path".to_owned()),
         ["apply", ..] => Err("apply accepts zero or one request JSON path".to_owned()),
         ["probe", ..] => Err("probe accepts zero or one request JSON path".to_owned()),
-        ["delay", ..] => Err("delay does not accept arguments".to_owned()),
+        ["delay", ..] => Err("delay accepts only --mode full|repeated".to_owned()),
         ["exits", ..] => Err("exits does not accept arguments".to_owned()),
         ["connections", "close", ..] => {
             Err("connections close requires exactly one connection ID".to_owned())
@@ -1007,7 +1017,7 @@ fn read_connect_request(path: &Path) -> Result<ConnectRequest, String> {
 
 fn print_usage() {
     eprintln!(
-        "  rosetun rules export [--selected-ids ID,...] [--with-list-urls] [FILE|-]\n  rosetun rules import [--replace] [--yes] FILE|-"
+        "  rosetun rules export [--selected-ids ID,...] [--with-list-urls] [FILE|-]\n  rosetun rules import [--replace] [--yes] FILE|-\n  rosetun rules test <address|program>"
     );
     eprintln!(
         "\
@@ -1017,7 +1027,7 @@ Usage:
   rosetun connect [request.json]
   rosetun apply [request.json]
   rosetun probe [request.json]
-  rosetun delay
+  rosetun delay [--mode full|repeated]
   rosetun exits
   rosetun connections
   rosetun connections close <id>
@@ -1057,7 +1067,7 @@ mod tests {
         status_has_no_network, temporary_rule_line, temporary_rules_status,
     };
     use rosetun_config::{
-        ConnectionMode, ConnectionState, DomainMatch, FailureKind, InstalledProtection,
+        ConnectionMode, ConnectionState, DelayMode, DomainMatch, FailureKind, InstalledProtection,
         ProcessMatch, ProtectionShortfallCode, ProtectionState, RequestedProtection, Rule, RuleId,
         RuleMatcher, RuleTarget, Status, XrayUse,
     };
@@ -1203,7 +1213,7 @@ mod tests {
                 request_path: Some("request.json".to_owned()),
             })
         );
-        assert_eq!(parse(&["delay"]), Ok(Command::Delay));
+        assert_eq!(parse(&["delay"]), Ok(Command::Delay { mode: None }));
         assert_eq!(
             parse(&["select", "subscription", "node"]),
             Ok(Command::Select {
@@ -1396,8 +1406,31 @@ mod tests {
         );
         assert_eq!(
             parse(&["delay", "extra"]),
-            Err("delay does not accept arguments".to_owned())
+            Err("delay accepts only --mode full|repeated".to_owned())
         );
+    }
+
+    #[test]
+    fn delay_takes_a_mode_and_refuses_an_unknown_one() {
+        assert_eq!(
+            parse(&["delay", "--mode", "full"]),
+            Ok(Command::Delay {
+                mode: Some(DelayMode::Full)
+            })
+        );
+        assert_eq!(
+            parse(&["delay", "--mode", "repeated"]),
+            Ok(Command::Delay {
+                mode: Some(DelayMode::Repeated)
+            })
+        );
+        for refused in [
+            &["delay", "--mode", "instant"][..],
+            &["delay", "--mode"][..],
+            &["delay", "--mode", "full", "extra"][..],
+        ] {
+            assert!(parse(refused).is_err(), "{refused:?} must be refused");
+        }
     }
 
     #[test]

@@ -1,6 +1,6 @@
 English | [Русский](README.ru.md)
 
-<p align="center"><img src=".github/assets/banner.svg" alt="Rosetun: VPN client for Windows and Linux" width="100%"></p>
+<p align="center"><img src="site/static/assets/banner.svg" alt="Rosetun: VPN client for Windows and Linux" width="100%"></p>
 
 <p align="center">
   <a href="https://eoftgge.github.io/rosetun/en/"><img src="https://img.shields.io/badge/Website-8C2338?style=for-the-badge" alt="Website"></a>
@@ -31,11 +31,10 @@ A system service protects against leaks independently of the engine.
 - Experimental Lockdown: protection while disconnected too.
 - TUN and System proxy.
 - Rules by program, website, IP and list, with separate exits.
+- Two-hop exits, a proxy exit that connects through another exit (experimental).
 - Provider subscriptions, QR codes and `rosetun://` links.
 - Local network access and automatic reconnect.
 - Tray, notifications and CLI; English and Russian interfaces.
-
-Development builds: [two-hop proxy exits and limitations](TWO-HOP-EXITS.md). Network qualification is pending.
 
 ## Install
 
@@ -60,7 +59,7 @@ Debian 13 is verified. Ubuntu 24.04+, Linux Mint 22+ and compatible derivatives 
 
 [Guide](https://eoftgge.github.io/rosetun/en/docs/) · [Help](https://eoftgge.github.io/rosetun/en/help/) · [For providers](https://eoftgge.github.io/rosetun/en/providers/).
 
-[Build from source](https://eoftgge.github.io/rosetun/en/docs/build/) · [Security](SECURITY.md).
+[Build from source](https://eoftgge.github.io/rosetun/en/docs/build/) · [Security](SECURITY.md) · [Security model](https://eoftgge.github.io/rosetun/en/docs/security/).
 
 ## Troubleshooting
 

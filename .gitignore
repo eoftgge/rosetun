@@ -21,3 +21,13 @@ __pycache__/
 # Temporary directory
 /temp
 *.zip
+
+# The installer script copy with a BOM that build.ps1 gives to ISCC
+/installer/rosetun.build.iss
+
+# Caches
+__pycache__
+
+# Release data written by tools/site/release.py
+/site/data/release.json
+/site/public/

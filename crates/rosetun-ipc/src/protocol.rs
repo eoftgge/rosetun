@@ -1,13 +1,13 @@
 use rosetun_config::{
-    AppConfig, ExitId, LiveConnection, LogLevel, Node, NodeId, ProtectionCapabilities, Rule,
-    RuleId, RuleSet, RuleSetId, RuleTarget, RuleTemplate, Selection, Settings, Status, Traffic,
-    resolve_exits,
+    AppConfig, DelayMode, ExitId, LiveConnection, LogLevel, Node, NodeId, Outbound,
+    ProtectionCapabilities, Rule, RuleId, RuleSet, RuleSetId, RuleTarget, RuleTemplate, Selection,
+    Settings, Status, StreamSettings, SubscriptionId, Traffic, resolve_exits,
 };
 use serde::{Deserialize, Serialize};
 use std::fmt::Formatter;
 use std::time::Duration;
 
-pub const PROTOCOL_VERSION: u32 = 22;
+pub const PROTOCOL_VERSION: u32 = 23;
 const LOCAL_PROXY_PORT_BUSY: &str = "another program holds the local proxy port ";
 const TUNNEL_ADDRESS_IN_USE: &str = "the tunnel address is still held by the previous session";
 
@@ -63,7 +63,11 @@ pub enum Request {
     },
     Connect(Box<ConnectRequest>),
     ProbeNodes(Box<ProbeRequest>),
-    TunnelDelay,
+    /// Times the tunnel and each exit of the running session (protocol 23: the
+    /// request names how).
+    TunnelDelay {
+        mode: DelayMode,
+    },
     Disconnect,
     /// Restarts the running session as it is, under its protection (protocol 18).
     Reconnect,
@@ -119,7 +123,9 @@ impl std::fmt::Debug for Request {
             Self::ForeignRules => f.write_str("ForeignRules"),
             Self::Connections => f.write_str("Connections"),
             Self::CloseConnection { .. } => f.write_str("CloseConnection"),
-            Self::TunnelDelay => f.write_str("TunnelDelay"),
+            Self::TunnelDelay { mode } => {
+                f.debug_struct("TunnelDelay").field("mode", mode).finish()
+            }
             Self::Disconnect => f.write_str("Disconnect"),
             Self::Reconnect => f.write_str("Reconnect"),
             Self::SetLockdown {
@@ -223,9 +229,21 @@ impl ConnectRequest {
         config: &AppConfig,
         exits: ExitContext<'_>,
     ) -> Result<Self, ConnectRequestError> {
-        let (request, blocked) = Self::build(config, Vec::new(), exits)?;
+        let (request, blocked) = Self::build(config, Vec::new(), exits, false)?;
         request.validate_exit_chains()?;
         warn_blocked_exits(blocked);
+        Ok(request)
+    }
+
+    /// The request a connection would be routed by, for asking where an
+    /// address would go. It needs no selected server: without one a stand-in
+    /// takes its place, which no rule can name. Never send it to the service.
+    pub fn for_routing_check(
+        config: &AppConfig,
+        temporary_rules: Vec<Rule>,
+        exits: ExitContext<'_>,
+    ) -> Result<Self, ConnectRequestError> {
+        let (request, _) = Self::build(config, temporary_rules, exits, true)?;
         Ok(request)
     }
 
@@ -233,14 +251,15 @@ impl ConnectRequest {
         config: &AppConfig,
         temporary_rules: Vec<Rule>,
         exits: ExitContext<'_>,
+        stand_in: bool,
     ) -> Result<(Self, usize), ConnectRequestError> {
-        let selection = config
-            .active
-            .as_ref()
-            .ok_or(ConnectRequestError::SelectionMissing)?;
-        let (_, node) = config
-            .active_node()
-            .ok_or(ConnectRequestError::NodeNotFound)?;
+        let chosen = match (config.active.as_ref(), config.active_node()) {
+            (Some(selection), Some((_, node))) => (selection.clone(), node.clone()),
+            (None, _) if !stand_in => return Err(ConnectRequestError::SelectionMissing),
+            (Some(_), None) if !stand_in => return Err(ConnectRequestError::NodeNotFound),
+            _ => stand_in_server(),
+        };
+        let (selection, node) = &chosen;
 
         let (rule_set, rule_templates) = match &config.active_rule_set {
             Some(_) => config
@@ -355,7 +374,6 @@ impl ConnectRequest {
                     || parent.via.is_some()
                     || self.settings.engine != rosetun_config::EngineKind::SingBox
                     || self.settings.tls_fragment.enabled
-                    || rosetun_config::uses_xray(&parent.node, &self.settings)
                     || rosetun_config::uses_xray(&extra.node, &self.settings)
                     || !matches!(
                         extra.node.outbound,
@@ -388,7 +406,7 @@ impl ConnectRequest {
         temporary_rules: Vec<Rule>,
         exits: ExitContext<'_>,
     ) -> Result<Self, ConnectRequestError> {
-        let (mut request, blocked) = Self::build(config, temporary_rules, exits)?;
+        let (mut request, blocked) = Self::build(config, temporary_rules, exits, false)?;
         if let Some(running) = running {
             request.settings.engine = running.engine;
             request.settings.xray = running.xray;
@@ -422,6 +440,28 @@ impl ConnectRequest {
             .splice(0..0, self.temporary_rules.iter().cloned());
         rules
     }
+}
+
+/// A server that exists nowhere: it keeps a routing check from needing a
+/// selection, and no exit rule can resolve to it.
+fn stand_in_server() -> (Selection, Node) {
+    let selection = Selection {
+        subscription: SubscriptionId::new(""),
+        node: NodeId::new(""),
+    };
+    let node = Node {
+        id: NodeId::new(""),
+        name: String::new(),
+        server: String::new(),
+        port: 0,
+        outbound: Outbound::Unknown {
+            scheme: String::new(),
+            params: std::collections::BTreeMap::new(),
+        },
+        stream: StreamSettings::default(),
+        raw: None,
+    };
+    (selection, node)
 }
 
 fn warn_blocked_exits(count: usize) {
@@ -683,6 +723,57 @@ mod tests {
     }
 
     #[test]
+    fn a_first_hop_through_xray_is_accepted_only_where_sing_box_reaches_it() {
+        let mut config = selected_config();
+        config.subscriptions[0].nodes[0].outbound =
+            rosetun_config::Outbound::Http(Default::default());
+        config.subscriptions[0].nodes[0].server = "198.51.100.2".into();
+        let mut request = ConnectRequest::from_config(&config).unwrap();
+        let mut first = request.node.clone();
+        first.server = "192.0.2.1".into();
+        first.outbound = rosetun_config::Outbound::Vless(rosetun_config::VlessParams {
+            uuid: "00000000-0000-0000-0000-000000000000".into(),
+            flow: None,
+        });
+        first.stream.tls = rosetun_config::TlsMode::Reality(rosetun_config::RealityParams {
+            sni: Some("example.com".into()),
+            public_key: "test-public-key".into(),
+            short_id: None,
+            fingerprint: None,
+        });
+        assert_eq!(request.settings.xray, rosetun_config::XrayUse::Auto);
+        assert!(rosetun_config::uses_xray(&first, &request.settings));
+        request.extra_nodes = vec![
+            super::ExtraNode {
+                exit: ExitId::new("a"),
+                via: None,
+                node: first,
+                selection: request.selection.clone(),
+            },
+            super::ExtraNode {
+                exit: ExitId::new("b"),
+                via: Some(ExitId::new("a")),
+                node: request.node.clone(),
+                selection: request.selection.clone(),
+            },
+        ];
+        assert!(request.validate_exit_chains().is_ok());
+
+        let mut xray_engine = request.clone();
+        xray_engine.settings.engine = rosetun_config::EngineKind::Xray;
+        let mut fragmented = request.clone();
+        fragmented.settings.tls_fragment.enabled = true;
+        let mut domain_b = request.clone();
+        domain_b.extra_nodes[1].node.server = "b.example.com".into();
+        for rejected in [xray_engine, fragmented, domain_b] {
+            assert_eq!(
+                rejected.validate_exit_chains(),
+                Err(ConnectRequestError::UnsupportedExitChain)
+            );
+        }
+    }
+
+    #[test]
     fn a_busy_port_error_names_its_port() {
         let error = super::HelperError::local_proxy_port_busy(10808);
         assert_eq!(error.code, super::ErrorCode::LocalProxyPortBusy);
@@ -729,7 +820,7 @@ mod tests {
             serde_json::to_string(&super::ErrorCode::AccessDenied).unwrap(),
             "\"access_denied\""
         );
-        assert_eq!(super::PROTOCOL_VERSION, 22);
+        assert_eq!(super::PROTOCOL_VERSION, 23);
         assert_eq!(
             serde_json::to_string(&super::Request::OpenNetwork).unwrap(),
             "\"open_network\""
@@ -1317,6 +1408,32 @@ mod tests {
             assert_eq!(error, expected);
             assert_eq!(error.to_string(), message);
         }
+    }
+
+    #[test]
+    fn a_routing_check_needs_no_selected_node_and_keeps_the_rules() {
+        let mut config = selected_config();
+        config.active = None;
+
+        let request =
+            ConnectRequest::for_routing_check(&config, Vec::new(), ExitContext::default()).unwrap();
+
+        assert_eq!(request.rule_set.rules, selected_config().rule_sets[0].rules);
+        assert_eq!(
+            ConnectRequest::for_routing_check(
+                &dangling_node_config(),
+                Vec::new(),
+                ExitContext::default()
+            )
+            .unwrap()
+            .selection
+            .node,
+            NodeId::new("")
+        );
+        assert_eq!(
+            ConnectRequest::from_config(&config).unwrap_err(),
+            ConnectRequestError::SelectionMissing
+        );
     }
 
     #[test]

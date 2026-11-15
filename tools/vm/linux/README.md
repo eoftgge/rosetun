@@ -79,7 +79,7 @@ runs, the job goes on in the guest; reconnect with
   its rights to the `pwsh` started in it.
 - The **Windows OpenSSH client** (`ssh`, `scp`, `ssh-keygen`), part of Windows.
 - **WSL with Debian** as an ordinary default user, with git, a C linker and
-  Rust 1.96.0 (the project MSRV):
+  Rust 1.99.1 (the project toolchain):
 
   ```powershell
   wsl --install -d Debian
@@ -88,7 +88,7 @@ runs, the job goes on in the guest; reconnect with
   ```sh
   sudo apt-get install git build-essential curl
   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
-  ~/.cargo/bin/rustup toolchain install 1.96.0
+  ~/.cargo/bin/rustup toolchain install 1.99.1
   ```
 
   You never work in WSL by hand: the host calls it. The build keeps a clone and
@@ -417,7 +417,7 @@ checking, restore `l2-clean` again.
    folder so it never mixes with the Windows one):
 
    ```powershell
-   wsl -d Debian --exec bash -lc 'cd /mnt/d/path/to/rosetun && export CARGO_TARGET_DIR=$HOME/.cache/rosetun-manual && cargo +1.96.0 build --release --locked -p rosetun-helper-privileged -p rosetun && mkdir -p target/linux-manual && cp $CARGO_TARGET_DIR/release/rosetun-helper-privileged $CARGO_TARGET_DIR/release/rosetun packaging/linux/rosetun-helper.service packaging/linux/rosetun-lockdown.service packaging/linux/io.github.eoftgge.rosetun.policy packaging/linux/rosetun.sysusers target/linux-manual/'
+   wsl -d Debian --exec bash -lc 'cd /mnt/d/path/to/rosetun && export CARGO_TARGET_DIR=$HOME/.cache/rosetun-manual && cargo +1.99.1 build --release --locked -p rosetun-helper-privileged -p rosetun && mkdir -p target/linux-manual && cp $CARGO_TARGET_DIR/release/rosetun-helper-privileged $CARGO_TARGET_DIR/release/rosetun packaging/linux/rosetun-helper.service packaging/linux/rosetun-lockdown.service packaging/linux/io.github.eoftgge.rosetun.policy packaging/linux/rosetun.sysusers target/linux-manual/'
    ```
 
 2. **Copy** them to the guest with the stand's key and pinned host key
@@ -706,16 +706,22 @@ ends with `systemctl reboot`. Two stand units carry on, both named
 `rosetun-l2-early.service` runs in early boot after `rosetun-lockdown.service`
 and before `network-pre.target` and notes whether the table is there;
 `rosetun-l2-resume.service` runs the phase after each reboot. The report lists
-every boot in `guest.boot_ids`; the host accepts at most the two planned
+every boot in `guest.boot_ids`, and `helper-journal.txt` holds the Lockdown and
+helper units' journal of each boot (saved before every reboot, since the guest's
+journal need not survive it); the host accepts at most the two planned
 reboots, the staged boot first. Status `rebooting` while the guest is down is
 not a failure: the host keeps polling.
 
 **SSH.** The host's SSH reaches the guest from the Default Switch, a private
 network: Lockdown without "Local network" cuts it off. The job never needs it,
 the host only polls and keeps polling through a failed connection. The window
-without the local network is short (`lockdown.direct-blocked` to
-`inbound.closed`); from `inbound.lan-open` on Lockdown keeps the local network,
-also across the first reboot. The cleanup runs `rosetun-helper-privileged
+without the local network is short (`lockdown.direct-blocked` up to
+`inbound.lan-open`); from there on Lockdown keeps the local network.
+Across the first reboot the boot set has no network to name (it opens only the
+private ranges of "Private networks behind the router", which this run does not
+choose), so by the code the host cannot connect from the boot until the helper is
+started in `reboot.service-completes` and reads the segment; the host keeps
+polling meanwhile. That has not been observed on the stand. The cleanup runs `rosetun-helper-privileged
 --reset-firewall` before it closes the report, so the host can always read it
 in the end. If the guest stays out of reach, the host's wait runs out and its
 checkpoint restore removes everything.
@@ -728,8 +734,9 @@ checkpoint restore removes everything.
 | `lockdown.direct-blocked` | `rosetun lockdown on --lan off` as root: status `lockdown: on`, `/var/lib/rosetun/lockdown` root's with mode 600, an input chain; HTTPS to the probe refused on the physical interface and by the route |
 | `lockdown.gui-scope`, `lockdown.cli-scope` | in the first account's `rosetun-gui.scope` / `rosetun-cli.scope` (`systemd-run --user --scope`), `rosetun status` (the hello makes the service look for the scope), then HTTPS to the probe and a UDP 53 datagram leave the physical interface |
 | `lockdown.other-process` | the same account outside a scope, and in `rosetun-other.scope`, is refused both |
-| `inbound.closed` | a peer namespace on a veth pair with link-local addresses (169.254.77.1 guest, .2 peer; link-local is part of "Local network") does not get sshd's banner |
-| `inbound.lan-open` | after `rosetun lockdown on --lan on` it does; HTTPS to the probe stays refused |
+| `inbound.closed` | without the local network the input chain accepts no source address, and a peer namespace on a veth pair with link-local addresses (169.254.77.1 guest, .2 peer) does not get sshd's banner. The peer is set up before Lockdown and must reach sshd then; if it cannot, the step is ERROR, since a refusal would prove nothing |
+| `inbound.lan-open` | after `rosetun lockdown on --lan on` the input chain permits the own segment of the physical interface only with `iifname "<interface>"` and accepts no source address without an interface; sshd accepts a **new SSH connection from the host** that began after the local network went on (the sshd journal, up to 45 s); HTTPS to the probe stays refused. The host's SSH is the proof on the real interface, so the step depends on it: the host opens a new connection about every 10 s only under `-Run` (or `-Collect` with `-WaitSeconds`). The guest looks for such a connection for 20 s before Lockdown; if none comes, the step is ERROR (the run is not polled), not PASS. A poll that was seen before but is missing after is FAIL |
+| `inbound.lan-link-local-closed` | with the local network the input chain permits link-local on the physical interface, and the link-local veth peer still does not get sshd's banner: link-local is open on physical interfaces only |
 | `lockdown.session` | a connect without the kill switch (the DNS-lock request) gets it from Lockdown: the tunnel answers, the physical interface is refused |
 | `lockdown.session-scope-closed` | during the session the GUI's scope is refused on the physical interface |
 | `lockdown.after-session` | after the disconnect the network stays closed and the GUI's scope gets out again |
@@ -789,7 +796,7 @@ Each needs its own stand extension and a decision by the owner first:
 
 The owner runs qualification. Before Hyper-V, turn off Lockdown on the Windows host. The Linux VM needs a working recovery console.
 
-The two-hop catalog covers HTTP/HTTPS/SOCKS5, IPv4/IPv6, TUN and System proxy; A/B failures, authentication, TLS certificates, UDP/QUIC, Apply/rollback/reconnect, engine restart, missing dependencies, subscription/fallback changes, Lockdown and allow_lan. Domain B and Xray/fragmentation are refusal cases, not supported positive cases.
+The two-hop catalog covers HTTP/HTTPS/SOCKS5, IPv4/IPv6, TUN and System proxy; A/B failures, authentication, TLS certificates, UDP/QUIC, Apply/rollback/reconnect, engine restart, missing dependencies, subscription/fallback changes, Lockdown and allow_lan. A through Xray (VLESS REALITY with Xray Auto, `two-hop.positive.xray-first-hop`) is a positive case: sing-box reaches A through Xray's local SOCKS inbound. Domain B, B through Xray, the Xray-only engine and fragmentation are refusal cases.
 
 **UNRUN:** this stand does not provision independently identifiable A, B and a target with synchronized server observations and physical client packet capture. The existing host node connection count or external-IP probe cannot prove the required transitions. The catalog records pending observations, not executable network qualification. Windows adds UNRUN rows from `two-hop-scenarios.tsv` to the failure matrix report. Linux L3 and Proxy list optional `not-run` scenarios, reported as SKIP with an explicit UNRUN reason and partial coverage. Existing independent traffic tests continue unchanged.
 
@@ -801,4 +808,4 @@ To qualify a scenario, retain all of the following for the same marked request a
 4. For HTTPS, use a trusted test CA for the positive case, then a wrong name and an untrusted certificate for refusal. Use incorrect B credentials separately. Test a domain B as a refusal without a physical DNS query, including after subscription and fallback changes.
 5. Raw CLI output, request/configuration with secrets removed, engine/helper versions and commit, timestamped A/B/target logs, interface names, captures, and the matrix report. Return these artifacts if any observation differs. Keep raw secrets and personal network data out of commits.
 
-A matrix run whose two-hop rows remain UNRUN does not accept the feature. See [configuration and limits](../../../TWO-HOP-EXITS.md).
+A matrix run whose two-hop rows remain UNRUN does not accept the feature.

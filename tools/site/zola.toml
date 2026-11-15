@@ -1,0 +1,12 @@
+# The Zola release that builds the site. Change the version and both hashes together; the
+# SHA-256 of each archive is on https://github.com/getzola/zola/releases. install_zola.py
+# and the Pages workflow read this file, so the pin lives here and nowhere else.
+version = "0.23.6"
+
+[linux]
+triple = "x86_64-unknown-linux-gnu"
+sha256 = "8f5132b3522412d04e395e0b25f6d68613ad272a873e54a2b3ebf664873024a4"
+
+[windows]
+triple = "x86_64-pc-windows-msvc"
+sha256 = "79179284f816febc281adbedb27189806cf22f83e8be4d0fca6835fbeeb09587"

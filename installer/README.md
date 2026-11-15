@@ -1,6 +1,6 @@
 # Windows installer
 
-Requires Rust 1.96 or newer, Inno Setup 6.3 or newer, `cargo-about` 0.9.2 (`cargo install cargo-about --locked --version 0.9.2 --features cli`), and `curl.exe` (included with Windows 10 and newer).
+Requires Rust 1.99 or newer, Inno Setup 6.3 or newer, `cargo-about` 0.9.2 (`cargo install cargo-about --locked --version 0.9.2 --features cli`), and `curl.exe` (included with Windows 10 and newer).
 
 CI also runs `cargo deny --locked check --warn unmaintained` (advisories, licenses, sources, duplicates; see `deny.toml`). To run it locally, install the same version: `cargo install cargo-deny --locked --version 0.20.2`.
 
@@ -58,7 +58,7 @@ When updating sing-box, also review its embedded Wintun version. Download the ma
 
 ## Debian package
 
-`installer/linux/build-deb.sh` builds `rosetun_<version>_amd64.deb` on Debian 12 as an ordinary user, with Rust 1.96.0 from rustup. The release workflow pins the Debian image by digest and installs the C linker, `binutils`, Python 3, `dpkg-dev`, `curl`, `unzip` and the Wayland, xkbcommon, X11 and GL/EGL development libraries. Debian 12 has glibc 2.36 and LTS through June 2028. `--release` installs pinned `cargo-about` 0.9.2. The package and Arch archive share the exact same payload; no second compilation or Debian 13 packaging job is needed. Keep `CARGO_TARGET_DIR` on a Linux filesystem: a Windows drive under WSL keeps no file modes, and the script refuses it. The result is `<target>/deb/rosetun_<version>_amd64.deb`; the script prints its SHA-256.
+`installer/linux/build-deb.sh` builds `rosetun_<version>_amd64.deb` on Debian 12 as an ordinary user, with Rust 1.99.1 from rustup. The release workflow pins the Debian image by digest and installs the C linker, `binutils`, Python 3, `dpkg-dev`, `curl`, `unzip` and the Wayland, xkbcommon, X11 and GL/EGL development libraries. Debian 12 has glibc 2.36 and LTS through June 2028. `--release` installs pinned `cargo-about` 0.9.2. The package and Arch archive share the exact same payload; no second compilation or Debian 13 packaging job is needed. Keep `CARGO_TARGET_DIR` on a Linux filesystem: a Windows drive under WSL keeps no file modes, and the script refuses it. The result is `<target>/deb/rosetun_<version>_amd64.deb`; the script prints its SHA-256.
 
 The sing-box and Xray archives are pinned by version and SHA-256 at the top of the script, and the build stops when a version differs from `SUPPORTED_SING_BOX_VERSION` or `SUPPORTED_XRAY_VERSION`. Update them together with `build.ps1`. Two builds of one commit in the same folder give the same bytes: `SOURCE_DATE_EPOCH` is the commit's time unless it is set.
 

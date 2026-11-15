@@ -3,9 +3,9 @@ use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rosetun_config::{
-    AccentPreset, AppConfig, ConnectionMode, DnsSettings, ExitId, ExitTarget, LanguageSetting,
-    ListId, ListSource, NodeId, ProtectionCapabilities, RuleId, RuleMatcher, RuleSetId, RuleTarget,
-    RuleTemplate, Status, SubscriptionId, XrayUse,
+    AccentPreset, AppConfig, ConnectionMode, DelayMode, DnsSettings, ExitId, ExitTarget,
+    LanguageSetting, ListId, ListSource, NodeId, ProtectionCapabilities, RuleId, RuleMatcher,
+    RuleSetId, RuleTarget, RuleTemplate, Status, SubscriptionId, XrayUse,
 };
 use rosetun_core::{
     AddOptions, AppliedSnapshot, DnsPreset, NewExit, RuleDestination, RuleSetsSnapshot,
@@ -51,8 +51,8 @@ pub(crate) use rules::NameDialog;
 pub(crate) use rules::PROCESS_LIST_STALE_MS;
 use rules::RulesState;
 pub(crate) use rules::{
-    AddRuleDialog, AddressError, ChosenProgram, MAX_ADDRESSES, MAX_PROGRAMS, NameDialogKind,
-    RecentSite, RuleInputKind, UndoNotice,
+    AddRuleDialog, AddressError, CheckLine, ChosenProgram, MAX_ADDRESSES, MAX_PROGRAMS,
+    NameDialogKind, RecentSite, RuleInputKind, UndoNotice,
 };
 use session::SessionState;
 pub(crate) use session::{RequestInputs, SessionPart};
@@ -150,6 +150,9 @@ pub(crate) struct State {
     pub(crate) config_error: Option<ConfigWorkerError>,
     pub(crate) status: Status,
     pub(crate) tunnel_delay: TunnelDelay,
+    /// The mode `tunnel_delay` was asked in. A number never outlives the mode
+    /// it was measured in: a new mode starts the check again.
+    tunnel_delay_mode: DelayMode,
     delay_last_auto: Option<u64>,
     pub(crate) session: SessionState,
     pub(crate) exit: ExitLookup,
@@ -222,6 +225,7 @@ impl Default for State {
             config_error: None,
             status: Status::default(),
             tunnel_delay: TunnelDelay::Idle,
+            tunnel_delay_mode: DelayMode::default(),
             delay_last_auto: None,
             session: SessionState::default(),
             exit: ExitLookup::None,
@@ -289,6 +293,8 @@ pub(crate) enum Action {
     SetLanguage(LanguageSetting),
     SetAccent(AccentPreset),
     SetReduceMotion(bool),
+    /// How the main screen measures the delay.
+    SetDelayMode(DelayMode),
     #[cfg(any(windows, target_os = "linux"))]
     SetAutostart(bool),
     #[cfg(any(windows, target_os = "linux"))]
@@ -378,6 +384,8 @@ pub(crate) enum Action {
     },
     SelectVisibleRules,
     ClearRuleSelection,
+    /// From the answer of "Check an address or program": the table shows the rule.
+    ShowCheckedRule(RuleId),
     OpenCreateSet,
     OpenRenameSet,
     CancelSetName,
@@ -596,10 +604,15 @@ pub(crate) enum Job {
     PingNode(SubscriptionId, NodeId),
     FullCheck(SubscriptionId),
     FullCheckNode(SubscriptionId, NodeId),
-    TunnelDelay,
+    TunnelDelay(DelayMode),
     Connections,
     ProgramNames(Vec<String>),
     SessionLists {
+        request: u64,
+        session: Box<ConnectRequest>,
+    },
+    /// The lists of the rules "Check an address or program" goes through.
+    CheckLists {
         request: u64,
         session: Box<ConnectRequest>,
     },
@@ -659,6 +672,7 @@ impl State {
                 }
                 self.config_generation = generation;
                 self.config = config;
+                self.restart_delay_after_mode_change();
                 self.cache_config_request();
                 if !self.config_ready {
                     self.restore_found_update();
@@ -700,7 +714,7 @@ impl State {
             | WorkerEvent::SelectRuleSet(_)
             | WorkerEvent::SetKillSwitch(_)
             | WorkerEvent::SetLockdown { .. }
-            | WorkerEvent::TunnelDelay(_)) => self.reduce_connection(event),
+            | WorkerEvent::TunnelDelay(..)) => self.reduce_connection(event),
             #[cfg(any(windows, target_os = "linux", test))]
             event @ WorkerEvent::Reconnect(_) => self.reduce_connection(event),
             event @ WorkerEvent::TemporaryRules { .. } => self.reduce_session(event),
@@ -711,6 +725,9 @@ impl State {
             WorkerEvent::ProgramNames(names) => self.reduce_program_names(names),
             WorkerEvent::SessionLists { request, result } => {
                 self.reduce_session_lists(request, result);
+            }
+            WorkerEvent::CheckLists { request, result } => {
+                self.reduce_check_lists(request, result);
             }
             WorkerEvent::CloseConnection(result) => self.reduce_close_connection(result),
             event @ (WorkerEvent::Apply(_)
@@ -842,6 +859,7 @@ impl State {
             | Action::SetLanguage(_)
             | Action::SetAccent(_)
             | Action::SetReduceMotion(_)
+            | Action::SetDelayMode(_)
             | Action::SetConnectOnStart(_)
             | Action::SetAutoReconnect(_)
             | Action::SetAllowLan(_)
@@ -919,6 +937,7 @@ impl State {
             | Action::SelectRule { .. }
             | Action::SelectVisibleRules
             | Action::ClearRuleSelection
+            | Action::ShowCheckedRule(_)
             | Action::StepRuleSelection { .. }
             | Action::OpenCreateSet
             | Action::OpenRenameSet
