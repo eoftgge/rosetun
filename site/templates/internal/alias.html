@@ -1,5 +1,7 @@
 {#- An old address that now redirects. The target is relative to this page, so it works from any directory.
-    An alias is the new path under `ru/`, so it is one level deeper than the page it points to. -#}
+    This template assumes every alias is `/ru/` plus the page's own path (the Russian pages used to live
+    there), so an alias is exactly one level deeper than its page. An alias of any other kind would get a
+    wrong target; check.py refuses it. -#}
 {%- set path = url | replace(from=get_url(path="/"), to="") | trim(pat="/") -%}
 {%- set depth = (path | split(pat="/") | length) if path else 0 -%}
 {%- set root = ["../" for i in range(end=depth + 1)] | join(sep="") -%}

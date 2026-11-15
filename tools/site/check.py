@@ -13,6 +13,7 @@ from urllib.parse import unquote, urlsplit
 import xml.etree.ElementTree as ET
 
 CONFIG = Path(__file__).resolve().parents[2] / 'site' / 'config.toml'
+OWN_HOST = urlsplit(tomllib.loads(CONFIG.read_text(encoding='utf-8'))['base_url']).hostname
 LABELS = {
     'ru': dict(items=('Главная', 'Документация', 'Для провайдеров', 'Помощь'), switch='English',
                licenses='Лицензии', security='Сообщить об уязвимости', toc='На этой странице'),
@@ -104,6 +105,7 @@ def local_target(root, source, url, resource=False):
     parts = urlsplit(url)
     if parts.scheme or parts.netloc:
         assert not resource, f'{source}: external resource {url}'
+        assert parts.hostname != OWN_HOST, f'{source}: absolute link to the own site {url}; use a relative one'
         assert parts.scheme == 'https', f'{source}: unsafe link {url}'
         return None
     assert not parts.path.startswith(('/', '\\')), f'{source}: root-relative URL {url}'
@@ -159,12 +161,33 @@ def check_chrome(path, root, doc, lang, inner):
 def check_alias(root, path, doc, documents):
     """An old `/ru/...` address redirects to the page that replaced it."""
     assert doc.redirect, f'{path}: not a redirect'
+    assert path.name == 'index.html', f'{path}: a redirect must be a directory index'
     target, _ = local_target(root, path, doc.redirect)
     relative = path.relative_to(root / 'ru')
     assert target == root / relative, f'{path}: redirect leads to {doc.redirect}'
     scripts = {local_target(root, path, src, True)[0] for src in doc.scripts}
     assert scripts == {root / 'assets/redirect.js'}, f'{path}: unexpected scripts {doc.scripts}'
     assert target in documents, f'{path}: redirect to a missing page'
+
+
+def check_not_found(root, path, doc, csp):
+    """The 404 page is served at any address, so its links start from the site's directory."""
+    assert doc.lang == 'ru', f'{path}: wrong language'
+    assert doc.csp == csp, f'{path}: unexpected Content-Security-Policy'
+    assert not doc.scripts, f'{path}: the 404 page must not load scripts'
+    style = next((url for url, _ in doc.links if url.endswith('assets/site.css')), None)
+    assert style and style.startswith('/'), f'{path}: expected the style sheet from the site directory'
+    prefix = style.removesuffix('assets/site.css')
+    for url, resource in doc.links:
+        if url.startswith('#'):
+            continue
+        if urlsplit(url).scheme:
+            local_target(root, path, url, resource)
+            continue
+        assert url.startswith(prefix), f'{path}: address outside the site directory {url}'
+        target = root / unquote(urlsplit(url).path)[len(prefix):]
+        assert (target / 'index.html' if target.is_dir() else target).is_file(), f'{path}: missing target {url}'
+    assert {prefix, prefix + 'en/'} <= {url for url, _ in doc.links}, f'{path}: missing links to both home pages'
 
 
 def check(directory, rendered=False):
@@ -179,14 +202,16 @@ def check(directory, rendered=False):
         documents[path] = doc
     assert documents, 'no HTML documents'
     aliases = {path for path in documents if path.relative_to(root).parts[0] == 'ru'}
-    pages = {path: doc for path, doc in documents.items()
-             if path not in aliases and path.relative_to(root).as_posix() != '404.html'}
+    not_found = root / '404.html'
+    assert not_found in documents, '404.html is missing'
+    check_not_found(root, not_found, documents[not_found], csp['csp'])
+    pages = {path: doc for path, doc in documents.items() if path not in aliases and path != not_found}
     for path, doc in pages.items():
+        assert not doc.redirect, f'{path}: unexpected redirect; only /ru/ aliases are supported'
         relative = path.relative_to(root)
         lang, inner = page_language(relative)
         assert doc.lang == lang, f'{path}: wrong language'
         assert set(doc.alternates) == {'ru', 'en'}, f'{path}: missing hreflang'
-        assert not doc.redirect, f'{path}: unexpected redirect'
         for other, counterpart in (('ru', root / inner), ('en', root / 'en' / inner)):
             assert counterpart in pages, f'{path}: missing translation {other}'
             actual, _ = local_target(root, path, doc.alternates[other])
@@ -218,6 +243,8 @@ def check(directory, rendered=False):
                        if page_language(path.relative_to(root))[0] == 'ru'}
     assert not stray, f'redirect without a page: {sorted(p.relative_to(root).as_posix() for p in stray)}'
     for path, doc in documents.items():
+        if path == not_found:
+            continue
         for url, resource in doc.links:
             resolved = local_target(root, path, url, resource)
             if resolved:

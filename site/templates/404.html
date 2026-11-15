@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{#- GitHub Pages serves this page at any missing address, so here the addresses start from the site's directory
+    instead of the page's own. There is no script: only links to the home page of each language. -#}
+{% block title %}{{ trans(key="not_found", lang="ru") }} · {{ trans(key="not_found", lang="en") }} · Rosetun{% endblock title %}
+{% block main %}
+            <div class="prose">
+                <h1>{{ trans(key="not_found", lang="ru") }}</h1>
+                <p><a href="{{ root }}">{{ trans(key="home", lang="ru") }}</a></p>
+                <h2 lang="en">{{ trans(key="not_found", lang="en") }}</h2>
+                <p lang="en"><a href="{{ root }}en/" hreflang="en">{{ trans(key="home", lang="en") }}</a></p>
+            </div>
+{% endblock main %}

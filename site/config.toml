@@ -1,4 +1,4 @@
-# Built with the Zola version pinned in tools/site/zola.env.
+# Built with the Zola version pinned in tools/site/zola.toml.
 # The address is only the production default; every internal link is relative,
 # so a build for another address (a preview) needs only --base-url.
 base_url = "https://eoftgge.github.io/rosetun"
@@ -28,6 +28,7 @@ help = "Помощь"
 switch = "English"
 licenses = "Лицензии"
 security = "Сообщить об уязвимости"
+not_found = "Страница не найдена"
 toc = "На этой странице"
 pager = "Назад и вперёд"
 banner = "Стабильный выпуск: см. загрузки."
@@ -45,6 +46,7 @@ help = "Help"
 switch = "Русский"
 licenses = "Licenses"
 security = "Report a vulnerability"
+not_found = "Page not found"
 toc = "On this page"
 pager = "Previous and next"
 banner = "Stable release: see downloads."

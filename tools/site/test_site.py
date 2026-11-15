@@ -350,6 +350,47 @@ class SiteBuild(unittest.TestCase):
         with self.assertRaisesRegex(AssertionError, 'missing redirect'):
             check(output, rendered=True)
 
+    def test_the_404_page_links_to_both_home_pages_and_loads_no_script(self):
+        output = self.built()
+        page = output / '404.html'
+        original = page.read_text(encoding='utf-8')
+        self.assertIn('href="/rosetun/"', original)
+        self.assertIn('href="/rosetun/en/"', original)
+        self.assertNotIn('<script', original)
+        for old, new in (
+            ('href="/rosetun/en/" hreflang="en">Home', 'href="/rosetun/de/" hreflang="en">Home'),
+            ('</head>', '<script src="/rosetun/assets/script.js"></script></head>'),
+            ('/rosetun/assets/site.css', 'assets/site.css'),
+        ):
+            with self.subTest(old=old):
+                self.assertIn(old, original)
+                page.write_text(original.replace(old, new, 1), encoding='utf-8')
+                with self.assertRaises(AssertionError):
+                    check(output, rendered=True)
+        page.write_text(original, encoding='utf-8')
+        quiet_check(output, rendered=True)
+
+    def test_a_link_to_the_own_site_must_be_relative(self):
+        output = self.built()
+        page = output / 'en/index.html'
+        original = page.read_text(encoding='utf-8')
+        page.write_text(original + '<a href="https://eoftgge.github.io/rosetun/en/docs/">Docs</a>', encoding='utf-8')
+        with self.assertRaisesRegex(AssertionError, 'own site'):
+            check(output, rendered=True)
+
+    def test_an_alias_that_is_not_an_old_russian_address_is_refused(self):
+        source = Path(self.directory.name) / 'source'
+        shutil.copytree(SITE, source, ignore=shutil.ignore_patterns('release.json'))
+        help_page = source / 'content/help.md'
+        text = help_page.read_text(encoding='utf-8')
+        help_page.write_text(text.replace('aliases = ["/ru/help/"]', 'aliases = ["/ru/help/", "/old/help/"]'),
+                             encoding='utf-8')
+        output = Path(self.directory.name) / 'output'
+        subprocess.run([zola(), '--root', str(source), 'build', '--output-dir', str(output)],
+                       check=True, capture_output=True, text=True)
+        with self.assertRaisesRegex(AssertionError, 'unexpected redirect'):
+            check(output)
+
     def test_a_build_for_another_address_keeps_every_link_relative(self):
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / 'source'

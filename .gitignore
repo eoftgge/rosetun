@@ -27,3 +27,4 @@ __pycache__
 
 # Release data written by tools/site/release.py
 /site/data/release.json
+/site/public/

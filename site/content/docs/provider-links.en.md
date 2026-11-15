@@ -10,4 +10,4 @@ A button on a provider's page can open Rosetun with a subscription filled in: `r
 
 The Windows installer registers the scheme for all users. The Debian package registers it through its `.desktop` file (`x-scheme-handler/rosetun`). A running Rosetun takes the link from a later start through a channel only your account can open: a named pipe on Windows, a socket in `$XDG_RUNTIME_DIR` on Linux.
 
-More for providers, with response headers: [the site's page](https://eoftgge.github.io/rosetun/en/providers/).
+More for providers, with response headers: [the site's page](../../providers/).
