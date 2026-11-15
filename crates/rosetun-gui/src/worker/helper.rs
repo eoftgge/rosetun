@@ -208,11 +208,11 @@ impl WorkerDispatcher {
         });
     }
 
-    pub(crate) fn tunnel_delay(&self) {
+    pub(crate) fn tunnel_delay(&self, mode: DelayMode) {
         self.spawn_helper(
             "rosetun-tunnel-delay",
-            rosetun_ipc::HelperClient::tunnel_delay,
-            |publisher, result| publisher.complete(WorkerEvent::TunnelDelay(result)),
+            move |client| client.tunnel_delay(mode),
+            move |publisher, result| publisher.complete(WorkerEvent::TunnelDelay(mode, result)),
         );
     }
 

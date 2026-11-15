@@ -1,5 +1,5 @@
 use rosetun_config::{
-    AppConfig, ExitId, LiveConnection, LogLevel, Node, NodeId, ProtectionCapabilities, Rule,
+    AppConfig, DelayMode, ExitId, LiveConnection, LogLevel, Node, NodeId, ProtectionCapabilities, Rule,
     RuleId, RuleSet, RuleSetId, RuleTarget, RuleTemplate, Selection, Settings, Status, Traffic,
     resolve_exits,
 };
@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt::Formatter;
 use std::time::Duration;
 
-pub const PROTOCOL_VERSION: u32 = 22;
+pub const PROTOCOL_VERSION: u32 = 23;
 const LOCAL_PROXY_PORT_BUSY: &str = "another program holds the local proxy port ";
 const TUNNEL_ADDRESS_IN_USE: &str = "the tunnel address is still held by the previous session";
 
@@ -63,7 +63,11 @@ pub enum Request {
     },
     Connect(Box<ConnectRequest>),
     ProbeNodes(Box<ProbeRequest>),
-    TunnelDelay,
+    /// Times the tunnel and each exit of the running session (protocol 23: the
+    /// request names how).
+    TunnelDelay {
+        mode: DelayMode,
+    },
     Disconnect,
     /// Restarts the running session as it is, under its protection (protocol 18).
     Reconnect,
@@ -119,7 +123,10 @@ impl std::fmt::Debug for Request {
             Self::ForeignRules => f.write_str("ForeignRules"),
             Self::Connections => f.write_str("Connections"),
             Self::CloseConnection { .. } => f.write_str("CloseConnection"),
-            Self::TunnelDelay => f.write_str("TunnelDelay"),
+            Self::TunnelDelay { mode } => f
+                .debug_struct("TunnelDelay")
+                .field("mode", mode)
+                .finish(),
             Self::Disconnect => f.write_str("Disconnect"),
             Self::Reconnect => f.write_str("Reconnect"),
             Self::SetLockdown {
@@ -779,7 +786,7 @@ mod tests {
             serde_json::to_string(&super::ErrorCode::AccessDenied).unwrap(),
             "\"access_denied\""
         );
-        assert_eq!(super::PROTOCOL_VERSION, 22);
+        assert_eq!(super::PROTOCOL_VERSION, 23);
         assert_eq!(
             serde_json::to_string(&super::Request::OpenNetwork).unwrap(),
             "\"open_network\""

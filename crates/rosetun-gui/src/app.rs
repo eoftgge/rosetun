@@ -577,7 +577,7 @@ impl App {
             Job::PingNode(id, node) => self.workers.ping(id, Some(node)),
             Job::FullCheck(id) => self.workers.full_check(id, None),
             Job::FullCheckNode(id, node) => self.workers.full_check(id, Some(node)),
-            Job::TunnelDelay => self.workers.tunnel_delay(),
+            Job::TunnelDelay(mode) => self.workers.tunnel_delay(mode),
             Job::Connections => self.workers.connections(),
             Job::ProgramNames(paths) => self.workers.program_names(paths),
             Job::SessionLists { request, session } => self.workers.session_lists(request, *session),

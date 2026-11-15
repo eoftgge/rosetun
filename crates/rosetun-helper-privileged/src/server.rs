@@ -444,10 +444,12 @@ fn dispatch(
             Ok(results) => Response::Probe(results),
             Err(error) => Response::Error(error),
         },
-        Request::TunnelDelay => match helper.tunnel_delay_as(caller.expect("caller checked"), DelayMode::Full) {
-            Ok(delays) => Response::Delay(delays),
-            Err(error) => Response::Error(error),
-        },
+        Request::TunnelDelay { mode } => {
+            match helper.tunnel_delay_as(caller.expect("caller checked"), *mode) {
+                Ok(delays) => Response::Delay(delays),
+                Err(error) => Response::Error(error),
+            }
+        }
         Request::Disconnect => match helper.disconnect_as(caller.expect("caller checked")) {
             Ok(()) => Response::Ok,
             Err(error) => Response::Error(error),
@@ -630,7 +632,9 @@ mod tests {
             Request::ForeignRules,
             Request::Connections,
             Request::CloseConnection { id: "a".to_owned() },
-            Request::TunnelDelay,
+            Request::TunnelDelay {
+                mode: DelayMode::Repeated,
+            },
             Request::Disconnect,
             Request::Reconnect,
             Request::OpenNetwork,
@@ -719,7 +723,9 @@ mod tests {
         ));
         assert!(matches!(
             dispatch(
-                &Request::TunnelDelay,
+                &Request::TunnelDelay {
+                    mode: DelayMode::Full,
+                },
                 &helper,
                 &mut greeted,
                 Some(&caller),

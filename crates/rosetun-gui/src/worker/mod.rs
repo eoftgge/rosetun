@@ -7,7 +7,7 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use rosetun_config::{
-    AccentPreset, AppConfig, DnsSettings, Exit, ExitId, ExitTarget, LanguageSetting, List, ListId,
+    AccentPreset, AppConfig, DelayMode, DnsSettings, Exit, ExitId, ExitTarget, LanguageSetting, List, ListId,
     LiveConnection, Node, NodeId, ProtectionCapabilities, Rule, RuleId, RuleMatcher, RuleSet,
     RuleSetId, RuleTarget, Status, Subscription, SubscriptionId,
 };
@@ -261,7 +261,7 @@ pub(crate) enum WorkerEvent {
         subscription: SubscriptionId,
         result: Result<Vec<ProbeResult>, HelperCommandError>,
     },
-    TunnelDelay(Result<TunnelDelays, HelperCommandError>),
+    TunnelDelay(DelayMode, Result<TunnelDelays, HelperCommandError>),
     Connections {
         result: Result<(Vec<LiveConnection>, Vec<LiveConnection>), HelperCommandError>,
         /// When the answer arrived, by `display::monotonic_ms`.

@@ -223,11 +223,11 @@ fn tunnel_delay_starts_after_three_seconds_once_per_session() {
     assert!(state.take_tunnel_delay(1_002).is_none());
     assert!(matches!(
         state.take_tunnel_delay(1_003),
-        Some(Job::TunnelDelay)
+        Some(Job::TunnelDelay(DelayMode::Repeated))
     ));
     assert_eq!(state.tunnel_delay, TunnelDelay::Measuring);
     assert!(state.take_tunnel_delay(1_004).is_none());
-    state.reduce(WorkerEvent::TunnelDelay(Ok(main_delay(
+    state.reduce(WorkerEvent::TunnelDelay(DelayMode::Repeated, Ok(main_delay(
         ProbeOutcome::Works { millis: 85 },
     ))));
     assert_eq!(
@@ -247,7 +247,7 @@ fn tunnel_delay_starts_after_three_seconds_once_per_session() {
     assert!(state.take_tunnel_delay(1_202).is_none());
     assert!(matches!(
         state.take_tunnel_delay(1_203),
-        Some(Job::TunnelDelay)
+        Some(Job::TunnelDelay(DelayMode::Repeated))
     ));
 }
 
@@ -261,24 +261,24 @@ fn tunnel_delay_retries_busy_auto_measurements_after_ten_seconds() {
     }));
     assert!(matches!(
         state.take_tunnel_delay(1_003),
-        Some(Job::TunnelDelay)
+        Some(Job::TunnelDelay(DelayMode::Repeated))
     ));
-    state.reduce(WorkerEvent::TunnelDelay(Err(HelperCommandError::Client(
+    state.reduce(WorkerEvent::TunnelDelay(DelayMode::Repeated, Err(HelperCommandError::Client(
         ClientError::Helper(HelperError::new(ErrorCode::Busy, "")),
     ))));
     assert_eq!(state.tunnel_delay, TunnelDelay::Idle);
     assert!(state.take_tunnel_delay(1_012).is_none());
     assert!(matches!(
         state.take_tunnel_delay(1_013),
-        Some(Job::TunnelDelay)
+        Some(Job::TunnelDelay(DelayMode::Repeated))
     ));
-    state.reduce(WorkerEvent::TunnelDelay(Err(HelperCommandError::Client(
+    state.reduce(WorkerEvent::TunnelDelay(DelayMode::Repeated, Err(HelperCommandError::Client(
         ClientError::Helper(HelperError::new(ErrorCode::Busy, "")),
     ))));
     assert!(state.take_tunnel_delay(1_022).is_none());
     assert!(matches!(
         state.take_tunnel_delay(1_023),
-        Some(Job::TunnelDelay)
+        Some(Job::TunnelDelay(DelayMode::Repeated))
     ));
 }
 
@@ -292,20 +292,20 @@ fn tunnel_delay_manual_refresh_and_stale_completion() {
     }));
     assert!(matches!(
         state.act(Action::MeasureDelay),
-        Some(Job::TunnelDelay)
+        Some(Job::TunnelDelay(DelayMode::Repeated))
     ));
     assert!(state.act(Action::MeasureDelay).is_none());
-    state.reduce(WorkerEvent::TunnelDelay(Err(HelperCommandError::Client(
+    state.reduce(WorkerEvent::TunnelDelay(DelayMode::Repeated, Err(HelperCommandError::Client(
         ClientError::Helper(HelperError::new(ErrorCode::Busy, "")),
     ))));
     assert_eq!(state.tunnel_delay, TunnelDelay::Idle);
     assert!(state.operation_error.is_none());
     assert!(matches!(
         state.take_tunnel_delay(1_003),
-        Some(Job::TunnelDelay)
+        Some(Job::TunnelDelay(DelayMode::Repeated))
     ));
     assert!(state.act(Action::MeasureDelay).is_none());
-    state.reduce(WorkerEvent::TunnelDelay(Err(HelperCommandError::Client(
+    state.reduce(WorkerEvent::TunnelDelay(DelayMode::Repeated, Err(HelperCommandError::Client(
         ClientError::Closed,
     ))));
     assert_eq!(
@@ -314,12 +314,12 @@ fn tunnel_delay_manual_refresh_and_stale_completion() {
     );
     assert!(matches!(
         state.act(Action::MeasureDelay),
-        Some(Job::TunnelDelay)
+        Some(Job::TunnelDelay(DelayMode::Repeated))
     ));
     state.reduce(WorkerEvent::Status(Status::default()));
     assert_eq!(state.tunnel_delay, TunnelDelay::Idle);
     assert!(state.act(Action::MeasureDelay).is_none());
-    state.reduce(WorkerEvent::TunnelDelay(Ok(main_delay(
+    state.reduce(WorkerEvent::TunnelDelay(DelayMode::Repeated, Ok(main_delay(
         ProbeOutcome::Works { millis: 25 },
     ))));
     assert_eq!(state.tunnel_delay, TunnelDelay::Idle);

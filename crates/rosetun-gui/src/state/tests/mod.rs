@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use rosetun_config::{
-    ConnectionState, DomainMatch, FailureKind, Node, NodeId, Outbound, ProcessMatch,
+    ConnectionState, DelayMode, DomainMatch, FailureKind, Node, NodeId, Outbound, ProcessMatch,
     ProtectionCapabilities, Rule, RuleMatcher, RuleSet, Selection, VlessParams,
 };
 use rosetun_core::{

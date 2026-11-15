@@ -4,7 +4,7 @@ use crate::{
     ConnectRequest, Connection, Frame, HelperError, ListFormat, PROTOCOL_VERSION, ProbeRequest,
     ProbeResult, Request, Response, SessionExit, TunnelDelays,
 };
-use rosetun_config::{LiveConnection, ProtectionCapabilities, Rule, Status};
+use rosetun_config::{DelayMode, LiveConnection, ProtectionCapabilities, Rule, Status};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ClientError {
@@ -181,8 +181,8 @@ impl HelperClient {
         }
     }
 
-    pub fn tunnel_delay(&mut self) -> Result<TunnelDelays, ClientError> {
-        match self.request(Request::TunnelDelay)? {
+    pub fn tunnel_delay(&mut self, mode: DelayMode) -> Result<TunnelDelays, ClientError> {
+        match self.request(Request::TunnelDelay { mode })? {
             Response::Delay(delays) => Ok(delays),
             _ => Err(ClientError::Unexpected),
         }

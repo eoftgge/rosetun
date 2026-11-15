@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rosetun_config::{
-    AccentPreset, AppConfig, ConnectionMode, DnsSettings, ExitId, ExitTarget, LanguageSetting,
+    AccentPreset, AppConfig, ConnectionMode, DelayMode, DnsSettings, ExitId, ExitTarget, LanguageSetting,
     ListId, ListSource, NodeId, ProtectionCapabilities, RuleId, RuleMatcher, RuleSetId, RuleTarget,
     RuleTemplate, Status, SubscriptionId, XrayUse,
 };
@@ -150,6 +150,9 @@ pub(crate) struct State {
     pub(crate) config_error: Option<ConfigWorkerError>,
     pub(crate) status: Status,
     pub(crate) tunnel_delay: TunnelDelay,
+    /// The mode `tunnel_delay` was asked in. A number never outlives the mode
+    /// it was measured in: a new mode starts the check again.
+    tunnel_delay_mode: DelayMode,
     delay_last_auto: Option<u64>,
     pub(crate) session: SessionState,
     pub(crate) exit: ExitLookup,
@@ -222,6 +225,7 @@ impl Default for State {
             config_error: None,
             status: Status::default(),
             tunnel_delay: TunnelDelay::Idle,
+            tunnel_delay_mode: DelayMode::default(),
             delay_last_auto: None,
             session: SessionState::default(),
             exit: ExitLookup::None,
@@ -596,7 +600,7 @@ pub(crate) enum Job {
     PingNode(SubscriptionId, NodeId),
     FullCheck(SubscriptionId),
     FullCheckNode(SubscriptionId, NodeId),
-    TunnelDelay,
+    TunnelDelay(DelayMode),
     Connections,
     ProgramNames(Vec<String>),
     SessionLists {
@@ -659,6 +663,7 @@ impl State {
                 }
                 self.config_generation = generation;
                 self.config = config;
+                self.restart_delay_after_mode_change();
                 self.cache_config_request();
                 if !self.config_ready {
                     self.restore_found_update();
@@ -700,7 +705,7 @@ impl State {
             | WorkerEvent::SelectRuleSet(_)
             | WorkerEvent::SetKillSwitch(_)
             | WorkerEvent::SetLockdown { .. }
-            | WorkerEvent::TunnelDelay(_)) => self.reduce_connection(event),
+            | WorkerEvent::TunnelDelay(..)) => self.reduce_connection(event),
             #[cfg(any(windows, target_os = "linux", test))]
             event @ WorkerEvent::Reconnect(_) => self.reduce_connection(event),
             event @ WorkerEvent::TemporaryRules { .. } => self.reduce_session(event),
