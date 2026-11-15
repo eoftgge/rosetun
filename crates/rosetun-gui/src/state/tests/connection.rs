@@ -1112,3 +1112,91 @@ fn a_refused_reconnect_shows_why_and_a_failed_engine_leaves_it_to_the_status() {
     assert!(!state.operations.helper);
     assert!(state.operation_error.is_none());
 }
+
+fn connected_with_the_mode(mode: DelayMode) -> State {
+    let mut state = state_for_auto_connect();
+    state.config.interface.delay_mode = mode;
+    state.tunnel_delay_mode = mode;
+    state.reduce(WorkerEvent::Status(Status {
+        state: ConnectionState::Connected,
+        since_unix: Some(1_000),
+        ..Status::default()
+    }));
+    state
+}
+
+fn config_with_the_mode(state: &State, mode: DelayMode, generation: u64) -> WorkerEvent {
+    let mut config = state.config.clone();
+    config.interface.delay_mode = mode;
+    WorkerEvent::Config { generation, config }
+}
+
+#[test]
+fn choosing_a_delay_mode_saves_it_and_the_same_mode_does_nothing() {
+    let mut state = State::default();
+    state.config_ready = true;
+    assert!(state.act(Action::SetDelayMode(DelayMode::Repeated)).is_none());
+    assert!(matches!(
+        state.act(Action::SetDelayMode(DelayMode::Full)),
+        Some(Job::Setting(SettingChange::DelayMode(DelayMode::Full)))
+    ));
+}
+
+#[test]
+fn a_new_delay_mode_starts_a_new_check_at_once_and_drops_the_old_number() {
+    let mut state = connected_with_the_mode(DelayMode::Repeated);
+    assert!(matches!(
+        state.take_tunnel_delay(1_003),
+        Some(Job::TunnelDelay(DelayMode::Repeated))
+    ));
+    state.reduce(WorkerEvent::TunnelDelay(
+        DelayMode::Repeated,
+        Ok(main_delay(ProbeOutcome::Works { millis: 40 })),
+    ));
+    assert!(state.tunnel_delay.proxy().is_some());
+
+    let event = config_with_the_mode(&state, DelayMode::Full, 1);
+    state.reduce(event);
+    // The old number is gone in the same step the caption changes.
+    assert_eq!(state.tunnel_delay, TunnelDelay::Idle);
+    assert!(matches!(
+        state.take_tunnel_delay(1_004),
+        Some(Job::TunnelDelay(DelayMode::Full))
+    ));
+    assert_eq!(state.tunnel_delay, TunnelDelay::Measuring);
+}
+
+#[test]
+fn an_answer_to_the_mode_before_the_change_is_ignored() {
+    let mut state = connected_with_the_mode(DelayMode::Repeated);
+    assert!(state.take_tunnel_delay(1_003).is_some());
+    let event = config_with_the_mode(&state, DelayMode::Full, 1);
+    state.reduce(event);
+    assert!(matches!(
+        state.take_tunnel_delay(1_004),
+        Some(Job::TunnelDelay(DelayMode::Full))
+    ));
+
+    state.reduce(WorkerEvent::TunnelDelay(
+        DelayMode::Repeated,
+        Ok(main_delay(ProbeOutcome::Works { millis: 40 })),
+    ));
+    assert_eq!(state.tunnel_delay, TunnelDelay::Measuring);
+    state.reduce(WorkerEvent::TunnelDelay(
+        DelayMode::Full,
+        Ok(main_delay(ProbeOutcome::Works { millis: 260 })),
+    ));
+    assert_eq!(
+        state.tunnel_delay,
+        TunnelDelay::Done(main_delay(ProbeOutcome::Works { millis: 260 }))
+    );
+}
+
+#[test]
+fn a_manual_check_asks_in_the_saved_mode() {
+    let mut state = connected_with_the_mode(DelayMode::Full);
+    assert!(matches!(
+        state.act(Action::MeasureDelay),
+        Some(Job::TunnelDelay(DelayMode::Full))
+    ));
+}

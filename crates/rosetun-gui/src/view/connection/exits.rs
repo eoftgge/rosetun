@@ -4,6 +4,8 @@ use super::*;
 use crate::state::SessionExitRow;
 use crate::view::exits::exit_title;
 
+use super::hero::delay_mode_hint;
+
 /// "Rules through other servers", with the gap above it: one row per exit of
 /// the running session. Returns whether the card was shown.
 pub(super) fn exits_card(ui: &mut egui::Ui, state: &State) -> bool {
@@ -55,7 +57,8 @@ fn exit_row(ui: &mut egui::Ui, state: &State, row: &SessionExitRow<'_>) {
             });
         },
         |ui| {
-            ui.label(RichText::new(status).color(color));
+            ui.label(RichText::new(status).color(color))
+                .on_hover_text(delay_mode_hint(state.config.interface.delay_mode));
         },
     );
 }
