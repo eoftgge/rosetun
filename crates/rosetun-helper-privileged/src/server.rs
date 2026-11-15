@@ -4,6 +4,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use rosetun_config::DelayMode;
 use rosetun_ipc::{
     CodecError, Connection, ErrorCode, Frame, HelperError, Listener, PROTOCOL_VERSION, Request,
     Response,
@@ -443,7 +444,7 @@ fn dispatch(
             Ok(results) => Response::Probe(results),
             Err(error) => Response::Error(error),
         },
-        Request::TunnelDelay => match helper.tunnel_delay_as(caller.expect("caller checked")) {
+        Request::TunnelDelay => match helper.tunnel_delay_as(caller.expect("caller checked"), DelayMode::Full) {
             Ok(delays) => Response::Delay(delays),
             Err(error) => Response::Error(error),
         },

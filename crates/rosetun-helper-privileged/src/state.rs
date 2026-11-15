@@ -9,6 +9,7 @@ mod lockdown;
 mod path;
 mod probe;
 mod protection;
+mod repeated;
 mod session_lock;
 #[cfg(test)]
 mod tests;
@@ -28,8 +29,9 @@ use rosetun_config::{
     Traffic, fragments_tls, list_tag,
 };
 use rosetun_engine::{
-    ControlEndpoint, EngineBackend, EngineProcess, EngineRegistry, EngineRights, RenderRequest,
-    RenderedConfig, TrafficProbe, TrafficTotals, UrlTestTarget, errors::EngineError, url_test_any,
+    ControlEndpoint, DelayInbound, EngineBackend, EngineProcess, EngineRegistry, EngineRights,
+    PROXY_TAG, RenderRequest, RenderedConfig, TrafficProbe, TrafficTotals, UrlTestTarget,
+    errors::EngineError, exit_tag, url_test_any,
 };
 use rosetun_engine_xray::{SocksEndpoint, XrayHelper};
 use rosetun_ipc::transport::{AccountIdentity, PeerIdentity};
@@ -2186,8 +2188,18 @@ impl Session {
             Some(listen) => Some(listen.dns),
             None => backend.tunnel_dns_server(&settings.tun),
         };
+        let outbounds = extra.outbounds(&socks);
         let control = match ControlEndpoint::local() {
-            Ok(control) => Some(control),
+            Ok(mut control) => {
+                // One account per outbound the repeated delay can time.
+                let tags = std::iter::once(PROXY_TAG.to_owned())
+                    .chain(outbounds.iter().map(|outbound| exit_tag(outbound.index)));
+                match DelayInbound::local(tags) {
+                    Ok(delay) => control.delay = Some(delay),
+                    Err(error) => tracing::warn!(%error, "repeated delay entry is unavailable"),
+                }
+                Some(control)
+            }
             Err(error) => {
                 tracing::warn!(%error, "traffic control endpoint is unavailable");
                 None
@@ -2208,7 +2220,7 @@ impl Session {
             &RenderRequest {
                 node: resolved_node.as_ref().unwrap_or(node),
                 socks: socks.main(),
-                extra: &extra.outbounds(&socks),
+                extra: &outbounds,
                 rules,
                 lists,
                 settings,

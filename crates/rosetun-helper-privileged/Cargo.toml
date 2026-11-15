@@ -18,8 +18,10 @@ rosetun-engine-xray.workspace = true
 rosetun-ipc.workspace = true
 rosetun-routing.workspace = true
 serde_json.workspace = true
+thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+ureq = { workspace = true, features = ["rustls", "socks-proxy"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc.workspace = true
