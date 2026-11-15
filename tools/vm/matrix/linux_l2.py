@@ -11,7 +11,7 @@ import subprocess
 import time
 from typing import NamedTuple
 
-from . import l3_requests
+from . import l3_requests, run_state
 from .catalog import digest, parse_catalog
 from .config import make_plan, validate_plan
 from .evidence import write_file
@@ -453,10 +453,35 @@ class LinuxL2Job:
         self.handles = {}
         self.assessment = None
         self.deadline = time.monotonic() + int(env['JOB_TIMEOUT_SECONDS']) + 180
+        state = run_state.of(vm.run)
+        if state is not None:
+            self._record(lambda: state.deadline('job_deadline', int(env['JOB_TIMEOUT_SECONDS']) + 180))
         vm._linux_l2_job = self
         self._save('plan.json', self._plan)
         self._save('package.json', json.dumps(dict(package, identity=identity), sort_keys=True).encode())
         self._evidence('l2-created')
+
+    def _record(self, write):
+        """Write one change of the run state; a write that fails stops the operation before the guest sees it."""
+        try:
+            write()
+        except (OSError, ValueError):
+            self.vm.evidence_failed = True
+            raise JobError('l2-run-state-write-failed') from None
+
+    def _remember(self):
+        state = run_state.of(self.vm.run)
+        if state is not None:
+            # The job state is the guest's word: anything outside the plain alphabet is kept as such.
+            job = self.job if type(self.job) is str and re.fullmatch(r'[A-Za-z0-9_-]{1,64}', self.job) else 'unrecognized'
+            self._record(lambda: state.update('job', submission=self.submission, launcher=self.launcher, job=job,
+                                              pid=self.pid, session=self.session))
+
+    def _spent(self, value):
+        """Record `value` job calls as spent before the call that makes it so."""
+        state = run_state.of(self.vm.run)
+        if state is not None:
+            self._record(lambda: state.record('job_calls', value))
 
     def _save(self, name, data):
         relative = 'linux-' + self.profile.name + '/' + name
@@ -481,6 +506,7 @@ class LinuxL2Job:
         self._begin()
         if self.calls >= 112 or (self.calls >= 111 and name != 'guest-file-close'):
             raise JobError('l2-rpc-budget')
+        self._spent(self.calls + 1)
         self.calls += 1
         return self.vm.qga._rpc(name, timeout, args)
 
@@ -492,6 +518,10 @@ class LinuxL2Job:
             raise JobError('l2-rpc-budget')
         previous_limit = qga._operation_limit
         qga._operation_limit = min(previous_limit, before + 112 - self.calls)
+        previous_hook = qga.on_call
+        if run_state.of(self.vm.run) is not None:
+            # The probe's calls go to the session directly; each is recorded as a job call before it is sent.
+            qga.on_call = lambda: self._spent(self.calls + qga.calls - before + 1)
         try:
             qga.jobs_enabled = True
             qga.probe(5)
@@ -500,6 +530,7 @@ class LinuxL2Job:
         finally:
             self.calls += qga.calls - before
             qga._operation_limit = previous_limit
+            qga.on_call = previous_hook
 
     @_guest_serialized
     def submit(self):
@@ -511,6 +542,7 @@ class LinuxL2Job:
         self._fresh_boot()
         self.submission = 'unknown'
         self.session = self.vm.qga.session_id
+        self._remember()
         self._evidence('l2-submit-intent')
         try:
             guest = self.identity['guest_run_id']
@@ -523,6 +555,7 @@ class LinuxL2Job:
             self.pid = value['pid']
             self.submission, self.launcher = 'launcher-spawned', 'running'
         finally:
+            self._remember()
             self._evidence('l2-submit-return', pid=self.pid, session_id=self.session)
         return self.snapshot()
 
@@ -605,6 +638,9 @@ class LinuxL2Job:
         try:
             if self.submission == 'not-submitted' or self.polls >= POLLS:
                 raise JobError('l2-not-submitted-or-poll-limit')
+            state = run_state.of(self.vm.run)
+            if state is not None:
+                self._record(lambda: state.record('job_polls', self.polls + 1))
             self.polls += 1
             self._fresh_boot()
             if self.session != self.vm.qga.session_id:
@@ -637,6 +673,9 @@ class LinuxL2Job:
         except (OSError, ValueError, UnicodeError, RecursionError):
             self._evidence('l2-collect-unverified')
             raise JobError('l2-result-UNVERIFIED') from None
+        finally:
+            if self.submission != 'not-submitted':
+                self._remember()
         self._evidence('l2-collected')
         return self.snapshot()
 

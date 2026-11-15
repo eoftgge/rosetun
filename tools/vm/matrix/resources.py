@@ -1,7 +1,7 @@
 """Local stand ownership and evidence retention. No resource cleanup is executed."""
 
 import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import json
 import os
@@ -23,13 +23,18 @@ DEVICES = {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$",
 
 EXECUTION_FILES = {'execution-identity': 'execution-identity.json',
                    'execution-summary': 'execution-summary.json'}
+RUN_STATE_FILE = {'run-state': 'run-state.json'}
 
 
 def execution_resources(data):
+    """Files a controller registers before preparation: its identity and summary, and the run state."""
     entries = [r for r in data['resources'] if r['id'] in EXECUTION_FILES]
     if entries and {r['id']: r.get('path') for r in entries} != EXECUTION_FILES:
         raise ValueError('incomplete-execution-resources')
-    return entries
+    state = [r for r in data['resources'] if r['id'] in RUN_STATE_FILE]
+    if state and {r['id']: r.get('path') for r in state} != RUN_STATE_FILE:
+        raise ValueError('incomplete-execution-resources')
+    return entries + state
 
 
 def _identifier(value):
@@ -505,6 +510,8 @@ class PreparedRun:
 
     _lease: StandLease
     _identity: tuple[str, str, str]
+    # What this controller keeps for the run beside the ledger, such as its run state.
+    _cache: dict = field(default_factory=dict, compare=False, repr=False)
 
     @property
     def directory(self):

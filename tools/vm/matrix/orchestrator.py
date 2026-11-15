@@ -14,6 +14,7 @@ from .execution import preflight
 from .lab_protocol import HELPER_REASON
 from .resources import (StandLease, create_run, resource_path, EXECUTION_FILES,
                         completion_verified)
+from .run_state import RunState, RESOURCE as RUN_STATE_RESOURCE
 
 SUMMARY_SCHEMA = 'rosetun.matrix.execution-summary.v1'
 _RETAINED_LEASES = []
@@ -51,6 +52,62 @@ def failure(stage, error):
     if ours and type(helper) is str and HELPER_REASON.fullmatch(helper):
         row['helper_reason'] = helper
     return row
+
+
+def phase_of(step, current):
+    """The run-state phase a controller step belongs to: steps never move a run back."""
+    if step.startswith('close'):
+        return 'closing'
+    if step.startswith('collect') or current in ('collecting', 'closing'):
+        return current if current == 'closing' else 'collecting'
+    if current == 'preparing' and not step.startswith('start'):
+        return 'preparing'
+    return 'running'
+
+
+def controller_commit(preflight_result):
+    source = preflight_result.get('controller_source') if type(preflight_result) is dict else None
+    sha = source.get('source_sha') if type(source) is dict else None
+    return sha if type(sha) is str and re.fullmatch('[0-9a-f]{40}', sha) else None
+
+
+def configuration_digest(config):
+    return hashlib.sha256(json.dumps(config, sort_keys=True).encode()).hexdigest()
+
+
+def begin_state(run, config, preflight_result, **identities):
+    """Register the run state beside the execution files and record the run as preparing."""
+    run.register(dict(RUN_STATE_RESOURCE))
+    return RunState.create(run, phase='preparing', commit=controller_commit(preflight_result),
+                           configuration_sha256=configuration_digest(config), **identities)
+
+
+def mark_step(states, name, status):
+    """Record a step of every run that has a state; a failed intent or done stops the controller."""
+    for state in states:
+        if state.phase in ('completed', 'quarantined'):
+            continue
+        try:
+            state.transition(phase_of(name, state.phase), name, status)
+        except (OSError, ValueError):
+            if status != 'error':
+                raise ValueError('run-state-write-failed') from None
+
+
+def finish_state(state, completed, result):
+    """The final phase: completed only with verified completion; otherwise quarantined with the first reason."""
+    if state is None or state.phase in ('completed', 'quarantined'):
+        return
+    reasons = [e.get('reason') for e in result['errors'] if type(e.get('reason')) is str]
+    try:
+        if completed:
+            state.transition('completed', 'summary', 'done')
+        else:
+            state.transition('quarantined', 'summary', 'done',
+                             reason=(reasons[0] if reasons and re.fullmatch(r'[A-Za-z0-9_-]{1,96}', reasons[0])
+                                     else 'completion-unverified'))
+    except (OSError, ValueError):
+        result['errors'].append(dict(stage='summary', kind='RunStateError', reason='run-state-write-failed'))
 
 
 def save(run, name, value, *, initial=False):
@@ -102,7 +159,7 @@ def run_linux(config, *, adapters=None, clock=time.monotonic, sleep=time.sleep,
                   evidence=[], assessment=None, delivery=None, execution=None,
                   completion=False, manual_recovery_required=False, errors=[],
                   security_invariants='UNVERIFIED', release_gate=False, exit_code=2)
-    lease = run = vm = attempt = job = None
+    lease = run = vm = attempt = job = state = None
     stage = 'preflight'
     interrupted = False
 
@@ -112,12 +169,16 @@ def run_linux(config, *, adapters=None, clock=time.monotonic, sleep=time.sleep,
         progress(name)
         row = dict(stage=name, state='started')
         result['stages'].append(row)
+        states = [state] if state is not None else []
+        mark_step(states, name, 'intent')
         try:
             value = operation()
         except BaseException:
             row['state'] = 'error'
+            mark_step(states, name, 'error')
             raise
         row['state'] = 'completed'
+        mark_step(states, name, 'done')
         return value
 
     def bounded_executor(deadline):
@@ -149,6 +210,7 @@ def run_linux(config, *, adapters=None, clock=time.monotonic, sleep=time.sleep,
         progress('run ' + identities['host_run_id'] + ' artifacts ' + str(run.directory))
         for identifier, name in EXECUTION_FILES.items():
             run.register(dict(id=identifier, kind='file', path=name))
+        state = begin_state(run, config, result['preflight'], **identities)
         step('save-identities', lambda: save(run, 'execution-identity.json',
               dict(schema='rosetun.matrix.execution-identity.v1', **identities), initial=True))
         save(run, 'execution-summary.json', result, initial=True)
@@ -169,6 +231,7 @@ def run_linux(config, *, adapters=None, clock=time.monotonic, sleep=time.sleep,
         step('boot', lambda: vm.wait_initial_guest(timeout=config['deadlines']['boot'],
                                                  clock=clock, sleep=sleep))
         identities.update(boot_id=vm.last_boot_id, vm_uuid=vm.vm_uuid)
+        state.update('identities', boot_id=vm.last_boot_id, vm_uuid=vm.vm_uuid)
         attempt = step('import-create', lambda: adapters.importer(vm, enabled=True,
               guest_run_id=identities['guest_run_id'], import_id=identities['import_id'],
               **config['accounts'], **{k + '_timeout': v for k, v in config['timeouts'].items()},
@@ -195,6 +258,7 @@ def run_linux(config, *, adapters=None, clock=time.monotonic, sleep=time.sleep,
                 raise
             step('submit-recovery', recovery)
         # Conservative waiting needs no status RPC and cannot consume collect attempts early.
+        state.deadline('wait_until', config['timeouts']['job'] + 125)
         step('wait', lambda: sleep(config['timeouts']['job'] + 125))
         try:
             step('collect', job.collect)
@@ -232,6 +296,7 @@ def run_linux(config, *, adapters=None, clock=time.monotonic, sleep=time.sleep,
             except (OSError, ValueError):
                 result['completion'] = False
         result['manual_recovery_required'] = run is not None and not result['completion']
+        finish_state(state, result['completion'], result)
         accepted = bool(result['execution'] and result['execution']['accepted'])
         result['exit_code'] = (130 if interrupted else 2 if result['errors'] or not result['completion']
                                else 0 if accepted else 1)

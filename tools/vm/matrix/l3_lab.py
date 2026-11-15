@@ -21,7 +21,7 @@ from .execution import lab_of, preflight
 from .lab_protocol import (LOG_LIMIT, PORTS, TARGETS, EVIDENCE_PCAP_LIMIT, CLIENTS, EGRESS, HELPER_REASON,
                            ROUTE_FLOW_LIMIT, ROUTE_FLOWS_LIMIT, classify_windows, https_exchanges, marker_run_id,
                            probes)
-from .orchestrator import _RETAINED_LEASES, failure, save
+from .orchestrator import _RETAINED_LEASES, begin_state, failure, finish_state, mark_step, save
 from .l3_align import align
 from .l3_summary import CONTROLS
 from .resources import StandLease, completion_verified, create_run, resource_path, EXECUTION_FILES
@@ -235,7 +235,7 @@ def run_linux_l3_lab(config, *, diagnostic=False, control=None, adapters=None, c
     if control is not None:
         result['control'] = control
     lease = pair = job = attempt = lab_id = None
-    runs, vms, closed = {}, {}, set()
+    runs, vms, closed, states = {}, {}, set(), {}
     stage = 'preflight'
     interrupted = False
     # What the finally block summarizes: kept as it arrives, so that a late failure loses nothing.
@@ -248,12 +248,16 @@ def run_linux_l3_lab(config, *, diagnostic=False, control=None, adapters=None, c
         progress(name)
         row = dict(stage=name, state='started')
         result['stages'].append(row)
+        current = list(states.values())
+        mark_step(current, name, 'intent')
         try:
             value = operation()
         except BaseException:
             row['state'] = 'error'
+            mark_step(current, name, 'error')
             raise
         row['state'] = 'completed'
+        mark_step(current, name, 'done')
         return value
 
     def bounded_executor(deadline):
@@ -295,6 +299,9 @@ def run_linux_l3_lab(config, *, diagnostic=False, control=None, adapters=None, c
             result.setdefault('artifact_directories', {})[role] = str(run.directory)
             for identifier, name in EXECUTION_FILES.items():
                 run.register(dict(id=identifier, kind='file', path=name))
+            states[role] = begin_state(run, config, result['preflight'], lab_id=lab_id, **(
+                dict(host_run_id=identities['host_run_id'], guest_run_id=guest_run_id,
+                     import_id=identities['import_id']) if role == 'test' else dict(host_run_id=members[role])))
             save(run, 'execution-identity.json', {
                 **(identities if role == 'test' else {}),
                 'schema': 'rosetun.matrix.execution-identity.v1', 'lab_id': lab_id, 'role': role,
@@ -433,7 +440,7 @@ def run_linux_l3_lab(config, *, diagnostic=False, control=None, adapters=None, c
             if handle is not None:
                 vms[starting] = handle
     finally:
-        finish(result, lease, pair, runs, vms, closed, job, attempt, seen, interrupted, lab_id)
+        finish(result, lease, pair, runs, vms, closed, job, attempt, seen, interrupted, lab_id, states)
     return result
 
 
@@ -463,7 +470,7 @@ def judge(lab_id, config, seen):
                                        required_labels=GROUP_LABELS, limit=EVIDENCE_PCAP_LIMIT, flows=True)
 
 
-def finish(result, lease, pair, runs, vms, closed, job, attempt, seen, interrupted, lab_id):
+def finish(result, lease, pair, runs, vms, closed, job, attempt, seen, interrupted, lab_id, states=None):
     """Close what is still open, then write the summary into both runs; never raises."""
     if job is not None:
         result['execution'] = job.snapshot()
@@ -496,6 +503,8 @@ def finish(result, lease, pair, runs, vms, closed, job, attempt, seen, interrupt
             result['completion'][role] = False
     result['completed'] = (set(runs) == set(ROLES) and all(result['completion'].values())
                            and (pair is None or pair.closed))
+    for role, state in (states or {}).items():
+        finish_state(state, result['completion'].get(role, False), result)
     result['manual_recovery_required'] = bool(runs) and not result['completed']
     result['legacy'] = legacy_block(seen['raw_report'], getattr(job, 'assessment', None))
     parsed = {k: _json_or_none(v) for k, v in seen['logs'].items() if k.endswith('.json')}

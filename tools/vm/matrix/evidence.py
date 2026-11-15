@@ -76,6 +76,12 @@ def append_row(run, relative, value, *, forbid=None, max_bytes=None, limit_check
         fsync_directory(path.parent)
 
 
+def write_run_state(run, raw, *, temporary):
+    """Replace the run's state file atomically; it must be registered and never carries the owner token."""
+    write_file(run, 'run-state.json', raw, mode='replace', temporary=temporary,
+               forbid=run._identity[2], require_registered=True)
+
+
 def write_file(run, relative, raw, *, mode, forbid=None, require_registered=False,
                readback=False, sync_parent=False, temporary=None):
     """Write a whole file. `mode` is 'create' (xb), 'overwrite' (wb) or 'replace'.

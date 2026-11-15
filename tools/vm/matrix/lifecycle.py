@@ -32,6 +32,7 @@ from .qemu import QemuConfig, CommandResult, _launch_plan, execute, OUTPUT_LIMIT
 from .report import _unique_object, _invalid_constant
 from .evidence import append_row
 from .resources import resource_path, execution_resources, lock_run, unlock_run, RUN_LOCK
+from . import run_state
 
 
 JOURNAL_LIMIT = 128
@@ -166,6 +167,8 @@ class Vm:
         self.qga = None
         self.qga_path = None
         self.control_lock = None
+        # The run's state on disk: the budgets below are recorded there before they are spent.
+        self.state = None
         self.qga_line_limit = LINE_LIMIT
         self._guest_lock = threading.Lock()
         self.qga_recoveries = 0
@@ -188,7 +191,20 @@ class Vm:
         self.operation_errors = []
 
     def _new_qmp(self, stream):
-        return Qmp(stream)
+        if self.state is None:
+            return Qmp(stream)
+        budgets = self.state.document['budgets']
+        return Qmp(stream, spent=dict(calls=budgets['qmp_calls'], events=budgets['qmp_events'],
+                                      bytes=(budgets['qmp_bytes_o'], budgets['qmp_bytes_i'])),
+                   persist=self.state.record)
+
+    def _spend(self, name):
+        """Record one more of a per-run budget before it is used; no record, no use."""
+        if self.state is not None:
+            try:
+                self.state.spend(name)
+            except (OSError, ValueError):
+                raise LifecycleError('run-state-budget-record-failed', self) from None
 
     def _check(self):
         if self.run is not self._owner_run:
@@ -282,6 +298,7 @@ class Vm:
             raise LifecycleError('qga-recovery-limit', self)
         if self.qga_observations >= 32:
             raise LifecycleError('qga-observation-limit', self)
+        self._spend('qga_recoveries')
         self.qga_recoveries += 1
         self.guest_observation = None
         old = self.qga.session_id
@@ -294,6 +311,7 @@ class Vm:
             self._new_qga()
         except (OSError, ValueError):
             self.qga.invalidate()
+            self._spend('qga_observations')
             self.qga_observations += 1
             self._guest_row(dict(self._observation_row(), operation='recovery',
                                  old_session_id=old, reason=self.qga_reason,
@@ -327,6 +345,7 @@ class Vm:
             raise LifecycleError('qga-not-configured', self)
         if self.qga_observations >= 32:
             raise LifecycleError('qga-observation-limit', self)
+        self._spend('qga_observations')
         self.qga_observations += 1
         row = dict(self._observation_row(), operation='recovery' if old_session_id else 'observe',
                    old_session_id=old_session_id, reason=self.qga_reason,
@@ -671,6 +690,10 @@ def start(run, *, timeout=5, executor=execute, lab=None):
         run.register({'id': 'control-lock', 'kind': 'file', 'path': RUN_LOCK})
         for identifier, path in sockets.items():
             run.register({'id': identifier, 'kind': 'socket', 'path': path.name})
+        if not any(r['id'] == run_state.RESOURCE['id'] for r in manifest['resources']):
+            # A run whose controller keeps no state of its own still gets one for its budgets.
+            run.register(dict(run_state.RESOURCE))
+        state = run_state.of(run) or run_state.RunState.create(run, phase='running')
         for name in (('qemu-stderr.log', 'completion.json', 'qga-observations.jsonl', 'job-evidence.jsonl')
                      if config.qga else ('qemu-stderr.log', 'completion.json')):
             run.register({'id': name.split('.')[0], 'kind': 'file', 'path': name})
@@ -704,6 +727,7 @@ def start(run, *, timeout=5, executor=execute, lab=None):
             raise
         raise LifecycleError('vm-start-failed') from None
     vm = Vm(run, timeout)
+    vm.state = state
     if lab is not None and getattr(lab, 'journal_full', False) and lab.role(run) == 'test':
         # The whole journal of the service comes back in one reply, which the ordinary limit would end.
         vm.qga_line_limit = DIAGNOSTIC_LINE_LIMIT
@@ -754,6 +778,7 @@ def start(run, *, timeout=5, executor=execute, lab=None):
             raise LifecycleError('qmp-initial-state-mismatch')
         if config.qga:
             vm._new_qga()
+        state.update('identities', vm_uuid=plan['uuid'])
         run.mark('running')
         vm._event('start', 'qmp-ready-paused', teardown=True)
         return vm
