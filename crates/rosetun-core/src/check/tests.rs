@@ -253,11 +253,13 @@ fn a_template_rule_names_the_template() {
         RuleTarget::Direct,
     )]);
 
-    let answer = check(
-        &request,
-        &none(),
-        &Subject::ProgramName("qbittorrent.exe".into()),
-    );
+    // The template lists each system's own program names.
+    let name = if cfg!(windows) {
+        "qbittorrent.exe"
+    } else {
+        "qbittorrent"
+    };
+    let answer = check(&request, &none(), &Subject::ProgramName(name.into()));
 
     assert!(matches!(
         answer,
