@@ -1801,6 +1801,7 @@ impl FakeClashApi {
         let control = ControlEndpoint {
             address: listener.local_addr().unwrap(),
             secret: "test-secret".to_owned(),
+            delay: None,
         };
         let calls = Arc::new(AtomicUsize::new(0));
         let stop = Arc::new(AtomicBool::new(false));

@@ -142,6 +142,7 @@ fn probes_render_all_proxy_protocols_and_reject_unsupported_tls() {
     let control = ControlEndpoint {
         address: "127.0.0.1:10800".parse().unwrap(),
         secret: "fixture-secret".into(),
+        delay: None,
     };
     let rendered = backend
         .render_probe(&ProbeRenderRequest {

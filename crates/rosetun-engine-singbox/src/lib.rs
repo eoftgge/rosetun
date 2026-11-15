@@ -719,6 +719,7 @@ mod tests {
         let control = ControlEndpoint {
             address: "127.0.0.1:12345".parse().unwrap(),
             secret: "private-secret".to_owned(),
+            delay: None,
         };
         let request = RenderRequest {
             extra: &[],
@@ -884,6 +885,7 @@ mod tests {
         let control = ControlEndpoint {
             address: "127.0.0.1:12345".parse().expect("loopback address"),
             secret: "private-secret".to_owned(),
+            delay: None,
         };
         let config = render::render(&RenderRequest {
             extra: &[],
@@ -916,6 +918,7 @@ mod tests {
         let control = ControlEndpoint {
             address: "127.0.0.1:12345".parse().unwrap(),
             secret: "private-secret".to_owned(),
+            delay: None,
         };
         let mut unsupported = node();
         unsupported.outbound = Outbound::Unknown {
@@ -979,6 +982,7 @@ mod tests {
         let control = ControlEndpoint {
             address: listener.local_addr().unwrap(),
             secret: "test-secret".to_owned(),
+            delay: None,
         };
         let expected_tag = match target {
             UrlTestTarget::Session => "proxy",
@@ -1069,6 +1073,7 @@ mod tests {
         let control = ControlEndpoint {
             address: listener.local_addr().unwrap(),
             secret: "test-secret".to_owned(),
+            delay: None,
         };
         let server = thread::spawn(move || {
             let mut seen = [false; 2];
@@ -1133,6 +1138,7 @@ mod tests {
         let control = ControlEndpoint {
             address: listener.local_addr().expect("server address"),
             secret: "test-secret".to_owned(),
+            delay: None,
         };
         let server = thread::spawn(move || {
             let deadline = Instant::now() + Duration::from_secs(3);
@@ -1234,6 +1240,7 @@ mod tests {
         let control = ControlEndpoint {
             address: listener.local_addr().unwrap(),
             secret: "test-secret".to_owned(),
+            delay: None,
         };
         let server = thread::spawn(move || {
             let deadline = std::time::Instant::now() + Duration::from_secs(1);
