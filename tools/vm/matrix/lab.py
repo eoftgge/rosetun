@@ -54,8 +54,12 @@ GUEST_LIFETIME = 90
 # What a negative control of stage 7c1 has to end in, as the summary says it.
 CONTROL_EXPECTATIONS = {
     'extra-packet': 'leak DETECTED, the canary flows tcp and udp and nothing else, the window proven',
-    'observer-stopped': 'leak UNVERIFIED and never NONE, the closing marker missing, the closing exchange refused',
-    'link-down': 'leak UNVERIFIED and never NONE, the closing marker missing, the link back before the end'}
+    'observer-stopped': 'leak UNVERIFIED and never NONE, the capture ended by request inside the window '
+                        '(capture-halted-in-window), the closing marker missing, the closing exchange refused',
+    'observer-killed': 'leak UNVERIFIED and never NONE, no health report from the killed observer '
+                       '(observer-gone), the closing marker missing, the closing exchange refused',
+    'link-down': 'leak UNVERIFIED and never NONE, the capture healthy to its end but without the closing marker '
+                 '(no capture-halted-in-window), the link back before the end'}
 # A control that stops something between the markers makes the test machine wait; the polls of its helper allow for it.
 CONTROL_POLLS = 120
 
@@ -402,11 +406,18 @@ def control_met(result):
                 and window['markers_found'] is True and window['ordered'] is True and result['observer_reasons'] == []
                 and result['errors'] == [] and result['qualification']['qualified'] is True)
     # The closing marker never reached the observer, so the window stays open: not a clean run, never a leak-free one.
-    return (control['intervened'] is True and result['leak'] == 'UNVERIFIED'
-            and 'window-markers-missing-or-repeated' in result['observer_reasons']
-            and window['markers_found'] is False
+    errors, reasons = result['errors'], result['observer_reasons']
+    if not (control['intervened'] is True and result['leak'] == 'UNVERIFIED' and window['markers_found'] is False
             and (name != 'link-down' or control['link_restored'] is True)
-            and len(result['errors']) == 1 and probe_error_is_the_closing_marker(result['errors'][0]))
+            and errors and probe_error_is_the_closing_marker(errors[0])):
+        return False
+    if name == 'observer-killed':
+        # A killed observer writes no health.json and no log, so nothing could be read and nothing was judged.
+        return (reasons == ['observer-gone']
+                and errors[1:] == [dict(stage='lab-smoke', kind='ValueError', reason='observer-gone')])
+    # Only a stopped observer says it ended inside the window; a cut link leaves it running to the finish.
+    return (len(errors) == 1 and 'window-markers-missing-or-repeated' in reasons
+            and ('capture-halted-in-window' in reasons) == (name == 'observer-stopped'))
 
 
 def tunnel_request(config, exchanges):
@@ -596,7 +607,7 @@ def lab_smoke(config, *, canary=False, tunnel=False, evidence_disk=False, durati
                     or lab.call('window', expected, window, **extra).get('exchanges_done') is not True):
                 return
             result['control']['intervened'] = True
-            if control == 'observer-stopped':
+            if control in ('observer-stopped', 'observer-killed'):
                 lab.call('halt', expected, window, **extra)
             else:
                 vms['test'].set_link(False)
@@ -630,9 +641,13 @@ def lab_smoke(config, *, canary=False, tunnel=False, evidence_disk=False, durati
             # The exchanges did not all finish while the test machine waited: nothing was stopped, so nothing is shown.
             result['errors'].append(dict(stage='control', kind='ValueError', reason='exchanges-not-completed'))
         result['replies'] = replies
-        lab.call('finish', expected, window, **extra)
+        finished = lab.call('finish', expected, window, **extra)
         # The observer has stopped, so what the test machine sends once its link is back is not judged.
         restore_link()
+        if control == 'observer-killed' and finished.get('observer_gone') is True:
+            # The killed observer left no health.json and no log: nothing to read, nothing judged, the run refused.
+            result.update(leak_reason='observer-gone', observer_reasons=['observer-gone'])
+            raise ValueError('observer-gone')
         evidence = {}
         files = (('targets.json', LOG_LIMIT), ('health.json', LOG_LIMIT))
         if not evidence_disk:

@@ -5,12 +5,16 @@ from dataclasses import asdict, replace
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import shutil
+import signal
 import socket
+import subprocess
 import sys
 import tempfile
 import threading
+import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -20,7 +24,7 @@ from tools.vm.matrix.tests import test_lifecycle, test_qemu
 from tools.vm.matrix.tests.test_lab import (Endpoint, canary_frames, capture, exchange, healthy, marker_exchange,
                                             pcap)
 
-STOPPED = ('observer-stopped', 'link-down')
+STOPPED = ('observer-stopped', 'observer-killed', 'link-down')
 
 
 class Qmp(test_lifecycle.Control):
@@ -56,6 +60,7 @@ class Harness(unittest.TestCase):
         plans, qmps, calls, vms, seen = {}, {}, [], {}, {}
         windows = [0]
         halts = control in STOPPED and fault not in ('never-seen', 'close-arrived')
+        killed = control == 'observer-killed' and halts
 
         def prepare(run, image, qemu):
             fixture.run, fixture.calls = run, []
@@ -109,7 +114,8 @@ class Harness(unittest.TestCase):
                 if operation == 'finish':
                     if fault == 'finish-fails':
                         raise ValueError('finish-failed')
-                    return dict(finished=True)
+                    # A killed observer never wrote its health, and the lab machine says so instead of waiting.
+                    return dict(finished=True, **({'observer_gone': True} if killed else {}))
                 # The test machine's helper: it waits, the controller acts on its polls, then the closing marker fails.
                 for _ in range(6 if poll is not None else 0):
                     poll()
@@ -129,7 +135,10 @@ class Harness(unittest.TestCase):
                     return pcap(probes, window)
                 if name == 'targets.json':
                     return json.dumps([{**p, 'response': wire.answer(p).hex()} for p in probes]).encode()
-                return json.dumps(healthy(window, **(dict(markers=healthy(window)['markers'][:1]) if halts else {}))).encode()
+                changes = dict(markers=healthy(window)['markers'][:1]) if halts else {}
+                # Only the lab's `halt` leaves the mark that the capture was ended on request.
+                changes |= dict(halted=True) if control == 'observer-stopped' and halts else {}
+                return json.dumps(healthy(window, **changes)).encode()
 
         adapters = SimpleNamespace(
             host=lambda: None, prepare=prepare, start=start, guest=Guest,
@@ -167,10 +176,62 @@ class ControlRunTests(Harness):
         result = self.scenario('observer-stopped')
         self.assertEqual((0, 'UNVERIFIED'), (result['exit_code'], result['leak']))
         self.assertIn('window-markers-missing-or-repeated', result['observer_reasons'])
+        self.assertIn('capture-halted-in-window', result['observer_reasons'])
         self.assertEqual((False, False), (result['window']['markers_found'], result['window']['ordered']))
         self.assertTrue(result['control']['met'] and result['control']['intervened'])
         self.assertEqual([], self.qmps['test'].links)
         self.assertEqual(dict(test=True, lab=True), result['completion'])
+
+    def test_a_cut_link_is_told_from_a_stopped_observer_by_the_reason_only_the_stop_leaves(self):
+        stopped = self.scenario('observer-stopped')
+        cut = self.scenario('link-down')
+        self.assertEqual((0, 0), (stopped['exit_code'], cut['exit_code']))
+        self.assertIn('capture-halted-in-window', stopped['observer_reasons'])
+        self.assertNotIn('capture-halted-in-window', cut['observer_reasons'])
+        # The one reason tells them apart: a stop without it, or a cut with it, is not what the control shows.
+        stopped['observer_reasons'].remove('capture-halted-in-window')
+        cut['observer_reasons'].append('capture-halted-in-window')
+        self.assertFalse(lab.control_met(stopped))
+        self.assertFalse(lab.control_met(cut))
+
+    def test_killing_the_observer_is_refused_without_a_verdict_and_never_says_none(self):
+        result = self.scenario('observer-killed')
+        self.assertEqual((0, 'UNVERIFIED', ['observer-gone']),
+                         (result['exit_code'], result['leak'], result['observer_reasons']))
+        self.assertTrue(result['control']['met'] and result['control']['intervened'])
+        self.assertEqual((False, False), (result['window']['markers_found'], result['window']['ordered']))
+        # The closing exchange of the test machine and the missing report of the observer are both on the record.
+        self.assertEqual(['probe', 'lab-smoke'], [row['stage'] for row in result['errors']])
+        self.assertEqual('observer-gone', result['errors'][1]['reason'])
+        self.assertEqual(['setup', 'window', 'window', 'halt', 'finish'], self.lab_operations())
+        self.assertEqual([], self.qmps['test'].links)
+        self.assertEqual(dict(test=True, lab=True), result['completion'])
+        self.assertTrue(result['channel_closed'])
+        self.assertNotIn('evidence_sha256', result)
+
+    def test_a_killed_observer_control_passes_only_on_its_own_refusal(self):
+        changes = (lambda r: r['observer_reasons'].append('capture-halted-in-window'),
+                   lambda r: r.update(leak='NONE'),
+                   lambda r: r['errors'].pop(),
+                   lambda r: r['errors'].pop(0),
+                   lambda r: r['errors'].append(dict(stage='lab-smoke', kind='ValueError', reason='other')),
+                   lambda r: r['control'].update(intervened=False))
+        for index, change in enumerate(changes):
+            with self.subTest(change=index):
+                result = self.scenario('observer-killed')
+                change(result)
+                self.assertFalse(lab.control_met(result))
+        # A kill does not pass as a stop or a cut, nor a stop as a kill.
+        killed = self.scenario('observer-killed')
+        for name in ('observer-stopped', 'link-down'):
+            self.assertFalse(lab.control_met(dict(killed, control=dict(killed['control'], name=name))))
+        stopped = self.scenario('observer-stopped')
+        self.assertFalse(lab.control_met(dict(stopped, control=dict(stopped['control'], name='observer-killed'))))
+
+    def test_a_kill_that_left_no_dead_observer_at_the_finish_is_judged_like_an_ordinary_run(self):
+        # The lab machine did not report the observer gone: the run reads its evidence as usual and the control fails.
+        result = self.scenario('observer-killed', fault='close-arrived')
+        self.assertEqual((2, False), (result['exit_code'], result['control']['met']))
 
     def test_the_intervention_waits_for_the_lab_to_mark_the_opening_and_acts_once(self):
         result = self.scenario('observer-stopped')
@@ -182,7 +243,7 @@ class ControlRunTests(Harness):
             with self.subTest(control=control, fault='slow-exchanges'):
                 slow = self.scenario(control, fault='slow-exchanges')
                 self.assertEqual((0, True), (slow['exit_code'], slow['control']['intervened']))
-                self.assertEqual(['setup'] + ['window'] * 5 + (['halt'] if control == 'observer-stopped' else [])
+                self.assertEqual(['setup'] + ['window'] * 5 + (['halt'] if control != 'link-down' else [])
                                  + ['finish'], self.lab_operations())
                 self.assertEqual(2 if control == 'link-down' else 0, len(self.qmps['test'].links))
         for control in STOPPED:
@@ -473,6 +534,7 @@ class GuestControlTests(unittest.TestCase):
         (run / 'health.json').write_text('{}')
         self.assertEqual(dict(halted=True), self.main(directory, dict(request, operation='halt')))
         self.assertTrue((run / 'stop').exists())
+        self.assertTrue((run / 'halted').exists())
         with self.assertRaises(FileExistsError):
             self.main(directory, dict(request, operation='halt'))
         for changes in (dict(control='link-down'), {}):
@@ -491,6 +553,95 @@ class GuestControlTests(unittest.TestCase):
             (run / 'stop').touch()
             with self.subTest(changes=changes), self.assertRaises(FileExistsError):
                 self.main(directory, dict(request, operation='finish'))
+
+    def observer_process(self, lab_id='a' * 32, operation='serve'):
+        child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)',
+                                  json.dumps(dict(operation=operation, lab_id=lab_id))])
+        self.addCleanup(child.wait)
+        self.addCleanup(child.kill)
+        return child
+
+    @unittest.skipUnless(Path('/proc/self/stat').exists(), 'the observer is found through /proc')
+    def test_only_the_observer_of_this_run_counts_as_the_observer(self):
+        lab_id = self.request['lab_id']
+        mine = self.observer_process()
+        self.assertTrue(self.entry.observer_alive(mine.pid, lab_id))
+        self.assertFalse(self.entry.observer_alive(mine.pid, 'b' * 32))
+        self.assertFalse(self.entry.observer_alive(self.observer_process(operation='setup').pid, lab_id))
+        self.assertFalse(self.entry.observer_alive(os.getpid(), lab_id))
+        mine.kill()
+        # Dead and not yet reaped: a zombie is not an observer.
+        for _ in range(50):
+            if not self.entry.observer_alive(mine.pid, lab_id):
+                break
+            time.sleep(.1)
+        self.assertFalse(self.entry.observer_alive(mine.pid, lab_id))
+        self.assertFalse(self.entry.observer_alive(2 ** 22 + 1, lab_id))
+
+    @unittest.skipUnless(Path('/proc/self/stat').exists(), 'the observer is found through /proc')
+    def test_the_kill_goes_to_the_recorded_observer_with_sigkill_and_leaves_no_stop_or_health(self):
+        directory, run, request = self.serve_dir(control='observer-killed')
+        child = self.observer_process()
+        (run / 'observer.pid').write_text(str(child.pid))
+        with patch.object(self.entry, 'ROOT', directory), patch.object(self.entry, 'identity', return_value='enp7s0'):
+            self.assertEqual(dict(halted=True), self.entry.main(dict(request, operation='halt')))
+        self.assertEqual(-signal.SIGKILL, child.wait(10))
+        self.assertEqual([], [p.name for p in run.iterdir() if p.name in ('stop', 'halted', 'health.json')])
+
+    @unittest.skipUnless(Path('/proc/self/stat').exists(), 'the observer is found through /proc')
+    def test_the_kill_refuses_a_process_that_is_not_the_observer_of_this_run(self):
+        directory, run, request = self.serve_dir(control='observer-killed')
+        for child in (self.observer_process('b' * 32), self.observer_process(operation='setup')):
+            (run / 'observer.pid').write_text(str(child.pid))
+            with self.assertRaisesRegex(ValueError, 'observer-not-running'):
+                self.main(directory, dict(request, operation='halt'))
+            self.assertIsNone(child.poll())
+        (run / 'observer.pid').unlink()
+        with self.assertRaises(OSError):
+            self.main(directory, dict(request, operation='halt'))
+
+    def test_the_kill_is_for_its_own_control_only(self):
+        for changes in (dict(control='observer-stopped'), dict(control='link-down'), {}):
+            directory, run, request = self.serve_dir(**changes)
+            (run / 'observer.pid').write_text(str(os.getpid()))
+            with self.subTest(changes=changes), patch.object(self.entry.os, 'kill') as kill:
+                with self.assertRaises((ValueError, FileExistsError)):
+                    self.main(directory, dict(request, operation='halt', **({} if changes else {'control': 'x'})))
+                kill.assert_not_called()
+
+    def test_the_finish_does_not_wait_for_a_killed_observer(self):
+        directory, run, request = self.serve_dir(control='observer-killed')
+        (run / 'observer.pid').write_text('2')
+        with patch.object(self.entry, 'observer_alive', return_value=False):
+            self.assertEqual(dict(finished=True, observer_gone=True),
+                             self.main(directory, dict(request, operation='finish')))
+        self.assertFalse((run / 'stop').exists())
+
+    def test_the_finish_of_an_observer_that_is_not_gone_or_wrote_its_health_is_the_ordinary_one(self):
+        directory, run, request = self.serve_dir(control='observer-killed')
+        # No kill happened: the observer is alive and is stopped the ordinary way, but it says nothing, so it times out.
+        (run / 'observer.pid').write_text('2')
+        with patch.object(self.entry, 'observer_alive', return_value=True), self.assertRaisesRegex(
+                ValueError, 'observer-stop-timeout'):
+            self.main(directory, dict(request, operation='finish'))
+        self.assertTrue((run / 'stop').exists())
+        # It ended and wrote its health on its own: that is a finished observer, not a gone one.
+        directory, run, request = self.serve_dir(control='observer-killed')
+        (run / 'observer.pid').write_text('2')
+        (run / 'health.json').write_text('{}')
+        with patch.object(self.entry, 'observer_alive', return_value=False):
+            self.assertEqual(dict(finished=True), self.main(directory, dict(request, operation='finish')))
+
+    def test_the_setup_records_the_pid_of_the_observer_only_for_the_kill(self):
+        for control, recorded in (('observer-killed', True), ('observer-stopped', False), ('link-down', False)):
+            directory, run, request = self.serve_dir(control=control)
+            (run / 'ready.json').write_text('{}')
+            writes = []
+            with self.subTest(control=control), patch.object(self.entry, 'command'), \
+                 patch.object(self.entry.subprocess, 'Popen', return_value=SimpleNamespace(pid=4242, poll=lambda: None)), \
+                 patch.object(Path, 'write_text', lambda path, text: writes.append((path.name, text))):
+                self.entry.setup(dict(request, operation='setup'), 'enp7s0', run)
+            self.assertEqual(recorded, ('observer.pid', '4242') in writes)
 
     def test_a_request_that_changed_its_control_since_the_setup_is_another_run(self):
         directory, run, request = self.serve_dir(control='link-down')

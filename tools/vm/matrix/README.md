@@ -3242,12 +3242,24 @@ such block and send the same requests to the guests as before.
 | `NAME` | What it does | Exit 0 only if |
 | --- | --- | --- |
 | `extra-packet` | sends the canary's packets, but the run is judged as an ordinary one | `leak` `DETECTED`, `canary_flows` `["tcp", "udp"]`, `canary_other` 0, both markers found and ordered, `observer_reasons` empty, no error, `qualified` |
-| `observer-stopped` | the controller stops the lab's observer between the markers | `leak` `UNVERIFIED` (never `NONE`), `window-markers-missing-or-repeated` in `observer_reasons`, the markers not found, and exactly one error: the closing exchange of the test machine (`marker-close`) |
-| `link-down` | the controller runs `set_link test-wire off` through QMP between the markers and `on` again before the machines close | the same as above, and `link_restored` true |
+| `observer-stopped` | the controller has the lab stop its observer the ordinary way (`halt`) between the markers | `leak` `UNVERIFIED` (never `NONE`), `window-markers-missing-or-repeated` **and `capture-halted-in-window`** in `observer_reasons`, the markers not found, and exactly one error: the closing exchange of the test machine (`marker-close`) |
+| `observer-killed` | the lab sends `SIGKILL` to its own observer between the markers (`halt`; no pid comes from the controller) | `leak` `UNVERIFIED` (never `NONE`), `observer_reasons` exactly `observer-gone`, the markers not found, and exactly two errors: the closing exchange of the test machine (`marker-close`) and the refusal `observer-gone` of the controller (stage `lab-smoke`) |
+| `link-down` | the controller runs `set_link test-wire off` through QMP between the markers and `on` again before the machines close | the same as `observer-stopped`, except that `capture-halted-in-window` must **not** be in `observer_reasons`, and `link_restored` true |
 
-For the last two the test machine waits `CONTROL_HOLD_SECONDS` (20) after its exchanges and before the
+The three differ in what the observer could still say. A stopped observer ends its capture on request and
+its `health.json` carries `halted` (only `halt` leaves it), which the verdict turns into
+`capture-halted-in-window`: the one reason a cut link cannot give, because there the observer runs on,
+healthy, to the `finish`. A killed observer gets no chance to write: no `health.json`, no target log, and a
+pcap that may be cut off. `finish` does not wait for it: the lab sees that the process of its observer
+(recorded by the lab at the setup, checked in `/proc` to be the observer of this run before it is signalled
+or trusted) is gone and answers `observer_gone`, so the controller reads nothing, judges nothing and ends
+the run as refused, with `observer-gone` as the reason. The kill needs no new right: the helper runs as
+root, as it does for everything else. A run whose `finish` did not find the observer gone is read as an
+ordinary run and the control fails.
+
+For the three that stop something the test machine waits `CONTROL_HOLD_SECONDS` (20) after its exchanges and before the
 closing marker, only when the request names the control (`control` in the request options, accepted
-only with these two names and no canary). The controller acts on the *event*: while the test machine's
+only with these three names and no canary). The controller acts on the *event*: while the test machine's
 helper runs it polls the lab with the new read-only operation `window`, which says whether the lab
 served the opening marker and has answered every exchange the request expects (the observer touches
 `exchanges-done` only for a request with a control, and only when the last of them is answered), and
@@ -3255,8 +3267,9 @@ acts once, on the first yes. The marker alone is not enough: the test machine st
 make after it, and a cut in the middle of them would add errors of its own. If the helper ends before
 the lab says yes, nothing is stopped: `control.intervened` stays false, the errors name
 `exchanges-not-completed` and the exit is 2. `observer-stopped` calls the new lab operation `halt`, which
-stops the observer the way `finish` does (`finish` then finds it stopped, but only for that control);
-`link-down` calls `Vm.set_link(False)` of the test machine. The link is brought back after `finish`
+stops the observer the way `finish` does, after marking the stop as asked for (`finish` then finds it
+stopped, but only for that control); `observer-killed` calls `halt` too, which signals the observer and
+touches neither the stop file nor the mark; `link-down` calls `Vm.set_link(False)` of the test machine. The link is brought back after `finish`
 (so that what the test machine sends once it is back is not judged), and in any case before the
 machines close, also when the run failed; a link that cannot be brought back is an error.
 

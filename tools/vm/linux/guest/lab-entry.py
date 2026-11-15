@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import re
 import selectors
+import signal
 import socket
 import ssl
 import stat
@@ -767,6 +768,9 @@ def setup(request, iface, directory):
     child = subprocess.Popen([ENTRY, json.dumps({**request, 'operation': 'serve', 'interface': iface})],
                              stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                              stderr=subprocess.DEVNULL, start_new_session=True, close_fds=True)
+    if request.get('control') == 'observer-killed':
+        # The lab machine knows its own observer; the controller never names a process.
+        (directory / 'observer.pid').write_text(str(child.pid))
     # The node and its listener start inside the observer, so they get a little longer.
     for _ in range(100 if tunnel is not None else 50):
         if child.poll() is not None:
@@ -1303,6 +1307,18 @@ def exchanges_done(request, marks, logs):
             and {p['nonce'] for p in request['probes']} <= answered)
 
 
+def observer_alive(pid, lab_id):
+    """Whether `pid` is still the observer of this run, and not a zombie or a process that took its number."""
+    try:
+        state = Path('/proc/%d/stat' % pid).read_text().rpartition(')')[2].split()[0]
+        arguments = Path('/proc/%d/cmdline' % pid).read_bytes().split(b'\0')
+        served = json.loads(arguments[-2])
+    except (OSError, ValueError, IndexError):
+        return False
+    return (state not in ('Z', 'X') and type(served) is dict and served.get('operation') == 'serve'
+            and served.get('lab_id') == lab_id)
+
+
 def serve(request, directory):
     deadline = time.monotonic() + request.get('duration_seconds', DURATION)
     logs, dropped, marks, ended, started = [], 0, [], None, None
@@ -1513,6 +1529,9 @@ def serve(request, directory):
         # Times are this machine's monotonic clock; a failed run records no end.
         health = dict(error=bool(failure), dropped=dropped, finished=True, capture_started=started,
                       capture_ended=ended, markers=marks, **extra)
+        if (directory / 'halted').exists():
+            # Only the control's `halt` leaves this: the capture ended because it was told to, inside the window.
+            health['halted'] = True
         if failure:
             health.update(error_reason=failure.reason, error_at=failure.at, error_in=failure.where)
         write(directory / 'health.json', health)
@@ -1552,12 +1571,30 @@ def main(request):
         return dict(exchanges_done=(directory / 'exchanges-done').exists())
     if request['role'] == 'lab' and operation == 'halt' and request.get('control') == 'observer-stopped':
         # The control stops the observer between the markers; `finish` then finds it stopped.
+        (directory / 'halted').touch(exist_ok=False)
         (directory / 'stop').touch(exist_ok=False)
         for _ in range(50):
             if (directory / 'health.json').exists():
                 return dict(halted=True)
             time.sleep(.1)
         raise ValueError('observer-stop-timeout')
+    if request['role'] == 'lab' and operation == 'halt' and request.get('control') == 'observer-killed':
+        # No stop file and no health.json: the observer gets no chance to say anything.
+        pid = int((directory / 'observer.pid').read_text())
+        if not observer_alive(pid, request['lab_id']):
+            raise ValueError('observer-not-running')
+        os.kill(pid, signal.SIGKILL)
+        for _ in range(50):
+            if not observer_alive(pid, request['lab_id']):
+                return dict(halted=True)
+            time.sleep(.1)
+        raise ValueError('observer-kill-timeout')
+    if request['role'] == 'lab' and operation == 'finish' and request.get('control') == 'observer-killed':
+        pid_file = directory / 'observer.pid'
+        if (pid_file.exists() and not (directory / 'health.json').exists()
+                and not observer_alive(int(pid_file.read_text()), request['lab_id'])):
+            # Nothing to wait for: the observer is gone and will never write its health.
+            return dict(finished=True, observer_gone=True)
     if request['role'] == 'lab' and operation == 'finish':
         time.sleep(.3)
         (directory / 'stop').touch(exist_ok=request.get('control') == 'observer-stopped')

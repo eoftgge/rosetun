@@ -475,6 +475,49 @@ class PlacesTests(ObserverCase):
             health['error_in'], health['error_reason'], health['capture_started']))
 
 
+class ControlProgressTests(ObserverCase):
+    """What the observer leaves for the controller of a control run, and for the verdict."""
+
+    def exchanges_done(self, observer):
+        for _ in range(40):
+            if (observer.directory / 'exchanges-done').exists():
+                return True
+            time.sleep(.05)
+        return False
+
+    def test_the_exchanges_are_done_only_when_the_opening_is_served_and_the_last_answer_is_out(self):
+        observer = Observer(self, control='link-down').start().wait_ready()
+        asked = [(p['service'], p['family']) for p in observer.request['probes']]
+        observer.marker('open')
+        for service, family in asked[:-1]:
+            observer.ask(service, family)
+        time.sleep(.3)
+        self.assertFalse((observer.directory / 'exchanges-done').exists())
+        observer.ask(*asked[-1])
+        self.assertTrue(self.exchanges_done(observer))
+
+    def test_answers_without_the_opening_marker_are_not_the_moment_to_act(self):
+        observer = Observer(self, control='link-down').start().wait_ready()
+        for p in observer.request['probes']:
+            observer.ask(p['service'], p['family'])
+        time.sleep(.3)
+        self.assertFalse((observer.directory / 'exchanges-done').exists())
+
+    def test_a_run_without_a_control_leaves_no_mark_for_one(self):
+        observer = Observer(self).start().wait_ready()
+        observer.marker('open')
+        for p in observer.request['probes']:
+            observer.ask(p['service'], p['family'])
+        time.sleep(.3)
+        self.assertFalse((observer.directory / 'exchanges-done').exists())
+
+    def test_a_capture_that_was_halted_says_so_in_its_health_and_any_other_does_not(self):
+        observer = Observer(self).start().wait_ready()
+        (observer.directory / 'halted').touch()
+        self.assertIs(True, observer.finish()['halted'])
+        self.assertNotIn('halted', Observer(self).run())
+
+
 class ExchangeIsolationTests(ObserverCase):
     """One bad exchange is that exchange's failure; the capture, the markers and the next exchange go on."""
 

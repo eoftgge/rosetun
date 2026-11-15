@@ -30,10 +30,10 @@ ACK_PREFIX = 'rosetun-lab-ack:'
 _WINDOW_MARKER = re.compile(rb'rosetun-lab-marker:([0-9a-f]{32})\.(0|[1-9][0-9]{0,2})\.(open|close)\.([a-z0-9_.-]{1,48})')
 DURATION = 60
 # Stage 7c1: the negative controls of `lab-smoke --control`. The first needs nothing but the canary's packets;
-# the other two stop something between the markers, so the test machine waits there for this long, after its
+# the others stop something between the markers, so the test machine waits there for this long, after its
 # exchanges and before the closing marker. The pause is only in a request that names such a control.
-CONTROLS = ('extra-packet', 'observer-stopped', 'link-down')
-GUEST_CONTROLS = ('observer-stopped', 'link-down')
+CONTROLS = ('extra-packet', 'observer-stopped', 'observer-killed', 'link-down')
+GUEST_CONTROLS = ('observer-stopped', 'observer-killed', 'link-down')
 CONTROL_HOLD_SECONDS = 20
 # Every wait of a lab socket, in seconds: a server for a request, a client for an answer, the test
 # machine for the echo of a marker. Nested virtualization with one vCPU per machine can stall a
@@ -1373,6 +1373,9 @@ def _health_reasons(health, ready, window, marker_replies):
         reasons.append('observer-not-ready')
     if not _clean(health):
         reasons.append('observer-health')
+    if type(health) is dict and health.get('halted') is True:
+        # Only the control's `halt` writes this: the capture was ended on request while the window was open.
+        reasons.append('capture-halted-in-window')
     if marker_replies != [{**m, 'response': marker_answer(m).hex()} for m in window]:
         reasons.append('marker-reply-mismatch')
     # The test machine's own send times are never compared with these.
