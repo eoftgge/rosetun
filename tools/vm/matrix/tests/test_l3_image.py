@@ -1,13 +1,24 @@
-"""The L3 image keeps the lab default without bypassing the tunnel for the probe."""
+"""The L3 image keeps the lab default without bypassing the tunnel for the probe, and its sshd listens only for the peer."""
 
+import contextlib
+import hashlib
+import io
+import os
 from pathlib import Path
 import runpy
+import tempfile
 import unittest
 
-prepare = runpy.run_path(str(Path(__file__).resolve().parents[2] / 'linux/prepare-l3-image.py'))['network_for_l3']
+tool = runpy.run_path(str(Path(__file__).resolve().parents[2] / 'linux/prepare-l3-image.py'))
+prepare = tool['network_for_l3']
 DEFAULT = '[Route]\nDestination=0.0.0.0/0\nGateway=192.0.2.1\n'
 LEGACY = '[Route]\nDestination=203.0.113.0/24\nGateway=192.0.2.1\n'
 IPV6 = '[Route]\nDestination=2001:db8:6a:2::/64\nGateway=2001:db8:6a:1::1\n'
+# The shape of the packaged unit: per-connection sshd on port 22 of every address.
+PACKAGED_SOCKET = ('[Unit]\nDescription=OpenBSD Secure Shell server socket\nBefore=sockets.target\n\n'
+                   '[Socket]\nListenStream=22\nAccept=yes\n\n[Install]\nWantedBy=sockets.target\n')
+REQUIRED = ['openssh-server_1%3a10.0p1-7_amd64.deb', 'openssh-client_1%3a10.0p1-7_amd64.deb',
+            'openssh-sftp-server_1%3a10.0p1-7_amd64.deb']
 
 
 class PreparationTests(unittest.TestCase):
@@ -22,3 +33,167 @@ class PreparationTests(unittest.TestCase):
         for text in (LEGACY, DEFAULT + LEGACY.replace('192.0.2.1', '192.0.2.9')):
             with self.subTest(text=text), self.assertRaises(ValueError):
                 prepare(text)
+
+
+class ArgumentTests(unittest.TestCase):
+    BASE = ['/srv/old.qcow2', '/srv/new.qcow2', '--source-sha256', '0' * 64, '--descriptor', '/srv/new.json']
+
+    def parse(self, *extra):
+        self.errors = io.StringIO()
+        with contextlib.redirect_stderr(self.errors):
+            return tool['arguments'](self.BASE + list(extra))
+
+    def test_the_sshd_mode_without_its_packages_is_refused(self):
+        with self.assertRaises(SystemExit) as raised:
+            self.parse('--sshd')
+        self.assertEqual(2, raised.exception.code)
+        self.assertIn('--sshd needs --sshd-debs DIR', self.errors.getvalue())
+
+    def test_packages_without_the_sshd_mode_are_refused(self):
+        with self.assertRaises(SystemExit):
+            self.parse('--sshd-debs', '/srv/debs')
+        self.assertIn('--sshd-debs is only for --sshd', self.errors.getvalue())
+
+    def test_the_sshd_mode_with_its_packages_and_the_old_mode_are_accepted(self):
+        args = self.parse('--sshd', '--sshd-debs', '/srv/debs')
+        self.assertEqual((True, Path('/srv/debs')), (args.sshd, args.sshd_debs))
+        args = self.parse()
+        self.assertEqual((False, None), (args.sshd, args.sshd_debs))
+
+
+class PackageTests(unittest.TestCase):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.directory = Path(temp.name) / 'debs'
+        self.directory.mkdir()
+
+    def write(self, names):
+        for name in names:
+            (self.directory / name).write_bytes(name.encode())
+
+    def test_every_package_is_listed_with_its_hash_and_size(self):
+        self.write(REQUIRED)
+        debs = tool['sshd_debs'](self.directory)
+        self.assertEqual(sorted(REQUIRED), [deb['name'] for deb in debs])
+        for deb in debs:
+            self.assertEqual((hashlib.sha256(deb['name'].encode()).hexdigest(), len(deb['name'].encode())),
+                             (deb['sha256'], deb['size_bytes']))
+
+    def test_a_directory_without_openssh_server_or_with_anything_else_is_refused(self):
+        self.write(REQUIRED[1:])
+        with self.assertRaisesRegex(ValueError, 'no openssh-server'):
+            tool['sshd_debs'](self.directory)
+        self.write(REQUIRED[:1] + ['notes.txt'])
+        with self.assertRaisesRegex(ValueError, 'unexpected entry'):
+            tool['sshd_debs'](self.directory)
+
+    def test_a_linked_package_is_refused(self):
+        self.write(REQUIRED[1:])
+        os.symlink(self.directory / REQUIRED[1], self.directory / REQUIRED[0])
+        with self.assertRaisesRegex(ValueError, 'unexpected entry'):
+            tool['sshd_debs'](self.directory)
+
+    def test_the_descriptor_carries_the_hashes_of_the_packages(self):
+        self.write(REQUIRED)
+        debs = tool['sshd_debs'](self.directory)
+        image = self.directory.parent / 'test-l3-v6.qcow2'
+        image.write_bytes(b'image')
+        descriptor = tool['image_descriptor'](image, debs)
+        self.assertEqual(dict(listen='198.51.100.1:22', debs=debs), descriptor['sshd'])
+        self.assertEqual((hashlib.sha256(b'image').hexdigest(), 5, 'test-l3-v6'),
+                         (descriptor['sha256'], descriptor['size_bytes'], descriptor['identifier']))
+        self.assertNotIn('sshd', tool['image_descriptor'](image))
+
+
+class SshdCheckTests(unittest.TestCase):
+    """What the read-only look at the prepared image accepts: a copy of its unit directories."""
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name)
+        self.etc, self.lib = self.root / 'etc', self.root / 'lib'
+        (self.etc / 'sockets.target.wants').mkdir(parents=True)
+        (self.etc / 'ssh.socket.d').mkdir()
+        self.lib.mkdir()
+        (self.lib / 'ssh.socket').write_text(PACKAGED_SOCKET, encoding='utf-8')
+        (self.etc / 'ssh.socket.d' / 'rosetun-lab.conf').write_text(tool['SOCKET_DROPIN_TEXT'], encoding='utf-8')
+        os.symlink('/usr/lib/systemd/system/ssh.socket', self.etc / 'sockets.target.wants' / 'ssh.socket')
+
+    def check(self, ssh_files=('ssh_host_ed25519_key', 'ssh_host_ed25519_key.pub', 'sshd_config'),
+              leftovers=(False, False)):
+        return tool['check_sshd'](self.root, list(ssh_files), list(leftovers))
+
+    def test_the_installed_socket_listens_only_on_the_peer_address(self):
+        settings = self.check()
+        self.assertEqual((['198.51.100.1:22'], [], 'yes', 'yes'),
+                         (settings['listen'], settings['other_listen'], settings['free_bind'], settings['accept']))
+
+    def test_a_further_listen_stream_is_refused(self):
+        for text in ('[Socket]\nListenStream=192.0.2.2:22\n', '[Socket]\nListenStream=0.0.0.0:2222\n',
+                     '[Socket]\nListenStream=\nListenStream=22\n', '[Socket]\nListenDatagram=198.51.100.1:22\n'):
+            with self.subTest(text=text):
+                (self.etc / 'ssh.socket.d' / 'zz-local.conf').write_text(text, encoding='utf-8')
+                with self.assertRaisesRegex(ValueError, 'listens on'):
+                    self.check()
+
+    def test_without_the_drop_in_the_packaged_port_on_every_address_is_refused(self):
+        (self.etc / 'ssh.socket.d' / 'rosetun-lab.conf').unlink()
+        with self.assertRaisesRegex(ValueError, r"listens on \['22'\]"):
+            self.check()
+
+    def test_a_drop_in_with_an_earlier_name_cannot_add_an_address_the_reset_keeps(self):
+        (self.etc / 'ssh.socket.d' / 'aa-local.conf').write_text('[Socket]\nListenStream=192.0.2.2:22\n',
+                                                                 encoding='utf-8')
+        self.assertEqual(['198.51.100.1:22'], self.check()['listen'])
+
+    def test_an_enabled_service_or_its_alias_is_refused(self):
+        wants = self.etc / 'multi-user.target.wants'
+        wants.mkdir()
+        os.symlink('/usr/lib/systemd/system/ssh.service', wants / 'ssh.service')
+        with self.assertRaisesRegex(ValueError, 'ssh.service is enabled'):
+            self.check()
+        (wants / 'ssh.service').unlink()
+        os.symlink('/usr/lib/systemd/system/ssh.service', self.etc / 'sshd.service')
+        with self.assertRaisesRegex(ValueError, 'alias'):
+            self.check()
+
+    def test_a_socket_that_is_not_enabled_is_refused(self):
+        (self.etc / 'sockets.target.wants' / 'ssh.socket').unlink()
+        with self.assertRaisesRegex(ValueError, 'not enabled'):
+            self.check()
+
+    def test_a_socket_that_hands_the_listening_to_sshd_is_refused(self):
+        (self.lib / 'ssh.socket').write_text(PACKAGED_SOCKET.replace('Accept=yes', 'Accept=no'), encoding='utf-8')
+        with self.assertRaisesRegex(ValueError, 'Accept=yes'):
+            self.check()
+
+    def test_a_socket_without_free_bind_or_masked_is_refused(self):
+        (self.etc / 'ssh.socket.d' / 'zz-local.conf').write_text('[Socket]\nFreeBind=no\n', encoding='utf-8')
+        with self.assertRaisesRegex(ValueError, 'FreeBind'):
+            self.check()
+        (self.etc / 'ssh.socket.d' / 'zz-local.conf').unlink()
+        os.symlink('/dev/null', self.etc / 'ssh.socket')
+        with self.assertRaisesRegex(ValueError, 'masked'):
+            self.check()
+
+    def test_no_host_key_or_a_leftover_of_the_installation_is_refused(self):
+        with self.assertRaisesRegex(ValueError, 'host key'):
+            self.check(ssh_files=('sshd_config',))
+        for leftovers in ((True, False), (False, True)):
+            with self.subTest(leftovers=leftovers), self.assertRaisesRegex(ValueError, 'left'):
+                self.check(leftovers=leftovers)
+
+    def test_the_install_script_never_starts_sshd_and_enables_only_the_socket(self):
+        script = tool['INSTALL_SCRIPT']
+        self.assertIn('systemctl disable ssh.service', script)
+        self.assertIn('systemctl enable ssh.socket', script)
+        self.assertIn('exit 101', script)
+        self.assertNotIn('start', script)
+        self.assertNotIn('apt', script)
+        self.assertEqual('ListenAddress 198.51.100.1:22\n', tool['SSHD_CONFIG_TEXT'])
+
+
+if __name__ == '__main__':
+    unittest.main()
