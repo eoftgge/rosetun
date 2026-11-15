@@ -218,7 +218,7 @@ class JointStartTests(unittest.TestCase):
                 self.closed = True
         with patch.object(lifecycle, '_host'), patch.object(lifecycle, 'Qmp', return_value=test_lifecycle.Control(plan)), \
                 patch.object(lifecycle, 'Qga', side_effect=Agent), \
-                patch.object(lifecycle.socket, 'socketpair', side_effect=lambda *args: (Endpoint(), Endpoint())), \
+                patch.object(lifecycle, '_open_control', side_effect=lambda *args, **kwargs: Endpoint()), \
                 patch.object(lifecycle, '_identity', return_value=identity), \
                 patch.object(lifecycle.subprocess, 'Popen', return_value=child) as popen:
             vm = lifecycle.start(run, lab=self.pair, executor=self.fixture.fake, timeout=30)
@@ -242,8 +242,8 @@ class JointStartTests(unittest.TestCase):
         self.assertIn('evidence.img', lab_line)
         for forbidden in ('rosetun-l2-media', 'l2-media.iso', 'l3-requests', 'l2-snapshot', 'ROSETUN_L3'):
             self.assertNotIn(forbidden, lab_line)
-        self.assertEqual(3, len(a.kwargs['pass_fds']))
-        self.assertEqual(3, len(b.kwargs['pass_fds']))
+        self.assertEqual(1, len(a.kwargs['pass_fds']))
+        self.assertEqual(1, len(b.kwargs['pass_fds']))
         self.assertFalse(set(a.kwargs['pass_fds']) & set(b.kwargs['pass_fds']))
 
     def test_the_resources_and_plans_of_the_two_runs_do_not_mix(self):

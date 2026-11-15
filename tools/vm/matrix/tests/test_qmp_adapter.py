@@ -159,6 +159,7 @@ class AdapterTests(unittest.TestCase):
         relay.stop = threading.Event()
         relay.limit = 1
         relay.failed = False
+        relay.counts, relay.reserve = [0, 0], None
         with patch('select.select', return_value=([relay.stream], [], [])):
             relay._run()
         self.assertTrue(relay.failed)
@@ -210,6 +211,7 @@ class AdapterTests(unittest.TestCase):
         relay.stream, relay.peer = Stream(), Stream()
         relay.stop = threading.Event()
         relay.limit, relay.failed = 100, False
+        relay.counts, relay.reserve = [0, 0], None
         with patch('select.select', side_effect=[([relay.stream], [], []),
                                                 ([relay.stream], [relay.peer], [])]):
             relay._run()

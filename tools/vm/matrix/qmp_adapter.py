@@ -12,11 +12,26 @@ import socket
 import threading
 
 
+# Bytes the relay may move past what is already on record before it records more.
+RESERVATION_BYTES = 65536
+
+
 class ByteRelay:
-    def __init__(self, stream, limit=1024 * 1024):
+    """Copy bytes between a control socket and the client within a byte budget.
+
+    `used` is what earlier relays of the same budget already moved; `reserve`,
+    when given, records a new ceiling before bytes past the previous one are
+    forwarded, so a controller that dies mid-exchange never hands a fresh
+    budget to the next one. A failed record stops the relay.
+    """
+
+    def __init__(self, stream, limit=1024 * 1024, *, used=(0, 0), reserve=None):
         self.client, self.peer = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
         self.stream = stream
         self.limit = limit
+        self.counts = list(used)
+        self.reserved = list(used)
+        self.reserve = reserve
         self.stop = threading.Event()
         self.failed = False
         self.thread = threading.Thread(target=self._run, daemon=True)
@@ -33,7 +48,7 @@ class ByteRelay:
     def _run(self):
         sockets = [self.stream, self.peer]
         buffers = [bytearray(), bytearray()]
-        counts = [0, 0]
+        counts = self.counts
         eof = set()
         try:
             for stream in sockets:
@@ -56,6 +71,9 @@ class ByteRelay:
                     if counts[index] > self.limit:
                         self.failed = True
                         return
+                    if self.reserve is not None and counts[index] > self.reserved[index]:
+                        self.reserved[index] = min(self.limit, counts[index] + RESERVATION_BYTES)
+                        self.reserve(index, self.reserved[index])
                     buffers[1-index].extend(block)
                 for stream in writable:
                     index = sockets.index(stream)
@@ -92,7 +110,14 @@ class ByteRelay:
 
 
 class Qmp:
-    def __init__(self, stream, *, client_factory=None, relay_factory=ByteRelay):
+    """`spent` and `persist` carry the run's QMP budget across controllers.
+
+    `spent` holds what earlier connections used (`calls`, `events`, `bytes`);
+    `persist(name, value)` records a new count before it is used and raises on
+    failure. Without them the budget belongs to this object, as before.
+    """
+
+    def __init__(self, stream, *, client_factory=None, relay_factory=ByteRelay, spent=None, persist=None):
         if client_factory is None:
             if version('qemu.qmp') != '0.0.6':
                 raise ValueError('qemu-qmp-0.0.6-required')
@@ -103,16 +128,24 @@ class Qmp:
         # The default listener cannot be removed. Its public accept hook is
         # explicitly extensible; reject retention while counting every event.
         self.client.events.accept = self._event
-        self.events = 0
-        self.calls = 0
+        spent = spent or {}
+        self.events = spent.get('events', 0)
+        self.calls = spent.get('calls', 0)
+        self.persist = persist
         self.valid = True
         self.closed = False
-        self.relay = relay_factory(stream)
+        if persist is None:
+            self.relay = relay_factory(stream)
+        else:
+            self.relay = relay_factory(stream, used=tuple(spent.get('bytes', (0, 0))),
+                                       reserve=lambda index, value: persist('qmp_bytes_' + 'oi'[index], value))
 
     def _event(self, event):
         self.events += 1
         if self.events > 128 or len(bytes(event)) > 65536:
             raise ValueError('qmp-event-limit')
+        if self.persist is not None:
+            self.persist('qmp_events', self.events)
         return False
 
     def _run(self, coroutine, timeout):
@@ -147,6 +180,12 @@ class Qmp:
         # cannot push teardown onto signals alone.
         if self.calls >= 128 or (self.calls >= 127 and name != 'quit'):
             raise ValueError('qmp-command-limit')
+        if self.persist is not None:
+            # Nothing is sent when the record fails, so the channel stays usable.
+            try:
+                self.persist('qmp_calls', self.calls + 1)
+            except (OSError, ValueError):
+                raise ValueError('qmp-budget-record-failed') from None
         self.calls += 1
 
         async def execute():

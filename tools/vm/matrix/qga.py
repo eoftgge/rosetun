@@ -41,7 +41,8 @@ def _timeout(value):
 
 
 class Qga:
-    def __init__(self, stream, *, client_factory=None, relay_factory=ByteRelay, sync_id=None, line_limit=LINE_LIMIT):
+    def __init__(self, stream, *, client_factory=None, relay_factory=ByteRelay, sync_id=None, line_limit=LINE_LIMIT,
+                 on_call=None):
         if line_limit not in (LINE_LIMIT, DIAGNOSTIC_LINE_LIMIT):
             raise QgaError('invalid-qga-line-limit')
         self.line_limit = line_limit
@@ -59,6 +60,8 @@ class Qga:
         self.jobs_enabled = False
         self.staging_enabled = False
         self._operation_limit = 128
+        # Records one more call of the run before it is sent; raises when it cannot.
+        self.on_call = on_call
 
     def connect(self, timeout):
         """Synchronize once, then hand the clean stream to the library."""
@@ -152,6 +155,11 @@ class Qga:
         limit = min(128, self._operation_limit)
         if self.calls >= limit or (self.calls >= limit - 1 and name != 'guest-file-close'):
             raise QgaError('qga-command-limit')
+        if self.on_call is not None:
+            try:
+                self.on_call()
+            except (OSError, ValueError):
+                raise QgaError('qga-budget-record-failed') from None
         self.calls += 1
         return self._run(self.client.execute(name, arguments), timeout)
 

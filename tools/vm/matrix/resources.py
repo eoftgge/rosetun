@@ -103,7 +103,7 @@ def _file_key(value):
 def _resource(value, directory):
     if type(value) is not dict:
         raise ValueError("invalid resource")
-    if value.get("kind") == "file":
+    if value.get("kind") in ("file", "socket"):
         _keys(value, "id kind path")
         resource_path(directory, value["path"])
     elif value.get("kind") == "process":
@@ -143,10 +143,10 @@ def read_manifest(directory, *, run_id=None, stand_id=None, owner_token=None):
     ids, paths = set(), set()
     for entry in data["resources"]:
         _resource(entry, directory)
-        if entry["id"] in ids or (entry["kind"] == "file" and _file_key(entry["path"]) in paths):
+        if entry["id"] in ids or (entry["kind"] != "process" and _file_key(entry["path"]) in paths):
             raise ValueError("duplicate resource")
         ids.add(entry["id"])
-        if entry["kind"] == "file":
+        if entry["kind"] != "process":
             paths.add(_file_key(entry["path"]))
     for reason in data["reasons"]:
         _identifier(reason)
@@ -308,6 +308,39 @@ def _lock(stream, acquire):
         fcntl.flock(stream.fileno(), (fcntl.LOCK_EX | fcntl.LOCK_NB) if acquire else fcntl.LOCK_UN)
     else:
         raise ValueError("local lease platform is unsupported")
+
+
+RUN_LOCK = "control.lock"
+
+
+def lock_run(directory):
+    """Take the control lock of one run: one controller is connected to its VM at a time.
+
+    The lock is an OS lock on `control.lock` beside the control sockets. It goes
+    with the process that holds it, so a dead controller never blocks a new one,
+    and QEMU never inherits it (O_CLOEXEC, and the child closes other descriptors).
+    """
+    path = resource_path(directory, RUN_LOCK)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    stream = os.fdopen(fd, "r+b", buffering=0)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise ValueError("expected a regular lock file")
+        _lock(stream, True)
+    except OSError:
+        stream.close()
+        raise ValueError("run-control-locked") from None
+    except BaseException:
+        stream.close()
+        raise
+    return stream
+
+
+def unlock_run(stream):
+    try:
+        _lock(stream, False)
+    finally:
+        stream.close()
 
 
 def _lock_stand(root, stand):
@@ -488,7 +521,7 @@ class PreparedRun:
             raise ValueError("run is no longer accepting resources")
         _resource(resource, self.directory)
         if any(entry["id"] == resource["id"] or
-               (entry["kind"] == resource["kind"] == "file"
+               ("process" not in (entry["kind"], resource["kind"])
                 and _file_key(entry["path"]) == _file_key(resource["path"]))
                for entry in data["resources"]):
             raise ValueError("duplicate resource")
@@ -616,7 +649,10 @@ def create_run(lease, run_id=None):
     directory = lease._root / "runs" / run_id
     _no_links(directory)
     directory.parent.mkdir(exist_ok=True)
-    directory.mkdir()
+    # The control sockets live here, so the directory is the owner's alone.
+    directory.mkdir(mode=0o700)
+    if os.name == "posix":
+        os.chmod(directory, 0o700)
     token = secrets.token_hex(32)
     _atomic_manifest(directory, {"schema": SCHEMA, "run_id": run_id,
                      "stand_id": lease._stand, "owner_token": token,

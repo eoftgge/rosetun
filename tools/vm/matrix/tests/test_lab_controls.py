@@ -84,7 +84,7 @@ class Harness(unittest.TestCase):
             fixture.run, fixture.calls = run, [0, 0]
             with patch.object(lifecycle, '_host'), patch.object(lifecycle, 'Qmp', return_value=qmps[role]), \
                  patch.object(lifecycle, 'Qga', side_effect=Agent), \
-                 patch.object(lifecycle.socket, 'socketpair', side_effect=lambda *args: (Endpoint(), Endpoint())), \
+                 patch.object(lifecycle, '_open_control', side_effect=lambda *args, **kwargs: Endpoint()), \
                  patch.object(lifecycle, '_identity', return_value=identity), \
                  patch.object(lifecycle.subprocess, 'Popen', return_value=child):
                 vm = lifecycle.start(run, lab=lab, executor=fixture.fake, timeout=30)

@@ -42,9 +42,13 @@ class RecoveryTests(unittest.TestCase):
                                Qga(stream, client_factory=Client, relay_factory=Relay, **kw))
         factory.start()
         self.addCleanup(factory.stop)
-        with patch.object(lifecycle.socket, 'socketpair', side_effect=[
-                (Stream(), Stream()), (self.endpoint, Stream())]):
-            self.vm = self.fixture.start()
+        # The first connection is the monitor's; every later one is a new agent session.
+        streams = iter([Stream()])
+        opened = patch.object(lifecycle, '_open_control',
+                              side_effect=lambda *args, **kwargs: next(streams, None) or self.endpoint.dup())
+        opened.start()
+        self.addCleanup(opened.stop)
+        self.vm = self.fixture.start()
         self.vm.timeout = 1
         real_sockets = patch.object(lifecycle.socket, 'socketpair', REAL_SOCKETPAIR)
         real_sockets.start()
@@ -74,7 +78,6 @@ class RecoveryTests(unittest.TestCase):
             vm.recover_guest()
         self.assertEqual(5, len(self.endpoint.copies))
         vm.hard_off()
-        self.assertTrue(self.endpoint.closed)
         self.assertTrue(all(s.closed for s in self.endpoint.copies))
         rows = (vm.run.directory / 'qga-observations.jsonl').read_text()
         self.assertNotIn(vm.run._identity[2], rows)
@@ -196,9 +199,9 @@ class RecoveryTests(unittest.TestCase):
         self.vm.hard_off()
         self.assertTrue(self.vm.completed)
 
-    def test_retained_endpoint_close_failure_blocks_completion(self):
+    def test_session_connection_close_failure_blocks_completion(self):
         from tools.vm.matrix.resources import completion_verified
-        with patch.object(self.endpoint, 'close', side_effect=OSError('uncertain')):
+        with patch.object(self.endpoint.copies[-1], 'close', side_effect=OSError('uncertain')):
             with self.assertRaises(lifecycle.LifecycleError):
                 self.vm.hard_off()
             self.assertFalse(self.vm.completed)
@@ -206,24 +209,36 @@ class RecoveryTests(unittest.TestCase):
         self.vm.hard_off()
 
     def test_without_qga_recovery_is_explicitly_unavailable(self):
-        endpoint = self.vm.qga_endpoint
-        self.vm.qga_endpoint = None
+        endpoint = self.vm.qga_path
+        self.vm.qga_path = None
         try:
             with self.assertRaisesRegex(lifecycle.LifecycleError, 'not-configured'):
                 self.vm.recover_guest()
         finally:
-            self.vm.qga_endpoint = endpoint
+            self.vm.qga_path = endpoint
 
 
 @unittest.skipUnless(INSTALLED, 'optional qemu.qmp 0.0.6 is not installed')
 class InstalledSequentialSessionTests(unittest.TestCase):
-    def test_timeout_late_open_reply_and_new_session_on_same_transport(self):
-        parent, peer = REAL_SOCKETPAIR(socket.AF_UNIX, socket.SOCK_STREAM)
+    def test_timeout_late_open_reply_and_new_session_on_a_new_connection(self):
+        import tempfile
+        from pathlib import Path
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        path = Path(directory.name) / 'qga.sock'
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        listener.bind(str(path))
+        path.chmod(0o600)
+        listener.listen(1)
         vm = lifecycle.Vm(None, 1)
-        vm.qga_endpoint = parent
+        vm.qga_path = path
+        vm.process = SimpleNamespace(poll=lambda: None)
         errors, syncs, sessions, copies = [], [], [], []
         def server():
+            peer = None
             try:
+                listener.settimeout(5)
+                peer, _ = listener.accept()
                 peer.settimeout(5)
                 def request():
                     data = bytearray()
@@ -241,6 +256,12 @@ class InstalledSequentialSessionTests(unittest.TestCase):
                     raise AssertionError('request limit')
                 late = None
                 for attempt in range(2):
+                    if attempt:
+                        # The first session closed its connection; QEMU serves the next one.
+                        self.assertEqual(b'', peer.recv(1))
+                        peer.close()
+                        peer, _ = listener.accept()
+                        peer.settimeout(5)
                     sync = request()
                     self.assertEqual('guest-sync-delimited', sync['execute'])
                     syncs.append(sync['arguments']['id'])
@@ -261,7 +282,8 @@ class InstalledSequentialSessionTests(unittest.TestCase):
             except BaseException as error:
                 errors.append(repr(error))
             finally:
-                peer.close()
+                if peer is not None:
+                    peer.close()
         thread = threading.Thread(target=server, daemon=True)
         thread.start()
         try:
@@ -280,12 +302,11 @@ class InstalledSequentialSessionTests(unittest.TestCase):
                 vm.qga.close()
                 self.assertTrue(vm.qga.closed)
                 self.assertEqual(-1, copies[-1].fileno())
-                self.assertGreaterEqual(parent.fileno(), 0)
         finally:
             if vm.qga is not None:
                 vm.qga.close()
-            parent.close()
             thread.join(6)
+            listener.close()
         self.assertFalse(thread.is_alive())
         self.assertEqual([], errors)
         self.assertEqual(2, len(set(syncs)))

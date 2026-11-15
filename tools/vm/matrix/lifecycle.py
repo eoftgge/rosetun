@@ -1,8 +1,11 @@
 """One owned Linux/KVM child, private QMP, and bounded confirmed termination.
 
-There is no PID-based recovery, file cleanup, guest readiness or qualification.
-Calls must be serialized by the caller. Startup failures carry the VM handle so
-an unconfirmed child can still be stopped without surrendering its lease.
+QMP and QGA are UNIX sockets that QEMU listens on inside the private run
+directory, so a later controller can connect to a live run again. One
+controller at a time holds the run's control lock. There is no file cleanup,
+guest readiness or qualification. Calls must be serialized by the caller.
+Startup failures carry the VM handle so an unconfirmed child can still be
+stopped without surrendering its lease.
 """
 
 import json
@@ -11,6 +14,7 @@ import os
 from pathlib import Path
 import platform
 import socket
+import stat
 import subprocess
 import sys
 import secrets
@@ -27,7 +31,7 @@ from .images import ImageDescriptor, image_chain, local_file
 from .qemu import QemuConfig, CommandResult, _launch_plan, execute, OUTPUT_LIMIT
 from .report import _unique_object, _invalid_constant
 from .evidence import append_row
-from .resources import resource_path, execution_resources
+from .resources import resource_path, execution_resources, lock_run, unlock_run, RUN_LOCK
 
 
 JOURNAL_LIMIT = 128
@@ -43,6 +47,10 @@ JOURNAL_LIMIT = 128
 # refused retry ends quarantined, as before.
 TEARDOWN_ROWS = 18
 ORDINARY_ROWS = JOURNAL_LIMIT - TEARDOWN_ROWS
+QMP_SOCKET = 'qmp.sock'
+QGA_SOCKET = 'qga.sock'
+# sun_path holds 108 bytes with the terminating zero.
+SOCKET_PATH_LIMIT = 107
 
 
 class LifecycleError(ValueError):
@@ -84,6 +92,58 @@ def _identity(process, executable):
             'boot_id': boot, 'start_id': start, 'executable': executable}
 
 
+def _private_directory(directory):
+    """The run directory must be the controller user's alone: the sockets inside carry no other check."""
+    if os.name != 'posix':
+        return
+    info = os.lstat(directory)
+    if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid()
+            or stat.S_IMODE(info.st_mode) & 0o077):
+        raise LifecycleError('run-directory-not-private')
+
+
+def socket_path(run_directory, name):
+    path = resource_path(run_directory, name)
+    if len(os.fsencode(str(path))) > SOCKET_PATH_LIMIT or ',' in str(path):
+        raise LifecycleError('control-socket-path-unusable')
+    return path
+
+
+def _own_socket(path):
+    info = os.lstat(path)
+    if (not stat.S_ISSOCK(info.st_mode) or info.st_uid != os.getuid()
+            or stat.S_IMODE(info.st_mode) & 0o077):
+        raise LifecycleError('control-socket-not-private')
+
+
+def _open_control(path, timeout, alive, *, sleep=time.sleep, clock=time.monotonic):
+    """Connect to one of QEMU's listening control sockets within `timeout` seconds.
+
+    QEMU binds the socket while it starts, so a missing or refusing socket is
+    retried while `alive()` holds. The socket is checked without following links.
+    """
+    deadline = clock() + _limit(timeout)
+    while True:
+        stream = None
+        try:
+            _own_socket(path)
+            stream = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            stream.settimeout(max(.05, min(1, deadline - clock())))
+            stream.connect(str(path))
+            stream.settimeout(None)
+            return stream
+        except (FileNotFoundError, ConnectionRefusedError, socket.timeout):
+            if stream is not None:
+                stream.close()
+            if not alive() or clock() >= deadline:
+                raise LifecycleError('control-socket-unavailable') from None
+            sleep(.05)
+        except BaseException:
+            if stream is not None:
+                stream.close()
+            raise
+
+
 def _guest_serialized(method):
     @wraps(method)
     def call(self, *args, **kwargs):
@@ -104,7 +164,8 @@ class Vm:
         self.process = None
         self.qmp = None
         self.qga = None
-        self.qga_endpoint = None
+        self.qga_path = None
+        self.control_lock = None
         self.qga_line_limit = LINE_LIMIT
         self._guest_lock = threading.Lock()
         self.qga_recoveries = 0
@@ -125,6 +186,9 @@ class Vm:
         self.completed = False
         self.controls_closed = False
         self.operation_errors = []
+
+    def _new_qmp(self, stream):
+        return Qmp(stream)
 
     def _check(self):
         if self.run is not self._owner_run:
@@ -158,15 +222,23 @@ class Vm:
             self.evidence_failed = True
             raise LifecycleError('lifecycle-evidence-write-failed', self) from None
 
+    def _alive(self):
+        return self.process is not None and self.process.poll() is None
+
     def _new_qga(self):
+        """A new session is a new connection; QEMU serves one client of the agent socket at a time."""
         if self.qga is not None and not self.qga.closed:
             raise LifecycleError('qga-old-session-not-closed', self)
-        stream = self.qga_endpoint.dup()
+        stream = _open_control(self.qga_path, self.timeout, self._alive)
         self.launch_sockets.append(stream)
         # Only a session that asks for a longer line says so, so that nothing else is told of the option.
         extra = {} if self.qga_line_limit == LINE_LIMIT else dict(line_limit=self.qga_line_limit)
+        extra.update(self._qga_options())
         self.qga = Qga(stream, sync_id=(self._sync_seed + self.qga_recoveries) % 2**63, **extra)
         self.launch_sockets.remove(stream)
+
+    def _qga_options(self):
+        return {}
 
     @_guest_serialized
     def observe_guest(self):
@@ -202,7 +274,7 @@ class Vm:
     def recover_guest(self):
         """Replace a confirmed closed client under the original live lease."""
         self._check()
-        if self.qga_endpoint is None:
+        if self.qga_path is None:
             raise LifecycleError('qga-not-configured', self)
         if self.process is None or self.process.poll() is not None or self.exited:
             raise LifecycleError('vm-child-has-exited', self)
@@ -460,9 +532,6 @@ class Vm:
                 self.qmp.close()
             if self.qga is not None:
                 self.qga.close()
-            if self.qga_endpoint is not None:
-                self.qga_endpoint.close()
-            if self.qga is not None:
                 self._event('qga', 'closed', teardown=True)
             if self.stderr is not None:
                 self.stderr.close()
@@ -499,7 +568,7 @@ class Vm:
             # controls are closed. Quarantined ledger still blocks a new lease.
             if self.exited:
                 controls_closed = True
-                for control in (*self.launch_sockets, self.qmp, self.qga, self.qga_endpoint, self.stderr):
+                for control in (*self.launch_sockets, self.qmp, self.qga, self.stderr):
                     if control is not None:
                         try:
                             control.close()
@@ -507,6 +576,16 @@ class Vm:
                             controls_closed = False
                 if controls_closed:
                     self.run._lease._active.discard(self)
+                    if self.completed:
+                        self._release_control_lock()
+
+    def _release_control_lock(self):
+        if self.control_lock is not None:
+            lock, self.control_lock = self.control_lock, None
+            try:
+                unlock_run(lock)
+            except (OSError, ValueError):
+                pass
 
     def __enter__(self):
         return self
@@ -580,9 +659,18 @@ def start(run, *, timeout=5, executor=execute, lab=None):
         image.verify_bytes()
     except (KeyError, TypeError, OSError, ValueError):
         raise LifecycleError('prelaunch-validation-failed') from None
+    _private_directory(run.directory)
+    sockets = {'qmp-socket': socket_path(run.directory, QMP_SOCKET)}
+    if config.qga:
+        sockets['qga-socket'] = socket_path(run.directory, QGA_SOCKET)
+    if any(os.path.lexists(path) for path in (*sockets.values(), resource_path(run.directory, RUN_LOCK))):
+        raise LifecycleError('control-path-exists')
     # No process exists yet, so a failure here leaves partial resources and a
     # quarantined run instead of a prepared one that later starts refuse.
     try:
+        run.register({'id': 'control-lock', 'kind': 'file', 'path': RUN_LOCK})
+        for identifier, path in sockets.items():
+            run.register({'id': identifier, 'kind': 'socket', 'path': path.name})
         for name in (('qemu-stderr.log', 'completion.json', 'qga-observations.jsonl', 'job-evidence.jsonl')
                      if config.qga else ('qemu-stderr.log', 'completion.json')):
             run.register({'id': name.split('.')[0], 'kind': 'file', 'path': name})
@@ -623,51 +711,39 @@ def start(run, *, timeout=5, executor=execute, lab=None):
     vm.wire = f'{lab.role(run)}-wire' if lab is not None else None
     vm._l2_media = media
     run._lease._active.add(vm)
-    child = None
-    parent = None
-    qga_parent = qga_child = None
     try:
         run.mark('starting')
         vm._event('start', 'intent', teardown=True)
+        vm.control_lock = lock_run(run.directory)
         vm.stderr = StderrSink(resource_path(run.directory, 'qemu-stderr.log'), run._identity[2])
-        parent, child = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
-        vm.launch_sockets.extend((parent, child))
-        vm.qmp = Qmp(parent)
-        vm.launch_sockets.remove(parent)
-        argv = [*plan['argv'], '-S', '-chardev', f'socket,id=control,fd={child.fileno()}',
+        # QEMU listens and the controller connects, so the channels outlive the controller.
+        argv = [*plan['argv'], '-S', '-chardev', f'socket,id=control,path={sockets["qmp-socket"]},server=on,wait=off',
                 '-mon', 'chardev=control,mode=control']
-        descriptors = [child.fileno()]
+        descriptors = []
         if lab is not None:
             network_argv, network_fd = lab.network(run)
             argv += network_argv
             descriptors.append(network_fd)
         if config.qga:
-            qga_parent, qga_child = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
-            vm.launch_sockets.extend((qga_parent, qga_child))
-            vm.qga_endpoint = qga_parent
-            vm.launch_sockets.remove(qga_parent)
-            vm._new_qga()
-            argv += ['-chardev', f'socket,id=guestagent,fd={qga_child.fileno()}',
+            vm.qga_path = sockets['qga-socket']
+            argv += ['-chardev', f'socket,id=guestagent,path={vm.qga_path},server=on,wait=off',
                      '-device', 'virtio-serial-pci,id=guestserial',
                      '-device', 'virtserialport,bus=guestserial.0,chardev=guestagent,name=org.qemu.guest_agent.0']
-            descriptors.append(qga_child.fileno())
             resource_path(run.directory, 'qga-observations.jsonl').touch(exist_ok=False)
             resource_path(run.directory, 'job-evidence.jsonl').touch(exist_ok=False)
         run._read()
         if media is not None:
             verify_media(media)
+        # umask 0177: QEMU creates the sockets owner read-write only.
         vm.process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                       stderr=subprocess.PIPE, shell=False, close_fds=True, bufsize=0,
-                                      pass_fds=tuple(descriptors), start_new_session=True)
-        child.close()
-        vm.launch_sockets.remove(child)
-        child = None
-        if qga_child is not None:
-            qga_child.close()
-            vm.launch_sockets.remove(qga_child)
-            qga_child = None
+                                      pass_fds=tuple(descriptors), start_new_session=True, umask=0o177)
         vm.stderr.start(vm.process.stderr)
         run.register(_identity(vm.process, config.executable))
+        stream = _open_control(sockets['qmp-socket'], timeout, vm._alive)
+        vm.launch_sockets.append(stream)
+        vm.qmp = vm._new_qmp(stream)
+        vm.launch_sockets.remove(stream)
         vm.qmp.handshake(timeout)
         if vm.qmp.command('query-uuid', timeout) != {'UUID': plan['uuid']}:
             raise LifecycleError('qmp-uuid-mismatch')
@@ -676,6 +752,8 @@ def start(run, *, timeout=5, executor=execute, lab=None):
             raise LifecycleError('qmp-kvm-not-enabled')
         if vm.status()['status'] != 'prelaunch':
             raise LifecycleError('qmp-initial-state-mismatch')
+        if config.qga:
+            vm._new_qga()
         run.mark('running')
         vm._event('start', 'qmp-ready-paused', teardown=True)
         return vm
@@ -698,17 +776,6 @@ def start(run, *, timeout=5, executor=execute, lab=None):
             raise
         raise LifecycleError('vm-start-failed', vm) from None
     finally:
-        pending = [child, qga_child]
-        if vm.qmp is None:
-            pending.append(parent)
-        if vm.qga is None:
-            pending.append(qga_parent)
-        for stream in pending:
-            if stream is not None:
-                try:
-                    stream.close()
-                except (OSError, ValueError):
-                    # Keep the original LifecycleError and its VM handle. The
-                    # VM retains failed endpoints and cannot confirm completion.
-                    vm.evidence_failed = True
-                    vm.operation_errors.append('launch-socket-close-unconfirmed')
+        if vm.process is None and not vm.completed:
+            # Nothing was spawned, so nothing can still need the lock.
+            vm._release_control_lock()

@@ -630,7 +630,7 @@ class PairTests(unittest.TestCase):
                 self.closed = True
         with patch.object(lifecycle, '_host'), patch.object(lifecycle, 'Qmp', return_value=control), \
              patch.object(lifecycle, 'Qga', side_effect=Agent), \
-             patch.object(lifecycle.socket, 'socketpair', side_effect=lambda *args: (Endpoint(), Endpoint())), \
+             patch.object(lifecycle, '_open_control', side_effect=lambda *args, **kwargs: Endpoint()), \
              patch.object(lifecycle, '_identity', return_value=identity), \
              patch.object(lifecycle.subprocess, 'Popen', return_value=child) as popen:
             vm = lifecycle.start(run, lab=self.pair, executor=self.fixture.fake, timeout=30)
@@ -649,7 +649,8 @@ class PairTests(unittest.TestCase):
             self.assertIn('mac=' + wire.MACS[role], ' '.join(argv))
             self.assertIn('addr.type=fd', ' '.join(argv))
             self.assertFalse(any(x in ' '.join(argv) for x in ('hostfwd', 'tap,', 'user,', 'listen=')))
-            self.assertEqual(3, len(call.kwargs['pass_fds']))
+            # Only the lab wire is inherited; the control channels are named sockets.
+            self.assertEqual(1, len(call.kwargs['pass_fds']))
         self.assertFalse(set(a.kwargs['pass_fds']) & set(b.kwargs['pass_fds']))
         first.close(hard=True)
         self.assertTrue(first.completed)

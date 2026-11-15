@@ -323,7 +323,7 @@ class DiskPairTests(test_lab.PairTests):
         disk = json.loads(lab_argv[len(lab_argv) - 1 - lab_argv[::-1].index('-blockdev') + 1])
         self.assertEqual(('evidence', False), (disk['node-name'], disk['read-only']))
         self.assertIn('serial=rosetun-lab-evidence', ' '.join(lab_argv))
-        self.assertEqual(3, len(b.kwargs['pass_fds']))
+        self.assertEqual(1, len(b.kwargs['pass_fds']))
 
 
 class Run:

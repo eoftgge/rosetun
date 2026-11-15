@@ -114,7 +114,7 @@ class LifecycleTests(unittest.TestCase):
         self.control = Control(self.plan)
         self.patches = [patch.object(lifecycle, '_host'),
                         patch.object(lifecycle.socket, 'AF_UNIX', 1, create=True),
-                        patch.object(lifecycle.socket, 'socketpair', return_value=(Stream(), Stream())),
+                        patch.object(lifecycle, '_open_control', side_effect=lambda *args, **kwargs: Stream()),
                         patch.object(lifecycle, 'Qmp', return_value=self.control),
                         patch.object(lifecycle, '_identity', return_value={
                             'id': 'qemu', 'kind': 'process', 'pid': 12345,
@@ -146,24 +146,22 @@ class LifecycleTests(unittest.TestCase):
         from tools.vm.matrix.tests.test_qga import Client, Relay, Stream as AgentStream
         from tools.vm.matrix.qga import Qga
         self.enable_qga()
-        monitor_parent, monitor_child = Stream(), Stream()
+        monitor_parent = Stream()
         agent_parent = AgentStream(b'\xff{"return":123}\n')
-        agent_child = Stream()
-        agent_child.fileno = lambda: 43
         agent = Qga(agent_parent, client_factory=Client, relay_factory=Relay)
         self.addCleanup(agent.close)
-        with patch.object(lifecycle.socket, 'socketpair', side_effect=[
-                (monitor_parent, monitor_child), (agent_parent, agent_child)]), patch.object(
-                lifecycle, 'Qga', return_value=agent), patch.object(
+        with patch.object(lifecycle, '_open_control', side_effect=[monitor_parent, agent_parent]) as opened, \
+                patch.object(lifecycle, 'Qga', return_value=agent), patch.object(
                 lifecycle.subprocess, 'Popen', return_value=self.child) as popen:
             vm = self.start()
-        self.assertEqual((42, 43), popen.call_args.kwargs['pass_fds'])
+        self.assertEqual((), popen.call_args.kwargs['pass_fds'])
         argv = popen.call_args.args[0]
-        self.assertIn('socket,id=guestagent,fd=43', argv)
+        agent_socket = self.run.directory / 'qga.sock'
+        self.assertIn(f'socket,id=guestagent,path={agent_socket},server=on,wait=off', argv)
+        self.assertEqual([self.run.directory / 'qmp.sock', agent_socket],
+                         [call.args[0] for call in opened.call_args_list])
         self.assertIn('virtio-serial-pci,id=guestserial', argv)
         self.assertIn('virtserialport,bus=guestserial.0,chardev=guestagent,name=org.qemu.guest_agent.0', argv)
-        self.assertTrue(monitor_child.closed)
-        self.assertTrue(agent_child.closed)
         self.assertFalse(agent_parent.closed)
         self.assertNotIn(self.run._identity[2], json.dumps(argv))
         vm.timeout = 1
@@ -205,17 +203,17 @@ class LifecycleTests(unittest.TestCase):
         self.assertNotIn(self.run._identity[2], journal)
         self.assertNotIn(self.run._identity[2].encode(), b''.join(agent_parent.sent))
 
-    def test_qga_parent_and_child_close_when_spawn_fails(self):
-        from tools.vm.matrix.tests.test_qga import Stream as AgentStream
+    def test_no_control_connection_is_made_when_spawn_fails(self):
         self.enable_qga()
-        agent_parent, agent_child = AgentStream(b''), Stream()
-        with patch.object(lifecycle.socket, 'socketpair', side_effect=[
-                (Stream(), Stream()), (agent_parent, agent_child)]), patch.object(
+        with patch.object(lifecycle, '_open_control') as opened, patch.object(
                 lifecycle.subprocess, 'Popen', side_effect=OSError('spawn failed')):
             with self.assertRaises(lifecycle.LifecycleError):
                 self.start()
-        self.assertTrue(agent_parent.closed)
-        self.assertTrue(agent_child.closed)
+        opened.assert_not_called()
+        self.assertEqual('quarantined', self.run._read()['state'])
+        # The control lock went with the failed start: a later controller can take it.
+        from tools.vm.matrix.resources import lock_run, unlock_run
+        unlock_run(lock_run(self.run.directory))
 
     def test_completion_rejects_qga_close_before_final_reap_and_later_failure(self):
         import hashlib
@@ -263,26 +261,26 @@ class LifecycleTests(unittest.TestCase):
         self.assertTrue(endpoint.closed)
         self.assertTrue(vm.completed)
 
-    def test_failed_child_endpoint_close_blocks_completion_and_retains_vm_handle(self):
+    def test_failed_agent_connection_close_blocks_completion_and_retains_vm_handle(self):
         from tools.vm.matrix.tests.test_qga import Stream as AgentStream
         self.enable_qga()
-        agent_parent, agent_child = AgentStream(b''), Stream()
-        with patch.object(agent_child, 'close', side_effect=OSError('close failed')), patch.object(
-                lifecycle.socket, 'socketpair', side_effect=[
-                    (Stream(), Stream()), (agent_parent, agent_child)]):
+        agent = AgentStream(b'')
+        with patch.object(agent, 'close', side_effect=OSError('close failed')), patch.object(
+                lifecycle, 'Qga', side_effect=OSError('session failed')), patch.object(
+                lifecycle, '_open_control', side_effect=[Stream(), agent]):
             with self.assertRaises(lifecycle.LifecycleError) as caught:
                 self.start()
         vm = caught.exception.vm
         self.assertIsNotNone(vm)
         self.assertTrue(vm.exited)
         self.assertFalse(vm.completed)
-        self.assertIn(agent_child, vm.launch_sockets)
+        self.assertIn(agent, vm.launch_sockets)
         self.assertFalse((self.run.directory / 'completion.json').exists())
-        self.assertTrue(agent_parent.closed)
-        # Retry may close descriptors, but cannot erase the failed evidence.
+        # A retry closes the connection, but no agent session was ever closed on record.
         with self.assertRaises(lifecycle.LifecycleError):
             vm.hard_off()
-        self.assertTrue(agent_child.closed)
+        self.assertTrue(agent.closed)
+        self.assertFalse(vm.completed)
 
     def test_lost_qga_does_not_prevent_qmp_quit(self):
         from unittest.mock import Mock
@@ -434,13 +432,22 @@ class LifecycleTests(unittest.TestCase):
         self.assert_failed_before_process(caught)
 
     def test_runtime_argv_uses_only_private_qmp_and_original_plan(self):
+        import os
+        import stat
         vm = self.start()
         try:
             args, kwargs = lifecycle.subprocess.Popen.call_args
             self.assertEqual(self.plan['argv'], args[0][:-5])
-            self.assertEqual(['-S', '-chardev', 'socket,id=control,fd=42',
+            control = self.run.directory / 'qmp.sock'
+            self.assertEqual(['-S', '-chardev', f'socket,id=control,path={control},server=on,wait=off',
                               '-mon', 'chardev=control,mode=control'], args[0][-5:])
-            self.assertEqual((42,), kwargs['pass_fds'])
+            self.assertEqual((), kwargs['pass_fds'])
+            self.assertEqual(0o177, kwargs['umask'])
+            if os.name == 'posix':
+                self.assertEqual(0o700, stat.S_IMODE(os.stat(self.run.directory).st_mode))
+            resources = {r['id']: r for r in self.run._read()['resources']}
+            self.assertEqual({'id': 'qmp-socket', 'kind': 'socket', 'path': 'qmp.sock'}, resources['qmp-socket'])
+            self.assertEqual('control.lock', resources['control-lock']['path'])
             self.assertFalse(kwargs['shell'])
             self.assertTrue(kwargs['close_fds'])
             self.assertTrue(kwargs['start_new_session'])
@@ -448,6 +455,19 @@ class LifecycleTests(unittest.TestCase):
             self.assertEqual(subprocess.PIPE, kwargs['stderr'])
         finally:
             vm.close()
+
+    def test_named_control_sockets_leave_the_journal_of_an_ordinary_run_unchanged(self):
+        # The rows of start, resume and close as the inherited socket pair wrote them.
+        vm = self.start()
+        vm.resume()
+        vm.close()
+        rows = [json.loads(line) for line in (self.run.directory / 'lifecycle.jsonl').read_text().splitlines()]
+        self.assertEqual([('start', 'intent'), ('start', 'qmp-ready-paused'), ('cont', 'intent'),
+                          ('cont', 'command-accepted'), ('cont', 'confirmed'), ('close', 'intent'),
+                          ('exit', 'child-reaped'), ('close', 'confirmed'),
+                          ('completion', 'controls-closed-child-reaped')],
+                         [(row['action'], row['result']) for row in rows])
+        self.assertEqual(list(range(1, len(rows) + 1)), [row['sequence'] for row in rows])
 
     def test_plan_tampering_blocks_spawn(self):
         self.plan['argv'].append('-enable-kvm')
