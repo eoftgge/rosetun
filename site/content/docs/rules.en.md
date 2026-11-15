@@ -13,6 +13,14 @@ group = "Setup"
 - **Temporary rules:** add a rule only until disconnect; it applies at once and is never saved.
 - **Connections** on the Traffic tab: while connected, what your programs connect to right now, grouped by program, with the route each connection took and why (which rule, list or the default). Create a rule or close a connection from there. The list is kept only in memory for the account that connected and is cleared on disconnect; it is never written to disk or to the log.
 
+## Check an address {#test}
+
+On the Rules tab, type a site, an IP address or a program into **Check an address or program**. One line says where the set in use sends it: the route, and the rule, list or default behind it. Nothing connects and nothing goes over the network. Click the rule's number to find it in the table. The temporary rules of the running connection count.
+
+Some answers are left open, and the line says so and shows what the rules say otherwise. A private address with **Local network** on depends on your network, which only the service knows. A program's name alone cannot meet a rule on a full path, and a site's name cannot meet a rule on an IP address. A list that cannot be read here, such as an uploaded `.srs`, leaves the answer open too.
+
+CLI: `rosetun rules test <address|program>` prints the same line and exits with 0, also for an open answer. Input that is no site, IP address or program exits with 2.
+
 ## Programs on Linux {#programs-on-linux}
 
 **Rules by program on Linux** have a price. To find a connection's program, sing-box reads the processes of every account, so a session with an enabled rule by program gives its engine `CAP_SYS_PTRACE` and `CAP_DAC_READ_SEARCH`: nearly root for anything that takes the engine over. Without such a rule the engine has neither. Where the service cannot give them (outside its systemd unit, say), a connection with such a rule is refused with the reason.
