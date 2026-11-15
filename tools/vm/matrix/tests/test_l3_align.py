@@ -9,7 +9,7 @@ from tools.vm.matrix.l3_summary import GROUP, WINDOW_OF
 
 OPENED, CLOSED = 1000.0, 1060.0
 FINISHED = datetime(2026, 11, 14, 0, 10, tzinfo=timezone.utc).timestamp()
-CONNECT_KS = [identifier for identifier in GROUP if WINDOW_OF[identifier] == 'connect_ks']
+CONNECT_KS = [identifier for identifier in GROUP if WINDOW_OF[identifier] == ('connect_ks', 0)]
 DURATIONS = dict(zip(CONNECT_KS, (8000, 15000, 2000, 5000, 7000, 4000, 3000)))
 
 

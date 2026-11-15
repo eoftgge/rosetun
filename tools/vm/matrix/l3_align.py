@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 import json
 import statistics
 
-from .l3_summary import GROUP, WINDOW_OF
+from .l3_summary import GROUP, WINDOW_OF, window_of
 
 # The most flows of each kind shown for one scenario; the rest are counted.
 FLOWS_PER_SCENARIO = 24
@@ -60,10 +60,11 @@ def report_times(rows, clock):
     return times
 
 
-def _window_of(label, windows):
-    """The first window with this label that has both of its marker times, and how many windows have the label."""
+def _window_of(label, windows, number=0):
+    """The first window with this label, from its number on, that has both of its marker times, and how many
+    windows have the label."""
     found = [w for w in windows if w.get('label') == label]
-    for window in found:
+    for window in found[number:]:
         clock = window.get('clock') or {}
         if type(clock.get('open_at')) in (int, float) and type(clock.get('close_at')) in (int, float):
             return window, len(found)
@@ -93,9 +94,14 @@ def align(rows, raw_report, lab):
     windows = [w for w in lab.get('windows', []) if type(w) is dict]
     route = (lab.get('route_flows') or {}).get('flows', [])
     table, offsets = [], []
-    for label in dict.fromkeys(label for label in WINDOW_OF.values() if label):
-        window, count = _window_of(label, windows)
-        peers = [row for row in rows if WINDOW_OF.get(row['id']) == label]
+
+    def place_of(identifier):
+        return window_of(identifier, windows) if identifier in WINDOW_OF else None
+
+    for pair in dict.fromkeys(place_of(identifier) for identifier in GROUP if place_of(identifier)):
+        label = pair[0]
+        window, count = _window_of(label, windows, pair[1])
+        peers = [row for row in rows if place_of(row['id']) == pair]
         if window is None or not peers:
             continue
         first = times.get(peers[0]['id'])
@@ -108,7 +114,8 @@ def align(rows, raw_report, lab):
                  last_end=_iso(max(end for _, end in times.values())) if times else None)
     for identifier in GROUP:
         row = by_id.get(identifier)
-        label = WINDOW_OF[identifier]
+        pair = place_of(identifier)
+        label = pair and pair[0]
         entry = dict(id=identifier, approximate=True, result=row.get('result') if row else 'MISSING',
                      label=label, window=None,
                      windows_with_label=0, duration_ms=row.get('duration_ms') if row else None,
@@ -118,10 +125,10 @@ def align(rows, raw_report, lab):
         table.append(entry)
         if row is None or label is None:
             continue
-        window, entry['windows_with_label'] = _window_of(label, windows)
+        window, entry['windows_with_label'] = _window_of(label, windows, pair[1])
         if window is None:
             continue
-        peers = [peer for peer in rows if WINDOW_OF.get(peer['id']) == label]
+        peers = [peer for peer in rows if place_of(peer['id']) == pair]
         durations = [peer['duration_ms'] if type(peer.get('duration_ms')) is int else 0 for peer in peers]
         place = [peer['id'] for peer in peers].index(identifier)
         before, after = sum(durations[:place]), sum(durations[place + 1:])
