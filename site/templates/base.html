@@ -1,0 +1,59 @@
+{#- Every address on the page is relative to this page, so the built site works from any directory. -#}
+{%- set item = page or section -%}
+{%- set here = item.path -%}
+{%- set trimmed = here | trim(pat="/") -%}
+{%- set segments = trimmed | split(pat="/") if trimmed else [] -%}
+{%- set root = ["../" for i in range(end=segments | length)] | join(sep="") -%}
+{%- set lroot = root ~ ("en/" if lang == "en" else "") -%}
+{%- set inner = segments[1:] if lang == "en" else segments -%}
+{%- set top = inner[0] if inner else "" -%}
+{%- set current = "page" if inner | length <= 1 else "location" -%}
+{%- set other = "en" if lang == "ru" else "ru" -%}
+{%- set base = config.base_url | trim_end(pat="/") -%}
+{%- set ru_url = [t.permalink | replace(from=base, to="") | trim_start(pat="/") for t in item.translations if t.lang == "ru"] | first -%}
+{%- set en_url = [t.permalink | replace(from=base, to="") | trim_start(pat="/") for t in item.translations if t.lang == "en"] | first -%}
+{%- set other_url = en_url if other == "en" else ru_url -%}
+{%- set page_title = item.title -%}
+<!doctype html>
+<html lang="{{ lang }}">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta name="description" content="{{ item.description or (page_title ~ ' · Rosetun') }}" />
+        <meta name="referrer" content="no-referrer" />
+        <meta http-equiv="Content-Security-Policy" content="{% block csp %}{{ config.extra.csp | safe }}{% endblock csp %}" />
+        <title>{% block title %}{{ page_title }} · Rosetun{% endblock title %}</title>
+        <link rel="stylesheet" href="{{ root }}assets/site.css" />
+        <link rel="icon" href="{{ root }}assets/rose.svg" type="image/svg+xml" />
+        <link rel="alternate" hreflang="ru" href="{{ (root ~ ru_url) or './' }}" />
+        <link rel="alternate" hreflang="en" href="{{ (root ~ en_url) or './' }}" />
+    </head>
+    <body>
+        <a class="skip" href="#main">{{ item.extra?.skip or trans(key="skip", lang=lang) }}</a>
+        <header class="wrap">
+            <div class="header-brand">
+                <a class="brand" href="{{ lroot or './' }}"><img src="{{ root }}assets/rose.svg" width="40" height="40" alt="" />Rosetun</a>
+                <p class="platform-label">WINDOWS <span aria-hidden="true">·</span> LINUX <span aria-hidden="true">·</span> OPEN SOURCE</p>
+            </div>
+            <nav aria-label="{{ trans(key='navigation', lang=lang) }}">
+                <a href="{{ lroot or './' }}"{% if top == "" %} aria-current="{{ current }}"{% endif %}>{{ trans(key="home", lang=lang) }}</a>
+                <a href="{{ lroot }}docs/"{% if top == "docs" %} aria-current="{{ current }}"{% endif %}>{{ trans(key="documentation", lang=lang) }}</a>
+                <a href="{{ lroot }}providers/"{% if top == "providers" %} aria-current="{{ current }}"{% endif %}>{{ trans(key="providers", lang=lang) }}</a>
+                <a href="{{ lroot }}help/"{% if top == "help" %} aria-current="{{ current }}"{% endif %}>{{ trans(key="help", lang=lang) }}</a>
+                <a href="{{ root ~ other_url }}" lang="{{ other }}" hreflang="{{ other }}">{{ trans(key="switch", lang=lang) }}</a>
+            </nav>
+        </header>
+        <main id="main" class="wrap">
+            {%- block main %}{% endblock main %}
+        </main>
+        <footer class="wrap">
+            <span>Rosetun</span>
+            <a href="https://github.com/eoftgge/rosetun">GitHub</a>
+            <a href="{{ lroot }}docs/licenses/">{{ trans(key="licenses", lang=lang) }}</a>
+            <a href="https://github.com/eoftgge/rosetun/blob/master/LICENSE">GPL-3.0-or-later</a>
+            <a href="https://github.com/eoftgge/rosetun/security/policy">{{ trans(key="security", lang=lang) }}</a>
+            <a href="{{ root ~ other_url }}" lang="{{ other }}" hreflang="{{ other }}">{{ trans(key="switch", lang=lang) }}</a>
+        </footer>
+        {%- block scripts %}{% endblock scripts %}
+    </body>
+</html>

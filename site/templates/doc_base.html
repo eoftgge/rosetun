@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{#- The banner, the contents list and the pager shared by the documentation pages and Help. -#}
+{% block main %}
+            <div class="prose docs">
+                <h1>{{ page_title }}</h1>
+                {%- set release = load_data(path="data/release.json", required=false) %}
+                <p class="note">{{ release?.banner?[lang] or trans(key="banner", lang=lang) }}</p>
+                {%- set overview = item.extra?.overview %}
+                {%- set labels = item.extra?.toc_labels or {} %}
+                <nav aria-label="{{ trans(key='toc', lang=lang) }}">
+                    {%- if overview %}<a href="#details">{{ overview }}</a>{% endif %}
+                    {%- for entry in item.toc %}
+                        {%- if not loop.first or overview %}{{ item.extra?.toc_separator or "" }}{% endif -%}
+                        <a href="#{{ entry.id }}">{{ labels?[entry.id] or entry.title }}</a>
+                    {%- endfor -%}
+                </nav>
+                {% if overview %}<section id="details">
+{% endif -%}
+                {{ item.content | safe }}
+                {%- if overview %}</section>{% endif %}
+                {%- block pager %}{% endblock pager %}
+            </div>
+{% endblock main %}

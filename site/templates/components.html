@@ -1,0 +1,6 @@
+{#- A section of a provider page: the page has no contents list, so its sections are plain wrappers. -#}
+{% component prose_section() -%}
+<section>
+{{ body | markdown }}
+</section>
+{%- endcomponent prose_section %}

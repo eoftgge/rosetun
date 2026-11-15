@@ -1,0 +1,8 @@
+{% extends "doc_base.html" %}
+{#- A documentation page. The order comes from the `weight` of the pages; the first and the last page link to the index. -#}
+{% block pager %}
+                {%- set index = get_section(path="docs/_index.md", lang=lang) %}
+                {%- set previous = page.lower or index %}
+                {%- set next = page.higher or index %}
+                <nav class="doc-pager" aria-label="{{ trans(key='pager', lang=lang) }}"><a rel="prev" href="{{ root }}{{ previous.permalink | replace(from=base, to="") | trim_start(pat="/") }}">← {{ previous.title }}</a><a rel="next" href="{{ root }}{{ next.permalink | replace(from=base, to="") | trim_start(pat="/") }}">{{ next.title }} →</a></nav>
+{% endblock pager %}

@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block main %}
+            <div class="prose">
+                <p class="eyebrow">{{ page.extra.eyebrow }}</p>
+                <h1>{{ page_title }}</h1>
+                <p class="lead">{{ page.extra.lead }}</p>
+                {{ page.content | safe }}
+            </div>
+{% endblock main %}
