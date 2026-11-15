@@ -1,7 +1,7 @@
 use rosetun_config::{
-    AppConfig, DelayMode, ExitId, LiveConnection, LogLevel, Node, NodeId, ProtectionCapabilities,
-    Rule, RuleId, RuleSet, RuleSetId, RuleTarget, RuleTemplate, Selection, Settings, Status,
-    Traffic, resolve_exits,
+    AppConfig, DelayMode, ExitId, LiveConnection, LogLevel, Node, NodeId, Outbound,
+    ProtectionCapabilities, Rule, RuleId, RuleSet, RuleSetId, RuleTarget, RuleTemplate, Selection,
+    Settings, Status, StreamSettings, SubscriptionId, Traffic, resolve_exits,
 };
 use serde::{Deserialize, Serialize};
 use std::fmt::Formatter;
@@ -229,9 +229,21 @@ impl ConnectRequest {
         config: &AppConfig,
         exits: ExitContext<'_>,
     ) -> Result<Self, ConnectRequestError> {
-        let (request, blocked) = Self::build(config, Vec::new(), exits)?;
+        let (request, blocked) = Self::build(config, Vec::new(), exits, false)?;
         request.validate_exit_chains()?;
         warn_blocked_exits(blocked);
+        Ok(request)
+    }
+
+    /// The request a connection would be routed by, for asking where an
+    /// address would go. It needs no selected server: without one a stand-in
+    /// takes its place, which no rule can name. Never send it to the service.
+    pub fn for_routing_check(
+        config: &AppConfig,
+        temporary_rules: Vec<Rule>,
+        exits: ExitContext<'_>,
+    ) -> Result<Self, ConnectRequestError> {
+        let (request, _) = Self::build(config, temporary_rules, exits, true)?;
         Ok(request)
     }
 
@@ -239,14 +251,15 @@ impl ConnectRequest {
         config: &AppConfig,
         temporary_rules: Vec<Rule>,
         exits: ExitContext<'_>,
+        stand_in: bool,
     ) -> Result<(Self, usize), ConnectRequestError> {
-        let selection = config
-            .active
-            .as_ref()
-            .ok_or(ConnectRequestError::SelectionMissing)?;
-        let (_, node) = config
-            .active_node()
-            .ok_or(ConnectRequestError::NodeNotFound)?;
+        let chosen = match (config.active.as_ref(), config.active_node()) {
+            (Some(selection), Some((_, node))) => (selection.clone(), node.clone()),
+            (None, _) if !stand_in => return Err(ConnectRequestError::SelectionMissing),
+            (Some(_), None) if !stand_in => return Err(ConnectRequestError::NodeNotFound),
+            _ => stand_in_server(),
+        };
+        let (selection, node) = &chosen;
 
         let (rule_set, rule_templates) = match &config.active_rule_set {
             Some(_) => config
@@ -393,7 +406,7 @@ impl ConnectRequest {
         temporary_rules: Vec<Rule>,
         exits: ExitContext<'_>,
     ) -> Result<Self, ConnectRequestError> {
-        let (mut request, blocked) = Self::build(config, temporary_rules, exits)?;
+        let (mut request, blocked) = Self::build(config, temporary_rules, exits, false)?;
         if let Some(running) = running {
             request.settings.engine = running.engine;
             request.settings.xray = running.xray;
@@ -427,6 +440,28 @@ impl ConnectRequest {
             .splice(0..0, self.temporary_rules.iter().cloned());
         rules
     }
+}
+
+/// A server that exists nowhere: it keeps a routing check from needing a
+/// selection, and no exit rule can resolve to it.
+fn stand_in_server() -> (Selection, Node) {
+    let selection = Selection {
+        subscription: SubscriptionId::new(""),
+        node: NodeId::new(""),
+    };
+    let node = Node {
+        id: NodeId::new(""),
+        name: String::new(),
+        server: String::new(),
+        port: 0,
+        outbound: Outbound::Unknown {
+            scheme: String::new(),
+            params: std::collections::BTreeMap::new(),
+        },
+        stream: StreamSettings::default(),
+        raw: None,
+    };
+    (selection, node)
 }
 
 fn warn_blocked_exits(count: usize) {
@@ -1373,6 +1408,32 @@ mod tests {
             assert_eq!(error, expected);
             assert_eq!(error.to_string(), message);
         }
+    }
+
+    #[test]
+    fn a_routing_check_needs_no_selected_node_and_keeps_the_rules() {
+        let mut config = selected_config();
+        config.active = None;
+
+        let request =
+            ConnectRequest::for_routing_check(&config, Vec::new(), ExitContext::default()).unwrap();
+
+        assert_eq!(request.rule_set.rules, selected_config().rule_sets[0].rules);
+        assert_eq!(
+            ConnectRequest::for_routing_check(
+                &dangling_node_config(),
+                Vec::new(),
+                ExitContext::default()
+            )
+            .unwrap()
+            .selection
+            .node,
+            NodeId::new("")
+        );
+        assert_eq!(
+            ConnectRequest::from_config(&config).unwrap_err(),
+            ConnectRequestError::SelectionMissing
+        );
     }
 
     #[test]
