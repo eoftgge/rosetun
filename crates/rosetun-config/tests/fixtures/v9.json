@@ -59,7 +59,8 @@
     ],
     "notifications": false,
     "announced_update": "9.9.10",
-    "quit_action": "keep_connected"
+    "quit_action": "keep_connected",
+    "delay_mode": "full"
   },
   "subscriptions": [
     {

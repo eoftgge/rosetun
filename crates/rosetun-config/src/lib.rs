@@ -114,6 +114,43 @@ pub enum QuitAction {
     KeepConnected,
 }
 
+/// How the delay of the tunnel and of each exit is measured.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DelayMode {
+    /// A new connection for every check, so its setup and encryption count too.
+    Full,
+    /// The second request on a connection that is already open.
+    #[default]
+    Repeated,
+}
+
+impl DelayMode {
+    pub const ALL: [Self; 2] = [Self::Full, Self::Repeated];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Full => "full",
+            Self::Repeated => "repeated",
+        }
+    }
+}
+
+impl std::str::FromStr for DelayMode {
+    type Err = UnknownDelayMode;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Self::ALL
+            .into_iter()
+            .find(|mode| mode.as_str() == value)
+            .ok_or(UnknownDelayMode)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("unknown delay mode")]
+pub struct UnknownDelayMode;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InterfaceSettings {
     /// Window scale in percent; see `rosetun_core::INTERFACE_SCALES`.
@@ -159,6 +196,10 @@ pub struct InterfaceSettings {
     /// Format 7 field; an action this release does not know reads as ask.
     #[serde(default, deserialize_with = "known_quit_action")]
     pub quit_action: QuitAction,
+    /// Format 9 field: how the main screen measures the delay; a mode this
+    /// release does not know reads as repeated.
+    #[serde(default, deserialize_with = "known_delay_mode")]
+    pub delay_mode: DelayMode,
 }
 
 fn known_accent<'de, D>(deserializer: D) -> Result<AccentPreset, D::Error>
@@ -175,6 +216,14 @@ where
 {
     let value = Value::deserialize(deserializer)?;
     Ok(QuitAction::deserialize(value).unwrap_or_default())
+}
+
+fn known_delay_mode<'de, D>(deserializer: D) -> Result<DelayMode, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Value::deserialize(deserializer)?;
+    Ok(DelayMode::deserialize(value).unwrap_or_default())
 }
 
 fn default_scale_percent() -> u16 {
@@ -203,6 +252,7 @@ impl Default for InterfaceSettings {
             notifications: true,
             announced_update: None,
             quit_action: QuitAction::Ask,
+            delay_mode: DelayMode::Repeated,
         }
     }
 }
@@ -365,7 +415,8 @@ pub fn from_json(bytes: &[u8]) -> Result<(AppConfig, Option<u32>), FormatError> 
 }
 
 fn migrate_8_to_9(_config: &mut Map<String, Value>) {
-    // Missing dependencies retain the standalone path.
+    // Missing dependencies retain the standalone path, and a missing
+    // `interface.delay_mode` reads as the default.
 }
 
 fn migrate_7_to_8(_config: &mut Map<String, Value>) {
