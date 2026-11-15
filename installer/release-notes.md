@@ -1,12 +1,39 @@
 # Rosetun {{version}}
 
-## In development
+Rosetun 0.6.0-beta.1 is a beta of the next version. It adds exits that connect through other exits and export and import of rules, and it brings Linux closer to Windows. The stable release is 0.5.1. In the app, this beta is offered later betas and the final 0.6, never 0.5.1.
 
-- **Two-hop proxy exits:** create A and B, select A under **Connect through** in B's editor, then point the desired rule at B. This affects the selected rule, not automatically all machine traffic. B supports HTTP/HTTPS CONNECT and SOCKS5 TCP with an IP-literal server. A may run through Xray, so VLESS with REALITY works as A; domain B, UDP/QUIC, the Xray-only engine and fragmentation are unsupported. Network qualification is pending. See [instructions and limitations](https://eoftgge.github.io/rosetun/en/docs/rules/#two-hop).
+**Settings format 9.** After 0.6 has started, your settings no longer open in 0.5: 0.5 refuses a file of a newer format and does not overwrite it. Copy your settings folder before you install (`%APPDATA%\Rosetun` on Windows, `~/.config/rosetun` on Linux); see **Updating from 0.5** and **Going back to 0.5** below.
 
-Rosetun 0.5.1 fixes an Arch Linux compatibility issue in the nftables preflight check. On systems where `/usr/sbin` is a symbolic link to `/usr/bin`, Rosetun rejected the trusted `nft` executable and reported the kill switch and DNS lock as unavailable. This release accepts the standard Arch Linux executable location without relaxing the ownership and permission checks.
+## What's new in 0.6
 
-Settings and Lockdown are unchanged from 0.5.0. See **What's new in 0.5** below for the previous release's features and known limitations.
+- **Two-hop exits (experimental).** An exit can connect through another exit: create A and B, choose A under **Connect through** in B's editor, then point a rule at B. Only the traffic that rule selects takes the path A → B. B is an HTTP, HTTPS or SOCKS5 proxy with an IP address as its server. A may run through Xray, so VLESS with REALITY works as A; B through Xray, a name instead of an address for B, UDP and QUIC, and TLS fragmentation are not supported, and the editor says why the list is empty. The function has not been checked on a real network yet. See [setup and limits](https://eoftgge.github.io/rosetun/en/docs/rules/#two-hop).
+- **Export and import of rules**, in the menu beside the rule set and in `rosetun rules export` and `rosetun rules import`. Import shows a preview first, skips duplicates, leaves the default rule alone unless you select it, and the whole import undoes with Ctrl+Z. List contents are never exported; links to lists only with your consent. See [Export and import](https://eoftgge.github.io/rosetun/en/docs/rules/#exchange).
+- **Linux: Local network opens only your own network**, on its own interface, with the VPN servers' addresses left out, as on Windows. **Private networks behind the router** keeps the wide ranges. See [Local network](https://eoftgge.github.io/rosetun/en/docs/local-network/).
+- **Linux, as on Windows:** file dialogs through the desktop portal, **Collect report** and the folder buttons, the system checks (proxy and traffic interception), the remembered window, and a system proxy on GNOME that is read back after it is set. See [Linux](https://eoftgge.github.io/rosetun/en/docs/linux/).
+- **Building from source needs Rust 1.99.**
+- **sing-box {{sing_box_version}} and Xray {{xray_version}}.**
+
+## Fixed in 0.6
+
+- **Windows: a tunnel address that the last session left behind.** After a fast startup, Windows may still hold the previous session's tunnel. Rosetun no longer retries in vain: it says "Windows still holds the tunnel of the last session · restart the computer".
+- **Menus.** The rule set menu, the rules menu and the check menu fit their labels, and the failure actions stand in one row.
+
+## Updating from 0.5
+
+Install it over 0.5; settings and Lockdown are carried over.
+
+- **Settings format 9.** Settings are converted when 0.6 first saves them, and the previous file stays as `config.v8.json`. 0.5 refuses to read the new format and does not overwrite it.
+- **Keep a copy before you install.** Copy your settings folder somewhere else first; it is the simplest way back.
+
+## Going back to 0.5
+
+Not tested.
+
+1. In 0.6, disconnect, so your own proxy settings come back.
+2. Uninstall 0.6 and keep your settings. This removes Lockdown, an update's hold and the sign-in task.
+3. Install 0.5.1.
+4. Close Rosetun and put your old settings back: the copy you made before installing, or `config.v8.json` renamed to `config.json` over the newer file. Changes made in 0.6, including two-hop paths, are lost.
+5. Turn on **Start with Windows** and Lockdown again if you use them.
 
 ## Fixed in 0.5.1
 
@@ -49,10 +76,11 @@ Not tested.
 
 ## Known limitations
 
-- **Windows: multicast without a chosen adapter goes into the tunnel.** mDNS or SSDP from a program that leaves the choice to Windows does not reach your network, also with **Local network** on. Programs that pick the adapter are fine, as is broadcast to 255.255.255.255.
-- **Linux: Local network is wider than on Windows.** The firewall opens every private range on any interface, not only your own network, and VPN servers' addresses are not left out.
+- **Two-hop exits are experimental.** They have not been checked on a real network. A step that fails never falls back to a shorter path.
+- **Windows: multicast without a chosen adapter goes into the tunnel.** mDNS or SSDP from a program that leaves the choice to Windows does not reach your network, also with **Local network** on. Programs that pick the adapter are fine, as is broadcast to 255.255.255.255. On Linux this has not been measured.
+- **Linux: Local network leaves out wide networks.** A network wider than /16 (IPv6: /48) or one that overlaps the tunnel stays closed, and so does a network that holds more than eight of your VPN servers.
 - **Linux: rules by program have a price.** A session with such a rule gives its engine `CAP_SYS_PTRACE` and `CAP_DAC_READ_SEARCH`, nearly root for anything that takes the engine over. A sing-box error sometimes attributes a connection to the wrong program ([#4501](https://github.com/SagerNet/sing-box/issues/4501), open), so a **Direct** rule for a program can now and then let another program's connection past the tunnel. If this matters, use rules by site and IP, with **Through VPN** as the default and no **Direct** rule by program.
-- **Linux:** no file dialogs, no **Collect report** and no system proxy or packet interception checks.
+- **Linux: what the system limits.** A file dialog needs a desktop portal, otherwise you type the full path. The service log in the report needs an account in the `systemd-journal` or `adm` group. The firewall check sees nftables and not legacy iptables. A QR code is read from a file or the clipboard, not from the screen. On Wayland only the window's size comes back, not its place.
 - **Lockdown is experimental.** Not tested: Windows 10, other firewalls or antivirus programs with their own network filters, firewalld on Linux, hibernation, sleep on real hardware (on Linux, sleep at all) and a power cut on Linux.
 - **With Lockdown on, Wi-Fi with a sign-in page** cannot open its page, and **the system cannot set the clock** without the tunnel. Turn Lockdown off for a moment, sign in or correct the clock, connect, and turn it on again.
 - **Lockdown leaves virtual machines on this computer without network**: Hyper-V on Windows, and most likely WSL2, Docker Desktop, Windows Sandbox and Mobile hotspot. On Linux, virtual machines and containers, without a Rosetun connection. Turn Lockdown off while you need them.
@@ -95,13 +123,46 @@ On Windows, the sing-box executable embeds Wintun {{wintun_version}}, distribute
 
 ## Русский
 
+Rosetun 0.6.0-beta.1 это бета следующей версии. В ней направления, которые подключаются через другие направления, экспорт и импорт правил, а Linux стал ближе к Windows. Стабильный выпуск: 0.5.1. Приложение предлагает этой бете более поздние беты и итоговую 0.6, но не 0.5.1.
+
+**Формат настроек 9.** После запуска 0.6 ваши настройки не открываются в 0.5: 0.5 отказывается читать файл более нового формата и не перезаписывает его. Перед установкой скопируйте папку настроек (`%APPDATA%\Rosetun` на Windows, `~/.config/rosetun` на Linux); см. **Обновление с 0.5** и **Возврат на 0.5** ниже.
+
+### Что нового в 0.6
+
+- **Двухзвенные направления (экспериментально).** Направление может подключаться через другое направление: создайте A и B, в редакторе B выберите A в поле **Подключаться через**, затем укажите B в правиле. Путь A → B проходит только трафик, который выбирает это правило. B это прокси HTTP, HTTPS или SOCKS5, а его сервер задан IP-адресом. A может идти через Xray, поэтому VLESS с REALITY работает как A; B через Xray, имя вместо адреса у B, UDP и QUIC и фрагментация TLS не поддерживаются, а редактор объясняет, почему список пуст. Функцию ещё не проверяли в настоящей сети. См. [настройку и ограничения](https://eoftgge.github.io/rosetun/ru/docs/rules/#two-hop).
+- **Экспорт и импорт правил** в меню рядом с набором правил, а также `rosetun rules export` и `rosetun rules import`. Импорт сначала показывает предпросмотр, пропускает дубликаты, не трогает правило по умолчанию без вашей отметки, а весь импорт отменяется Ctrl+Z. Содержимое списков не экспортируется; ссылки на списки только с вашего согласия. См. [Экспорт и импорт](https://eoftgge.github.io/rosetun/ru/docs/rules/#exchange).
+- **Linux: «Локальная сеть» открывает только вашу сеть**, на её интерфейсе, без адресов VPN-серверов, как на Windows. **Частные сети за роутером** сохраняет широкие диапазоны. См. [Локальная сеть](https://eoftgge.github.io/rosetun/ru/docs/local-network/).
+- **Linux, как на Windows:** диалоги выбора файла через портал рабочего стола, **Собрать отчёт** и кнопки папок, проверки системы (прокси и перехват трафика), запоминание окна и системный прокси на GNOME, который читается обратно после установки. См. [Linux](https://eoftgge.github.io/rosetun/ru/docs/linux/).
+- **Для сборки из исходников нужен Rust 1.99.**
+- **sing-box {{sing_box_version}} и Xray {{xray_version}}.**
+
+### Исправлено в 0.6
+
+- **Windows: адрес туннеля, оставшийся от прошлого сеанса.** После быстрого запуска Windows может ещё держать туннель предыдущего сеанса. Rosetun больше не повторяет попытки впустую: он пишет «Windows ещё держит туннель прошлой сессии · перезагрузите компьютер».
+- **Меню.** Меню набора правил, меню правил и меню проверки подгоняются под свои подписи, а кнопки при сбое стоят в одной строке.
+
+### Обновление с 0.5
+
+Устанавливайте поверх 0.5; настройки и Lockdown сохраняются.
+
+- **Формат настроек 9.** Настройки преобразуются при первом сохранении в 0.6, прежний файл остаётся как `config.v8.json`. 0.5 отказывается читать новый формат и не перезаписывает его.
+- **Сохраните копию перед установкой.** Скопируйте папку настроек в другое место; это самый простой путь назад.
+
+### Возврат на 0.5
+
+Не проверено.
+
+1. В 0.6 отключитесь, чтобы вернулись ваши настройки прокси.
+2. Удалите 0.6, сохранив настройки. Это снимает Lockdown, удержание после обновления и задачу запуска при входе.
+3. Установите 0.5.1.
+4. Закройте Rosetun и верните старые настройки: копию, сделанную перед установкой, или `config.v8.json`, переименованный в `config.json` поверх нового файла. Изменения, сделанные в 0.6, включая двухзвенные пути, пропадут.
+5. Снова включите **Запускать вместе с Windows** и Lockdown, если они нужны.
+
 ### Исправлено в 0.5.1
 
 Rosetun 0.5.1 исправляет несовместимость проверки nftables с Arch Linux. Когда `/usr/sbin` является символической ссылкой на `/usr/bin`, Rosetun отклонял исполняемый файл `nft` и сообщал, что kill switch и замок DNS недоступны. Теперь стандартное расположение `nft` в Arch Linux поддерживается без ослабления проверок владельца и прав доступа.
 
 - **Arch Linux: kill switch и замок DNS.** Проверка nftables принимает `/usr/bin/nft`, если путь проходит проверку безопасности. Защита больше не становится недоступной только из-за устройства каталогов Arch Linux.
-
-Настройки и Lockdown не изменились по сравнению с 0.5.0. Возможности предыдущего выпуска и известные ограничения описаны ниже.
 
 ### Что нового в 0.5
 
@@ -140,10 +201,11 @@ Rosetun 0.5.1 исправляет несовместимость проверк
 
 ### Известные ограничения
 
-- **Windows: multicast без выбранного адаптера уходит в туннель.** mDNS или SSDP от программы, которая оставляет выбор Windows, до вашей сети не доходит, в том числе при включённой **Локальной сети**. У программ, которые выбирают адаптер, всё работает, как и широковещательные запросы на 255.255.255.255.
-- **Linux: «Локальная сеть» шире, чем на Windows.** Брандмауэр открывает все частные диапазоны на любом интерфейсе, а не только вашу сеть, и адреса VPN-серверов не вырезаются.
+- **Двухзвенные направления экспериментальные.** Их не проверяли в настоящей сети. Сбой звена никогда не переключает на более короткий путь.
+- **Windows: multicast без выбранного адаптера уходит в туннель.** mDNS или SSDP от программы, которая оставляет выбор Windows, до вашей сети не доходит, в том числе при включённой **Локальной сети**. У программ, которые выбирают адаптер, всё работает, как и широковещательные запросы на 255.255.255.255. На Linux это не измерялось.
+- **Linux: «Локальная сеть» обходит широкие сети.** Сеть шире /16 (IPv6: /48) и сеть, пересекающаяся с туннелем, остаются закрытыми, как и сеть, в которой больше восьми ваших VPN-серверов.
 - **Linux: у правил по программам есть цена.** Сеанс с таким правилом даёт своему ядру `CAP_SYS_PTRACE` и `CAP_DAC_READ_SEARCH`, почти root для того, кто захватит ядро. Ошибка sing-box иногда приписывает соединение не той программе ([#4501](https://github.com/SagerNet/sing-box/issues/4501), открыта), поэтому правило «Напрямую» для программы может изредка пропустить мимо туннеля чужое соединение. Если это важно, используйте правила по сайтам и IP, а по умолчанию оставьте «Через VPN» без правил «Напрямую» по программам.
-- **Linux:** нет диалогов выбора файла, **Собрать отчёт** и проверок системного прокси и перехвата пакетов.
+- **Linux: что ограничивает система.** Диалогу выбора файла нужен портал рабочего стола, иначе полный путь вводится вручную. Для журнала службы в отчёте нужна учётная запись в группе `systemd-journal` или `adm`. Проверка брандмауэра видит nftables, но не старый iptables. QR-код читается из файла или буфера обмена, не с экрана. На Wayland возвращается только размер окна, не его место.
 - **Lockdown экспериментальный.** Не проверены: Windows 10, другие брандмауэры и антивирусы со своими сетевыми фильтрами, firewalld на Linux, гибернация, сон на настоящем компьютере (на Linux сон вообще) и отключение питания на Linux.
 - **С включённым Lockdown Wi-Fi со страницей входа** не может открыть эту страницу, а **система не может выставить время** без туннеля. Выключите Lockdown на минуту, войдите или поправьте время, подключитесь и включите его снова.
 - **Lockdown оставляет без сети виртуальные машины на этом компьютере**: Hyper-V на Windows и, скорее всего, WSL2, Docker Desktop, Windows Sandbox и мобильный хот-спот. На Linux виртуальные машины и контейнеры, пока нет подключения Rosetun. Выключайте Lockdown, пока они нужны.
