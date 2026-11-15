@@ -1,17 +1,20 @@
 """The summary of an L3 run in the lab: what the script reported, what the observer saw, and the exit code.
 
-Nothing here accepts anything. The group of stage 7b2b is judged against its windows; the other
-scenarios are listed with what the script reported and are not judged. The release gate stays
+Nothing here accepts anything. The group (stage 7b2b, widened by 7c2) is judged against its windows; the
+other scenarios are listed with what the script reported and are not judged. The release gate stays
 false and the security invariants stay unverified.
 """
 
 from .lab_protocol import CLIENTS, HTTPS_PORT, TARGETS
 
-# The scenarios of stage 7b2b, by id in scenarios-l3.tsv: the only ones that are judged.
+# The scenarios that are judged, by id in scenarios-l3.tsv, in the order the script runs them: those of stage
+# 7b2b, then those of 7c2, every other session under the kill switch where no direct traffic is expected.
 GROUP = ('preflight.identity', 'preflight.accounts', 'preflight.no-foreign-service', 'preflight.tools',
          'preflight.baseline', 'install.service', 'protection.reported', 'engine.identity', 'engine.files',
          'killswitch.direct-blocked', 'killswitch.tunnel-passes', 'lan.off', 'killswitch.foreign-table',
-         'killswitch.engine-killed', 'killswitch.flush-restored', 'killswitch.disconnect')
+         'killswitch.engine-killed', 'killswitch.flush-restored', 'killswitch.disconnect',
+         'rules.capabilities', 'rules.restart-guarded', 'inbound.reply', 'forward.blocked', 'crash.helper-killed',
+         'crash.open-network', 'crash.five-kills', 'upgrade.restart', 'upgrade.unprotected', 'stop.removes-table')
 # The scenarios of the two-hop exits: they have no check yet (evidence class `not-run`, not required), `run-l3.sh`
 # records each as SKIP "UNRUN: ..." before any session opens, so they belong to no group and no window.
 TWO_HOP = ('two-hop.positive.http.ipv4', 'two-hop.positive.http.ipv6', 'two-hop.positive.https.ipv4',
@@ -38,12 +41,24 @@ WINDOW_OF = {
     'lan.off': ('connect_ks', 0), 'killswitch.foreign-table': ('connect_ks', 0),
     'killswitch.engine-killed': ('connect_ks', 0), 'killswitch.flush-restored': ('connect_ks', 0),
     'killswitch.disconnect': ('connect_ks', 0),
+    # The first session of `capabilities` is under the kill switch; the second has a rule that sends a program
+    # direct, and `rules.direct-other-account` (outside the group) runs in it.
+    'rules.capabilities': ('capabilities', 0), 'rules.restart-guarded': ('restart_guarded', 0),
+    'inbound.reply': ('inbound', 0), 'forward.blocked': ('inbound', 0),
+    # `opened` ends the session `killed` opened: the window closes once open-network removed the table.
+    'crash.helper-killed': ('killed', 0), 'crash.open-network': ('killed', 0),
+    'crash.five-kills': ('five_kills', 0), 'upgrade.restart': ('upgraded', 0),
+    'upgrade.unprotected': None, 'stop.removes-table': ('stopped', 0),
     **dict.fromkeys(TWO_HOP),
 }
+# A scenario that opens a session of its own only when none is open: `forwarded` connects only if `inbound`
+# did not (it stopped before its connect, or the session was lost), and its window is then the one judged.
+OWN_WINDOW_WHEN_OPENED = {'forward.blocked': ('forwarded', 0)}
 GROUP_LABELS = tuple(dict.fromkeys(window[0] for window in WINDOW_OF.values() if window))
 # How many windows each label of the group has in a run where every scenario passed. Another count changes
 # no code; it is shown in `lab.window_counts`.
-WINDOWS_PER_LABEL = {'reported': 1, 'identity': 1, 'connect_ks': 1}
+WINDOWS_PER_LABEL = {'reported': 1, 'identity': 1, 'connect_ks': 1, 'capabilities': 2, 'restart_guarded': 1,
+                     'inbound': 1, 'forwarded': 1, 'killed': 1, 'five_kills': 1, 'upgraded': 1, 'stopped': 1}
 # What the observer must have seen of the lab for the group to mean anything. DoH is required too: the
 # helper's DNS check at connect (`check_cancellable` in `state/dns.rs`) goes through the DoH server that
 # `dns_section` of the sing-box render configures, so no scenario connects without it.
@@ -74,6 +89,9 @@ def window_verdict(windows):
 
 def window_of(identifier, windows):
     """The (label, number) of the window the scenario is judged in, or None."""
+    own = OWN_WINDOW_WHEN_OPENED.get(identifier)
+    if own is not None and any(window['label'] == own[0] for window in windows):
+        return own
     return WINDOW_OF[identifier]
 
 

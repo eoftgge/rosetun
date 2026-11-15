@@ -178,7 +178,7 @@ class ClockTests(unittest.TestCase):
         table = align_module.align(listing, self.report(), lab([window()]))
         last = of(table, GROUP[-1])
         self.assertEqual('2026-11-14T00:10:00.000Z', last['report_end'])
-        self.assertEqual('2026-11-14T00:09:57.000Z', last['report_begin'])
+        self.assertEqual('2026-11-14T00:09:59.000Z', last['report_begin'])
         first = of(table, 'preflight.identity')
         self.assertEqual(1.0, (datetime.fromisoformat(first['report_end'][:-1])
                                - datetime.fromisoformat(first['report_begin'][:-1])).total_seconds())

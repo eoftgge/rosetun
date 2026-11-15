@@ -306,10 +306,20 @@ class DiagnosticJointStartTests(JointStartTests):
                          self.pair.resources(self.runs['test']))
 
 
+# The windows of the two qualification runs of stage 7b2b, in order: `inbound` stopped before its connect there
+# (no sshd), so `forwarded` opened the session of the peer scenarios.
+WINDOWS_7B2B = ('reported', 'identity', 'connect_ks', 'capabilities', 'capabilities', 'through_vpn_by_program',
+                'restart_guarded', 'lan_on', 'lan_private_closed', 'lan_private_open', 'lan_follows_change',
+                'dns_lock', 'dns_lock_unavailable', 'missing_through_restart', 'forwarded', 'killed',
+                'dns_lock_killed', 'five_kills', 'upgraded', 'stopped')
+# The same run with sshd in the image: `inbound` opens the session and `forwarded` runs in it.
+WINDOWS_7C2 = tuple('inbound' if label == 'forwarded' else label for label in WINDOWS_7B2B)
+
+
 class Machines:
     """Fake machines, a fake lab guest and the evidence the lab machine leaves on its disk."""
-    # (label, frames inside the window, closed). A label of the group is one of the three below.
-    CLEAN = (('reported', ()), ('identity', ()), ('connect_ks', ()), ('capabilities', ()), ('lan_on', ()))
+    # (label, frames inside the window, closed): the windows of a clean run.
+    CLEAN = tuple((label, ()) for label in WINDOWS_7C2)
 
     def __init__(self, test, windows=None, fault=None, rows=None, evidence=None, fixtures=None):
         self.test, self.fault = test, fault
@@ -692,9 +702,8 @@ class OrderTests(Flow):
     def test_the_windows_and_the_legacy_report_are_in_the_summary(self):
         machines = Machines(self)
         result = self.go(machines)
-        self.assertEqual(['reported', 'identity', 'connect_ks', 'capabilities', 'lan_on'],
-                         [w['label'] for w in result['lab']['windows']])
-        self.assertEqual(['NONE'] * 5, [w['leak'] for w in result['lab']['windows']])
+        self.assertEqual(list(WINDOWS_7C2), [w['label'] for w in result['lab']['windows']])
+        self.assertEqual(['NONE'] * 20, [w['leak'] for w in result['lab']['windows']])
         self.assertEqual(len(scenario_ids()), len(result['legacy']['scenarios']))
         self.assertEqual(len(unrun_ids()), sum(r['result'] == 'SKIP' for r in result['legacy']['scenarios']))
         self.assertEqual('PASS', result['legacy']['summary']['overall'])
@@ -903,8 +912,7 @@ class FlowSummaryTests(Flow):
         from tools.vm.matrix.tests.test_lab import tcp
         syn = wire_frame(wire.CLIENTS[4], wire.GATEWAYS[4], 6, tcp(43000, 8388, flags=0x02))
         reply = wire_frame(wire.GATEWAYS[4], wire.CLIENTS[4], 6, tcp(8388, 43000, b'x' * 5, 0x18), reply=True)
-        windows = [('reported', ()), ('identity', ()), ('connect_ks', (syn, reply)), ('capabilities', ()),
-                   ('lan_on', ())]
+        windows = [(label, (syn, reply) if label == 'connect_ks' else ()) for label in WINDOWS_7C2]
         result = self.go(Machines(self, windows=windows))
         self.assertEqual(0, result['exit_code'])
         by_label = {w['label']: w['flows'] for w in result['lab']['windows']}
