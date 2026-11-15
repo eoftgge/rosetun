@@ -273,6 +273,10 @@ pub(crate) enum WorkerEvent {
         request: u64,
         result: Result<rosetun_core::SessionLists, StoreError>,
     },
+    CheckLists {
+        request: u64,
+        result: Result<rosetun_core::SessionLists, StoreError>,
+    },
     CloseConnection(Result<(), HelperCommandError>),
     UpdateAll {
         subscriptions: Result<Vec<SubscriptionUpdateResult>, StoreError>,

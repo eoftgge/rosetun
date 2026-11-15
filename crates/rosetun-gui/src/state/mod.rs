@@ -51,8 +51,8 @@ pub(crate) use rules::NameDialog;
 pub(crate) use rules::PROCESS_LIST_STALE_MS;
 use rules::RulesState;
 pub(crate) use rules::{
-    AddRuleDialog, AddressError, ChosenProgram, MAX_ADDRESSES, MAX_PROGRAMS, NameDialogKind,
-    RecentSite, RuleInputKind, UndoNotice,
+    AddRuleDialog, AddressError, CheckLine, ChosenProgram, MAX_ADDRESSES, MAX_PROGRAMS,
+    NameDialogKind, RecentSite, RuleInputKind, UndoNotice,
 };
 use session::SessionState;
 pub(crate) use session::{RequestInputs, SessionPart};
@@ -384,6 +384,8 @@ pub(crate) enum Action {
     },
     SelectVisibleRules,
     ClearRuleSelection,
+    /// From the answer of "Check an address or program": the table shows the rule.
+    ShowCheckedRule(RuleId),
     OpenCreateSet,
     OpenRenameSet,
     CancelSetName,
@@ -609,6 +611,11 @@ pub(crate) enum Job {
         request: u64,
         session: Box<ConnectRequest>,
     },
+    /// The lists of the rules "Check an address or program" goes through.
+    CheckLists {
+        request: u64,
+        session: Box<ConnectRequest>,
+    },
     CloseConnection(String),
     LookupExit {
         generation: u64,
@@ -718,6 +725,9 @@ impl State {
             WorkerEvent::ProgramNames(names) => self.reduce_program_names(names),
             WorkerEvent::SessionLists { request, result } => {
                 self.reduce_session_lists(request, result);
+            }
+            WorkerEvent::CheckLists { request, result } => {
+                self.reduce_check_lists(request, result);
             }
             WorkerEvent::CloseConnection(result) => self.reduce_close_connection(result),
             event @ (WorkerEvent::Apply(_)
@@ -927,6 +937,7 @@ impl State {
             | Action::SelectRule { .. }
             | Action::SelectVisibleRules
             | Action::ClearRuleSelection
+            | Action::ShowCheckedRule(_)
             | Action::StepRuleSelection { .. }
             | Action::OpenCreateSet
             | Action::OpenRenameSet

@@ -36,4 +36,17 @@ impl WorkerDispatcher {
             );
         });
     }
+
+    /// Reads the lists of the rules "Check an address or program" goes
+    /// through. Nothing about them is logged.
+    pub(crate) fn check_lists(&self, request: u64, session: ConnectRequest) {
+        self.spawn_task("rosetun-check-lists", move |publisher| {
+            let result = rosetun_core::read_session_lists(&publisher.store, &session);
+            emit(
+                &publisher.tx,
+                &publisher.repaint,
+                WorkerEvent::CheckLists { request, result },
+            );
+        });
+    }
 }

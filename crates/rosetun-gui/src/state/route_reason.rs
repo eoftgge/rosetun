@@ -53,7 +53,7 @@ impl SessionListsCache {
 }
 
 /// The session's enabled list rules, each list and category once.
-fn list_keys(request: &ConnectRequest) -> Vec<(ListId, Option<String>)> {
+pub(super) fn list_keys(request: &ConnectRequest) -> Vec<(ListId, Option<String>)> {
     let mut keys = Vec::new();
     for rule in request.effective_rule_set().enabled() {
         if let RuleMatcher::List { list, category } = &rule.matcher {

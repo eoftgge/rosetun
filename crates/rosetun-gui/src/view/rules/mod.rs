@@ -42,6 +42,7 @@ struct ToolbarRects {
     two_rows: bool,
 }
 
+mod check;
 mod dialogs;
 pub(crate) mod exchange;
 mod selection;
@@ -199,6 +200,8 @@ fn tab_body(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
         return;
     }
 
+    let check_available = state.rule_check_available();
+    let check_line = state.rule_check();
     let Some(set) = state
         .config
         .rule_sets
@@ -210,6 +213,14 @@ fn tab_body(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
     };
     template_section(ui, state, set, actions);
     ui.add_space(theme::space::XL);
+    check::address_check(
+        ui,
+        check_available,
+        &mut state.rules.check.input,
+        check_line,
+        actions,
+    );
+    ui.add_space(theme::space::M);
     let temporary = if state.config.active_rule_set.as_ref() == Some(&set.id) {
         state.session.temporary_rules.as_slice()
     } else {

@@ -204,6 +204,7 @@ mod qr;
 mod quit;
 mod recent;
 mod route_reason;
+mod rule_check;
 mod rule_history;
 mod rules;
 mod schedule;
