@@ -2578,7 +2578,8 @@ python tools/vm/linux/prepare-l3-image.py /srv/test-old.qcow2 /srv/test-new.qcow
 This requires `qemu-img` and `guestfish`. The source must be a stopped,
 standalone qcow2 image. The tool preserves the source, verifies the network
 file after writing the copy, and creates a new image descriptor. Copy its
-fields into `[image]` in a new execution configuration before the dry-run.
+fields into `[image]` in a new execution configuration before the dry-run
+(all but `sshd`, which only a v6 descriptor has; see stage 7c2).
 
 Certificates, with a term and the IP SAN (the guest clocks must be inside the
 validity period: check `date` in both images after preparing them):
@@ -2996,16 +2997,22 @@ rows do not name the client, so they say what failed (`ssl-...`, `timeout`) and 
 
 ### Scenarios outside the group
 
-They run and are reported. Until stages 7c to 7e, expect some of them to fail or to show a leak:
+They run and are reported. Stage 7c2 moved every session under the kill switch where no direct traffic
+is expected into the group (see "Stage 7c2" below); what stays outside needs either a declared expectation
+of direct traffic, which stage 7c3 adds, or a fixture the lab does not have yet:
 
-- `inbound.reply` fails: the image has no `sshd`, so the peer reads no banner.
-- `lan.private-closed`, `lan.private-open`, `lan.on`: no host in a private range exists in the lab.
-- `ipv6.neighbor` is skipped: the test machine has no IPv6 default router.
+- `rules.direct-other-account` (the second window `capabilities`) and `rules.proxy-default-direct`
+  (`through_vpn_by_program`) send a program direct by design, so their windows are `DETECTED`.
 - `dnslock.*` and `crash.dns-lock-killed` leave the network open on purpose (a DNS lock without a kill
-  switch, UDP 53 that is meant to leave): their windows are `DETECTED` and nothing yet says that is
-  expected.
-- `rules.direct-other-account` and `rules.proxy-default-direct` send a program direct by design, so
-  their windows are `DETECTED` too.
+  switch, UDP 53 that is meant to leave): their windows are `DETECTED` too.
+- `lan.on`, `lan.private-closed`, `lan.private-open`, `lan.follows-change`: Local network sessions let the
+  own network through by design, and no host in a private range exists in the lab. `lan.off` stays in the
+  group: it runs in `connect_ks`.
+- `ipv6.neighbor` is skipped: the test machine has no IPv6 default router.
+- `rules.search-misses` reads the journal and opens no session (it runs in the window `restart_guarded`).
+- The 20 `two-hop.*` have no check yet.
+
+Until stage 7c2, `inbound.reply` failed here because the test image had no `sshd`; image contract v6 adds one.
 
 ### Configuration and commands
 
@@ -3181,7 +3188,8 @@ the test machine, to the second. So:
   window had besides the durations of its scenarios (negative if the durations do not fit in it, a sign that
   the window is not what the report ran in). A scenario that belongs to no window (`preflight.*`, `install.service`),
   or whose window lacks a marker, has no interval and no flows. If several windows carry its label (the
-  script was run again), the first that has both markers is used and `windows_with_label` says how many there are.
+  script was run again), the first that has both markers, from the window's number on (stage 7c2), is used and
+  `windows_with_label` says how many there are.
 - `wire_flows` are the connections of the test machine in the window (the rows of `lab.windows[].flows`) and
   `route_flows` those of `lab.route_flows`, whose `first_ms` and `last_ms` here are the times of the first and the
   last packet in the same milliseconds, so the two lists can be read side by side. A flow is listed when its first
@@ -3325,6 +3333,179 @@ artifacts.
 5. `run linux-l3 --lab --control stop-helper --config <l3.toml>`: exit 0, `control_result.met` true.
 6. `run linux-l2 --config <l2.toml>`: as in the stage 5c qualification (`stage-l2.py` changed).
 7. `runs --state-directory <state>`: every run `completion_verified`, and the stand not locked.
+
+## Stage 7c2: the L3 group with every other kill switch session, and sshd for `inbound.reply`
+
+Until now the group was 16 scenarios: the preflight, the installation and three windows (`reported`,
+`identity`, `connect_ks`). The other sessions under the kill switch already ran in the lab, and in the two
+qualification runs of 7b2b their windows were `NONE`, but the exit code did not depend on them. This stage
+makes them part of the group: **26 scenarios**. Windows where direct traffic is expected (rules that send a
+program direct, a DNS lock, Local network, `lan.on`) stay outside: they need declared expectations (stage
+7c3). Nothing is accepted: the release gate stays false and the security invariants stay **UNVERIFIED**.
+
+### A window is a label and a number
+
+`WINDOW_OF` in `l3_summary.py` names, for each scenario, a pair (label, number) or `None`. The number counts
+the windows with that label from zero, in the order of the capture, and only that one window is judged for the
+scenario. `rules.capabilities` needs this: its function opens two sessions, the first under the kill switch
+alone and the second with a rule that sends a program direct, in which `rules.direct-other-account` (outside
+the group) then runs and which is `DETECTED` by design. The scenario is judged in `capabilities` 0 only.
+
+- A window beyond the expected ones (an implicit `disconnect`, a session opened again after a FAIL) is judged
+  by nothing; a leak in it is listed in `group.outside_leaks` like a leak outside the group and changes no code.
+  A session the script opens again always comes after the ones it expects, so the numbers of those stay right.
+- Fewer windows with a label than expected (`WINDOWS_PER_LABEL`): nothing tells which session is missing, so
+  no window of that label is judged and its scenarios are `UNOBSERVED` (exit 2), as for a label without any
+  window. A window is never judged for a scenario that belongs to another session.
+- `lab.window_counts` lists, for each label of the group, `expected`, `seen` and `as_expected`. Each row of
+  `lab.windows` also has `number` and `judged`. Neither changes the code; `in_group` keeps saying only whether
+  the label is one of the group's.
+- The control `stop-helper` of stage 7c1 reads the same judged window, `connect_ks` 0.
+
+### The group and its windows
+
+| Label | Number | Scenarios judged in it |
+| --- | --- | --- |
+| none | | `preflight.identity`, `preflight.accounts`, `preflight.no-foreign-service`, `preflight.tools`, `preflight.baseline`, `install.service`, `upgrade.unprotected` |
+| `reported` | 0 | `protection.reported` |
+| `identity` | 0 | `engine.identity`, `engine.files` |
+| `connect_ks` | 0 | `killswitch.direct-blocked`, `killswitch.tunnel-passes`, `lan.off`, `killswitch.foreign-table`, `killswitch.engine-killed`, `killswitch.flush-restored`, `killswitch.disconnect` |
+| `capabilities` | 0 (of 2) | `rules.capabilities` |
+| `restart_guarded` | 0 | `rules.restart-guarded` |
+| `inbound` (or `forwarded`, see below) | 0 | `inbound.reply`, `forward.blocked` |
+| `killed` | 0 | `crash.helper-killed`, `crash.open-network` |
+| `five_kills` | 0 | `crash.five-kills` |
+| `upgraded` | 0 | `upgrade.restart` |
+| `stopped` | 0 | `stop.removes-table` |
+
+`upgrade.unprotected` restarts the service with no session at all: it has no window, as the preflight.
+
+**The peer scenarios.** `inbound` sets up the peer namespace, reads the banner of sshd from the peer without
+Rosetun, and only then connects; `forwarded` connects only if no session is open. So:
+
+- With sshd (image contract v6), `inbound` opens the window `inbound` and `forwarded` runs in it; the window
+  closes in the `disconnect` of `forwarded`, before the peer's request that must answer again. Both scenarios
+  are judged in `inbound` 0.
+- If `inbound` stopped before its connect (no banner, as in every 7b2b run, or no peer namespace), it failed
+  and its row is `NOT_APPLICABLE`; `forwarded` opens a window of its own, `forwarded`, and `forward.blocked` is
+  judged in that one (`OWN_WINDOW_WHEN_OPENED`). The same holds if `inbound` connected but its session was gone
+  when `forwarded` ran. `lab.window_counts` then shows `inbound` 0 of 1.
+- A pass of `inbound.reply` without a window `inbound` is `UNOBSERVED`.
+
+### Where each window opens and closes
+
+Checked in `run-l3.sh`; it is not changed by this stage. Every closing marker waits for the table
+`inet rosetun` to be gone (`lab_mark`), so no window closes before the protection is removed, and in every case
+below the closing marker goes before the direct request that follows the session.
+
+| Scenario | Function | Sessions | Where the window closes |
+| --- | --- | --- | --- |
+| `rules.capabilities` | `capabilities` | 2 (two windows) | window 0 in the second `connect_with` (its `disconnect`, then `lab_mark close`); window 1 in the `connect_with` of `through_vpn_by_program` |
+| `rules.restart-guarded` | `restart_guarded` | 1 | the `disconnect` at the end of `scenario_program_rules`, after `rules.search-misses` |
+| `inbound.reply` | `inbound` | 1 | the `disconnect` of `forwarded`; if that fails, the `lab_mark close` after `forward.blocked` |
+| `forward.blocked` | `forwarded` | 0, or 1 when no session is open | as above, in the window `inbound` or its own |
+| `crash.helper-killed` | `killed` | 1 | `opened`, after `rosetun open-network` and `! table_present`, before `direct_https` |
+| `crash.open-network` | `opened` | 0 | the same |
+| `crash.five-kills` | `five_kills` | 2 `connect_with`, one window | the `disconnect` before the final `direct_https` |
+| `upgrade.restart` | `upgraded` | 2 `connect_with`, one window | the final `disconnect` |
+| `stop.removes-table` | `stopped` | 1 | after `systemctl stop` and `! table_present`, before `direct_https` (stage 7c1) |
+
+**Why `five_kills` and `upgraded` have one window each.** `lab_mark` sends nothing while the table
+`inet rosetun` exists. Between the two connects of each function the network is held closed: after the
+service is killed (`five_kills`) or restarted for an upgrade (`upgraded`), the restarted service keeps the
+table as a hold, and its state reads `Disconnected`. The second `connect_with` therefore runs no `disconnect`
+(the state is already `Disconnected`, and a `disconnect` would lift the hold), and both its `lab_mark close`
+and its `lab_mark open` find the table and do nothing. The connect brings the tunnel up under the hold and
+lifts the hold only once it is connected, so the protection never lapses, and the one window runs from the
+first connect to the `disconnect` at the end. A second window with either label means the hold was gone at
+the second connect: `lab.window_counts` shows it, the extra window is judged by nothing, and a leak while the
+hold was gone falls in the first window, whose verdict stands.
+
+If `crash.helper-killed` fails, `scenario_crash` returns with the window `killed` open; the first
+`disconnect` of `upgraded` lifts the hold and closes it before any direct request.
+
+### Image contract v6 (test image)
+
+v5 plus sshd for `inbound.reply`, which reads the banner `SSH-` on `198.51.100.1:22` (`PEER_HOST_ADDRESS`, the
+guest's end of the veth to the peer namespace; the address exists only between `peer_up` and `peer_down`). The
+lab image does not change. Hyper-V is not affected: its guest has its own sshd.
+
+- **Packages.** `openssh-server` and its Debian 13 dependencies, installed offline from a directory the owner
+  supplies (`--sshd-debs DIR`). The directory holds only `.deb` files (no links, no other entry) and must
+  include `openssh-server`. The tool never downloads and never reaches a network: it runs `dpkg -i` inside the
+  image through guestfish, with a `policy-rc.d` that forbids starting anything while the maintainer scripts run.
+  The name, SHA-256 and size of every package go into the descriptor (`sshd.debs`).
+- **Socket.** `ssh.socket` is enabled with a drop-in `/etc/systemd/system/ssh.socket.d/rosetun-lab.conf` that
+  resets the packaged `ListenStream` and sets `ListenStream=198.51.100.1:22` and `FreeBind=yes` (the address
+  does not exist at boot). `ssh.service` is disabled (no `.wants` link, no `sshd.service` alias). Never the
+  address on the lab wire (`192.0.2.2`), never `0.0.0.0`. `/etc/ssh/sshd_config.d/rosetun-lab.conf` sets
+  `ListenAddress 198.51.100.1:22` as a second bound for an sshd started by hand.
+- **Per connection.** The effective `ssh.socket` must have `Accept=yes`: systemd hands each connection to
+  `sshd -i`, and sshd binds nothing itself. If the packaged unit hands the listening socket to a daemon instead
+  (`Accept=no`), the tool refuses the image rather than vouch for an address it does not control.
+- **Keys.** The host keys are created in the image at installation (`ssh-keygen -A`), so every overlay of the
+  image has the same ones. That is acceptable here: sshd is reachable only from the peer namespace inside the
+  test machine, no client trusts or pins these keys, the scenario reads only the banner and the start of the key
+  exchange, and the image never leaves the stand. The private keys are not secrets of anything else; do not
+  reuse the image outside the lab.
+- **Check after writing.** The tool reads the copy back with `guestfish --ro` and refuses it unless
+  `ssh.socket` is enabled, `ssh.service` and its alias are not, the effective `ListenStream` list (the unit and
+  every drop-in in `socket.d` and `ssh.socket.d`, in order, an empty assignment resetting it) is exactly
+  `198.51.100.1:22` with no other `Listen*`, `FreeBind=yes`, `Accept=yes`, a host key exists, and neither the
+  `policy-rc.d` nor the package directory is left. A refused copy is deleted.
+- **Preflight.** No preflight looks at sshd: `preflight.no-foreign-service` checks units named `rosetun*`, the
+  helper's files, the table and the peer namespace. A listening socket opens no connection, so the quiet image
+  of v5 stays quiet.
+
+```sh
+python tools/vm/linux/prepare-l3-image.py /srv/test-v5.qcow2 /srv/test-v6.qcow2 \
+  --source-sha256 V5_SHA256 --descriptor /srv/test-v6.image.json \
+  --sshd --sshd-debs /srv/sshd-debs
+```
+
+`--sshd` without `--sshd-debs`, or the other way round, is refused by the parser (exit 2). Without both the tool
+prepares a v5 image as before. Copy the fields of the descriptor into `[image]` except `sshd`, which stays in the
+descriptor as the record of the packages.
+
+Check the new image after a boot, before sealing it:
+
+```sh
+systemctl is-enabled ssh.socket ssh.service   # enabled, disabled
+systemctl show -p Listen ssh.socket           # Listen=198.51.100.1:22 (Stream)
+ss -tlnp                                      # 198.51.100.1:22 held by systemd, nothing on 0.0.0.0:22
+```
+
+If the boot shows another address, stop: socket activation does not work this way in the image's release.
+
+### What to reinstall
+
+Only the test image: build v6 from the v5 image with `prepare-l3-image.py --sshd` and update the descriptor in
+the execution configuration. `l3_summary.py` and `l3_align.py` run on the controller; nothing in either image
+changes, so the lab image, its descriptor and the helpers stay as in stage 7c1.
+
+### Exit codes
+
+Unchanged (see stage 7b2b). The group is larger, so a failure or a leak in any of the ten new scenarios or
+windows is now a finding (1), and a pass in a window that is unverified or missing is `UNOBSERVED` (2).
+`LEAK_OUTSIDE_THE_GROUP_FAILS` stays false.
+
+### Qualification
+
+Each command in its own run on the clean checkpoint. Stop at the first unexpected result and send back the
+summaries and the retained artifacts.
+
+1. Build the v6 test image with `prepare-l3-image.py --sshd --sshd-debs DIR`; write the new descriptor into the
+   configurations (`[image]` of L2 and L3, `[test_image]` of the lab configuration).
+2. `lab-smoke --config <lab.toml>`, `lab-smoke --config <lab.toml> --canary`, then the controls of 7c1
+   (`--control extra-packet`, `--control observer-stopped`, `--control observer-killed`, `--control link-down`)
+   on the new images: exit 0 each, as in 7c1.
+3. `run linux-l3 --config <l3.toml>` without the lab: 4 PASS, 1 FAIL (`preflight.baseline`), 20 SKIP,
+   34 ERROR, exit 1, as in 7a.
+4. `run linux-l3 --lab --config <l3-lab.toml>`, twice in a row: the group 26 PASS (`inbound.reply` among them),
+   the cross-check without `DISAGREE` and without `UNOBSERVED`, `lab.window_counts` all `as_expected`, exit 0
+   both times.
+5. `run linux-l3 --lab --control stop-helper --config <l3-lab.toml>`: exit 0, `control_result.met` true.
+6. `run linux-l2 --config <l2.toml>`, then `runs --state-directory <state>`: every run `completion_verified`.
 
 ## Stage 7a: Linux L3 delivery without network
 
