@@ -1,6 +1,6 @@
 English | [Русский](README.ru.md)
 
-<p align="center"><img src=".github/assets/banner.svg" alt="Rosetun: VPN client for Windows and Linux" width="100%"></p>
+<p align="center"><img src="site/static/assets/banner.svg" alt="Rosetun: VPN client for Windows and Linux" width="100%"></p>
 
 <p align="center">
   <a href="https://eoftgge.github.io/rosetun/en/"><img src="https://img.shields.io/badge/Website-8C2338?style=for-the-badge" alt="Website"></a>
