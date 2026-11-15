@@ -691,7 +691,9 @@ ends with `systemctl reboot`. Two stand units carry on, both named
 `rosetun-l2-early.service` runs in early boot after `rosetun-lockdown.service`
 and before `network-pre.target` and notes whether the table is there;
 `rosetun-l2-resume.service` runs the phase after each reboot. The report lists
-every boot in `guest.boot_ids`; the host accepts at most the two planned
+every boot in `guest.boot_ids`, and `helper-journal.txt` holds the Lockdown and
+helper units' journal of each boot (saved before every reboot, since the guest's
+journal need not survive it); the host accepts at most the two planned
 reboots, the staged boot first. Status `rebooting` while the guest is down is
 not a failure: the host keeps polling.
 

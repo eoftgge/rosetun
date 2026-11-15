@@ -714,11 +714,28 @@ scenario_exit_denied() {
 
 # The first reboot: the helper does not start by itself, so after the boot only
 # the boot unit's set is in place until the resume phase starts the helper.
+# The Lockdown and helper units' journal of this boot, as the report keeps it.
+boot_journal() {
+    journalctl -b -u rosetun-lockdown.service --no-pager -o short-monotonic 2>/dev/null | tail -n 50
+    journalctl -b -u rosetun-helper.service --no-pager -o short-monotonic 2>/dev/null | tail -n 400
+}
+
+# Saves this boot's journal before a reboot. The report is written after the
+# last boot, which may have no helper at all, and the guest's journal need not
+# survive a reboot (no /var/log/journal), so the earlier boots are kept here.
+keep_boot_journal() {
+    local n
+    n=$(wc -l <"$STATE/boot-ids")
+    n=${n//[[:space:]]/}
+    { printf '== boot %s (%s) ==\n' "$n" "$(boot_id)"; boot_journal; } >"$STATE/journal-$n.txt"
+}
+
 reboot_now() {
     local phase=$1
     printf '%s\n' "$phase" >"$STATE/phase"
     : >"$STATE/rebooting"
     systemctl enable --quiet "$RESUME_UNIT" || return 1
+    keep_boot_journal
     write_status rebooting "$phase"
     sync
     systemctl --no-block reboot
@@ -930,8 +947,12 @@ finalize() {
     started_cleanup=$(l2_now_ms)
     if [ -f "$STATE/installed" ]; then
         {
-            journalctl -b -u rosetun-lockdown.service --no-pager -o short-monotonic 2>/dev/null | tail -n 50
-            journalctl -b -u rosetun-helper.service --no-pager -o short-monotonic 2>/dev/null | tail -n 400
+            local saved
+            for saved in "$STATE"/journal-*.txt; do
+                [ -f "$saved" ] && { cat -- "$saved"; echo; }
+            done
+            printf '== boot %s (%s), the last ==\n' "$(wc -l <"$STATE/boot-ids" | tr -d '[:space:]')" "$(boot_id)"
+            boot_journal
         } | LC_ALL=C tr -c '\n -~' '?' | l2_atomic_write "$REPORT/helper-journal.txt" 0644
     fi
     cleanup
