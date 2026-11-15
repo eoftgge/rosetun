@@ -31,11 +31,10 @@ A system service protects against leaks independently of the engine.
 - Experimental Lockdown: protection while disconnected too.
 - TUN and System proxy.
 - Rules by program, website, IP and list, with separate exits.
+- Two-hop exits, a proxy exit that connects through another exit (experimental).
 - Provider subscriptions, QR codes and `rosetun://` links.
 - Local network access and automatic reconnect.
 - Tray, notifications and CLI; English and Russian interfaces.
-
-Development builds: [two-hop proxy exits and limitations](TWO-HOP-EXITS.md). Network qualification is pending.
 
 ## Install
 

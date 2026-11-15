@@ -19,6 +19,32 @@ group = "Setup"
 
 A known sing-box error on Linux sometimes attributes a connection to the wrong program ([SagerNet/sing-box#4501](https://github.com/SagerNet/sing-box/issues/4501), open; Windows is not affected). So a **Direct** rule for a program can now and then let another program's connection past the tunnel, also with the kill switch on, because the kill switch lets the engine out. A connection whose program is not found matches no rule by program and goes by the rules after them. If this matters, use rules by site and IP instead, and keep **Through VPN** as the default with no **Direct** rule by program.
 
+## Two-hop exits {#two-hop}
+
+Experimental: this feature has not been checked on a real network yet.
+
+An exit can reach its server through another exit, so the traffic goes A → B. Both are proxy exits of the same connection.
+
+1. Add servers A and B, then create their exits on the **Exits** tab.
+2. Edit exit B. Set **Connect through** to exit A and save. The path reads **A → B**.
+3. Point the rule you want at **B**. Use **Apply** for a running connection.
+
+This changes only the traffic that the rule selects. It does not send all of the computer's traffic through B. In System proxy mode an application must use the local proxy; traffic that does not keeps its existing rules and protection settings.
+
+**Directly** in B's editor restores the ordinary connection to B's server. It is not the rule destination **Direct**. **Cancel** discards the changes in the editor. A failed **Apply** restores the saved rules, DNS and exit paths; temporary rules stay. An exit that another exit connects through cannot be deleted: change the path of the dependent exit first.
+
+Limits:
+
+- Exactly two exits. An exit cannot connect through itself, and there are no cycles or third hops.
+- B is an HTTP, HTTPS or SOCKS5 proxy, and its server is an IPv4 or IPv6 address, not a name. HTTPS still verifies the certificate; set the expected TLS server name where it is needed.
+- A can be any server that sing-box can reach, including one that runs through Xray, such as VLESS with REALITY when Xray is set to **Automatically**. B through Xray, the **Without Xray** engine choice and TLS fragmentation do not work for this path.
+- Rosetun does not look up B's name itself, so B's address must be given as a number. The name of A is resolved by the usual rules. DNS for the sites you open follows your DNS settings, so this feature does not promise that all DNS goes through B.
+- UDP, including QUIC, that a rule sends through B is blocked. It does not fall back to A or to a direct connection. Other rules keep their behaviour.
+- A missing exit, an unreachable proxy, wrong credentials or a failed HTTPS handshake never switches to a shorter path. After a changed subscription, a country fallback or a different mode, the service checks the path again.
+- B's delay measures the whole path A → B. The exit IP on the connection screen describes the main route, not B's public address.
+
+**Connect through** can be empty. The editor then says "Only HTTP and SOCKS5 proxies connect through another exit". That happens when the exit being edited is not an HTTP, HTTPS or SOCKS5 proxy, when no exit is chosen yet, when there is no other exit, or when every other exit would make a path that is not supported, such as a third hop or a cycle. Choose another exit or server if the editor says that the path is unavailable.
+
 ## Export and import {#exchange}
 
 In Rules, select the desired set in the picker (Main), then open the three-dot menu beside it. Export all or selected rules of that set, or import rules. The selected set does not need to be active. Copy the document to the clipboard or save a JSON file on Windows. Linux currently supports the clipboard only. Import from the same menu. In the preview, choose an existing destination set and Add or Replace, or choose New set, enter its name and click Import. The new set is created only on confirmation and is not activated automatically. Duplicates are skipped. The whole import, including the default rule and list references, can be undone with Ctrl+Z.

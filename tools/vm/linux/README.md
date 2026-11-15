@@ -793,4 +793,4 @@ To qualify a scenario, retain all of the following for the same marked request a
 4. For HTTPS, use a trusted test CA for the positive case, then a wrong name and an untrusted certificate for refusal. Use incorrect B credentials separately. Test a domain B as a refusal without a physical DNS query, including after subscription and fallback changes.
 5. Raw CLI output, request/configuration with secrets removed, engine/helper versions and commit, timestamped A/B/target logs, interface names, captures, and the matrix report. Return these artifacts if any observation differs. Keep raw secrets and personal network data out of commits.
 
-A matrix run whose two-hop rows remain UNRUN does not accept the feature. See [configuration and limits](../../../TWO-HOP-EXITS.md).
+A matrix run whose two-hop rows remain UNRUN does not accept the feature.
