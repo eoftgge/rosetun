@@ -3297,24 +3297,34 @@ else is 2, an interruption 130. A run with a control is never a qualification of
 ### Reinstall
 
 Changed in the images: `linux/guest/lab-entry.py` and `matrix/lab_protocol.py` in **both** images (the
-control request, the operations `window` and `halt`, the hold), and `linux/guest/stage-l2.py` in the
-**test** image (the optional `LAB_CONTROL`). `linux/guest/run-l3.sh` and `linux/guest/start.sh` reach the
+control request, the operations `window` and `halt`, the hold, the moment of the intervention, the mark of a
+stopped observer, the kill), and `linux/guest/stage-l2.py` in the **test** image (the optional
+`LAB_CONTROL`). `linux/guest/run-l3.sh` and `linux/guest/start.sh` reach the
 test machine through the package and need no reinstall. Update the image descriptors of both images
 (the new SHA-256 and size of each) before any qualification; the tunnel descriptors (`sing_box_sha256`,
 `ca_sha256`) do not change. The Hyper-V path needs the new `run-l3.sh` only when its owner takes it.
 
 ### Owner qualification
 
-Each command in its own run on the clean checkpoint. Stop at the first unexpected result and send back
-the summaries and the retained artifacts.
+Build both images again with the new `lab-entry.py` and `lab_protocol.py` and the test image with the new
+`stage-l2.py`, and update the image descriptors of both (see "Reinstall"). Each command in its own run on
+the clean checkpoint. Stop at the first unexpected result and send back the summaries and the retained
+artifacts.
 
 1. `lab-smoke --config <lab.toml>`, then `lab-smoke --config <lab.toml> --canary`: as in 6b.
 2. `lab-smoke --config <lab.toml> --control extra-packet`, then `--control observer-stopped`, then
-   `--control link-down`: exit 0 each; `control.met` true; `leak` `DETECTED`, `UNVERIFIED`, `UNVERIFIED`.
-3. `run linux-l3 --lab --config <l3.toml>`: 16 of 16, exit 0, the window `stopped` now `NONE` (it is
-   outside the group, so it is read in `lab.windows`).
-4. `run linux-l3 --lab --control stop-helper --config <l3.toml>`: exit 0, `control_result.met` true.
-5. `runs --state-directory <state>`: every run `completion_verified`.
+   `--control observer-killed`, then `--control link-down`: exit 0 each; `control.met` true; `leak`
+   `DETECTED`, `UNVERIFIED`, `UNVERIFIED`, `UNVERIFIED`. The `observer_reasons` of the second hold
+   `capture-halted-in-window`, those of the third are exactly `observer-gone`, those of the fourth do not
+   hold `capture-halted-in-window`. If a run exits 2 with `control.intervened` false and the error
+   `exchanges-not-completed`, the exchanges of the test machine did not finish in time: send the summary.
+3. `run linux-l3 --config <l3.toml>` without the laboratory: 4 PASS, 1 FAIL (`preflight.baseline`), 20 SKIP,
+   34 ERROR, exit 1, as in 7a.
+4. `run linux-l3 --lab --config <l3.toml>`, twice in a row (each on the clean checkpoint): 16 of 16, exit 0
+   both times, and the window `stopped` `NONE` (it is outside the group, so it is read in `lab.windows`).
+5. `run linux-l3 --lab --control stop-helper --config <l3.toml>`: exit 0, `control_result.met` true.
+6. `run linux-l2 --config <l2.toml>`: as in the stage 5c qualification (`stage-l2.py` changed).
+7. `runs --state-directory <state>`: every run `completion_verified`, and the stand not locked.
 
 ## Stage 7a: Linux L3 delivery without network
 
