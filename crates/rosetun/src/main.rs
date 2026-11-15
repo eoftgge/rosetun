@@ -159,7 +159,7 @@ fn main() -> ExitCode {
         },
         Command::Delay { mode } => with_helper(|client| delay(client, mode)),
         Command::Exits => local_result(exits::run()),
-        Command::Rules(command) => local_result(rules::run(command)),
+        Command::Rules(command) => rules::run(command),
         Command::Connections => with_helper(connections::run),
         Command::CloseConnection { id } => with_helper(|client| connections::close(client, &id)),
         Command::Status => with_helper(status),
@@ -1017,7 +1017,7 @@ fn read_connect_request(path: &Path) -> Result<ConnectRequest, String> {
 
 fn print_usage() {
     eprintln!(
-        "  rosetun rules export [--selected-ids ID,...] [--with-list-urls] [FILE|-]\n  rosetun rules import [--replace] [--yes] FILE|-"
+        "  rosetun rules export [--selected-ids ID,...] [--with-list-urls] [FILE|-]\n  rosetun rules import [--replace] [--yes] FILE|-\n  rosetun rules test <address|program>"
     );
     eprintln!(
         "\
