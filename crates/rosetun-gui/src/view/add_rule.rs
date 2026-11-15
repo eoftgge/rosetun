@@ -1259,18 +1259,25 @@ fn process_row(ui: &mut egui::Ui, row: ProcessRow<'_>, enabled: bool) -> egui::R
     };
     match row.detail {
         Some(detail) => {
-            text_painter.text(
-                egui::pos2(text_left, rect.center().y - theme::space::XS),
-                egui::Align2::LEFT_BOTTOM,
-                row.name,
+            // The two lines are centred as one block: the name above the centre and the
+            // detail below it left the pair a few points high.
+            let name = text_painter.layout_no_wrap(
+                row.name.to_owned(),
                 theme::font::semibold(theme::font::CAPTION),
                 name_color,
             );
-            text_painter.text(
-                egui::pos2(text_left, rect.center().y),
-                egui::Align2::LEFT_TOP,
-                detail,
+            let detail = text_painter.layout_no_wrap(
+                detail.to_owned(),
                 egui::TextStyle::Small.resolve(ui.style()),
+                theme::palette().text_dim,
+            );
+            let gap = theme::space::XXS;
+            let top = rect.center().y - (name.size().y + gap + detail.size().y) / 2.0;
+            let detail_top = top + name.size().y + gap;
+            text_painter.galley(egui::pos2(text_left, top), name, name_color);
+            text_painter.galley(
+                egui::pos2(text_left, detail_top),
+                detail,
                 theme::palette().text_dim,
             );
         }
