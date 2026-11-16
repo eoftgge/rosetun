@@ -395,7 +395,7 @@ class RequestTests(Base):
                         patch.object(self.entry, 'check_dns_fixtures'), \
                         patch.object(self.entry, 'check_lab_fixtures'), \
                         patch.object(self.entry.subprocess, 'Popen', return_value=child), \
-                        patch.object(Path, 'write_text', lambda path, text: writes.append((str(path), text))):
+                        patch.object(Path, 'write_text', lambda path, text: writes.append((path.as_posix(), text))):
                     self.entry.setup(request, 'enp7s0', directory)
                 replaced = [c for c in commands if c[:4] == ('/usr/sbin/ip', '-6', 'addr', 'replace')]
                 echo = [w for w in writes if w[0] == '/proc/sys/net/ipv6/icmp/echo_ignore_all']
