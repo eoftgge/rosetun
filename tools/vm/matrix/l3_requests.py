@@ -27,6 +27,13 @@ CONNECT = {'request-kill-switch.json': (True, False, False),
 PROGRAM = {'request-program-direct.json': ('proxy', 'direct'),
            'request-program-proxy.json': ('direct', 'proxy')}
 NAMES = tuple(CONNECT) + tuple(PROGRAM)
+# The Linux Proxy job: name -> (kill_switch, share_on_lan), in the order of New-RosetunLinuxProxyRequests. Each is
+# the kill-switch request in the proxy mode, with the local proxy on the port run-proxy.sh expects.
+PROXY_PORT = 10808
+PROXY = {'request-proxy.json': (False, False),
+         'request-proxy-strict.json': (True, False),
+         'request-proxy-share.json': (False, True)}
+PROXY_NAMES = ('request-kill-switch.json',) + tuple(PROXY)
 
 
 def _unique(pairs):
@@ -122,11 +129,39 @@ def render_all(server=DEFAULT_SERVER, port=DEFAULT_PORT, *, diagnostic=False):
     return files
 
 
-def write_all(directory, server=DEFAULT_SERVER, port=DEFAULT_PORT):
+def render_proxy(server=DEFAULT_SERVER, port=DEFAULT_PORT, *, diagnostic=False):
+    """Return the four request files of the Proxy job as name -> bytes, in the order the job uses them.
+
+    `request-kill-switch.json` is the L3 file byte for byte (`mode.change` starts from it); the three others are
+    that request in the proxy mode, with and without the kill switch and sharing.
+    """
+    base = render_all(server, port, diagnostic=diagnostic)['request-kill-switch.json']
+    files = {'request-kill-switch.json': base}
+    for name, (kill, share) in PROXY.items():
+        request = json.loads(base.decode('ascii'), object_pairs_hook=_unique)
+        request['settings'].update(connection_mode='system_proxy', kill_switch=kill,
+                                   local_proxy=dict(port=PROXY_PORT, share_on_lan=share))
+        files[name] = _serialize(request)
+    return files
+
+
+RENDERERS = {'l3': render_all, 'proxy': render_proxy}
+
+
+def render_for(profile, server=DEFAULT_SERVER, port=DEFAULT_PORT, *, diagnostic=False):
+    """The request files of a stage profile that has generated requests."""
+    try:
+        render = RENDERERS[profile]
+    except (KeyError, TypeError):
+        raise ValueError('l3-request-profile-unknown') from None
+    return render(server, port, diagnostic=diagnostic)
+
+
+def write_all(directory, server=DEFAULT_SERVER, port=DEFAULT_PORT, *, profile='l3'):
     """Create the files, or confirm that identical ones are already there."""
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
-    for name, data in render_all(server, port).items():
+    for name, data in render_for(profile, server, port).items():
         path = directory / name
         if path.exists() or path.is_symlink():
             if path.is_symlink() or not path.is_file() or path.read_bytes() != data:

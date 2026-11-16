@@ -239,8 +239,12 @@ l3=$here/../guest/run-l3.sh
 expect "run-l3.sh takes LAB_MARKER_ADDRESS as an optional key of job.env" \
     grep -q 'DNS_PROBE_ADDRESS LAB_MARKER_ADDRESS LAB_CONTROL || return 1' "$l3"
 expect "run-l3.sh sends no marker unless the address is set" grep -q '^    \[ -n "\$LAB_MARKER_ADDRESS" \] || return 0$' "$l3"
-expect "start.sh lets only an L3 stage read LAB_MARKER_ADDRESS" \
-    grep -q '^    \[ "\$stage" != l3 \] || keys+=(LAB_MARKER_ADDRESS LAB_CONTROL)$' "$start"
+expect "start.sh lets only an L3 or Proxy stage read LAB_MARKER_ADDRESS" \
+    grep -q '^    case \$stage in l3 | proxy) keys+=(LAB_MARKER_ADDRESS LAB_CONTROL) ;; esac$' "$start"
+expect "run-proxy.sh takes LAB_MARKER_ADDRESS and LAB_CONTROL as optional keys of job.env" \
+    grep -q 'DNS_PROBE_ADDRESS LAB_MARKER_ADDRESS LAB_CONTROL || return 1' "$here/../guest/run-proxy.sh"
+expect "run-proxy.sh refuses a control without a marker address" \
+    grep -q '^    \[ -z "\$LAB_CONTROL" \] || { \[ "\$LAB_CONTROL" = stop-helper \] && \[ -n "\$LAB_MARKER_ADDRESS" \]; } ||$' "$here/../guest/run-proxy.sh"
 lab_functions=$work/lab-functions.sh
 awk '/^# -+ lab windows/ { on = 1 } /^connect_with\(\) \{/ { on = 0 } on' "$l3" >"$lab_functions"
 expect "the lab window functions were found in run-l3.sh" test -s "$lab_functions"

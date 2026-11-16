@@ -49,9 +49,9 @@ class L2Import:
         if not re.fullmatch('[0-9a-f]{32}', attempt):
             raise JobError('invalid-l2-import-id')
         media = vm._l2_media
-        # The media record names its stage; the L3 block must accompany an L3 media and only that.
+        # The media record names its stage; the L3 block must accompany a media of the real service and only that.
         profile = l2.profile_of(media['package'].get('profile', 'l2'))
-        if (profile.name == 'l3') != (l3 is not None):
+        if (profile.name in l2.SERVICE_PROFILES) != (l3 is not None):
             raise JobError('l2-import-profile-mismatch')
         env = dict(RUN_ID=guest, STAND_ID=_identifier(vm.run._identity[1]),
                    EXPECTED_BOOT_ID=_uuid(observation['boot_id']), USER_A=user_a, USER_B=user_b,

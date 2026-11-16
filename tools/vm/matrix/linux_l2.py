@@ -75,7 +75,19 @@ PROFILES = {
                   (('rosetun-helper.service', 'packaging/linux/rosetun-helper.service'),
                    ('rosetun-engine.rules', 'packaging/linux/rosetun-engine.rules')),
                   l3_requests.NAMES, ENV_L3),
+    # The set is PROXY_START_REQUIRED of guest/start.sh: the L3 set, the GUI's module for the desktop's proxy
+    # settings, the Lockdown unit, and the four requests of the proxy mode.
+    'proxy': Profile('proxy', 'proxy',
+                     ('guest/launch.sh', 'guest/start.sh', 'guest/lib.sh', 'guest/run-proxy.sh', 'scenarios-proxy.tsv'),
+                     ('rosetun-helper-privileged', 'rosetun', 'desktop_proxy', 'sing-box'),
+                     ('rosetun-helper-privileged', 'rosetun', 'desktop_proxy'),
+                     (('rosetun-helper.service', 'packaging/linux/rosetun-helper.service'),
+                      ('rosetun-engine.rules', 'packaging/linux/rosetun-engine.rules'),
+                      ('rosetun-lockdown.service', 'packaging/linux/rosetun-lockdown.service')),
+                     l3_requests.PROXY_NAMES, ENV_L3),
 }
+# The stages that install the real service, take the host node's values and may run inside the lab.
+SERVICE_PROFILES = ('l3', 'proxy')
 
 
 def profile_of(name):
@@ -130,7 +142,7 @@ def bound_journal(data, limit=JOURNAL_FULL_LIMIT):
 
 def evidence_files(stage):
     """The files a stage's job may write under `linux-<stage>/`, all reserved before the VM runs."""
-    return EVIDENCE_FILES + (JOURNAL_FILES if stage == 'l3' else ())
+    return EVIDENCE_FILES + (JOURNAL_FILES if stage in SERVICE_PROFILES else ())
 
 
 def _json(raw):
@@ -312,7 +324,7 @@ def validate_package(directory, *, checkout, immutable=False, check_source=True,
             node = _json(small[name])['node']
             server, port = node['server'], node['port']
             kinds = {diagnostic for diagnostic in (False, True)
-                     if small[name] == l3_requests.render_all(server, port, diagnostic=diagnostic)[
+                     if small[name] == l3_requests.render_for(profile.name, server, port, diagnostic=diagnostic)[
                          name.rpartition('/')[2]]}
         except (KeyError, TypeError, ValueError):
             raise JobError('l3-request-invalid') from None
@@ -341,7 +353,7 @@ def validate_env(raw, profile='l2'):
         if not match or match[1] in env:
             raise JobError('l2-invalid-job-env')
         env[match[1]] = match[2]
-    optional = {LAB_MARKER_KEY, LAB_CONTROL_KEY} if profile.name == 'l3' else set()
+    optional = {LAB_MARKER_KEY, LAB_CONTROL_KEY} if profile.name in SERVICE_PROFILES else set()
     if not set(profile.env) <= set(env) <= set(profile.env) | optional:
         raise JobError('l2-job-env-fields')
     if not re.fullmatch(r'[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}', env['RUN_ID']):
@@ -358,8 +370,8 @@ def validate_env(raw, profile='l2'):
     # Limit this first execution API to the legacy CLI's maximum job duration.
     if not 60 <= int(env['JOB_TIMEOUT_SECONDS']) <= 7200:
         raise JobError('l2-job-timeout-range')
-    if profile.name == 'l3':
-        # The shapes run-l3.sh accepts, narrowed to documentation addresses and a real port.
+    if profile.name in SERVICE_PROFILES:
+        # The shapes run-l3.sh and run-proxy.sh accept, narrowed to documentation addresses and a real port.
         for key in ('HOST_ADDRESS', 'PROBE_ADDRESS', 'DNS_PROBE_ADDRESS'):
             if not re.fullmatch(r'[0-9]{1,3}(\.[0-9]{1,3}){3}', env[key]):
                 raise JobError('l3-job-env-address')
@@ -719,7 +731,7 @@ class LinuxL2Job:
             raw_report = self._read('report')
             if self._read('status-after') != raw_status:
                 raise JobError('l2-results-changed')
-            if self.profile.name == 'l3':
+            if self.profile.name in SERVICE_PROFILES:
                 self._journal()
             self._fresh_boot()
             result = assess(_json(raw_report), status, self.plan)

@@ -236,3 +236,80 @@ class RequestTests(unittest.TestCase):
             (Path(temp) / 'request-lan.json').write_bytes(b'{}\n')
             with self.assertRaises(ValueError):
                 req.write_all(temp)
+
+
+class ProxyRequestTests(unittest.TestCase):
+    """The four requests of the Proxy job: the kill-switch request in the proxy mode, as New-RosetunLinuxProxyRequests."""
+
+    def setUp(self):
+        self.files = req.render_proxy()
+        self.requests = {n: json.loads(b) for n, b in self.files.items()}
+
+    def test_exactly_the_four_files_the_proxy_job_installs(self):
+        self.assertEqual(['request-kill-switch.json', 'request-proxy.json', 'request-proxy-strict.json',
+                          'request-proxy-share.json'], list(self.files))
+        self.assertEqual(req.PROXY_NAMES, tuple(self.files))
+        script = (ROOT / 'tools/vm/linux/guest/run-proxy.sh').read_text(encoding='utf-8')
+        self.assertEqual(set(req.PROXY_NAMES), set(re.findall(r'request-[a-z-]+\.json', script)))
+
+    def test_variants_and_port_equal_the_powershell_function(self):
+        text = PSM1.read_text(encoding='utf-8')
+        body = re.search(r'function New-RosetunLinuxProxyRequests \{(.*?)\n\}', text, re.S).group(1)
+        found = dict(re.findall(r"'(request-proxy[a-z-]*\.json)'\s*=\s*@\{([^}]*)\}", body))
+        parsed = {n: tuple(v == '$true' for v in re.findall(r'=\s*(\$true|\$false)', v)) for n, v in found.items()}
+        self.assertEqual(req.PROXY, parsed)
+        self.assertIn('$ProxyPort = 10808', body)
+        self.assertIn("connection_mode -NotePropertyValue 'system_proxy'", body)
+        script = (ROOT / 'tools/vm/linux/guest/run-proxy.sh').read_text(encoding='utf-8')
+        self.assertIn(f'\nPROXY_PORT={req.PROXY_PORT}\n', script)
+
+    def test_the_kill_switch_request_is_the_l3_one_byte_for_byte(self):
+        for server, port in (('192.0.2.1', 8388), ('198.51.100.7', 9000)):
+            self.assertEqual(req.render_all(server, port)['request-kill-switch.json'],
+                             req.render_proxy(server, port)['request-kill-switch.json'])
+
+    def test_each_variant_differs_from_the_kill_switch_request_only_by_the_proxy_settings(self):
+        ks = self.requests['request-kill-switch.json']
+        proxy_fields = {'settings.connection_mode', 'settings.local_proxy.port', 'settings.local_proxy.share_on_lan'}
+        for name, (kill, share) in req.PROXY.items():
+            request = self.requests[name]
+            self.assertEqual(proxy_fields | (set() if kill else {'settings.kill_switch'}), differences(ks, request), name)
+            self.assertEqual('system_proxy', request['settings']['connection_mode'])
+            self.assertEqual(dict(port=10808, share_on_lan=share), request['settings']['local_proxy'])
+            self.assertIs(kill, request['settings']['kill_switch'])
+            self.assertIs(False, request['settings']['allow_lan'])
+            req.check_documentation_only(request)
+
+    DIGESTS = {
+        ('192.0.2.1', 8388): {
+            'request-kill-switch.json': '0b9df6f0125a1fc52743f00948f6505b7cf869a3a034b2621edcf87587a28840',
+            'request-proxy.json': '28187711c8a191ea306210fc77249ee739287b35b54cc98e26f164c3457ce889',
+            'request-proxy-strict.json': 'a5dc7f3c85ba6a74d7a44f641b57acb74ecf13f4e861ff0abdb95105a3dea24e',
+            'request-proxy-share.json': 'c3da87e6015d2584780d0163e27cba37ce5660bdbbb81f03ecfcc063e9efdfde'},
+        ('198.51.100.7', 9000): {
+            'request-kill-switch.json': '3116aab145a331179deff1d22d984b8cb6ab5fd8ea4473f4e528285c50485609',
+            'request-proxy.json': '41b61ffa94823dc8b229df455eb36014e876cda45af71653e500e6cee5f81198',
+            'request-proxy-strict.json': 'f2117b1374bd9cce63560a9577087c1570f76b86a2dcb7d9ca7c4d458034a445',
+            'request-proxy-share.json': 'c981726723d3fdd956e855c39ce82a1d2183936df5184db8a1f2ce19c61ddc0e'}}
+
+    def test_the_bytes_are_pinned(self):
+        for (server, port), expected in self.DIGESTS.items():
+            rendered = req.render_for('proxy', server, port)
+            self.assertEqual(expected, {n: hashlib.sha256(b).hexdigest() for n, b in rendered.items()})
+
+    def test_the_l3_renderer_and_its_bytes_are_unchanged_and_an_unknown_profile_is_refused(self):
+        self.assertEqual(req.render_all(), req.render_for('l3'))
+        self.assertEqual(RequestTests.ORDINARY[('192.0.2.1', 8388)],
+                         {n: hashlib.sha256(b).hexdigest() for n, b in req.render_for('l3').items()})
+        for profile in ('l2', 'l4', None):
+            with self.assertRaises(ValueError):
+                req.render_for(profile)
+
+    def test_written_once_and_never_overwritten(self):
+        with tempfile.TemporaryDirectory() as temp:
+            req.write_all(temp, profile='proxy')
+            req.write_all(temp, profile='proxy')
+            self.assertEqual(self.files, {n: (Path(temp) / n).read_bytes() for n in req.PROXY_NAMES})
+            (Path(temp) / 'request-proxy.json').write_bytes(b'{}\n')
+            with self.assertRaises(ValueError):
+                req.write_all(temp, profile='proxy')

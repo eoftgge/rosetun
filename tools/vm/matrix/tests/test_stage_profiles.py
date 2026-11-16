@@ -21,6 +21,7 @@ from tools.vm.matrix.tests.test_matrix import summarize, synthetic_inputs
 from tools.vm.matrix.tests.test_qga import BOOT, read
 
 L3 = l2.PROFILES['l3']
+PROXY = l2.PROFILES['proxy']
 ELF = b'\x7fELF\x02\x01' + b'\0' * 10 + b'\x02\0\x3e\0'
 SING_BOX = ELF + b'inert sing-box fixture; never execute'
 SING_BOX_SHA = hashlib.sha256(SING_BOX).hexdigest()
@@ -36,23 +37,23 @@ def checkout_bytes(name):
     return (CHECKOUT / name).read_bytes().replace(b'\r\n', b'\n')
 
 
-def package_l3(root, vm_uuid, stand='synthetic-l3', **env_overrides):
-    """A complete L3 package: real scripts, units and requests, inert binaries."""
-    for name in L3.sources:
+def package_l3(root, vm_uuid, stand='synthetic-l3', profile=L3, **env_overrides):
+    """A complete L3 (or Proxy) package: real scripts, units and requests, inert binaries."""
+    for name in profile.sources:
         path = root / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(checkout_bytes('tools/vm/linux/' + name).rstrip(b'\n') + b'\n')
     (root / 'artifacts').mkdir()
     artifacts = {}
-    for name in L3.binaries:
+    for name in profile.binaries:
         data = SING_BOX if name == 'sing-box' else ELF + name.encode() + b' inert fixture'
         (root / 'artifacts' / name).write_bytes(data)
         artifacts[name] = dict(sha256=hashlib.sha256(data).hexdigest())
-    for name, source in L3.packaged:
+    for name, source in profile.packaged:
         (root / 'artifacts' / name).write_bytes(checkout_bytes(source))
-    l3_requests.write_all(root / 'artifacts')
-    provenance = dict(schema=1, stage='l3', target='x86_64-unknown-linux-gnu', **SOURCE,
-                      artifacts={n: artifacts[n] for n in L3.attested})
+    l3_requests.write_all(root / 'artifacts', profile=profile.name)
+    provenance = dict(schema=1, stage=profile.stage, target='x86_64-unknown-linux-gnu', **SOURCE,
+                      artifacts={n: artifacts[n] for n in profile.attested})
     (root / 'artifacts/provenance.json').write_text(json.dumps(provenance), encoding='ascii')
     env = dict(RUN_ID=GUEST, STAND_ID=stand, EXPECTED_BOOT_ID=BOOT, USER_A='l2a', USER_B='l2b',
                BIOS_GUID=vm_uuid, SCENARIO_TIMEOUT_SECONDS='30', UNIT_TIMEOUT_SECONDS='180',
@@ -60,12 +61,12 @@ def package_l3(root, vm_uuid, stand='synthetic-l3', **env_overrides):
                PROBE_ADDRESS='203.0.113.2', DNS_PROBE_ADDRESS='203.0.113.53')
     env.update(env_overrides)
     (root / 'job.env').write_bytes(''.join(f'{k}={v}\n' for k, v in env.items()).encode())
-    manifest_l3(root)
+    manifest_l3(root, profile)
 
 
-def manifest_l3(root):
+def manifest_l3(root, profile=L3):
     (root / 'manifest.sha256').write_bytes(''.join(
-        hashlib.sha256((root / n).read_bytes()).hexdigest() + '  ' + n + '\n' for n in L3.payload).encode())
+        hashlib.sha256((root / n).read_bytes()).hexdigest() + '  ' + n + '\n' for n in profile.payload).encode())
 
 
 def register_evidence(run, stage):
@@ -108,6 +109,22 @@ class ProfileTableTests(unittest.TestCase):
             self.assertEqual(list(profile.env), entry['env'])
             self.assertEqual(5, len(profile.sources))
         self.assertEqual(media.CONTENT, media.content('l2'))
+
+    def test_proxy_is_exactly_what_start_sh_requires(self):
+        self.assertEqual(sorted(lines_of('tools/vm/linux/guest/start.sh', 'PROXY_START_REQUIRED')),
+                         sorted(PROXY.payload))
+        self.assertEqual(('rosetun-helper-privileged', 'rosetun', 'desktop_proxy', 'sing-box'), PROXY.binaries)
+        self.assertEqual(('rosetun-helper.service', 'rosetun-engine.rules', 'rosetun-lockdown.service'),
+                         tuple(a for a, _ in PROXY.packaged))
+        self.assertEqual(l3_requests.PROXY_NAMES, PROXY.requests)
+        self.assertEqual(('proxy', 'proxy', L3.env), (PROXY.name, PROXY.stage, PROXY.env))
+        self.assertEqual(('l3', 'proxy'), l2.SERVICE_PROFILES)
+        self.assertEqual(l2.evidence_files('l3'), l2.evidence_files('proxy'))
+
+    def test_the_proxy_build_records_the_three_attested_binaries(self):
+        script = (CHECKOUT / 'tools/vm/linux/build-artifacts.sh').read_text(encoding='utf-8')
+        self.assertIn('provenance rosetun-helper-privileged rosetun desktop_proxy >', script)
+        self.assertEqual(('rosetun-helper-privileged', 'rosetun', 'desktop_proxy'), PROXY.attested)
 
     def test_l3_delivers_the_documented_artifacts(self):
         self.assertEqual(('rosetun-helper-privileged', 'rosetun', 'sing-box'), L3.binaries)
@@ -1109,6 +1126,129 @@ class L3ImportTests(unittest.TestCase):
         bad['sizes']['artifacts/rosetun-engine.rules'] = 512 * 1024
         with self.assertRaises(ValueError):
             helper.request(encode(bad))
+
+
+class ProxyDeliveryTests(unittest.TestCase):
+    """The Proxy profile: its package, its job.env with the lab's keys, and the importer in the image."""
+
+    def setUp(self):
+        self.fixture = test_jobs.JobsTests()
+        self.fixture.setUp()
+        self.addCleanup(self.fixture.doCleanups)
+        self.vm = self.fixture.vm
+        del self.vm._smoke_job
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name)
+        package_l3(self.root, self.vm.vm_uuid, self.vm.run._identity[1], profile=PROXY)
+        with patch.object(l2, 'source_identity', return_value=SOURCE):
+            self.full = l2.validate_package(self.root, checkout=CHECKOUT, profile='proxy',
+                                            sing_box_sha256=SING_BOX_SHA)
+        (self.root / 'job.env').unlink()
+        (self.root / 'manifest.sha256').unlink()
+        with patch.object(l2, 'source_identity', return_value=SOURCE):
+            package = l2.validate_package(self.root, checkout=CHECKOUT, immutable=True, profile='proxy',
+                                          sing_box_sha256=SING_BOX_SHA)
+        names = media.content('proxy')
+        listing = media.manifest(package['hashes'], names)
+        (self.root / 'content.sha256').write_bytes(listing)
+        self.vm._l2_media = dict(package=package, sha256='c' * 64, size=2048,
+                                 content_sha256=hashlib.sha256(listing).hexdigest())
+        from tools.vm.matrix.resources import _atomic_manifest
+        record = self.vm.run._read()
+        for index, name in enumerate(media.resources('proxy')):
+            record['resources'].append(dict(id='import-test-' + str(index), kind='file', path=name))
+            path = self.vm.run.directory / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.touch()
+        _atomic_manifest(self.vm.run.directory, record)
+        for name in names:
+            (self.vm.run.directory / 'l2-package' / name).write_bytes((self.root / name).read_bytes())
+
+    def importer(self, ids='d', **block):
+        return delivery.L2Import(self.vm, guest_run_id=GUEST, import_id=ids * 32, user_a='l2a', user_b='l2b',
+                                 enabled=True, l3=dict(L3_BLOCK, **block))
+
+    def test_the_package_carries_the_proxy_catalog_profile_and_engine(self):
+        self.assertEqual('proxy', self.full['profile'])
+        self.assertEqual(47, len(self.full['catalog']))
+        self.assertEqual(20, sum(row['group'] == 'two-hop' for row in self.full['catalog']))
+        self.assertEqual(set(PROXY.files), set(self.full['hashes']))
+        self.assertEqual(list(L3.env), list(self.full['env']))
+        self.assertEqual(SING_BOX_SHA, self.full['hashes']['artifacts/sing-box'])
+
+    def test_an_l3_package_is_not_a_proxy_package_and_the_reverse(self):
+        with patch.object(l2, 'source_identity', return_value=SOURCE), self.assertRaises(ValueError):
+            l2.validate_package(self.root, checkout=CHECKOUT, immutable=True, profile='l3',
+                                sing_box_sha256=SING_BOX_SHA)
+
+    def test_requests_of_the_proxy_job_must_be_the_generator_output(self):
+        path = self.root / 'artifacts/request-proxy-share.json'
+        path.write_bytes(l3_requests.render_proxy()['request-proxy.json'])
+        with patch.object(l2, 'source_identity', return_value=SOURCE), self.assertRaises(ValueError):
+            l2.validate_package(self.root, checkout=CHECKOUT, immutable=True, profile='proxy',
+                                sing_box_sha256=SING_BOX_SHA)
+
+    def test_job_env_takes_the_lab_marker_and_the_control_last_and_the_helper_in_the_image_agrees(self):
+        plain = self.importer('a')
+        package = self.vm.run.directory / 'l2-package'
+        self.assertEqual('proxy', plain.identity['profile'])
+        self.assertNotIn('LAB_MARKER_ADDRESS', plain.request['env'])
+        plain_raw = (package / 'job.env').read_bytes()
+        for ids, extra in (('b', dict(lab_marker_address='203.0.113.2:9100')),
+                           ('c', dict(lab_marker_address='203.0.113.2:9100', lab_control='stop-helper'))):
+            del self.vm._l2_import
+            for name in ('job.env', 'manifest.sha256'):
+                (package / name).write_bytes(b'')
+            obj = self.importer(ids, **extra)
+            raw = (package / 'job.env').read_bytes()
+            self.assertEqual(b'LAB_MARKER_ADDRESS=203.0.113.2:9100', raw.splitlines()[13])
+            l2.validate_env(raw, 'proxy')
+            identity, hashes, sizes, env, final = helper.request(
+                base64.b64encode(json.dumps(obj.request).encode()).decode())
+            self.assertEqual((raw, 'proxy'), (env, identity['profile']))
+        del self.vm._l2_import
+        for name in ('job.env', 'manifest.sha256'):
+            (package / name).write_bytes(b'')
+        with self.assertRaises(ValueError):
+            self.importer('e', lab_control='stop-helper')
+        for value in ('10.0.0.1:9100', '203.0.113.2:9101'):
+            with self.assertRaises(ValueError):
+                l2.validate_env(plain_raw + b'LAB_MARKER_ADDRESS=' + value.encode() + b'\n', 'proxy')
+        l2.validate_env(plain_raw + b'LAB_MARKER_ADDRESS=203.0.113.2:9100\n', 'proxy')
+
+    def test_the_block_of_the_real_service_must_accompany_a_proxy_media(self):
+        with self.assertRaisesRegex(ValueError, 'profile'):
+            delivery.L2Import(self.vm, guest_run_id=GUEST, import_id='e' * 32, user_a='l2a',
+                              user_b='l2b', enabled=True)
+
+    def test_the_importer_installs_the_proxy_content_with_an_executable_desktop_module(self):
+        obj = self.importer()
+        self.fixture.files['ready.json'] = json.dumps(dict(
+            obj.identity, schema='rosetun.l2-import.v1', state='ready')).encode()
+
+        class Adapter:
+            def find(inner): return Path('/unused'), 2048
+            def verify(inner, *args): pass
+            def mount(inner, device, target): shutil.copytree(self.root, target, dirs_exist_ok=True)
+            def unmount(inner, target): pass
+
+        def publish(source, target):
+            source.rename(target)
+        import os
+        with tempfile.TemporaryDirectory() as temp, patch.object(helper, 'ROOT', Path(temp)), \
+                patch.object(helper, 'sync_dir'), patch.object(helper, 'trusted'), patch.object(os, 'fsync'), \
+                patch.object(helper, 'publish', side_effect=publish), \
+                patch.object(os, 'chown', create=True), patch.object(os, 'fchown', create=True), \
+                patch.object(os, 'fchmod', create=True), \
+                patch.object(os, 'O_NOFOLLOW', getattr(os, 'O_NOFOLLOW', 0), create=True), \
+                patch.object(os, 'O_NONBLOCK', getattr(os, 'O_NONBLOCK', 0), create=True):
+            i, hashes, sizes, env, final = helper.request(base64.b64encode(json.dumps(obj.request).encode()).decode())
+            helper.import_media(i, hashes, sizes, env, final, Adapter())
+            installed = Path(temp) / GUEST
+            found = {p.relative_to(installed).as_posix() for p in installed.rglob('*') if p.is_file()}
+            self.assertEqual(set(PROXY.files), found)
+        self.assertIn('desktop_proxy', helper.EXECUTABLE)
 
 
 if __name__ == '__main__':

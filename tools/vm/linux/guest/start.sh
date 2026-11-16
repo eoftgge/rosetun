@@ -154,7 +154,7 @@ l2_start_main() {
         SCENARIO_TIMEOUT_SECONDS UNIT_TIMEOUT_SECONDS JOB_TIMEOUT_SECONDS)
     [ "$stage" = l2 ] || keys+=(HOST_ADDRESS NODE_PORT PROBE_ADDRESS DNS_PROBE_ADDRESS)
     # The lab observer's marker service; absent from every job.env of the Hyper-V matrix.
-    [ "$stage" != l3 ] || keys+=(LAB_MARKER_ADDRESS LAB_CONTROL)
+    case $stage in l3 | proxy) keys+=(LAB_MARKER_ADDRESS LAB_CONTROL) ;; esac
     l2_read_env_file "$run/job.env" "${keys[@]}" || die "job.env is not valid"
     [ "$RUN_ID" = "$run_id" ] || die "job.env belongs to another run"
     [[ $JOB_TIMEOUT_SECONDS =~ ^[0-9]{2,5}$ ]] || die "invalid job time limit"

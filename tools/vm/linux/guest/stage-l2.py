@@ -84,14 +84,25 @@ L3_CONTENT = ('guest/launch.sh', 'guest/start.sh', 'guest/lib.sh', 'guest/run-l3
                   'rosetun-helper.service', 'rosetun-engine.rules', 'request-kill-switch.json',
                   'request-lan.json', 'request-lan-private.json', 'request-dns-lock.json',
                   'request-program-direct.json', 'request-program-proxy.json')) + ('artifacts/provenance.json',)
+# The Proxy stage: the L3 binaries with the GUI's module for the desktop's proxy settings, the Lockdown unit and
+# the four requests of the proxy mode.
+PROXY_BINARIES = ('rosetun-helper-privileged', 'rosetun', 'desktop_proxy', 'sing-box')
+PROXY_CONTENT = ('guest/launch.sh', 'guest/start.sh', 'guest/lib.sh', 'guest/run-proxy.sh',
+                 'scenarios-proxy.tsv') + tuple('artifacts/' + n for n in PROXY_BINARIES + (
+                     'rosetun-helper.service', 'rosetun-engine.rules', 'rosetun-lockdown.service',
+                     'request-kill-switch.json', 'request-proxy.json', 'request-proxy-strict.json',
+                     'request-proxy-share.json')) + ('artifacts/provenance.json',)
 ENV_L2 = ('RUN_ID STAND_ID EXPECTED_BOOT_ID USER_A USER_B BIOS_GUID SCENARIO_TIMEOUT_SECONDS '
           'UNIT_TIMEOUT_SECONDS JOB_TIMEOUT_SECONDS').split()
 ENV_L3 = ENV_L2 + ['HOST_ADDRESS', 'NODE_PORT', 'PROBE_ADDRESS', 'DNS_PROBE_ADDRESS']
 LAB_MARKER, MARKER_PORT = 'LAB_MARKER_ADDRESS', '9100'
 LAB_CONTROL = 'LAB_CONTROL'
 PROFILES = {'l2': dict(content=CONTENT, binaries=BINARIES, env=ENV_L2),
-            'l3': dict(content=L3_CONTENT, binaries=L3_BINARIES, env=ENV_L3)}
-EXECUTABLE = set(BINARIES) | set(L3_BINARIES)
+            'l3': dict(content=L3_CONTENT, binaries=L3_BINARIES, env=ENV_L3),
+            'proxy': dict(content=PROXY_CONTENT, binaries=PROXY_BINARIES, env=ENV_L3)}
+# The stages of the real service: they take the host node's values and may run inside the lab.
+SERVICE = ('l3', 'proxy')
+EXECUTABLE = set(BINARIES) | set(L3_BINARIES) | set(PROXY_BINARIES)
 DOCUMENTATION_V4 = tuple(ipaddress.ip_network(n) for n in ('192.0.2.0/24', '198.51.100.0/24', '203.0.113.0/24'))
 SERIAL = 'rosetun-l2-media'
 ISO_LIMIT = 1700 * 1024 * 1024
@@ -142,8 +153,8 @@ def request(raw):
         limit = 512 * 1024 * 1024 if n in tuple('artifacts/' + b for b in binaries) else 256 * 1024
         require(type(sizes[n]) is int and 0 < sizes[n] <= limit)
     require(sum(sizes.values()) <= TOTAL_LIMIT)
-    # Only an L3 run inside the lab names the observer's marker service, last in the file.
-    marker = profile == 'l3' and LAB_MARKER in env
+    # Only an L3 or Proxy run inside the lab names the observer's marker service, last in the file.
+    marker = profile in SERVICE and LAB_MARKER in env
     # The one control of the lab is named only together with the marker service, after it.
     control = marker and LAB_CONTROL in env
     order = order + ([LAB_MARKER] if marker else []) + ([LAB_CONTROL] if control else [])
@@ -157,7 +168,7 @@ def request(raw):
     for k in ('SCENARIO_TIMEOUT_SECONDS', 'UNIT_TIMEOUT_SECONDS', 'JOB_TIMEOUT_SECONDS'):
         require(re.fullmatch('[0-9]+', env[k]) and 10 <= int(env[k]) <= 86400)
     require(60 <= int(env['JOB_TIMEOUT_SECONDS']) <= 7200)
-    if profile == 'l3':
+    if profile in SERVICE:
         for k in ('HOST_ADDRESS', 'PROBE_ADDRESS', 'DNS_PROBE_ADDRESS'):
             require(re.fullmatch(r'[0-9]{1,3}(\.[0-9]{1,3}){3}', env[k]))
             address = ipaddress.IPv4Address(env[k])
