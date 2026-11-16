@@ -4185,6 +4185,9 @@ python tools/vm/linux/prepare-l3-image.py /srv/test-v5k.qcow2 /srv/test-l5.qcow2
   `preflight.no-foreign-service` of `run-l5.sh` refuses any rosetun unit, file or package on the machine.
 - After the image is built, install the importer `stage-l2.py` of this commit in it (as for the other test images)
   and copy the fields of the descriptor into `[image]` except `l5_dependencies`.
+- v5k carries the lab helper of its time. A run inside the lab needs the helper of this commit in the test image too:
+  install `linux/guest/lab-entry.py` and `matrix/lab_protocol.py` together (as in stage 7e) along with `stage-l2.py`.
+  The qualification did that before `--deps-debs`, on a copy of v5k; either order gives the same files.
 
 ### Windows
 
