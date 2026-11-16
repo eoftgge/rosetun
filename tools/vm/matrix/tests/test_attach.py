@@ -222,9 +222,9 @@ class AttachTests(unittest.TestCase):
         self.assertEqual([('guest-reset-coalesced', '1-of-1 merged=1 +67ms reason=guest-reset qemu=1.067000')],
                          self.rows_of(run_id, 'guest-reset-coalesced'))
         self.assertEqual(1, self.record(run_id)['collected']['guest_reset_1_merged'])
-        # Two seconds on, with the boot still unconfirmed, a reset is a reboot of its own: over the plan of one.
+        # Two seconds on, with the boot still unconfirmed, a reset is a reboot that nobody saw the boot of.
         fake_controller.steer('reset-event guest guest-reset 3 0')
-        with self.assertRaisesRegex(lifecycle.LifecycleError, 'unplanned-guest-reset'):
+        with self.assertRaisesRegex(lifecycle.LifecycleError, 'guest-reboot-unobserved'):
             vm.watch_resets()
 
     def test_attach_to_a_reset_with_no_recorded_time_merges_nothing(self):
@@ -244,7 +244,7 @@ class AttachTests(unittest.TestCase):
         vm.planned_reboots = 1
         self.assertEqual((None, True), (vm.reset_first_us, vm.reset_pending))
         fake_controller.steer('reset-event guest guest-reset 1 67000')
-        with self.assertRaisesRegex(lifecycle.LifecycleError, 'unplanned-guest-reset'):
+        with self.assertRaisesRegex(lifecycle.LifecycleError, 'guest-reboot-unobserved'):
             vm.watch_resets()
 
     def test_the_journal_of_a_run_with_a_reboot_says_what_the_controller_saw(self):

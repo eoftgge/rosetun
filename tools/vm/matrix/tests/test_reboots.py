@@ -332,24 +332,45 @@ class CoalescedResetTests(RebootCase):
     def test_the_window_closes_after_one_second_of_qemus_time_to_the_microsecond(self):
         self.seen(at(0), at(1000))
         self.assertEqual(1, self.vm.reset_merged)
-        with self.assertRaisesRegex(lifecycle.LifecycleError, 'unplanned-guest-reset'):
+        with self.assertRaisesRegex(lifecycle.LifecycleError, 'guest-reboot-unobserved'):
             self.seen(at(1000, micro=1))
-        self.assertEqual('unplanned-guest-reset reason=guest-reset qemu=1700000001.000001', self.rows()[-1][1])
+        self.assertEqual('guest-reboot-unobserved reason=guest-reset qemu=1700000001.000001', self.rows()[-1][1])
 
-    def test_a_second_reset_after_the_window_before_the_boot_is_confirmed_counts_against_the_plan(self):
+    def test_a_second_reset_after_the_window_before_the_boot_is_confirmed_is_a_boot_nobody_observed(self):
         self.seen(at(0))
-        with self.assertRaisesRegex(lifecycle.LifecycleError, 'unplanned-guest-reset'):
+        with self.assertRaisesRegex(lifecycle.LifecycleError, 'guest-reboot-unobserved'):
             self.seen(at(2500))
-        self.assertEqual(('guest-reset-observed', 'unplanned-guest-reset reason=guest-reset qemu=1700000002.500000'),
+        self.assertEqual(('guest-reset-observed', 'guest-reboot-unobserved reason=guest-reset qemu=1700000002.500000'),
                          self.rows()[-1])
         self.assertEqual((1, 0), (self.vm.guest_resets, self.vm.reset_merged))
+        # The refusal is sticky, and no boot ID is taken after it.
+        with self.assertRaisesRegex(lifecycle.LifecycleError, 'guest-reboot-unobserved'):
+            self.vm.observe_guest()
+        self.assertEqual([BOOT], self.vm.boot_chain)
+
+    def test_a_plan_of_two_does_not_excuse_a_second_reset_before_the_first_boot_is_taken(self):
+        self.vm.planned_reboots = 2
+        self.seen(at(0), at(60))
+        with self.assertRaisesRegex(lifecycle.LifecycleError, 'guest-reboot-unobserved'):
+            self.seen(at(2500))
+        self.assertEqual((1, 1), (self.vm.guest_resets, self.vm.reset_merged))
+
+    def test_a_reset_that_comes_while_the_boot_of_the_first_is_awaited_ends_the_await(self):
+        self.vm.planned_reboots = 2
+        self.seen(at(0))
+        self.control.resets.append(at(26_900))
+        with self.assertRaisesRegex(lifecycle.LifecycleError, 'guest-reboot-unobserved'):
+            self.reboot(NEW)
+        self.assertEqual(([BOOT], True), (self.vm.boot_chain, self.vm.reset_pending))
 
     def test_a_plan_of_two_takes_a_reset_after_the_window_as_the_second_reboot(self):
         self.vm.planned_reboots = 2
-        self.seen(at(0), at(60), at(2500), at(2560))
+        self.seen(at(0), at(60))
+        self.reboot(NEW)
+        self.seen(at(2500), at(2560))
         self.assertEqual((2, 1), (self.vm.guest_resets, self.vm.reset_merged))
-        self.assertEqual(['guest-reset-observed', 'guest-reset-coalesced', 'guest-reset-observed',
-                          'guest-reset-coalesced'], [action for action, _ in self.rows()[-4:]])
+        self.assertEqual(['guest-reset-observed', 'guest-reset-coalesced', 'boot-chain-extended',
+                          'guest-reset-observed', 'guest-reset-coalesced'], [action for action, _ in self.rows()[-5:]])
 
     def test_a_reset_within_the_window_of_a_boot_already_confirmed_is_a_new_reboot(self):
         self.seen(at(0))
@@ -376,13 +397,13 @@ class CoalescedResetTests(RebootCase):
                           ('guest-reset-coalesced', '1-of-2 merged=1 +5ms reason=guest-shutdown qemu=1700000000.005000')],
                          self.rows()[-2:])
 
-    def test_a_reset_with_no_time_is_never_merged_and_costs_the_plan_as_before(self):
+    def test_a_reset_with_no_time_is_never_merged_and_before_the_boot_is_taken_it_is_unobserved(self):
         self.seen(at(0))
         for event in (ResetEvent(True), ResetEvent(True, 'guest-reset', None)):
-            with self.assertRaisesRegex(lifecycle.LifecycleError, 'unplanned-guest-reset'):
+            with self.assertRaisesRegex(lifecycle.LifecycleError, 'guest-reboot-unobserved'):
                 self.seen(event)
             self.vm.unplanned_reset = None
-        self.assertEqual('unplanned-guest-reset reason=guest-reset', self.rows()[-1][1])
+        self.assertEqual('guest-reboot-unobserved reason=guest-reset', self.rows()[-1][1])
 
     def test_a_reset_of_the_host_inside_the_window_is_still_an_error(self):
         self.seen(at(0))
@@ -456,10 +477,12 @@ class WaitTests(RebootCase):
         self.job.submit()
         self.publish('running')
         calls = self.job.calls
-        sleeps, finished = self.waiting(725, hook=lambda n: self.publish('finished') if n == 2 else None)
+        sleeps, finished = self.waiting(725, hook=lambda n: self.publish('finished') if self.clock.now == 48 else None)
         self.assertTrue(finished)
-        # One look every 46 seconds (a sixteenth of the wait), and each look is open, read and close.
-        self.assertEqual(([46, 46], 6, 0), (sleeps, self.job.calls - calls, self.job.polls))
+        # One look every 46 seconds (a sixteenth of the wait), and each look is open, read and close; the status
+        # that came at 48 is seen by the second look, at 92, however often QMP is read in between.
+        self.assertEqual((92, 6, 0), (sum(sleeps), self.job.calls - calls, self.job.polls))
+        self.assertLessEqual(max(sleeps), l2.WATCH_SECONDS)
 
     def test_a_status_that_never_ends_is_waited_out_in_full_and_collection_goes_the_old_way(self):
         self.job.submit()
@@ -478,13 +501,69 @@ class WaitTests(RebootCase):
     def test_a_short_wait_looks_every_thirty_seconds(self):
         self.job.submit()
         self.publish('running')
+        calls = self.job.calls
         sleeps, finished = self.waiting(100)
-        self.assertEqual(([30, 30, 30, 10], False), (sleeps, finished))
+        # Looks at 30, 60, 90 and at the end, 3 agent calls each.
+        self.assertEqual((False, 100, 4 * 3), (finished, sum(sleeps), self.job.calls - calls))
 
     def test_no_status_yet_is_no_failure_of_the_channel(self):
         self.job.submit()
-        sleeps, finished = self.waiting(100, hook=lambda n: self.publish('finished') if n == 2 else None)
-        self.assertEqual(([30, 30], True), (sleeps, finished))
+        sleeps, finished = self.waiting(100, hook=lambda n: self.publish('finished') if self.clock.now == 60 else None)
+        self.assertEqual((60, True), (sum(sleeps), finished))
+
+    def test_qmp_is_read_every_few_seconds_whatever_the_interval_of_the_looks(self):
+        self.job.submit()
+        self.publish('running')
+        with patch.object(self.vm, 'watch_resets', wraps=self.vm.watch_resets) as watched:
+            sleeps, _ = self.waiting(2405)
+        # A look every 151 seconds (16 of them), but a read of the events every 2.
+        self.assertEqual((2405, 2), (sum(sleeps), l2.WATCH_SECONDS))
+        self.assertEqual(len(sleeps), watched.call_count)
+        self.assertEqual(6 + 16 * 3, self.job.calls)
+
+    def test_two_resets_27_seconds_apart_are_both_taken_while_the_status_is_looked_at_every_151_seconds(self):
+        self.vm.planned_reboots = 2
+        self.job.submit()
+        self.publish('running')
+        first, second = self.fixture.agent_new(), self.fixture.agent_new()
+        self.serve(first, NEW)
+        self.serve(second, THIRD)
+        taken, extend = [], self.vm._extend_chain
+
+        def extended(boot, kind):
+            taken.append(self.clock.now)
+            return extend(boot, kind)
+
+        def hook(n):
+            if self.clock.now == 10:
+                self.control.resets.append(at(0))
+            if self.clock.now == 38:
+                self.control.resets.append(at(26_900))
+            if self.clock.now == 150:
+                self.publish('finished', boot=THIRD, boots=[BOOT, NEW, THIRD])
+        with patch.object(lifecycle, 'Qga', side_effect=[first, second]), \
+                patch.object(self.vm, '_extend_chain', extended):
+            sleeps, finished = self.waiting(2405, hook=hook)
+        self.assertTrue(finished)
+        self.assertEqual([BOOT, NEW, THIRD], self.vm.boot_chain)
+        # Each boot is taken at the step that read its RESET, and the one look that ends the wait is at 151.
+        self.assertEqual(([10, 38], 151), (taken, sum(sleeps)))
+        self.assertEqual((2, 0), (self.vm.qga_recoveries, self.job.polls))
+
+    def test_two_resets_read_late_are_a_boot_nobody_observed_and_the_wait_ends_with_that_error(self):
+        self.vm.planned_reboots = 2
+        self.job.submit()
+        self.publish('running')
+
+        def hook(n):
+            # What the old wait did: the first look of a long interval finds both RESETs in the queue.
+            if self.clock.now == 10:
+                self.control.resets.extend((at(0), at(26_900)))
+        with self.assertRaisesRegex(lifecycle.LifecycleError, 'guest-reboot-unobserved'):
+            self.waiting(2405, hook=hook)
+        self.assertEqual(('guest-reset-observed', 'guest-reboot-unobserved reason=guest-reset qemu=1700000026.900000'),
+                         self.rows()[-1])
+        self.assertEqual([BOOT], self.vm.boot_chain)
 
     def test_the_looks_stop_when_the_job_calls_run_short_and_the_time_is_still_waited_out(self):
         self.job.submit()
@@ -611,6 +690,16 @@ class OrchestratorTests(unittest.TestCase):
         names = [e[0] for e in self.flow.events]
         self.assertNotIn('collect', names)
         self.assertEqual('close', names[-1])
+        self.assertEqual(0, self.flow.collects)
+
+    def test_a_boot_nobody_observed_in_the_wait_ends_the_run_with_an_error_and_exit_2_and_never_collects(self):
+        def wait(seconds, **options):
+            raise lifecycle.LifecycleError('guest-reboot-unobserved')
+        self.flow.job.wait = wait
+        result = self.flow.execute()
+        self.assertEqual(2, result['exit_code'])
+        self.assertEqual(('wait', 'guest-reboot-unobserved'),
+                         (result['errors'][0]['stage'], result['errors'][0]['reason']))
         self.assertEqual(0, self.flow.collects)
 
     def test_the_smoke_suite_plans_one_reset_and_takes_the_media_of_its_profile(self):

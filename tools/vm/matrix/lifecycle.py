@@ -68,10 +68,16 @@ RESET_MERGE_US = 1_000_000
 RESET_MERGE_LIMIT = 4
 # How long the controller lets QMP read events that already arrived, and how many agent sessions one reset may try.
 RESET_PUMP_SECONDS = 0.25
-RESET_ATTEMPTS = 8
+# A guest that was reset may need most of a minute to answer, and a job may reboot it again soon after (Linux L4 did
+# so 27 seconds after the first reset), so a boot not taken before the next RESET is `guest-reboot-unobserved`. The
+# tries are therefore close together: 10 seconds at most for each and 5 between them, 12 in all. That covers about
+# the time the 8 tries 15 seconds apart did (180 seconds against 200).
+RESET_ATTEMPTS = 12
+RESET_RETRY_SECONDS = 5
 # What a refusal of a boot is called; each ends the run, so none of them is retried.
 BOOT_REFUSALS = ('unplanned-guest-reset', 'host-reset-outside-reset', 'guest-reset-before-first-boot',
-                 'boot-id-changed-without-reset', 'guest-reset-boot-id-unchanged', 'boot-id-repeated')
+                 'boot-id-changed-without-reset', 'guest-reset-boot-id-unchanged', 'boot-id-repeated',
+                 'guest-reboot-unobserved')
 
 
 class LifecycleError(ValueError):
@@ -550,7 +556,7 @@ class Vm:
     def watch_resets(self):
         """Read the resets QEMU has reported since the last look; an unplanned one is an error.
 
-        The poll of a job calls it between its reads, because QMP events are only read while the controller
+        The wait of a job calls it every few seconds, because QMP events are only read while the controller
         looks. It sends no command and spends no QMP budget, and it writes a row only for a reset it finds.
         """
         self._check()
@@ -576,7 +582,8 @@ class Vm:
         """Register each RESET: only a guest's own reset within the plan is accepted, the host's `reset()` apart.
 
         A guest RESET that comes while the boot of an earlier one is unconfirmed, within `RESET_MERGE_US` of that one
-        by QEMU's time, is the same reboot and spends nothing of the plan.
+        by QEMU's time, is the same reboot and spends nothing of the plan. One after that window is a reboot of a guest
+        whose earlier boot was never observed, and ends the run: `guest-reboot-unobserved`.
         """
         for event in resets:
             if not event.guest and expected_host > 0:
@@ -587,6 +594,9 @@ class Vm:
             if self._merges(event):
                 self._merge_guest_reset(event)
                 continue
+            if self.reset_pending and self.reset_kind == 'guest':
+                # The boot of the earlier reboot was never taken, so the chain would lose a boot ID.
+                self._refuse_reset('guest-reboot-unobserved', event)
             if not self.boot_chain:
                 self._refuse_reset('guest-reset-before-first-boot', event)
             if self.guest_resets >= self._planned_reboots:
@@ -713,7 +723,7 @@ class Vm:
                             raise LifecycleError('rebooted-qga-close-unconfirmed', self)
                     self._sync_seed = (self._sync_seed + 1) % 2**63
                     self._new_qga()
-                    sleep(min(15, max(0, deadline - clock())))
+                    sleep(min(RESET_RETRY_SECONDS, max(0, deadline - clock())))
             raise LifecycleError('rebooted-guest-deadline', self)
         finally:
             self.timeout = previous

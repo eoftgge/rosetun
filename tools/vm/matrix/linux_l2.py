@@ -147,10 +147,11 @@ POLLS = 4
 POLL_SECONDS = 30
 POLL_SPLIT = 16
 POLL_CALLS_LIMIT = 52
-# How long after an agent call that failed the controller still watches QMP for the reset that explains it
-# (the agent stops a few seconds before the machine resets).
-RESET_GRACE_SECONDS = 30
-RESET_GRACE_STEP = 5
+# The wait reads QMP events every WATCH_SECONDS, whatever the interval of the looks at the status file, since a
+# RESET that is read late is a boot the controller cannot see: Linux L4 reboots its guest again 27 seconds after the
+# first reset, and two seconds leaves most of that for the new boot to be taken. A read costs no agent call and no QMP
+# command (about a quarter of a second of the event loop), so the step may be this short.
+WATCH_SECONDS = 2
 STATUS_LIMIT = 8192
 EVIDENCE_FILES = ('plan.json', 'package.json', 'assessment.json') + tuple(
     f'{i}/{name}.json' for i in range(1, POLLS + 1)
@@ -716,24 +717,30 @@ class LinuxL2Job:
     def wait(self, seconds, *, sleep=time.sleep, clock=time.monotonic):
         """Wait for the job to finish, at most `seconds`, by reading its status file; True once it has.
 
-        A final status ends the wait early. A planned guest reset ends the agent's session: the controller sees
-        the RESET itself and recovers the session here, and none of it spends a collection attempt. A look that
-        fails for any other reason ends the looking, and the rest is waited out as a fixed wait always was; the
-        collection then goes the way it always went. An unplanned reset is an error and is not caught.
+        A final status ends the wait early. QMP is read every `WATCH_SECONDS`, apart from the looks at the status
+        file, which keep their own interval. A planned guest reset ends the agent's session: the controller sees
+        the RESET at its next read and recovers the session here at once, and none of it spends a collection
+        attempt. A look that fails for any other reason ends the looking, and the rest is waited out as a fixed wait
+        always was; the collection then goes the way it always went. An unplanned reset, and a second one before the
+        boot of the first is taken, are errors and are not caught.
         """
         vm, end = self.vm, clock() + seconds
         interval = max(POLL_SECONDS, -(-seconds // POLL_SPLIT))
         looking = self.submission != 'not-submitted' and vm.qga is not None and vm.qga.valid
+        next_look = clock() + interval
         while True:
             remaining = end - clock()
             if remaining <= 0:
                 return False
-            sleep(min(interval, remaining))
+            sleep(min(WATCH_SECONDS, remaining, max(0, next_look - clock())))
             vm.watch_resets()
             if self._reset_pending():
                 self._recover(end - clock(), sleep, clock)
                 looking = True
                 continue
+            if clock() < next_look and clock() < end:
+                continue
+            next_look = clock() + interval
             if not looking:
                 continue
             if self.calls >= POLL_CALLS_LIMIT:
@@ -747,15 +754,6 @@ class LinuxL2Job:
                 named = isinstance(error, (QgaError, JobError, LifecycleError))
                 self._evidence('l2-poll-stopped', reason=str(error) if named else type(error).__name__)
                 looking = False
-                # The agent stops a few seconds before the machine resets, so a reset may be about to be told.
-                for _ in range(RESET_GRACE_SECONDS // RESET_GRACE_STEP):
-                    if self._reset_pending():
-                        break
-                    sleep(RESET_GRACE_STEP)
-                    vm.watch_resets()
-                if self._reset_pending():
-                    self._recover(end - clock(), sleep, clock)
-                    looking = True
 
     def _reset_pending(self):
         return self.vm.reset_pending and self.vm.reset_kind == 'guest'

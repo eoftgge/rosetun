@@ -4274,8 +4274,12 @@ fake QEMU on named sockets and scripted agents.
 ### Events and the chain of boots
 
 - QEMU says a guest reset as a QMP `RESET` event with `guest: true`. Events are read only while the controller looks, so
-  `Vm.watch_resets()` (the wait calls it at every look, and every guest observation calls it first) lets the loop run for
-  a quarter of a second. It sends no command and spends no QMP call; each event costs one of the 128 `qmp_events`.
+  `Vm.watch_resets()` (the wait calls it every `WATCH_SECONDS` = 2 seconds, whatever the interval of its looks at the
+  status file, and every guest observation calls it first) lets the loop run for a quarter of a second. It sends no
+  command and spends no QMP call; each event costs one of the 128 `qmp_events`. The step is short because of what a late
+  read costs: Linux L4 reboots its guest again 27 seconds after the first reset, and a controller that read the queue
+  only every 151 seconds found both RESETs at once and could take one boot of two (the qualification of 8d). A reset is
+  read within two seconds and the new session is taken at once, in the same step.
 - A guest reset within the plan is **registered**: the journal row `guest-reset-observed` (result `1-of-2`, `2-of-2`),
   the run-state step `guest-reset-N` at intent (before anything else), the current agent session invalidated, and the
   VM `reset_pending` with `reset_kind = guest`. The plan is `planned_reboots` of the suite (`config.PLANNED_REBOOTS`:
@@ -4291,15 +4295,19 @@ fake QEMU on named sockets and scripted agents.
   the last. Why one second: the attempts of a reboot are tens of milliseconds apart, while no guest gets through firmware,
   bootloader and kernel to a userspace that answers the agent in that time. At most `RESET_MERGE_LIMIT` = **4** RESETs
   are merged into one reboot (five in all, about the number of ways Linux has); a fifth merge is `guest-reset-merge-limit`.
-  A RESET with no time, one after the window, or one after the new boot ID was taken is a reboot of its own and counts
-  against the plan as below.
+  A RESET after the new boot ID was taken is a reboot of its own and counts against the plan as below. A RESET with no
+  time, or one after the window, **while the boot of the reboot pending is not yet taken**, is a reboot whose boot nobody
+  observed: `guest-reboot-unobserved`, below.
 - Every other reset is an **error that ends the run** (`LifecycleError`, exit 2, the VM closed hard), and no later boot ID
   is taken: `unplanned-guest-reset` (more guest resets than planned, or any when none is), `host-reset-outside-reset`
   (a `RESET` without `guest: true` that `Vm.reset()` did not cause), `guest-reset-before-first-boot`,
-  `guest-reset-merge-limit` (see above). The row `guest-reset-observed` says which, with the event's reason and time, and
-  the refusal is sticky.
+  `guest-reset-merge-limit` (see above), and `guest-reboot-unobserved` (a guest RESET outside the merge window while the
+  boot of the earlier reboot is unconfirmed: the chain would lack a boot ID, whatever the plan still allows; before, such
+  a RESET was registered as the next reboot and the earlier boot was lost). The row `guest-reset-observed` says which,
+  with the event's reason and time, and the refusal is sticky. It takes one journal row, as the others do.
 - After a registered reset `await_rebooted_guest` gives the new session: the first try is `recover_guest` (the one
-  recovery the reset earns), then up to seven more tries, 15 seconds apart, each a new session that spends an
+  recovery the reset earns), then up to eleven more tries, 5 seconds apart (`RESET_RETRY_SECONDS`; 10 seconds at most for a
+  try, 180 seconds in all, as the eight tries 15 seconds apart covered 200), each a new session that spends an
   observation and no recovery. A boot ID is taken only when it **differs** from the last of the chain: the same one is
   `guest-reset-boot-id-unchanged` (no reset happened), one already in the chain is `boot-id-repeated`, and a changed one
   with no RESET behind it is `boot-id-changed-without-reset`. Each refusal is the result of the observation row.
@@ -4329,7 +4337,7 @@ fake QEMU on named sockets and scripted agents.
 | journal rows of the lifecycle | 110 ordinary + 18 reserve | the same; 2 per reboot, 6 at most (up to 4 merged RESETs) |
 | `qmp_calls` | 128 | the same; a reboot sends none |
 | `qmp_events` | 128 | the same; one per RESET, so 5 per reboot at most |
-| `qga_observations` | 32 | the same; 1 per reboot when its first try succeeds, 8 at most |
+| `qga_observations` | 32 | the same (kept; see below); 1 per reboot when its first try succeeds, 12 at most |
 | `job_calls` | 112 | the same; 3 per look of the wait |
 
 - **Journal rows.** One reboot takes two rows of the ordinary journal: `guest-reset-observed` and
@@ -4343,6 +4351,16 @@ fake QEMU on named sockets and scripted agents.
   none (each writes the run state's `collected` section once: at most 4 + 1 writes a reboot).
 - **QGA.** The rule is 4 + planned: `import-refresh` takes one, an uncertain submit or collection at most two more, each
   reboot one; the retries of a slow boot cost observations only.
+- **Linux L4 (two reboots), recounted for the prompt wait.** Recoveries: 4 + 2 = 6, as before (the wait reads the reset at
+  once but still takes one recovery per reboot). Observations, 32 as before: the first boot 1, each recovery 1 (6 in all,
+  two of them the reboots' first tries), and the retries of a boot that is not up yet, at most 11 for each reboot, so
+  1 + 6 + 2 x 11 = 29 at the very worst; a guest that answers within 15 seconds costs 1 or 2 for a reboot. A prompt first
+  try finds the guest still booting more often than the late one did, which is why the retries are closer together and
+  the cap of tries was raised from 8 to 12; the number of the budget is not changed because the worst case still fits
+  (the retries of the first boot, up to 20, are not counted: that boot comes before everything above). Journal rows: two
+  reboots are 14 of the 110 ordinary rows, 22 at most with merged RESETs, and `guest-reboot-unobserved` is one row more
+  (the refused reset takes one); reading QMP every two seconds writes nothing unless it finds a RESET, so a run with no
+  reboot has the journal it had.
 
 ### Waiting by reading the status
 
@@ -4354,10 +4372,15 @@ fake QEMU on named sockets and scripted agents.
   fixed wait always was. Nothing a look reads is saved except a row `l2-poll` when the state or the boot changes.
 - A look that finds `state: finished` for this run on the boot the controller confirmed last ends the wait at once;
   `collect` follows and does what it always did (`job_polls` is spent by collections only, never by looks).
-- A look that fails (a lost session, an invalid reply) ends the looking, not the wait: the controller gives the QMP events
-  30 seconds more to explain it, since the agent stops a few seconds before the machine resets, and recovers the session
-  inside the wait when a planned reset turns up. Any other failure leaves the old branch: the wait runs out,
-  `collect`, `collect-recovery`, `collect-final`. An unplanned reset ends the wait with an error and no collection.
+- QMP is read **every 2 seconds** (`WATCH_SECONDS`), and the looks at the status file keep their interval and their
+  calls (3 each, 16 at most, stopping at 52 spent). A planned reset is recovered in the step that read it: the session is
+  new and the boot ID is taken before the next look, which no longer has to wait for the interval. The look that failed
+  because the agent stopped before the machine reset is explained by that: the reset is read at the next step, and the
+  old extra 30 seconds of grace are gone with the reason for them. The job's two reboots 27 seconds apart are both taken.
+- A look that fails (a lost session, an invalid reply) ends the looking, not the wait: the reset that explains it is
+  recovered inside the wait when a planned one turns up, and the looking starts again. Any other failure leaves the old
+  branch: the wait runs out, `collect`, `collect-recovery`, `collect-final`. An unplanned reset, and a second one before
+  the boot of the first is taken (`guest-reboot-unobserved`), end the wait with an error and no collection.
 - The job's own deadline, the `wait_until` of the run state and the lab capture (`DURATION_MAX`) are as they were.
 
 ### The smoke job
