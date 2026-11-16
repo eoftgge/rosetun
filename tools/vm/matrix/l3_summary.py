@@ -20,7 +20,8 @@ GROUP = ('preflight.identity', 'preflight.accounts', 'preflight.no-foreign-servi
          'rules.capabilities', 'rules.restart-guarded', 'rules.search-misses', 'inbound.reply', 'forward.blocked',
          'crash.helper-killed', 'crash.open-network', 'crash.five-kills', 'upgrade.restart', 'upgrade.unprotected',
          'stop.removes-table', 'rules.direct-other-account', 'rules.proxy-default-direct', 'dnslock.direct-blocked',
-         'dnslock.tunnel-passes', 'dnslock.unavailable', 'dnslock.unavailable-restart', 'crash.dns-lock-killed')
+         'dnslock.tunnel-passes', 'dnslock.unavailable', 'dnslock.unavailable-restart', 'crash.dns-lock-killed',
+         'route.specific-bypass')
 # The scenarios of the two-hop exits: they have no check yet (evidence class `not-run`, not required), `run-l3.sh`
 # records each as SKIP "UNRUN: ..." before any session opens, so they belong to no group and no window.
 TWO_HOP = ('two-hop.positive.http.ipv4', 'two-hop.positive.http.ipv6', 'two-hop.positive.https.ipv4',
@@ -66,6 +67,9 @@ WINDOW_OF = {
     # `dns_lock_unavailable_restart` gives nft its mode back, then ends the session `missing_through_restart` opened.
     'dnslock.unavailable-restart': ('missing_through_restart', 0),
     'crash.dns-lock-killed': ('dns_lock_killed', 0),
+    # Judged in its kill-switch session only, as its result is: the session with a DNS lock alone that follows
+    # (`specific_bypass_dns_lock`) adds to the note and stays outside the group, held against its expectation.
+    'route.specific-bypass': ('specific_bypass', 0),
     **dict.fromkeys(TWO_HOP),
 }
 # A scenario that opens a session of its own only when none is open: `forwarded` connects only if `inbound`
@@ -80,9 +84,10 @@ GROUP_LABELS = tuple(dict.fromkeys(window[0] for window in WINDOW_OF.values() if
 WINDOWS_PER_LABEL = {'reported': 1, 'identity': 1, 'connect_ks': 1, 'capabilities': 2, 'restart_guarded': 1,
                      'inbound': 1, 'killed': 1, 'five_kills': 1, 'upgraded': 1, 'stopped': 1,
                      'through_vpn_by_program': 1, 'dns_lock': 1, 'dns_lock_unavailable': 1,
-                     'missing_through_restart': 1, 'dns_lock_killed': 1}
-# Labels whose session opens only now and then (OWN_WINDOW_WHEN_OPENED): at most this many windows.
-WINDOWS_AT_MOST = {'forwarded': 1, 'direct_for_other_account': 1}
+                     'missing_through_restart': 1, 'dns_lock_killed': 1, 'specific_bypass': 1}
+# Labels whose session opens only now and then (OWN_WINDOW_WHEN_OPENED, or the DNS-lock session of
+# `route.specific-bypass`, which runs only after its kill-switch part passed): at most this many windows.
+WINDOWS_AT_MOST = {'forwarded': 1, 'direct_for_other_account': 1, 'specific_bypass_dns_lock': 1}
 # The flows a window shows beyond the tunnel and the lab's infrastructure by design (stage 7c3), by (label,
 # number): each a flow the test machine opens, (protocol, kind, server) with its exact count. They are fixed
 # here, by the controller, from what the functions of run-l3.sh send; the guest declares nothing. A flow is a
@@ -105,6 +110,10 @@ EXPECTED_FLOWS = {
     # `dns_lock_killed`: the `direct_https` of `kill_helper` while the lock still stands; the window closes once
     # the restarted helper removed the lock, before `expect_udp_dns_sent` and the last `direct_https`.
     ('dns_lock_killed', 0): {TARGET_FLOW: 1},
+    # `specific_bypass_dns_lock`: with a route to the target more specific than the default, the one request of
+    # `route_of` leaves directly (a known weakness, characterised, not fixed). The kill-switch session before it
+    # has no entry: its `tunnel_https` and `direct_https` are both dropped in the guest and show nothing.
+    ('specific_bypass_dns_lock', 0): {TARGET_FLOW: 1},
 }
 # What the observer must have seen of the lab for the group to mean anything. DoH is required too: the
 # helper's DNS check at connect (`check_cancellable` in `state/dns.rs`) goes through the DoH server that
@@ -113,7 +122,8 @@ REQUIRED_FIXTURES = ('node', 'https', 'dns', 'doh')
 # Whether a leak seen in a window outside the group changes the exit code. Since stage 7c3 the windows outside
 # the group are those of Local network (`lan_on`, `lan_private_closed`, `lan_private_open`,
 # `lan_follows_change`), which let the own network through by design and have no host of their own in the lab
-# yet, and the one of `ipv6.neighbor` when it runs: they are listed (`group.outside_leaks`, and DETECTED in
+# yet, the one of `ipv6.neighbor` when it runs, and the DNS-lock session of `route.specific-bypass`, which only
+# adds to that scenario's note: they are listed (`group.outside_leaks`, and DETECTED in
 # `lab.windows`) and do not decide the code. Set this to make any leak in any window exit 1.
 LEAK_OUTSIDE_THE_GROUP_FAILS = False
 # The positive control of stage 7c1: the script stops the service inside the window of the kill-switch

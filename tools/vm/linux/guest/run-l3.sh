@@ -656,6 +656,71 @@ EOF
     check killswitch.disconnect "the table went away and the direct path answered" disconnect_removes
 }
 
+# A route to the probe address more specific than the default, in the main table, as a
+# DHCP server's classless static routes (option 121) would put it there during a session.
+# The engine's routes leave it in force, so that address is reached past the tunnel: the
+# kill switch drops it (no leak, the address is unreachable); a DNS lock alone does not.
+# STATE remembers the route before it goes in, so cleanup removes it whatever happens.
+specific_route_add() {
+    printf '%s %s %s\n' "$PROBE_ADDRESS/32" "$1" "$PHYS" >"$STATE/specific-route"
+    ip -4 route replace "$PROBE_ADDRESS/32" via "$1" dev "$PHYS" ||
+        { fail_reason="could not add the route $PROBE_ADDRESS/32 via $1 dev $PHYS"; return 1; }
+}
+
+specific_route_remove() {
+    local destination gateway device
+    [ -f "$STATE/specific-route" ] || return 0
+    read -r destination gateway device <"$STATE/specific-route"
+    ip -4 route del "$destination" via "$gateway" dev "$device" 2>/dev/null
+    [ -z "$(ip -4 route show exact "$destination" dev "$device" 2>/dev/null)" ] || return 1
+    rm -f -- "$STATE/specific-route"
+}
+
+# The result is the kill-switch part's alone; the DNS-lock session only adds to the note.
+scenario_specific_route() {
+    local id=route.specific-bypass started gateway ks_note='' dns_note=''
+    started=$(l2_now_ms)
+    write_status running "$id"
+    gateway=$(ip -4 route show default dev "$PHYS" 2>/dev/null | sed -n 's/^default via \([0-9.]*\).*/\1/p' | head -n 1)
+    specific_bypass() {
+        [ -n "$gateway" ] || { fail_reason="no IPv4 default gateway on $PHYS for the specific route"; return 1; }
+        connect_with request-kill-switch.json || return 1
+        table_present || { fail_reason="connected but the table is missing"; return 1; }
+        specific_route_add "$gateway" || return 1
+        local rc
+        rc=$(tunnel_https)
+        if reached_rc "$rc"; then
+            ks_note="HTTPS through the tunnel still answered"
+        else
+            ks_note="HTTPS through the tunnel did not answer (curl exit $rc)"
+        fi
+        expect_blocked "HTTPS to $PROBE_ADDRESS on $PHYS with the specific route" direct_https || return 1
+        specific_route_remove || { fail_reason="could not remove the route $PROBE_ADDRESS/32"; return 1; }
+        disconnect
+    }
+    specific_bypass_dns_lock() {
+        if ! connect_with request-dns-lock.json; then
+            dns_note="the DNS-lock session did not connect: $fail_reason"
+            return
+        fi
+        if specific_route_add "$gateway"; then
+            dns_note="with the DNS lock alone HTTPS went: $(route_of "$USER_A" "$(command -v curl)")"
+        else
+            dns_note="with the DNS lock alone: $fail_reason"
+        fi
+        specific_route_remove
+        disconnect
+    }
+    if specific_bypass; then
+        specific_bypass_dns_lock
+        record "$id" PASS "with the kill switch the direct path was refused; $ks_note; $dns_note" "$started"
+    else
+        record "$id" FAIL "${fail_reason:-the condition did not hold}${ks_note:+; $ks_note}" "$started"
+    fi
+    specific_route_remove
+    fail_reason=''
+}
+
 # engine_capabilities MASK: sing-box holds exactly these, in the three sets.
 engine_capabilities() {
     local mask=$1 pid status set
@@ -1221,6 +1286,10 @@ cleanup() {
     if [ -f "$STATE/nft-untrusted" ]; then
         chmod o-w "$NFT" && rm -f -- "$STATE/nft-untrusted" && note "gave $NFT its mode back" || problem "could not give $NFT its mode back"
     fi
+    if [ -f "$STATE/specific-route" ]; then
+        specific_route_remove && note "removed the specific route to $PROBE_ADDRESS/32" ||
+            problem "could not remove the specific route to $PROBE_ADDRESS/32 from the main table"
+    fi
     if [ -f "$STATE/peer" ]; then
         peer_down && note "removed the peer namespace" || problem "could not remove the peer namespace $PEER_NS, its NAT table or routing rule"
     fi
@@ -1351,6 +1420,7 @@ if preflight_ok; then
         scenario_protection_reported
         scenario_engine
         scenario_kill_switch
+        scenario_specific_route
         scenario_program_rules
         scenario_lan_on
         scenario_dns_lock

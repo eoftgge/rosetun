@@ -20,6 +20,7 @@ rules.proxy-default-direct	yes	real-service	rules	-	Direct by default and a Thro
 rules.restart-guarded	yes	real-service	rules	-	adding and removing a rule by program while connected restarts sing-box with the capabilities it needs; the direct path stays refused throughout
 rules.search-misses	yes	real-service	rules	-	the journal shows process lookups that found a program; the note counts them and those that did not, for the report
 killswitch.disconnect	yes	real-service	killswitch	-	a disconnect removes the table and the direct path answers again
+route.specific-bypass	no	real-service	route	-	a route to the probe address more specific than the default, added to the main table during a kill-switch session: the direct path stays refused (the note says whether the tunnel still reached the address, and where one request went in a session with the DNS lock alone)
 lan.on	yes	real-service	lan	-	"Local network" on: UDP to a device of the own network on the physical interface is sent, the host node (the VPN server) and the probe address are refused
 lan.private-closed	yes	real-service	lan	-	"Local network" on without Private networks behind the router: UDP to a private address outside the own network, on the physical interface, is refused locally
 lan.private-open	yes	real-service	lan	-	"Local network" with Private networks behind the router: UDP to a private address outside the own network is sent, UDP 53 there, the host node (the VPN server) and the probe address are refused locally

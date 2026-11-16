@@ -317,6 +317,16 @@ WINDOWS_7B2B = ('reported', 'identity', 'connect_ks', 'capabilities', 'capabilit
 WINDOWS_7C2 = tuple('inbound' if label == 'forwarded' else label for label in WINDOWS_7B2B)
 
 
+def with_specific_route(labels):
+    """The windows with the two sessions of `route.specific-bypass` (stage 7c3), which runs after `connect_ks`."""
+    at = labels.index('connect_ks') + 1
+    return tuple(labels[:at]) + ('specific_bypass', 'specific_bypass_dns_lock') + tuple(labels[at:])
+
+
+# The run of stage 7c3: that of 7c2 with the sessions of the specific route.
+WINDOWS_7C3 = with_specific_route(WINDOWS_7C2)
+
+
 class Machines:
     """Fake machines, a fake lab guest and the evidence the lab machine leaves on its disk."""
     def __init__(self, test, windows=None, fault=None, rows=None, evidence=None, fixtures=None):
@@ -574,10 +584,10 @@ def direct_flow(kind, port):
 DIRECT_IN_A_CLEAN_RUN = {('capabilities', 1): 'target', ('direct_for_other_account', 0): 'target',
                          ('through_vpn_by_program', 0): 'target', ('dns_lock', 0): 'target',
                          ('dns_lock_unavailable', 0): 'resolver', ('missing_through_restart', 0): 'resolver',
-                         ('dns_lock_killed', 0): 'target'}
+                         ('dns_lock_killed', 0): 'target', ('specific_bypass_dns_lock', 0): 'target'}
 
 
-def clean_windows(labels=WINDOWS_7C2, direct=None):
+def clean_windows(labels=WINDOWS_7C3, direct=None):
     """(label, frames) of a run with these windows: nothing in them but the flows they are expected to show."""
     direct = DIRECT_IN_A_CLEAN_RUN if direct is None else direct
     spec, seen = [], {}
@@ -733,10 +743,10 @@ class OrderTests(Flow):
     def test_the_windows_and_the_legacy_report_are_in_the_summary(self):
         machines = Machines(self)
         result = self.go(machines)
-        self.assertEqual(list(WINDOWS_7C2), [w['label'] for w in result['lab']['windows']])
+        self.assertEqual(list(WINDOWS_7C3), [w['label'] for w in result['lab']['windows']])
         self.assertEqual(['EXPECTED' if (w['label'], w['number']) in DIRECT_IN_A_CLEAN_RUN else 'NONE'
                           for w in result['lab']['windows']], [w['verdict'] for w in result['lab']['windows']])
-        self.assertEqual(6, [w['verdict'] for w in result['lab']['windows']].count('EXPECTED'))
+        self.assertEqual(7, [w['verdict'] for w in result['lab']['windows']].count('EXPECTED'))
         self.assertEqual(len(scenario_ids()), len(result['legacy']['scenarios']))
         self.assertEqual(len(unrun_ids()), sum(r['result'] == 'SKIP' for r in result['legacy']['scenarios']))
         self.assertEqual('PASS', result['legacy']['summary']['overall'])

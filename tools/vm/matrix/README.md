@@ -2968,7 +2968,7 @@ of the lab run.
 ## Stage 7b2b: the L3 kill switch group in the lab
 
 Stage 7b2b runs the real Linux L3 stage through the lab: `run linux-l3 --lab` starts the lab
-machine and the test machine of stages 7b1 and 7b2a together and runs **all 59 scenarios** of the catalog
+machine and the test machine of stages 7b1 and 7b2a together and runs **all 60 scenarios** of the catalog
 (the 20 `two-hop.*` among them have no check and are recorded SKIP "UNRUN"), exactly
 as `run-l3.sh` runs them, on the test machine. The lab machine is the VPN node (`192.0.2.1:8388`),
 the HTTPS target (`203.0.113.2:443`), the resolver and the DoH target, and it records the wire to its
@@ -3423,7 +3423,7 @@ artifacts.
    hold `capture-halted-in-window`. If a run exits 2 with `control.intervened` false and the error
    `exchanges-not-completed`, the exchanges of the test machine did not finish in time: send the summary.
 3. `run linux-l3 --config <l3.toml>` without the laboratory: 4 PASS, 1 FAIL (`preflight.baseline`), 20 SKIP,
-   34 ERROR, exit 1, as in 7a.
+   35 ERROR, exit 1, as in 7a.
 4. `run linux-l3 --lab --config <l3.toml>`, twice in a row (each on the clean checkpoint): 16 of 16, exit 0
    both times, and the window `stopped` `NONE` (it is outside the group, so it is read in `lab.windows`).
 5. `run linux-l3 --lab --control stop-helper --config <l3.toml>`: exit 0, `control_result.met` true.
@@ -3616,7 +3616,7 @@ summaries and the retained artifacts.
    (`--control extra-packet`, `--control observer-stopped`, `--control observer-killed`, `--control link-down`)
    on the new images: exit 0 each, as in 7c1.
 3. `run linux-l3 --config <l3.toml>` without the lab: 4 PASS, 1 FAIL (`preflight.baseline`), 20 SKIP,
-   34 ERROR, exit 1, as in 7a.
+   35 ERROR, exit 1, as in 7a.
 4. `run linux-l3 --lab --config <l3-lab.toml>`, twice in a row: the group 27 PASS (`inbound.reply` among them),
    the cross-check without `DISAGREE` and without `UNOBSERVED`, `lab.window_counts` all `as_expected`, exit 0
    both times.
@@ -3650,9 +3650,9 @@ and the release gate stays false.
 | `preflight.identity`, `preflight.accounts`, `preflight.no-foreign-service`, `preflight.tools` | PASS |
 | `preflight.baseline` | FAIL, the reason names the missing route to `203.0.113.2` |
 | the 20 `two-hop.*` (evidence class `not-run`, not required) | SKIP, "UNRUN: ..." |
-| the other 34 | ERROR, "not run" |
+| the other 35 (34 before stage 7c3 added `route.specific-bypass`) | ERROR, "not run" |
 
-The report is complete (59 rows), the cleanup is PASS, the assessment is not
+The report is complete (60 rows), the cleanup is PASS, the assessment is not
 accepted, and the summary has `completion` true and `delivery.state` `ready`.
 The assessor's `validation` shows `ERROR` with the single problem "guest reports
 an infrastructure error or aborted run", because the guest's own summary says
@@ -3767,7 +3767,7 @@ L2 run uses it too.
    version, copy the unit and rules, update the test image and the importer.
 2. `run linux-l3 --dry-run`, then the ordinary command.
 3. Expect 4 PASS, `preflight.baseline` FAIL (route to `203.0.113.2`), 20 SKIP
-   (`two-hop.*`, "UNRUN"), 34 ERROR "not run", `completion` true, exit 1.
+   (`two-hop.*`, "UNRUN"), 35 ERROR "not run", `completion` true, exit 1.
 4. Run the ordinary `run linux-l2` again on the same stand and image: the result
    must be as in the stage 5c qualification.
 
