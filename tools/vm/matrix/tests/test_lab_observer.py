@@ -252,12 +252,12 @@ class ReasonTests(ObserverCase):
 class ExchangeNameTests(ObserverCase):
     def test_a_failed_exchange_names_itself_its_family_why_and_how_long(self):
         def failing():
-            time.sleep(.02)
+            time.sleep(.05)
             raise socket.timeout('timed out')
         with self.assertRaises(self.entry.Refused) as raised:
             self.entry.exchange('dns-tcp', 6, failing)
         self.assertRegex(str(raised.exception), r'^dns-tcp:6:timeout:[0-9]+ms$')
-        self.assertGreaterEqual(int(str(raised.exception).rsplit(':', 1)[1][:-2]), 15)
+        self.assertGreaterEqual(int(str(raised.exception).rsplit(':', 1)[1][:-2]), 30)
         self.assertTrue(wire.HELPER_REASON.fullmatch(str(raised.exception)))
 
     def test_a_successful_exchange_returns_its_value(self):
