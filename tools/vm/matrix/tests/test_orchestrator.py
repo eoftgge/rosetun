@@ -47,6 +47,8 @@ class FlowTests(unittest.TestCase):
         self.job = SimpleNamespace(submission='not-submitted', assessment=None)
         self.job.submit = self.submit
         self.job.collect = self.collect
+        # A fake wait takes all of its time, as the fixed wait did.
+        self.job.wait = lambda seconds, **kwargs: self.clock.sleep(seconds)
         self.job.snapshot = lambda: dict(accepted=self.job.assessment is not None and self.accepted)
         self.attempt = SimpleNamespace(state='built', receipt_verified=False, deadline=900)
         self.attempt.stage = self.stage

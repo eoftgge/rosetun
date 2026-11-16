@@ -9,6 +9,7 @@ import sys
 import time
 import uuid
 
+from .config import REBOOT_SECONDS, planned_reboots_of
 from .evidence import write_file
 from .execution import preflight
 from .lab_protocol import HELPER_REASON
@@ -225,7 +226,7 @@ def _release(lease, result, interrupted):
 
 
 def attach_run(state_directory, run_id, *, timeout=5, sleep=time.sleep, now=time.time, progress=None,
-               commit=None):
+               commit=None, clock=time.monotonic):
     """Carry on a `run linux-l2`/`linux-l3` whose controller died after the job was submitted.
 
     The summary it finishes says `attached: true` and how many controllers
@@ -263,6 +264,7 @@ def attach_run(state_directory, run_id, *, timeout=5, sleep=time.sleep, now=time
         return dict(refusal, refused=error.reason)
     result = found['summary']
     config = result['configuration']
+    vm.planned_reboots = planned_reboots_of(config.get('suite', 'linux-l2'))
     result.update(attached=True, attachments=attachments)
     job = None
     stage = 'attach'
@@ -296,7 +298,11 @@ def attach_run(state_directory, run_id, *, timeout=5, sleep=time.sleep, now=time
         if state.phase != 'closing':
             if job is None:
                 raise ValueError('l2-job-state-missing')
-            step('attach-guest', vm.attach_guest)
+            if vm.reset_pending and vm.reset_kind == 'guest':
+                # The dead controller saw the guest's reset and did not confirm its boot: wait for it as it would.
+                step('attach-guest', lambda: vm.await_rebooted_guest(timeout=REBOOT_SECONDS, clock=clock, sleep=sleep))
+            else:
+                step('attach-guest', vm.attach_guest)
             if collected():
                 job.load_assessment()
             else:
@@ -305,7 +311,7 @@ def attach_run(state_directory, run_id, *, timeout=5, sleep=time.sleep, now=time
                     # The controller died while submitting: wait as a fresh submission would.
                     wait_until = now() + config['timeouts']['job'] + 125
                     state.update('deadlines', wait_until=wait_until)
-                step('wait', lambda: sleep(max(0, wait_until - now())))
+                step('wait', lambda: job.wait(max(0, wait_until - now()), sleep=sleep, clock=clock))
                 try:
                     step('collect', job.collect)
                 except Exception:
@@ -505,6 +511,7 @@ def run_linux(config, *, adapters=None, clock=time.monotonic, sleep=time.sleep,
         if clock() >= deadline:
             raise TimeoutError('preparation deadline')
         vm = step('start', lambda: adapters.start(run))
+        vm.planned_reboots = planned_reboots_of(suite)
         step('resume', vm.resume)
         step('boot', lambda: vm.wait_initial_guest(timeout=config['deadlines']['boot'],
                                                  clock=clock, sleep=sleep))
@@ -535,9 +542,9 @@ def run_linux(config, *, adapters=None, clock=time.monotonic, sleep=time.sleep,
             if vm.qga.valid or job.submission != 'unknown':
                 raise
             step('submit-recovery', recovery)
-        # Conservative waiting needs no status RPC and cannot consume collect attempts early.
+        # The wait reads the job's status file, so it ends when the job does and spends no collect attempt.
         state.deadline('wait_until', config['timeouts']['job'] + 125)
-        step('wait', lambda: sleep(config['timeouts']['job'] + 125))
+        step('wait', lambda: job.wait(config['timeouts']['job'] + 125, sleep=sleep, clock=clock))
         try:
             step('collect', job.collect)
         except Exception:

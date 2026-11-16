@@ -634,14 +634,18 @@ class Vm:
                     break
                 self.timeout = min(10, remaining)
                 try:
-                    return self.recover_guest() if attempt == 0 else self.observe_guest()
+                    if attempt:
+                        return self.observe_guest()
+                    # A controller that attaches to a run with a reset pending has no session yet.
+                    return self.attach_guest() if self.qga is None else self.recover_guest()
                 except LifecycleError as error:
                     if (str(error) in BOOT_REFUSALS or self.process.poll() is not None or self.evidence_failed
                             or str(error) in ('qga-recovery-limit', 'qga-observation-limit')):
                         raise
-                    self.qga.close()
-                    if not self.qga.closed:
-                        raise LifecycleError('rebooted-qga-close-unconfirmed', self)
+                    if self.qga is not None:
+                        self.qga.close()
+                        if not self.qga.closed:
+                            raise LifecycleError('rebooted-qga-close-unconfirmed', self)
                     self._sync_seed = (self._sync_seed + 1) % 2**63
                     self._new_qga()
                     sleep(min(15, max(0, deadline - clock())))

@@ -6,6 +6,16 @@ import tomllib
 from .catalog import LINUX_ROOT, SUITES, digest, read_catalog, validate_snapshot
 
 PLAN_SCHEMA = "rosetun.matrix.plan.v1"
+# The guest resets a suite plans: any other reset of its run is an error.
+PLANNED_REBOOTS = {"linux-l4": 2, "linux-reboot-smoke": 1}
+
+
+# How long the controller gives the new boot of a planned guest reset before its agent must answer.
+REBOOT_SECONDS = 240
+
+
+def planned_reboots_of(suite):
+    return PLANNED_REBOOTS.get(suite, 0)
 
 
 def validate_profile(profile):
@@ -50,7 +60,7 @@ def make_plan(suite, profile_name, profile):
         "suite": suite,
         "profile": profile_name,
         "policy": dict(profile),
-        "planned_reboots": 2 if suite == "linux-l4" else 0,
+        "planned_reboots": planned_reboots_of(suite),
         "catalog": rows,
         "catalog_digest": digest(rows),
     }
@@ -71,8 +81,7 @@ def validate_plan(plan):
     if not isinstance(plan["profile"], str) or not plan["profile"].strip():
         raise ValueError("invalid plan profile")
     validate_profile(plan["policy"])
-    expected = 2 if plan["suite"] == "linux-l4" else 0
-    if type(plan["planned_reboots"]) is not int or plan["planned_reboots"] != expected:
+    if type(plan["planned_reboots"]) is not int or plan["planned_reboots"] != planned_reboots_of(plan["suite"]):
         raise ValueError("invalid planned reboot limit")
     validate_snapshot(plan["catalog"])
     if plan["catalog_digest"] != digest(plan["catalog"]):

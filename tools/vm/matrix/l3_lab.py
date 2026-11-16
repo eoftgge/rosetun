@@ -409,7 +409,7 @@ def run_linux_lab(config, *, suite, diagnostic=False, control=None, adapters=Non
             if vm.qga.valid or job.submission != 'unknown':
                 raise
             step('submit-recovery', recovery)
-        step('wait', lambda: sleep(config['timeouts']['job'] + 125))
+        step('wait', lambda: job.wait(config['timeouts']['job'] + 125, sleep=sleep, clock=clock))
         try:
             step('collect', job.collect)
         except Exception:

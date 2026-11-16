@@ -98,6 +98,7 @@ class AttachTests(unittest.TestCase):
             job.assessment = dict(acceptance=dict(accepted=True, release=False))
         job.collect = collect
         job.load_assessment = load
+        job.wait = lambda seconds, **kwargs: None
         job.snapshot = lambda: dict(accepted=job.assessment is not None)
         return job
 

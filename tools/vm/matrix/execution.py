@@ -181,7 +181,7 @@ def preflight(config, *, dry_run=False):
         controller_source = source_identity(controller)
     actions = ['lease', 'create run and identities', 'overlay', 'ISO', 'start paused',
                'resume', 'observe boot', 'import once', 'verify receipt', 'submit once',
-               'wait job timeout + 125 seconds', 'collect at most twice', 'close', 'summary']
+               'wait for the job by reading its status, at most job timeout + 125 seconds', 'collect at most twice', 'close', 'summary']
     limitations = ['attach carries a run on only after its job was submitted; before that, recover --close',
                    'no automatic file cleanup', 'no network', 'dry-run does not execute binary version checks']
     if l3:
@@ -203,7 +203,7 @@ def preflight(config, *, dry_run=False):
                    'lab setup: VPN node, HTTPS target, resolver, DoH, capture to the evidence disk',
                    'start the test machine paused, resume, observe boot',
                    'import once', 'verify receipt', 'submit run-l3.sh once (with LAB_MARKER_ADDRESS)',
-                   'wait job timeout + 125 seconds', 'collect at most twice', 'finish the capture',
+                   'wait for the job by reading its status, at most job timeout + 125 seconds', 'collect at most twice', 'finish the capture',
                    'close both machines', 'read and verify the evidence disk',
                    'split the capture into windows found from the markers',
                    'cross-check the kill switch group against the windows', 'summary']

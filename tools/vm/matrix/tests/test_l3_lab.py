@@ -452,6 +452,8 @@ class Machines:
 
         attempt.stage, attempt.check_receipt, attempt.linux_l2_job = stage, receipt, create_job
         job.submit, job.collect = submit, collect
+        # A fake wait takes all of its time, as the fixed wait did.
+        job.wait = lambda seconds, *, sleep, clock: sleep(seconds)
         job.snapshot = lambda: dict(accepted=False, polls=job.polls)
 
         def full_journal():

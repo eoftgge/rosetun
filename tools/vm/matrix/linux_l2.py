@@ -13,10 +13,10 @@ from typing import NamedTuple
 
 from . import l3_requests, run_state
 from .catalog import digest, parse_catalog
-from .config import make_plan, validate_plan
+from .config import REBOOT_SECONDS, make_plan, validate_plan
 from .evidence import write_file
 from .jobs import JobError, LAUNCHER, SmokeJob, _uuid
-from .lifecycle import _guest_serialized
+from .lifecycle import LifecycleError, _guest_serialized
 from .qga import QgaError
 from .report import assess, _unique_object, _invalid_constant
 from .resources import _identifier, _no_links, _regular_file, resource_path
@@ -119,6 +119,19 @@ def profile_of(name):
 BLOCK = 32768
 REPORT_LIMIT = 256 * 1024
 POLLS = 4
+# The wait for a job reads its status file instead of sleeping. A look costs three of the job's 112 agent calls
+# (open, read, close) and one is needed for a boot check on each side, so the budget decides how often to look:
+# the submission takes about 6 calls and each of the two collections about 23, which leaves 58 as the point where
+# the looking stops, and a wait of up to 16 looks, one every 30 seconds or one sixteenth of the wait if longer,
+# takes 48 of them.
+POLL_SECONDS = 30
+POLL_SPLIT = 16
+POLL_CALLS_LIMIT = 58
+# How long after an agent call that failed the controller still watches QMP for the reset that explains it
+# (the agent stops a few seconds before the machine resets).
+RESET_GRACE_SECONDS = 30
+RESET_GRACE_STEP = 5
+STATUS_LIMIT = 8192
 EVIDENCE_FILES = ('plan.json', 'package.json', 'assessment.json') + tuple(
     f'{i}/{name}.json' for i in range(1, POLLS + 1)
     for name in ('status', 'report', 'status-after'))
@@ -464,9 +477,11 @@ class LinuxL2Job:
             _json(job._plan)
             identity = package['identity']
             ids = state.document['identities']
+            # The job names the boot it started on, the first of the chain; the state's own boot is the last.
+            first = state.document['boot_chain'][0] if state.document['boot_chain'] else ids['boot_id']
             if (type(identity) is not dict or identity.get('host_run_id') != vm.run._identity[0]
                     or identity.get('vm_uuid') != vm.vm_uuid or identity.get('guest_run_id') != ids['guest_run_id']
-                    or identity.get('boot_id') != ids['boot_id'] or identity.get('stand_id') != vm.run._identity[1]):
+                    or identity.get('boot_id') != first or identity.get('stand_id') != vm.run._identity[1]):
                 raise JobError('l2-job-identity-mismatch')
             deadline = state.document['deadlines']['job_deadline']
         except (KeyError, TypeError, OSError, ValueError):
@@ -478,6 +493,7 @@ class LinuxL2Job:
         job.pid, job.session = record['pid'], record['session']
         job.verification = 'UNVERIFIED'
         job.calls, job.polls = state.budget('job_calls'), state.budget('job_polls')
+        job._looked = None
         job.grace = 0
         job.handles = {}
         job.assessment = None
@@ -543,6 +559,7 @@ class LinuxL2Job:
         self.verification = 'UNVERIFIED'
         self.pid = self.session = None
         self.calls = self.polls = 0
+        self._looked = None
         self.grace = 0
         self.handles = {}
         self.assessment = None
@@ -590,11 +607,17 @@ class LinuxL2Job:
         vm = self.vm
         vm._check()
         if (vm.process.poll() is not None or not vm.qga.valid or vm.qga.closed or
-                vm.reset_pending or vm.last_boot_id != self.identity['boot_id']):
+                vm.reset_pending or vm.last_boot_id != self._boot):
             raise JobError('l2-channel-or-boot-unverified')
         if time.monotonic() >= self.deadline + self.grace:
             raise JobError('l2-job-deadline')
         vm.qga.deadline = min(self.deadline + self.grace, time.monotonic() + 60)
+
+    @property
+    def _boot(self):
+        """The boot the controller confirmed last: the end of its chain, not what the guest reports."""
+        chain = self.vm.boot_chain
+        return chain[-1] if chain else self.identity['boot_id']
 
     def _rpc(self, name, args, timeout=5):
         self._begin()
@@ -619,7 +642,7 @@ class LinuxL2Job:
         try:
             qga.jobs_enabled = True
             qga.probe(5)
-            if qga.read_boot_id(5) != self.identity['boot_id']:
+            if qga.read_boot_id(5) != self._boot:
                 raise JobError('l2-boot-changed')
         finally:
             self.calls += qga.calls - before
@@ -633,6 +656,9 @@ class LinuxL2Job:
         delivery = getattr(self.vm, '_l2_import', None)
         if delivery is not None:
             delivery.require_ready()
+        if list(self.vm.boot_chain) != [self.identity['boot_id']]:
+            # A guest that has been reset before its job exists is not the guest the package was made for.
+            raise JobError('l2-boot-chain-before-submit')
         self._fresh_boot()
         self.submission = 'unknown'
         self.session = self.vm.qga.session_id
@@ -652,6 +678,109 @@ class LinuxL2Job:
             self._remember()
             self._evidence('l2-submit-return', pid=self.pid, session_id=self.session)
         return self.snapshot()
+
+    def wait(self, seconds, *, sleep=time.sleep, clock=time.monotonic):
+        """Wait for the job to finish, at most `seconds`, by reading its status file; True once it has.
+
+        A final status ends the wait early. A planned guest reset ends the agent's session: the controller sees
+        the RESET itself and recovers the session here, and none of it spends a collection attempt. A look that
+        fails for any other reason ends the looking, and the rest is waited out as a fixed wait always was; the
+        collection then goes the way it always went. An unplanned reset is an error and is not caught.
+        """
+        vm, end = self.vm, clock() + seconds
+        interval = max(POLL_SECONDS, -(-seconds // POLL_SPLIT))
+        looking = self.submission != 'not-submitted' and vm.qga is not None and vm.qga.valid
+        while True:
+            remaining = end - clock()
+            if remaining <= 0:
+                return False
+            sleep(min(interval, remaining))
+            vm.watch_resets()
+            if self._reset_pending():
+                self._recover(end - clock(), sleep, clock)
+                looking = True
+                continue
+            if not looking:
+                continue
+            if self.calls >= POLL_CALLS_LIMIT:
+                self._evidence('l2-poll-stopped', reason='job-call-budget')
+                looking = False
+                continue
+            try:
+                if self._peek():
+                    return True
+            except (QgaError, OSError, ValueError, UnicodeError, RecursionError) as error:
+                named = isinstance(error, (QgaError, JobError, LifecycleError))
+                self._evidence('l2-poll-stopped', reason=str(error) if named else type(error).__name__)
+                looking = False
+                # The agent stops a few seconds before the machine resets, so a reset may be about to be told.
+                for _ in range(RESET_GRACE_SECONDS // RESET_GRACE_STEP):
+                    if self._reset_pending():
+                        break
+                    sleep(RESET_GRACE_STEP)
+                    vm.watch_resets()
+                if self._reset_pending():
+                    self._recover(end - clock(), sleep, clock)
+                    looking = True
+
+    def _reset_pending(self):
+        return self.vm.reset_pending and self.vm.reset_kind == 'guest'
+
+    def _recover(self, remaining, sleep, clock):
+        self._evidence('l2-guest-reset', boot_chain=len(self.vm.boot_chain), resets=self.vm.guest_resets)
+        self.vm.await_rebooted_guest(timeout=min(REBOOT_SECONDS, max(60, remaining)), clock=clock, sleep=sleep)
+        self._evidence('l2-guest-rebooted', boot_chain=len(self.vm.boot_chain))
+
+    @_guest_serialized
+    def _peek(self):
+        """One look at the status file: has the job finished, on the boot the controller confirmed last?"""
+        self._begin()
+        path = '/var/lib/rosetun-l2/' + self.identity['guest_run_id'] + '/report/status.json'
+        try:
+            handle = self._rpc('guest-file-open', dict(path=path, mode='r'))
+        except QgaError as error:
+            # Refused means answered: the file is not there yet, which is no failure of the channel.
+            if str(error) != 'qga-rpc-rejected':
+                raise
+            return False
+        if type(handle) is not int or not 0 <= handle < 2**63:
+            self.vm.qga.invalidate()
+            raise JobError('l2-invalid-handle')
+        data = bytearray()
+        try:
+            for _ in range(3):
+                requested = STATUS_LIMIT + 1 - len(data)
+                value = self._rpc('guest-file-read', dict(handle=handle, count=requested))
+                if (type(value) is not dict or set(value) != {'count', 'eof', 'buf-b64'} or
+                        type(value['count']) is not int or not 0 <= value['count'] <= requested or
+                        type(value['eof']) is not bool or type(value['buf-b64']) is not str or
+                        len(value['buf-b64']) > 4 * ((STATUS_LIMIT + 3) // 3) + 4):
+                    raise JobError('l2-invalid-read')
+                block = base64.b64decode(value['buf-b64'], validate=True)
+                if base64.b64encode(block).decode() != value['buf-b64'] or len(block) != value['count']:
+                    raise JobError('l2-invalid-read-count')
+                data.extend(block)
+                if len(data) > STATUS_LIMIT:
+                    raise JobError('l2-result-size-limit')
+                if value['eof']:
+                    break
+                if not block:
+                    raise JobError('l2-read-no-progress')
+            else:
+                raise JobError('l2-read-block-limit')
+        finally:
+            if self.vm.qga.valid:
+                if self._rpc('guest-file-close', dict(handle=handle)) != {}:
+                    self.vm.qga.invalidate()
+                    raise JobError('l2-invalid-close')
+        status = _json(bytes(data))
+        look = (status.get('state'), status.get('boot_id'))
+        if look != self._looked:
+            # Only a change of state or of boot is kept: a look at every scenario would fill the evidence file.
+            self._looked = look
+            self._evidence('l2-poll', state=str(look[0])[:32], boot_id=str(look[1])[:64])
+        return (status.get('state') == 'finished' and status.get('run_id') == self.identity['guest_run_id']
+                and status.get('boot_id') == self._boot)
 
     def _read(self, name):
         """The bytes of one result file; the journal is optional and gives None when the guest has none."""
@@ -752,7 +881,7 @@ class LinuxL2Job:
             status = _json(raw_status)
             self.job = status.get('state', 'unknown')
             if (self.job != 'finished' or status.get('run_id') != self.identity['guest_run_id'] or
-                    status.get('boot_id') != self.identity['boot_id']):
+                    status.get('boot_id') != self._boot):
                 raise JobError('l2-not-finished-or-foreign-status')
             raw_report = self._read('report')
             if self._read('status-after') != raw_status:
@@ -760,7 +889,9 @@ class LinuxL2Job:
             if self.profile.name in SERVICE_PROFILES:
                 self._journal()
             self._fresh_boot()
-            result = assess(_json(raw_report), status, self.plan)
+            report = _json(raw_report)
+            self._same_chain(report)
+            result = assess(report, status, self.plan)
             self._save('assessment.json', json.dumps(result, sort_keys=True).encode())
             self.assessment = result
             self.verification = result['validation']['status']
@@ -772,6 +903,17 @@ class LinuxL2Job:
                 self._remember()
         self._evidence('l2-collected')
         return self.snapshot()
+
+    def _same_chain(self, report):
+        """The guest's list of boots must be the one the controller saw, element by element."""
+        guest = report.get('guest') if isinstance(report, dict) else None
+        boots = guest.get('boot_ids') if isinstance(guest, dict) else None
+        chain = list(self.vm.boot_chain)
+        if (boots is not None or self.plan['planned_reboots']) and boots != chain:
+            shown = boots if (isinstance(boots, list) and len(boots) <= 8 and
+                              all(isinstance(b, str) and len(b) <= 64 for b in boots)) else None
+            self._evidence('l2-boot-chain-mismatch', controller=chain, guest=shown)
+            raise JobError('l2-boot-chain-mismatch')
 
     @_guest_serialized
     def full_journal(self):
@@ -819,9 +961,12 @@ class LinuxL2Job:
             self.grace = 0
 
     def snapshot(self):
-        return dict(identity=self.identity, submission=self.submission, launcher=self.launcher,
-                    job=self.job, verification=self.verification, assessment=self.assessment,
-                    accepted=bool(self.assessment and self.verification == 'PASS' and
-                                  self.launcher != 'exited-error' and
-                                  self.assessment['acceptance']['accepted']),
-                    security_invariants='UNVERIFIED', release_gate=False)
+        result = dict(identity=self.identity, submission=self.submission, launcher=self.launcher,
+                      job=self.job, verification=self.verification, assessment=self.assessment,
+                      accepted=bool(self.assessment and self.verification == 'PASS' and
+                                    self.launcher != 'exited-error' and
+                                    self.assessment['acceptance']['accepted']),
+                      security_invariants='UNVERIFIED', release_gate=False)
+        if self.plan['planned_reboots']:
+            result['boot_chain'] = list(self.vm.boot_chain)
+        return result
