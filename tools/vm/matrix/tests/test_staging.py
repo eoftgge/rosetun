@@ -15,11 +15,13 @@ from tools.vm.matrix import staging
 from tools.vm.matrix.jobs import JobError
 from tools.vm.matrix.qga import QgaError
 from tools.vm.matrix.tests.test_jobs import JobsTests, GUEST
+from tools.vm.matrix.tests.posix_only import controller_only
 
 CHECKOUT = Path(__file__).resolve().parents[4]
 ATTEMPT = '0123456789abcdef' * 2
 
 
+@controller_only
 class StagingTests(JobsTests):
     # Inherited jobs tests also verify that the manual path remains available.
     def build(self, **kw):

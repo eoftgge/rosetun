@@ -9,6 +9,7 @@ from unittest.mock import patch
 from tools.vm.matrix import lifecycle
 from tools.vm.matrix.qmp_adapter import ResetEvent
 from tools.vm.matrix.tests import test_qemu
+from tools.vm.matrix.tests.posix_only import controller_only
 
 REAL_HOST = lifecycle._host
 REAL_SOCKETPAIR = lifecycle.socket.socketpair
@@ -116,6 +117,7 @@ class Control:
         pass
 
 
+@controller_only
 class LifecycleTests(unittest.TestCase):
     def setUp(self):
         # Reuse preparation fixtures, not its test cases or real command runner.

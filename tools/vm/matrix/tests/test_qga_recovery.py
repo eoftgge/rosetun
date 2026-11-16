@@ -11,6 +11,7 @@ from tools.vm.matrix.qga import Qga, QgaError
 from tools.vm.matrix.tests import test_lifecycle
 from tools.vm.matrix.tests.test_lifecycle import Stream, REAL_SOCKETPAIR
 from tools.vm.matrix.tests.test_qga import Client, Relay, Stream as AgentStream, BOOT, info, read, INSTALLED
+from tools.vm.matrix.tests.posix_only import controller_only
 
 OTHER_BOOT = '22345678-1234-4234-8234-123456789abc'
 
@@ -31,6 +32,7 @@ class Endpoint(AgentStream):
         return stream
 
 
+@controller_only
 class RecoveryTests(unittest.TestCase):
     def setUp(self):
         self.fixture = test_lifecycle.LifecycleTests()

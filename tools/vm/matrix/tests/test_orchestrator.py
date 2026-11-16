@@ -13,6 +13,7 @@ from tools.vm.matrix import orchestrator as o, execution, cli, lifecycle
 from tools.vm.matrix.tests.test_linux_l2 import package, CHECKOUT, SOURCE
 from tools.vm.matrix.tests.test_qga import BOOT
 from tools.vm.matrix.tests import test_qemu
+from tools.vm.matrix.tests.posix_only import controller_only
 
 
 class Clock:
@@ -378,6 +379,7 @@ class ReservationTests(unittest.TestCase):
         self.assertEqual(3, len(fixture.calls))
         self.assertEqual(5, len(fixture.run._read()['resources']))
 
+    @controller_only
     def test_summary_finalization_does_not_invalidate_real_completion(self):
         from tools.vm.matrix.tests import test_lifecycle
         fixture = test_lifecycle.LifecycleTests()

@@ -13,6 +13,7 @@ from tools.vm.matrix.jobs import JobError
 from tools.vm.matrix.qemu import CommandResult
 from tools.vm.matrix.tests import (test_jobs, test_l2_media, test_lifecycle, test_linux_l2,
                                    test_qemu, test_staging)
+from tools.vm.matrix.tests.posix_only import controller_only
 
 
 def old_row(value):
@@ -38,6 +39,7 @@ class JournalBytesTests(unittest.TestCase):
             self.assertEqual(list(last), rows[-len(last):])
         return rows
 
+    @controller_only
     def test_lifecycle_and_job_journals(self):
         fixture = fixture_of(self, test_jobs.JobsTests())
         vm, directory = fixture.vm, fixture.vm.run.directory
@@ -55,6 +57,7 @@ class JournalBytesTests(unittest.TestCase):
         rows = self.assert_old_formula(directory / 'job-evidence.jsonl')
         self.assertEqual(['first', 'second'], [r['operation'] for r in rows[-2:]])
 
+    @controller_only
     def test_staging_journal(self):
         fixture = fixture_of(self, test_staging.StagingTests())
         package = fixture.build(delay_seconds=1)
@@ -64,6 +67,7 @@ class JournalBytesTests(unittest.TestCase):
         self.assert_old_formula(path)
         self.assertTrue(path.read_bytes().isascii())
 
+    @controller_only
     def test_import_journal(self):
         fixture = fixture_of(self, test_l2_media.ImportTests())
         fixture.obj._evidence('first')
@@ -89,6 +93,7 @@ class OwnerTokenTests(unittest.TestCase):
             if path.is_file() and path.name != 'manifest.json':
                 self.assertNotIn(token.encode(), path.read_bytes(), path.name)
 
+    @controller_only
     def test_lifecycle_and_guest_observation_journals(self):
         fixture = fixture_of(self, test_jobs.JobsTests())
         vm = fixture.vm
@@ -108,6 +113,7 @@ class OwnerTokenTests(unittest.TestCase):
         self.assertTrue(vm.evidence_failed)
         self.assert_absent(vm.run.directory, token)
 
+    @controller_only
     def test_staging_journal(self):
         fixture = fixture_of(self, test_staging.StagingTests())
         package = fixture.build(delay_seconds=1)
@@ -117,6 +123,7 @@ class OwnerTokenTests(unittest.TestCase):
         self.assertTrue(fixture.vm.evidence_failed)
         self.assert_absent(fixture.vm.run.directory, token)
 
+    @controller_only
     def test_import_journal(self):
         fixture = fixture_of(self, test_l2_media.ImportTests())
         token = fixture.vm.run._identity[2]
@@ -126,6 +133,7 @@ class OwnerTokenTests(unittest.TestCase):
         self.assertTrue(fixture.vm.evidence_failed)
         self.assert_absent(fixture.vm.run.directory, token)
 
+    @controller_only
     def test_linux_l2_evidence_files(self):
         fixture = fixture_of(self, test_linux_l2.ExecutionTests())
         token = fixture.vm.run._identity[2]
@@ -158,6 +166,7 @@ class OwnerTokenTests(unittest.TestCase):
         self.assertEqual('quarantined', fixture.run._read()['state'])
         self.assert_absent(fixture.run.directory, token)
 
+    @controller_only
     def test_completion_proof(self):
         fixture = fixture_of(self, test_lifecycle.LifecycleTests())
         vm = fixture.start()

@@ -18,6 +18,7 @@ from tools.vm.matrix.tests.test_lab import Endpoint, capture, exchange, healthy,
 from tools.vm.matrix.tests.test_lab_fixtures import Base, load_entry
 from tools.vm.matrix.tests.test_lab_tunnel import tunnel_block
 from tools.vm.matrix.tests.test_lab_tunnel_protocol import direct, from_node, to_node
+from tools.vm.matrix.tests.posix_only import controller_only
 
 RUN = 'a' * 32
 SMALL = 1024 * 1024
@@ -315,6 +316,7 @@ class DiskPairTests(test_lab.PairTests):
         self.assertIn('evidence.img', paths(self.runs['lab']))
         self.assertNotIn('evidence.img', paths(self.runs['test']))
 
+    @controller_only
     def test_the_started_lab_machine_gets_the_disk_the_test_machine_does_not_and_no_descriptor_more(self):
         first, a = self.launch('test')
         second, b = self.launch('lab')

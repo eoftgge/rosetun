@@ -10,6 +10,7 @@ from tools.vm.matrix import run_state
 from tools.vm.matrix.qmp_adapter import ByteRelay, Qmp, RESERVATION_BYTES
 from tools.vm.matrix.resources import read_manifest
 from tools.vm.matrix.tests import test_orchestrator
+from tools.vm.matrix.tests.posix_only import controller_only
 
 
 def load(directory):
@@ -165,6 +166,7 @@ class AdapterBudgetTests(unittest.TestCase):
         self.assertTrue(qmp.valid)
         self.assertEqual(0, qmp.calls)
 
+    @controller_only
     def test_the_relay_records_a_new_ceiling_before_forwarding_past_the_old_one(self):
         stream, peer = socket.socketpair()
         ceilings = []
@@ -178,6 +180,7 @@ class AdapterBudgetTests(unittest.TestCase):
             relay.close()
             peer.close()
 
+    @controller_only
     def test_a_failed_ceiling_record_stops_the_relay_before_forwarding(self):
         stream, peer = socket.socketpair()
         def fail(index, value):

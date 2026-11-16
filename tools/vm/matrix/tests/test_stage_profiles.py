@@ -19,6 +19,7 @@ from tools.vm.matrix.tests.test_l2_media import helper
 from tools.vm.matrix.tests.test_linux_l2 import CHECKOUT, SOURCE
 from tools.vm.matrix.tests.test_matrix import summarize, synthetic_inputs
 from tools.vm.matrix.tests.test_qga import BOOT, read
+from tools.vm.matrix.tests.posix_only import controller_only
 
 L3 = l2.PROFILES['l3']
 PROXY = l2.PROFILES['proxy']
@@ -202,6 +203,7 @@ class L2BytesTests(unittest.TestCase):
             self.assertEqual(set(self.ENV), set(package['env']))
             self.assertEqual(l2.FILES, tuple(package['hashes']))
 
+    @controller_only
     def test_l2_import_job_env_request_and_receipt_are_the_old_bytes(self):
         fixture = test_l2_media.ImportTests()
         self.addCleanup(fixture.doCleanups)
@@ -226,6 +228,7 @@ class L2BytesTests(unittest.TestCase):
         self.assertEqual(dict(identity, schema='rosetun.l2-import.v1', state='ready'),
                          json.loads(fixture.fixture.files['ready.json']))
 
+    @controller_only
     def test_an_l2_request_may_not_name_a_profile(self):
         fixture = test_l2_media.ImportTests()
         self.addCleanup(fixture.doCleanups)
@@ -236,6 +239,7 @@ class L2BytesTests(unittest.TestCase):
             with self.assertRaises((ValueError, TypeError), msg=repr(profile)):
                 helper.request(base64.b64encode(json.dumps(request).encode()).decode())
 
+    @controller_only
     def test_l2_job_keeps_its_evidence_directory_and_identity(self):
         fixture = test_linux_l2.ExecutionTests()
         self.addCleanup(fixture.doCleanups)
@@ -710,6 +714,7 @@ class JournalTextTests(unittest.TestCase):
         self.assertIn(b'bytes left out]', kept)
 
 
+@controller_only
 class L3ImportTests(unittest.TestCase):
     def setUp(self):
         self.fixture = test_jobs.JobsTests()
@@ -1164,6 +1169,7 @@ class L3ImportTests(unittest.TestCase):
             helper.request(encode(bad))
 
 
+@controller_only
 class ProxyDeliveryTests(unittest.TestCase):
     """The Proxy profile: its package, its job.env with the lab's keys, and the importer in the image."""
 
@@ -1287,6 +1293,7 @@ class ProxyDeliveryTests(unittest.TestCase):
         self.assertIn('desktop_proxy', helper.EXECUTABLE)
 
 
+@controller_only
 class L5DeliveryTests(unittest.TestCase):
     """The L5 profile: two packages instead of programs, no engine hash, the lab's keys and the importer in the image."""
 

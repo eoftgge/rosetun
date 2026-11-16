@@ -18,6 +18,7 @@ from unittest.mock import patch
 from tools.vm.matrix import cli, lab, lifecycle, lab_protocol as wire
 from tools.vm.matrix.resources import create_run, EXECUTION_FILES
 from tools.vm.matrix.tests import test_qemu, test_lifecycle
+from tools.vm.matrix.tests.posix_only import controller_only
 
 
 class Endpoint:
@@ -689,6 +690,7 @@ class PairTests(unittest.TestCase):
         self.addCleanup(vm.close, hard=True)
         return vm, popen.call_args
 
+    @controller_only
     def test_two_owned_runs_have_separate_disks_ids_and_only_internal_network(self):
         first, a = self.launch('test')
         second, b = self.launch('lab')
@@ -709,6 +711,7 @@ class PairTests(unittest.TestCase):
         self.assertFalse(second.completed)
         self.assertEqual({second}, self.fixture.lease._active)
 
+    @controller_only
     def test_legacy_start_still_refuses_second_vm_and_foreign_role_is_rejected(self):
         self.launch('test')
         with self.assertRaises(lifecycle.LifecycleError):

@@ -26,6 +26,7 @@ from tools.vm.matrix.tests.test_lab_fixtures import load_entry
 from tools.vm.matrix.tests.test_lab_windows import health, served
 from tools.vm.matrix.tests.test_orchestrator_l3 import PACKAGE
 from tools.vm.matrix.tests.test_qga import BOOT
+from tools.vm.matrix.tests.posix_only import controller_only
 
 SCENARIOS = Path(__file__).resolve().parents[2] / 'linux' / 'scenarios-l3.tsv'
 HEX = '1' * 64
@@ -170,6 +171,7 @@ class DryRunTests(unittest.TestCase):
         self.assertEqual(2, code)
 
 
+@controller_only
 class JointStartTests(unittest.TestCase):
     """The real `lifecycle.start` for both machines of the run, on a fake process and fake endpoints."""
 

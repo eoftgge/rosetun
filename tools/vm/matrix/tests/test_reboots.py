@@ -25,6 +25,7 @@ from tools.vm.matrix.tests.test_linux_l2 import CHECKOUT, SOURCE
 from tools.vm.matrix.tests.test_matrix import summarize, synthetic_inputs
 from tools.vm.matrix.tests.test_qga import BOOT, read
 from tools.vm.matrix.tests.test_stage_profiles import lines_of, register_evidence
+from tools.vm.matrix.tests.posix_only import controller_only, linux_stand_paths
 
 NEW = '22345678-1234-4234-8234-123456789abc'
 THIRD = '32345678-1234-4234-8234-123456789abc'
@@ -125,6 +126,7 @@ class RebootCase(unittest.TestCase):
         return [(row['action'], row['result']) for row in map(json.loads, raw.splitlines())]
 
 
+@controller_only
 class ChainTests(RebootCase):
     def test_a_planned_guest_reset_and_a_new_boot_id_make_a_chain_of_two_and_the_job_collects(self):
         self.job.submit()
@@ -243,6 +245,7 @@ class ChainTests(RebootCase):
             self.job.collect()
 
 
+@controller_only
 class BudgetTests(RebootCase):
     planned = 2
 
@@ -281,6 +284,7 @@ def at(milliseconds, *, reason='guest-reset', guest=True, micro=0):
     return ResetEvent(guest, reason, T0 + milliseconds * 1000 + micro)
 
 
+@controller_only
 class CoalescedResetTests(RebootCase):
     """Linux resets a machine by several ways in a row and QEMU reports each: those are one reboot."""
 
@@ -413,6 +417,7 @@ class CoalescedResetTests(RebootCase):
         self.assertEqual((None, 0), (self.vm.reset_first_us, self.vm.reset_merged))
 
 
+@controller_only
 class CoalescedBudgetTests(RebootCase):
     planned = 2
 
@@ -435,6 +440,7 @@ class CoalescedBudgetTests(RebootCase):
         self.assertEqual(2, self.vm.guest_resets)
 
 
+@controller_only
 class WaitTests(RebootCase):
     def waiting(self, seconds, *, hook=None):
         sleeps = []
@@ -672,6 +678,7 @@ class SmokeProfileTests(unittest.TestCase):
             self.assertIn(text, script)
         self.assertNotIn('rosetun-helper', script)
 
+    @linux_stand_paths
     def test_the_example_configuration_validates_for_the_smoke_suite(self):
         with (Path(execution.__file__).parent / 'execution-reboot-smoke.example.toml').open('rb') as stream:
             config = execution.validate(tomllib.load(stream))

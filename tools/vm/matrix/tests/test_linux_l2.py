@@ -18,6 +18,7 @@ from tools.vm.matrix.tests import test_jobs
 from tools.vm.matrix.tests.test_jobs import GUEST
 from tools.vm.matrix.tests.test_matrix import synthetic_inputs, summarize
 from tools.vm.matrix.tests.test_qga import BOOT, read
+from tools.vm.matrix.tests.posix_only import controller_only
 
 CHECKOUT = Path(__file__).resolve().parents[4]
 SOURCE = dict(source_sha='a' * 40, source_dirty=False, source_dirty_digest='b' * 64)
@@ -131,6 +132,7 @@ class PackageTests(unittest.TestCase):
         self.assertTrue(source['source_dirty'])
 
 
+@controller_only
 class ExecutionTests(unittest.TestCase):
     def setUp(self):
         self.fixture = test_jobs.JobsTests()

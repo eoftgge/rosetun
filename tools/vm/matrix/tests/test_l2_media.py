@@ -16,6 +16,7 @@ from tools.vm.matrix.tests import test_linux_l2, test_qemu, test_jobs
 from tools.vm.matrix.tests.test_linux_l2 import CHECKOUT, SOURCE, package
 from tools.vm.matrix.tests.test_qga import BOOT
 from tools.vm.matrix.tests.test_jobs import GUEST
+from tools.vm.matrix.tests.posix_only import controller_only
 
 spec = importlib.util.spec_from_file_location('stage_l2', CHECKOUT / 'tools/vm/linux/guest/stage-l2.py')
 helper = importlib.util.module_from_spec(spec)
@@ -188,6 +189,7 @@ class MediaTests(unittest.TestCase):
         self.assertFalse((self.run.directory / 'l2-media.iso').exists())
 
 
+@controller_only
 class ImportTests(unittest.TestCase):
     def setUp(self):
         self.fixture = test_jobs.JobsTests()

@@ -23,6 +23,7 @@ from tools.vm.matrix import cli, lab, lifecycle, qmp_adapter, lab_protocol as wi
 from tools.vm.matrix.tests import test_lifecycle, test_qemu
 from tools.vm.matrix.tests.test_lab import (Endpoint, canary_frames, capture, exchange, healthy, marker_exchange,
                                             pcap)
+from tools.vm.matrix.tests.posix_only import controller_only
 
 STOPPED = ('observer-stopped', 'observer-killed', 'link-down')
 
@@ -158,6 +159,7 @@ class Harness(unittest.TestCase):
         return [c['operation'] for c in self.calls if c['role'] == 'lab']
 
 
+@controller_only
 class ControlRunTests(Harness):
     def test_an_extra_packet_run_is_judged_as_an_ordinary_one_and_passes_only_on_the_detected_leak(self):
         result = self.scenario('extra-packet')

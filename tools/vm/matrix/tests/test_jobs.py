@@ -11,10 +11,12 @@ from tools.vm.matrix.qga import Qga, QgaError
 from tools.vm.matrix.tests.test_qga import Client, Relay, Stream, BOOT, info, read
 from tools.vm.matrix.tests import test_lifecycle
 from tools.vm.matrix.resources import completion_verified
+from tools.vm.matrix.tests.posix_only import controller_only
 
 GUEST = '20261111T010203Z-0123abcd'
 
 
+@controller_only
 class JobsTests(unittest.TestCase):
     def setUp(self):
         self.fixture = test_lifecycle.LifecycleTests()
