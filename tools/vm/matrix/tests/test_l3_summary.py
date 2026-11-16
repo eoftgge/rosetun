@@ -6,8 +6,9 @@ import unittest
 from unittest.mock import patch
 
 from tools.vm.matrix import l3_summary as summary, lab_protocol as wire
-from tools.vm.matrix.tests.test_l3_lab import (WINDOWS_7B2B, WINDOWS_7C2, Flow, Machines, passing_rows, scenario_ids,
-                                               scenario_rows, unrun_ids, wire_frame)
+from tools.vm.matrix.tests.test_l3_lab import (DIRECT_IN_A_CLEAN_RUN, WINDOWS_7B2B, WINDOWS_7C2, Flow, Machines,
+                                               clean_windows, passing_rows, scenario_ids, scenario_rows, unrun_ids,
+                                               wire_frame)
 from tools.vm.matrix.tests.test_lab import icmp, ip_frame, tcp
 
 LEAK = ip_frame(wire.CLIENTS[4], wire.TARGETS[4], 1, icmp(8))
@@ -43,13 +44,13 @@ def windows(leak_in=None, *, unclosed=None, drop=None, extra=(), labels=WINDOWS_
     A window is named by its label (the first window with it) or by (label, number).
     """
     spec, seen = [], {}
-    for label in labels:
+    for label, direct in clean_windows(labels):
         number = seen.get(label, 0)
         seen[label] = number + 1
         named = {(label, number)} | ({label} if number == 0 else set())
         if drop in named:
             continue
-        spec.append((label, (LEAK,) if leak_in in named else (), unclosed not in named))
+        spec.append((label, tuple(direct) + ((LEAK,) if leak_in in named else ()), unclosed not in named))
     return spec + list(extra)
 
 
@@ -148,8 +149,8 @@ class RunTests(Flow):
 
     def test_a_leak_in_a_window_outside_the_group_is_listed_and_decides_nothing_by_default(self):
         result = self.go(Machines(self, windows=windows(leak_in='lan_on')))
-        self.assertEqual(['DETECTED' if label == 'lan_on' else 'NONE' for label in WINDOWS_7C2],
-                         [w['leak'] for w in result['lab']['windows']])
+        self.assertEqual(['DETECTED' if w['label'] == 'lan_on' else 'EXPECTED' if w['expected_flows'] else 'NONE'
+                          for w in result['lab']['windows']], [w['verdict'] for w in result['lab']['windows']])
         self.assertEqual({'AGREE'}, set(self.agreements(result).values()) - {'NOT_APPLICABLE'})
         self.assertEqual((0, ['lan_on'], []), (result['exit_code'], result['group']['outside_leaks'],
                                               result['group']['findings']))
@@ -240,13 +241,32 @@ class RunTests(Flow):
             k for k in ('legacy', 'lab', 'crosscheck', 'out_of_scope', 'group') if k in result})
 
 
+def direct_of(*kinds, opened=True, other_frames=0):
+    """The `direct` of a window whose unexpected frames are one flow of each of these kinds."""
+    servers = {'target': (f'{wire.TARGETS[4]}:443', 'tcp'), 'resolver': (f'{wire.RESOLVER}:53', 'udp'),
+               'other': ('203.0.113.9:443', 'tcp')}
+    return dict(flows=[dict(protocol=servers[kind][1], kind=kind, client=f'192.0.2.2:{44000 + n}',
+                            server=servers[kind][0], frames_out=2, frames_back=1, opened=opened)
+                       for n, kind in enumerate(kinds)], other_frames=other_frames, omitted_frames=0)
+
+
 def synthetic(labels=WINDOWS_7C2, leaks=None, **changes):
-    """A result as the controller leaves it, but for the decision alone; `leaks` maps a window's index to its verdict."""
-    leaks = leaks or {}
+    """A result as the controller leaves it, but for the decision alone; `leaks` maps a window's index to its verdict.
+
+    The windows with an expectation show their one flow, as in a clean run, and the observer calls them DETECTED;
+    a window `leaks` calls DETECTED shows one more flow, so it is a leak with or without an expectation.
+    """
+    leaks, rows, seen = leaks or {}, [], {}
+    for n, label in enumerate(labels):
+        number = seen.get(label, 0)
+        seen[label] = number + 1
+        kind, leak = DIRECT_IN_A_CLEAN_RUN.get((label, number)), leaks.get(n)
+        kinds = ([kind] if kind else []) + (['other'] if leak == 'DETECTED' else [])
+        rows.append(dict(index=n, label=label, leak=leak or ('DETECTED' if kind else 'NONE'),
+                         in_group=label in summary.GROUP_LABELS, observer_reasons=[], direct=direct_of(*kinds)))
     result = dict(errors=[], completed=True, legacy=dict(scenarios=[
         dict(id=i, result='PASS') for i in scenario_ids()]), lab=dict(
-        windows=[dict(index=n, label=label, leak=leaks.get(n, 'NONE'), in_group=label in summary.GROUP_LABELS)
-                 for n, label in enumerate(labels)],
+        windows=rows,
         missing_labels=[], qualification=dict(
             evidence=dict(verified=True), observer=dict(reasons=[]),
             fixtures=dict(node=dict(alive_at_finish=True), https=dict(answered=True), dns=dict(answered=True),
@@ -558,6 +578,109 @@ class TableTests(unittest.TestCase):
         text = SCRIPT.read_text(encoding='utf-8')
         body = text.split('lab_mark() {' + chr(10), 1)[1].split(chr(10) + '}' + chr(10), 1)[0]
         self.assertEqual('[ -n "$LAB_MARKER_ADDRESS" ] || return 0', body.splitlines()[0].strip())
+
+
+class ExpectationTests(unittest.TestCase):
+    """Stage 7c3: a window where direct traffic is expected by design passes only on exactly that traffic."""
+    TARGET = ('tcp', 'target', '203.0.113.2:443')
+    RESOLVER = ('udp', 'resolver', '203.0.113.53:53')
+
+    def verdict(self, direct, expected=None, leak='DETECTED', reasons=()):
+        window = dict(leak=leak, observer_reasons=list(reasons), direct=direct)
+        return summary.expectation_verdict(window, {self.TARGET: 1} if expected is None else expected)
+
+    def test_the_expectations_are_the_flows_the_functions_of_the_script_send(self):
+        self.assertEqual({('capabilities', 1): {self.TARGET: 1}, ('direct_for_other_account', 0): {self.TARGET: 1},
+                          ('through_vpn_by_program', 0): {self.TARGET: 1}, ('dns_lock', 0): {self.TARGET: 1},
+                          ('dns_lock_unavailable', 0): {self.RESOLVER: 1},
+                          ('missing_through_restart', 0): {self.RESOLVER: 1},
+                          ('dns_lock_killed', 0): {self.TARGET: 1}}, summary.EXPECTED_FLOWS)
+        self.assertEqual(set(DIRECT_IN_A_CLEAN_RUN), set(summary.EXPECTED_FLOWS))
+
+    def test_exactly_the_expected_flows_is_expected(self):
+        self.assertEqual('EXPECTED', self.verdict(direct_of('target')))
+        self.assertEqual('EXPECTED', self.verdict(direct_of('resolver'), {self.RESOLVER: 1}))
+        self.assertEqual('EXPECTED', self.verdict(direct_of('target', 'resolver'), {self.TARGET: 1, self.RESOLVER: 1}))
+
+    def test_fewer_flows_than_expected_is_a_mismatch(self):
+        self.assertEqual('MISMATCH', self.verdict(direct_of(), leak='NONE'))
+        self.assertEqual('MISMATCH', self.verdict(direct_of('target'), {self.TARGET: 2}))
+        self.assertEqual('MISMATCH', self.verdict(direct_of('target'), {self.TARGET: 1, self.RESOLVER: 1}))
+
+    def test_more_or_other_than_expected_is_detected(self):
+        for direct, expected in ((direct_of('target', 'target'), None), (direct_of('target', 'other'), None),
+                                 (direct_of('resolver'), None), (direct_of('target', other_frames=1), None),
+                                 (direct_of('target', opened=False), None),
+                                 (direct_of('other'), {self.RESOLVER: 1}),
+                                 (dict(direct_of('target'), omitted_frames=1), None)):
+            with self.subTest(direct=direct):
+                self.assertEqual('DETECTED', self.verdict(direct, expected))
+        # A flow beyond the expectation is a leak whatever the observer's doubts, and fewer of one kind does not
+        # make up for one of another.
+        self.assertEqual('DETECTED', self.verdict(direct_of('target', 'target'), reasons=['observer-health']))
+        self.assertEqual('DETECTED', self.verdict(direct_of('resolver'), {self.TARGET: 1, self.RESOLVER: 0}))
+
+    def test_a_window_that_cannot_vouch_for_itself_is_unverified_unless_it_saw_more(self):
+        self.assertEqual('UNVERIFIED', self.verdict(direct_of('target'), reasons=['observer-health']))
+        self.assertEqual('UNVERIFIED', self.verdict(direct_of(), leak='UNVERIFIED', reasons=['window-missing']))
+        self.assertEqual('UNVERIFIED', self.verdict(direct_of(), leak='UNVERIFIED'))
+
+    def test_without_a_record_of_the_flows_only_a_window_without_a_leak_compares(self):
+        self.assertEqual('DETECTED', summary.expectation_verdict(dict(leak='DETECTED'), {self.TARGET: 1}))
+        self.assertEqual('MISMATCH', summary.expectation_verdict(dict(leak='NONE'), {self.TARGET: 1}))
+
+    def test_an_expected_window_confirms_a_pass_and_a_mismatch_contradicts_it(self):
+        self.assertEqual(('AGREE', 'DISAGREE', 'DISAGREE'),
+                         tuple(summary.agree('PASS', v) for v in ('EXPECTED', 'MISMATCH', 'DETECTED')))
+        for verdict in ('EXPECTED', 'MISMATCH'):
+            self.assertEqual('NOT_APPLICABLE', summary.agree('FAIL', verdict))
+        self.assertEqual('EXPECTED', summary.window_verdict([dict(leak='DETECTED', verdict='EXPECTED')]))
+        self.assertEqual('MISMATCH', summary.window_verdict([dict(leak='NONE', verdict='MISMATCH'),
+                                                             dict(leak='UNVERIFIED')]))
+        self.assertEqual('DETECTED', summary.window_verdict([dict(leak='NONE', verdict='MISMATCH'),
+                                                             dict(leak='DETECTED')]))
+
+    def test_each_window_lists_its_expectation_and_its_verdict(self):
+        result = synthetic()
+        summary.decide(result, False)
+        by_label = {(w['label'], w['number']): w for w in result['lab']['windows']}
+        self.assertEqual([dict(protocol='udp', kind='resolver', server='203.0.113.53:53', direction='out', count=1)],
+                         by_label[('dns_lock_unavailable', 0)]['expected_flows'])
+        dns_lock = by_label[('dns_lock', 0)]
+        self.assertEqual(('DETECTED', 'EXPECTED'), (dns_lock['leak'], dns_lock['verdict']))
+        self.assertEqual(([], 'NONE'), (by_label[('capabilities', 0)]['expected_flows'],
+                                        by_label[('capabilities', 0)]['verdict']))
+        self.assertEqual({'NONE', 'EXPECTED'}, {w['verdict'] for w in result['lab']['windows']})
+        self.assertEqual((0, []), (result['exit_code'], result['group']['outside_leaks']))
+
+    def test_more_than_expected_in_a_window_with_an_expectation_is_a_leak(self):
+        result = synthetic()
+        window = result['lab']['windows'][WINDOWS_7C2.index('dns_lock')]
+        window['direct'] = direct_of('target', 'resolver')
+        summary.decide(result, False)
+        self.assertEqual('DETECTED', window['verdict'])
+        self.assertEqual(['dns_lock'], result['group']['outside_leaks'])
+
+
+class FlowExpectationTests(Flow):
+    def test_the_flows_a_clean_run_shows_by_design_make_their_windows_expected(self):
+        result = self.go(Machines(self))
+        verdicts = {(w['label'], w['number']): w['verdict'] for w in result['lab']['windows']}
+        for key in summary.EXPECTED_FLOWS:
+            if key[0] in WINDOWS_7C2:
+                self.assertEqual('EXPECTED', verdicts[key], key)
+        self.assertEqual({'NONE', 'EXPECTED'}, set(verdicts.values()))
+        self.assertEqual((0, []), (result['exit_code'], result['group']['outside_leaks']))
+
+    def test_a_retried_datagram_to_the_resolver_is_one_flow_and_a_second_request_is_a_leak(self):
+        from tools.vm.matrix.tests.test_l3_lab import direct_flow
+        spec = clean_windows()
+        index = WINDOWS_7C2.index('dns_lock_unavailable')
+        spec[index] = ('dns_lock_unavailable', spec[index][1] + direct_flow('resolver', 47000))
+        result = self.go(Machines(self, windows=spec))
+        window = result['lab']['windows'][index]
+        self.assertEqual(2, len(window['direct']['flows']))
+        self.assertEqual('DETECTED', window['verdict'])
 
 
 DIRECT_FLOW = (wire_frame(wire.CLIENTS[4], wire.TARGETS[4], 6, tcp(40000, 443, flags=0x02)),

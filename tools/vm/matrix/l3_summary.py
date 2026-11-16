@@ -1,11 +1,14 @@
 """The summary of an L3 run in the lab: what the script reported, what the observer saw, and the exit code.
 
 Nothing here accepts anything. The group (stage 7b2b, widened by 7c2) is judged against its windows; the
-other scenarios are listed with what the script reported and are not judged. The release gate stays
-false and the security invariants stay unverified.
+other scenarios are listed with what the script reported and are not judged. A window where direct traffic
+is expected by design is held against that exact traffic (stage 7c3). The release gate stays false and the
+security invariants stay unverified.
 """
 
-from .lab_protocol import CLIENTS, HTTPS_PORT, TARGETS
+from collections import Counter
+
+from .lab_protocol import CLIENTS, HTTPS_PORT, PORTS, RESOLVER, TARGETS
 
 # The scenarios that are judged, by id in scenarios-l3.tsv, in the order the script runs them: those of stage
 # 7b2b, then those of 7c2, every other session under the kill switch where no direct traffic is expected.
@@ -65,6 +68,29 @@ WINDOWS_PER_LABEL = {'reported': 1, 'identity': 1, 'connect_ks': 1, 'capabilitie
                      'inbound': 1, 'killed': 1, 'five_kills': 1, 'upgraded': 1, 'stopped': 1}
 # Labels whose session opens only now and then (OWN_WINDOW_WHEN_OPENED): at most this many windows.
 WINDOWS_AT_MOST = {'forwarded': 1}
+# The flows a window shows beyond the tunnel and the lab's infrastructure by design (stage 7c3), by (label,
+# number): each a flow the test machine opens, (protocol, kind, server) with its exact count. They are fixed
+# here, by the controller, from what the functions of run-l3.sh send; the guest declares nothing. A flow is a
+# connection or an exchange by four-tuple, so a SYN or a datagram sent again stays one flow (curl's TFTP request
+# goes twice when the reply is no TFTP). A window without an entry is judged as before: anything is a leak.
+TARGET_FLOW = ('tcp', 'target', f'{TARGETS[4]}:{HTTPS_PORT}')
+RESOLVER_FLOW = ('udp', 'resolver', f"{RESOLVER}:{PORTS['dns-udp']}")
+EXPECTED_FLOWS = {
+    # `direct_for_other_account`, in the second session of `capabilities` (or its own when that one is gone): two
+    # `route_of`, the curl of the other account goes direct (one connection), the other program through the tunnel.
+    ('capabilities', 1): {TARGET_FLOW: 1},
+    ('direct_for_other_account', 0): {TARGET_FLOW: 1},
+    # `through_vpn_by_program`: the same, the other way round; the other program goes direct.
+    ('through_vpn_by_program', 0): {TARGET_FLOW: 1},
+    # `dns_lock`: UDP 53 is refused locally (no frame), one `direct_https` answers; `dig` goes through the tunnel.
+    ('dns_lock', 0): {TARGET_FLOW: 1},
+    # `dns_lock_unavailable` and `missing_through_restart`: one `expect_udp_dns_sent` each, to the lab resolver.
+    ('dns_lock_unavailable', 0): {RESOLVER_FLOW: 1},
+    ('missing_through_restart', 0): {RESOLVER_FLOW: 1},
+    # `dns_lock_killed`: the `direct_https` of `kill_helper` while the lock still stands; the window closes once
+    # the restarted helper removed the lock, before `expect_udp_dns_sent` and the last `direct_https`.
+    ('dns_lock_killed', 0): {TARGET_FLOW: 1},
+}
 # What the observer must have seen of the lab for the group to mean anything. DoH is required too: the
 # helper's DNS check at connect (`check_cancellable` in `state/dns.rs`) goes through the DoH server that
 # `dns_section` of the sing-box render configures, so no scenario connects without it.
@@ -84,13 +110,49 @@ CONTROL_EXPECTATIONS = {
                    f'{TARGETS[4]}:{HTTPS_PORT}, {CONTROL_SCENARIO} DISAGREE, an ordinary run would exit 1'}
 
 
+def expectation_verdict(window, expected):
+    """The verdict of a window against what the controller expects of it: a Counter of (protocol, kind, server).
+
+    EXPECTED: every unexpected frame belongs to a flow the test machine opened and that the expectation names, in
+    exactly the expected number. DETECTED: anything else, or more of an expected flow, whatever else went wrong.
+    UNVERIFIED: nothing beyond the expectation, but the window cannot vouch for itself. MISMATCH: fewer flows
+    than expected in a window that can, so something the script says went out was not seen.
+    """
+    direct = window.get('direct')
+    if direct is None:
+        # No record of the flows (not an L3 capture): only a window without unexpected frames can be compared.
+        if window['leak'] == 'DETECTED':
+            return 'DETECTED'
+        direct = dict(flows=[], other_frames=0, omitted_frames=0)
+    seen, beyond = Counter(), direct['other_frames'] + direct['omitted_frames']
+    for flow in direct['flows']:
+        key = (flow['protocol'], flow['kind'], flow['server'])
+        if flow['opened'] is True and key in expected:
+            seen[key] += 1
+        else:
+            beyond += 1
+    if beyond or any(seen[key] > count for key, count in expected.items()):
+        return 'DETECTED'
+    if window.get('observer_reasons') or window['leak'] == 'UNVERIFIED':
+        return 'UNVERIFIED'
+    return 'EXPECTED' if seen == Counter(expected) else 'MISMATCH'
+
+
+def expected_flows(expected):
+    """The expectation of a window as the summary lists it."""
+    return [dict(protocol=protocol, kind=kind, server=server, direction='out', count=count)
+            for (protocol, kind, server), count in (expected or {}).items()]
+
+
 def window_verdict(windows):
-    """One verdict for the judged windows of a scenario: a leak anywhere wins, then anything unproven."""
-    verdicts = {window['leak'] for window in windows}
-    for verdict in ('DETECTED', 'UNVERIFIED'):
+    """One verdict for the judged windows of a scenario: a leak anywhere wins, then a mismatch, then anything unproven."""
+    verdicts = {window.get('verdict', window['leak']) for window in windows}
+    for verdict in ('DETECTED', 'MISMATCH', 'UNVERIFIED'):
         if verdict in verdicts:
             return verdict
-    return 'NONE' if verdicts else None
+    if not verdicts:
+        return None
+    return 'EXPECTED' if 'EXPECTED' in verdicts else 'NONE'
 
 
 def window_of(identifier, windows):
@@ -125,11 +187,13 @@ def judged_windows(window, windows):
 
 
 def agree(legacy, verdict):
-    """The rules of the study: a pass is confirmed by a clean window, contradicted by a leak, and
-    unconfirmed by anything else; every other result stays what the script said."""
+    """The rules of the study: a pass is confirmed by a clean window or one that showed exactly what was expected,
+    contradicted by a leak or by expected traffic that was not seen, and unconfirmed by anything else; every other
+    result stays what the script said."""
     if legacy != 'PASS':
         return 'NOT_APPLICABLE'
-    return {'NONE': 'AGREE', 'DETECTED': 'DISAGREE'}.get(verdict, 'UNOBSERVED')
+    return {'NONE': 'AGREE', 'EXPECTED': 'AGREE', 'DETECTED': 'DISAGREE',
+            'MISMATCH': 'DISAGREE'}.get(verdict, 'UNOBSERVED')
 
 
 def crosscheck(rows, windows):
@@ -198,19 +262,27 @@ def decide(result, interrupted):
     A diagnostic run (`diagnostic: true`) never exits below 2, whatever it found: what it found stays
     in `outcome` and `group`, but it is not counted toward a qualification.
     Scenarios outside the group, and windows outside it that cannot be verified, change nothing.
+    A window with an expectation (EXPECTED_FLOWS) has the verdict of the comparison with it: EXPECTED confirms
+    a pass like NONE, MISMATCH contradicts it like DETECTED, and only DETECTED is a leak.
     """
     legacy, lab = result['legacy'], result['lab']
     rows = {row['id']: row for row in legacy['scenarios']}
     windows = lab['windows']
+    # Each window's verdict: the observer's own, or for a window with an expectation the comparison with it.
+    for window, (label, number) in zip(windows, numbered(windows)):
+        limit = window_limit(label)
+        expected = EXPECTED_FLOWS.get((label, number))
+        window.update(number=number, beyond=limit is not None and number >= limit,
+                      expected_flows=expected_flows(expected),
+                      verdict=window['leak'] if expected is None else expectation_verdict(window, expected))
     table = crosscheck(rows, windows)
     result['crosscheck'] = table
     # The windows a row of the cross-check names are judged. A window of a label of the group beyond its
     # count is a session nobody expected, under the kill switch: a leak in it is a finding all the same. A
     # window within the count that no scenario of the group judges (the second `capabilities`) is outside.
     judged = {index for row in table for index in row['windows']}
-    for window, (label, number) in zip(windows, numbered(windows)):
-        limit = window_limit(label)
-        window.update(number=number, judged=window['index'] in judged, beyond=limit is not None and number >= limit)
+    for window in windows:
+        window['judged'] = window['index'] in judged
     lab['window_counts'] = window_counts(windows)
     result['out_of_scope'] = [dict(id=row['id'], legacy_result=row['result'], agreement='out-of-scope')
                               for row in legacy['scenarios'] if row['id'] not in GROUP]
@@ -223,10 +295,10 @@ def decide(result, interrupted):
         findings.append('group-scenario-failed')
     if any(row['agreement'] == 'DISAGREE' for row in table):
         findings.append('pass-contradicted-by-window')
-    if any(window['leak'] == 'DETECTED' and (window['judged'] or window['beyond']) for window in windows):
+    if any(window['verdict'] == 'DETECTED' and (window['judged'] or window['beyond']) for window in windows):
         findings.append('leak-in-group-window')
     outside = [window['label'] for window in windows
-               if window['leak'] == 'DETECTED' and not window['judged'] and not window['beyond']]
+               if window['verdict'] == 'DETECTED' and not window['judged'] and not window['beyond']]
     if outside and LEAK_OUTSIDE_THE_GROUP_FAILS:
         findings.append('leak-outside-group')
     if result['errors']:

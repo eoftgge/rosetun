@@ -138,7 +138,8 @@ class FlowTests(unittest.TestCase):
         plain = self.classify(frames, flows=False)
         asked = self.classify(frames, flows=True)
         self.assertTrue(all('flows' not in window for window in plain['windows']))
-        self.assertEqual(plain, {**asked, 'windows': [{k: v for k, v in w.items() if k not in ('flows', 'clock')}
+        added = ('flows', 'direct', 'clock')
+        self.assertEqual(plain, {**asked, 'windows': [{k: v for k, v in w.items() if k not in added}
                                                       for w in asked['windows']]})
         # The leak is still the verdict of the window; its connection is what the flows say it was.
         self.assertEqual(['NONE', 'DETECTED'], [w['leak'] for w in asked['windows']])
@@ -152,6 +153,42 @@ class FlowTests(unittest.TestCase):
         from tools.vm.matrix.tests.test_lab import udp
         body = [ip_frame(CLIENT, TARGET, 17, udp(42000, 9000, b'q')), ip_frame(CLIENT, TARGET, 1, bytes(8))]
         self.assertEqual([], self.flows(self.classify(self.two((), body)), 1)['connections'])
+
+    def test_the_unexpected_frames_of_a_window_are_grouped_into_the_flows_the_test_machine_opened(self):
+        from tools.vm.matrix.tests.test_lab import icmp, udp
+        retried = ip_frame(CLIENT, wire.RESOLVER, 17, udp(42000, 53, b'q'))
+        reply = ip_frame(wire.RESOLVER, CLIENT, 17, udp(53, 42000, b'r'), src=wire.MACS['lab'], dst=wire.MACS['test'])
+        body = [out(GATEWAY, wire.NODE_PORT, flags=SYN), out(TARGET, 443, sport=44000, flags=SYN),
+                back(TARGET, 443, dport=44000, flags=SYN_ACK), out(TARGET, 443, sport=44000, data=b'x'),
+                retried, reply, retried, reply, back(TARGET, 443, dport=45000, data=b'late'),
+                ip_frame(CLIENT, TARGET, 1, icmp(8))]
+        result = self.classify(self.two((), body))
+        window = result['windows'][1]
+        self.assertEqual(9, window['categories']['unexpected'])
+        self.assertEqual(dict(flows=[
+            dict(protocol='tcp', kind='target', client=CLIENT + ':44000', server=TARGET + ':443', frames_out=2,
+                 frames_back=1, opened=True),
+            dict(protocol='udp', kind='resolver', client=CLIENT + ':42000', server=wire.RESOLVER + ':53',
+                 frames_out=2, frames_back=2, opened=True),
+            dict(protocol='tcp', kind='target', client=CLIENT + ':45000', server=TARGET + ':443', frames_out=0,
+                 frames_back=1, opened=False)], other_frames=1, omitted_frames=0), window['direct'])
+        # The node's connection is the tunnel, not a flow of unexpected frames.
+        self.assertEqual(dict(flows=[], other_frames=0, omitted_frames=0), result['windows'][0]['direct'])
+
+    def test_unexpected_frames_beyond_the_kept_flows_are_counted(self):
+        from tools.vm.matrix.tests.test_lab import udp
+        body = [ip_frame(CLIENT, TARGET, 17, udp(40000 + n, 9999, b'q')) for n in range(wire.FLOW_LIMIT + 3)]
+        direct = self.classify(self.two((), body))['windows'][1]['direct']
+        self.assertEqual((wire.FLOW_LIMIT, 3, 0), (len(direct['flows']), direct['omitted_frames'],
+                                                   direct['other_frames']))
+        self.assertEqual({'other'}, {flow['kind'] for flow in direct['flows']})
+
+    def test_a_udp_exchange_the_other_side_began_and_a_resolver_on_another_port_are_no_expected_kind(self):
+        from tools.vm.matrix.tests.test_lab import udp
+        body = [ip_frame(wire.RESOLVER, CLIENT, 17, udp(53, 41000, b'r'), src=wire.MACS['lab'], dst=wire.MACS['test']),
+                ip_frame(CLIENT, wire.RESOLVER, 17, udp(41001, 5353, b'q'))]
+        flows = self.classify(self.two((), body))['windows'][1]['direct']['flows']
+        self.assertEqual([('resolver', False), ('other', True)], [(f['kind'], f['opened']) for f in flows])
 
     def test_the_timestamps_of_a_capture_do_not_change_how_it_is_read(self):
         frames = self.two((), [out(GATEWAY, wire.NODE_PORT, flags=SYN)])

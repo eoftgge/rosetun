@@ -1030,6 +1030,67 @@ class _Flows:
         return dict(connections=list(self.table.values()), omitted=len(self.omitted))
 
 
+# What a flow of unexpected frames is (stage 7c3): a TCP connection to the HTTPS target, a UDP exchange with the
+# lab resolver on port 53, or anything else. The controller compares them with what it expects of a window.
+DIRECT_KINDS = ('target', 'resolver', 'other')
+
+
+def _direct_kind(protocol, peer):
+    address, port = peer
+    if protocol == 'tcp' and port == HTTPS_PORT and address in (TARGETS[4], TARGETS[6]):
+        return 'target'
+    if protocol == 'udp' and port == PORTS['dns-udp'] and address == RESOLVER:
+        return 'resolver'
+    return 'other'
+
+
+class _Direct:
+    """The `unexpected` frames of one window, by flow, so the controller can hold them against an expectation.
+
+    A flow is a TCP connection or a UDP exchange of the test machine, by protocol and four-tuple, with the frames
+    each way. `opened` says the test machine started it inside the window: a SYN without ACK that it sent, or for
+    UDP an outbound first frame. A retransmission stays in its flow. Every other unexpected frame (ARP, ICMP, a
+    fragment, a frame that names no address of the test machine) is counted in `other_frames`, and one beyond
+    `FLOW_LIMIT` flows in `omitted_frames`, so the three account for every unexpected frame of the window.
+    """
+
+    def __init__(self):
+        self.table, self.other, self.omitted = {}, 0, 0
+
+    def add(self, frame):
+        protocol = {6: 'tcp', 17: 'udp'}.get(frame.proto)
+        tests = (CLIENTS[4], CLIENTS[6])
+        if frame.fragment or frame.arp is not None or protocol is None or frame.sport is None:
+            self.other += 1
+            return
+        if frame.src in tests:
+            outbound, client, peer = True, (frame.src, frame.sport), (frame.dst, frame.dport)
+        elif frame.dst in tests:
+            outbound, client, peer = False, (frame.dst, frame.dport), (frame.src, frame.sport)
+        else:
+            self.other += 1
+            return
+        key = (protocol, client, peer)
+        row = self.table.get(key)
+        if row is None:
+            if len(self.table) >= FLOW_LIMIT:
+                self.omitted += 1
+                return
+            row = self.table[key] = dict(protocol=protocol, kind=_direct_kind(protocol, peer),
+                                         client=_endpoint(*client), server=_endpoint(*peer), frames_out=0,
+                                         frames_back=0, opened=protocol == 'udp' and outbound)
+        row['frames_out' if outbound else 'frames_back'] += 1
+        if protocol == 'tcp' and outbound and (frame.flags or 0) & (TCP_SYN | TCP_ACK) == TCP_SYN:
+            row['opened'] = True
+
+    def document(self):
+        return dict(flows=list(self.table.values()), other_frames=self.other, omitted_frames=self.omitted)
+
+
+def _no_direct():
+    return dict(flows=[], other_frames=0, omitted_frames=0)
+
+
 # The link between the lab node and the routed namespace, and the most flows kept of what crosses it.
 ROUTE_INTERFACE = 'rt-route'
 ROUTE_FLOW_LIMIT = 512
@@ -1227,7 +1288,8 @@ def classify_windows(raw, run, windows_expected, *, health, ready, allowances=()
     scenarios of that label only. Every row says whether its label is in the group.
 
     With `flows` every window row also has `flows`: the TCP connections of the test machine inside
-    it (`_Flows`), from the headers of the frames already captured. They change no verdict.
+    it (`_Flows`), from the headers of the frames already captured, and `direct`: its `unexpected` frames by
+    flow (`_Direct`). Neither changes the verdict here; the controller holds `direct` against what it expects.
     """
     found_mode = windows_expected is None
     if found_mode:
@@ -1254,6 +1316,7 @@ def classify_windows(raw, run, windows_expected, *, health, ready, allowances=()
         if index not in windows:
             windows[index] = dict(categories=_window_counts(names, tunnel_port), unexpected=[], reasons=[],
                                   labels=[], first=None, last=None, flows=_Flows(tunnel_port) if flows else None,
+                                  direct=_Direct() if flows else None,
                                   seen={(word, kind): [] for word in WINDOW_WORDS for kind in ('request', 'response')})
         return windows[index]
 
@@ -1303,6 +1366,8 @@ def classify_windows(raw, run, windows_expected, *, health, ready, allowances=()
             _count(windows[current]['categories'], category, item, windows[current]['unexpected'], 'unexpected')
             if flows and item.proto == 6 and not item.fragment:
                 windows[current]['flows'].add(item, times[position] if position < len(times) else None)
+            if flows and category == 'unexpected':
+                windows[current]['direct'].add(item)
     shared = []
     if problem:
         shared.append('invalid-pcap:' + problem)
@@ -1345,6 +1410,7 @@ def classify_windows(raw, run, windows_expected, *, health, ready, allowances=()
         results.append(dict(index=index, label=label, expected='NONE', leak=leak, leak_reason=reason,
                             observer_reasons=reasons, categories=row['categories'], unexpected=row['unexpected'],
                             **({'flows': row['flows'].document() if row.get('flows') else dict(connections=[], omitted=0),
+                                'direct': row['direct'].document() if row.get('direct') else _no_direct(),
                                 'clock': _window_clock(row, times)} if flows else {})))
     answer = dict(windows=results, outside_window=dict(categories=outside, frames=outside_frames),
                   extra_windows=extra, observer_reasons=shared)

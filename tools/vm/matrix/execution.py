@@ -60,7 +60,7 @@ def lab_of(config):
 def validate_lab(block, l3, job_timeout):
     """The lab machine's image, the pinned fixtures of stage 7b1 and the certificates of stage 7b2a."""
     from .lab import validate_tunnel
-    from .lab_protocol import GATEWAYS, JOB_TIMEOUT_SECONDS, TARGETS
+    from .lab_protocol import GATEWAYS, JOB_TIMEOUT_SECONDS, RESOLVER, TARGETS
     exact(block, ('image', 'tunnel', 'https_cert_sha256', 'doh_cert_sha256'))
     exact(block['image'], [f.name for f in fields(ImageDescriptor)])
     validate_tunnel(block['tunnel'])
@@ -71,6 +71,9 @@ def validate_lab(block, l3, job_timeout):
     if (l3['host_address'], l3['probe_address'], l3['node_port']) != (
             GATEWAYS[4], TARGETS[4], block['tunnel']['node_port']):
         raise ValueError('L3 addresses and node port must be those of the lab')
+    # The expected UDP 53 of the DNS-lock windows is an exchange with the lab resolver (EXPECTED_FLOWS).
+    if l3['dns_probe_address'] != RESOLVER:
+        raise ValueError('the L3 DNS probe address must be the lab resolver')
     if job_timeout > JOB_TIMEOUT_SECONDS:
         raise ValueError('the lab capture covers a job of at most ' + str(JOB_TIMEOUT_SECONDS) + ' seconds')
 

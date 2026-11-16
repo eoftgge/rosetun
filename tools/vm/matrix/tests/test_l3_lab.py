@@ -109,6 +109,7 @@ class ConfigTests(unittest.TestCase):
                    lambda c: c['l3'].update(node_port=8389),
                    lambda c: c['l3'].update(host_address='192.0.2.9'),
                    lambda c: c['l3'].update(probe_address='203.0.113.9'),
+                   lambda c: c['l3'].update(dns_probe_address='203.0.113.2'),
                    lambda c: c['lab'].update(image='not a table'))
         for change in changes:
             with self.subTest(change=change):
@@ -318,12 +319,10 @@ WINDOWS_7C2 = tuple('inbound' if label == 'forwarded' else label for label in WI
 
 class Machines:
     """Fake machines, a fake lab guest and the evidence the lab machine leaves on its disk."""
-    # (label, frames inside the window, closed): the windows of a clean run.
-    CLEAN = tuple((label, ()) for label in WINDOWS_7C2)
-
     def __init__(self, test, windows=None, fault=None, rows=None, evidence=None, fixtures=None):
         self.test, self.fault = test, fault
-        self.windows = list(self.CLEAN if windows is None else windows)
+        # (label, frames inside the window, closed): the windows of a clean run by default.
+        self.windows = list(clean_windows() if windows is None else windows)
         self.rows, self.evidence, self.fixtures = rows, evidence, fixtures or {}
         self.events, self.calls, self.vms, self.guests, self.reads, self.imports = [], [], {}, [], [], []
         self.job_options = {}
@@ -558,6 +557,38 @@ def wire_frame(src, dst, proto, body, reply=False):
     return ip_frame(src, dst, proto, body)
 
 
+def direct_flow(kind, port):
+    """The frames of one flow the test machine opens past the tunnel: to the HTTPS target or the lab resolver."""
+    from tools.vm.matrix.tests.test_lab import tcp
+    if kind == 'target':
+        return (wire_frame(wire.CLIENTS[4], wire.TARGETS[4], 6, tcp(port, 443, flags=0x02)),
+                wire_frame(wire.TARGETS[4], wire.CLIENTS[4], 6, tcp(443, port, flags=0x12), reply=True),
+                wire_frame(wire.CLIENTS[4], wire.TARGETS[4], 6, tcp(port, 443, b'hello', 0x18)))
+    # curl's TFTP request goes twice when the reply is no TFTP, as the lab resolver's is.
+    request = wire_frame(wire.CLIENTS[4], wire.RESOLVER, 17, udp(port, 53, b'\x00\x01rosetun-l3\x00octet\x00'))
+    reply = wire_frame(wire.RESOLVER, wire.CLIENTS[4], 17, udp(53, port, b'\x00\x01\x81\x01'), reply=True)
+    return request, reply, request, reply
+
+
+# What the windows with an expectation (stage 7c3) show in a clean run, by (label, number): one flow each.
+DIRECT_IN_A_CLEAN_RUN = {('capabilities', 1): 'target', ('direct_for_other_account', 0): 'target',
+                         ('through_vpn_by_program', 0): 'target', ('dns_lock', 0): 'target',
+                         ('dns_lock_unavailable', 0): 'resolver', ('missing_through_restart', 0): 'resolver',
+                         ('dns_lock_killed', 0): 'target'}
+
+
+def clean_windows(labels=WINDOWS_7C2, direct=None):
+    """(label, frames) of a run with these windows: nothing in them but the flows they are expected to show."""
+    direct = DIRECT_IN_A_CLEAN_RUN if direct is None else direct
+    spec, seen = [], {}
+    for index, label in enumerate(labels):
+        number = seen.get(label, 0)
+        seen[label] = number + 1
+        kind = direct.get((label, number))
+        spec.append((label, direct_flow(kind, 44000 + index) if kind else ()))
+    return spec
+
+
 class Flow(unittest.TestCase):
     JOB = 900
 
@@ -685,7 +716,7 @@ class OrderTests(Flow):
         for role, run in machines.runs.items():
             self.assertEqual(identities['lab_id'] + '-' + role, run.directory.name)
             saved = json.loads((run.directory / 'execution-summary.json').read_bytes())
-            self.assertEqual(result, saved)
+            self.assertEqual(json.loads(json.dumps(result)), saved)
             linkage = json.loads((run.directory / 'execution-identity.json').read_bytes())
             self.assertEqual((identities['lab_id'], role), (linkage['lab_id'], linkage['role']))
         test_identity = json.loads((machines.runs['test'].directory / 'execution-identity.json').read_bytes())
@@ -703,7 +734,9 @@ class OrderTests(Flow):
         machines = Machines(self)
         result = self.go(machines)
         self.assertEqual(list(WINDOWS_7C2), [w['label'] for w in result['lab']['windows']])
-        self.assertEqual(['NONE'] * 20, [w['leak'] for w in result['lab']['windows']])
+        self.assertEqual(['EXPECTED' if (w['label'], w['number']) in DIRECT_IN_A_CLEAN_RUN else 'NONE'
+                          for w in result['lab']['windows']], [w['verdict'] for w in result['lab']['windows']])
+        self.assertEqual(6, [w['verdict'] for w in result['lab']['windows']].count('EXPECTED'))
         self.assertEqual(len(scenario_ids()), len(result['legacy']['scenarios']))
         self.assertEqual(len(unrun_ids()), sum(r['result'] == 'SKIP' for r in result['legacy']['scenarios']))
         self.assertEqual('PASS', result['legacy']['summary']['overall'])
