@@ -190,6 +190,73 @@ class FlowTests(unittest.TestCase):
         flows = self.classify(self.two((), body))['windows'][1]['direct']['flows']
         self.assertEqual([('resolver', False), ('other', True)], [(f['kind'], f['opened']) for f in flows])
 
+    def neighbor_request(self, target='192.0.2.250', **changes):
+        from tools.vm.matrix.tests.test_lab import arp
+        fields = dict(src=wire.MACS['test'], dst=wire.BROADCAST, sha=wire.MACS['test'], tha='00:00:00:00:00:00')
+        sender = changes.pop('sender', CLIENT)
+        return arp(changes.pop('op', 1), sender, target, **(fields | changes))
+
+    def test_the_requests_of_the_test_machine_for_a_neighbor_are_one_flow_however_many_it_sends(self):
+        for count in (1, 3, 6):
+            with self.subTest(count=count):
+                direct = self.classify(self.two((), [self.neighbor_request()] * count))['windows'][1]['direct']
+                self.assertEqual(dict(flows=[dict(protocol='arp', kind='neighbor', client=CLIENT, server='192.0.2.250',
+                                                  frames_out=count, frames_back=0, opened=True)],
+                                      other_frames=0, omitted_frames=0), direct)
+        # Two addresses asked for are two flows.
+        direct = self.classify(self.two((), [self.neighbor_request(), self.neighbor_request('192.0.2.251')]))
+        self.assertEqual(['192.0.2.250', '192.0.2.251'], [f['server'] for f in direct['windows'][1]['direct']['flows']])
+
+    def test_an_arp_frame_that_only_looks_like_a_request_for_a_neighbor_is_no_flow(self):
+        stranger, zero = '00:00:5e:00:53:70', '00:00:00:00:00:00'
+        cases = {'an-answer-to-the-test-machine': self.neighbor_request(op=2, sender='192.0.2.250', target=CLIENT,
+                                                                        src=stranger, dst=wire.MACS['test'],
+                                                                        sha=stranger, tha=wire.MACS['test']),
+                 'a-request-from-another-address': self.neighbor_request(sender='192.0.2.99'),
+                 'a-request-to-one-machine': self.neighbor_request(dst=stranger),
+                 'a-request-naming-another-hardware-address': self.neighbor_request(sha=stranger),
+                 'a-request-with-a-target-hardware-address': self.neighbor_request(tha=stranger),
+                 'an-announcement': self.neighbor_request(target=CLIENT),
+                 'a-request-of-another-machine-for-the-test-machine': self.neighbor_request(
+                     sender='192.0.2.250', target=CLIENT, src=stranger, sha=stranger)}
+        for name, frame in cases.items():
+            with self.subTest(name=name):
+                window = self.classify(self.two((), [frame]))['windows'][1]
+                self.assertEqual(('DETECTED', dict(flows=[], other_frames=1, omitted_frames=0)),
+                                 (window['leak'], window['direct']))
+        self.assertEqual(zero, wire.ZERO_MAC)
+
+    def unreachable(self, datagram, source=GATEWAY, kind=3, **macs):
+        from tools.vm.matrix.tests.test_lab import icmp
+        macs = dict(src=wire.MACS['lab'], dst=wire.MACS['test']) | macs
+        return ip_frame(source, CLIENT, 1, icmp(kind, bytes(4) + datagram[14:14 + 28]), **macs)
+
+    def test_the_router_saying_a_datagram_of_a_flow_has_no_route_is_a_frame_back_of_that_flow(self):
+        from tools.vm.matrix.tests.test_lab import udp
+        datagram = ip_frame(CLIENT, '10.254.254.1', 17, udp(42000, 69, b'q'))
+        body = [datagram, self.unreachable(datagram), datagram, self.unreachable(datagram)]
+        direct = self.classify(self.two((), body))['windows'][1]['direct']
+        self.assertEqual(dict(flows=[dict(protocol='udp', kind='other', client=CLIENT + ':42000',
+                                          server='10.254.254.1:69', frames_out=2, frames_back=2, opened=True)],
+                              other_frames=0, omitted_frames=0), direct)
+
+    def test_an_error_that_belongs_to_no_flow_of_the_window_or_comes_from_elsewhere_is_no_frame_of_a_flow(self):
+        from tools.vm.matrix.tests.test_lab import udp
+        datagram = ip_frame(CLIENT, '10.254.254.1', 17, udp(42000, 69, b'q'))
+        other = ip_frame(CLIENT, '10.254.254.1', 17, udp(42001, 69, b'q'))
+        syn = out('10.254.254.1', 69, sport=42000, flags=SYN)
+        cases = {'before-its-datagram': [self.unreachable(datagram), datagram],
+                 'about-another-port': [datagram, self.unreachable(other)],
+                 'about-a-tcp-segment': [datagram, self.unreachable(syn)],
+                 'from-another-address': [datagram, self.unreachable(datagram, source=TARGET)],
+                 'time-exceeded': [datagram, self.unreachable(datagram, kind=11)],
+                 'from-another-machine': [datagram, self.unreachable(datagram, src='00:00:5e:00:53:70')]}
+        for name, body in cases.items():
+            with self.subTest(name=name):
+                direct = self.classify(self.two((), body))['windows'][1]['direct']
+                self.assertEqual(1, direct['other_frames'])
+                self.assertEqual([0], [f['frames_back'] for f in direct['flows'] if f['client'] == CLIENT + ':42000'])
+
     def test_the_timestamps_of_a_capture_do_not_change_how_it_is_read(self):
         frames = self.two((), [out(GATEWAY, wire.NODE_PORT, flags=SYN)])
         self.assertEqual(list(wire.records(timed(frames))), frames)

@@ -567,9 +567,24 @@ def wire_frame(src, dst, proto, body, reply=False):
     return ip_frame(src, dst, proto, body)
 
 
+LAN_NEIGHBOR, BEHIND_ROUTER = '192.0.2.250', '10.254.254.1'
+
+
 def direct_flow(kind, port):
-    """The frames of one flow the test machine opens past the tunnel: to the HTTPS target or the lab resolver."""
-    from tools.vm.matrix.tests.test_lab import tcp
+    """The frames of one flow the test machine opens past the tunnel: to the HTTPS target, the lab resolver, a
+    neighbor of the own network nobody holds (its ARP requests) or a private address behind the gateway."""
+    from tools.vm.matrix.tests.test_lab import arp, icmp, ip_frame, tcp
+    if kind == 'neighbor':
+        # As every lab run showed: three broadcast requests, no answer, so the datagram never leaves.
+        request = arp(1, wire.CLIENTS[4], LAN_NEIGHBOR, src=wire.MACS['test'], dst=wire.BROADCAST,
+                      sha=wire.MACS['test'], tha='00:00:00:00:00:00')
+        return request, request, request
+    if kind == 'behind':
+        # curl's TFTP request sent twice, and the lab's router saying each time that it has no route there.
+        datagram = wire_frame(wire.CLIENTS[4], BEHIND_ROUTER, 17, udp(port, 69, b'\x00\x01rosetun-l3\x00octet\x00'))
+        error = ip_frame(wire.GATEWAYS[4], wire.CLIENTS[4], 1, icmp(3, bytes(4) + datagram[14:14 + 28]),
+                         src=wire.MACS['lab'], dst=wire.MACS['test'])
+        return datagram, error, datagram, error
     if kind == 'target':
         return (wire_frame(wire.CLIENTS[4], wire.TARGETS[4], 6, tcp(port, 443, flags=0x02)),
                 wire_frame(wire.TARGETS[4], wire.CLIENTS[4], 6, tcp(443, port, flags=0x12), reply=True),
@@ -580,11 +595,13 @@ def direct_flow(kind, port):
     return request, reply, request, reply
 
 
-# What the windows with an expectation (stage 7c3) show in a clean run, by (label, number): one flow each.
-DIRECT_IN_A_CLEAN_RUN = {('capabilities', 1): 'target', ('direct_for_other_account', 0): 'target',
-                         ('through_vpn_by_program', 0): 'target', ('dns_lock', 0): 'target',
-                         ('dns_lock_unavailable', 0): 'resolver', ('missing_through_restart', 0): 'resolver',
-                         ('dns_lock_killed', 0): 'target', ('specific_bypass_dns_lock', 0): 'target'}
+# What the windows with an expectation (stages 7c3 and 7e) show in a clean run, by (label, number): the kinds of
+# their flows, one flow each.
+DIRECT_IN_A_CLEAN_RUN = {('capabilities', 1): ('target',), ('direct_for_other_account', 0): ('target',),
+                         ('through_vpn_by_program', 0): ('target',), ('dns_lock', 0): ('target',),
+                         ('dns_lock_unavailable', 0): ('resolver',), ('missing_through_restart', 0): ('resolver',),
+                         ('dns_lock_killed', 0): ('target',), ('specific_bypass_dns_lock', 0): ('target',),
+                         ('lan_on', 0): ('neighbor',), ('lan_private_open', 0): ('behind', 'neighbor')}
 
 
 def clean_windows(labels=WINDOWS_7C3, direct=None):
@@ -594,8 +611,10 @@ def clean_windows(labels=WINDOWS_7C3, direct=None):
     for index, label in enumerate(labels):
         number = seen.get(label, 0)
         seen[label] = number + 1
-        kind = direct.get((label, number))
-        spec.append((label, direct_flow(kind, 44000 + index) if kind else ()))
+        frames = ()
+        for kind in direct.get((label, number), ()):
+            frames += direct_flow(kind, 44000 + index)
+        spec.append((label, frames))
     return spec
 
 
@@ -746,7 +765,7 @@ class OrderTests(Flow):
         self.assertEqual(list(WINDOWS_7C3), [w['label'] for w in result['lab']['windows']])
         self.assertEqual(['EXPECTED' if (w['label'], w['number']) in DIRECT_IN_A_CLEAN_RUN else 'NONE'
                           for w in result['lab']['windows']], [w['verdict'] for w in result['lab']['windows']])
-        self.assertEqual(7, [w['verdict'] for w in result['lab']['windows']].count('EXPECTED'))
+        self.assertEqual(9, [w['verdict'] for w in result['lab']['windows']].count('EXPECTED'))
         self.assertEqual(len(scenario_ids()), len(result['legacy']['scenarios']))
         self.assertEqual(len(unrun_ids()), sum(r['result'] == 'SKIP' for r in result['legacy']['scenarios']))
         self.assertEqual('PASS', result['legacy']['summary']['overall'])

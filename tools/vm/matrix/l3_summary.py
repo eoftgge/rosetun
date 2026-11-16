@@ -12,7 +12,7 @@ from .lab_protocol import CLIENTS, HTTPS_PORT, PORTS, RESOLVER, TARGETS
 
 # The scenarios that are judged, by id in scenarios-l3.tsv: those of stage 7b2b, then those of 7c2, every other
 # session under the kill switch where no direct traffic is expected, then those of 7c3, whose windows show direct
-# traffic by design and are held against EXPECTED_FLOWS.
+# traffic by design and are held against EXPECTED_FLOWS, then the Local network sessions of 7e.
 GROUP = ('preflight.identity', 'preflight.accounts', 'preflight.no-foreign-service', 'preflight.tools',
          'preflight.baseline', 'install.service', 'protection.reported', 'engine.identity', 'engine.files',
          'killswitch.direct-blocked', 'killswitch.tunnel-passes', 'lan.off', 'killswitch.foreign-table',
@@ -21,7 +21,7 @@ GROUP = ('preflight.identity', 'preflight.accounts', 'preflight.no-foreign-servi
          'crash.helper-killed', 'crash.open-network', 'crash.five-kills', 'upgrade.restart', 'upgrade.unprotected',
          'stop.removes-table', 'rules.direct-other-account', 'rules.proxy-default-direct', 'dnslock.direct-blocked',
          'dnslock.tunnel-passes', 'dnslock.unavailable', 'dnslock.unavailable-restart', 'crash.dns-lock-killed',
-         'route.specific-bypass')
+         'route.specific-bypass', 'lan.on', 'lan.private-closed', 'lan.private-open', 'lan.follows-change')
 # The scenarios of the two-hop exits: they have no check yet (evidence class `not-run`, not required), `run-l3.sh`
 # records each as SKIP "UNRUN: ..." before any session opens, so they belong to no group and no window.
 TWO_HOP = ('two-hop.positive.http.ipv4', 'two-hop.positive.http.ipv6', 'two-hop.positive.https.ipv4',
@@ -70,6 +70,9 @@ WINDOW_OF = {
     # Judged in its kill-switch session only, as its result is: the session with a DNS lock alone that follows
     # (`specific_bypass_dns_lock`) adds to the note and stays outside the group, held against its expectation.
     'route.specific-bypass': ('specific_bypass', 0),
+    # Stage 7e. Each function of `scenario_lan_on` opens its own session and ends it.
+    'lan.on': ('lan_on', 0), 'lan.private-closed': ('lan_private_closed', 0),
+    'lan.private-open': ('lan_private_open', 0), 'lan.follows-change': ('lan_follows_change', 0),
     **dict.fromkeys(TWO_HOP),
 }
 # A scenario that opens a session of its own only when none is open: `forwarded` connects only if `inbound`
@@ -84,7 +87,8 @@ GROUP_LABELS = tuple(dict.fromkeys(window[0] for window in WINDOW_OF.values() if
 WINDOWS_PER_LABEL = {'reported': 1, 'identity': 1, 'connect_ks': 1, 'capabilities': 2, 'restart_guarded': 1,
                      'inbound': 1, 'killed': 1, 'five_kills': 1, 'upgraded': 1, 'stopped': 1,
                      'through_vpn_by_program': 1, 'dns_lock': 1, 'dns_lock_unavailable': 1,
-                     'missing_through_restart': 1, 'dns_lock_killed': 1, 'specific_bypass': 1}
+                     'missing_through_restart': 1, 'dns_lock_killed': 1, 'specific_bypass': 1, 'lan_on': 1,
+                     'lan_private_closed': 1, 'lan_private_open': 1, 'lan_follows_change': 1}
 # Labels whose session opens only now and then (OWN_WINDOW_WHEN_OPENED, or the DNS-lock session of
 # `route.specific-bypass`, which runs only after its kill-switch part passed): at most this many windows.
 WINDOWS_AT_MOST = {'forwarded': 1, 'direct_for_other_account': 1, 'specific_bypass_dns_lock': 1}
@@ -95,6 +99,17 @@ WINDOWS_AT_MOST = {'forwarded': 1, 'direct_for_other_account': 1, 'specific_bypa
 # goes twice when the reply is no TFTP). A window without an entry is judged as before: anything is a leak.
 TARGET_FLOW = ('tcp', 'target', f'{TARGETS[4]}:{HTTPS_PORT}')
 RESOLVER_FLOW = ('udp', 'resolver', f"{RESOLVER}:{PORTS['dns-udp']}")
+# The two addresses of Local network in run-l3.sh with the lab's addresses (stage 7e). `neighbor_address` takes
+# the first of .250, .251, .252 in the test machine's /24 that is neither its own address nor the host node's:
+# with 192.0.2.2 and 192.0.2.1, 192.0.2.250, which nobody holds, so the TFTP datagram to it never gets past the
+# ARP requests for it. `behind_router_address` takes the first private address outside the test machine's first
+# two octets: 10.254.254.1, which the lab routes nowhere, so its router answers each datagram with a destination
+# unreachable (part of the flow). TFTP is port 69.
+LAN_NEIGHBOR = CLIENTS[4].rsplit('.', 1)[0] + '.250'
+BEHIND_ROUTER = '10.254.254.1'
+TFTP_PORT = 69
+NEIGHBOR_FLOW = ('arp', 'neighbor', LAN_NEIGHBOR)
+BEHIND_ROUTER_FLOW = ('udp', 'other', f'{BEHIND_ROUTER}:{TFTP_PORT}')
 EXPECTED_FLOWS = {
     # `direct_for_other_account`, in the second session of `capabilities` (or its own when that one is gone): two
     # `route_of`, the curl of the other account goes direct (one connection), the other program through the tunnel.
@@ -114,16 +129,21 @@ EXPECTED_FLOWS = {
     # `route_of` leaves directly (a known weakness, characterised, not fixed). The kill-switch session before it
     # has no entry: its `tunnel_https` and `direct_https` are both dropped in the guest and show nothing.
     ('specific_bypass_dns_lock', 0): {TARGET_FLOW: 1},
+    # Stage 7e. `lan_on`: one `expect_udp_sent_to` the neighbor, which leaves the guest and asks for it on the link
+    # (as many requests as the kernel sends, one flow); the host node and the probe address are dropped in the guest.
+    ('lan_on', 0): {NEIGHBOR_FLOW: 1},
+    # `lan_private_open`: one `expect_udp_sent_to` the private address behind the gateway (one source port, sent
+    # again without an answer), one to the neighbor; UDP 53 there, the host node and the probe are dropped in the
+    # guest. `lan_private_closed` and `lan_follows_change` send nothing past the guest and have no entry.
+    ('lan_private_open', 0): {BEHIND_ROUTER_FLOW: 1, NEIGHBOR_FLOW: 1},
 }
 # What the observer must have seen of the lab for the group to mean anything. DoH is required too: the
 # helper's DNS check at connect (`check_cancellable` in `state/dns.rs`) goes through the DoH server that
 # `dns_section` of the sing-box render configures, so no scenario connects without it.
 REQUIRED_FIXTURES = ('node', 'https', 'dns', 'doh')
-# Whether a leak seen in a window outside the group changes the exit code. Since stage 7c3 the windows outside
-# the group are those of Local network (`lan_on`, `lan_private_closed`, `lan_private_open`,
-# `lan_follows_change`), which let the own network through by design and have no host of their own in the lab
-# yet, the one of `ipv6.neighbor` when it runs, and the DNS-lock session of `route.specific-bypass`, which only
-# adds to that scenario's note: they are listed (`group.outside_leaks`, and DETECTED in
+# Whether a leak seen in a window outside the group changes the exit code. Since stage 7e the windows outside
+# the group are the one of `ipv6.neighbor` when it runs and the DNS-lock session of `route.specific-bypass`,
+# which only adds to that scenario's note: they are listed (`group.outside_leaks`, and DETECTED in
 # `lab.windows`) and do not decide the code. Set this to make any leak in any window exit 1.
 LEAK_OUTSIDE_THE_GROUP_FAILS = False
 # The positive control of stage 7c1: the script stops the service inside the window of the kill-switch
@@ -276,8 +296,7 @@ def decide(result, interrupted):
     the fixtures answered, the evidence disk is verified and both machines completed.
     1: the run found something: a scenario of the group failed, a pass is contradicted by a window
     (DISAGREE), or a leak in a judged window or in a window of a label of the group beyond its count (a
-    leak in any other window, a Local network window among them, counts only if
-    LEAK_OUTSIDE_THE_GROUP_FAILS). A seen leak and a failed check stand whatever else went wrong, so 1
+    leak in any other window counts only if LEAK_OUTSIDE_THE_GROUP_FAILS). A seen leak and a failed check stand whatever else went wrong, so 1
     comes before 2.
     2: nothing was found but the run cannot vouch for itself: a controller error, a machine that did
     not stop, no report, an unverified evidence disk, a fixture that did not answer, an unclean

@@ -1031,8 +1031,10 @@ class _Flows:
 
 
 # What a flow of unexpected frames is (stage 7c3): a TCP connection to the HTTPS target, a UDP exchange with the
-# lab resolver on port 53, or anything else. The controller compares them with what it expects of a window.
-DIRECT_KINDS = ('target', 'resolver', 'other')
+# lab resolver on port 53, the test machine resolving an address of its own network that is not the lab's (stage
+# 7e), or anything else. The controller compares them with what it expects of a window.
+DIRECT_KINDS = ('target', 'resolver', 'neighbor', 'other')
+ZERO_MAC = '00:00:00:00:00:00'
 
 
 def _direct_kind(protocol, peer):
@@ -1049,15 +1051,57 @@ class _Direct:
 
     A flow is a TCP connection or a UDP exchange of the test machine, by protocol and four-tuple, with the frames
     each way. `opened` says the test machine started it inside the window: a SYN without ACK that it sent, or for
-    UDP an outbound first frame. A retransmission stays in its flow. Every other unexpected frame (ARP, ICMP, a
-    fragment, a frame that names no address of the test machine) is counted in `other_frames`, and one beyond
-    `FLOW_LIMIT` flows in `omitted_frames`, so the three account for every unexpected frame of the window.
+    UDP an outbound first frame. A retransmission stays in its flow. Two more kinds of frame belong to a flow
+    (stage 7e): an ARP request the test machine broadcasts from its own address for another address than the lab's
+    is the flow `arp` to that address (`neighbor`, opened, every request again one more frame out; an answer is no
+    part of it), and a destination
+    unreachable error the lab's router sends the test machine about a datagram of a UDP flow already in the window
+    is a frame back of that flow. Every other unexpected frame (another ARP frame, ICMP, a fragment, a frame that
+    names no address of the test machine) is counted in `other_frames`, and one beyond `FLOW_LIMIT` flows in
+    `omitted_frames`, so the three account for every unexpected frame of the window.
     """
 
     def __init__(self):
         self.table, self.other, self.omitted = {}, 0, 0
 
+    def _neighbor_request(self, frame):
+        """The address a broadcast ARP request of the test machine, from its own address, asks for; else None."""
+        if frame.arp is None or frame.fragment:
+            return None
+        op, sha, spa, tha, tpa = frame.arp
+        if ((op, sha, spa, tha, frame.src_mac, frame.dst_mac)
+                == (1, MACS['test'], CLIENTS[4], ZERO_MAC, MACS['test'], BROADCAST) and tpa != spa):
+            return tpa
+        return None
+
+    def _unreachable_flow(self, frame):
+        """The UDP flow of this window an ICMP destination unreachable from the lab's router is about; else None."""
+        if (frame.fragment or frame.family != 4 or frame.proto != 1 or frame.icmp is None or frame.icmp[0] != 3
+                or frame.inner is None or (frame.src_mac, frame.dst_mac, frame.src, frame.dst)
+                != (MACS['lab'], MACS['test'], GATEWAYS[4], CLIENTS[4])):
+            return None
+        source, target, proto, sport, dport = frame.inner
+        if proto != 17 or source != CLIENTS[4] or sport is None:
+            return None
+        return self.table.get(('udp', (source, sport), (target, dport)))
+
     def add(self, frame):
+        asked = self._neighbor_request(frame)
+        if asked is not None:
+            key = ('arp', (CLIENTS[4], None), (asked, None))
+            row = self.table.get(key)
+            if row is None:
+                if len(self.table) >= FLOW_LIMIT:
+                    self.omitted += 1
+                    return
+                row = self.table[key] = dict(protocol='arp', kind='neighbor', client=CLIENTS[4], server=asked,
+                                             frames_out=0, frames_back=0, opened=True)
+            row['frames_out'] += 1
+            return
+        flow = self._unreachable_flow(frame)
+        if flow is not None:
+            flow['frames_back'] += 1
+            return
         protocol = {6: 'tcp', 17: 'udp'}.get(frame.proto)
         tests = (CLIENTS[4], CLIENTS[6])
         if frame.fragment or frame.arp is not None or protocol is None or frame.sport is None:
