@@ -7,6 +7,36 @@ operations; the limited L2 execution path is described below. Existing legacy
 matrices remain supported. Internal QEMU qualification does not establish
 network protection or scenario/release acceptance.
 
+## Offline tests in CI
+
+`vm-matrix.yml` runs `python -m unittest discover -s tools/vm/matrix/tests -t .`
+on ubuntu-24.04 (Python 3.13, the stand's version) and on windows-2025
+(Python 3.11). Windows stays on the floor of the tools because 3.13 there reports
+`st_ctime` differently for an open file and for a path, and the Linux-only file
+identity checks (`linux_l2._hash`, `images.verify_bytes`) compare both.
+
+The QEMU controller runs on Linux alone (KVM, AF_UNIX control sockets under a
+path of at most 107 bytes, pidfd), and the temporary directory of a Windows
+runner is already longer than that. A test that goes through the real
+`lifecycle.start` or opens such a socket is skipped there, with
+`tests/posix_only.py` giving the reason, instead of weakening the path check.
+The Windows helpers (`windows_*`, the PowerShell producers) are not skipped.
+
+Windows skips 259 of 1381 tests. Of these 28 were skipped before (no Linux
+`/proc` or bash, POSIX-only fixtures, `qemu.qmp` not installed). A Linux host
+skips only the Windows pieces it cannot run (18 without PowerShell). The other
+231 are the controller groups:
+
+- `lifecycle.start` and what is built on it: `test_lifecycle`, `test_jobs`,
+  `test_staging`, `test_qga_recovery`, `test_reboots` (chains, budgets, waits),
+  `test_linux_l2`, `test_l2_media` (import), `test_lab_controls`, the joint
+  start of two machines in `test_l3_lab`, `test_lab` and `test_lab_evidence`
+  (disk pairs), the delivery groups of `test_stage_profiles`;
+- tests that take those fixtures to look at evidence bytes: `test_evidence`
+  (journals, owner token), `test_orchestrator` (reservation);
+- the relay budget over an AF_UNIX socket pair in `test_run_state`;
+- one test that reads the Linux stand's example paths in `test_reboots`.
+
 ## When a stand is blocked
 
 A run that did not reach a verified completion keeps its stand locked:
