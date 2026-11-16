@@ -5,6 +5,7 @@ No library internals or legacy APIs are used. Imports remain execution-only.
 """
 
 import asyncio
+import json
 import math
 from importlib.metadata import version
 import select
@@ -132,6 +133,8 @@ class Qmp:
         self.events = spent.get('events', 0)
         self.calls = spent.get('calls', 0)
         self.persist = persist
+        # What each RESET event said, in order: True for a reset the guest made, False for any other.
+        self.resets = []
         self.valid = True
         self.closed = False
         if persist is None:
@@ -146,7 +149,29 @@ class Qmp:
             raise ValueError('qmp-event-limit')
         if self.persist is not None:
             self.persist('qmp_events', self.events)
+        self._note_reset(event)
         return False
+
+    def _note_reset(self, event):
+        try:
+            message = json.loads(bytes(event))
+        except ValueError:
+            return
+        if type(message) is dict and message.get('event') == 'RESET':
+            data = message.get('data')
+            self.resets.append(type(data) is dict and data.get('guest') is True)
+
+    def take_resets(self):
+        """The RESET events read since the last call, oldest first: `True` for a guest's own reset."""
+        taken, self.resets = self.resets, []
+        return taken
+
+    def pump(self, seconds):
+        """Let events that already arrived be read, which only happens while the loop runs; no command, no budget."""
+        async def idle():
+            await asyncio.sleep(seconds)
+
+        return self._run(idle(), seconds + 1)
 
     def _run(self, coroutine, timeout):
         if type(timeout) not in (int, float) or not math.isfinite(timeout) or not 0 < timeout <= 60:

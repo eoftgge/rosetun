@@ -54,12 +54,25 @@ QMP_SOCKET = 'qmp.sock'
 QGA_SOCKET = 'qga.sock'
 # sun_path holds 108 bytes with the terminating zero.
 SOCKET_PATH_LIMIT = 107
+# One planned guest reset takes two rows of the ordinary journal: `guest-reset-observed` when the controller sees
+# the RESET event and `boot-chain-extended` when the new boot ID is confirmed. A refused reset takes one.
+RESET_ROWS = 2
+# How long the controller lets QMP read events that already arrived, and how many agent sessions one reset may try.
+RESET_PUMP_SECONDS = 0.25
+RESET_ATTEMPTS = 8
+# What a refusal of a boot is called; each ends the run, so none of them is retried.
+BOOT_REFUSALS = ('unplanned-guest-reset', 'host-reset-outside-reset', 'guest-reset-before-first-boot',
+                 'boot-id-changed-without-reset', 'guest-reset-boot-id-unchanged', 'boot-id-repeated')
 
 
 class LifecycleError(ValueError):
     def __init__(self, reason, vm=None):
         super().__init__(reason)
         self.vm = vm
+
+
+class _BootRefused(Exception):
+    """A boot ID the controller must not take; the observation row says why."""
 
 
 def _limit(value):
@@ -248,6 +261,13 @@ class Vm:
         self.last_boot_id = None
         self.reset_boot_id = None
         self.reset_pending = False
+        # The boot IDs the controller confirmed, the first being the boot the job started on; the last is `last_boot_id`.
+        self.boot_chain = []
+        # Who made the pending reset: `guest` (a RESET event seen by the controller) or `controller` (`reset()`).
+        self.reset_kind = None
+        self.guest_resets = 0
+        self.unplanned_reset = None
+        self._planned_reboots = 0
         self.qga_reason = 'initial'
         self.launch_sockets = []
         self.guest_observation = None
@@ -270,9 +290,27 @@ class Vm:
                                       bytes=(budgets['qmp_bytes_o'], budgets['qmp_bytes_i'])),
                    persist=self.state.record)
 
+    @property
+    def planned_reboots(self):
+        return self._planned_reboots
+
+    @planned_reboots.setter
+    def planned_reboots(self, value):
+        """How many guest resets the run plans: more than that is an error, and each earns one QGA recovery."""
+        if type(value) is not int or not 0 <= value <= run_state.MAX_PLANNED_REBOOTS:
+            raise ValueError('invalid-planned-reboots')
+        self._planned_reboots = value
+        if self.state is not None:
+            self.state.planned_reboots = value
+
+    @property
+    def qga_recovery_limit(self):
+        return run_state.limit('qga_recoveries', self._planned_reboots)
+
     def _spend(self, name):
         """Record one more of a per-run budget before it is used; no record, no use."""
         if self.state is not None:
+            self.state.planned_reboots = self._planned_reboots
             try:
                 self.state.spend(name)
             except (OSError, ValueError):
@@ -340,7 +378,7 @@ class Vm:
             raise LifecycleError('qga-not-configured', self)
         if self.qga is not None:
             raise LifecycleError('qga-session-exists', self)
-        if self.qga_recoveries >= 4:
+        if self.qga_recoveries >= self.qga_recovery_limit:
             raise LifecycleError('qga-recovery-limit', self)
         self._spend('qga_recoveries')
         self.qga_recoveries += 1
@@ -385,7 +423,7 @@ class Vm:
             raise LifecycleError('qga-not-configured', self)
         if self.process is None or self.process.poll() is not None or self.exited:
             raise LifecycleError('vm-child-has-exited', self)
-        if self.qga_recoveries >= 4:
+        if self.qga_recoveries >= self.qga_recovery_limit:
             raise LifecycleError('qga-recovery-limit', self)
         if self.qga_observations >= 32:
             raise LifecycleError('qga-observation-limit', self)
@@ -434,6 +472,8 @@ class Vm:
         self.guest_observation = None
         if self.qga is None:
             raise LifecycleError('qga-not-configured', self)
+        # A reset the guest made is told by QMP, not by the agent: take it in before judging any boot ID.
+        self._sync_resets()
         if self.qga_observations >= 32:
             raise LifecycleError('qga-observation-limit', self)
         self._spend('qga_observations')
@@ -443,6 +483,7 @@ class Vm:
                    new_session_id=self.qga.session_id if old_session_id else None,
                    recovery_attempt=self.qga_recoveries)
         self.qga.deadline = deadline if deadline is not None else time.monotonic() + self.timeout
+        kind = self.reset_kind
         try:
             if not self.qga.attempted:
                 remaining = self.qga.deadline - time.monotonic()
@@ -457,12 +498,26 @@ class Vm:
             row['boot_comparison'] = ('unknown' if baseline is None else
                                       'same' if baseline == row['boot_id'] else 'changed')
             row['new_boot_confirmed'] = self.reset_pending and row['boot_comparison'] == 'changed'
+            if row['boot_comparison'] == 'changed' and not self.reset_pending:
+                raise _BootRefused('boot-id-changed-without-reset')
+            if self.reset_kind == 'guest' and self.reset_pending and row['boot_comparison'] == 'same':
+                # The guest that made the reset is gone: an agent that still reports the old boot is no new boot.
+                raise _BootRefused('guest-reset-boot-id-unchanged')
+            if row['new_boot_confirmed'] and row['boot_id'] in self.boot_chain:
+                raise _BootRefused('boot-id-repeated')
             self.last_boot_id = row['boot_id']
             if row['new_boot_confirmed']:
                 self.reset_pending = False
+                self.reset_kind = None
+            elif not self.boot_chain:
+                self.boot_chain = [row['boot_id']]
             row['result'] = 'observed'
             row['sync_id'] = self.qga.sync_id
             self.qga_reason = 'explicit'
+        except _BootRefused as error:
+            self.qga_reason = row['result'] = str(error)
+            self.operation_errors.append(str(error))
+            raise LifecycleError(str(error), self) from None
         except QgaError as error:
             row['result'] = str(error)
             self.qga_reason = str(error)
@@ -474,8 +529,125 @@ class Vm:
             if row['result'] != 'observed':
                 self.qga.invalidate()
             self._guest_row(row)
+        if row['new_boot_confirmed']:
+            self._extend_chain(row['boot_id'], kind)
         self.guest_observation = row
         return row
+
+    def watch_resets(self):
+        """Read the resets QEMU has reported since the last look; an unplanned one is an error.
+
+        The poll of a job calls it between its reads, because QMP events are only read while the controller
+        looks. It sends no command and spends no QMP budget, and it writes a row only for a reset it finds.
+        """
+        self._check()
+        self._sync_resets()
+
+    def _sync_resets(self):
+        if self.unplanned_reset is not None:
+            raise LifecycleError(self.unplanned_reset, self)
+        if self.qmp is None:
+            return
+        try:
+            self.qmp.pump(RESET_PUMP_SECONDS)
+            resets = self.qmp.take_resets()
+        except (OSError, ValueError):
+            raise LifecycleError('qmp-events-unavailable', self) from None
+        self._ingest_resets(resets)
+
+    def _ingest_resets(self, resets, *, expected_host=0):
+        """Register each RESET: only a guest's own reset within the plan is accepted, the host's `reset()` apart."""
+        for guest in resets:
+            if not guest and expected_host > 0:
+                expected_host -= 1
+                continue
+            if not guest:
+                self._refuse_reset('host-reset-outside-reset')
+            if not self.boot_chain:
+                self._refuse_reset('guest-reset-before-first-boot')
+            if self.guest_resets >= self._planned_reboots:
+                self._refuse_reset('unplanned-guest-reset')
+            self._register_guest_reset()
+
+    def _refuse_reset(self, reason):
+        """An unplanned reset ends the run: no boot ID is taken after it, and the row says what was seen."""
+        self.unplanned_reset = reason
+        self.reset_pending = True
+        self.operation_errors.append(reason)
+        self._event('guest-reset-observed', reason)
+        raise LifecycleError(reason, self)
+
+    def _step(self, name, status):
+        """One step of the run state, in the phase it is in; it says that a reset was seen or that its boot was taken."""
+        if self.state is not None:
+            try:
+                self.state.transition(self.state.phase, name, status)
+            except (OSError, ValueError):
+                self.evidence_failed = True
+                raise LifecycleError('run-state-write-failed', self) from None
+
+    def _register_guest_reset(self):
+        self._reserve(RESET_ROWS)
+        self.guest_resets += 1
+        # The intent goes to disk first: a controller that dies from here on is attached with the reset pending.
+        self._step('guest-reset-%d' % self.guest_resets, 'intent')
+        self.reset_boot_id = self.boot_chain[-1]
+        self.reset_pending = True
+        self.reset_kind = 'guest'
+        self.qga_reason = 'guest-reset'
+        self.guest_observation = None
+        if self.qga is not None:
+            self.qga.invalidate()
+        self._event('guest-reset-observed', '%d-of-%d' % (self.guest_resets, self._planned_reboots))
+
+    def _extend_chain(self, boot_id, kind):
+        """Take a boot ID the controller confirmed: the run state first, then the journal."""
+        if self.state is not None:
+            try:
+                self.state.planned_reboots = self._planned_reboots
+                if not self.state.boot_chain:
+                    # The run that never wrote its first boot into the state starts the chain here.
+                    self.state.update('identities', boot_id=self.boot_chain[0])
+                self.state.extend_boot_chain(boot_id)
+            except (OSError, ValueError):
+                self.evidence_failed = True
+                raise LifecycleError('run-state-write-failed', self) from None
+            if kind == 'guest':
+                self._step('guest-reset-%d' % self.guest_resets, 'done')
+        self.boot_chain.append(boot_id)
+        self._event('boot-chain-extended', str(len(self.boot_chain)))
+
+    def await_rebooted_guest(self, *, timeout, clock=time.monotonic, sleep=time.sleep):
+        """After a planned guest reset: the one recovery it earns, then bounded tries until the new boot answers.
+
+        The first try is `recover_guest` and spends the recovery. The guest needs a while to boot, so a try that
+        fails is followed by new sessions that, like those of the first boot, spend no recovery but each one an
+        observation. Every outcome that refuses a boot ends the run at once.
+        """
+        if not self.reset_pending or self.reset_kind != 'guest':
+            raise LifecycleError('no-guest-reset-pending', self)
+        deadline, previous = clock() + timeout, self.timeout
+        try:
+            for attempt in range(RESET_ATTEMPTS):
+                remaining = deadline - clock()
+                if remaining <= 0:
+                    break
+                self.timeout = min(10, remaining)
+                try:
+                    return self.recover_guest() if attempt == 0 else self.observe_guest()
+                except LifecycleError as error:
+                    if (str(error) in BOOT_REFUSALS or self.process.poll() is not None or self.evidence_failed
+                            or str(error) in ('qga-recovery-limit', 'qga-observation-limit')):
+                        raise
+                    self.qga.close()
+                    if not self.qga.closed:
+                        raise LifecycleError('rebooted-qga-close-unconfirmed', self)
+                    self._sync_seed = (self._sync_seed + 1) % 2**63
+                    self._new_qga()
+                    sleep(min(15, max(0, deadline - clock())))
+            raise LifecycleError('rebooted-guest-deadline', self)
+        finally:
+            self.timeout = previous
 
     def status(self):
         self._check()
@@ -539,12 +711,15 @@ class Vm:
     def reset(self):
         """Confirm RESET, not guest boot readiness or a new guest boot ID."""
         self._check()
+        # A reset the guest made before this one is registered first, so that this one is told apart from it.
+        self._sync_resets()
         # intent, command-accepted, RESET-observed, confirmed, then on failure
         # command-accepted-event-unconfirmed and error.
         self._reserve(6)
         self.guest_observation = None
         self.reset_boot_id = self.last_boot_id
         self.reset_pending = True
+        self.reset_kind = 'controller'
         self.qga_reason = 'reset'
         if self.qga is not None:
             self.qga.invalidate()
@@ -554,13 +729,16 @@ class Vm:
             self._event('reset', 'command-accepted')
             self._event('reset', 'RESET-observed')
             self._event('reset', 'confirmed')
-            return self.status()
+            value = self.status()
         except (OSError, ValueError):
             self.operation_errors.append('reset-unconfirmed')
             if getattr(self.qmp, 'last_command_accepted', False):
                 self._event('reset', 'command-accepted-event-unconfirmed')
             self._event('reset', 'error')
             raise LifecycleError('reset-unconfirmed', self) from None
+        # The one RESET this command caused has been read; anything else read with it is the guest's.
+        self._ingest_resets(self.qmp.take_resets(), expected_host=1)
+        return value
 
     def powerdown(self):
         """Compatibility API: request ACPI only, without confirming shutdown."""
@@ -739,7 +917,14 @@ def attach(run, *, timeout=5):
     vm.process, vm.attached, vm.state, vm.vm_uuid, vm.events = process, True, state, vm_uuid, events
     vm.qga_recoveries = state.budget('qga_recoveries')
     vm.qga_observations = state.budget('qga_observations')
-    vm.last_boot_id = state.document['identities']['boot_id']
+    vm.boot_chain = list(state.document['boot_chain'])
+    vm.last_boot_id = vm.boot_chain[-1] if vm.boot_chain else state.document['identities']['boot_id']
+    # A reset whose intent is the last of its kind was seen by the dead controller, who did not confirm its boot.
+    resets = [row for row in state.document['transitions'] if row['step'].startswith('guest-reset-')]
+    vm.guest_resets = sum(row['status'] == 'intent' for row in resets)
+    if resets and resets[-1]['status'] == 'intent' and vm.boot_chain:
+        vm.reset_boot_id, vm.reset_pending, vm.reset_kind = vm.boot_chain[-1], True, 'guest'
+        vm.qga_reason = 'guest-reset'
     try:
         vm.control_lock = lock_run(run.directory)
     except (OSError, ValueError):

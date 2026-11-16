@@ -10,6 +10,11 @@ refuses the token itself.
 
 A step is written twice, as an intent before the action and as done (or error)
 after it. A step left at intent is unknown: it may or may not have happened.
+
+`boot_chain` lists the guest's boot IDs as this run's controllers observed them:
+the first is the boot the job was submitted on, each later one follows a planned
+guest reset the controller saw itself. `identities.boot_id` is always its last
+element. The guest's own report is never a source for it.
 """
 
 import hashlib
@@ -35,11 +40,13 @@ STATUSES = ('intent', 'done', 'error')
 # session as before: a new session is a recovery, and recoveries are counted here.
 BUDGETS = {'qmp_calls': 128, 'qmp_events': 128, 'qmp_bytes_o': 1024 * 1024, 'qmp_bytes_i': 1024 * 1024,
            'qga_recoveries': 4, 'qga_observations': 32, 'job_calls': 112, 'job_polls': 4}
+# The most guest resets a run may plan; each one allows one more QGA recovery on top of `BUDGETS`.
+MAX_PLANNED_REBOOTS = 2
 IDENTITIES = ('host_run_id', 'guest_run_id', 'import_id', 'lab_id', 'vm_uuid', 'boot_id')
 JOB_FIELDS = ('submission', 'launcher', 'job', 'pid', 'session')
 TRANSITION_LIMIT = 256
 FIELDS = ('schema sequence run_id stand_id owner_digest controller phase reason step transitions identities '
-          'host deadlines budgets collected job configuration_sha256 attachments')
+          'host deadlines budgets collected job configuration_sha256 attachments boot_chain')
 
 
 class RunStateError(ValueError):
@@ -59,6 +66,11 @@ def host_boot_id():
 
 def owner_digest(token):
     return hashlib.sha256(token.encode()).hexdigest()
+
+
+def limit(name, planned_reboots=0):
+    """What one run may spend of a budget; a planned guest reset earns one more QGA recovery."""
+    return BUDGETS[name] + (planned_reboots if name == 'qga_recoveries' else 0)
 
 
 def _name(value, *, optional=False):
@@ -113,8 +125,14 @@ def validate(document, *, run_id, stand_id, token):
         _name(key)
     budgets = document['budgets']
     if (type(budgets) is not dict or set(budgets) != set(BUDGETS)
-            or any(type(v) is not int or not 0 <= v <= BUDGETS[k] for k, v in budgets.items())):
+            or any(type(v) is not int or not 0 <= v <= limit(k, MAX_PLANNED_REBOOTS) for k, v in budgets.items())):
         raise RunStateError('run-state-budgets')
+    chain = document['boot_chain']
+    if (type(chain) is not list or len(chain) > MAX_PLANNED_REBOOTS + 1 or len(set(chain)) != len(chain)
+            or (chain[-1] if chain else None) != identities['boot_id']):
+        raise RunStateError('run-state-boot-chain')
+    for value in chain:
+        _name(value)
     collected = document['collected']
     if type(collected) is not dict or any(type(v) not in (bool, int, str) for v in collected.values()):
         raise RunStateError('run-state-collected')
@@ -142,6 +160,8 @@ class RunState:
     def __init__(self, run, document):
         self.run = run
         self.document = document
+        # How many guest resets this run plans: set once by whoever starts or attaches it.
+        self.planned_reboots = 0
         # The QMP relay records its byte ceiling from its own thread.
         self._lock = threading.RLock()
 
@@ -150,13 +170,15 @@ class RunState:
         if phase not in PHASES or set(identities) - set(IDENTITIES):
             raise RunStateError('run-state-invalid-start')
         run_id, stand_id, token = run._identity
+        identities = {k: identities.get(k) for k in IDENTITIES}
         document = dict(schema=SCHEMA, sequence=0, run_id=run_id, stand_id=stand_id,
                         owner_digest=owner_digest(token), controller=dict(commit=commit), phase=phase,
                         reason=None, step=None, transitions=[],
-                        identities={k: identities.get(k) for k in IDENTITIES},
+                        identities=identities,
                         host=dict(boot_id=host_boot_id()), deadlines={},
                         budgets={k: 0 for k in BUDGETS}, collected={}, job=None,
-                        configuration_sha256=configuration_sha256, attachments=0)
+                        configuration_sha256=configuration_sha256, attachments=0,
+                        boot_chain=[identities['boot_id']] if identities['boot_id'] else [])
         state = cls(run, document)
         state._write()
         run._cache['run_state'] = state
@@ -175,6 +197,10 @@ class RunState:
         except (OSError, RecursionError):
             raise RunStateError('run-state-unreadable') from None
         run_id, stand_id, token = run._identity
+        if type(document) is dict and 'boot_chain' not in document and type(document.get('identities')) is dict:
+            # A file written before the chain existed holds the one boot it was started on.
+            boot = document['identities'].get('boot_id')
+            document['boot_chain'] = [boot] if boot else []
         state = cls(run, validate(document, run_id=run_id, stand_id=stand_id, token=token))
         run._cache['run_state'] = state
         return state
@@ -221,11 +247,32 @@ class RunState:
             elif section in ('identities', 'deadlines', 'collected'):
                 if section == 'identities' and set(values) - set(IDENTITIES):
                     raise RunStateError('run-state-identities')
+                if section == 'identities' and values.get('boot_id') is not None:
+                    # The first boot starts the chain; a later one joins it only through `extend_boot_chain`.
+                    chain = self.document['boot_chain']
+                    if chain and chain[-1] != values['boot_id']:
+                        raise RunStateError('run-state-boot-chain')
+                    if not chain:
+                        self.document['boot_chain'] = [_name(values['boot_id'])]
                 self.document[section].update(values)
             elif section == 'attachments':
                 self.document['attachments'] = values['count']
             else:
                 raise RunStateError('run-state-section')
+            self._write()
+
+    @property
+    def boot_chain(self):
+        return list(self.document['boot_chain'])
+
+    def extend_boot_chain(self, boot_id):
+        """Append a boot the controller confirmed; `identities.boot_id` follows it in the same write."""
+        with self._lock:
+            chain = self.document['boot_chain']
+            if not chain or boot_id in chain or len(chain) >= MAX_PLANNED_REBOOTS + 1:
+                raise RunStateError('run-state-boot-chain')
+            chain.append(_name(boot_id))
+            self.document['identities']['boot_id'] = boot_id
             self._write()
 
     def deadline(self, name, seconds):
@@ -238,8 +285,7 @@ class RunState:
     def record(self, name, value):
         """Record `value` as spent before it is used; a value past the limit or a failed write refuses."""
         with self._lock:
-            limit = BUDGETS.get(name)
-            if limit is None or type(value) is not int or not 0 <= value <= limit:
+            if name not in BUDGETS or type(value) is not int or not 0 <= value <= limit(name, self.planned_reboots):
                 raise RunStateError('run-state-budget-exhausted')
             if value > self.document['budgets'][name]:
                 self.document['budgets'][name] = value

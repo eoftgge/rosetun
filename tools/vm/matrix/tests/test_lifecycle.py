@@ -80,9 +80,18 @@ class Control:
         self.state = 'prelaunch'
         self.commands = []
         self.bad_uuid = False
+        # What the monitor reported as RESET events: True for the guest's own.
+        self.resets = []
 
     def handshake(self, timeout):
         pass
+
+    def pump(self, seconds):
+        pass
+
+    def take_resets(self):
+        taken, self.resets = self.resets, []
+        return taken
 
     def command(self, name, timeout, *, event=None):
         self.commands.append(name)

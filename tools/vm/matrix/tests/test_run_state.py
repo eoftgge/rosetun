@@ -101,7 +101,7 @@ class BudgetTests(unittest.TestCase):
         state = self.state()
         run_id, stand_id, token = state.run._identity
         for change in (dict(extra=1), dict(owner_digest='0' * 64), dict(phase='paused'),
-                       dict(budgets=dict(state.document['budgets'], qga_recoveries=5))):
+                       dict(budgets=dict(state.document["budgets"], qga_recoveries=7))):
             with self.assertRaises(ValueError):
                 run_state.validate(dict(state.document, **change), run_id=run_id, stand_id=stand_id, token=token)
         with self.assertRaises(ValueError):
