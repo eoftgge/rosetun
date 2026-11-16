@@ -3944,6 +3944,131 @@ and the retained artifacts.
 
 The checks of stage W are not repeated.
 
+## Stage 8a: Linux Proxy in the lab
+
+`run linux-proxy` delivers the Proxy package (system proxy without TUN, the strict kill switch of the first phase,
+sharing, Lockdown, the GUI's module for the desktop's proxy settings, the stop of the service) as `run linux-l3`
+delivers L3, and `run linux-proxy --lab` runs `run-proxy.sh` inside the lab of stage 7b2b, with windows and
+expectations as for L3. Nothing is accepted: the release gate stays false and the security invariants stay
+**UNVERIFIED**. No Proxy run has been through the lab yet: every count below comes from `run-proxy.sh` alone and
+has not been compared with the wire.
+
+### Profile and requests
+
+- The stage profile `proxy` (`PROFILES` in `linux_l2.py`, the importer `guest/stage-l2.py`) is exactly
+  `PROXY_START_REQUIRED` of `guest/start.sh`: the L3 sources with `guest/run-proxy.sh` and `scenarios-proxy.tsv`,
+  the binaries `rosetun-helper-privileged`, `rosetun`, `desktop_proxy` (the three that
+  `build-artifacts.sh --proxy` records in `provenance.json`, `"stage": "proxy"`) and `sing-box` (hashed against
+  `[l3].sing_box_sha256`), the units `rosetun-helper.service`, `rosetun-engine.rules` and `rosetun-lockdown.service`
+  of `packaging/linux/` (compared byte for byte), and four generated requests. Its evidence goes to `linux-proxy/`,
+  the service's journal included.
+- The requests are made by `l3_requests.render_proxy` from the L3 template, as `New-RosetunLinuxProxyRequests`
+  makes them from the kill-switch request: `request-kill-switch.json` is the L3 file byte for byte (`mode.change`
+  starts from it), and `request-proxy.json`, `request-proxy-strict.json` and `request-proxy-share.json` add
+  `connection_mode` `system_proxy` and `local_proxy` (`port` 10808, `share_on_lan`) with the kill switch off, on and
+  off. Documentation addresses only; a test pins their digests.
+- `job.env` takes `LAB_MARKER_ADDRESS` and `LAB_CONTROL` for `proxy` as for `l3` (the importer in the image,
+  `start.sh`, `validate_env` and `run-proxy.sh` all accept them, last and only together in that order). The Hyper-V
+  path writes neither.
+- The configuration is `rosetun.matrix.execution.v2` (without the lab) or `v3` (with it) with `suite = "linux-proxy"`
+  and the same `[l3]` table as L3 (the node, the probes, the engine's hash): start from the L3 examples and change
+  the suite. The content directory holds the files above (the requests are never in it).
+
+### The lab's private address
+
+The service shares its proxy only on a private address of a physical interface (`private_addresses` of the routing
+crate), and the test machine's address on the lab wire is `192.0.2.2`. The owner approved one private address for
+the lab, **`192.168.77.2/24`**, as an exception to the documentation addresses (as `10.254.254.1` of stage 7e). It is
+not in the image: only with `LAB_MARKER_ADDRESS`, `run-proxy.sh` adds it to the physical interface once
+`install.service` passed and before the first session, removes it after `stop.removes-table`, and the cleanup
+removes one that is left; both removals are cleanup actions of the report. The service reads the private addresses
+at every connect (and watches them during a shared session), so the address does not have to exist when the service
+starts. The share scenarios then look for the proxy on that address; without the lab they look, as before, on the
+interface's first address. It does not collide with the private addresses `run-l3.sh` derives for Local network,
+and L3 never adds it.
+
+### Windows
+
+The markers (`lab_mark`, `lab_label`, `lab_send`, `lab_run_id`) moved from `run-l3.sh` to `guest/lib.sh` unchanged;
+`run-l3.sh` and `run-proxy.sh` use them from there. `connect_with` and `disconnect` of `run-proxy.sh` are those of
+`run-l3.sh`. A window is labelled by the function that opened its session, so the functions that open one are named
+after their windows.
+
+| Label | Scenarios | Opens | Closes | Expectation | From |
+| --- | --- | --- | --- | --- | --- |
+| `proxy_open` | `proxy.through`, `proxy.around-open`, `proxy.loopback-only` | `connect_with request-proxy.json` | the `disconnect` at the start of `busy` | **EXPECTED**: one TCP to `203.0.113.2:443` | the one `direct_https` of `proxy.around-open`; the curl through the proxy is the engine's connection to the node (`tunnel`) |
+| none | `proxy.port-busy` | (no session: `cli connect` must fail with the port taken) | | | |
+| `strict` | `strict.through`, `strict.around-blocked`, `strict.first-phase`, `strict.engine-killed`, `strict.disconnect` | `connect_with request-proxy-strict.json` | the `disconnect` of `gone`, before its `direct_https` | `NONE` | three `direct_https` dropped in the guest |
+| `mode_change` | `mode.change` | `connect_with request-kill-switch.json` | the `disconnect` inside the `connect_with` of `share` | `NONE` | two `direct_https` dropped in the guest |
+| `share` | `share.listens`, `share.peer-refused` | `connect_with request-proxy-share.json` | the `connect_with` of `share_off` | `NONE` | the request to the proxy on `192.168.77.2` stays in the machine; the peer is behind a veth |
+| `share_off` | `share.off` | `connect_with request-proxy.json` | the `disconnect` at the end of `scenario_share` | `NONE` | nothing is sent |
+| `lockdown_share` | `lockdown.share-closed`, `lockdown.share-open`, `lockdown.off` | `lab_mark open` at the start of the function, before the Lockdown unit and `lockdown on --lan off` | `lab_mark close` after `lockdown off` and `! table_present` | `NONE` | one `direct_https`, dropped by Lockdown |
+| `stopped` | `stop.removes-table` | `connect_with request-proxy-strict.json` | `lab_mark close` after `systemctl stop` and `! table_present`, before `direct_https` (rule of 7c1) | `NONE` | nothing is sent inside |
+| none | `preflight.*`, `install.service`, `desktop.*` | | | | `desktop.*` only write files (as on Hyper-V, there is no KDE session) |
+
+Every closing marker waits for the table `inet rosetun` to be gone (`lab_mark`), so no window closes before the
+protection is removed, and no direct request meant for after a session comes before its close. A run where every
+scenario passed has these seven windows, one of each label (`WINDOWS_PER_LABEL`).
+
+**Under Lockdown no marker goes out** (the table is there all the time). So `lockdown_share` is one coarse window:
+the restart of the service with the Lockdown unit, Lockdown without Local network and its session, the `disconnect`,
+Lockdown with Local network and its session, the `disconnect` and `lockdown off`. A leak anywhere in it contradicts all
+three scenarios, and which one leaked is not told. Likewise `opened` connects inside that window (its markers find the
+table and do nothing). If Lockdown did not go on, `opened` would open a window of its own, of a label no table names,
+where anything is a leak.
+
+### The group
+
+All 27 scenarios but the 20 `two-hop.*` (SKIP "UNRUN", as in L3): the five `preflight.*`, `install.service`, the
+`proxy.*`, `strict.*`, `mode.change`, the three `share.*`, the three `lockdown.*`, the four `desktop.*` and
+`stop.removes-table`. `share.listens` and `lockdown.share-open` are in it thanks to the private address. The tables
+are in `proxy_tables.py`; `l3_summary.py` judges either suite with the same code (`tables_for`), and the L3 tables
+and their results did not change. The exit codes are those of stage 7b2b and 7e; the summary schema is
+`rosetun.matrix.proxy-summary.v1` with the same fields. `LEAK_OUTSIDE_THE_GROUP_FAILS` is true, and the fixtures
+required are those of L3 (`node`, `https` direct and through the node, `dns`, `doh`: the helper's DNS check at
+connect goes through the engine's DNS, whose server is the DoH target, in the proxy mode too). `--diagnostic` is
+for L3 only.
+
+What is derived, not seen: that the engine in the proxy mode without the kill switch (`proxy_open`, `share`,
+`share_off`) sends nothing past the node but what the script asks for. If the first runs show more (a DNS query of
+the engine, say), the windows say `DETECTED` and the expectation is to be discussed, not widened by guess.
+
+### Control
+
+`run linux-proxy --lab --control stop-helper`: right after `strict.through` passed, in the window `strict`,
+`run-proxy.sh` stops the service and makes one `direct_https` (`control_stop_helper`, the same as in L3). The
+scenarios after it may fail. Exit 0 only when the window `strict` is `DETECTED` with a TCP flow from the test
+machine to `203.0.113.2:443` that the target answered, `strict.through` is `DISAGREE`, an ordinary run would have
+exited 1 and both machines completed. Without `LAB_CONTROL` the script does what it did.
+
+### What to reinstall
+
+- The test image: `guest/stage-l2.py` (the profile `proxy`), then its descriptor in the configurations. The lab image
+  does not change: `lab-entry.py` and `lab_protocol.py` are as in stage 7e.
+- The content directories: `guest/lib.sh` and `guest/start.sh` changed, and every package compares them byte for byte
+  with the checkout, so the L2, L3 and Proxy content directories all take the new copies (L3 also the new
+  `guest/run-l3.sh`). The Proxy content directory is new: `build-artifacts.sh --proxy`, the Linux `sing-box`, the
+  three units of `packaging/linux/`, `guest/run-proxy.sh` and `scenarios-proxy.tsv`.
+- The Hyper-V path takes the new `run-proxy.sh`, `run-l3.sh`, `lib.sh` and `start.sh` only when its owner does; without
+  `LAB_MARKER_ADDRESS` none of them sends a marker or adds an address.
+
+### Qualification
+
+Each command in its own run on the clean checkpoint. Stop at the first unexpected result and send back the summaries
+and the retained artifacts.
+
+1. Install `stage-l2.py` in the test image and update its descriptor; prepare the Proxy content directory; copy the new
+   `lib.sh`, `start.sh` and `run-l3.sh` into the L2 and L3 content directories.
+2. `run linux-proxy --config <proxy.toml>` without the lab (`--dry-run` first): 4 PASS, `preflight.baseline` FAIL (no
+   route to `203.0.113.2`), 20 SKIP, 22 ERROR "not run", `completion` true, exit 1.
+3. `run linux-proxy --lab --config <proxy-lab.toml>`, twice in a row: the group 27 of 27 PASS, the cross-check `AGREE`
+   or `NOT_APPLICABLE` only, seven windows, `proxy_open` `EXPECTED` and the other six `NONE`, `lab.window_counts` all
+   `as_expected`, `group.outside_windows` empty, no `findings`, exit 0 both times. The cleanup actions name the
+   removal of `192.168.77.2`. Send back the `direct` flows of `proxy_open`, `share` and `share_off` whatever they are.
+4. `run linux-proxy --lab --control stop-helper --config <proxy-lab.toml>`: exit 0, `control_result.met` true.
+5. `run linux-l3 --lab --config <l3-lab.toml>` once: as in stage 7e (40 of 40, exit 0); L3 is not broken.
+6. `run linux-l2 --config <l2.toml>`, then `runs --state-directory <state>`: every run `completion_verified`.
+
 ## Stage 7a: Linux L3 delivery without network
 
 `run linux-l3` delivers the L3 package to one VM and runs the existing
