@@ -3766,6 +3766,172 @@ and the retained artifacts.
 The owner alone runs the legacy L3 on Hyper-V (`Invoke-LinuxL2Matrix.ps1 -Run -Stage L3`): the new scenario runs there
 too, and its note shows the same two answers for the Default Switch.
 
+## Stage 7e: Local network and IPv6 in the group, and every window judged
+
+After stage 7c3 the Local network windows, the window of `ipv6.neighbor` (SKIP in the lab: no IPv6 router) and the
+DNS-lock session of `route.specific-bypass` were outside the group, so a leak in them decided nothing. This stage
+fixes what the Local network windows may show, gives the lab an IPv6 router, adds those five scenarios to the group
+(**40 scenarios**) and makes a leak in any window a finding. Nothing is accepted: the release gate stays false and the
+security invariants stay **UNVERIFIED**. `run-l3.sh` and `scenarios-l3.tsv` do not change (60 rows), so neither does
+the Hyper-V path.
+
+### Local network: the flows and their expectations
+
+The functions of `scenario_lan_on` use two addresses that `run-l3.sh` picks from the test machine's own address and
+the host node's (`192.0.2.2`, `192.0.2.1` in the lab):
+
+- `neighbor_address`: the first of `.250`, `.251`, `.252` of the own /24 that is neither, so `192.0.2.250`. Nobody holds
+  it, on purpose: the TFTP datagram of `expect_udp_sent_to` leaves nftables and waits for ARP, which nobody answers, so
+  the datagram itself never reaches the wire. The ARP requests are the proof that it got past the kill switch (a
+  datagram dropped in the output hook never asks for its neighbor). A lab host on that address would add frames and a
+  second address to the infrastructure table for no stronger proof, so the lab has none.
+- `behind_router_address`: the first private address outside the own first two octets, so `10.254.254.1`, the
+  owner-approved private address of the lab (an exception to the documentation addresses). The datagram goes to the
+  lab's router, which has no route there and answers each one with a destination unreachable (type 3) from
+  `192.0.2.1`.
+
+Two new members of the flows of a window (`direct`), both read from the headers:
+
+- `protocol` `arp`, `kind` `neighbor`: the broadcast ARP requests of the test machine (sender `192.0.2.2` with its
+  own MAC, target MAC zero) for one address other than the lab's. All requests for that address are one flow, opened by
+  the test machine, `frames_out` counting them. An answer, an announcement, a request from another address or to one
+  machine is no part of it and stays `other_frames`.
+- A destination unreachable from the lab's router (`192.0.2.1`, the lab's MAC, to the test machine) that quotes a
+  datagram of a UDP flow already seen in the window is a frame back of that flow. Any other ICMP error stays
+  `other_frames`. This applies to every window, the ones of stage 7c3 included.
+
+| Window | Flows expected | Count | Where the count comes from |
+| --- | --- | --- | --- |
+| `lan_on` 0 | ARP for `192.0.2.250` | 1 | one `expect_udp_sent_to` the neighbor; `direct_node` and `direct_https` are dropped in the guest |
+| `lan_private_closed` 0 | none | 0 | `expect_udp_refused_to` is refused in the guest |
+| `lan_private_open` 0 | UDP to `10.254.254.1:69`, opened by the test machine; ARP for `192.0.2.250` | 1 each | one `expect_udp_sent_to` each address; `udp_dns_to`, `direct_node` and `direct_https` are dropped in the guest |
+| `lan_follows_change` 0 | none | 0 | only `direct_https`, dropped; nothing in the script sends to `203.0.113.5/24` while it is on the interface, and no run showed a frame for it |
+
+Why one ARP flow and not an exact number of requests: the kernel sends `mcast_solicit` requests (3 by default) for each
+resolution, and whether curl's retry starts a second resolution depends on its timers against the kernel's. Every lab
+run so far showed three requests in `lan_on` and in `lan_private_open` and two datagrams with two errors back to
+`10.254.254.1` (twelve runs of stages 7b2b and 7c1, read again with this stage's code: both windows `EXPECTED`,
+`lan_private_closed` and `lan_follows_change` `NONE`, no ARP for `203.0.113.0/24`). The category cannot cover anything
+else: one sender, one target per flow, broadcast requests only, and any flow beyond the expected ones is a leak.
+
+| Label | Number | Scenario judged in it |
+| --- | --- | --- |
+| `lan_on` | 0 | `lan.on` |
+| `lan_private_closed` | 0 | `lan.private-closed` |
+| `lan_private_open` | 0 | `lan.private-open` |
+| `lan_follows_change` | 0 | `lan.follows-change` |
+| `neighbor` | 0 | `ipv6.neighbor` |
+
+Each function opens its own session and ends it with `disconnect`, whose closing marker waits for the table to be gone.
+
+### IPv6 in the lab and the allowance
+
+The lab's link-local address `fe80::200:5eff:fe00:5362` (the modified EUI-64 of its MAC) is the test machine's IPv6
+default router. The lab's kernel makes that address itself when the link comes up (the captures of earlier L3 runs show
+multicast listener reports from it). In an L3 run only (`windows: true`), `setup` also runs
+`ip -6 addr replace fe80::200:5eff:fe00:5362/64 dev <link> nodad` after the link is up and writes `0` to
+`/proc/sys/net/ipv6/icmp/echo_ignore_all`, so the address is there and answers echo whatever the image set. The kernel
+answers neighbor solicitation and echo; nothing else is served. `lab-smoke` and the requests of 6a and 6b change
+nothing.
+
+`ipv6.neighbor` then runs instead of SKIP: without Rosetun it reads the router from `ip -6 route show default` and
+pings it; its session `neighbor` (Local network) flushes the neighbor cache, pings the router twice and sends one
+datagram to `2001:db8::1`, which the kill switch refuses in the guest. The window has no expectation (`NONE`).
+
+- Neighbor solicitation and advertisement between the two link-local addresses are infrastructure already (any
+  link-local address of either machine, to the solicited-node group or the other machine).
+- The echo is the allowance `ipv6-link-local-echo`: an echo request (type 128, code 0) from `fe80::200:5eff:fe00:5361`
+  (the test machine's EUI-64 address) to `fe80::200:5eff:fe00:5362` with the lab's MAC as destination, or the echo
+  reply (129, code 0) the other way. Not from or to a global address, not another link-local address, not a request of
+  the lab, not to a group, not over IPv4.
+- The allowance holds in the windows labelled `neighbor` only (`WINDOW_ALLOWANCES` in `l3_summary.py`, the new
+  `window_allowances` of `classify_windows`). The same echo in any other window is `unexpected`, and the ping without
+  Rosetun, before the session, falls outside every window, where it is only counted.
+
+On Hyper-V the scenario reads whatever router the guest has, as before, or is SKIP.
+
+### Image contract v6b (test image)
+
+v6 plus the IPv6 router. `prepare-l3-image.py --ipv6-router` changes only the network file the tool already edits
+(`/etc/systemd/network/00-rosetun-lab.network`):
+
+- in its one `[Network]` section `LinkLocalAddressing=ipv6`, `IPv6LinkLocalAddressGenerationMode=eui64` and
+  `IPv6AcceptRA=no`, each added when missing; a section that sets one of them to another value is refused, as is a
+  second `[Network]` section;
+- one route `[Route] Destination=::/0 Gateway=fe80::200:5eff:fe00:5362`; a file that already has an IPv6 default
+  route, a link-local or `_ipv6ra` gateway or an IPv6 `Gateway=` in `[Network]` is refused. The route
+  `2001:db8:6a:2::/64 via 2001:db8:6a:1::1` of the 6a contract stays;
+- no address is added. The file read back from the copy must have each setting once with its value, the same
+  `Address=` lines as before, exactly that one IPv6 default route and every other section unchanged, or the copy is
+  deleted. The descriptor gains `ipv6_router` (the gateway and the settings).
+
+```sh
+python tools/vm/linux/prepare-l3-image.py /srv/test-v6.qcow2 /srv/test-v6b.qcow2 \
+  --source-sha256 V6_SHA256 --descriptor /srv/test-v6b.image.json --ipv6-router
+```
+
+`--ipv6-router` goes alone or with `--sshd`. Copy the fields of the descriptor into `[image]` except `sshd` and
+`ipv6_router`. Check the new image after a boot, before sealing it:
+
+```sh
+ip -6 route show default          # default via fe80::200:5eff:fe00:5362 dev <if> proto static ...
+ip -6 addr show dev <if>          # fe80::200:5eff:fe00:5361/64 and 2001:db8:6a:1::2/64 only, no temporary address
+sysctl net.ipv6.conf.<if>.accept_ra   # 0
+networkctl status <if>
+```
+
+If another address, another IPv6 route or a router advertisement shows up, stop and send the output.
+
+### Every window is judged
+
+`LEAK_OUTSIDE_THE_GROUP_FAILS` is now true. A window is outside when no scenario of the group is judged in it and it is
+not beyond the count of a label of the group. Its verdict after the expectation decides: `DETECTED` is a finding
+(`leak-outside-group`, exit 1), `EXPECTED` and `NONE` are not, and a `MISMATCH` characterises rather than protects: it
+changes no code and is listed in `group.outside_mismatches`. `group.outside_windows` lists every window outside with
+its verdict.
+
+What stays outside, and why it is judged all the same:
+
+- `specific_bypass_dns_lock` 0: its result is not the scenario's (the part under the kill switch decides
+  `route.specific-bypass`), but it is held against its one direct request, so anything more is a leak.
+- A window of a label no table names: no ordinary run has one (every function of `run-l3.sh` that opens a session has a
+  label in `WINDOWS_PER_LABEL` or `WINDOWS_AT_MOST`, which a test checks), so anything in it is a leak.
+
+A window of a label of the group with fewer windows than expected is not judged and is no finding of its own: which
+session is missing is unknown, so is what the window should show (`capabilities` 0 shows nothing, 1 a direct request).
+It is listed in `group.outside_leaks` if `DETECTED`, and the run cannot vouch for itself (`window-count`, exit 2), as
+in stage 7c2. An outside window that cannot be verified still changes nothing.
+
+### What to reinstall
+
+- `linux/guest/lab-entry.py` and `matrix/lab_protocol.py` in **both** images (`lab-entry.py` imports `LINK_LOCALS`
+  from `lab_protocol.py`, so the two go together), then update both image descriptors.
+- The test image: build v6b from that v6 copy with `--ipv6-router` and write its descriptor into the configurations
+  (`[image]` of L2 and L3, `[test_image]` of the lab configuration).
+- `l3_summary.py` and `l3_lab.py` run on the controller. The content directory is the one of stage 7c3: `run-l3.sh`
+  and `scenarios-l3.tsv` did not change.
+
+### Qualification
+
+Each command in its own run on the clean checkpoint. Stop at the first unexpected result and send back the summaries
+and the retained artifacts.
+
+1. Install the helper in both images and build v6b as above; update the descriptors in the configurations.
+2. `lab-smoke --config <lab.toml>`, `lab-smoke --config <lab.toml> --canary`, then `--control extra-packet`,
+   `--control observer-stopped`, `--control observer-killed` and `--control link-down`: exit 0 each, as in 7c1. The
+   test machine now has an IPv6 default route; an unexpected frame from it in `lab-smoke` is a result to send back.
+3. `run linux-l3 --config <l3.toml>` without the lab: 4 PASS, 1 FAIL (`preflight.baseline`), 20 SKIP, 35 ERROR, exit 1.
+4. `run linux-l3 --lab --config <l3-lab.toml>`, twice in a row: the group 40 of 40 PASS (`ipv6.neighbor` PASS among
+   them), the cross-check `AGREE` or `NOT_APPLICABLE` only, 23 windows, each `NONE` or `EXPECTED` (nine `EXPECTED`:
+   the seven of stage 7c3, `lan_on` and `lan_private_open`), `lab.window_counts` all `as_expected`,
+   `group.outside_windows` only `specific_bypass_dns_lock` (`EXPECTED`), no `findings`, exit 0 both times. In the
+   window `neighbor` `categories.allowed` is expected to show `ipv6-link-local-echo` 4 (two pings) and
+   `infrastructure` the neighbor discovery; send the counts back whatever they are.
+5. `run linux-l3 --lab --control stop-helper --config <l3-lab.toml>`: exit 0, `control_result.met` true.
+6. `run linux-l2 --config <l2.toml>`, then `runs --state-directory <state>`: every run `completion_verified`.
+
+The checks of stage W are not repeated.
+
 ## Stage 7a: Linux L3 delivery without network
 
 `run linux-l3` delivers the L3 package to one VM and runs the existing
