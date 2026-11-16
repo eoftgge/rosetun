@@ -134,11 +134,14 @@ wait_state() {
     return 1
 }
 
+# The lab's window markers (lab_mark, in lib.sh) do nothing without LAB_MARKER_ADDRESS.
 connect_with() {
     local request=$1
     # A scenario that failed half-way may have left a session.
     [[ $(state_line) =~ ^Disconnected ]] || cli 60 disconnect
+    lab_mark close
     install -m 0600 -o "$(uid_of "$USER_A")" -g "$(gid_of "$USER_A")" -- "$ART/$request" "$RUN/work-$USER_A/$request"
+    lab_mark open
     cli 120 connect "$request"
     [ "$CLI_RC" -eq 0 ] || { fail_reason="connect with $request failed: $(cli_error)"; return 1; }
     wait_state '^Connected' 30
@@ -146,7 +149,8 @@ connect_with() {
 
 disconnect() {
     cli 60 disconnect
-    wait_state '^Disconnected' 30
+    wait_state '^Disconnected' 30 || return 1
+    lab_mark close
 }
 
 table_present() { "$NFT" list table inet rosetun >/dev/null 2>&1; }
@@ -467,6 +471,16 @@ scenario_install() {
     check install.repeat "the helper keeps its process" do_repeat
 }
 
+# The positive control of the lab observer, the same as in run-l3.sh: inside the window `upgrade_ks`, right after
+# `upgrade.kill-switch-no-leak` passed, the service stops and one direct request goes where it was refused a
+# moment ago. Without Lockdown the hold the upgrade left ends with an ordinary stop, as a crash's hold does, so the
+# request leaves while the counter's table still stands, after its count was taken. The scenarios after it run as
+# they are and may fail; the observer has to see that request.
+control_stop_helper() {
+    timeout "$UNIT_TIMEOUT_SECONDS" systemctl stop rosetun-helper.service
+    direct_https >/dev/null
+}
+
 scenario_upgrade() {
     do_watch() {
         local packets
@@ -479,7 +493,10 @@ scenario_upgrade() {
     check upgrade.watch "the counter works" do_watch
     passed upgrade.watch || return 0
 
-    do_no_leak() {
+    # The function that opens a session names its lab window (lab_label): `upgrade_ks` opens the one window of
+    # the kill-switch session, which the hold keeps through the upgrade (the table never goes, so no marker
+    # does), and the `disconnect` of `do_reconnect` closes it.
+    upgrade_ks() {
         local prober_pid packets attempts missing since
         connect_with request-kill-switch.json || return 1
         table_present || { fail_reason="a kill-switch session has no table"; return 1; }
@@ -500,8 +517,9 @@ scenario_upgrade() {
         [ "$missing" -eq 0 ] || { fail_reason="the table was gone at $missing of $attempts looks"; return 1; }
         [ "${packets:-1}" -eq 0 ] || { fail_reason="$packets packets past the tunnel: $(watch_senders "$since")"; return 1; }
     }
-    check upgrade.kill-switch-no-leak "the table stayed and nothing left past the tunnel" do_no_leak
+    check upgrade.kill-switch-no-leak "the table stayed and nothing left past the tunnel" upgrade_ks
     passed upgrade.kill-switch-no-leak || return 0
+    [ "$LAB_CONTROL" != stop-helper ] || control_stop_helper
 
     do_hold() {
         wait_service_answers || return 1
@@ -525,9 +543,15 @@ scenario_upgrade() {
     }
     check upgrade.reconnect "connect lifts the hold, disconnect opens the network" do_reconnect
 
-    do_lockdown() {
+    upgrade_lockdown() {
+        # A window the kill-switch session left open (a scenario of it failed before its disconnect) is closed
+        # here, once nothing of Rosetun is in the way.
+        lab_mark close
         install_package "$OLD_DEB" || return 1
         wait_service_answers || return 1
+        # Under Lockdown the table stays and no marker goes out, so the one window of the Lockdown scenarios
+        # opens before Lockdown goes on and closes in `do_remove`, once the removal took the table away.
+        lab_mark open
         lockdown_on || return 1
         install_package "$NEW_DEB" || return 1
         wait_service_answers || return 1
@@ -537,7 +561,7 @@ scenario_upgrade() {
         table_present || { fail_reason="the table is gone"; return 1; }
         expect_blocked "HTTPS on $PHYS" direct_https
     }
-    check upgrade.lockdown "Lockdown survives the upgrade" do_lockdown
+    check upgrade.lockdown "Lockdown survives the upgrade" upgrade_lockdown
 }
 
 scenario_remove() {
@@ -563,6 +587,7 @@ scenario_remove() {
         [ ! -e "$UNIT_FILE" ] || { fail_reason="the unit file is still there"; return 1; }
         systemctl --quiet is-active rosetun-helper.service && { fail_reason="the service still runs"; return 1; }
         table_present && { fail_reason="the table is still there"; return 1; }
+        lab_mark close
         [ ! -e "$RECORD" ] || { fail_reason="the record is still there"; return 1; }
         expect_reached "HTTPS on $PHYS" direct_https
     }
