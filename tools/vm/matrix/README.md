@@ -91,13 +91,14 @@ controller leaves behind is kept and never blocks the next write). Fields:
   step with `status` `intent`, `done` or `error`; `transitions` keeps every one
   (at most 256). Each controller step is written as an intent before it runs
   and as done or error after it. A step left at intent is unknown.
-- `identities`: host run, guest run, import, lab, VM UUID, guest boot ID.
+- `identities`: host run, guest run, import, lab, VM UUID, guest boot ID (the last of `boot_chain`).
+- `boot_chain`: the boot IDs the controller confirmed, in order (stage 8c); a file without it is read with its one boot.
 - `host.boot_id` and `deadlines` (`job_deadline`, `wait_until`) as absolute
   times on the host's real-time clock.
 - `budgets`: what the run has spent, recorded before it is spent:
   `qmp_calls` (128, the last one reserved for `quit`), `qmp_events` (128),
   `qmp_bytes_o`/`qmp_bytes_i` (1 MiB each way, recorded in 64 KiB steps),
-  `qga_recoveries` (4), `qga_observations` (32), `job_calls` (112), `job_polls`
+  `qga_recoveries` (4, and one more for each planned guest reboot), `qga_observations` (32), `job_calls` (112), `job_polls`
   (4). QGA calls (128) and QGA relay bytes stay per session, as before; every
   new session is a counted recovery. The lifecycle journal counts its own rows.
 - `job`: submission, launcher and job state, guest PID, session.
@@ -116,7 +117,7 @@ lease (which never creates a run), checks the recorded QEMU (pid, host boot and
 start time, again through a pidfd), takes the run lock, connects to `qmp.sock`
 and compares `query-uuid`; then opens one agent session (a recovery), rebuilds
 the job from `linux-<stage>/plan.json`, `package.json` and the run state, waits
-until `wait_until`, collects (at most the polls left) and closes. A run killed
+(by reading the job's status, stage 8c) until `wait_until`, collects (at most the polls left) and closes. A run killed
 while closing is only closed; an assessment already saved is read back, never
 collected again. The summary carries `attached: true` and `attachments`; the
 exit code is the one the original command would have given (0 accepted, 1 not
@@ -2054,17 +2055,17 @@ the QGA session before receipt/job work. At most one additional recovery for
 unknown submit and one for failed collection are allowed: at most three of the
 existing four recovery slots, never another helper/launcher exec.
 
-After submit the controller waits the full **job timeout + 125 seconds without
-RPCs**, including the existing 120-second systemd stop/cleanup allowance and
-five seconds for final publication. First collection therefore occurs after
-1025 seconds for the default 900-second job, or 7325 for the maximum 7200-second
-job, even when L2 finishes early. One final collection may follow 15 seconds later. No status-only protocol
-or increased collect limit is needed. All reads remain under the job + 180 second
-deadline. A normal boot check costs five RPCs (info/ping/open/read/close), submit
+After submit the controller waits **at most job timeout + 125 seconds**, including the existing 120-second systemd
+stop/cleanup allowance and five seconds for final publication. Since stage 8c it reads the job's status file on the way
+(see "Waiting by reading the status") and collects as soon as it says `finished`; a job that does not say so is
+collected after the whole wait, 1025 seconds for the default 900-second job, or 7325 for the maximum 7200-second job.
+One final collection may follow 15 seconds later. No increased collect limit is needed. All reads remain under the
+job + 180 second deadline. A normal boot check costs five RPCs (info/ping/open/read/close), submit
 six, and collection with the maximum 256 KiB report costs at most 28: two boot
 checks (10), launcher status (1), two <=8 KiB status reads (6), report open + nine
 reads including the overflow/EOF probe + close (11). Thus submit plus two maximum
-collections needs at most **62 of 112 job RPCs**, independent of job duration.
+collections needs at most **62 of 112 job RPCs**, independent of job duration; the at most 16 looks of the wait
+(3 RPCs each) take 48 more, 110 in all, and stop at 52 spent.
 The refreshed QGA session uses five recovery-observation RPCs, eight receipt RPCs,
 then at most 62 job RPCs, totaling 75 of 128. Unusual short reads may exhaust the
 unchanged limits and fail explicitly. Recovery opens a new bounded session;
@@ -4230,6 +4231,130 @@ artifacts.
    stages 7e and 8a; neither is broken.
 6. `run linux-l2 --config <l2.toml>`, then `runs --state-directory <state>`: every run `completion_verified`.
 
+## Stage 8c: planned guest reboots in the controller
+
+The controller can now carry a job through a reboot of the guest that the job asks for, and it waits for a job by reading
+its status instead of sleeping. Nothing here runs Linux L4: that is stage 8d. Nothing is accepted: the release gate stays
+false and the security invariants stay **UNVERIFIED**. No run has been through a real reboot yet; the offline tests use a
+fake QEMU on named sockets and scripted agents.
+
+### Events and the chain of boots
+
+- QEMU says a guest reset as a QMP `RESET` event with `guest: true`. Events are read only while the controller looks, so
+  `Vm.watch_resets()` (the wait calls it at every look, and every guest observation calls it first) lets the loop run for
+  a quarter of a second. It sends no command and spends no QMP call; each event costs one of the 128 `qmp_events`.
+- A guest reset within the plan is **registered**: the journal row `guest-reset-observed` (result `1-of-2`, `2-of-2`),
+  the run-state step `guest-reset-N` at intent (before anything else), the current agent session invalidated, and the
+  VM `reset_pending` with `reset_kind = guest`. The plan is `planned_reboots` of the suite (`config.PLANNED_REBOOTS`:
+  `linux-reboot-smoke` 1, `linux-l4` 2, every other suite 0; at most 2, `run_state.MAX_PLANNED_REBOOTS`).
+- Every other reset is an **error that ends the run** (`LifecycleError`, exit 2, the VM closed hard), and no later boot ID
+  is taken: `unplanned-guest-reset` (more guest resets than planned, or any when none is), `host-reset-outside-reset`
+  (a `RESET` without `guest: true` that `Vm.reset()` did not cause), `guest-reset-before-first-boot`. The row
+  `guest-reset-observed` says which, and the refusal is sticky.
+- After a registered reset `await_rebooted_guest` gives the new session: the first try is `recover_guest` (the one
+  recovery the reset earns), then up to seven more tries, 15 seconds apart, each a new session that spends an
+  observation and no recovery. A boot ID is taken only when it **differs** from the last of the chain: the same one is
+  `guest-reset-boot-id-unchanged` (no reset happened), one already in the chain is `boot-id-repeated`, and a changed one
+  with no RESET behind it is `boot-id-changed-without-reset`. Each refusal is the result of the observation row.
+- The chain is `Vm.boot_chain`, kept in `run-state.json` as `boot_chain` (the first element is the boot the job was
+  submitted on; `identities.boot_id` is always its last element, so summaries read as before). `RunState.update` of
+  `identities.boot_id` starts it; later boots join only through `extend_boot_chain`, never twice. A file written before
+  the chain existed is read with its one boot.
+- The job takes the chain from the controller, never from the guest: `submit` needs the chain to be exactly the first
+  boot, `_begin` and `_fresh_boot` check `vm.last_boot_id` and the guest's reading against its last element, and the
+  collection needs `status.boot_id` to be that element and the report's `boot_ids` to equal the chain element by
+  element, or the job is refused (`l2-result-UNVERIFIED`, with the row `l2-boot-chain-mismatch` in `job-evidence.jsonl`
+  naming both lists). `report.assess` still judges the guest's list against the plan.
+- `attach` takes the chain from the run state and the last boot ID from its end. A controller that died after it saw a
+  reset and before it confirmed the boot left `guest-reset-N` at intent: the attached controller starts with the reset
+  pending and waits for the boot as the first one would (`attach-guest` then uses `await_rebooted_guest`); the count of
+  registered resets is the number of those intents. The budgets continue from the file, so the recoveries of the reboot
+  stay spent. A lab run is never attached, as before: after the death of its controller, `recover --close`.
+
+### Budgets (the numbers)
+
+| | before | with `planned_reboots` = n |
+|---|---|---|
+| `qga_recoveries` | 4 | 4 + n (one per reboot; the file allows 6 at most) |
+| journal rows of the lifecycle | 110 ordinary + 18 reserve | the same; 2 per reboot |
+| `qmp_calls` | 128 | the same; a reboot sends none |
+| `qmp_events` | 128 | the same; one per reset |
+| `qga_observations` | 32 | the same; 1 per reboot when its first try succeeds, 8 at most |
+| `job_calls` | 112 | the same; 3 per look of the wait |
+
+- **Journal rows.** One reboot takes two rows of the ordinary journal: `guest-reset-observed` and
+  `boot-chain-extended` (a refused reset takes one). An ordinary run is 10 rows (start 2, resume 3, close 5); with two
+  planned reboots it is 14, of the 110 ordinary rows, and the teardown reserve of 18 is untouched
+  (`test_two_planned_resets_fit_in_the_ordinary_rows...`). A reset that would take the ordinary rows over their limit is
+  refused with `lifecycle-journal-limit` and leaves no trace.
+- **Run-state steps.** A reboot writes `guest-reset-N` twice (intent, done) into the 256 transitions.
+- **QGA.** The rule is 4 + planned: `import-refresh` takes one, an uncertain submit or collection at most two more, each
+  reboot one; the retries of a slow boot cost observations only.
+
+### Waiting by reading the status
+
+- `LinuxL2Job.wait(seconds, sleep, clock)` replaces the fixed `job + 125` of `run`, of `attach` and of the lab run
+  (`l3_lab.py`); the bound is the same, so a run with no reboots waits no longer than before. The wait looks at
+  `status.json` (open, read, close: 3 job calls) every `max(30, seconds / 16)` seconds: 46 seconds for the usual 725,
+  never more than 16 looks. The calls are the reason: of the 112 of a job, the submission takes 6 and each of the two
+  collections at most 28, so 16 looks (48) fit and the looking stops at 52 spent, the rest being waited out as a
+  fixed wait always was. Nothing a look reads is saved except a row `l2-poll` when the state or the boot changes.
+- A look that finds `state: finished` for this run on the boot the controller confirmed last ends the wait at once;
+  `collect` follows and does what it always did (`job_polls` is spent by collections only, never by looks).
+- A look that fails (a lost session, an invalid reply) ends the looking, not the wait: the controller gives the QMP events
+  30 seconds more to explain it, since the agent stops a few seconds before the machine resets, and recovers the session
+  inside the wait when a planned reset turns up. Any other failure leaves the old branch: the wait runs out,
+  `collect`, `collect-recovery`, `collect-final`. An unplanned reset ends the wait with an error and no collection.
+- The job's own deadline, the `wait_until` of the run state and the lab capture (`DURATION_MAX`) are as they were.
+
+### The smoke job
+
+`run linux-reboot-smoke --config <reboot-smoke.toml>` (`--dry-run` first; `execution-reboot-smoke.example.toml`, schema
+`execution.v2` with `suite = "linux-reboot-smoke"`, no `[l3]` table, no lab, `timeouts.job = 300`) delivers the profile
+`reboot-smoke` and runs `guest/run-reboot-smoke.sh`: it records the first boot, checks the identity, installs and enables
+its own unit `rosetun-l2-resume.service` (the pattern of `run-l4.sh`), writes `rebooting` and runs `systemctl reboot`.
+After the boot the unit appends the second boot ID, checks that it differs and that the unit is what runs, removes
+itself and closes the report with `boot_ids` of two. Its three scenarios (`scenarios-reboot-smoke.tsv`) are
+`preflight.identity`, `reboot.planned` and `reboot.continued`, all required. There is no Rosetun service, program or
+network change; the package is the guest scripts, the catalog and `provenance.json` (`"stage": "reboot-smoke"`, no
+artifacts), which `build-artifacts.sh --reboot-smoke OUTPUT_DIR` makes (it still needs the pinned toolchain for the
+record of the build).
+
+- `start.sh` knows the stage (`reboot_smoke_start_path_allowed`, `REBOOT_SMOKE_START_REQUIRED`: 7 files) and reads the
+  keys of an L2 `job.env`. `stage-l2.py` has the profile, so the importer takes it.
+- The content directory is `guest/launch.sh`, `start.sh`, `lib.sh`, `run-reboot-smoke.sh`, `scenarios-reboot-smoke.tsv`
+  and `artifacts/provenance.json`, byte for byte of the checkout.
+- Expected result: 3 PASS, `boot_chain` of two in the summary's `execution`, `qga_recoveries` 2 in `run-state.json`
+  (one for the import, one for the reboot), `identities.boot_id` the second boot, `completion` true, exit 0. Killed after
+  the reboot, `attach` finishes it.
+
+### What to reinstall or build
+
+- The test image takes the new `stage-l2.py` (the importer knows the profile); the image itself does not change. The
+  smoke needs nothing beyond systemd and the agent.
+- The content directories of L2, L3, Proxy and L5 take the new `guest/start.sh` (the stage test and the key list changed).
+  The smoke content directory is new, as above.
+- Nothing on the Hyper-V path changes.
+
+### Qualification
+
+Each command in its own run. Stop at the first unexpected result and send back the summaries, `run-state.json`,
+`lifecycle.jsonl` and `qga-observations.jsonl` of the retained runs.
+
+1. Install `stage-l2.py` in the test image, prepare the smoke content directory, copy the new `start.sh` into the other
+   content directories.
+2. `run linux-l2 --config <l2.toml>` (the wait by reading must give the same 34 results; note when it ended against the
+   old 1025 seconds): exit 0, `completion_verified`.
+3. `run linux-reboot-smoke --config <reboot-smoke.toml> --dry-run`, then the run: 3 PASS, exit 0. In `lifecycle.jsonl`
+   the rows `guest-reset-observed` (`1-of-1`) and `boot-chain-extended` (`2`); in `run-state.json` `boot_chain` of two,
+   the steps `guest-reset-1` intent and done; in `qga-observations.jsonl` the recovery with `reason: guest-reset` and
+   `new_boot_confirmed: true`. Write down how many tries the new boot took and how long the reboot lasted.
+4. The same run killed (`kill -9` of the controller) after the reboot and again before it: `attach --state-directory ...
+   --run-id ...`; the run ends `completed`, `attached: true`, and `qga_recoveries` was not set back to 0.
+5. `runs --state-directory <state>`: every run `completion_verified`.
+6. The lab L3 once (`run linux-l3 --lab --config <l3-lab.toml>`): the same results and windows as in stage 7e; the wait
+   by reading must not change the capture or its windows.
+
 ## Stage 7a: Linux L3 delivery without network
 
 `run linux-l3` delivers the L3 package to one VM and runs the existing
@@ -4326,7 +4451,7 @@ in stage 5c.
 The addresses must be IPv4 documentation addresses (`192.0.2.0/24`,
 `198.51.100.0/24`, `203.0.113.0/24`); the VM has no network, so none of them
 answers. The example sets `job` to 300 seconds: stage 7a ends after the preflight
-checks, but the controller still waits `job + 125` seconds before it collects.
+checks, but the controller still waits for the job, at most `job + 125` seconds, before it collects.
 Raise `job` (and `deadlines.execution` to `job + 180`) for a run of every scenario.
 
 ```sh
