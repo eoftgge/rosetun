@@ -638,6 +638,20 @@ Assert-That 'the check catches the mistake it is for' ('timeout --kill-after=3 6
 $unguarded = [regex]::Matches($probe, '(?m)^\s*scope_probe [a-z-]+\s*$').Count
 Assert-That 'every L4 scope probe stops on a scope that did not run' ($unguarded -eq 0) "$unguarded unguarded"
 
+# --- the Hyper-V path of L4 is as it was: it names no lab key, the job's defaults are empty, nothing is sent
+foreach ($name in @('RosetunLinuxVm.psm1', 'Invoke-LinuxL2Matrix.ps1')) {
+    $stand = Get-Content -LiteralPath (Join-Path $PSScriptRoot "..\$name") -Raw
+    Assert-That "$name writes no lab key into a job.env" ($stand -notmatch 'LAB_(MARKER_ADDRESS|CONTROL|POLLER_KEY)') $name
+}
+foreach ($key in @('LAB_MARKER_ADDRESS', 'LAB_CONTROL', 'LAB_POLLER_KEY')) {
+    Assert-That "run-l4.sh has no $key unless job.env names it" ($probe -match "(?m)^$key=''$")
+}
+Assert-That 'run-l4.sh notes the local network and installs the poller key only for a lab' (
+    $probe -match [regex]::Escape('[ -z "$LAB_MARKER_ADDRESS" ] || date +%s%3N >"$STATE/lan-on-ms"') -and
+    $probe -match [regex]::Escape('[ -n "$LAB_POLLER_KEY" ] || return 0'))
+Assert-That 'run-l4.sh turns the control on only when asked' (
+    ([regex]::Matches($probe, [regex]::Escape('[ "$LAB_CONTROL" != stop-helper ] ||'))).Count -eq 2)
+
 Write-Host "Test-LinuxHarness: $script:Passed passed, $script:Failed failed"
 if ($script:Failed -gt 0) { exit 1 }
 exit 0

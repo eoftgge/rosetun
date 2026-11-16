@@ -287,6 +287,32 @@ expect "run-proxy.sh takes LAB_MARKER_ADDRESS and LAB_CONTROL as optional keys o
     grep -q 'DNS_PROBE_ADDRESS LAB_MARKER_ADDRESS LAB_CONTROL || return 1' "$here/../guest/run-proxy.sh"
 expect "run-proxy.sh refuses a control without a marker address" \
     grep -q '^    \[ -z "\$LAB_CONTROL" \] || { \[ "\$LAB_CONTROL" = stop-helper \] && \[ -n "\$LAB_MARKER_ADDRESS" \]; } ||$' "$here/../guest/run-proxy.sh"
+# --- run-l4.sh: what its lab wrappers do without a lab and with one (the functions only, lib.sh's own lab_mark)
+l4_functions=$work/l4-functions.sh
+awk '/^(lockdown|lockdown_lan_on|poller_authorize)\(\) \{/ { on = 1 } on { print } /^}/ { on = 0 }' \
+    "$here/../guest/run-l4.sh" >"$l4_functions"
+expect "the L4 lab wrappers were found in run-l4.sh" test -s "$l4_functions"
+l4_state=$work/l4-state
+mkdir -p "$l4_state"
+expect "without a lab the L4 wrappers send nothing, note nothing and install no key" \
+    bash -c '. "$1"; . "$2"; d=$3; lockdown_as_root() { echo "on $*" >>"$d/calls"; }; STATE=$d
+        LAB_MARKER_ADDRESS= LAB_POLLER_KEY= POLLER_DIR=$d/ssh POLLER_AUTHORIZED=$d/ssh/authorized_keys
+        lockdown --lan off && lockdown_lan_on && poller_authorize &&
+        [ "$(cat "$d/calls")" = "$(printf "on on --lan off\non on --lan on")" ] && [ ! -e "$d/lan-on-ms" ] &&
+        [ ! -e "$d/ssh" ] && [ ! -e "$d/poller-key" ]' _ "$lib" "$l4_functions" "$l4_state"
+rm -rf "$l4_state"
+mkdir -p "$l4_state"
+expect "with a lab the local network is noted before it goes on, in milliseconds, and the key is made restricted" \
+    bash -c '. "$1"; . "$2"; d=$3; lockdown_as_root() { [ -s "$d/lan-on-ms" ] && echo noted-before >"$d/order"; }; STATE=$d
+        # The stand installs as root for root; here only the mode counts.
+        install() { local keep=(); while [ $# -gt 0 ]; do case $1 in -o | -g) shift 2 ;; *) keep+=("$1"); shift ;; esac; done
+            command install "${keep[@]}"; }
+        LAB_POLLER_KEY=AAAAC3NzaC1lZDI1NTE5AAAAIDdaiAGCsQq31Uv+08lkBzoO4XLz2qYjJa8CGmj3B1Ea
+        POLLER_DIR=$d/ssh POLLER_AUTHORIZED=$d/ssh/authorized_keys LAB_MARKER_ADDRESS=203.0.113.2:9100
+        lockdown_lan_on && grep -qx noted-before "$d/order" && grep -Eq "^[0-9]{13}$" "$d/lan-on-ms" &&
+        poller_authorize && [ "$(stat -c %a "$d/ssh")" = 700 ] && [ "$(stat -c %a "$d/ssh/authorized_keys")" = 600 ] &&
+        grep -qx "restrict,command=\"/bin/true\" ssh-ed25519 $LAB_POLLER_KEY rosetun-lab-poller" "$d/ssh/authorized_keys" &&
+        [ -e "$d/poller-dir" ] && [ -e "$d/poller-file" ] && [ -e "$d/poller-key" ]' _ "$lib" "$l4_functions" "$l4_state"
 lab_functions=$work/lab-functions.sh
 awk '/^# -+ lab windows/ { on = 1 } on' "$lib" >"$lab_functions"
 expect "the lab window functions were found in lib.sh" test -s "$lab_functions"
