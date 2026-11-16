@@ -36,6 +36,8 @@ TUNNEL_ARTIFACTS = {'lab-https': 'https.json', 'lab-node': 'node.log'}
 DNS_ARTIFACTS = {'lab-dns': 'dns.json'}
 # Only a diagnostic L3 run counts the flows behind the node.
 ROUTE_ARTIFACTS = {'lab-route-flows': 'route-flows.json'}
+# Only a Linux L4 run has the log of the lab's SSH poller: every attempt with its time and result.
+POLLER_ARTIFACTS = {'lab-poller': 'poller.json'}
 # Only a diagnostic L3 run keeps the whole journal of the service, and it keeps it in the run of the test machine
 # (`JOURNAL_FULL` of `linux_l2` under `linux-l3/`). It is registered here because `lifecycle.start` accepts exactly
 # the resources that preparation and the lab pair registered, and no others.
@@ -136,7 +138,7 @@ def plan_lab(config, *, tunnel=False, evidence_disk=False, dns=False, control=No
 class LabPair:
     """Capability for two particular runs under their original lease."""
     def __init__(self, lease, runs, lab_id, *, pair_factory=socket.socketpair, tunnel=False, evidence_disk=False,
-                 dns=False, route_flows=False, journal_full=False):
+                 dns=False, route_flows=False, journal_full=False, poller=False):
         lease._check_live()
         if set(runs) != set(MACS) or lease._active or runs['test'] is runs['lab']:
             raise ValueError('invalid-lab-members')
@@ -149,6 +151,7 @@ class LabPair:
         self.dns = dns is True
         self.route_flows = route_flows is True
         self.journal_full = journal_full is True
+        self.poller = poller is True
         self.sockets = {}
         self.used = set()
         self.closed = False
@@ -187,6 +190,8 @@ class LabPair:
             files = {**files, **DNS_ARTIFACTS}
         if getattr(self, 'route_flows', False):
             files = {**files, **ROUTE_ARTIFACTS}
+        if getattr(self, 'poller', False):
+            files = {**files, **POLLER_ARTIFACTS}
         return {**files, **EVIDENCE_RESOURCES} if getattr(self, 'evidence_disk', False) else files
 
     def check_start(self, run):
@@ -286,7 +291,7 @@ class Guest:
                 request['tunnel'] = tunnel
             if options:
                 if not set(options) <= {'evidence_disk', 'duration_seconds', 'dns', 'dns_check', 'windows',
-                                        'certificates', 'route_flows', 'control'}:
+                                        'certificates', 'route_flows', 'control', 'poller'}:
                     raise ValueError('invalid-lab-option')
                 request.update(options)
             self.vm.qga.jobs_enabled = True
@@ -316,7 +321,7 @@ class Guest:
 
     def read(self, name, limit):
         if name not in (*ARTIFACTS.values(), *TUNNEL_ARTIFACTS.values(), *DNS_ARTIFACTS.values(),
-                        *ROUTE_ARTIFACTS.values()):
+                        *ROUTE_ARTIFACTS.values(), *POLLER_ARTIFACTS.values()):
             raise ValueError('invalid-lab-artifact')
         with self.vm._guest_lock:
             handle = self.rpc('guest-file-open', {'path': '/run/rosetun-lab/' + self.lab_id + '/' + name, 'mode': 'r'})

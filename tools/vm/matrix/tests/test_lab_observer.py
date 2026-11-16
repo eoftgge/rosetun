@@ -15,7 +15,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from tools.vm.matrix import l3_lab, lab, orchestrator, lab_protocol as wire
+from tools.vm.matrix import l3_lab, lab, orchestrator, lab_protocol as wire, poller_key
 from tools.vm.matrix.tests import test_lab as frames
 from tools.vm.matrix.tests import test_lab as frames
 from tools.vm.matrix.tests.test_lab_fixtures import load_entry, runpy_main, tunnel_block
@@ -361,8 +361,10 @@ class PlacesTests(ObserverCase):
         """(Observer, health) of a run that Boom stops in `place`."""
         entry = self.entry
         tunnel = place in ('https', 'node')
+        # The poller of Linux L4 is a thread of the observer that needs the phase windows and a key of its own.
+        poller = dict(windows=True, poller=dict(private_key=poller_key.new_pair()[0])) if place == 'poller' else {}
         observer = Observer(self, tunnel=tunnel, dns=place in ('dns', 'doh'),
-                            duration=0.4 if place == 'finish' else 30)
+                            duration=0.4 if place == 'finish' else 30, **poller)
 
         def boom(*args, **kwargs):
             raise Boom('injected')
@@ -378,6 +380,8 @@ class PlacesTests(ObserverCase):
             self.enterContext(patch.object(entry, 'dns_loop', boom))
         elif place == 'doh':
             self.enterContext(patch.object(entry, 'doh_loop', boom))
+        elif place == 'poller':
+            self.enterContext(patch.object(entry, 'poll_once', boom))
         elif place == 'node':
             self.enterContext(patch.object(entry, 'start_process', boom))
         elif place == 'setup':
@@ -396,7 +400,7 @@ class PlacesTests(ObserverCase):
             elif place == 'https':
                 socket.create_connection(observer.addresses[(4, 'https')], 3).close()
             # The server threads of DNS fail on their own while the loop goes on until it is stopped.
-            if place not in ('dns', 'doh'):
+            if place not in ('dns', 'doh', 'poller'):
                 observer.thread.join(10)
         return observer, observer.finish()
 

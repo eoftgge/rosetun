@@ -66,6 +66,17 @@ NODE_LOG_GAP = 64
 L3_BODY = b'rosetun-lab-target\n'
 REFUSAL_ROWS = 8
 TUNNEL_KEYS = {'port', 'method', 'password', 'sing_box_sha256', 'ca_sha256', 'https'}
+# Stage 8d: the SSH poller of Linux L4 stands in for the host node that polls the guest legacy L4 runs beside: one
+# `ssh` login of a restricted key every POLL_INTERVAL seconds, from the lab's own address to the test machine's
+# sshd, whose journal then says `Accepted publickey ... from 192.0.2.1`. Each attempt is logged with its time and
+# result (at most POLL_ROWS) and the log is a file of the run. The key is the run's own, made by the controller.
+SSH = Path('/usr/bin/ssh')
+POLL_INTERVAL = 10
+POLL_TIMEOUT = 15
+POLL_ROWS = 256
+POLLER_KEYS = {'private_key'}
+POLLER_KEY_PATTERN = re.compile(r'-----BEGIN OPENSSH PRIVATE KEY-----\n[A-Za-z0-9+/=\n]{1,1024}'
+                                r'-----END OPENSSH PRIVATE KEY-----\n')
 HTTPS_KEYS = {'run_id', 'nonce', 'kind', 'family', 'protocol', 'source', 'target', 'port', 'path'}
 lstat = os.lstat
 
@@ -127,6 +138,7 @@ def identity(request):
         raise ValueError('invalid-control')
     if 'dns_check' in request:
         dns_check_of(request)
+    poller_of(request)
     if 'certificates' in request:
         pinned = request['certificates']
         if (type(pinned) is not dict or set(pinned) != {'https_sha256', 'doh_sha256'}
@@ -175,6 +187,30 @@ def dns_check_of(request):
             != (DNS_CHECK_DOH, 'tcp', TARGETS[4], HTTPS_PORT) or doh['path'] != '/' + doh['run_id'] + '/' + doh['nonce']):
         raise ValueError('foreign-dns-check')
     return checks
+
+
+def poller_of(request):
+    """The validated `poller` block of a request, or None: the one-time private key of the SSH poller of Linux L4.
+
+    The key is the whole block. It needs the windows of the phases and the evidence disk of a stage-8 run, and an
+    OpenSSH private key file of a plain shape and a bounded size, nothing more.
+    """
+    if 'poller' not in request:
+        return None
+    block = request['poller']
+    if (type(block) is not dict or set(block) != POLLER_KEYS or request.get('windows') is not True
+            or request.get('control') is not None or type(block['private_key']) is not str
+            or not POLLER_KEY_PATTERN.fullmatch(block['private_key'])):
+        raise ValueError('invalid-poller')
+    return block
+
+
+def redacted(request):
+    """The request as the lab machine keeps it on disk: the poller's private key is replaced by its hash."""
+    if 'poller' not in request:
+        return request
+    block = request['poller']
+    return {**request, 'poller': dict(private_key_sha256=hashlib.sha256(block['private_key'].encode()).hexdigest())}
 
 
 def tunnel_of(request):
@@ -734,9 +770,50 @@ def check_dns_fixtures(certificates=None):
     fixture(DOH_KEY, 'missing-doh-key', private=True)
 
 
+class PollerLog:
+    """The rows of poller.json: one per attempt of the poller, bounded by count."""
+
+    def __init__(self):
+        self.rows, self.overflow = [], False
+
+    def record(self, attempt, started, result, code, elapsed_ms):
+        if len(self.rows) >= POLL_ROWS:
+            self.overflow = True
+            return
+        self.rows.append(dict(attempt=attempt, at=round(started, 3), result=result, code=code, elapsed_ms=elapsed_ms))
+
+
+def poll_once(key_path):
+    """One login of the poller: (result, exit code of ssh). `accepted` means the forced command ran and ended 0."""
+    try:
+        process = subprocess.run(
+            [str(SSH), '-i', str(key_path), '-b', GATEWAYS[4], '-o', 'BatchMode=yes', '-o', 'IdentitiesOnly=yes',
+             '-o', 'StrictHostKeyChecking=no', '-o', 'UserKnownHostsFile=/dev/null', '-o', 'LogLevel=ERROR',
+             '-o', 'ConnectTimeout=5', '-o', 'ConnectionAttempts=1', 'root@' + CLIENTS[4], 'true'],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=POLL_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        return 'timeout', None
+    except OSError:
+        return 'error', None
+    return ('accepted' if process.returncode == 0 else 'failed'), process.returncode
+
+
+def poller_loop(key_path, log, stop):
+    attempt = 0
+    while not stop.is_set():
+        attempt += 1
+        started, begun = time.time(), time.monotonic()
+        result, code = poll_once(key_path)
+        log.record(attempt, started, result, code, int((time.monotonic() - begun) * 1000))
+        if stop.wait(POLL_INTERVAL):
+            return
+
+
 def setup(request, iface, directory):
     # The role, VM, boot and one-shot run claim are checked before any mutation.
     tunnel = tunnel_of(request)
+    if poller_of(request) is not None:
+        fixture(SSH, 'poller-ssh-missing')
     if tunnel is not None:
         check_lab_fixtures(tunnel, request.get('certificates'))
     if request.get('dns') is True:
@@ -1331,6 +1408,8 @@ def serve(request, directory):
     logs, dropped, marks, ended, started = [], 0, [], None, None
     failure, place = Failure(), 'setup'
     tunnel = tunnel_of(request)
+    poller = poller_of(request)
+    poller_log, poller_stop, poller_thread, poller_key = PollerLog(), threading.Event(), None, directory / 'poller.key'
     https_log, node, node_state, context, servers = [], None, None, None, None
     # An L3 run counts what the script asks of the HTTPS target; its connections run on threads.
     https_requests = HttpsLog() if l3_mode(request) else None
@@ -1411,6 +1490,14 @@ def serve(request, directory):
                 route_thread.start()
             except Exception:
                 route_state['error'] = 'route-capture-unavailable'
+        if poller is not None:
+            # The key lives on this machine's tmpfs for the length of the capture and is removed with it.
+            descriptor = os.open(poller_key, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(descriptor, 'w', encoding='ascii') as stream:
+                stream.write(poller['private_key'])
+            poller_thread = threading.Thread(target=guarded, args=('poller', failure, poller_loop, poller_key,
+                                                                   poller_log, poller_stop), daemon=True)
+            poller_thread.start()
         write(directory / 'ready.json', {'capture_ready': True})
         while time.monotonic() < deadline and not (directory / 'stop').exists():
             for key, _ in selector.select(.1):
@@ -1499,6 +1586,17 @@ def serve(request, directory):
         for stream in dns_sockets:
             stream.close()
         extra = {}
+        poller_stop.set()
+        if poller_thread is not None:
+            poller_thread.join(POLL_TIMEOUT + 2)
+        if poller is not None:
+            try:
+                poller_key.unlink()
+            except OSError:
+                pass
+            settle(lambda: write(directory / 'poller.json', poller_log.rows))
+            if poller_log.overflow:
+                failure.note('poller', ValueError('poller-log-limit'))
         route_stop.set()
         if route_thread is not None:
             route_thread.join(2)
@@ -1553,9 +1651,9 @@ def main(request):
     if operation == 'setup' and request['role'] == 'lab':
         ROOT.mkdir(mode=0o700, exist_ok=True)
         # A single claim per boot prevents replay into another run or namespace.
-        write(ROOT / 'claim.json', request)
+        write(ROOT / 'claim.json', redacted(request))
         directory.mkdir(mode=0o700)
-        write(directory / 'identity.json', request)
+        write(directory / 'identity.json', redacted(request))
         setup(request, iface, directory)
         return dict(capture_ready=True)
     if operation == 'probe' and request['role'] == 'test':
@@ -1565,9 +1663,10 @@ def main(request):
     saved = json.loads((directory / 'identity.json').read_bytes())
     if any(saved[k] != request[k] for k in ('lab_id', 'role', 'vm_uuid', 'boot_id', 'probes', 'markers')):
         raise ValueError('wrong-run')
-    if any(saved.get(key) != request.get(key) for key in ('tunnel', 'dns', 'dns_check', 'evidence_disk',
-                                                       'duration_seconds', 'windows', 'certificates',
-                                                       'route_flows', 'control')):
+    shown = redacted(request)
+    if any(saved.get(key) != shown.get(key) for key in ('tunnel', 'dns', 'dns_check', 'evidence_disk',
+                                                     'duration_seconds', 'windows', 'certificates',
+                                                     'route_flows', 'control', 'poller')):
         raise ValueError('wrong-run')
     if request['role'] == 'lab' and operation == 'serve':
         if request.get('interface') != iface:

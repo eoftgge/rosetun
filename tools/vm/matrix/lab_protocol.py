@@ -31,7 +31,8 @@ LOG_LIMIT = 32768
 HELPER_REASON = re.compile(r'[a-z0-9:._-]{1,96}')
 REASON_LIMIT = 96
 # Where the observer was when it stopped, as `error_in` of `health.json`.
-OBSERVER_PLACES = ('capture', 'marker', 'http', 'udp', 'dns-tcp', 'https', 'dns', 'doh', 'node', 'setup', 'finish')
+OBSERVER_PLACES = ('capture', 'marker', 'http', 'udp', 'dns-tcp', 'https', 'dns', 'doh', 'node', 'poller', 'setup',
+                   'finish')
 # Stage 7b2a: phase windows. Window N is bracketed by `open` and `close` markers that carry
 # its index and the short name of the phase it observes.
 WINDOW_WORDS = ('open', 'close')
@@ -1281,13 +1282,43 @@ def _window_clock(row, times):
     return clock
 
 
-def _window_counts(names, tunnel_port):
+def _window_counts(names, tunnel_port, poll=False):
     counts = dict(probe=0, marker=0, infrastructure=0, unexpected=0, foreign=0, unparsed=0)
     if names:
         counts['allowed'] = dict.fromkeys(sorted(names), 0)
     if tunnel_port is not None:
         counts['tunnel'] = 0
+    if poll:
+        counts[POLL_CATEGORY] = 0
     return counts
+
+
+# Stage 8d: the lab's SSH poller of Linux L4 (`inbound.lan-open` waits for a new connection from the host node, which
+# in the lab is the lab machine). The category `inbound-poll` is exactly one connection pattern: TCP from the lab's
+# address to the test machine's port 22, whenever it is sent (a SYN nobody answers is the poller's own business), and
+# the test machine's segments from port 22 back to a port the poller used, from the moment its local network went on.
+# A reply before that moment, or to any other port, is an unexpected frame like any other. Both ends are fixed by the
+# MACs and the addresses of the lab, so nothing wider than the poller's four-tuple is let through.
+POLL_CATEGORY = 'inbound-poll'
+POLL_PORT = 22
+
+
+def _poll_direction(frame):
+    """'request' for a TCP segment of the lab to the test machine's sshd, 'reply' for one of it back, else None."""
+    if frame.family != 4 or frame.proto != 6 or frame.fragment or frame.arp is not None:
+        return None
+    if ((frame.src, frame.dst, frame.dport) == (GATEWAYS[4], CLIENTS[4], POLL_PORT)
+            and (frame.src_mac, frame.dst_mac) == (MACS['lab'], MACS['test'])):
+        return 'request'
+    if ((frame.src, frame.dst, frame.sport) == (CLIENTS[4], GATEWAYS[4], POLL_PORT)
+            and (frame.src_mac, frame.dst_mac) == (MACS['test'], MACS['lab'])):
+        return 'reply'
+    return None
+
+
+def _poll_ports(frames):
+    """The source ports the lab's poller used, from the segments it sent to the test machine's sshd."""
+    return {frame.sport for frame in frames if _poll_direction(frame) == 'request'}
 
 
 def _count(counts, category, frame, listing, unexpected_key):
@@ -1348,7 +1379,7 @@ def _window_allowances(window_allowances, found_mode):
 
 def classify_windows(raw, run, windows_expected, *, health, ready, allowances=(), tunnel_port=None,
                      https=None, probes=(), limit=CAPTURE_LIMIT, required_labels=(), flows=False,
-                     window_allowances=None):
+                     window_allowances=None, inbound_poll=None):
     """Split one capture into phase windows and give every expected window its own leak verdict.
 
     `windows_expected` lists, in order, the windows the controller expects: dicts with the
@@ -1380,6 +1411,10 @@ def classify_windows(raw, run, windows_expected, *, health, ready, allowances=()
     `window_allowances` maps a label to allowance names that hold, beside `allowances`, inside the windows
     whose markers name that label and nowhere else (found mode only); their counts are in that window's
     `categories.allowed`.
+
+    `inbound_poll` turns on the category `inbound-poll` (see POLL_CATEGORY): a dict with `replies_from`, the capture
+    time in seconds from which the test machine's answers to the poller are admitted, or None for never. Without it
+    the poller's frames are unexpected frames, as for every other suite. Poller frames are never part of `flows`.
     """
     found_mode = windows_expected is None
     if found_mode:
@@ -1396,9 +1431,15 @@ def classify_windows(raw, run, windows_expected, *, health, ready, allowances=()
         _tunnel_port(tunnel_port)
     parsed, unparsed, problem = _parse_capture(raw, limit)
     is_probe = _probe_matcher([frame for _, frame in parsed], probes, direct_connection(https))
-    times = _record_times(raw, limit) if flows else []
+    poll = inbound_poll is not None
+    if poll and (type(inbound_poll) is not dict or set(inbound_poll) != {'replies_from'}
+                 or not (inbound_poll['replies_from'] is None or (
+                     type(inbound_poll['replies_from']) in (int, float) and math.isfinite(inbound_poll['replies_from'])))):
+        raise ValueError('invalid-windows')
+    times = _record_times(raw, limit) if flows or poll else []
+    polled = _poll_ports(frame for _, frame in parsed) if poll else set()
     windows, requests = {}, []
-    outside = _window_counts(names, tunnel_port)
+    outside = _window_counts(names, tunnel_port, poll)
     outside['outside-window'] = outside.pop('unexpected')
     outside_frames = []
     current, broken, next_index = None, None, 0
@@ -1406,7 +1447,7 @@ def classify_windows(raw, run, windows_expected, *, health, ready, allowances=()
     def window(index, label):
         if index not in windows:
             own = names | by_label.get(label, frozenset())
-            windows[index] = dict(categories=_window_counts(own, tunnel_port), names=own, unexpected=[], reasons=[],
+            windows[index] = dict(categories=_window_counts(own, tunnel_port, poll), names=own, unexpected=[], reasons=[],
                                   labels=[], first=None, last=None, flows=_Flows(tunnel_port) if flows else None,
                                   direct=_Direct() if flows else None,
                                   seen={(word, kind): [] for word in WINDOW_WORDS for kind in ('request', 'response')})
@@ -1451,12 +1492,19 @@ def classify_windows(raw, run, windows_expected, *, health, ready, allowances=()
                 if fault is not None and broken is None:
                     broken = (fault, position)
             continue
-        category = _category(item, is_probe, names if current is None else windows[current]['names'], tunnel_port)
+        direction = _poll_direction(item) if poll else None
+        if direction == 'request' or (direction == 'reply' and item.dport in polled
+                                      and inbound_poll['replies_from'] is not None and position < len(times)
+                                      and times[position] >= inbound_poll['replies_from']):
+            category = POLL_CATEGORY
+        else:
+            category = _category(item, is_probe, names if current is None else windows[current]['names'],
+                                 tunnel_port)
         if current is None:
             _count(outside, category, item, outside_frames, 'outside-window')
         else:
             _count(windows[current]['categories'], category, item, windows[current]['unexpected'], 'unexpected')
-            if flows and item.proto == 6 and not item.fragment:
+            if flows and item.proto == 6 and not item.fragment and category != POLL_CATEGORY:
                 windows[current]['flows'].add(item, times[position] if position < len(times) else None)
             if flows and category == 'unexpected':
                 windows[current]['direct'].add(item)
@@ -1480,7 +1528,7 @@ def classify_windows(raw, run, windows_expected, *, health, ready, allowances=()
         row, reasons = windows.get(index), []
         if row is None:
             reasons.append('window-missing')
-            row = dict(categories=_window_counts(names, tunnel_port), unexpected=[], reasons=[])
+            row = dict(categories=_window_counts(names, tunnel_port, poll), unexpected=[], reasons=[])
         else:
             seen = row['seen']
             if any(len(positions) != 1 for positions in seen.values()):
