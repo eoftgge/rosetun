@@ -647,8 +647,8 @@ class PairTests(unittest.TestCase):
         unix.start()
         self.addCleanup(unix.stop)
         self.fixture = test_qemu.PreparationTests()
-        self.fixture.setUp()
         self.addCleanup(self.fixture.doCleanups)
+        self.fixture.setUp()
         self.fixture.config = replace(self.fixture.config, qga=True)
         self.runs = dict(test=self.fixture.run, lab=create_run(self.fixture.lease))
         self.plans = {}
@@ -732,8 +732,8 @@ class PairTests(unittest.TestCase):
 class OrchestrationTests(unittest.TestCase):
     def scenario(self, fault=None, canary=False):
         fixture = test_qemu.PreparationTests()
-        fixture.setUp()
         self.addCleanup(fixture.doCleanups)
+        fixture.setUp()
         config = dict(schema='rosetun.matrix.lab.v1', state_directory=str(fixture.root / 'lab-state'),
                       stand_id='lab', qemu=asdict(replace(fixture.config, machine='pc-i440fx-10.0', qga=True)),
                       test_image=fixture.image.record(), lab_image=fixture.image.record())
@@ -893,8 +893,8 @@ class OrchestrationTests(unittest.TestCase):
 
     def test_dry_run_has_no_mutations_or_network(self):
         fixture = test_qemu.PreparationTests()
-        fixture.setUp()
         self.addCleanup(fixture.doCleanups)
+        fixture.setUp()
         config = dict(schema='rosetun.matrix.lab.v1', state_directory=str(fixture.root / 'absent'),
                       stand_id='lab', qemu=asdict(replace(fixture.config, machine='pc-i440fx-10.0', qga=True)),
                       test_image=fixture.image.record(), lab_image=fixture.image.record())

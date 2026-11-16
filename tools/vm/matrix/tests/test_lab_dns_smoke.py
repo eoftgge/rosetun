@@ -32,8 +32,8 @@ def plain_frames(check, *, reply=True, source=wire.CLIENTS[4]):
 class DnsSmoke(unittest.TestCase):
     def scenario(self, fault=None, dns=True, tunnel=True):
         fixture = test_qemu.PreparationTests()
-        fixture.setUp()
         self.addCleanup(fixture.doCleanups)
+        fixture.setUp()
         config = dict(schema=lab.SCHEMA_V2, state_directory=str(fixture.root / 'lab-state'), stand_id='lab',
                       qemu=asdict(replace(fixture.config, machine='pc-i440fx-10.0', qga=True)),
                       test_image=fixture.image.record(), lab_image=fixture.image.record(), tunnel=tunnel_block())
@@ -286,8 +286,8 @@ class DnsSmoke(unittest.TestCase):
     def test_dns_needs_the_tunnel_and_is_refused_before_anything_starts(self):
         sentinel = SimpleNamespace(host=lambda: self.fail('adapters used before the configuration was refused'))
         fixture = test_qemu.PreparationTests()
-        fixture.setUp()
         self.addCleanup(fixture.doCleanups)
+        fixture.setUp()
         config = dict(schema=lab.SCHEMA_V2, state_directory=str(fixture.root / 'lab-state'), stand_id='lab',
                       qemu=asdict(replace(fixture.config, machine='pc-i440fx-10.0', qga=True)),
                       test_image=fixture.image.record(), lab_image=fixture.image.record(), tunnel=tunnel_block())

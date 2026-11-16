@@ -165,8 +165,8 @@ class L3FlowTests(base.FlowTests):
 
     def test_the_l2_summary_names_its_suite_and_never_asks_for_requests(self):
         case = base.FlowTests('test_complete_order_late_agent_and_no_early_collection')
-        case.setUp()
         self.addCleanup(case.doCleanups)
+        case.setUp()
         case.adapters.requests = lambda *a: self.fail('L2 has no generated requests')
         result = case.execute()
         self.assertEqual(('linux-l2', 0), (result['suite'], result['exit_code']))
@@ -257,8 +257,8 @@ class ExecutionConfigTests(unittest.TestCase):
 class L3DryRunTests(unittest.TestCase):
     def setUp(self):
         self.fixture = test_qemu.PreparationTests()
-        self.fixture.setUp()
         self.addCleanup(self.fixture.doCleanups)
+        self.fixture.setUp()
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         root = Path(self.temp.name)

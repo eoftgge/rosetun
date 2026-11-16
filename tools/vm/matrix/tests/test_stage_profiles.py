@@ -204,8 +204,8 @@ class L2BytesTests(unittest.TestCase):
 
     def test_l2_import_job_env_request_and_receipt_are_the_old_bytes(self):
         fixture = test_l2_media.ImportTests()
-        fixture.setUp()
         self.addCleanup(fixture.doCleanups)
+        fixture.setUp()
         vm = fixture.vm
         fixture.obj.stage()
         expected = ''.join(f'{k}={v}\n' for k, v in zip(self.ENV, (
@@ -228,8 +228,8 @@ class L2BytesTests(unittest.TestCase):
 
     def test_an_l2_request_may_not_name_a_profile(self):
         fixture = test_l2_media.ImportTests()
-        fixture.setUp()
         self.addCleanup(fixture.doCleanups)
+        fixture.setUp()
         for profile in ('l2', 'l4', ['l3'], None):
             request = copy.deepcopy(fixture.obj.request)
             request['identity']['profile'] = profile
@@ -238,8 +238,8 @@ class L2BytesTests(unittest.TestCase):
 
     def test_l2_job_keeps_its_evidence_directory_and_identity(self):
         fixture = test_linux_l2.ExecutionTests()
-        fixture.setUp()
         self.addCleanup(fixture.doCleanups)
+        fixture.setUp()
         self.assertEqual('linux-l2', fixture.job.identity['job_id'])
         self.assertEqual('l2', fixture.job.profile.name)
         self.assertEqual('linux-l2', fixture.job.plan['suite'])
@@ -568,8 +568,8 @@ class L3MediaTests(unittest.TestCase):
 
     def setUp(self):
         self.fixture = test_l2_media.MediaTests()
-        self.fixture.setUp()
         self.addCleanup(self.fixture.doCleanups)
+        self.fixture.setUp()
         self.root = self.fixture.root
         for child in list(self.root.iterdir()):
             shutil.rmtree(child) if child.is_dir() else child.unlink()
@@ -713,8 +713,8 @@ class JournalTextTests(unittest.TestCase):
 class L3ImportTests(unittest.TestCase):
     def setUp(self):
         self.fixture = test_jobs.JobsTests()
-        self.fixture.setUp()
         self.addCleanup(self.fixture.doCleanups)
+        self.fixture.setUp()
         self.vm, self.agent = self.fixture.vm, self.fixture.agent
         del self.vm._smoke_job
         temp = tempfile.TemporaryDirectory()
@@ -1169,8 +1169,8 @@ class ProxyDeliveryTests(unittest.TestCase):
 
     def setUp(self):
         self.fixture = test_jobs.JobsTests()
-        self.fixture.setUp()
         self.addCleanup(self.fixture.doCleanups)
+        self.fixture.setUp()
         self.vm = self.fixture.vm
         del self.vm._smoke_job
         temp = tempfile.TemporaryDirectory()
@@ -1292,8 +1292,8 @@ class L5DeliveryTests(unittest.TestCase):
 
     def setUp(self):
         self.fixture = test_jobs.JobsTests()
-        self.fixture.setUp()
         self.addCleanup(self.fixture.doCleanups)
+        self.fixture.setUp()
         self.vm = self.fixture.vm
         del self.vm._smoke_job
         temp = tempfile.TemporaryDirectory()

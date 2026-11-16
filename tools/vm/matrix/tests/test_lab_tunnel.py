@@ -31,8 +31,8 @@ class ConfigTests(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
         fixture = test_qemu.PreparationTests()
-        fixture.setUp()
         self.addCleanup(fixture.doCleanups)
+        fixture.setUp()
         self.v1 = dict(schema=lab.SCHEMA_V1, state_directory=str(fixture.root / 'state'), stand_id='lab',
                        qemu=asdict(replace(fixture.config, machine='pc-i440fx-10.0', qga=True)),
                        test_image=fixture.image.record(), lab_image=fixture.image.record())
@@ -91,8 +91,8 @@ class ConfigTests(unittest.TestCase):
 class OrchestrationTests(unittest.TestCase):
     def scenario(self, fault=None, canary=False):
         fixture = test_qemu.PreparationTests()
-        fixture.setUp()
         self.addCleanup(fixture.doCleanups)
+        fixture.setUp()
         config = dict(schema=lab.SCHEMA_V2, state_directory=str(fixture.root / 'lab-state'),
                       stand_id='lab', qemu=asdict(replace(fixture.config, machine='pc-i440fx-10.0', qga=True)),
                       test_image=fixture.image.record(), lab_image=fixture.image.record(),
@@ -323,8 +323,8 @@ class CommandLineTests(unittest.TestCase):
 
     def test_a_version_1_configuration_with_the_flag_exits_2_before_any_work(self):
         fixture = test_qemu.PreparationTests()
-        fixture.setUp()
         self.addCleanup(fixture.doCleanups)
+        fixture.setUp()
         v1 = dict(schema=lab.SCHEMA_V1, state_directory=str(fixture.root / 'state'), stand_id='lab',
                   qemu=asdict(replace(fixture.config, machine='pc-i440fx-10.0', qga=True)),
                   test_image=fixture.image.record(), lab_image=fixture.image.record())

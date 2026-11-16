@@ -21,8 +21,8 @@ def old_row(value):
 
 
 def fixture_of(case, fixture):
-    fixture.setUp()
     case.addCleanup(fixture.doCleanups)
+    fixture.setUp()
     return fixture
 
 

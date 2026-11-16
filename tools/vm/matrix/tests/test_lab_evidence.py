@@ -337,8 +337,8 @@ class Run:
     def scenario(self):
         run = self
         fixture = test_qemu.PreparationTests()
-        fixture.setUp()
         self.test.addCleanup(fixture.doCleanups)
+        fixture.setUp()
         config = dict(schema=lab.SCHEMA_V2 if self.tunnel else lab.SCHEMA_V1,
                       state_directory=str(fixture.root / 'lab-state'), stand_id='lab',
                       qemu=asdict(replace(fixture.config, machine='pc-i440fx-10.0', qga=True)),
@@ -530,8 +530,8 @@ class SmokeTests(unittest.TestCase):
     def test_a_duration_outside_the_range_is_refused_before_anything_starts(self):
         sentinel = SimpleNamespace(host=lambda: self.fail('adapters used'))
         fixture = test_qemu.PreparationTests()
-        fixture.setUp()
         self.addCleanup(fixture.doCleanups)
+        fixture.setUp()
         config = dict(schema=lab.SCHEMA_V1, state_directory=str(fixture.root / 's'), stand_id='lab',
                       qemu=asdict(replace(fixture.config, machine='pc-i440fx-10.0', qga=True)),
                       test_image=fixture.image.record(), lab_image=fixture.image.record())
@@ -607,8 +607,8 @@ class CommandLineTests(unittest.TestCase):
 
     def test_the_plan_adds_the_disk_and_leaves_the_rest_as_it_was(self):
         fixture = test_qemu.PreparationTests()
-        fixture.setUp()
         self.addCleanup(fixture.doCleanups)
+        fixture.setUp()
         config = dict(schema=lab.SCHEMA_V1, state_directory=str(fixture.root / 's'), stand_id='lab',
                       qemu=asdict(replace(fixture.config, machine='pc-i440fx-10.0', qga=True)),
                       test_image=fixture.image.record(), lab_image=fixture.image.record())

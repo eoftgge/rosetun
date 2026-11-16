@@ -249,8 +249,8 @@ class RunTests(Flow):
 
     def go_again(self, **kwargs):
         case = RunTests()
-        case.setUp()
         self.addCleanup(case.doCleanups)
+        case.setUp()
         return case.go(Machines(case, **kwargs))
 
     def test_the_whole_summary_is_saved_with_its_cross_check_in_both_runs(self):

@@ -64,8 +64,8 @@ class RebootCase(unittest.TestCase):
 
     def setUp(self):
         self.fixture = test_jobs.JobsTests()
-        self.fixture.setUp()
         self.addCleanup(self.fixture.doCleanups)
+        self.fixture.setUp()
         self.vm, self.agent = self.fixture.vm, self.fixture.agent
         del self.vm._smoke_job
         self.vm.planned_reboots = self.planned
@@ -568,8 +568,8 @@ class OrchestratorTests(unittest.TestCase):
 
     def setUp(self):
         self.flow = test_orchestrator.FlowTests()
-        self.flow.setUp()
         self.addCleanup(self.flow.doCleanups)
+        self.flow.setUp()
 
     def test_the_wait_is_asked_for_the_old_bound_and_a_job_that_ends_early_is_collected_at_once(self):
         asked = []
@@ -683,8 +683,8 @@ class SmokeProfileTests(unittest.TestCase):
 class SmokeDryRunTests(unittest.TestCase):
     def setUp(self):
         self.fixture = test_qemu.PreparationTests()
-        self.fixture.setUp()
         self.addCleanup(self.fixture.doCleanups)
+        self.fixture.setUp()
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         self.root = Path(temp.name)

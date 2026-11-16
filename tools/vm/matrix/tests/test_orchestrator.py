@@ -277,8 +277,8 @@ class FlowTests(unittest.TestCase):
 class PreflightTests(unittest.TestCase):
     def setUp(self):
         self.fixture = test_qemu.PreparationTests()
-        self.fixture.setUp()
         self.addCleanup(self.fixture.doCleanups)
+        self.fixture.setUp()
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         root = Path(self.temp.name)
@@ -369,8 +369,8 @@ class InitialAgentTests(unittest.TestCase):
 class ReservationTests(unittest.TestCase):
     def test_prepare_accepts_only_complete_execution_reservations(self):
         fixture = test_qemu.PreparationTests()
-        fixture.setUp()
         self.addCleanup(fixture.doCleanups)
+        fixture.setUp()
         for identifier, name in o.EXECUTION_FILES.items():
             fixture.run.register(dict(id=identifier, kind='file', path=name))
             o.save(fixture.run, name, dict(schema='synthetic'), initial=True)
@@ -381,8 +381,8 @@ class ReservationTests(unittest.TestCase):
     def test_summary_finalization_does_not_invalidate_real_completion(self):
         from tools.vm.matrix.tests import test_lifecycle
         fixture = test_lifecycle.LifecycleTests()
-        fixture.setUp()
         self.addCleanup(fixture.doCleanups)
+        fixture.setUp()
         run = fixture.run
         for identifier, name in o.EXECUTION_FILES.items():
             run.register(dict(id=identifier, kind='file', path=name))
@@ -398,8 +398,8 @@ class ReservationTests(unittest.TestCase):
     def test_media_accepts_execution_reservations_with_existing_fake_packager(self):
         from tools.vm.matrix.tests import test_l2_media
         fixture = test_l2_media.MediaTests()
-        fixture.setUp()
         self.addCleanup(fixture.doCleanups)
+        fixture.setUp()
         for identifier, name in o.EXECUTION_FILES.items():
             fixture.run.register(dict(id=identifier, kind='file', path=name))
             o.save(fixture.run, name, dict(schema='synthetic'), initial=True)

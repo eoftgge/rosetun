@@ -18,8 +18,8 @@ GUEST = '20261111T010203Z-0123abcd'
 class JobsTests(unittest.TestCase):
     def setUp(self):
         self.fixture = test_lifecycle.LifecycleTests()
-        self.fixture.setUp()
         self.addCleanup(self.fixture.doCleanups)
+        self.fixture.setUp()
         self.fixture.enable_qga()
         self.agent = self.agent_new()
         with patch.object(lifecycle, 'Qga', return_value=self.agent):

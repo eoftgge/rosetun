@@ -23,8 +23,8 @@ def load(directory):
 class OrchestratorStateTests(unittest.TestCase):
     def setUp(self):
         self.flow = test_orchestrator.FlowTests()
-        self.flow.setUp()
         self.addCleanup(self.flow.doCleanups)
+        self.flow.setUp()
 
     def test_a_complete_run_records_every_step_as_intent_then_done_and_ends_completed(self):
         from pathlib import Path

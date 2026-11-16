@@ -130,8 +130,8 @@ class ConfigTests(unittest.TestCase):
 class DryRunTests(unittest.TestCase):
     def setUp(self):
         self.base = l3tests.L3DryRunTests()
-        self.base.setUp()
         self.addCleanup(self.base.doCleanups)
+        self.base.setUp()
         self.addCleanup(self.base.temp.cleanup)
         self.config = copy.deepcopy(self.base.config)
         self.config.update(schema=execution.SCHEMA_V3, lab=dict(
@@ -181,8 +181,8 @@ class JointStartTests(unittest.TestCase):
         unix.start()
         self.addCleanup(unix.stop)
         self.media = test_stage_profiles.L3MediaTests()
-        self.media.setUp()
         self.addCleanup(self.media.doCleanups)
+        self.media.setUp()
         self.media.build()
         self.fixture = self.media.fixture.fixture
         self.runs = dict(test=self.media.run, lab=create_run(self.fixture.lease))
@@ -652,8 +652,8 @@ class Flow(unittest.TestCase):
 
     def setUp(self):
         self.fixture = test_qemu.PreparationTests()
-        self.fixture.setUp()
         self.addCleanup(self.fixture.doCleanups)
+        self.fixture.setUp()
         self.config = dict(
             schema=execution.SCHEMA_V3, suite='linux-l3', state_directory=str(self.fixture.root / 'lab-state'),
             stand_id='synthetic', image={'name': 'test'}, qemu=asdict(replace(

@@ -134,8 +134,8 @@ class PackageTests(unittest.TestCase):
 class ExecutionTests(unittest.TestCase):
     def setUp(self):
         self.fixture = test_jobs.JobsTests()
-        self.fixture.setUp()
         self.addCleanup(self.fixture.doCleanups)
+        self.fixture.setUp()
         self.vm, self.agent = self.fixture.vm, self.fixture.agent
         del self.vm._smoke_job
         temp = tempfile.TemporaryDirectory()

@@ -46,8 +46,8 @@ class Harness(unittest.TestCase):
 
     def config(self):
         fixture = test_qemu.PreparationTests()
-        fixture.setUp()
         self.addCleanup(fixture.doCleanups)
+        fixture.setUp()
         fixture.config = replace(fixture.config, qga=True)
         self.fixture = fixture
         return dict(schema='rosetun.matrix.lab.v1', state_directory=str(fixture.root / 'lab-state'),

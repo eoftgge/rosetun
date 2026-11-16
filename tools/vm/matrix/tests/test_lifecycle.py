@@ -120,8 +120,8 @@ class LifecycleTests(unittest.TestCase):
     def setUp(self):
         # Reuse preparation fixtures, not its test cases or real command runner.
         self.fixture = test_qemu.PreparationTests()
-        self.fixture.setUp()
         self.addCleanup(self.fixture.doCleanups)
+        self.fixture.setUp()
         self.plan = self.fixture.prepare()
         self.run = self.fixture.run
         self.child = Child()

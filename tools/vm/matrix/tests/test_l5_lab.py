@@ -229,8 +229,8 @@ class WithoutTheLabTests(unittest.TestCase):
         from tools.vm.matrix import evidence, l3_requests, orchestrator
         from tools.vm.matrix.tests.test_orchestrator_l3 import L3FlowTests
         case = L3FlowTests('test_complete_order_late_agent_and_no_early_collection')
-        case.setUp()
         self.addCleanup(case.doCleanups)
+        case.setUp()
         case.config['suite'] = 'linux-l5'
         case.config['l3'].pop('sing_box_sha256')
         self.case, self.asked = case, []
@@ -271,8 +271,8 @@ class DryRunTests(unittest.TestCase):
         from tools.vm.matrix.tests.test_stage_profiles import package_l3
         self.json = json
         base = L3DryRunTests()
-        base.setUp()
         self.addCleanup(base.doCleanups)
+        base.setUp()
         self.addCleanup(base.temp.cleanup)
         self.base = base
         temp = tempfile.TemporaryDirectory()

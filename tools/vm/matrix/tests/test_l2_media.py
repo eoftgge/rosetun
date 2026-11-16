@@ -25,8 +25,8 @@ spec.loader.exec_module(helper)
 class MediaTests(unittest.TestCase):
     def setUp(self):
         self.fixture = test_qemu.PreparationTests()
-        self.fixture.setUp()
         self.addCleanup(self.fixture.doCleanups)
+        self.fixture.setUp()
         self.fixture.prepare()
         self.run = self.fixture.run
         path = self.run.directory / 'launch-plan.json'
@@ -191,8 +191,8 @@ class MediaTests(unittest.TestCase):
 class ImportTests(unittest.TestCase):
     def setUp(self):
         self.fixture = test_jobs.JobsTests()
-        self.fixture.setUp()
         self.addCleanup(self.fixture.doCleanups)
+        self.fixture.setUp()
         self.vm, self.agent = self.fixture.vm, self.fixture.agent
         del self.vm._smoke_job
         temp = tempfile.TemporaryDirectory()

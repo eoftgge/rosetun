@@ -34,8 +34,8 @@ class Endpoint(AgentStream):
 class RecoveryTests(unittest.TestCase):
     def setUp(self):
         self.fixture = test_lifecycle.LifecycleTests()
-        self.fixture.setUp()
         self.addCleanup(self.fixture.doCleanups)
+        self.fixture.setUp()
         self.fixture.enable_qga()
         self.endpoint = Endpoint()
         factory = patch.object(lifecycle, 'Qga', side_effect=lambda stream, **kw:
