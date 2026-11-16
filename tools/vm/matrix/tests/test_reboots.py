@@ -172,6 +172,13 @@ class ChainTests(RebootCase):
             self.vm.watch_resets()
         self.assertEqual(('guest-reset-observed', 'host-reset-outside-reset'), self.rows()[-1])
 
+    def test_a_monitor_that_cannot_be_read_stops_a_run_that_plans_a_reset_and_no_other(self):
+        self.control.pump = lambda seconds: (_ for _ in ()).throw(ValueError('qmp-unavailable'))
+        with self.assertRaisesRegex(lifecycle.LifecycleError, 'qmp-events-unavailable'):
+            self.vm.watch_resets()
+        self.vm.planned_reboots = 0
+        self.vm.watch_resets()
+
     def test_the_controllers_own_reset_is_expected_inside_reset_only(self):
         self.vm.reset()
         self.assertFalse(self.vm.unplanned_reset)

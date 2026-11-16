@@ -552,6 +552,10 @@ class Vm:
             self.qmp.pump(RESET_PUMP_SECONDS)
             resets = self.qmp.take_resets()
         except (OSError, ValueError):
+            # A channel that failed earlier cannot tell a reset. A run that plans none still has the boot ID to
+            # catch one (`boot-id-changed-without-reset`); a run that plans one cannot go on without the event.
+            if self._planned_reboots == 0:
+                return
             raise LifecycleError('qmp-events-unavailable', self) from None
         self._ingest_resets(resets)
 
