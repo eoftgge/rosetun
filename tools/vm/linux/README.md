@@ -416,14 +416,14 @@ checking, restore `l2-clean` again.
 
 3. **Engines**, in the guest as `l2admin`. The versions must be the pinned
    ones (`SUPPORTED_SING_BOX_VERSION` and `SUPPORTED_XRAY_VERSION` in the engine
-   crates; 1.14.3 and 26.10.21 at the time of writing). Compare each archive with
+   crates; 1.14.3 and 26.11.9 at the time of writing). Compare each archive with
    the checksum its release page publishes before you install it:
 
    ```sh
    cd ~/rosetun-manual
    sudo apt-get install --no-install-recommends curl unzip nftables
    curl -fLO https://github.com/SagerNet/sing-box/releases/download/v1.14.3/sing-box-1.14.3-linux-amd64.tar.gz
-   curl -fLO https://github.com/XTLS/Xray-core/releases/download/v26.10.21/Xray-linux-64.zip
+   curl -fLO https://github.com/XTLS/Xray-core/releases/download/v26.11.9/Xray-linux-64.zip
    sha256sum sing-box-1.14.3-linux-amd64.tar.gz Xray-linux-64.zip
    tar -xzf sing-box-1.14.3-linux-amd64.tar.gz --strip-components=1 sing-box-1.14.3-linux-amd64/sing-box
    unzip -o Xray-linux-64.zip xray

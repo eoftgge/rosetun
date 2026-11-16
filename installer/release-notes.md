@@ -16,9 +16,11 @@ Rosetun 0.6.0-beta.1 is a beta of the next version. It adds exits that connect t
 - **Linux: Local network opens only your own network**, on its own interface, with the VPN servers' addresses left out, as on Windows. **Private networks behind the router** keeps the wide ranges. See [Local network](https://eoftgge.github.io/rosetun/en/docs/local-network/).
 - **Linux, as on Windows:** file dialogs through the desktop portal, **Collect report** and the folder buttons, the system checks (proxy and traffic interception), the remembered window, and a system proxy on GNOME that is read back after it is set. See [Linux](https://eoftgge.github.io/rosetun/en/docs/linux/).
 - **Building from source needs Rust 1.99.**
-- **sing-box {{sing_box_version}} and Xray {{xray_version}}.**
+- **sing-box {{sing_box_version}} and Xray {{xray_version}}.** Xray uses an updated Chrome fingerprint.
 
 ## Fixed in 0.6
+
+- **Xray TCP listeners disable MPTCP by default**, reducing exposure to [CVE-2026-98432 in the Linux kernel](https://security-tracker.debian.org/tracker/CVE-2026-98432). The complete fix requires an updated OS kernel.
 
 - **Windows: a tunnel address that the last session left behind.** After a fast startup, Windows may still hold the previous session's tunnel. Rosetun no longer retries in vain: it says "Windows still holds the tunnel of the last session · restart the computer".
 - **Menus.** The rule set menu, the rules menu and the check menu fit their labels, and the failure actions stand in one row.
@@ -144,9 +146,11 @@ Rosetun 0.6.0-beta.1 это бета следующей версии. В ней 
 - **Linux: «Локальная сеть» открывает только вашу сеть**, на её интерфейсе, без адресов VPN-серверов, как на Windows. **Частные сети за роутером** сохраняет широкие диапазоны. См. [Локальная сеть](https://eoftgge.github.io/rosetun/ru/docs/local-network/).
 - **Linux, как на Windows:** диалоги выбора файла через портал рабочего стола, **Собрать отчёт** и кнопки папок, проверки системы (прокси и перехват трафика), запоминание окна и системный прокси на GNOME, который читается обратно после установки. См. [Linux](https://eoftgge.github.io/rosetun/ru/docs/linux/).
 - **Для сборки из исходников нужен Rust 1.99.**
-- **sing-box {{sing_box_version}} и Xray {{xray_version}}.**
+- **sing-box {{sing_box_version}} и Xray {{xray_version}}.** В Xray обновлён Chrome fingerprint.
 
 ### Исправлено в 0.6
+
+- **У TCP-слушателей Xray MPTCP выключен по умолчанию**, что сокращает поверхность атаки для [CVE-2026-98432 в ядре Linux](https://security-tracker.debian.org/tracker/CVE-2026-98432). Для полного исправления нужно обновлённое ядро ОС.
 
 - **Windows: адрес туннеля, оставшийся от прошлого сеанса.** После быстрого запуска Windows может ещё держать туннель предыдущего сеанса. Rosetun больше не повторяет попытки впустую: он пишет «Windows ещё держит туннель прошлой сессии · перезагрузите компьютер».
 - **Меню.** Меню набора правил, меню правил и меню проверки подгоняются под свои подписи, а кнопки при сбое стоят в одной строке.

@@ -56,6 +56,22 @@ The installer includes `licenses/wintun.txt` and the unchanged `licenses/wintun-
 
 When updating sing-box, also review its embedded Wintun version. Download the matching official `wintun-<version>.zip` from `https://www.wintun.net/builds/`, verify the byte length and SHA-256 of `bin/amd64/wintun.dll`, and compare the archive's license with the unchanged license from that upstream tag. Stop on any mismatch; do not bypass the guard. Update `$wintunVersion`, `$wintunDllLength` and `$wintunDllHash` beside the sing-box pin in `build.ps1`, the vendored license if it changed, and the version/hash documentation here. Review the public license notices and release-note template as well. Verify that the official sing-box executable passes the embedded-DLL guard before releasing.
 
+## Xray configuration checks
+
+After updating Xray, check the actual rendered configurations with the verified
+binary before packaging. Set `ROSETUN_TEST_XRAY` to its absolute path, or place it
+in `target/installer/xray/`, then run:
+
+```sh
+cargo test -q -p rosetun-engine-xray --locked --test xray_check -- --ignored
+```
+
+This runs `xray run -test` for session and probe configurations, including
+REALITY/Vision, TLS, XHTTP, fragmentation and multiple outbounds. It checks the
+exact pinned version and configuration syntax without starting listeners or
+connecting to servers. A missing binary fails this explicit check. The owner
+still runs the Windows and Linux VM matrices before release.
+
 ## Debian package
 
 `installer/linux/build-deb.sh` builds `rosetun_<version>_amd64.deb` on Debian 12 as an ordinary user, with Rust 1.99.1 from rustup. The release workflow pins the Debian image by digest and installs the C linker, `binutils`, Python 3, `dpkg-dev`, `curl`, `unzip` and the Wayland, xkbcommon, X11 and GL/EGL development libraries. Debian 12 has glibc 2.36 and LTS through June 2028. `--release` installs pinned `cargo-about` 0.9.2. The package and Arch archive share the exact same payload; no second compilation or Debian 13 packaging job is needed. Keep `CARGO_TARGET_DIR` on a Linux filesystem: a Windows drive under WSL keeps no file modes, and the script refuses it. The result is `<target>/deb/rosetun_<version>_amd64.deb`; the script prints its SHA-256.
