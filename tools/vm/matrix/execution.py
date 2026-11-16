@@ -16,14 +16,17 @@ from .resources import _identifier, _state_path, inspect_runs
 
 SCHEMA = 'rosetun.matrix.execution.v1'
 SCHEMA_V2 = 'rosetun.matrix.execution.v2'
-# Version 3 is version 2 for the L3 or Proxy suite plus the block that makes it a run inside the lab.
+# Version 3 is version 2 for the L3, Proxy or L5 suite plus the block that makes it a run inside the lab.
 SCHEMA_V3 = 'rosetun.matrix.execution.v3'
-SUITES = ('linux-l2', 'linux-l3', 'linux-proxy')
+SUITES = ('linux-l2', 'linux-l3', 'linux-proxy', 'linux-l5')
 # The suites of the real service: they carry the `[l3]` block (the node, the probes, the engine's hash) and may
-# run inside the lab. Proxy takes the same block as L3, under the same name.
-SERVICE_SUITES = ('linux-l3', 'linux-proxy')
+# run inside the lab. Proxy and L5 take the same block as L3, under the same name; L5 without the engine's hash,
+# since its packages bring their engines (provenance.json vouches for the packages).
+SERVICE_SUITES = ('linux-l3', 'linux-proxy', 'linux-l5')
 # The stage profile of each suite's package.
-PROFILE_OF = {'linux-l2': 'l2', 'linux-l3': 'l3', 'linux-proxy': 'proxy'}
+PROFILE_OF = {'linux-l2': 'l2', 'linux-l3': 'l3', 'linux-proxy': 'proxy', 'linux-l5': 'l5'}
+# The suites whose package carries no engine of its own and whose `[l3]` block names no engine hash.
+WITHOUT_ENGINE = ('linux-l5',)
 FIELDS = {'schema', 'mode', 'platform', 'state_directory', 'stand_id', 'image', 'qemu',
           'xorriso', 'content_directory', 'source_checkout', 'accounts', 'timeouts', 'deadlines'}
 
@@ -38,14 +41,18 @@ def suite_of(config):
     return config.get('suite', 'linux-l2')
 
 
-def validate_l3(block):
-    """Fill the optional job.env values; the hash of the delivered engine has no default."""
+def validate_l3(block, *, engine=True):
+    """Fill the optional job.env values; the hash of the delivered engine has no default.
+
+    Without `engine` (L5, whose packages bring the engines) the block names no engine hash at all.
+    """
     from .linux_l2 import DOCUMENTATION_V4, L3_DEFAULTS
-    if (type(block) is not dict or 'sing_box_sha256' not in block or
+    if (type(block) is not dict or ('sing_box_sha256' in block) != engine or
             set(block) - {'sing_box_sha256'} - set(L3_DEFAULTS)):
         raise ValueError('unknown or missing L3 configuration fields')
     block = dict(L3_DEFAULTS, **block)
-    if type(block['sing_box_sha256']) is not str or not re.fullmatch('[0-9a-f]{64}', block['sing_box_sha256']):
+    if engine and (type(block['sing_box_sha256']) is not str or
+                   not re.fullmatch('[0-9a-f]{64}', block['sing_box_sha256'])):
         raise ValueError('sing-box SHA-256 must be 64 lowercase hex digits')
     for name in ('host_address', 'probe_address', 'dns_probe_address'):
         value = block[name]
@@ -95,7 +102,7 @@ def validate(config):
         exact(config, FIELDS | {'suite'} | ({'l3'} if suite in SERVICE_SUITES else set())
               | ({'lab'} if config['schema'] == SCHEMA_V3 else set()))
         if suite in SERVICE_SUITES:
-            config['l3'] = validate_l3(config['l3'])
+            config['l3'] = validate_l3(config['l3'], engine=suite not in WITHOUT_ENGINE)
     if config['mode'] != 'exploratory':
         raise ValueError('execution supports exploratory only; release is unsupported')
     if config['platform'] != 'linux-x86_64-kvm':
@@ -148,7 +155,7 @@ def preflight(config, *, dry_run=False):
     if lab:
         ImageDescriptor(**lab['image']).validate(state)
     profile = PROFILE_OF[suite]
-    extra = dict(profile=profile, sing_box_sha256=l3['sing_box_sha256'], without_requests=True) if l3 else {}
+    extra = dict(profile=profile, sing_box_sha256=l3.get('sing_box_sha256'), without_requests=True) if l3 else {}
     package = validate_package(config['content_directory'], checkout=config['source_checkout'],
                                immutable=True, check_source=not dry_run, **extra)
     from .l2_media import TOTAL_LIMIT
@@ -185,6 +192,9 @@ def preflight(config, *, dry_run=False):
         limitations += ['the sing-box binary is hashed, never executed, on the controller']
     if l3 and profile == 'proxy':
         actions[2] = 'write the four Proxy lab requests into the run directory'
+    if l3 and profile == 'l5':
+        actions[2] = 'write the three L5 lab requests into the run directory'
+        limitations[-1] = 'the two packages are hashed and their magic read, never installed, on the controller'
     if lab:
         actions = ['lease', 'create the test run and the lab run with their identities',
                    'overlays of both machines', 'evidence disk of the lab machine (64 MiB, zeroed)',
@@ -208,6 +218,13 @@ def preflight(config, *, dry_run=False):
             actions[-2] = 'cross-check the Proxy group against the windows'
             limitations[3:5] = ['every scenario but the two-hop exits is in the group; their windows are judged',
                                 'run-proxy.sh adds the private address 192.168.77.2/24 for sharing and removes it']
+        if profile == 'l5':
+            actions[4] = 'write the three L5 lab requests into the test run'
+            actions[11] = 'submit run-l5.sh once (with LAB_MARKER_ADDRESS)'
+            actions[-2] = 'cross-check the L5 group and the counter of the upgrade against the windows'
+            limitations[3:6] = ['all 17 scenarios are in the group; the two windows are judged',
+                                'the test image has the dependencies of the package and no rosetun',
+                                'the two packages are hashed and their magic read, never installed, on the controller']
     return dict(schema='rosetun.matrix.execution-plan.v1', dry_run=dry_run, suite=suite,
                 configuration=config, content_hashes=package['hashes'],
                 controller_checkout=str(controller), controller_source=controller_source,

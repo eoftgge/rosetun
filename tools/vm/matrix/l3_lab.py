@@ -1,10 +1,10 @@
-"""Linux L3 (stage 7b2b) and Linux Proxy (stage 8a) inside the two-machine lab: exploratory, nothing here is an
-acceptance.
+"""Linux L3 (stage 7b2b), Linux Proxy (stage 8a) and Linux L5 (stage 8b) inside the two-machine lab: exploratory,
+nothing here is an acceptance.
 
-The test machine runs `run-l3.sh` or `run-proxy.sh` as `run linux-l3` or `run linux-proxy` does; next to it the
-lab machine holds the VPN node, the HTTPS target, the resolver and the DoH target and captures the wire to its
-evidence disk. The script marks every protected session on the wire; the controller finds those windows in the
-capture and sets the observer's verdict beside the script's own results.
+The test machine runs `run-l3.sh`, `run-proxy.sh` or `run-l5.sh` as `run linux-l3`, `run linux-proxy` or
+`run linux-l5` does; next to it the lab machine holds the VPN node, the HTTPS target, the resolver and the DoH
+target and captures the wire to its evidence disk. The script marks every protected session on the wire; the
+controller finds those windows in the capture and sets the observer's verdict beside the script's own results.
 """
 
 from datetime import datetime, timezone
@@ -29,8 +29,9 @@ from .resources import StandLease, completion_verified, create_run, resource_pat
 
 SCHEMA = 'rosetun.matrix.l3-summary.v1'
 # Each suite of the lab: the schema of its summary and the stage profile of its package.
-SCHEMAS = {'linux-l3': SCHEMA, 'linux-proxy': 'rosetun.matrix.proxy-summary.v1'}
-PROFILES = {'linux-l3': 'l3', 'linux-proxy': 'proxy'}
+SCHEMAS = {'linux-l3': SCHEMA, 'linux-proxy': 'rosetun.matrix.proxy-summary.v1',
+           'linux-l5': 'rosetun.matrix.l5-summary.v1'}
+PROFILES = {'linux-l3': 'l3', 'linux-proxy': 'proxy', 'linux-l5': 'l5'}
 ROLES = ('lab', 'test')
 # What the lab machine keeps beside the capture, and the bound of each file.
 LAB_FILES = (('targets.json', LOG_LIMIT), ('health.json', LOG_LIMIT), ('https.json', LOG_LIMIT),
@@ -230,6 +231,11 @@ def run_linux_proxy_lab(config, **options):
     return run_linux_lab(config, suite='linux-proxy', **options)
 
 
+def run_linux_l5_lab(config, **options):
+    """One Linux L5 run in the lab (stage 8b), with the same steps and the tables of `l5_tables`."""
+    return run_linux_lab(config, suite='linux-l5', **options)
+
+
 def run_linux_lab(config, *, suite, diagnostic=False, control=None, adapters=None, clock=time.monotonic,
                   sleep=time.sleep, progress=None):
     """One run of a suite of the real service in the lab; see `run_linux_l3_lab`."""
@@ -337,7 +343,7 @@ def run_linux_lab(config, *, suite, diagnostic=False, control=None, adapters=Non
                                                    **({'profile': profile} if profile != 'l3' else {})))
         step('media', lambda: adapters.attach(runs['test'], directory=config['content_directory'],
              checkout=config['source_checkout'], xorriso=config['xorriso'], executor=executor,
-             profile=profile, sing_box_sha256=l3['sing_box_sha256']))
+             profile=profile, sing_box_sha256=l3.get('sing_box_sha256')))
         # The pair registers its files in both runs (the test machine's DNS client log among them), while the
         # requests and the media accept only the resources of a freshly prepared run: so it comes last.
         # The evidence disk is made with the pair; it belongs to the lab machine alone.

@@ -418,13 +418,19 @@ def run_linux_proxy(config, **options):
     return run_linux(config, **options)
 
 
+def run_linux_l5(config, **options):
+    if config.get('suite') != 'linux-l5':
+        raise ValueError('configuration is for another suite')
+    return run_linux(config, **options)
+
+
 def run_linux(config, *, adapters=None, clock=time.monotonic, sleep=time.sleep,
               progress=None):
-    """One path for every stage; only L3 and Proxy add their requests to the run and pass their profile on."""
+    """One path for every stage; only L3, Proxy and L5 add their requests to the run and pass their profile on."""
     progress = progress or (lambda stage: print(stage, file=sys.stderr, flush=True))
     suite = config.get('suite', 'linux-l2')
-    l3 = config.get('l3') if suite in ('linux-l3', 'linux-proxy') else None
-    profile = 'proxy' if suite == 'linux-proxy' else 'l3'
+    l3 = config.get('l3') if suite in ('linux-l3', 'linux-proxy', 'linux-l5') else None
+    profile = {'linux-proxy': 'proxy', 'linux-l5': 'l5'}.get(suite, 'l3')
     result = dict(schema=SUMMARY_SCHEMA, suite=suite, identities={}, configuration=config, stages=[],
                   evidence=[], assessment=None, delivery=None, execution=None,
                   completion=False, manual_recovery_required=False, errors=[],
@@ -495,7 +501,7 @@ def run_linux(config, *, adapters=None, clock=time.monotonic, sleep=time.sleep,
                                                        **({'profile': profile} if profile != 'l3' else {})))
         step('media', lambda: adapters.attach(run, directory=config['content_directory'],
               checkout=config['source_checkout'], xorriso=config['xorriso'], executor=executor,
-              **(dict(profile=profile, sing_box_sha256=l3['sing_box_sha256']) if l3 else {})))
+              **(dict(profile=profile, sing_box_sha256=l3.get('sing_box_sha256')) if l3 else {})))
         if clock() >= deadline:
             raise TimeoutError('preparation deadline')
         vm = step('start', lambda: adapters.start(run))

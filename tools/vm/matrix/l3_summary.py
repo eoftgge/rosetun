@@ -7,6 +7,7 @@ security invariants stay unverified.
 """
 
 from collections import Counter
+import re
 from types import SimpleNamespace
 
 from .lab_protocol import CLIENTS, HTTPS_PORT, PORTS, RESOLVER, TARGETS
@@ -168,11 +169,15 @@ CONTROL_WINDOW, CONTROL_SCENARIO = 'connect_ks', 'killswitch.direct-blocked'
 CONTROL_EXPECTATIONS = {
     'stop-helper': f'window {CONTROL_WINDOW} DETECTED with a direct flow from the test machine to '
                    f'{TARGETS[4]}:{HTTPS_PORT}, {CONTROL_SCENARIO} DISAGREE, an ordinary run would exit 1'}
-# The tables a suite is judged by: these of L3, or those of `proxy_tables` (stage 8a) for the Linux Proxy suite.
+# The tables a suite is judged by: these of L3, or those of `proxy_tables` (stage 8a) for the Linux Proxy suite, or
+# those of `l5_tables` (stage 8b) for the Linux L5 suite.
 TABLES = ('GROUP', 'WINDOW_OF', 'OWN_WINDOW_WHEN_OPENED', 'GROUP_LABELS', 'WINDOWS_PER_LABEL', 'WINDOWS_AT_MOST',
           'EXPECTED_FLOWS', 'WINDOW_ALLOWANCES', 'REQUIRED_FIXTURES', 'LEAK_OUTSIDE_THE_GROUP_FAILS', 'CONTROLS',
           'CONTROL_WINDOW', 'CONTROL_SCENARIO')
-LAB_SUITES = ('linux-l3', 'linux-proxy')
+# A table only some suites have, None for the others: the guest's own counter of direct packets and the window
+# whose observer is its twin (L5: `rosetun-l5-watch` and `upgrade_ks`).
+OPTIONAL_TABLES = ('COUNTER',)
+LAB_SUITES = ('linux-l3', 'linux-proxy', 'linux-l5')
 
 
 def tables_for(suite='linux-l3'):
@@ -182,9 +187,13 @@ def tables_for(suite='linux-l3'):
     elif suite == 'linux-proxy':
         from . import proxy_tables
         source = vars(proxy_tables)
+    elif suite == 'linux-l5':
+        from . import l5_tables
+        source = vars(l5_tables)
     else:
         raise ValueError('lab-suite-unknown')
-    tables = SimpleNamespace(suite=suite, **{name: source[name] for name in TABLES})
+    tables = SimpleNamespace(suite=suite, **{name: source[name] for name in TABLES},
+                             **{name: source.get(name) for name in OPTIONAL_TABLES})
     tables.CONTROL_EXPECTATIONS = {
         'stop-helper': f'window {tables.CONTROL_WINDOW} DETECTED with a direct flow from the test machine to '
                        f'{TARGETS[4]}:{HTTPS_PORT}, {tables.CONTROL_SCENARIO} DISAGREE, an ordinary run would exit 1'}
@@ -328,6 +337,39 @@ def direct_flow_seen(windows):
     return False
 
 
+def counter_crosscheck(rows, windows, tables):
+    """The guest's counter of direct packets beside the observer's direct frames in its twin window (`COUNTER`).
+
+    The count is the script's: its scenario passes only when the counter saw none, and a failure names the count in
+    its reason; any other result leaves it unknown. The observer's are the unexpected frames of the window, and among
+    them those the test machine sent to the address the counter watches. AGREE when both saw some or both none,
+    DISAGREE when one did and the other did not (the counter saw none and the wire had a direct frame, or the other
+    way round), UNKNOWN when either number is missing.
+    """
+    counter = tables.COUNTER
+    row = rows.get(counter['scenario']) or {}
+    count = None
+    if row.get('result') == 'PASS':
+        count = 0
+    elif row.get('result') == 'FAIL':
+        match = re.match(counter['reason'], str(row.get('reason', '')))
+        count = int(match[1]) if match else None
+    found = judged_windows(counter['window'], windows, tables)
+    direct = target = None
+    if len(found) == 1:
+        direct = found[0]['categories']['unexpected']
+        target = sum(flow['frames_out'] for flow in (found[0].get('direct') or {}).get('flows', [])
+                     if str(flow.get('server')).rpartition(':')[0] == counter['address'])
+    if count is None or direct is None:
+        agreement = 'UNKNOWN'
+    else:
+        agreement = 'AGREE' if (count > 0) == (direct > 0) else 'DISAGREE'
+    return dict(scenario=counter['scenario'], table=counter['table'], window=counter['window'][0],
+                window_number=counter['window'][1], windows=[window['index'] for window in found], script_count=count,
+                observer_direct_frames=direct, observer_frames_to_address=target, address=counter['address'],
+                agreement=agreement)
+
+
 def missing_fixtures(fixtures, tables=None):
     return [name for name in (tables or tables_for()).REQUIRED_FIXTURES if not (fixtures.get(name) or {}).get(
         'alive_at_finish' if name == 'node' else 'answered')]
@@ -340,8 +382,9 @@ def decide(result, interrupted):
     the fixtures answered, the evidence disk is verified and both machines completed.
     1: the run found something: a scenario of the group failed, a pass is contradicted by a window
     (DISAGREE), or a leak in a judged window or in a window of a label of the group beyond its count, or,
-    with LEAK_OUTSIDE_THE_GROUP_FAILS (since stage 7e), a leak in any other window. A seen leak and a failed check stand whatever else went wrong, so 1
-    comes before 2.
+    with LEAK_OUTSIDE_THE_GROUP_FAILS (since stage 7e), a leak in any other window, or (L5, stage 8b) the guest's
+    own counter contradicted by its twin window (`counter_crosscheck`). A seen leak and a failed check stand
+    whatever else went wrong, so 1 comes before 2.
     2: nothing was found but the run cannot vouch for itself: a controller error, a machine that did
     not stop, no report, an unverified evidence disk, a fixture that did not answer, an unclean
     observer, a pass nobody observed (UNOBSERVED, which includes a window that never closed), a
@@ -386,6 +429,9 @@ def decide(result, interrupted):
         findings.append('group-scenario-failed')
     if any(row['agreement'] == 'DISAGREE' for row in table):
         findings.append('pass-contradicted-by-window')
+    counter = counter_crosscheck(rows, windows, tables) if tables.COUNTER else None
+    if counter is not None and counter['agreement'] == 'DISAGREE':
+        findings.append('counter-contradicted-by-window')
     if any(window['verdict'] == 'DETECTED' and (window['judged'] or window['beyond']) for window in windows):
         findings.append('leak-in-group-window')
     unjudged = [window for window in windows if not window['judged'] and not window['beyond']]
@@ -433,6 +479,9 @@ def decide(result, interrupted):
                            outside_mismatches=[window['label'] for window in unjudged
                                                if window['verdict'] == 'MISMATCH'],
                            findings=findings, unproven=unproven)
+    if counter is not None:
+        # Only a suite with a counter of its own (L5) has this field; the summaries of the others keep theirs.
+        result['group']['counter'] = counter
     if interrupted:
         result['exit_code'], result['outcome'] = 130, 'interrupted'
     elif findings:
