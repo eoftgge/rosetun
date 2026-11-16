@@ -133,6 +133,31 @@ class AdapterTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             adapter._event(Message())
 
+    def test_a_reset_event_is_noted_as_the_guests_or_not_and_taken_once(self):
+        adapter = self.adapter()
+        class Message:
+            def __init__(self, text):
+                self.text = text
+            def __bytes__(self):
+                return self.text
+        for raw in (b'{"event":"RESET","data":{"guest":true,"reason":"guest-reset"}}',
+                    b'{"event":"RESET","data":{"guest":false,"reason":"host-qmp-system-reset"}}',
+                    b'{"event":"RESET","data":{}}', b'{"event":"RESET"}', b'{"event":"STOP"}', b'not json',
+                    b'{"event":"RESET","data":{"guest":"yes"}}'):
+            adapter._event(Message(raw))
+        self.assertEqual([True, False, False, False, False], adapter.take_resets())
+        self.assertEqual([], adapter.take_resets())
+        # Every event counts against the budget, the ones that say nothing as well.
+        self.assertEqual(7, adapter.events)
+
+    def test_pump_runs_the_loop_without_sending_a_command_or_spending_the_budget(self):
+        adapter = self.adapter()
+        adapter.pump(0.01)
+        self.assertEqual(0, adapter.calls)
+        adapter.valid = False
+        with self.assertRaises(ValueError):
+            adapter.pump(0.01)
+
     def test_quit_keeps_the_last_command_after_ordinary_commands_are_exhausted(self):
         adapter = self.adapter()
         for _ in range(127):
@@ -256,6 +281,55 @@ class StderrTests(unittest.TestCase):
 
 @unittest.skipUnless(INSTALLED, 'optional qemu.qmp 0.0.6 and Unix socket support')
 class InstalledAdapterTests(unittest.TestCase):
+    def test_public_client_reads_an_unsolicited_reset_while_the_loop_pumps(self):
+        parent, peer = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+        errors = []
+        release = threading.Event()
+
+        def server():
+            try:
+                peer.settimeout(3)
+                with peer.makefile('rwb', buffering=0) as stream:
+                    def send(value):
+                        stream.write(json.dumps(value).encode() + b'\r\n')
+                    send({'QMP': {'version': {'qemu': {'major': 10, 'minor': 0, 'micro': 0},
+                                             'package': 'synthetic'}, 'capabilities': []}})
+                    buffer = bytearray()
+                    while True:
+                        buffer.extend(stream.read(1))
+                        try:
+                            negotiate = json.loads(buffer)
+                            break
+                        except ValueError:
+                            pass
+                    send({'return': {}, 'id': negotiate['id']} if 'id' in negotiate else {'return': {}})
+                    release.wait(3)
+                    for guest in (True, False):
+                        send({'event': 'RESET', 'data': {'guest': guest, 'reason': 'synthetic'},
+                              'timestamp': {'seconds': 0, 'microseconds': 0}})
+                    stream.read(1)
+            except BaseException as error:
+                errors.append(type(error).__name__)
+            finally:
+                peer.close()
+
+        thread = threading.Thread(target=server, daemon=True)
+        thread.start()
+        adapter = Qmp(parent)
+        try:
+            adapter.handshake(2)
+            adapter.pump(0.05)
+            self.assertEqual([], adapter.take_resets())
+            release.set()
+            adapter.pump(0.5)
+            # The library hands over its own message type; the adapter reads its bytes.
+            self.assertEqual([True, False], adapter.take_resets())
+            self.assertEqual(2, adapter.events)
+        finally:
+            adapter.close()
+            thread.join(timeout=3)
+        self.assertEqual([], errors)
+
     def test_public_client_accepts_socket_and_reset_before_reply(self):
         parent, peer = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
         errors = []

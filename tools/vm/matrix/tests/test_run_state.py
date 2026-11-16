@@ -194,5 +194,74 @@ class AdapterBudgetTests(unittest.TestCase):
             peer.close()
 
 
+class BootChainTests(unittest.TestCase):
+    state = BudgetTests.state
+
+    FIRST = '12345678-1234-4234-8234-123456789abc'
+    SECOND = '22345678-1234-4234-8234-123456789abc'
+    THIRD = '32345678-1234-4234-8234-123456789abc'
+
+    def checked(self, state, **change):
+        run_id, stand_id, token = state.run._identity
+        return run_state.validate(dict(state.document, **change), run_id=run_id, stand_id=stand_id, token=token)
+
+    def test_the_first_boot_starts_the_chain_and_identity_follows_it(self):
+        state = self.state(phase='running')
+        self.assertEqual([], state.boot_chain)
+        state.update('identities', boot_id=self.FIRST)
+        state.update('identities', boot_id=self.FIRST)
+        self.assertEqual([self.FIRST], state.boot_chain)
+        state.extend_boot_chain(self.SECOND)
+        reread = run_state.RunState.load(state.run)
+        self.assertEqual(([self.FIRST, self.SECOND], self.SECOND),
+                         (reread.boot_chain, reread.document['identities']['boot_id']))
+
+    def test_a_boot_joins_the_chain_only_through_extend_and_never_twice(self):
+        state = self.state(phase='running')
+        state.update('identities', boot_id=self.FIRST)
+        with self.assertRaisesRegex(ValueError, 'boot-chain'):
+            state.update('identities', boot_id=self.SECOND)
+        state.extend_boot_chain(self.SECOND)
+        with self.assertRaisesRegex(ValueError, 'boot-chain'):
+            state.extend_boot_chain(self.SECOND)
+        with self.assertRaisesRegex(ValueError, 'boot-chain'):
+            state.extend_boot_chain(self.FIRST)
+        state.extend_boot_chain(self.THIRD)
+        with self.assertRaisesRegex(ValueError, 'boot-chain'):
+            state.extend_boot_chain('42345678-1234-4234-8234-123456789abc')
+        self.assertEqual([self.FIRST, self.SECOND, self.THIRD], state.boot_chain)
+
+    def test_a_chain_that_does_not_end_in_the_identity_or_repeats_a_boot_refuses_the_file(self):
+        state = self.state(phase='running')
+        state.update('identities', boot_id=self.FIRST)
+        state.extend_boot_chain(self.SECOND)
+        for change in (dict(boot_chain=[self.FIRST]), dict(boot_chain=[self.SECOND, self.FIRST]),
+                       dict(boot_chain=[self.FIRST, self.SECOND, self.SECOND]), dict(boot_chain=[]),
+                       dict(boot_chain=self.FIRST), dict(boot_chain=[self.FIRST, 7])):
+            with self.subTest(change=change), self.assertRaisesRegex(ValueError, 'boot-chain|identities'):
+                self.checked(state, **change)
+
+    def test_a_file_written_before_the_chain_existed_is_read_with_its_one_boot(self):
+        state = self.state(phase='running')
+        state.update('identities', boot_id=self.FIRST)
+        document = dict(state.document)
+        del document['boot_chain']
+        (state.run.directory / 'run-state.json').write_text(json.dumps(document))
+        self.assertEqual([self.FIRST], run_state.RunState.load(state.run).boot_chain)
+
+    def test_a_planned_reset_earns_one_recovery_and_the_file_allows_the_most_a_run_may_plan(self):
+        state = self.state(phase='running')
+        state.record('qga_recoveries', 4)
+        with self.assertRaisesRegex(ValueError, 'exhausted'):
+            state.record('qga_recoveries', 5)
+        state.planned_reboots = 2
+        state.record('qga_recoveries', 6)
+        with self.assertRaisesRegex(ValueError, 'exhausted'):
+            state.record('qga_recoveries', 7)
+        self.assertEqual(6, run_state.RunState.load(state.run).budget('qga_recoveries'))
+        self.assertEqual((4, 5, 6), tuple(run_state.limit('qga_recoveries', n) for n in (0, 1, 2)))
+        self.assertEqual(128, run_state.limit('qmp_calls', 2))
+
+
 if __name__ == '__main__':
     unittest.main()

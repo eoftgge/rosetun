@@ -229,6 +229,31 @@ expect_not "an L3 stage refuses the L2 job" l3_allows guest/run-l2.sh
 expect_not "an L2 stage refuses the L3 job" start_allows guest/run-l3.sh
 expect_not "an L3 stage refuses another request" l3_allows artifacts/request-other.json
 expect "start.sh picks the job by the stage" grep -q 'job="$run/guest/run-$stage.sh"' "$start"
+
+# --- the reboot smoke stage: the guest scripts and the record of the build, nothing of Rosetun
+smoke_allows() { bash -c '. "$1" && reboot_smoke_start_path_allowed "$2"' _ "$start" "$1"; }
+required_smoke=$(bash -c '. "$1" && printf "%s\n" "${REBOOT_SMOKE_START_REQUIRED[@]}"' _ "$start")
+expect "start.sh requires the smoke job, its catalog and the record of the build" \
+    test "$(printf '%s\n' "$required_smoke" | wc -l)" -eq 7
+while IFS= read -r path; do
+    expect "every required smoke path passes both lists: $path" \
+        bash -c '. "$1" && l2_launch_path_allowed "$3" && . "$2" && reboot_smoke_start_path_allowed "$3"' _ "$launch" "$start" "$path"
+done <<<"$required_smoke"
+expect_not "the smoke stage refuses a program" smoke_allows artifacts/rosetun
+expect_not "the smoke stage refuses the L2 fixture" smoke_allows artifacts/l2_transport_fixture
+expect_not "the smoke stage refuses another job" smoke_allows guest/run-l4.sh
+expect_not "an L2 stage refuses the smoke job" start_allows guest/run-reboot-smoke.sh
+expect "start.sh tells the smoke stage by its job" \
+    grep -q "grep -q '  guest/run-reboot-smoke\\\\.sh\$' \"\$run/manifest.sha256\"" "$start"
+expect "the smoke stage reads the keys of an L2 job.env only" \
+    grep -q '^    case \$stage in l2 | reboot-smoke) ;; \*) keys+=(HOST_ADDRESS NODE_PORT PROBE_ADDRESS DNS_PROBE_ADDRESS) ;; esac$' "$start"
+smoke=$here/../guest/run-reboot-smoke.sh
+expect "run-reboot-smoke.sh is valid shell" bash -n "$smoke"
+expect "run-reboot-smoke.sh reads exactly the keys of an L2 job.env" \
+    grep -q 'USER_B BIOS_GUID \\$' "$smoke"
+expect "run-reboot-smoke.sh does not finish a report before its reboot is over" \
+    grep -q '^    \[ -f "\$STATE/rebooting" \] && return 0$' "$smoke"
+expect_not "run-reboot-smoke.sh touches no Rosetun file or unit" grep -Eq 'rosetun-(helper|lockdown|engine)|/usr/lib/rosetun' "$smoke"
 expect "run-l3.sh reads the host node values through the strict reader" \
     grep -q 'JOB_TIMEOUT_SECONDS HOST_ADDRESS NODE_PORT PROBE_ADDRESS DNS_PROBE_ADDRESS' "$here/../guest/run-l3.sh"
 expect_not "run-l3.sh never deletes the service's own table" \

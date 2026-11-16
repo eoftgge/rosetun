@@ -105,6 +105,9 @@ class Control:
             self.state = 'paused'
         if name == 'cont':
             self.state = 'running'
+        if name == 'system_reset':
+            # The monitor tells the controller's own reset as a RESET that is not the guest's.
+            self.resets.append(False)
         return {}
 
     def close(self):

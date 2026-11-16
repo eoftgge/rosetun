@@ -19,7 +19,7 @@ class MiniClient:
         self.negotiate = True
         self.runstate = SimpleNamespace(name='IDLE')
         self.limit = readbuflen
-        self.reader = self.writer = None
+        self.reader = self.writer = self.task = None
         self.ident = 0
 
     async def connect(self, sock):
@@ -29,6 +29,9 @@ class MiniClient:
             greeting = await self._read()
             if 'QMP' not in greeting:
                 raise ValueError('no greeting')
+        # Like the library's reader, a task reads while the loop runs, so an event arrives with no command sent.
+        self.replies = asyncio.Queue()
+        self.task = asyncio.ensure_future(self._reader())
         if self.negotiate:
             await self.execute('qmp_capabilities')
 
@@ -38,6 +41,18 @@ class MiniClient:
             raise EOFError('peer closed')
         return json.loads(line)
 
+    async def _reader(self):
+        while True:
+            try:
+                message = await self._read()
+            except (EOFError, OSError, ValueError):
+                await self.replies.put(None)
+                return
+            if 'event' in message:
+                self.events.accept(json.dumps(message).encode())
+            else:
+                await self.replies.put(message)
+
     async def execute(self, name, arguments=None):
         self.ident += 1
         request = {'execute': name, 'id': self.ident}
@@ -46,10 +61,9 @@ class MiniClient:
         self.writer.write(json.dumps(request).encode() + b'\n')
         await self.writer.drain()
         while True:
-            message = await self._read()
-            if 'event' in message:
-                self.events.accept(json.dumps(message).encode())
-                continue
+            message = await self.replies.get()
+            if message is None:
+                raise EOFError('peer closed')
             if message.get('id') != self.ident:
                 continue
             if 'error' in message:
@@ -57,6 +71,8 @@ class MiniClient:
             return message['return']
 
     async def disconnect(self):
+        if self.task is not None:
+            self.task.cancel()
         if self.writer is not None:
             self.writer.close()
             try:
