@@ -127,12 +127,12 @@ REPORT_LIMIT = 256 * 1024
 POLLS = 4
 # The wait for a job reads its status file instead of sleeping. A look costs three of the job's 112 agent calls
 # (open, read, close) and one is needed for a boot check on each side, so the budget decides how often to look:
-# the submission takes about 6 calls and each of the two collections about 23, which leaves 58 as the point where
-# the looking stops, and a wait of up to 16 looks, one every 30 seconds or one sixteenth of the wait if longer,
-# takes 48 of them.
+# the submission takes 6 calls and each of the two collections at most 28, which leaves 112 - 56 = 56, and a wait of
+# up to 16 looks (one every 30 seconds, or one sixteenth of the wait if longer) takes 48 of them after the 6 of the
+# submission; 52 is the point where the looking stops, so that the last look still ends within what is left.
 POLL_SECONDS = 30
 POLL_SPLIT = 16
-POLL_CALLS_LIMIT = 58
+POLL_CALLS_LIMIT = 52
 # How long after an agent call that failed the controller still watches QMP for the reset that explains it
 # (the agent stops a few seconds before the machine resets).
 RESET_GRACE_SECONDS = 30
