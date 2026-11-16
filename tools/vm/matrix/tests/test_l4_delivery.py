@@ -36,6 +36,14 @@ class L4ProfileTests(unittest.TestCase):
         self.assertIn('l4', l2.SERVICE_PROFILES)
         self.assertEqual(l2.evidence_files('l3'), l2.evidence_files('l4'))
 
+    def test_the_l4_build_records_the_two_attested_programs_of_the_l3_build_under_its_own_stage(self):
+        script = (CHECKOUT / 'tools/vm/linux/build-artifacts.sh').read_text(encoding='utf-8')
+        self.assertIn('elif [ "${1-}" = --l4 ]; then\n    stage=l4\n', script)
+        self.assertIn('elif [ "$stage" = l3 ] || [ "$stage" = l4 ]; then', script)
+        self.assertEqual(('rosetun-helper-privileged', 'rosetun'), L4.attested)
+        self.assertEqual(L3.attested, L4.attested)
+        self.assertEqual('l4', L4.stage)
+
     def test_the_guest_importer_table_is_the_controller_table(self):
         entry = helper.PROFILES['l4']
         self.assertEqual(media.content('l4'), tuple(entry['content']))
