@@ -481,6 +481,32 @@ class LeakTests(unittest.TestCase):
                 self.assertEqual({name: 1}, allowed['categories']['allowed'])
                 self.assertEqual('DETECTED', self.verdict([frame], allowances=set(wire_names()) - {name})['leak'])
 
+    def test_the_link_local_traffic_of_the_test_machine_in_the_v6b_image_is_infrastructure(self):
+        own, lab_address = wire.LINK_LOCALS['test'], wire.LINK_LOCALS['lab']
+        extra = [
+            neighbor(135, own, 'ff02::1:ff00:5362', lab_address, src=self.test, dst='33:33:ff:00:53:62'),
+            neighbor(136, lab_address, own, lab_address, src=self.lab, dst=self.test),
+            neighbor(135, lab_address, own, own, src=self.lab, dst=self.test),
+            neighbor(136, own, lab_address, own, src=self.test, dst=self.lab),
+            ip_frame(own, 'ff02::16', 58, icmp(143, bytes(4)), first=0, dst='33:33:00:00:00:16',
+                     extension=bytes([58, 0, 5, 2, 0, 0, 1, 0])),
+            ip_frame(own, 'ff02::2', 58, icmp(133, bytes(4)), dst='33:33:00:00:00:02')]
+        result = self.verdict(extra)
+        self.assertEqual((6, 0, 'NONE'), (result['categories']['infrastructure'], result['categories']['unexpected'],
+                                          result['leak']))
+
+    def test_the_duplicate_address_check_of_the_test_machines_link_local_address_is_a_leak_unless_declared(self):
+        dad = neighbor(135, '::', 'ff02::1:ff00:5361', wire.LINK_LOCALS['test'], src=self.test, dst='33:33:ff:00:53:61')
+        plain = self.verdict([dad])
+        self.assertEqual(('DETECTED', 1), (plain['leak'], plain['categories']['unexpected']))
+        allowed = self.verdict([dad], allowances=['ipv6-dad'])
+        self.assertEqual(('NONE', {'ipv6-dad': 1}), (allowed['leak'], allowed['categories']['allowed']))
+
+    def test_a_multicast_name_query_from_the_link_local_address_is_a_leak(self):
+        query = ip_frame(wire.LINK_LOCALS['test'], 'ff02::1:3', 17, udp(50000, 5355, bytes(12)), dst='33:33:00:01:00:03')
+        result = self.verdict([query])
+        self.assertEqual(('DETECTED', 1), (result['leak'], result['categories']['unexpected']))
+
     def test_every_allowance_together_counts_each_name_and_the_lab_machine_may_announce_too(self):
         lab_announcement = arp(1, wire.GATEWAYS[4], wire.GATEWAYS[4], src=self.lab, dst=wire.BROADCAST, sha=self.lab,
                                tha='00:00:00:00:00:00')

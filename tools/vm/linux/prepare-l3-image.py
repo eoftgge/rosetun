@@ -105,7 +105,9 @@ RELATION = re.compile(r'\s*([a-z0-9][a-z0-9+.-]+)(?::[a-z0-9-]+)?\s*'
 # Contract v6b: `ipv6.neighbor` of run-l3.sh needs an IPv6 default router on the physical interface. It is the lab's
 # link-local address, the modified EUI-64 of its MAC 00:00:5e:00:53:62, which answers in an L3 run. The test machine
 # accepts no router advertisement and gets no address beyond those it has; its own link-local address is the EUI-64
-# of its MAC, the one the observer's allowance for the echo names.
+# of its MAC, the one the observer's allowance for the echo names. The quiet image of contract v6 sets
+# `LinkLocalAddressing=no` on purpose; v6b replaces exactly that value, since the test machine cannot reach a
+# link-local router without a link-local address of its own.
 IPV6_ROUTER = 'fe80::200:5eff:fe00:5362'
 IPV6_NETWORK = (('LinkLocalAddressing', 'ipv6'), ('IPv6LinkLocalAddressGenerationMode', 'eui64'),
                 ('IPv6AcceptRA', 'no'))
@@ -148,11 +150,43 @@ def check_no_ipv6_router(rows):
             raise ValueError('the network file has an IPv6 gateway already')
 
 
+def ipv6_network_plan(fields):
+    """What v6b does to the settings of one [Network] section: ({key: (old, new)} replaced, [(key, value)] added).
+
+    A value that is already the wanted one stays. The only value replaced is the `no` of LinkLocalAddressing
+    that the quiet image of contract v6 sets, once; any other value is refused rather than overridden.
+    """
+    replaced, added = {}, []
+    for key, wanted in IPV6_NETWORK:
+        values = [value for name, value in fields if name == key]
+        if key == 'LinkLocalAddressing' and values == ['no']:
+            replaced[key] = ('no', wanted)
+        elif any(value != wanted for value in values):
+            raise ValueError(f'[Network] {key}={values[-1]} conflicts with {key}={wanted}')
+        elif not values:
+            added.append((key, wanted))
+    return replaced, added
+
+
+def with_replaced_setting(raw, key, old, new):
+    """`raw` with the one line `key=old` rewritten as `key=new`, in place and with its line ending."""
+    lines = raw.splitlines(keepends=True)
+    hits = [index for index, line in enumerate(lines)
+            if not line.lstrip().startswith(('#', ';')) and '=' in line
+            and tuple(part.strip() for part in line.split('=', 1)) == (key, old)]
+    if len(hits) != 1:
+        raise ValueError(f'[Network] expected one {key}={old} line')
+    line = lines[hits[0]]
+    lines[hits[0]] = f'{key}={new}' + line[len(line.rstrip('\r\n')):]
+    return ''.join(lines)
+
+
 def with_ipv6_router(text):
     """The network file with the settings of contract v6b in its one [Network] section and the IPv6 default route.
 
-    A setting the file already has with another value, a second [Network] section or an IPv6 route through a
-    gateway is refused rather than overridden: the owner looks at the file.
+    The `LinkLocalAddressing=no` of the quiet image becomes `ipv6`. A setting the file already has with any other
+    value, a second [Network] section or an IPv6 route through a gateway is refused rather than overridden: the
+    owner looks at the file.
     """
     rows = sections_of(text)
     check_no_ipv6_router(rows)
@@ -160,17 +194,13 @@ def with_ipv6_router(text):
     if len(network) != 1:
         raise ValueError('expected one [Network] section')
     raw, _, fields = rows[network[0]]
-    added = ''
-    for key, wanted in IPV6_NETWORK:
-        values = [value for name, value in fields if name == key]
-        if any(value != wanted for value in values):
-            raise ValueError(f'[Network] {key}={values[-1]} conflicts with {key}={wanted}')
-        if not values:
-            added += f'{key}={wanted}\n'
+    replaced, added = ipv6_network_plan(fields)
+    for key, (old, new) in replaced.items():
+        raw = with_replaced_setting(raw, key, old, new)
     sections = [section for section, _, _ in rows]
     body = raw.rstrip('\n') + '\n'
     tail = raw[len(raw.rstrip('\n')):][1:]
-    sections[network[0]] = body + added + tail
+    sections[network[0]] = body + ''.join(f'{key}={value}\n' for key, value in added) + tail
     joined = ''.join(sections)
     route = '[Route]\n' + ''.join(f'{key}={value}\n' for key, value in IPV6_ROUTE.items())
     return joined + ('' if joined.endswith('\n\n') or not joined else '\n' if joined.endswith('\n') else '\n\n') + route
@@ -180,7 +210,9 @@ def check_ipv6_router(before, after):
     """Refuse a network file read back from the image unless it is `before` with exactly what v6b adds.
 
     One [Network] section with each setting of IPV6_NETWORK once and with its value, the same addresses as
-    `before`, exactly one IPv6 default or link-local route (IPV6_ROUTE) and every section of `before` kept.
+    `before`, exactly one IPv6 default or link-local route (IPV6_ROUTE) and every section of `before` kept. The
+    sections and their settings must be those of `before` with the one replacement of `with_ipv6_router` and what it
+    adds, nothing more. The result records what was replaced.
     """
     rows, old = sections_of(after), sections_of(before)
     networks = [fields for _, header, fields in rows if header == '[Network]']
@@ -202,7 +234,13 @@ def check_ipv6_router(before, after):
     for _, header, fields in old:
         if header != '[Network]' and fields not in kept:
             raise ValueError(f'ipv6-router: a section {header} of the source is gone')
-    return dict(gateway=IPV6_ROUTER, network=dict(IPV6_NETWORK))
+    expected = with_ipv6_router(before)
+    if [(header, fields) for _, header, fields in rows] != [(header, fields) for _, header, fields in sections_of(expected)]:
+        raise ValueError('ipv6-router: the file is not the source with the replacement and the additions of v6b')
+    replaced = {key: dict(before=old, after=new)
+                for key, (old, new) in ipv6_network_plan(next(fields for _, header, fields in old
+                                                              if header == '[Network]'))[0].items()}
+    return dict(gateway=IPV6_ROUTER, network=dict(IPV6_NETWORK), replaced=replaced)
 
 
 def network_for_l3(text):

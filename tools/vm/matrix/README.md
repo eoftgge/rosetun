@@ -3856,14 +3856,19 @@ v6 plus the IPv6 router. `prepare-l3-image.py --ipv6-router` changes only the ne
 (`/etc/systemd/network/00-rosetun-lab.network`):
 
 - in its one `[Network]` section `LinkLocalAddressing=ipv6`, `IPv6LinkLocalAddressGenerationMode=eui64` and
-  `IPv6AcceptRA=no`, each added when missing; a section that sets one of them to another value is refused, as is a
-  second `[Network]` section;
+  `IPv6AcceptRA=no`, each added when missing and kept when it already has that value. The one value replaced is the
+  `LinkLocalAddressing=no` of the quiet v6a image (the contract of v6 turns the test machine's link-local address off
+  on purpose, and v6b cannot work without it: the route goes through the lab's `fe80::` address and the echo
+  allowance names the test machine's EUI-64 one). That single line becomes `LinkLocalAddressing=ipv6` in place; any
+  value other than `no` and `ipv6`, a second `LinkLocalAddressing` line, any other conflicting setting or a second
+  `[Network]` section is refused;
 - one route `[Route] Destination=::/0 Gateway=fe80::200:5eff:fe00:5362`; a file that already has an IPv6 default
-  route, a link-local or `_ipv6ra` gateway or an IPv6 `Gateway=` in `[Network]` is refused. The route
-  `2001:db8:6a:2::/64 via 2001:db8:6a:1::1` of the 6a contract stays;
-- no address is added. The file read back from the copy must have each setting once with its value, the same
-  `Address=` lines as before, exactly that one IPv6 default route and every other section unchanged, or the copy is
-  deleted. The descriptor gains `ipv6_router` (the gateway and the settings).
+  route, a link-local or `_ipv6ra` gateway or an IPv6 `Gateway=` in `[Network]` is refused, so the output of v6b is
+  not prepared again. The route `2001:db8:6a:2::/64 via 2001:db8:6a:1::1` of the 6a contract stays;
+- no address is added. The file read back from the copy must be the source with that one replacement plus what v6b
+  adds, each setting once with its value, the same `Address=` lines as before, exactly that one IPv6 default route
+  and every other section and setting unchanged, or the copy is deleted. The descriptor gains `ipv6_router` (the
+  gateway, the settings and `replaced`: for each replaced setting its value `before` and `after`, `{}` when none).
 
 ```sh
 python tools/vm/linux/prepare-l3-image.py /srv/test-v6.qcow2 /srv/test-v6b.qcow2 \
@@ -3881,6 +3886,24 @@ networkctl status <if>
 ```
 
 If another address, another IPv6 route or a router advertisement shows up, stop and send the output.
+
+Frames the link-local address adds to the wire (judged by `classify` in `lab_protocol.py`; none of the tables is
+widened for them):
+
+| Frame of the test machine | Category |
+| --- | --- |
+| Neighbor solicitation and advertisement with the lab, from or to `fe80::200:5eff:fe00:5361` (to the solicited-node group or the peer; the target is a link-local address or one of the two lab addresses) | `infrastructure` |
+| Multicast listener report (version 2, to `ff02::16`) from the link-local address, for its solicited-node group | `infrastructure` |
+| Duplicate address detection of the link-local address: neighbor solicitation from `::` to `ff02::1:ff00:5361`, sent once when the link comes up (boot, or a link that goes down and up) | `unexpected` where nothing declares `ipv6-dad`, which is `lab-smoke` and every window of the L3 group (only `neighbor` declares an allowance, the echo); outside a window of an L3 run it is counted in `outside_window` only |
+| Router solicitation | none: `IPv6AcceptRA=no` makes the kernel send none. From the link-local address to `ff02::2` it would be `infrastructure`, from `::` it would need `ipv6-unspecified-rs` and be `unexpected` |
+| Echo to the lab's link-local address (`ipv6.neighbor`) | the allowance `ipv6-link-local-echo` in a window labelled `neighbor`, `unexpected` anywhere else |
+| Anything else from the link-local address, such as a multicast name query (LLMNR, mDNS) | `unexpected` |
+
+The duplicate address detection of the test machine's global address `2001:db8:6a:1::2` is the same frame with
+another target and is judged the same way already in v6a. The link-local one is sent when the link comes up, which
+in an ordinary run is before the capture starts, but a link that goes down and up inside a capture sends it again,
+and then it is `DETECTED`: nothing declares `ipv6-dad` now. If it shows up in a real run, send the summary instead
+of widening the tables; the decision is the owner's.
 
 ### Every window is judged
 

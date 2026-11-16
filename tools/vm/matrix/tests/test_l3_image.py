@@ -62,7 +62,8 @@ class Ipv6RouterTests(unittest.TestCase):
                          + '\n[Route]\nDestination=::/0\nGateway=fe80::200:5eff:fe00:5362\n', updated)
         self.assertEqual(dict(gateway='fe80::200:5eff:fe00:5362',
                               network=dict(LinkLocalAddressing='ipv6', IPv6LinkLocalAddressGenerationMode='eui64',
-                                           IPv6AcceptRA='no')), tool['check_ipv6_router'](NETWORK_V6, updated))
+                                           IPv6AcceptRA='no'), replaced={}),
+                         tool['check_ipv6_router'](NETWORK_V6, updated))
         # The IPv4 default stays the one the L3 preparation needs.
         self.assertEqual(updated, prepare(updated))
 
@@ -74,7 +75,10 @@ class Ipv6RouterTests(unittest.TestCase):
 
     def test_a_conflicting_setting_an_ipv6_gateway_or_a_second_network_section_is_refused(self):
         for change in (('Address=192.0.2.2/24\n', 'Address=192.0.2.2/24\nIPv6AcceptRA=yes\n'),
-                       ('Address=192.0.2.2/24\n', 'Address=192.0.2.2/24\nLinkLocalAddressing=no\n'),
+                       ('Address=192.0.2.2/24\n', 'Address=192.0.2.2/24\nLinkLocalAddressing=yes\n'),
+                       ('Address=192.0.2.2/24\n', 'Address=192.0.2.2/24\nLinkLocalAddressing=ipv4\n'),
+                       ('Address=192.0.2.2/24\n', 'Address=192.0.2.2/24\nLinkLocalAddressing=no\nLinkLocalAddressing=no\n'),
+                       ('Address=192.0.2.2/24\n', 'Address=192.0.2.2/24\nLinkLocalAddressing=no\nLinkLocalAddressing=ipv6\n'),
                        ('Address=192.0.2.2/24\n', 'Address=192.0.2.2/24\nIPv6LinkLocalAddressGenerationMode=stable-privacy\n'),
                        ('Address=192.0.2.2/24\n', 'Address=192.0.2.2/24\nGateway=2001:db8:6a:1::1\n'),
                        ('Address=192.0.2.2/24\n', 'Address=192.0.2.2/24\nGateway=_ipv6ra\n'),
@@ -106,6 +110,79 @@ class Ipv6RouterTests(unittest.TestCase):
             record = dict(gateway='fe80::200:5eff:fe00:5362', network={})
             self.assertEqual(record, tool['image_descriptor'](image, None, record)['ipv6_router'])
             self.assertNotIn('ipv6_router', tool['image_descriptor'](image))
+
+
+# The network file of the real v6a image: its quiet contract turns the link-local address off on purpose.
+NETWORK_V6A = ('[Network]\nDHCP=no\nIPv6AcceptRA=no\nLinkLocalAddressing=no\nAddress=192.0.2.2/24\n'
+               'Address=2001:db8:6a:1::2/64\n\n[Route]\nDestination=2001:db8:6a:2::/64\nGateway=2001:db8:6a:1::1\n\n'
+               '[Route]\nDestination=0.0.0.0/0\nGateway=192.0.2.1\n')
+NETWORK_V6B = ('[Network]\nDHCP=no\nIPv6AcceptRA=no\nLinkLocalAddressing=ipv6\nAddress=192.0.2.2/24\n'
+               'Address=2001:db8:6a:1::2/64\nIPv6LinkLocalAddressGenerationMode=eui64\n\n'
+               '[Route]\nDestination=2001:db8:6a:2::/64\nGateway=2001:db8:6a:1::1\n\n'
+               '[Route]\nDestination=0.0.0.0/0\nGateway=192.0.2.1\n\n'
+               '[Route]\nDestination=::/0\nGateway=fe80::200:5eff:fe00:5362\n')
+
+
+class RealImageIpv6RouterTests(unittest.TestCase):
+    """The file of the real v6a image, which turns link-local addressing off, becomes v6b."""
+
+    def test_the_v6a_file_is_unchanged_by_the_l3_preparation(self):
+        self.assertEqual(NETWORK_V6A, prepare(NETWORK_V6A))
+
+    def test_the_link_local_off_of_v6a_is_replaced_in_place_and_the_rest_is_added(self):
+        updated = tool['with_ipv6_router'](NETWORK_V6A)
+        self.assertEqual(NETWORK_V6B, updated)
+        self.assertEqual(1, updated.count('LinkLocalAddressing='))
+        self.assertNotIn('LinkLocalAddressing=no', updated)
+
+    def test_the_readback_is_checked_and_records_what_was_replaced(self):
+        updated = tool['with_ipv6_router'](NETWORK_V6A)
+        self.assertEqual(dict(gateway='fe80::200:5eff:fe00:5362',
+                              network=dict(LinkLocalAddressing='ipv6', IPv6LinkLocalAddressGenerationMode='eui64',
+                                           IPv6AcceptRA='no'),
+                              replaced=dict(LinkLocalAddressing=dict(before='no', after='ipv6'))),
+                         tool['check_ipv6_router'](NETWORK_V6A, updated))
+
+    def test_a_file_that_already_allows_link_local_replaces_nothing(self):
+        source = NETWORK_V6A.replace('LinkLocalAddressing=no', 'LinkLocalAddressing=ipv6')
+        updated = tool['with_ipv6_router'](source)
+        self.assertEqual({}, tool['check_ipv6_router'](source, updated)['replaced'])
+        self.assertEqual(NETWORK_V6B, updated)
+
+    def test_the_result_is_not_prepared_again(self):
+        with self.assertRaises(ValueError):
+            tool['with_ipv6_router'](NETWORK_V6B)
+
+    def test_a_readback_that_keeps_the_off_value_or_changes_anything_else_is_refused(self):
+        updated = tool['with_ipv6_router'](NETWORK_V6A)
+        for change in (('LinkLocalAddressing=ipv6', 'LinkLocalAddressing=no'),
+                       ('LinkLocalAddressing=ipv6', 'LinkLocalAddressing=ipv4'),
+                       ('DHCP=no\n', 'DHCP=yes\n'),
+                       ('DHCP=no\n', ''),
+                       ('IPv6AcceptRA=no\n', 'IPv6AcceptRA=yes\n'),
+                       ('IPv6LinkLocalAddressGenerationMode=eui64\n',
+                        'IPv6LinkLocalAddressGenerationMode=eui64\nLLMNR=yes\n'),
+                       ('Gateway=192.0.2.1\n', 'Gateway=192.0.2.9\n'),
+                       ('Destination=2001:db8:6a:2::/64\n', 'Destination=2001:db8:6a:3::/64\n')):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                tool['check_ipv6_router'](NETWORK_V6A, updated.replace(*change, 1))
+
+    def test_a_value_other_than_no_or_ipv6_is_still_refused(self):
+        for value in ('yes', 'ipv4', 'true', 'false', 'dhcp'):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                tool['with_ipv6_router'](NETWORK_V6A.replace('LinkLocalAddressing=no', f'LinkLocalAddressing={value}'))
+
+    def test_the_spacing_and_the_line_ending_of_the_replaced_line_are_kept_apart_from_the_value(self):
+        source = NETWORK_V6A.replace('LinkLocalAddressing=no\n', 'LinkLocalAddressing = no\r\n')
+        updated = tool['with_ipv6_router'](source)
+        self.assertIn('\nLinkLocalAddressing=ipv6\r\nAddress=192.0.2.2/24\n', updated)
+        self.assertEqual(dict(LinkLocalAddressing=dict(before='no', after='ipv6')),
+                         tool['check_ipv6_router'](source, updated)['replaced'])
+
+    def test_a_commented_off_value_is_not_the_setting(self):
+        source = NETWORK_V6A.replace('LinkLocalAddressing=no\n', '# LinkLocalAddressing=no\nLinkLocalAddressing=no\n')
+        updated = tool['with_ipv6_router'](source)
+        self.assertIn('# LinkLocalAddressing=no\nLinkLocalAddressing=ipv6\n', updated)
 
 
 class ArgumentTests(unittest.TestCase):
