@@ -16,9 +16,14 @@ from .resources import _identifier, _state_path, inspect_runs
 
 SCHEMA = 'rosetun.matrix.execution.v1'
 SCHEMA_V2 = 'rosetun.matrix.execution.v2'
-# Version 3 is version 2 for the L3 suite plus the block that makes it a run inside the lab.
+# Version 3 is version 2 for the L3 or Proxy suite plus the block that makes it a run inside the lab.
 SCHEMA_V3 = 'rosetun.matrix.execution.v3'
-SUITES = ('linux-l2', 'linux-l3')
+SUITES = ('linux-l2', 'linux-l3', 'linux-proxy')
+# The suites of the real service: they carry the `[l3]` block (the node, the probes, the engine's hash) and may
+# run inside the lab. Proxy takes the same block as L3, under the same name.
+SERVICE_SUITES = ('linux-l3', 'linux-proxy')
+# The stage profile of each suite's package.
+PROFILE_OF = {'linux-l2': 'l2', 'linux-l3': 'l3', 'linux-proxy': 'proxy'}
 FIELDS = {'schema', 'mode', 'platform', 'state_directory', 'stand_id', 'image', 'qemu',
           'xorriso', 'content_directory', 'source_checkout', 'accounts', 'timeouts', 'deadlines'}
 
@@ -85,11 +90,11 @@ def validate(config):
         exact(config, FIELDS)
     else:
         suite = config.get('suite')
-        if suite not in SUITES or (config['schema'] == SCHEMA_V3 and suite != 'linux-l3'):
+        if suite not in SUITES or (config['schema'] == SCHEMA_V3 and suite not in SERVICE_SUITES):
             raise ValueError('unsupported execution suite')
-        exact(config, FIELDS | {'suite'} | ({'l3'} if suite == 'linux-l3' else set())
+        exact(config, FIELDS | {'suite'} | ({'l3'} if suite in SERVICE_SUITES else set())
               | ({'lab'} if config['schema'] == SCHEMA_V3 else set()))
-        if suite == 'linux-l3':
+        if suite in SERVICE_SUITES:
             config['l3'] = validate_l3(config['l3'])
     if config['mode'] != 'exploratory':
         raise ValueError('execution supports exploratory only; release is unsupported')
@@ -142,14 +147,15 @@ def preflight(config, *, dry_run=False):
     lab = lab_of(config)
     if lab:
         ImageDescriptor(**lab['image']).validate(state)
-    extra = dict(profile='l3', sing_box_sha256=l3['sing_box_sha256'], without_requests=True) if l3 else {}
+    profile = PROFILE_OF[suite]
+    extra = dict(profile=profile, sing_box_sha256=l3['sing_box_sha256'], without_requests=True) if l3 else {}
     package = validate_package(config['content_directory'], checkout=config['source_checkout'],
                                immutable=True, check_source=not dry_run, **extra)
     from .l2_media import TOTAL_LIMIT
     if l3:
         # Rendered in memory only: the same generator the run later writes from.
-        from .l3_requests import render_all
-        render_all(l3['host_address'], l3['node_port'])
+        from .l3_requests import render_for
+        render_for(profile, l3['host_address'], l3['node_port'])
     if sum(package['sizes'].values()) > TOTAL_LIMIT:
         raise ValueError('L2 content exceeds media limit')
     if any(r['stand_id'] in (None, config['stand_id']) and not r.get('completion_verified')
@@ -177,6 +183,8 @@ def preflight(config, *, dry_run=False):
             limitations += ['the VM has no network: preflight.baseline is expected to FAIL and the '
                             'remaining scenarios to ERROR']
         limitations += ['the sing-box binary is hashed, never executed, on the controller']
+    if l3 and profile == 'proxy':
+        actions[2] = 'write the four Proxy lab requests into the run directory'
     if lab:
         actions = ['lease', 'create the test run and the lab run with their identities',
                    'overlays of both machines', 'evidence disk of the lab machine (64 MiB, zeroed)',
@@ -194,6 +202,12 @@ def preflight(config, *, dry_run=False):
                        'only the kill switch group is judged; the other scenarios run and are reported',
                        'some scenarios outside the group are expected to FAIL until stages 7c to 7e',
                        'the sing-box binary is hashed, never executed, on the controller']
+        if profile == 'proxy':
+            actions[4] = 'write the four Proxy lab requests into the test run'
+            actions[11] = 'submit run-proxy.sh once (with LAB_MARKER_ADDRESS)'
+            actions[-2] = 'cross-check the Proxy group against the windows'
+            limitations[3:5] = ['every scenario but the two-hop exits is in the group; their windows are judged',
+                                'run-proxy.sh adds the private address 192.168.77.2/24 for sharing and removes it']
     return dict(schema='rosetun.matrix.execution-plan.v1', dry_run=dry_run, suite=suite,
                 configuration=config, content_hashes=package['hashes'],
                 controller_checkout=str(controller), controller_source=controller_source,

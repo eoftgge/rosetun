@@ -7,6 +7,7 @@ security invariants stay unverified.
 """
 
 from collections import Counter
+from types import SimpleNamespace
 
 from .lab_protocol import CLIENTS, HTTPS_PORT, PORTS, RESOLVER, TARGETS
 
@@ -167,6 +168,27 @@ CONTROL_WINDOW, CONTROL_SCENARIO = 'connect_ks', 'killswitch.direct-blocked'
 CONTROL_EXPECTATIONS = {
     'stop-helper': f'window {CONTROL_WINDOW} DETECTED with a direct flow from the test machine to '
                    f'{TARGETS[4]}:{HTTPS_PORT}, {CONTROL_SCENARIO} DISAGREE, an ordinary run would exit 1'}
+# The tables a suite is judged by: these of L3, or those of `proxy_tables` (stage 8a) for the Linux Proxy suite.
+TABLES = ('GROUP', 'WINDOW_OF', 'OWN_WINDOW_WHEN_OPENED', 'GROUP_LABELS', 'WINDOWS_PER_LABEL', 'WINDOWS_AT_MOST',
+          'EXPECTED_FLOWS', 'WINDOW_ALLOWANCES', 'REQUIRED_FIXTURES', 'LEAK_OUTSIDE_THE_GROUP_FAILS', 'CONTROLS',
+          'CONTROL_WINDOW', 'CONTROL_SCENARIO')
+LAB_SUITES = ('linux-l3', 'linux-proxy')
+
+
+def tables_for(suite='linux-l3'):
+    """The tables of a suite run in the lab, read when they are needed (so a test may change one of L3's)."""
+    if suite == 'linux-l3':
+        source = globals()
+    elif suite == 'linux-proxy':
+        from . import proxy_tables
+        source = vars(proxy_tables)
+    else:
+        raise ValueError('lab-suite-unknown')
+    tables = SimpleNamespace(suite=suite, **{name: source[name] for name in TABLES})
+    tables.CONTROL_EXPECTATIONS = {
+        'stop-helper': f'window {tables.CONTROL_WINDOW} DETECTED with a direct flow from the test machine to '
+                       f'{TARGETS[4]}:{HTTPS_PORT}, {tables.CONTROL_SCENARIO} DISAGREE, an ordinary run would exit 1'}
+    return tables
 
 
 def expectation_verdict(window, expected):
@@ -214,12 +236,13 @@ def window_verdict(windows):
     return 'EXPECTED' if 'EXPECTED' in verdicts else 'NONE'
 
 
-def window_of(identifier, windows):
+def window_of(identifier, windows, tables=None):
     """The (label, number) of the window the scenario is judged in, or None."""
-    own = OWN_WINDOW_WHEN_OPENED.get(identifier)
+    tables = tables or tables_for()
+    own = tables.OWN_WINDOW_WHEN_OPENED.get(identifier)
     if own is not None and any(window['label'] == own[0] for window in windows):
         return own
-    return WINDOW_OF[identifier]
+    return tables.WINDOW_OF[identifier]
 
 
 def numbered(windows):
@@ -232,7 +255,7 @@ def numbered(windows):
     return pairs
 
 
-def judged_windows(window, windows):
+def judged_windows(window, windows, tables=None):
     """The one window named by (label, number), as a list of zero or one.
 
     With fewer windows of the label than expected, nothing says which session is missing, so none of them is
@@ -240,7 +263,8 @@ def judged_windows(window, windows):
     ones keep their numbers, because a session the script opens again comes after them.
     """
     label, number = window
-    if [found['label'] for found in windows].count(label) < WINDOWS_PER_LABEL.get(label, number + 1):
+    tables = tables or tables_for()
+    if [found['label'] for found in windows].count(label) < tables.WINDOWS_PER_LABEL.get(label, number + 1):
         return []
     return [found for found, pair in zip(windows, numbered(windows)) if pair == window]
 
@@ -255,36 +279,42 @@ def agree(legacy, verdict):
             'MISMATCH': 'DISAGREE'}.get(verdict, 'UNOBSERVED')
 
 
-def crosscheck(rows, windows):
+def crosscheck(rows, windows, tables=None):
     """One row per scenario of the group: its result, its window and whether the two agree."""
+    tables = tables or tables_for()
     table = []
-    for identifier in GROUP:
+    for identifier in tables.GROUP:
         legacy = rows[identifier]['result'] if identifier in rows else 'MISSING'
-        window = window_of(identifier, windows)
+        window = window_of(identifier, windows, tables)
         row = dict(id=identifier, legacy_result=legacy, window=window and window[0],
                    window_number=window and window[1], windows=[], window_verdict=None)
         if window is None:
             row['agreement'] = 'NOT_APPLICABLE'
         else:
-            found = judged_windows(window, windows)
+            found = judged_windows(window, windows, tables)
             row.update(windows=[found_window['index'] for found_window in found], window_verdict=window_verdict(found),
                        agreement=agree(legacy, window_verdict(found)))
         table.append(row)
     return table
 
 
-def window_counts(windows):
+def window_counts(windows, tables=None):
     """For each label of the group, and each that may stand in for one: the windows expected and those seen."""
+    tables = tables or tables_for()
+    per_label, at_most = tables.WINDOWS_PER_LABEL, tables.WINDOWS_AT_MOST
     seen = [window['label'] for window in windows]
-    rows = [dict(label=label, expected=WINDOWS_PER_LABEL[label], at_most=None, seen=seen.count(label),
-                 as_expected=seen.count(label) == WINDOWS_PER_LABEL[label]) for label in GROUP_LABELS]
+    rows = [dict(label=label, expected=per_label[label], at_most=None, seen=seen.count(label),
+                 as_expected=seen.count(label) == per_label[label]) for label in tables.GROUP_LABELS]
     return rows + [dict(label=label, expected=None, at_most=limit, seen=seen.count(label),
-                        as_expected=seen.count(label) <= limit) for label, limit in WINDOWS_AT_MOST.items()]
+                        as_expected=seen.count(label) <= limit) for label, limit in at_most.items()]
 
 
-def window_limit(label):
+def window_limit(label, tables=None):
     """How many windows the label may have, or None for a label outside the group."""
-    return WINDOWS_PER_LABEL.get(label) if label in GROUP_LABELS else WINDOWS_AT_MOST.get(label)
+    tables = tables or tables_for()
+    if label in tables.GROUP_LABELS:
+        return tables.WINDOWS_PER_LABEL.get(label)
+    return tables.WINDOWS_AT_MOST.get(label)
 
 
 def direct_flow_seen(windows):
@@ -298,8 +328,8 @@ def direct_flow_seen(windows):
     return False
 
 
-def missing_fixtures(fixtures):
-    return [name for name in REQUIRED_FIXTURES if not (fixtures.get(name) or {}).get(
+def missing_fixtures(fixtures, tables=None):
+    return [name for name in (tables or tables_for()).REQUIRED_FIXTURES if not (fixtures.get(name) or {}).get(
         'alive_at_finish' if name == 'node' else 'answered')]
 
 
@@ -324,16 +354,18 @@ def decide(result, interrupted):
     a pass like NONE, MISMATCH contradicts it like DETECTED, and only DETECTED is a leak.
     """
     legacy, lab = result['legacy'], result['lab']
+    # The suite names its tables; a summary without one is an L3 run's.
+    tables = tables_for(result.get('suite', 'linux-l3'))
     rows = {row['id']: row for row in legacy['scenarios']}
     windows = lab['windows']
     # Each window's verdict: the observer's own, or for a window with an expectation the comparison with it.
     for window, (label, number) in zip(windows, numbered(windows)):
-        limit = window_limit(label)
-        expected = EXPECTED_FLOWS.get((label, number))
+        limit = window_limit(label, tables)
+        expected = tables.EXPECTED_FLOWS.get((label, number))
         window.update(number=number, beyond=limit is not None and number >= limit,
                       expected_flows=expected_flows(expected),
                       verdict=window['leak'] if expected is None else expectation_verdict(window, expected))
-    table = crosscheck(rows, windows)
+    table = crosscheck(rows, windows, tables)
     result['crosscheck'] = table
     # The windows a row of the cross-check names are judged. A window of a label of the group beyond its
     # count is a session nobody expected and has no expectation: a leak in it is a finding all the same. A
@@ -341,10 +373,11 @@ def decide(result, interrupted):
     judged = {index for row in table for index in row['windows']}
     for window in windows:
         window['judged'] = window['index'] in judged
-    lab['window_counts'] = window_counts(windows)
+    lab['window_counts'] = window_counts(windows, tables)
     result['out_of_scope'] = [dict(id=row['id'], legacy_result=row['result'], agreement='out-of-scope')
-                              for row in legacy['scenarios'] if row['id'] not in GROUP]
-    results = {identifier: rows[identifier]['result'] if identifier in rows else 'MISSING' for identifier in GROUP}
+                              for row in legacy['scenarios'] if row['id'] not in tables.GROUP]
+    results = {identifier: rows[identifier]['result'] if identifier in rows else 'MISSING'
+               for identifier in tables.GROUP}
     failed = [i for i, outcome in results.items() if outcome == 'FAIL']
     not_run = [i for i, outcome in results.items() if outcome not in ('PASS', 'FAIL')]
     qualification = lab['qualification']
@@ -362,7 +395,7 @@ def decide(result, interrupted):
     # window is listed, and the run cannot vouch for itself (`window-count`), but it is no finding of its own.
     short = {row['label'] for row in lab['window_counts'] if row['expected'] is not None and not row['as_expected']
              and row['seen'] < row['expected']}
-    if any(label not in short for label in outside) and LEAK_OUTSIDE_THE_GROUP_FAILS:
+    if any(label not in short for label in outside) and tables.LEAK_OUTSIDE_THE_GROUP_FAILS:
         findings.append('leak-outside-group')
     if result['errors']:
         unproven.append('controller-error')
@@ -374,7 +407,7 @@ def decide(result, interrupted):
         unproven.append('group-scenario-did-not-run')
     if not qualification['evidence']['verified']:
         unproven.append('evidence-disk')
-    missing = missing_fixtures(qualification['fixtures'])
+    missing = missing_fixtures(qualification['fixtures'], tables)
     if missing:
         unproven.append('fixtures-not-seen:' + ','.join(missing))
     if qualification['observer']['reasons']:
@@ -391,8 +424,9 @@ def decide(result, interrupted):
             unproven.append(f"outside-window-not-verified:{window['label']}:{window['number']}:{window['verdict']}")
     if result.get('diagnostic'):
         unproven.append('diagnostic-run')
-    result['group'] = dict(scenarios=list(GROUP), results=results, passed=all(o == 'PASS' for o in results.values()),
-                           failed=failed, not_run=not_run, labels=list(GROUP_LABELS),
+    result['group'] = dict(scenarios=list(tables.GROUP), results=results,
+                           passed=all(o == 'PASS' for o in results.values()),
+                           failed=failed, not_run=not_run, labels=list(tables.GROUP_LABELS),
                            missing_labels=lab['missing_labels'], outside_leaks=outside,
                            outside_windows=[dict(label=window['label'], number=window['number'],
                                                  verdict=window['verdict']) for window in unjudged],
@@ -413,11 +447,11 @@ def decide(result, interrupted):
     control = result.get('control')
     if control is not None:
         # The ordinary code stays in the summary; the code of the run is the control's own.
-        direct = judged_windows(WINDOW_OF[CONTROL_SCENARIO], windows)
-        row = next(row for row in table if row['id'] == CONTROL_SCENARIO)
-        met = (control in CONTROLS and result['exit_code'] == 1 and window_verdict(direct) == 'DETECTED'
+        direct = judged_windows(tables.WINDOW_OF[tables.CONTROL_SCENARIO], windows, tables)
+        row = next(row for row in table if row['id'] == tables.CONTROL_SCENARIO)
+        met = (control in tables.CONTROLS and result['exit_code'] == 1 and window_verdict(direct) == 'DETECTED'
                and direct_flow_seen(direct) and row['agreement'] == 'DISAGREE' and result['completed'] is True)
-        result['control_result'] = dict(name=control, expected=CONTROL_EXPECTATIONS.get(control), met=met,
+        result['control_result'] = dict(name=control, expected=tables.CONTROL_EXPECTATIONS.get(control), met=met,
                                         ordinary_exit_code=result['exit_code'])
         if result['exit_code'] != 130:
             result['exit_code'], result['outcome'] = (0, 'control-met') if met else (2, 'control-not-met')

@@ -1,9 +1,10 @@
-"""Linux L3 inside the two-machine lab (stage 7b2b): exploratory, nothing here is an acceptance.
+"""Linux L3 (stage 7b2b) and Linux Proxy (stage 8a) inside the two-machine lab: exploratory, nothing here is an
+acceptance.
 
-The test machine runs `run-l3.sh` as `run linux-l3` does; next to it the lab machine holds the VPN
-node, the HTTPS target, the resolver and the DoH target and captures the wire to its evidence
-disk. The script marks every protected session on the wire; the controller finds those windows
-in the capture and sets the observer's verdict beside the script's own results.
+The test machine runs `run-l3.sh` or `run-proxy.sh` as `run linux-l3` or `run linux-proxy` does; next to it the
+lab machine holds the VPN node, the HTTPS target, the resolver and the DoH target and captures the wire to its
+evidence disk. The script marks every protected session on the wire; the controller finds those windows in the
+capture and sets the observer's verdict beside the script's own results.
 """
 
 from datetime import datetime, timezone
@@ -23,10 +24,13 @@ from .lab_protocol import (LOG_LIMIT, PORTS, TARGETS, EVIDENCE_PCAP_LIMIT, CLIEN
                            probes)
 from .orchestrator import _RETAINED_LEASES, begin_state, failure, finish_state, mark_step, save
 from .l3_align import align
-from .l3_summary import CONTROLS
+from .l3_summary import CONTROLS, LAB_SUITES, tables_for
 from .resources import StandLease, completion_verified, create_run, resource_path, EXECUTION_FILES
 
 SCHEMA = 'rosetun.matrix.l3-summary.v1'
+# Each suite of the lab: the schema of its summary and the stage profile of its package.
+SCHEMAS = {'linux-l3': SCHEMA, 'linux-proxy': 'rosetun.matrix.proxy-summary.v1'}
+PROFILES = {'linux-l3': 'l3', 'linux-proxy': 'proxy'}
 ROLES = ('lab', 'test')
 # What the lab machine keeps beside the capture, and the bound of each file.
 LAB_FILES = (('targets.json', LOG_LIMIT), ('health.json', LOG_LIMIT), ('https.json', LOG_LIMIT),
@@ -49,7 +53,7 @@ class Adapters:
 
 
 def marker_address():
-    """Where run-l3.sh sends its window markers: the target of the lab, on the port of the observer."""
+    """Where the job sends its window markers: the target of the lab, on the port of the observer."""
     return TARGETS[4] + ':' + str(PORTS['marker'])
 
 
@@ -57,13 +61,13 @@ def capture_seconds(config):
     return config['timeouts']['job'] + CAPTURE_SLACK
 
 
-def saved_report(run, job):
+def saved_report(run, job, profile='l3'):
     """The bytes of the report the job collected last, exactly as the guest wrote them, else None."""
     polls = getattr(job, 'polls', 0)
     if not isinstance(polls, int) or polls < 1:
         return None
     try:
-        return resource_path(run.directory, 'linux-l3/' + str(polls) + '/report.json').read_bytes()
+        return resource_path(run.directory, 'linux-' + profile + '/' + str(polls) + '/report.json').read_bytes()
     except OSError:
         return None
 
@@ -212,20 +216,34 @@ def lab_block(lab_id, evidence_disk, verdict, fixtures, hashes, refusals=(), rou
     return block
 
 
-def run_linux_l3_lab(config, *, diagnostic=False, control=None, adapters=None, clock=time.monotonic,
-                     sleep=time.sleep, progress=None):
+def run_linux_l3_lab(config, **options):
     """One L3 run in the lab. A diagnostic run asks the engine to name destinations and is never a qualification.
 
     A run with `control` is the positive control of the observer, not a qualification: the script stops the
     service inside a window and the run succeeds only if the observer saw what that did.
     """
-    if config.get('suite') != 'linux-l3' or lab_of(config) is None:
+    return run_linux_lab(config, suite='linux-l3', **options)
+
+
+def run_linux_proxy_lab(config, **options):
+    """One Linux Proxy run in the lab (stage 8a), with the same steps and the tables of `proxy_tables`."""
+    return run_linux_lab(config, suite='linux-proxy', **options)
+
+
+def run_linux_lab(config, *, suite, diagnostic=False, control=None, adapters=None, clock=time.monotonic,
+                  sleep=time.sleep, progress=None):
+    """One run of a suite of the real service in the lab; see `run_linux_l3_lab`."""
+    if suite not in LAB_SUITES or config.get('suite') != suite or lab_of(config) is None:
         raise ValueError('configuration is not for the lab')
-    if control is not None and (control not in CONTROLS or diagnostic):
+    if control is not None and (control not in tables_for(suite).CONTROLS or diagnostic):
         raise ValueError('lab-control-invalid')
+    # The diagnostic run lines the scenarios of the L3 group up with the flows; there is no such table for Proxy.
+    if diagnostic and suite != 'linux-l3':
+        raise ValueError('lab-diagnostic-l3-only')
+    profile = PROFILES[suite]
     progress = progress or (lambda stage: print(stage, file=sys.stderr, flush=True))
     l3, lab_config = config['l3'], config['lab']
-    result = dict(schema=SCHEMA, suite='linux-l3', mode='lab', identities={}, configuration=config, stages=[],
+    result = dict(schema=SCHEMAS[suite], suite=suite, mode='lab', identities={}, configuration=config, stages=[],
                   evidence=[], legacy=None, lab=None, crosscheck=[], out_of_scope=[], delivery=None,
                   execution=None, completion=dict.fromkeys(ROLES, False), completed=False,
                   manual_recovery_required=False, errors=[], security_invariants='UNVERIFIED',
@@ -315,10 +333,11 @@ def run_linux_l3_lab(config, *, diagnostic=False, control=None, adapters=None, c
         step('prepare-test', lambda: adapters.prepare(runs['test'], adapters.image(**config['image']),
                                                       adapters.config(**config['qemu']), executor=executor))
         step('requests', lambda: adapters.requests(runs['test'], l3['host_address'], l3['node_port'],
-                                                   **({'diagnostic': True} if diagnostic else {})))
+                                                   **({'diagnostic': True} if diagnostic else {}),
+                                                   **({'profile': profile} if profile != 'l3' else {})))
         step('media', lambda: adapters.attach(runs['test'], directory=config['content_directory'],
              checkout=config['source_checkout'], xorriso=config['xorriso'], executor=executor,
-             profile='l3', sing_box_sha256=l3['sing_box_sha256']))
+             profile=profile, sing_box_sha256=l3['sing_box_sha256']))
         # The pair registers its files in both runs (the test machine's DNS client log among them), while the
         # requests and the media accept only the resources of a freshly prepared run: so it comes last.
         # The evidence disk is made with the pair; it belongs to the lab machine alone.
@@ -393,7 +412,7 @@ def run_linux_l3_lab(config, *, diagnostic=False, control=None, adapters=None, c
             sleep(15)
             step('collect-final', job.collect)
         result['execution'] = job.snapshot()
-        seen['raw_report'] = saved_report(runs['test'], job)
+        seen['raw_report'] = saved_report(runs['test'], job, profile)
         if diagnostic:
             # The report is in; a journal the guest cannot give is noted and changes nothing already collected.
             try:
@@ -429,7 +448,7 @@ def run_linux_l3_lab(config, *, diagnostic=False, control=None, adapters=None, c
         if not completion_verified(lab_run.directory, lab_run._read()):
             raise ValueError('lab-completion-unconfirmed')
         step('evidence-read', lambda: read_disk(lab_run, lab_id, seen))
-        step('windows', lambda: judge(lab_id, config, seen))
+        step('windows', lambda: judge(lab_id, config, seen, suite))
     except BaseException as error:
         interrupted = isinstance(error, KeyboardInterrupt)
         result['errors'].append(failure(stage, error))
@@ -461,14 +480,14 @@ def read_disk(lab_run, lab_id, seen):
     disk.update(verified=True, reason=None, pcap_bytes=len(raw), pcap_sha256=seen['hashes']['capture.pcap'])
 
 
-def judge(lab_id, config, seen):
+def judge(lab_id, config, seen, suite='linux-l3'):
     """Split the capture into the windows its markers name; the labels of the group must each have one."""
-    from .l3_summary import GROUP_LABELS, WINDOW_ALLOWANCES
+    tables = tables_for(suite)
     seen['health'] = json.loads(seen['logs']['health.json'])
     seen['verdict'] = classify_windows(seen['logs']['capture.pcap'], lab_id, None, health=seen['health'], ready=True,
                                        tunnel_port=config['lab']['tunnel']['node_port'],
-                                       required_labels=GROUP_LABELS, limit=EVIDENCE_PCAP_LIMIT, flows=True,
-                                       window_allowances=WINDOW_ALLOWANCES)
+                                       required_labels=tables.GROUP_LABELS, limit=EVIDENCE_PCAP_LIMIT, flows=True,
+                                       window_allowances=tables.WINDOW_ALLOWANCES)
 
 
 def finish(result, lease, pair, runs, vms, closed, job, attempt, seen, interrupted, lab_id, states=None):
@@ -476,7 +495,7 @@ def finish(result, lease, pair, runs, vms, closed, job, attempt, seen, interrupt
     if job is not None:
         result['execution'] = job.snapshot()
         if seen['raw_report'] is None:
-            seen['raw_report'] = saved_report(runs['test'], job)
+            seen['raw_report'] = saved_report(runs['test'], job, PROFILES.get(result.get('suite'), 'l3'))
     if attempt is not None:
         result['delivery'] = dict(state=attempt.state, receipt_verified=attempt.receipt_verified)
     for role in ROLES:

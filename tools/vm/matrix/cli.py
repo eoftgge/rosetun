@@ -45,15 +45,16 @@ def main(argv=None):
     lab.add_argument('--evidence-disk', action='store_true',
                      help='keep the capture on a separate disk of the lab machine and read it after it stops')
     run = commands.add_parser('run', help='execute exploratory Linux L2 or L3 on an explicitly selected stand')
-    run.add_argument('suite', choices=['linux-l2', 'linux-l3'])
+    run.add_argument('suite', choices=['linux-l2', 'linux-l3', 'linux-proxy'])
     run.add_argument('--config', required=True)
     run.add_argument('--dry-run', action='store_true')
     run.add_argument('--lab', action='store_true',
-                     help='run linux-l3 inside the two-machine lab (needs an execution.v3 configuration)')
+                     help='run linux-l3 or linux-proxy inside the two-machine lab (needs an execution.v3 configuration)')
     run.add_argument('--control', choices=L3_CONTROLS,
                      help='with --lab: the positive control of the observer; exit 0 only if it saw what the control did')
     run.add_argument('--diagnostic', action='store_true',
-                     help='with --lab: ask the engine to name destinations; the run is never a qualification (exit 2 or more)')
+                     help='with --lab, linux-l3 only: ask the engine to name destinations; the run is never a '
+                          'qualification (exit 2 or more)')
     attach = commands.add_parser('attach', help='connect to a live run whose controller died and finish it')
     attach.add_argument('--state-directory', required=True)
     attach.add_argument('--run-id', required=True)
@@ -97,17 +98,21 @@ def main(argv=None):
             # A version 3 configuration is the lab's and nothing else's; versions 1 and 2 never are.
             if args.lab != (lab_of(config) is not None):
                 raise ValueError('--lab and the lab block of the configuration go together')
-            if args.diagnostic and not args.lab:
-                raise ValueError('--diagnostic needs --lab')
-            if args.control and (not args.lab or args.diagnostic or args.suite != 'linux-l3'):
+            if args.diagnostic and (not args.lab or args.suite != 'linux-l3'):
+                raise ValueError('--diagnostic needs --lab and linux-l3')
+            if args.control and (not args.lab or args.diagnostic or args.suite not in ('linux-l3', 'linux-proxy')):
                 raise ValueError('--control needs --lab and cannot go with --diagnostic')
             if args.dry_run:
                 result, code = preflight(config, dry_run=True), 0
             else:
                 from . import l3_lab, orchestrator
-                result = (l3_lab.run_linux_l3_lab if args.lab else orchestrator.run_linux_l3 if args.suite == 'linux-l3'
-                          else orchestrator.run_linux_l2)(config, **({'diagnostic': True} if args.diagnostic else {}),
-                                                          **({'control': args.control} if args.control else {}))
+                if args.lab:
+                    run = l3_lab.run_linux_proxy_lab if args.suite == 'linux-proxy' else l3_lab.run_linux_l3_lab
+                else:
+                    run = {'linux-l3': orchestrator.run_linux_l3, 'linux-proxy': orchestrator.run_linux_proxy}.get(
+                        args.suite, orchestrator.run_linux_l2)
+                result = run(config, **({'diagnostic': True} if args.diagnostic else {}),
+                             **({'control': args.control} if args.control else {}))
                 code = result['exit_code']
         elif args.command == 'attach':
             from .orchestrator import attach_run

@@ -346,6 +346,8 @@ class Machines:
         self.rows, self.evidence, self.fixtures = rows, evidence, fixtures or {}
         self.events, self.calls, self.vms, self.guests, self.reads, self.imports = [], [], {}, [], [], []
         self.job_options = {}
+        # Where the fake job leaves the report: the evidence directory of the stage profile.
+        self.report_directory = 'linux-l3'
         self.lab_id = None
         self.runs = {}
 
@@ -442,7 +444,7 @@ class Machines:
             machines.note('collect')
             job.polls += 1
             run = machines.runs['test']
-            target = run.directory / 'linux-l3' / str(job.polls)
+            target = run.directory / machines.report_directory / str(job.polls)
             target.mkdir(parents=True, exist_ok=True)
             (target / 'report.json').write_bytes(machines.report())
             job.assessment = dict(acceptance=dict(accepted=False, release=False),

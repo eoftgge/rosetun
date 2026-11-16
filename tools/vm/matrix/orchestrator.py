@@ -412,12 +412,19 @@ def run_linux_l3(config, **options):
     return run_linux(config, **options)
 
 
+def run_linux_proxy(config, **options):
+    if config.get('suite') != 'linux-proxy':
+        raise ValueError('configuration is for another suite')
+    return run_linux(config, **options)
+
+
 def run_linux(config, *, adapters=None, clock=time.monotonic, sleep=time.sleep,
               progress=None):
-    """One path for both stages; only L3 adds its requests to the run and passes its profile on."""
+    """One path for every stage; only L3 and Proxy add their requests to the run and pass their profile on."""
     progress = progress or (lambda stage: print(stage, file=sys.stderr, flush=True))
     suite = config.get('suite', 'linux-l2')
-    l3 = config.get('l3') if suite == 'linux-l3' else None
+    l3 = config.get('l3') if suite in ('linux-l3', 'linux-proxy') else None
+    profile = 'proxy' if suite == 'linux-proxy' else 'l3'
     result = dict(schema=SUMMARY_SCHEMA, suite=suite, identities={}, configuration=config, stages=[],
                   evidence=[], assessment=None, delivery=None, execution=None,
                   completion=False, manual_recovery_required=False, errors=[],
@@ -484,10 +491,11 @@ def run_linux(config, *, adapters=None, clock=time.monotonic, sleep=time.sleep,
                                                 adapters.config(**config['qemu']), executor=executor))
         if l3:
             # The generated requests belong to this run; the owner's content stays untouched.
-            step('requests', lambda: adapters.requests(run, l3['host_address'], l3['node_port']))
+            step('requests', lambda: adapters.requests(run, l3['host_address'], l3['node_port'],
+                                                       **({'profile': profile} if profile != 'l3' else {})))
         step('media', lambda: adapters.attach(run, directory=config['content_directory'],
               checkout=config['source_checkout'], xorriso=config['xorriso'], executor=executor,
-              **(dict(profile='l3', sing_box_sha256=l3['sing_box_sha256']) if l3 else {})))
+              **(dict(profile=profile, sing_box_sha256=l3['sing_box_sha256']) if l3 else {})))
         if clock() >= deadline:
             raise TimeoutError('preparation deadline')
         vm = step('start', lambda: adapters.start(run))
