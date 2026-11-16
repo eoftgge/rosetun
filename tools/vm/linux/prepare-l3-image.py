@@ -2,7 +2,8 @@
 """Copy an already provisioned lab test image, remove the legacy IPv4 probe route and, with --sshd, install
 sshd offline so that it listens only on the peer's side of the test machine; with --ipv6-router, make the lab's
 link-local address the IPv6 default router of the test machine; with --deps-debs, install offline what the rosetun
-package needs for the L5 image, which stays quiet and has no rosetun in it."""
+package needs for the L5 image, which stays quiet and has no rosetun in it; with --l4 (and --deps-debs), turn the L3
+test image with sshd into the L4 image: the user bus, sshd on the addresses of the L4 job, the nftables unit as it is."""
 
 import argparse
 import hashlib
@@ -97,6 +98,40 @@ dpkg -i {DEB_STAGING}/*.deb
 rm -rf {DEB_STAGING}
 '''
 DPKG_STATUS = '/var/lib/dpkg/status'
+# Stage 8d, the L4 test image (contract v7), made from the L3 test image with sshd and the IPv6 router (v6b, with the
+# helper of the lab). run-l4.sh needs, beyond what that image has: the user manager and its bus (`dbus-user-session`,
+# for `systemd-run --user --scope`), sshd where the job's peers look for it, and a boot that flushes the ruleset
+# before Lockdown's table goes in (`nftables.service` with `flush ruleset` in /etc/nftables.conf, enabled by the job
+# itself, never by the image).
+L4_DEPENDS = ('dbus-user-session', 'nftables', 'openssh-server')
+# sshd of the L4 job: on the test machine's own address, where the lab's poller connects (`inbound.lan-open`), and on
+# the guest's end of the veth to the peer namespace (`inbound.closed`, `inbound.lan-link-local-closed`). Neither
+# bind may fail while the address is not there yet or no more: FreeBind. The units are named like those of v6 and
+# not rosetun*, which `preflight.no-foreign-service` of run-l4.sh refuses; they sit beside the v6 socket, which stays.
+L4_LISTEN = ['192.0.2.2:22', '169.254.77.1:22']
+L4_SOCKET_UNIT = 'l4-lab-sshd.socket'
+L4_SERVICE_UNIT = 'l4-lab-sshd@.service'
+L4_SOCKET_TEXT = f"""[Unit]
+Description=sshd of the Rosetun L4 lab, for the lab's poller and the peer namespace
+Before=sockets.target
+
+[Socket]
+{''.join('ListenStream=' + address + chr(10) for address in L4_LISTEN)}FreeBind=yes
+Accept=yes
+
+[Install]
+WantedBy=sockets.target
+"""
+L4_SERVICE_TEXT = SERVICE_TEXT.replace('Rosetun L3 lab', 'Rosetun L4 lab')
+L4_INSTALL_SCRIPT = f'''set -eu
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+systemctl enable {L4_SOCKET_UNIT}
+'''
+NFTABLES_CONF = '/etc/nftables.conf'
+NFTABLES_UNIT = 'nftables.service'
+USER_BUS_SOCKET = '/usr/lib/systemd/user/dbus.socket'
+# No unit the dependencies of the L4 image enable is allowed either: the job enables nftables.service itself.
+L4_ALLOWED_UNITS = ()
 # The bound of the control member a .deb is read for, and of the package database read back from the image.
 CONTROL_LIMIT = 1024 * 1024
 STATUS_LIMIT = 64 * 1024 * 1024
@@ -367,9 +402,9 @@ def check_sshd(root, ssh_files, leftovers):
     return settings
 
 
-def image_descriptor(destination, debs=None, ipv6_router=None, l5=None):
-    """The descriptor of the new image; the fields of [image] and, with sshd, the IPv6 router or the L5 dependencies,
-    what was changed."""
+def image_descriptor(destination, debs=None, ipv6_router=None, l5=None, l4=None):
+    """The descriptor of the new image; the fields of [image] and, with sshd, the IPv6 router, the L5 dependencies or
+    the L4 additions, what was changed."""
     descriptor = dict(schema='rosetun.matrix.image.v1', identifier=destination.stem,
                       guest_os='linux', architecture='x86_64', path=str(destination),
                       size_bytes=destination.stat().st_size, sha256=digest(destination),
@@ -380,6 +415,8 @@ def image_descriptor(destination, debs=None, ipv6_router=None, l5=None):
         descriptor['ipv6_router'] = ipv6_router
     if l5 is not None:
         descriptor['l5_dependencies'] = l5
+    if l4 is not None:
+        descriptor['l4'] = l4
     return descriptor
 
 
@@ -580,15 +617,16 @@ def unmet(depends, installed, provided):
     return missing
 
 
-def check_dependencies(status, packages=()):
-    """Refuse an image without every package of L5_DEPENDS or what a checked package depends on, or with rosetun.
+def check_dependencies(status, packages=(), required=L5_DEPENDS):
+    """Refuse an image without every package of `required` (L5_DEPENDS) or what a checked package depends on, or
+    with rosetun.
 
     `packages` are (name of the file, control paragraph) of the packages the owner built for the run.
     """
     installed, provided = installed_packages(status)
     if 'rosetun' in installed:
         raise ValueError('deps: the rosetun package is installed in the image')
-    absent = [name for name in L5_DEPENDS if name not in installed]
+    absent = [name for name in required if name not in installed]
     if absent:
         raise ValueError(f"deps: not installed: {', '.join(absent)}")
     checked = []
@@ -599,7 +637,7 @@ def check_dependencies(status, packages=()):
             raise ValueError(f"deps: {file_name} needs what the image does not have: {', '.join(missing)}")
         checked.append(dict(file=file_name, package=control.get('Package'), version=control.get('Version'),
                             depends=depends))
-    return dict(installed={name: installed[name] for name in L5_DEPENDS}, checked_packages=checked)
+    return dict(installed={name: installed[name] for name in required}, checked_packages=checked)
 
 
 def unit_links(root):
@@ -685,6 +723,86 @@ def read_l5(image, before, packages):
         return result
 
 
+def check_l4(root, status, ssh_files, flags, nftables, before, after, quiet):
+    """Refuse an L4 image that lacks what run-l4.sh needs or that starts more than the job asks it to.
+
+    `root` holds copies of the two unit directories, `status` the package database, `ssh_files` the names in
+    /etc/ssh, `flags` the answers of `exists` for the user bus socket, nftables.service, /etc/nftables.conf,
+    policy-rc.d, the package staging directory and the script of the installation. `nftables` is the text of
+    /etc/nftables.conf or None, `before` and `after` the unit links before and after the socket was installed
+    and `quiet` what `check_quiet` said of the installation of the dependencies.
+    """
+    bus, unit, conf, policy, staging, script = flags
+    result = check_dependencies(status, (), L4_DEPENDS)
+    if not bus:
+        raise ValueError(f'l4: {USER_BUS_SOCKET} is missing, so there is no user bus (dbus-user-session)')
+    if not unit:
+        raise ValueError(f'l4: {NFTABLES_UNIT} is missing')
+    if not conf or nftables is None or not re.search(r'^[ \t]*flush ruleset[ \t]*$', nftables, re.MULTILINE):
+        raise ValueError(f'l4: {NFTABLES_CONF} is missing or does not flush the ruleset')
+    if policy or staging or script:
+        raise ValueError('l4: the installation left policy-rc.d, its packages or its script in the image')
+    # The sshd of v6 stays as it was: the lab's L3 jobs read its banner on the address of the peer.
+    sshd = check_sshd(root, ssh_files, [policy, staging])
+    settings = unit_settings(unit_texts(root, L4_SOCKET_UNIT, 'socket'))
+    if settings['listen'] != L4_LISTEN or settings['other_listen']:
+        raise ValueError(f"l4: {L4_SOCKET_UNIT} listens on {settings['listen'] + settings['other_listen']}")
+    if settings['free_bind'] != 'yes':
+        raise ValueError(f'l4: {L4_SOCKET_UNIT} has no FreeBind=yes')
+    if settings['accept'] != 'yes':
+        raise ValueError(f'l4: {L4_SOCKET_UNIT} does not accept connections itself (Accept=yes)')
+    if unit_texts(root, L4_SERVICE_UNIT, 'service') != [L4_SERVICE_TEXT]:
+        raise ValueError(f'l4: {L4_SERVICE_UNIT} is not the one this tool writes, or has a drop-in')
+    enabled = ('etc', 'sockets.target.wants', L4_SOCKET_UNIT, '/etc/systemd/system/' + L4_SOCKET_UNIT)
+    if after - before != {enabled} or before - after:
+        raise ValueError('l4: the installation changed other links of the unit directories than the socket')
+    # The job enables nftables.service itself, after it looked at the boot without it; the image never does.
+    if any(link[2] == NFTABLES_UNIT and link[1] != '.' for link in after):
+        raise ValueError(f'l4: {NFTABLES_UNIT} is enabled in the image')
+    return dict(installed=result['installed'], units=quiet, v6_sshd=dict(listen=sshd['listen']),
+                sockets=dict(unit=L4_SOCKET_UNIT, service=L4_SERVICE_UNIT, listen=settings['listen']),
+                user_bus=USER_BUS_SOCKET,
+                nftables=dict(unit=NFTABLES_UNIT, conf=NFTABLES_CONF,
+                              conf_sha256=hashlib.sha256(nftables.encode('utf-8')).hexdigest(), flush_ruleset=True))
+
+
+def install_l4(image):
+    """Upload the L4 socket and its service template and enable the socket, in one writable session."""
+    with tempfile.TemporaryDirectory() as temp:
+        script, socket, service = (Path(temp) / name for name in ('install.sh', 'socket', 'service'))
+        for path, text in ((script, L4_INSTALL_SCRIPT), (socket, L4_SOCKET_TEXT), (service, L4_SERVICE_TEXT)):
+            path.write_text(text, encoding='utf-8', newline='\n')
+        guestfish(image, ['upload', str(socket), '/etc/systemd/system/' + L4_SOCKET_UNIT],
+                  ['upload', str(service), '/etc/systemd/system/' + L4_SERVICE_UNIT],
+                  ['upload', str(script), '/root/rosetun-lab-l4.sh'], ['sh', 'sh /root/rosetun-lab-l4.sh'],
+                  ['rm', '/root/rosetun-lab-l4.sh'], writable=True)
+
+
+def read_l4(image, before, quiet):
+    """Check the installed L4 image by reading it; `before` are the unit links after the dependencies went in."""
+    with tempfile.TemporaryDirectory() as temp:
+        root = Path(temp)
+        status = root / 'status'
+        output = copy_units(image, root, [['download', DPKG_STATUS, str(status)], ['ls', '/etc/ssh'],
+                                          ['exists', USER_BUS_SOCKET], ['exists', '/usr/lib/systemd/system/' + NFTABLES_UNIT],
+                                          ['exists', NFTABLES_CONF], ['exists', '/usr/sbin/policy-rc.d'],
+                                          ['exists', DEB_STAGING], ['exists', '/root/rosetun-lab-l4.sh']])
+        lines = output.splitlines()
+        if len(lines) < 6 or not set(lines[-6:]) <= {'true', 'false'}:
+            raise ValueError('l4: unexpected guestfish output')
+        flags = [line == 'true' for line in lines[-6:]]
+        conf = None
+        if flags[2]:
+            target = root / 'nftables.conf'
+            guestfish(image, ['download', NFTABLES_CONF, str(target)])
+            if target.stat().st_size > CONTROL_LIMIT:
+                raise ValueError('l4: the nftables configuration is too large')
+            conf = target.read_text(encoding='utf-8')
+        if status.stat().st_size > STATUS_LIMIT:
+            raise ValueError('deps: the package database is too large')
+        return check_l4(root, status.read_text(encoding='utf-8'), lines[:-6], flags, conf, before, unit_links(root), quiet)
+
+
 def arguments(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('source', type=Path)
@@ -702,7 +820,15 @@ def arguments(argv=None):
     parser.add_argument('--check-package', type=Path, action='append', default=[], metavar='DEB',
                         help='with --deps-debs: a rosetun package of the run, whose Depends must all be installed; '
                              'only its control file is read')
+    parser.add_argument('--l4', action='store_true',
+                        help='the L4 image (contract v7), made from the L3 test image with sshd and the IPv6 '
+                             'router: with --deps-debs, the user bus; sshd on the addresses of the L4 job; '
+                             'nftables.service left as the package has it')
     args = parser.parse_args(argv)
+    if args.l4 and (args.deps_debs is None or args.sshd or args.sshd_debs is not None or args.ipv6_router
+                    or args.check_package):
+        parser.error('--l4 needs --deps-debs DIR and goes with neither --sshd, --sshd-debs, --ipv6-router '
+                     'nor --check-package')
     if args.sshd and args.sshd_debs is None:
         parser.error('--sshd needs --sshd-debs DIR')
     if args.sshd_debs is not None and not args.sshd:
@@ -758,25 +884,36 @@ def main(argv=None):
             if sshd_debs(args.sshd_debs.resolve(strict=True)) != debs:
                 raise ValueError('sshd-debs changed during the installation')
             sshd = read_sshd(destination)
-        l5 = None
-        if deps is not None:
+        l5 = l4 = None
+        if deps is not None and not args.l4:
             units = read_units(destination)
             install_deps(destination, args.deps_debs.resolve(strict=True), deps)
             if deps_debs(args.deps_debs.resolve(strict=True)) != deps:
                 raise ValueError('deps-debs changed during the installation')
             l5 = dict(debs=deps, **read_l5(destination, units, packages))
+        if args.l4:
+            # The source must be the L3 test image with sshd: its v6 socket stays and the checks below read it.
+            read_sshd(destination)
+            units = read_units(destination)
+            install_deps(destination, args.deps_debs.resolve(strict=True), deps)
+            if deps_debs(args.deps_debs.resolve(strict=True)) != deps:
+                raise ValueError('deps-debs changed during the installation')
+            installed = read_units(destination)
+            quiet = check_quiet(units, installed, L4_ALLOWED_UNITS)
+            install_l4(destination)
+            l4 = dict(debs=deps, **read_l4(destination, installed, quiet))
     except BaseException:
         # A half-prepared copy is never left to be taken for a prepared one.
         destination.unlink()
         raise
     if digest(source) != before:
         raise ValueError('source image changed')
-    descriptor = image_descriptor(destination, debs, ipv6_router, l5)
+    descriptor = image_descriptor(destination, debs, ipv6_router, l5, l4)
     with args.descriptor.open('x', encoding='utf-8') as stream:
         json.dump(descriptor, stream, indent=2)
         stream.write('\n')
     print(json.dumps(dict(source_sha256=before, network_before=original, network_after=updated, sshd=sshd,
-                          ipv6_router=ipv6_router, l5_dependencies=l5, image=descriptor), indent=2))
+                          ipv6_router=ipv6_router, l5_dependencies=l5, l4=l4, image=descriptor), indent=2))
 
 
 if __name__ == '__main__':
