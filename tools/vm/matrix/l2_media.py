@@ -192,7 +192,7 @@ def attach_media(run, *, directory, checkout, xorriso, executor=execute, profile
                    forbid=run._identity[2])
         event(state='snapshot-verified', package=package, content_sha256=hashlib.sha256(listing).hexdigest())
         iso = resource_path(run.directory, 'l2-media.iso')
-        command(['-as', 'mkisofs', '-iso-level', '3', '-R', '-V', 'ROSETUN_' + profile.upper(),
+        command(['-as', 'mkisofs', '-iso-level', '3', '-R', '-V', 'ROSETUN_' + profile.upper().replace('-', '_'),
                  '-o', str(iso), str(snapshot)], 300)
         sha, size, _ = l2._hash(iso, ISO_LIMIT)
         record = dict(path=str(iso), sha256=sha, size=size,

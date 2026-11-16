@@ -31,7 +31,7 @@ def synthetic_inputs(suite="linux-l2", mode="exploratory"):
                        "result": "SKIP" if row["evidence"] == "not-run" else "PASS"}
                       for row in plan["catalog"]],
     }
-    if suite == "linux-l4":
+    if suite in ("linux-l4", "linux-reboot-smoke"):
         report["guest"]["boot_ids"] = ["synthetic-test-boot"]
     summarize(report)
     return plan, report, {"run_id": "synthetic-test-run", "state": "finished"}
@@ -48,7 +48,7 @@ def summarize(report):
 class CatalogTests(unittest.TestCase):
     def test_all_existing_catalogs_keep_their_fields(self):
         expected_counts = {"linux-l2": 34, "linux-l3": 60, "linux-l4": 27,
-                           "linux-l5": 17, "linux-proxy": 47}
+                           "linux-l5": 17, "linux-proxy": 47, "linux-reboot-smoke": 3}
         for suite, filename in SUITES.items():
             with self.subTest(suite=suite):
                 rows = read_catalog(LINUX_ROOT / filename)

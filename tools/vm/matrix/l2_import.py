@@ -209,6 +209,7 @@ class L2Import:
         self.require_ready()
         profile = self.vm._l2_media['package'].get('profile', 'l2')
         # The L5 packages bring their engines, so its block names no engine hash.
-        extra = dict(profile=profile, sing_box_sha256=self.l3.get('sing_box_sha256')) if profile != 'l2' else {}
+        extra = dict(profile=profile, sing_box_sha256=(getattr(self, 'l3', None) or {}).get('sing_box_sha256')
+                     ) if profile != 'l2' else {}
         return l2.LinuxL2Job(self.vm, package_directory=resource_path(self.vm.run.directory, 'l2-package'),
                              checkout=checkout, enabled=enabled, **extra)

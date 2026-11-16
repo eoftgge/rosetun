@@ -106,6 +106,12 @@ PROFILES = {
                   ('guest/launch.sh', 'guest/start.sh', 'guest/lib.sh', 'guest/run-l5.sh', 'scenarios-l5.tsv'),
                   (), ('rosetun-old.deb', 'rosetun-new.deb'), (), l3_requests.L5_NAMES, ENV_L3,
                   ('rosetun-old.deb', 'rosetun-new.deb')),
+    # The smoke job of the planned guest reboot: the guest scripts and the record of the build, no program and no
+    # service of Rosetun. Its suite plans one reset (config.PLANNED_REBOOTS).
+    'reboot-smoke': Profile('reboot-smoke', 'reboot-smoke',
+                            ('guest/launch.sh', 'guest/start.sh', 'guest/lib.sh', 'guest/run-reboot-smoke.sh',
+                             'scenarios-reboot-smoke.tsv'),
+                            (), (), (), (), ENV_L2),
 }
 # The stages that install the real service, take the host node's values and may run inside the lab.
 SERVICE_PROFILES = ('l3', 'proxy', 'l5')

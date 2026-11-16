@@ -57,6 +57,12 @@ L5_START_REQUIRED=(guest/launch.sh guest/lib.sh guest/run-l5.sh guest/start.sh s
     artifacts/rosetun-old.deb artifacts/rosetun-new.deb artifacts/request-kill-switch.json
     artifacts/request-lan.json artifacts/request-dns-lock.json artifacts/provenance.json)
 
+reboot_smoke_start_path_allowed() {
+    [[ $1 =~ ^(guest/(launch|lib|run-reboot-smoke|start)\.sh|scenarios-reboot-smoke\.tsv|job\.env|artifacts/provenance\.json)$ ]]
+}
+REBOOT_SMOKE_START_REQUIRED=(guest/launch.sh guest/lib.sh guest/run-reboot-smoke.sh guest/start.sh
+    scenarios-reboot-smoke.tsv job.env artifacts/provenance.json)
+
 l2_start_root_only() {
     [ ! -L "$1" ] && [ "$(stat -c %u -- "$1")" -eq 0 ] && [ $((0$(stat -c %a -- "$1") & 022)) -eq 0 ]
 }
@@ -83,7 +89,7 @@ l2_start_main() {
     [ -f "$run/manifest.sha256" ] && l2_start_root_only "$run/manifest.sha256" || die "the run's manifest is missing or not root-owned"
     [ "$(sha256sum -- "$run/manifest.sha256" | cut -d' ' -f1)" = "$manifest_hash" ] || die "the run's manifest is not the one the host computed"
 
-    # A stage that carries the L3, L4 or L5 job is that stage and must hold only its files.
+    # A stage that carries the L3, L4, L5 or reboot smoke job is that stage and must hold only its files.
     local stage=l2 allowed=l2_start_path_allowed required=("${L2_START_REQUIRED[@]}")
     if grep -q '  guest/run-smoke\.sh$' "$run/manifest.sha256"; then
         stage=smoke allowed=smoke_start_path_allowed required=("${SMOKE_START_REQUIRED[@]}")
@@ -93,6 +99,8 @@ l2_start_main() {
         stage=l4 allowed=l4_start_path_allowed required=("${L4_START_REQUIRED[@]}")
     elif grep -q '  guest/run-l5\.sh$' "$run/manifest.sha256"; then
         stage=l5 allowed=l5_start_path_allowed required=("${L5_START_REQUIRED[@]}")
+    elif grep -q '  guest/run-reboot-smoke\.sh$' "$run/manifest.sha256"; then
+        stage=reboot-smoke allowed=reboot_smoke_start_path_allowed required=("${REBOOT_SMOKE_START_REQUIRED[@]}")
     elif grep -q '  guest/run-proxy\.sh$' "$run/manifest.sha256"; then
         stage=proxy allowed=proxy_start_path_allowed required=("${PROXY_START_REQUIRED[@]}")
     fi
@@ -152,7 +160,7 @@ l2_start_main() {
     RUN_ID='' JOB_TIMEOUT_SECONDS=900
     local keys=(RUN_ID STAND_ID EXPECTED_BOOT_ID USER_A USER_B BIOS_GUID
         SCENARIO_TIMEOUT_SECONDS UNIT_TIMEOUT_SECONDS JOB_TIMEOUT_SECONDS)
-    [ "$stage" = l2 ] || keys+=(HOST_ADDRESS NODE_PORT PROBE_ADDRESS DNS_PROBE_ADDRESS)
+    case $stage in l2 | reboot-smoke) ;; *) keys+=(HOST_ADDRESS NODE_PORT PROBE_ADDRESS DNS_PROBE_ADDRESS) ;; esac
     # The lab observer's marker service; absent from every job.env of the Hyper-V matrix.
     case $stage in l3 | proxy | l5) keys+=(LAB_MARKER_ADDRESS LAB_CONTROL) ;; esac
     l2_read_env_file "$run/job.env" "${keys[@]}" || die "job.env is not valid"

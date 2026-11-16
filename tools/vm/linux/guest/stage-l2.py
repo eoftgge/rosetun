@@ -98,6 +98,9 @@ L5_CONTENT = ('guest/launch.sh', 'guest/start.sh', 'guest/lib.sh', 'guest/run-l5
               'scenarios-l5.tsv') + tuple('artifacts/' + n for n in L5_PACKAGES + (
                   'request-kill-switch.json', 'request-lan.json', 'request-dns-lock.json')) + (
                   'artifacts/provenance.json',)
+# The reboot smoke stage: the guest scripts and the record of the build, no program and no service of Rosetun.
+REBOOT_SMOKE_CONTENT = ('guest/launch.sh', 'guest/start.sh', 'guest/lib.sh', 'guest/run-reboot-smoke.sh',
+                        'scenarios-reboot-smoke.tsv', 'artifacts/provenance.json')
 ENV_L2 = ('RUN_ID STAND_ID EXPECTED_BOOT_ID USER_A USER_B BIOS_GUID SCENARIO_TIMEOUT_SECONDS '
           'UNIT_TIMEOUT_SECONDS JOB_TIMEOUT_SECONDS').split()
 ENV_L3 = ENV_L2 + ['HOST_ADDRESS', 'NODE_PORT', 'PROBE_ADDRESS', 'DNS_PROBE_ADDRESS']
@@ -106,7 +109,8 @@ LAB_CONTROL = 'LAB_CONTROL'
 PROFILES = {'l2': dict(content=CONTENT, binaries=BINARIES, env=ENV_L2),
             'l3': dict(content=L3_CONTENT, binaries=L3_BINARIES, env=ENV_L3),
             'proxy': dict(content=PROXY_CONTENT, binaries=PROXY_BINARIES, env=ENV_L3),
-            'l5': dict(content=L5_CONTENT, binaries=(), env=ENV_L3, packages=L5_PACKAGES)}
+            'l5': dict(content=L5_CONTENT, binaries=(), env=ENV_L3, packages=L5_PACKAGES),
+            'reboot-smoke': dict(content=REBOOT_SMOKE_CONTENT, binaries=(), env=ENV_L2)}
 # The stages of the real service: they take the host node's values and may run inside the lab.
 SERVICE = ('l3', 'proxy', 'l5')
 EXECUTABLE = set(BINARIES) | set(L3_BINARIES) | set(PROXY_BINARIES)

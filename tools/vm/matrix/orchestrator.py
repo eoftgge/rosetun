@@ -430,6 +430,12 @@ def run_linux_l5(config, **options):
     return run_linux(config, **options)
 
 
+def run_linux_reboot_smoke(config, **options):
+    if config.get('suite') != 'linux-reboot-smoke':
+        raise ValueError('configuration is for another suite')
+    return run_linux(config, **options)
+
+
 def run_linux(config, *, adapters=None, clock=time.monotonic, sleep=time.sleep,
               progress=None):
     """One path for every stage; only L3, Proxy and L5 add their requests to the run and pass their profile on."""
@@ -507,7 +513,8 @@ def run_linux(config, *, adapters=None, clock=time.monotonic, sleep=time.sleep,
                                                        **({'profile': profile} if profile != 'l3' else {})))
         step('media', lambda: adapters.attach(run, directory=config['content_directory'],
               checkout=config['source_checkout'], xorriso=config['xorriso'], executor=executor,
-              **(dict(profile=profile, sing_box_sha256=l3.get('sing_box_sha256')) if l3 else {})))
+              **(dict(profile=profile, sing_box_sha256=l3.get('sing_box_sha256')) if l3 else
+                 dict(profile='reboot-smoke') if suite == 'linux-reboot-smoke' else {})))
         if clock() >= deadline:
             raise TimeoutError('preparation deadline')
         vm = step('start', lambda: adapters.start(run))

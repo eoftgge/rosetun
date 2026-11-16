@@ -11,6 +11,7 @@ SUITES = {
     "linux-l4": "scenarios-l4.tsv",
     "linux-l5": "scenarios-l5.tsv",
     "linux-proxy": "scenarios-proxy.tsv",
+    "linux-reboot-smoke": "scenarios-reboot-smoke.tsv",
 }
 FIELDS = ("id", "required", "evidence", "group", "detail", "title")
 

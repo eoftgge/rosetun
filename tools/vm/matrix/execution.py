@@ -18,13 +18,14 @@ SCHEMA = 'rosetun.matrix.execution.v1'
 SCHEMA_V2 = 'rosetun.matrix.execution.v2'
 # Version 3 is version 2 for the L3, Proxy or L5 suite plus the block that makes it a run inside the lab.
 SCHEMA_V3 = 'rosetun.matrix.execution.v3'
-SUITES = ('linux-l2', 'linux-l3', 'linux-proxy', 'linux-l5')
+SUITES = ('linux-l2', 'linux-l3', 'linux-proxy', 'linux-l5', 'linux-reboot-smoke')
 # The suites of the real service: they carry the `[l3]` block (the node, the probes, the engine's hash) and may
 # run inside the lab. Proxy and L5 take the same block as L3, under the same name; L5 without the engine's hash,
 # since its packages bring their engines (provenance.json vouches for the packages).
 SERVICE_SUITES = ('linux-l3', 'linux-proxy', 'linux-l5')
 # The stage profile of each suite's package.
-PROFILE_OF = {'linux-l2': 'l2', 'linux-l3': 'l3', 'linux-proxy': 'proxy', 'linux-l5': 'l5'}
+PROFILE_OF = {'linux-l2': 'l2', 'linux-l3': 'l3', 'linux-proxy': 'proxy', 'linux-l5': 'l5',
+              'linux-reboot-smoke': 'reboot-smoke'}
 # The suites whose package carries no engine of its own and whose `[l3]` block names no engine hash.
 WITHOUT_ENGINE = ('linux-l5',)
 FIELDS = {'schema', 'mode', 'platform', 'state_directory', 'stand_id', 'image', 'qemu',
@@ -155,7 +156,8 @@ def preflight(config, *, dry_run=False):
     if lab:
         ImageDescriptor(**lab['image']).validate(state)
     profile = PROFILE_OF[suite]
-    extra = dict(profile=profile, sing_box_sha256=l3.get('sing_box_sha256'), without_requests=True) if l3 else {}
+    extra = dict(profile=profile, sing_box_sha256=l3.get('sing_box_sha256'), without_requests=True) if l3 else (
+        dict(profile=profile) if profile != 'l2' else {})
     package = validate_package(config['content_directory'], checkout=config['source_checkout'],
                                immutable=True, check_source=not dry_run, **extra)
     from .l2_media import TOTAL_LIMIT
@@ -184,6 +186,13 @@ def preflight(config, *, dry_run=False):
                'wait for the job by reading its status, at most job timeout + 125 seconds', 'collect at most twice', 'close', 'summary']
     limitations = ['attach carries a run on only after its job was submitted; before that, recover --close',
                    'no automatic file cleanup', 'no network', 'dry-run does not execute binary version checks']
+    if suite == 'linux-reboot-smoke':
+        actions[9] = 'submit once (the job reboots the guest once)'
+        actions[10] += '; the one planned guest reset is taken from QMP, then a new agent session and the new boot ID'
+        limitations += ['the job needs no network and no Rosetun program: the package holds the guest scripts '
+                        'and the record of the build',
+                        'attach carries the run on after the reboot as well as before it; any other guest reset '
+                        'is an error']
     if l3:
         actions.insert(2, 'write the six L3 lab requests into the run directory')
         if not lab:
