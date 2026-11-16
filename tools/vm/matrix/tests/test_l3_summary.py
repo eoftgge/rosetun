@@ -22,12 +22,19 @@ ADDED = (('rules.capabilities', ('capabilities', 0)), ('rules.restart-guarded', 
          ('crash.helper-killed', ('killed', 0)), ('crash.open-network', ('killed', 0)),
          ('crash.five-kills', ('five_kills', 0)), ('upgrade.restart', ('upgraded', 0)),
          ('upgrade.unprotected', None), ('stop.removes-table', ('stopped', 0)))
+# The scenarios stage 7c3 adds: their windows show direct traffic by design and are held against an expectation.
+ADDED_7C3 = (('rules.direct-other-account', ('capabilities', 1)),
+             ('rules.proxy-default-direct', ('through_vpn_by_program', 0)),
+             ('dnslock.direct-blocked', ('dns_lock', 0)), ('dnslock.tunnel-passes', ('dns_lock', 0)),
+             ('dnslock.unavailable', ('dns_lock_unavailable', 0)),
+             ('dnslock.unavailable-restart', ('missing_through_restart', 0)),
+             ('crash.dns-lock-killed', ('dns_lock_killed', 0)))
 LABELS = ('reported', 'identity', 'connect_ks', 'capabilities', 'restart_guarded', 'inbound', 'killed', 'five_kills',
-          'upgraded', 'stopped')
-# Kept outside: windows where direct traffic is expected need the expectations of a later stage.
-OUTSIDE = ('rules.direct-other-account', 'rules.proxy-default-direct', 'dnslock.direct-blocked',
-           'dnslock.tunnel-passes', 'dnslock.unavailable', 'dnslock.unavailable-restart', 'crash.dns-lock-killed',
-           'lan.on', 'lan.private-closed', 'lan.private-open', 'lan.follows-change', 'ipv6.neighbor')
+          'upgraded', 'stopped', 'through_vpn_by_program', 'dns_lock', 'dns_lock_unavailable',
+          'missing_through_restart', 'dns_lock_killed')
+# Kept outside: Local network lets the own network through by design and the lab has no private host yet; the
+# test machine has no IPv6 router.
+OUTSIDE = ('lan.on', 'lan.private-closed', 'lan.private-open', 'lan.follows-change', 'ipv6.neighbor')
 
 
 def results(**changes):
@@ -64,22 +71,24 @@ class RunTests(Flow):
         agreements = self.agreements(result)
         self.assertEqual({'NOT_APPLICABLE'}, {agreements[i] for i in summary.GROUP if summary.WINDOW_OF[i] is None})
         self.assertEqual({'AGREE'}, {agreements[i] for i in summary.GROUP if summary.WINDOW_OF[i] is not None})
-        self.assertEqual(27, len(result['crosscheck']))
+        self.assertEqual(34, len(result['crosscheck']))
         self.assertEqual({True}, {row['as_expected'] for row in result['lab']['window_counts']})
+        verdicts = {row['id']: row['window_verdict'] for row in result['crosscheck']}
+        self.assertEqual({'EXPECTED'}, {verdicts[i] for i, _ in ADDED_7C3})
         self.assertTrue(result['group']['passed'])
         self.assertEqual(([], []), (result['group']['findings'], result['group']['unproven']))
         self.assertFalse(result['release_gate'])
         self.assertEqual('UNVERIFIED', result['security_invariants'])
 
     def test_the_scenarios_outside_the_group_are_listed_without_a_verdict(self):
-        result = self.go(Machines(self, rows=results(rules__direct_other_account=('FAIL', 'x'),
+        result = self.go(Machines(self, rows=results(lan__on=('FAIL', 'x'),
                                                       lan__private_closed=('FAIL', 'no private host'))))
         self.assertEqual(len(scenario_ids()) - len(summary.GROUP), len(result['out_of_scope']))
         self.assertEqual({'out-of-scope'}, {row['agreement'] for row in result['out_of_scope']})
         self.assertFalse(any('window_verdict' in row for row in result['out_of_scope']))
         self.assertFalse({row['id'] for row in result['out_of_scope']} & set(summary.GROUP))
         by_id = {row['id']: row['legacy_result'] for row in result['out_of_scope']}
-        self.assertEqual(('FAIL', 'FAIL'), (by_id['rules.direct-other-account'], by_id['lan.private-closed']))
+        self.assertEqual(('FAIL', 'FAIL'), (by_id['lan.on'], by_id['lan.private-closed']))
         self.assertEqual(0, result['exit_code'])
 
     def test_a_leak_in_the_window_of_the_kill_switch_session_contradicts_every_pass_that_ran_in_it(self):
@@ -138,8 +147,7 @@ class RunTests(Flow):
         self.assertEqual((2, 'MISSING'), (result['exit_code'], result['group']['results']['engine.files']))
 
     def test_scenarios_and_windows_outside_the_group_change_nothing_unless_they_saw_a_leak(self):
-        rows = results(rules__proxy_default_direct=('FAIL', 'x'), dnslock__direct_blocked=('ERROR', 'y'),
-                       ipv6__neighbor=('SKIP', 'z'))
+        rows = results(lan__on=('FAIL', 'x'), lan__private_open=('ERROR', 'y'), ipv6__neighbor=('SKIP', 'z'))
         # A window that never closed spoils the ones after it, so the unclosed one is the last of the run.
         result = self.go(Machines(self, rows=rows, windows=windows(extra=[('lan_on', (), False)])))
         lan_on = result['lab']['windows'][-1]
@@ -322,14 +330,18 @@ class DecisionTests(unittest.TestCase):
         summary.decide(result, False)
         return result, next(row for row in result['crosscheck'] if row['id'] == 'rules.capabilities')
 
-    def test_of_two_windows_with_one_label_the_first_is_judged(self):
+    def test_of_two_windows_with_one_label_each_scenario_is_judged_in_its_own(self):
         result, row = self.capabilities(['NONE', 'DETECTED'])
         self.assertEqual((('capabilities', 0), [3], 'NONE', 'AGREE'),
                          ((row['window'], row['window_number']), row['windows'], row['window_verdict'],
                           row['agreement']))
-        self.assertEqual((0, [], ['capabilities']), (result['exit_code'], result['group']['findings'],
-                                                    result['group']['outside_leaks']))
-        self.assertEqual([True, False], [w['judged'] for w in result['lab']['windows'][3:5]])
+        other = next(r for r in result['crosscheck'] if r['id'] == 'rules.direct-other-account')
+        self.assertEqual((('capabilities', 1), [4], 'DETECTED', 'DISAGREE'),
+                         ((other['window'], other['window_number']), other['windows'], other['window_verdict'],
+                          other['agreement']))
+        self.assertEqual((1, []), (result['exit_code'], result['group']['outside_leaks']))
+        self.assertIn('leak-in-group-window', result['group']['findings'])
+        self.assertEqual([True, True], [w['judged'] for w in result['lab']['windows'][3:5]])
         self.assertEqual([0, 1], [w['number'] for w in result['lab']['windows'][3:5]])
 
     def test_a_leak_in_the_first_of_two_windows_contradicts_the_pass(self):
@@ -372,11 +384,14 @@ class GroupOf7c2Tests(unittest.TestCase):
         return result, {row['id']: row for row in result['crosscheck']}
 
     def test_the_table_of_the_added_windows_is_the_one_of_the_stage_in_its_order(self):
-        self.assertEqual([identifier for identifier, _ in ADDED], list(summary.GROUP[16:]))
-        self.assertEqual(list(ADDED), [(identifier, summary.WINDOW_OF[identifier]) for identifier in summary.GROUP[16:]])
-        self.assertEqual(27, len(summary.GROUP))
+        self.assertEqual([identifier for identifier, _ in ADDED], list(summary.GROUP[16:27]))
+        self.assertEqual(list(ADDED), [(i, summary.WINDOW_OF[i]) for i in summary.GROUP[16:27]])
+        self.assertEqual(list(ADDED_7C3), [(i, summary.WINDOW_OF[i]) for i in summary.GROUP[27:]])
+        self.assertEqual(34, len(summary.GROUP))
         self.assertEqual(LABELS, summary.GROUP_LABELS)
-        self.assertEqual({'forward.blocked': ('forwarded', 0)}, summary.OWN_WINDOW_WHEN_OPENED)
+        self.assertEqual({'forward.blocked': ('forwarded', 0),
+                          'rules.direct-other-account': ('direct_for_other_account', 0)},
+                         summary.OWN_WINDOW_WHEN_OPENED)
 
     def test_every_scenario_of_the_group_is_in_the_catalog_and_has_a_window_entry(self):
         ids = scenario_ids()
@@ -391,14 +406,13 @@ class GroupOf7c2Tests(unittest.TestCase):
         self.assertFalse(summary.LEAK_OUTSIDE_THE_GROUP_FAILS)
 
     def test_the_windows_of_a_run_with_sshd_make_the_whole_group_agree(self):
-        # The verdicts of the 7b2b runs: the windows where a program or UDP 53 goes direct by design saw it.
-        leaks = {n: 'DETECTED' for n, label in enumerate(WINDOWS_7C2) if label in (
-            'through_vpn_by_program', 'lan_on', 'dns_lock', 'dns_lock_unavailable', 'missing_through_restart',
-            'dns_lock_killed')}
-        leaks[4] = 'DETECTED'
+        # As in the 7b2b and 7c1 runs: the windows where a program or UDP 53 goes direct by design saw just that
+        # (synthetic), and the Local network windows saw their own network.
+        leaks = {n: 'DETECTED' for n, label in enumerate(WINDOWS_7C2) if label in ('lan_on', 'lan_private_open')}
         result, table = self.decide(leaks=leaks)
         self.assertEqual(20, len(result['lab']['windows']))
-        self.assertEqual(27, len(table))
+        self.assertEqual(34, len(table))
+        self.assertEqual(['lan_on', 'lan_private_open'], result['group']['outside_leaks'])
         self.assertEqual({'AGREE', 'NOT_APPLICABLE'}, {row['agreement'] for row in table.values()})
         self.assertEqual({None}, {table[i]['window'] for i in summary.GROUP if table[i]['agreement'] != 'AGREE'})
         self.assertEqual((0, 'group-clean'), (result['exit_code'], result['outcome']))
@@ -406,7 +420,7 @@ class GroupOf7c2Tests(unittest.TestCase):
         self.assertEqual({True}, {row['as_expected'] for row in result['lab']['window_counts']})
 
     def test_the_windows_of_the_7b2b_runs_judge_forward_blocked_in_the_session_forwarded_opened(self):
-        result, table = self.decide(WINDOWS_7B2B, {4: 'DETECTED'}, **{'inbound.reply': 'FAIL'})
+        result, table = self.decide(WINDOWS_7B2B, None, **{'inbound.reply': 'FAIL'})
         self.assertEqual(('forwarded', [14], 'AGREE'), (table['forward.blocked']['window'],
                                                          table['forward.blocked']['windows'],
                                                          table['forward.blocked']['agreement']))
@@ -502,19 +516,125 @@ class GroupOf7c2Tests(unittest.TestCase):
         self.assertEqual((1, ['leak-in-group-window'], []), (result['exit_code'], result['group']['findings'],
                                                              result['group']['outside_leaks']))
 
-    def test_the_second_capabilities_window_with_the_expected_count_stays_outside(self):
+    def test_the_second_capabilities_window_is_judged_for_the_direct_rule_of_another_account(self):
         result, table = self.decide(leaks={4: 'DETECTED'})
         window = result['lab']['windows'][4]
-        self.assertEqual(('capabilities', 1, False, False), (window['label'], window['number'], window['judged'],
-                                                             window['beyond']))
-        self.assertEqual((0, ['capabilities'], [], []), (result['exit_code'], result['group']['outside_leaks'],
-                                                         result['group']['findings'], result['group']['unproven']))
+        self.assertEqual(('capabilities', 1, True, False), (window['label'], window['number'], window['judged'],
+                                                            window['beyond']))
+        self.assertEqual(('AGREE', 'DISAGREE'), (table['rules.capabilities']['agreement'],
+                                                 table['rules.direct-other-account']['agreement']))
+        self.assertEqual((1, []), (result['exit_code'], result['group']['outside_leaks']))
 
     def test_an_unprotected_restart_has_no_window(self):
         result, table = self.decide()
         self.assertEqual((None, None, 'NOT_APPLICABLE'), (table['upgrade.unprotected']['window'],
                                                           table['upgrade.unprotected']['window_number'],
                                                           table['upgrade.unprotected']['agreement']))
+
+
+def function_body(text, name):
+    return [line.strip() for line in text.split('    ' + name + '() {\n', 1)[1].split('\n    }\n', 1)[0].splitlines()]
+
+
+class GroupOf7c3Tests(unittest.TestCase):
+    """The group of stage 7c3: the windows where a program, a request or UDP 53 goes direct by design."""
+
+    def decide(self, labels=WINDOWS_7C2, direct=None, **rows):
+        """`direct` maps a window's index to the `direct` it showed instead of its expected flow."""
+        result = synthetic(labels)
+        for index, shown in (direct or {}).items():
+            result['lab']['windows'][index].update(
+                direct=shown, leak='DETECTED' if shown['flows'] or shown['other_frames'] else 'NONE')
+        for row in result['legacy']['scenarios']:
+            if row['id'] in rows:
+                row['result'] = rows[row['id']]
+        summary.decide(result, False)
+        return result, {row['id']: row for row in result['crosscheck']}
+
+    def test_every_expectation_names_a_window_the_group_counts_or_one_that_stands_in_for_it(self):
+        for label, number in summary.EXPECTED_FLOWS:
+            with self.subTest(label=label):
+                limit = summary.WINDOWS_PER_LABEL.get(label, summary.WINDOWS_AT_MOST.get(label))
+                self.assertIsNotNone(limit)
+                self.assertLess(number, limit)
+        judged = {summary.WINDOW_OF[i] for i, _ in ADDED_7C3} | {summary.OWN_WINDOW_WHEN_OPENED[ADDED_7C3[0][0]]}
+        self.assertEqual(judged, set(summary.EXPECTED_FLOWS))
+
+    def test_fewer_flows_than_expected_contradict_every_pass_judged_in_the_window(self):
+        for identifier, (label, number) in ADDED_7C3:
+            with self.subTest(identifier=identifier):
+                index = [n for n, pair in enumerate(summary.numbered([dict(label=x) for x in WINDOWS_7C2]))
+                         if pair == (label, number)][0]
+                result, table = self.decide(direct={index: direct_of()})
+                self.assertEqual(('MISMATCH', 'DISAGREE'), (table[identifier]['window_verdict'],
+                                                            table[identifier]['agreement']))
+                self.assertEqual((1, ['pass-contradicted-by-window']), (result['exit_code'],
+                                                                        result['group']['findings']))
+
+    def test_more_than_expected_is_a_leak_in_a_window_of_the_group(self):
+        for identifier, (label, number) in ADDED_7C3:
+            with self.subTest(identifier=identifier):
+                index = [n for n, pair in enumerate(summary.numbered([dict(label=x) for x in WINDOWS_7C2]))
+                         if pair == (label, number)][0]
+                kind = DIRECT_IN_A_CLEAN_RUN[(label, number)]
+                result, table = self.decide(direct={index: direct_of(kind, kind)})
+                self.assertEqual('DISAGREE', table[identifier]['agreement'])
+                self.assertEqual(1, result['exit_code'])
+                self.assertIn('leak-in-group-window', result['group']['findings'])
+
+    def test_a_failure_stays_a_failure_whatever_the_window_showed(self):
+        result, table = self.decide(direct={WINDOWS_7C2.index('dns_lock_unavailable'): direct_of()},
+                                    **{'dnslock.unavailable': 'FAIL'})
+        self.assertEqual(('MISMATCH', 'NOT_APPLICABLE'), (table['dnslock.unavailable']['window_verdict'],
+                                                          table['dnslock.unavailable']['agreement']))
+        self.assertEqual((1, ['group-scenario-failed']), (result['exit_code'], result['group']['findings']))
+
+    def test_the_session_another_account_opened_after_capabilities_lost_its_own_is_the_one_judged(self):
+        labels = list(WINDOWS_7C2)
+        labels.insert(5, 'direct_for_other_account')
+        result, table = self.decide(labels, **{'rules.capabilities': 'FAIL'})
+        row = table['rules.direct-other-account']
+        self.assertEqual((('direct_for_other_account', 0), [5], 'EXPECTED', 'AGREE'),
+                         ((row['window'], row['window_number']), row['windows'], row['window_verdict'],
+                          row['agreement']))
+        counts = {row['label']: row for row in result['lab']['window_counts']}
+        self.assertEqual((1, True), (counts['direct_for_other_account']['seen'],
+                                     counts['direct_for_other_account']['as_expected']))
+
+    def test_a_dns_lock_session_opened_again_is_beyond_the_count_and_has_no_expectation(self):
+        labels = list(WINDOWS_7C2)
+        labels.insert(12, 'dns_lock')
+        result, table = self.decide(labels, direct={12: direct_of('target')})
+        extra = result['lab']['windows'][12]
+        self.assertEqual(('dns_lock', 1, True, [], 'DETECTED'), (extra['label'], extra['number'], extra['beyond'],
+                                                                extra['expected_flows'], extra['verdict']))
+        self.assertEqual(1, result['exit_code'])
+        self.assertIn('window-count:dns_lock:expected=1,seen=2', result['group']['unproven'])
+
+    def test_the_expected_counts_are_what_the_functions_of_the_script_send(self):
+        text = SCRIPT.read_text(encoding='utf-8')
+        # One direct HTTPS request in `kill_helper`, while a DNS lock still stands in `dns_lock_killed`.
+        self.assertEqual(1, text.split('\nkill_helper() {\n', 1)[1].split('\n}\n', 1)[0].count('direct_https'))
+        dns_lock = function_body(text, 'dns_lock')
+        self.assertEqual((1, 1, 0), (sum('direct_https' in line for line in dns_lock),
+                                     sum('expect_udp_dns_refused' in line for line in dns_lock),
+                                     sum('expect_udp_dns_sent' in line for line in dns_lock)))
+        for name in ('dns_lock_unavailable', 'missing_through_restart'):
+            body = function_body(text, name)
+            self.assertEqual((1, 0), (sum('expect_udp_dns_sent' in line for line in body),
+                                      sum('direct_https' in line for line in body)), name)
+        for name in ('direct_for_other_account', 'through_vpn_by_program'):
+            routes = [line for line in function_body(text, name) if 'expect_route' in line]
+            self.assertEqual(2, len(routes), name)
+            self.assertEqual(1, sum(line.endswith(' direct') or ' direct &&' in line for line in routes), name)
+        # The window of a DNS lock that a crash left closes once the restarted helper removed it, before the
+        # datagram and the request that are meant to leave afterwards.
+        killed = function_body(text, 'dns_lock_killed')
+        close = killed.index('lab_mark close')
+        self.assertLess(next(n for n, line in enumerate(killed) if line.startswith('! table_present')), close)
+        self.assertLess(next(n for n, line in enumerate(killed) if line.startswith('kill_helper')), close)
+        self.assertLess(close, next(n for n, line in enumerate(killed) if 'expect_udp_dns_sent' in line))
+        self.assertLess(close, next(n for n, line in enumerate(killed) if 'direct_https' in line))
 
 
 class TableTests(unittest.TestCase):
@@ -659,7 +779,8 @@ class ExpectationTests(unittest.TestCase):
         window['direct'] = direct_of('target', 'resolver')
         summary.decide(result, False)
         self.assertEqual('DETECTED', window['verdict'])
-        self.assertEqual(['dns_lock'], result['group']['outside_leaks'])
+        self.assertEqual(([], 1), (result['group']['outside_leaks'], result['exit_code']))
+        self.assertEqual(['leak-in-group-window', 'pass-contradicted-by-window'], sorted(result['group']['findings']))
 
 
 class FlowExpectationTests(Flow):
@@ -694,7 +815,7 @@ class ControlTests(Flow):
         return {row['id']: row['agreement'] for row in result['crosscheck']}
 
     def direct(self, label='connect_ks', frames=DIRECT_FLOW):
-        return [(name, frames if name == label else (), True) for name in WINDOWS_7C2]
+        return [(name, frames if name == label else body, True) for name, body in clean_windows()]
 
     def control(self, spec=None, **options):
         return self.go(Machines(self, windows=spec if spec is not None else self.direct(), **options),

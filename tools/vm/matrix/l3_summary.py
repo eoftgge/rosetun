@@ -10,15 +10,17 @@ from collections import Counter
 
 from .lab_protocol import CLIENTS, HTTPS_PORT, PORTS, RESOLVER, TARGETS
 
-# The scenarios that are judged, by id in scenarios-l3.tsv, in the order the script runs them: those of stage
-# 7b2b, then those of 7c2, every other session under the kill switch where no direct traffic is expected.
+# The scenarios that are judged, by id in scenarios-l3.tsv: those of stage 7b2b, then those of 7c2, every other
+# session under the kill switch where no direct traffic is expected, then those of 7c3, whose windows show direct
+# traffic by design and are held against EXPECTED_FLOWS.
 GROUP = ('preflight.identity', 'preflight.accounts', 'preflight.no-foreign-service', 'preflight.tools',
          'preflight.baseline', 'install.service', 'protection.reported', 'engine.identity', 'engine.files',
          'killswitch.direct-blocked', 'killswitch.tunnel-passes', 'lan.off', 'killswitch.foreign-table',
          'killswitch.engine-killed', 'killswitch.flush-restored', 'killswitch.disconnect',
          'rules.capabilities', 'rules.restart-guarded', 'rules.search-misses', 'inbound.reply', 'forward.blocked',
          'crash.helper-killed', 'crash.open-network', 'crash.five-kills', 'upgrade.restart', 'upgrade.unprotected',
-         'stop.removes-table')
+         'stop.removes-table', 'rules.direct-other-account', 'rules.proxy-default-direct', 'dnslock.direct-blocked',
+         'dnslock.tunnel-passes', 'dnslock.unavailable', 'dnslock.unavailable-restart', 'crash.dns-lock-killed')
 # The scenarios of the two-hop exits: they have no check yet (evidence class `not-run`, not required), `run-l3.sh`
 # records each as SKIP "UNRUN: ..." before any session opens, so they belong to no group and no window.
 TWO_HOP = ('two-hop.positive.http.ipv4', 'two-hop.positive.http.ipv6', 'two-hop.positive.https.ipv4',
@@ -46,7 +48,7 @@ WINDOW_OF = {
     'killswitch.engine-killed': ('connect_ks', 0), 'killswitch.flush-restored': ('connect_ks', 0),
     'killswitch.disconnect': ('connect_ks', 0),
     # The first session of `capabilities` is under the kill switch; the second has a rule that sends a program
-    # direct, and `rules.direct-other-account` (outside the group) runs in it.
+    # direct, and `rules.direct-other-account` runs in it.
     'rules.capabilities': ('capabilities', 0), 'rules.restart-guarded': ('restart_guarded', 0),
     # Recorded after `rules.restart-guarded`, before the `disconnect` that closes its window.
     'rules.search-misses': ('restart_guarded', 0),
@@ -55,19 +57,32 @@ WINDOW_OF = {
     'crash.helper-killed': ('killed', 0), 'crash.open-network': ('killed', 0),
     'crash.five-kills': ('five_kills', 0), 'upgrade.restart': ('upgraded', 0),
     'upgrade.unprotected': None, 'stop.removes-table': ('stopped', 0),
+    # Stage 7c3. `direct_for_other_account` keeps the second session of `capabilities`; the `connect_with` of
+    # `through_vpn_by_program` closes that window, and the one of `restart_guarded` closes its own.
+    'rules.direct-other-account': ('capabilities', 1), 'rules.proxy-default-direct': ('through_vpn_by_program', 0),
+    # `dns_tunnel` runs in the session `dns_lock` opened and ends it.
+    'dnslock.direct-blocked': ('dns_lock', 0), 'dnslock.tunnel-passes': ('dns_lock', 0),
+    'dnslock.unavailable': ('dns_lock_unavailable', 0),
+    # `dns_lock_unavailable_restart` gives nft its mode back, then ends the session `missing_through_restart` opened.
+    'dnslock.unavailable-restart': ('missing_through_restart', 0),
+    'crash.dns-lock-killed': ('dns_lock_killed', 0),
     **dict.fromkeys(TWO_HOP),
 }
 # A scenario that opens a session of its own only when none is open: `forwarded` connects only if `inbound`
 # did not (it stopped before its connect, or the session was lost), and its window is then the one judged.
-OWN_WINDOW_WHEN_OPENED = {'forward.blocked': ('forwarded', 0)}
+# `direct_for_other_account` connects only if the second session of `capabilities` is gone.
+OWN_WINDOW_WHEN_OPENED = {'forward.blocked': ('forwarded', 0),
+                          'rules.direct-other-account': ('direct_for_other_account', 0)}
 GROUP_LABELS = tuple(dict.fromkeys(window[0] for window in WINDOW_OF.values() if window))
 # How many windows each label of the group has in a run where every scenario passed (`lab.window_counts`).
 # Another count is a run whose sessions are not numbered as the script numbers them, so it cannot vouch for
 # itself (exit 2), and a leak in a window beyond the count is a finding like a leak in a judged window.
 WINDOWS_PER_LABEL = {'reported': 1, 'identity': 1, 'connect_ks': 1, 'capabilities': 2, 'restart_guarded': 1,
-                     'inbound': 1, 'killed': 1, 'five_kills': 1, 'upgraded': 1, 'stopped': 1}
+                     'inbound': 1, 'killed': 1, 'five_kills': 1, 'upgraded': 1, 'stopped': 1,
+                     'through_vpn_by_program': 1, 'dns_lock': 1, 'dns_lock_unavailable': 1,
+                     'missing_through_restart': 1, 'dns_lock_killed': 1}
 # Labels whose session opens only now and then (OWN_WINDOW_WHEN_OPENED): at most this many windows.
-WINDOWS_AT_MOST = {'forwarded': 1}
+WINDOWS_AT_MOST = {'forwarded': 1, 'direct_for_other_account': 1}
 # The flows a window shows beyond the tunnel and the lab's infrastructure by design (stage 7c3), by (label,
 # number): each a flow the test machine opens, (protocol, kind, server) with its exact count. They are fixed
 # here, by the controller, from what the functions of run-l3.sh send; the guest declares nothing. A flow is a
@@ -95,11 +110,11 @@ EXPECTED_FLOWS = {
 # helper's DNS check at connect (`check_cancellable` in `state/dns.rs`) goes through the DoH server that
 # `dns_section` of the sing-box render configures, so no scenario connects without it.
 REQUIRED_FIXTURES = ('node', 'https', 'dns', 'doh')
-# Whether a leak seen in a window outside the group changes the exit code. Several scenarios outside the
-# group leave the protection on purpose (a DNS lock without a kill switch, a rule that sends a program
-# direct, a session that is not protected at all), and nothing here declares those expectations yet:
-# until it does, such windows are listed (`group.outside_leaks`, and DETECTED in `lab.windows`) and do
-# not decide the code. Set this to make any leak in any window exit 1.
+# Whether a leak seen in a window outside the group changes the exit code. Since stage 7c3 the windows outside
+# the group are those of Local network (`lan_on`, `lan_private_closed`, `lan_private_open`,
+# `lan_follows_change`), which let the own network through by design and have no host of their own in the lab
+# yet, and the one of `ipv6.neighbor` when it runs: they are listed (`group.outside_leaks`, and DETECTED in
+# `lab.windows`) and do not decide the code. Set this to make any leak in any window exit 1.
 LEAK_OUTSIDE_THE_GROUP_FAILS = False
 # The positive control of stage 7c1: the script stops the service inside the window of the kill-switch
 # session and sends one direct request, so a run is a success only if the observer saw exactly that.
@@ -251,7 +266,7 @@ def decide(result, interrupted):
     the fixtures answered, the evidence disk is verified and both machines completed.
     1: the run found something: a scenario of the group failed, a pass is contradicted by a window
     (DISAGREE), or a leak in a judged window or in a window of a label of the group beyond its count (a
-    leak in any other window, the second `capabilities` included, counts only if
+    leak in any other window, a Local network window among them, counts only if
     LEAK_OUTSIDE_THE_GROUP_FAILS). A seen leak and a failed check stand whatever else went wrong, so 1
     comes before 2.
     2: nothing was found but the run cannot vouch for itself: a controller error, a machine that did
@@ -278,8 +293,8 @@ def decide(result, interrupted):
     table = crosscheck(rows, windows)
     result['crosscheck'] = table
     # The windows a row of the cross-check names are judged. A window of a label of the group beyond its
-    # count is a session nobody expected, under the kill switch: a leak in it is a finding all the same. A
-    # window within the count that no scenario of the group judges (the second `capabilities`) is outside.
+    # count is a session nobody expected and has no expectation: a leak in it is a finding all the same. A
+    # window within the count that no scenario of the group judges (none since stage 7c3) is outside.
     judged = {index for row in table for index in row['windows']}
     for window in windows:
         window['judged'] = window['index'] in judged

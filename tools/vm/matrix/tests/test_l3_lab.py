@@ -945,7 +945,7 @@ class FlowSummaryTests(Flow):
         from tools.vm.matrix.tests.test_lab import tcp
         syn = wire_frame(wire.CLIENTS[4], wire.GATEWAYS[4], 6, tcp(43000, 8388, flags=0x02))
         reply = wire_frame(wire.GATEWAYS[4], wire.CLIENTS[4], 6, tcp(8388, 43000, b'x' * 5, 0x18), reply=True)
-        windows = [(label, (syn, reply) if label == 'connect_ks' else ()) for label in WINDOWS_7C2]
+        windows = [(label, (syn, reply) if label == 'connect_ks' else body) for label, body in clean_windows()]
         result = self.go(Machines(self, windows=windows))
         self.assertEqual(0, result['exit_code'])
         by_label = {w['label']: w['flows'] for w in result['lab']['windows']}
