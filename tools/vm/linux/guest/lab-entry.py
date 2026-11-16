@@ -787,7 +787,8 @@ def poll_once(key_path):
     """One login of the poller: (result, exit code of ssh). `accepted` means the forced command ran and ended 0."""
     try:
         process = subprocess.run(
-            [str(SSH), '-i', str(key_path), '-b', GATEWAYS[4], '-o', 'BatchMode=yes', '-o', 'IdentitiesOnly=yes',
+            [str(SSH), '-i', str(key_path), '-b', GATEWAYS[4], '-F', '/dev/null', '-o', 'BatchMode=yes',
+             '-o', 'IdentitiesOnly=yes',
              '-o', 'StrictHostKeyChecking=no', '-o', 'UserKnownHostsFile=/dev/null', '-o', 'LogLevel=ERROR',
              '-o', 'ConnectTimeout=5', '-o', 'ConnectionAttempts=1', 'root@' + CLIENTS[4], 'true'],
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=POLL_TIMEOUT)

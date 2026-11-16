@@ -235,7 +235,7 @@ class HelperTests(unittest.TestCase):
         arguments, options = seen[0]
         self.assertEqual('/usr/bin/ssh', Path(arguments[0]).as_posix())
         self.assertEqual(['-i', '/run/key'], [arguments[1], Path(arguments[2]).as_posix()])
-        self.assertEqual(['-b', GATEWAY], arguments[3:5])
+        self.assertEqual(['-b', GATEWAY, '-F', '/dev/null'], arguments[3:7])
         self.assertEqual(['root@' + CLIENT, 'true'], arguments[-2:])
         for option in ('BatchMode=yes', 'IdentitiesOnly=yes', 'ConnectTimeout=5'):
             self.assertIn(option, arguments)
