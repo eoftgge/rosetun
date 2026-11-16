@@ -463,11 +463,12 @@ def read_disk(lab_run, lab_id, seen):
 
 def judge(lab_id, config, seen):
     """Split the capture into the windows its markers name; the labels of the group must each have one."""
-    from .l3_summary import GROUP_LABELS
+    from .l3_summary import GROUP_LABELS, WINDOW_ALLOWANCES
     seen['health'] = json.loads(seen['logs']['health.json'])
     seen['verdict'] = classify_windows(seen['logs']['capture.pcap'], lab_id, None, health=seen['health'], ready=True,
                                        tunnel_port=config['lab']['tunnel']['node_port'],
-                                       required_labels=GROUP_LABELS, limit=EVIDENCE_PCAP_LIMIT, flows=True)
+                                       required_labels=GROUP_LABELS, limit=EVIDENCE_PCAP_LIMIT, flows=True,
+                                       window_allowances=WINDOW_ALLOWANCES)
 
 
 def finish(result, lease, pair, runs, vms, closed, job, attempt, seen, interrupted, lab_id, states=None):

@@ -21,7 +21,8 @@ GROUP = ('preflight.identity', 'preflight.accounts', 'preflight.no-foreign-servi
          'crash.helper-killed', 'crash.open-network', 'crash.five-kills', 'upgrade.restart', 'upgrade.unprotected',
          'stop.removes-table', 'rules.direct-other-account', 'rules.proxy-default-direct', 'dnslock.direct-blocked',
          'dnslock.tunnel-passes', 'dnslock.unavailable', 'dnslock.unavailable-restart', 'crash.dns-lock-killed',
-         'route.specific-bypass', 'lan.on', 'lan.private-closed', 'lan.private-open', 'lan.follows-change')
+         'route.specific-bypass', 'lan.on', 'lan.private-closed', 'lan.private-open', 'lan.follows-change',
+         'ipv6.neighbor')
 # The scenarios of the two-hop exits: they have no check yet (evidence class `not-run`, not required), `run-l3.sh`
 # records each as SKIP "UNRUN: ..." before any session opens, so they belong to no group and no window.
 TWO_HOP = ('two-hop.positive.http.ipv4', 'two-hop.positive.http.ipv6', 'two-hop.positive.https.ipv4',
@@ -73,6 +74,9 @@ WINDOW_OF = {
     # Stage 7e. Each function of `scenario_lan_on` opens its own session and ends it.
     'lan.on': ('lan_on', 0), 'lan.private-closed': ('lan_private_closed', 0),
     'lan.private-open': ('lan_private_open', 0), 'lan.follows-change': ('lan_follows_change', 0),
+    # The session of `neighbor` in `scenario_ipv6`, which in the lab has the lab's link-local address as its IPv6
+    # router (test image v6b); without that router the scenario is SKIP and opens no window.
+    'ipv6.neighbor': ('neighbor', 0),
     **dict.fromkeys(TWO_HOP),
 }
 # A scenario that opens a session of its own only when none is open: `forwarded` connects only if `inbound`
@@ -88,7 +92,7 @@ WINDOWS_PER_LABEL = {'reported': 1, 'identity': 1, 'connect_ks': 1, 'capabilitie
                      'inbound': 1, 'killed': 1, 'five_kills': 1, 'upgraded': 1, 'stopped': 1,
                      'through_vpn_by_program': 1, 'dns_lock': 1, 'dns_lock_unavailable': 1,
                      'missing_through_restart': 1, 'dns_lock_killed': 1, 'specific_bypass': 1, 'lan_on': 1,
-                     'lan_private_closed': 1, 'lan_private_open': 1, 'lan_follows_change': 1}
+                     'lan_private_closed': 1, 'lan_private_open': 1, 'lan_follows_change': 1, 'neighbor': 1}
 # Labels whose session opens only now and then (OWN_WINDOW_WHEN_OPENED, or the DNS-lock session of
 # `route.specific-bypass`, which runs only after its kill-switch part passed): at most this many windows.
 WINDOWS_AT_MOST = {'forwarded': 1, 'direct_for_other_account': 1, 'specific_bypass_dns_lock': 1}
@@ -137,14 +141,19 @@ EXPECTED_FLOWS = {
     # guest. `lan_private_closed` and `lan_follows_change` send nothing past the guest and have no entry.
     ('lan_private_open', 0): {BEHIND_ROUTER_FLOW: 1, NEIGHBOR_FLOW: 1},
 }
+# Allowances that hold in the windows of one label only (stage 7e). In `neighbor` the test machine pings the lab's
+# link-local address, its IPv6 router, under the kill switch with Local network: the echo request and the reply
+# are counted as allowed there and are unexpected in every other window. The neighbor discovery around them is
+# infrastructure anyway. The window has no expectation: the datagram to 2001:db8::1 is refused in the guest.
+WINDOW_ALLOWANCES = {'neighbor': ('ipv6-link-local-echo',)}
 # What the observer must have seen of the lab for the group to mean anything. DoH is required too: the
 # helper's DNS check at connect (`check_cancellable` in `state/dns.rs`) goes through the DoH server that
 # `dns_section` of the sing-box render configures, so no scenario connects without it.
 REQUIRED_FIXTURES = ('node', 'https', 'dns', 'doh')
-# Whether a leak seen in a window outside the group changes the exit code. Since stage 7e the windows outside
-# the group are the one of `ipv6.neighbor` when it runs and the DNS-lock session of `route.specific-bypass`,
-# which only adds to that scenario's note: they are listed (`group.outside_leaks`, and DETECTED in
-# `lab.windows`) and do not decide the code. Set this to make any leak in any window exit 1.
+# Whether a leak seen in a window outside the group changes the exit code. Since stage 7e the one window outside
+# the group a run expects is the DNS-lock session of `route.specific-bypass`, which only adds to that scenario's
+# note: a leak there is listed (`group.outside_leaks`, and DETECTED in `lab.windows`) and does not decide the
+# code. Set this to make any leak in any window exit 1.
 LEAK_OUTSIDE_THE_GROUP_FAILS = False
 # The positive control of stage 7c1: the script stops the service inside the window of the kill-switch
 # session and sends one direct request, so a run is a success only if the observer saw exactly that.

@@ -12,6 +12,18 @@ MACS = {'test': '00:00:5e:00:53:61', 'lab': '00:00:5e:00:53:62'}
 CLIENTS = {4: '192.0.2.2', 6: '2001:db8:6a:1::2'}
 GATEWAYS = {4: '192.0.2.1', 6: '2001:db8:6a:1::1'}
 TARGETS = {4: '203.0.113.2', 6: '2001:db8:6a:2::2'}
+
+
+def eui64_link_local(mac):
+    """The modified EUI-64 link-local address of a hardware address (RFC 4291, appendix A)."""
+    octets = bytes.fromhex(mac.replace(':', ''))
+    interface_id = bytes([octets[0] ^ 0x02]) + octets[1:3] + b'\xff\xfe' + octets[3:]
+    return str(ipaddress.IPv6Address(b'\xfe\x80' + bytes(6) + interface_id))
+
+
+# The link-local address of each machine on the lab wire. The lab's is the IPv6 router of an L3 run (stage 7e);
+# the test image of contract v6b generates its own the same way.
+LINK_LOCALS = {role: eui64_link_local(mac) for role, mac in MACS.items()}
 CAPTURE_LIMIT = 131072
 LOG_LIMIT = 32768
 # What a helper prints after `lab-helper-failed:` and what the observer records in `health.json`:
@@ -108,6 +120,8 @@ ALLOWANCES = (
     ('arp-probe', 'arp', 'broadcast from 0.0.0.0 asking for its own address'),
     ('ipv6-dad', 'icmpv6', 'neighbor solicitation from :: to the solicited-node group of its own address'),
     ('ipv6-unspecified-rs', 'icmpv6', 'router solicitation from :: to all routers'),
+    ('ipv6-link-local-echo', 'icmpv6', "echo request (128, code 0) from the test machine's link-local address to "
+                                       "the lab's, or the echo reply (129, code 0) back, between the two machines"),
 )
 
 BROADCAST = 'ff:ff:ff:ff:ff:ff'
@@ -679,6 +693,13 @@ def _allowance(frame, names):
     if sender is None:
         return None
     own4, own6 = ENDPOINTS[sender]
+    if frame.family == 6 and frame.proto == 58 and frame.icmp is not None and not frame.fragment:
+        # Only the test machine asks and only the lab answers, each from its own link-local address to the other's.
+        peer = 'lab' if sender == 'test' else 'test'
+        kind = {'test': 128, 'lab': 129}[sender]
+        if (frame.icmp == (kind, 0) and (frame.src, frame.dst) == (LINK_LOCALS[sender], LINK_LOCALS[peer])
+                and frame.dst_mac == MACS[peer]):
+            return 'ipv6-link-local-echo' if 'ipv6-link-local-echo' in names else None
     if frame.arp is not None:
         op, sha, spa, tha, tpa = frame.arp
         if sha != frame.src_mac or frame.dst_mac != BROADCAST:
@@ -1305,8 +1326,23 @@ def _required_labels(required_labels):
     return list(required_labels)
 
 
+def _window_allowances(window_allowances, found_mode):
+    """{label: names}: allowances declared for the windows with that label only, when the windows are found."""
+    if not window_allowances:
+        return {}
+    if not found_mode or type(window_allowances) is not dict:
+        raise ValueError('invalid-windows')
+    declared = {}
+    for label, names in window_allowances.items():
+        if type(label) is not str or not WINDOW_LABEL.fullmatch(label) or type(names) not in (list, tuple):
+            raise ValueError('invalid-windows')
+        declared[label] = _declared(names)
+    return declared
+
+
 def classify_windows(raw, run, windows_expected, *, health, ready, allowances=(), tunnel_port=None,
-                     https=None, probes=(), limit=CAPTURE_LIMIT, required_labels=(), flows=False):
+                     https=None, probes=(), limit=CAPTURE_LIMIT, required_labels=(), flows=False,
+                     window_allowances=None):
     """Split one capture into phase windows and give every expected window its own leak verdict.
 
     `windows_expected` lists, in order, the windows the controller expects: dicts with the
@@ -1334,6 +1370,10 @@ def classify_windows(raw, run, windows_expected, *, health, ready, allowances=()
     With `flows` every window row also has `flows`: the TCP connections of the test machine inside
     it (`_Flows`), from the headers of the frames already captured, and `direct`: its `unexpected` frames by
     flow (`_Direct`). Neither changes the verdict here; the controller holds `direct` against what it expects.
+
+    `window_allowances` maps a label to allowance names that hold, beside `allowances`, inside the windows
+    whose markers name that label and nowhere else (found mode only); their counts are in that window's
+    `categories.allowed`.
     """
     found_mode = windows_expected is None
     if found_mode:
@@ -1345,6 +1385,7 @@ def classify_windows(raw, run, windows_expected, *, health, ready, allowances=()
         required = []
         labels = _window_specs(windows_expected)
     names = _declared(allowances)
+    by_label = _window_allowances(window_allowances, found_mode)
     if tunnel_port is not None:
         _tunnel_port(tunnel_port)
     parsed, unparsed, problem = _parse_capture(raw, limit)
@@ -1356,9 +1397,10 @@ def classify_windows(raw, run, windows_expected, *, health, ready, allowances=()
     outside_frames = []
     current, broken, next_index = None, None, 0
 
-    def window(index):
+    def window(index, label):
         if index not in windows:
-            windows[index] = dict(categories=_window_counts(names, tunnel_port), unexpected=[], reasons=[],
+            own = names | by_label.get(label, frozenset())
+            windows[index] = dict(categories=_window_counts(own, tunnel_port), names=own, unexpected=[], reasons=[],
                                   labels=[], first=None, last=None, flows=_Flows(tunnel_port) if flows else None,
                                   direct=_Direct() if flows else None,
                                   seen={(word, kind): [] for word in WINDOW_WORDS for kind in ('request', 'response')})
@@ -1375,7 +1417,7 @@ def classify_windows(raw, run, windows_expected, *, health, ready, allowances=()
         hit = _phase_hit(item, run)
         if hit is not None:
             direction, index, word, label = hit
-            row = window(index)
+            row = window(index, label)
             row['categories']['marker'] += 1
             row['labels'].append(label)
             row['seen'][(word, direction)].append(position)
@@ -1403,7 +1445,7 @@ def classify_windows(raw, run, windows_expected, *, health, ready, allowances=()
                 if fault is not None and broken is None:
                     broken = (fault, position)
             continue
-        category = _category(item, is_probe, names, tunnel_port)
+        category = _category(item, is_probe, names if current is None else windows[current]['names'], tunnel_port)
         if current is None:
             _count(outside, category, item, outside_frames, 'outside-window')
         else:

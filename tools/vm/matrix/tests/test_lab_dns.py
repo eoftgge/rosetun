@@ -383,6 +383,34 @@ class RequestTests(Base):
                 self.entry.setup(request, 'enp7s0', directory)
         return commands
 
+    def test_only_an_l3_run_keeps_the_lab_link_local_address_and_answers_its_echo(self):
+        plain = {k: v for k, v in self.request.items() if k != 'tunnel'}
+        for request, l3 in ((plain, False), (dict(plain, windows=True), True)):
+            commands, writes = [], []
+            with tempfile.TemporaryDirectory() as temp, self.subTest(l3=l3):
+                directory = Path(temp)
+                (directory / 'ready.json').write_text('{}')
+                child = type('Child', (), {'poll': lambda self: None})()
+                with patch.object(self.entry, 'command', lambda *args: commands.append(args)), \
+                        patch.object(self.entry, 'check_dns_fixtures'), \
+                        patch.object(self.entry, 'check_lab_fixtures'), \
+                        patch.object(self.entry.subprocess, 'Popen', return_value=child), \
+                        patch.object(Path, 'write_text', lambda path, text: writes.append((str(path), text))):
+                    self.entry.setup(request, 'enp7s0', directory)
+                replaced = [c for c in commands if c[:4] == ('/usr/sbin/ip', '-6', 'addr', 'replace')]
+                echo = [w for w in writes if w[0] == '/proc/sys/net/ipv6/icmp/echo_ignore_all']
+                if l3:
+                    self.assertEqual([('/usr/sbin/ip', '-6', 'addr', 'replace', 'fe80::200:5eff:fe00:5362/64', 'dev',
+                                       'enp7s0', 'nodad')], replaced)
+                    self.assertEqual([('/proc/sys/net/ipv6/icmp/echo_ignore_all', '0')], echo)
+                    # After the link is up, before forwarding and the observer.
+                    self.assertLess(commands.index(('/usr/sbin/ip', 'link', 'set', 'enp7s0', 'up')),
+                                    commands.index(replaced[0]))
+                    self.assertLess(writes.index(echo[0]),
+                                    writes.index(('/proc/sys/net/ipv4/ip_forward', '1')))
+                else:
+                    self.assertEqual(([], []), (replaced, echo))
+
     def test_the_resolver_and_the_doh_address_exist_in_the_namespace_only_on_request(self):
         plain = {k: v for k, v in self.request.items() if k != 'tunnel'}
         def added(commands):

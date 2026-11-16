@@ -29,7 +29,8 @@ from lab_protocol import (MACS, CLIENTS, GATEWAYS, TARGETS, PORTS, SERVICES, CAP
                           EVIDENCE_PCAP_LIMIT, EVIDENCE_HEADER_SIZE, DURATION_MAX, evidence_header,
                           WINDOW_LIMIT, ACK_PREFIX, parse_window_marker, DNS_CHECK_DOH, DOH_NAME,
                           dns_name, plain_reply_ok, REASON_LIMIT, REQUEST_TIMEOUT, RESPONSE_TIMEOUT, MARKER_TIMEOUT,
-                          ROUTE_INTERFACE, ROUTE_FLOWS_LIMIT, RouteFlows, GUEST_CONTROLS, CONTROL_HOLD_SECONDS)
+                          ROUTE_INTERFACE, ROUTE_FLOWS_LIMIT, RouteFlows, GUEST_CONTROLS, CONTROL_HOLD_SECONDS,
+                          LINK_LOCALS)
 
 ROOT = Path('/run/rosetun-lab')
 ENTRY = '/usr/local/libexec/rosetun-lab/entry'
@@ -745,6 +746,12 @@ def setup(request, iface, directory):
     command('/usr/sbin/ip', 'addr', 'add', GATEWAYS[4] + '/24', 'dev', iface)
     command('/usr/sbin/ip', '-6', 'addr', 'add', GATEWAYS[6] + '/64', 'dev', iface, 'nodad')
     command('/usr/sbin/ip', 'link', 'set', iface, 'up')
+    if l3_mode(request):
+        # The IPv6 router of an L3 run is this link-local address (`ipv6.neighbor`, test image v6b). The kernel
+        # usually makes it itself when the link comes up; `replace` leaves one address either way, and an echo
+        # request to it is answered whatever the image set.
+        command('/usr/sbin/ip', '-6', 'addr', 'replace', LINK_LOCALS['lab'] + '/64', 'dev', iface, 'nodad')
+        Path('/proc/sys/net/ipv6/icmp/echo_ignore_all').write_text('0')
     command('/usr/sbin/ip', 'netns', 'add', 'rtlab')
     command('/usr/sbin/ip', 'link', 'add', 'rt-route', 'type', 'veth', 'peer', 'name', 'rt-target')
     command('/usr/sbin/ip', 'link', 'set', 'rt-target', 'netns', 'rtlab')

@@ -327,6 +327,16 @@ def with_specific_route(labels):
 WINDOWS_7C3 = with_specific_route(WINDOWS_7C2)
 
 
+def with_neighbor(labels):
+    """The windows with the session of `ipv6.neighbor` (stage 7e), which runs after the DNS lock scenarios."""
+    at = labels.index('missing_through_restart') + 1
+    return tuple(labels[:at]) + ('neighbor',) + tuple(labels[at:])
+
+
+# The run of stage 7e: that of 7c3 with an IPv6 router, so `ipv6.neighbor` opens its session.
+WINDOWS_7E = with_neighbor(WINDOWS_7C3)
+
+
 class Machines:
     """Fake machines, a fake lab guest and the evidence the lab machine leaves on its disk."""
     def __init__(self, test, windows=None, fault=None, rows=None, evidence=None, fixtures=None):
@@ -604,14 +614,29 @@ DIRECT_IN_A_CLEAN_RUN = {('capabilities', 1): ('target',), ('direct_for_other_ac
                          ('lan_on', 0): ('neighbor',), ('lan_private_open', 0): ('behind', 'neighbor')}
 
 
-def clean_windows(labels=WINDOWS_7C3, direct=None):
-    """(label, frames) of a run with these windows: nothing in them but the flows they are expected to show."""
+def router_ping():
+    """What `neighbor` shows on the wire: neighbor discovery of the lab's link-local address, then two pings of it."""
+    from tools.vm.matrix.tests.test_lab import icmp, ip_frame, neighbor
+    test, lab = wire.LINK_LOCALS['test'], wire.LINK_LOCALS['lab']
+    to_lab = dict(src=wire.MACS['test'], dst=wire.MACS['lab'])
+    to_test = dict(src=wire.MACS['lab'], dst=wire.MACS['test'])
+    frames = (neighbor(135, test, 'ff02::1:ff00:5362', lab, src=wire.MACS['test'], dst='33:33:ff:00:53:62'),
+              neighbor(136, lab, test, lab, **to_test))
+    for sequence in (1, 2):
+        body = bytes([0, 7, 0, sequence]) + b'rosetun'
+        frames += (ip_frame(test, lab, 58, icmp(128, body), **to_lab), ip_frame(lab, test, 58, icmp(129, body), **to_test))
+    return frames
+
+
+def clean_windows(labels=WINDOWS_7E, direct=None):
+    """(label, frames) of a run with these windows: nothing in them but the flows they are expected to show, and
+    in `neighbor` the ping of the lab's link-local address."""
     direct = DIRECT_IN_A_CLEAN_RUN if direct is None else direct
     spec, seen = [], {}
     for index, label in enumerate(labels):
         number = seen.get(label, 0)
         seen[label] = number + 1
-        frames = ()
+        frames = router_ping() if (label, number) == ('neighbor', 0) else ()
         for kind in direct.get((label, number), ()):
             frames += direct_flow(kind, 44000 + index)
         spec.append((label, frames))
@@ -762,7 +787,7 @@ class OrderTests(Flow):
     def test_the_windows_and_the_legacy_report_are_in_the_summary(self):
         machines = Machines(self)
         result = self.go(machines)
-        self.assertEqual(list(WINDOWS_7C3), [w['label'] for w in result['lab']['windows']])
+        self.assertEqual(list(WINDOWS_7E), [w['label'] for w in result['lab']['windows']])
         self.assertEqual(['EXPECTED' if (w['label'], w['number']) in DIRECT_IN_A_CLEAN_RUN else 'NONE'
                           for w in result['lab']['windows']], [w['verdict'] for w in result['lab']['windows']])
         self.assertEqual(9, [w['verdict'] for w in result['lab']['windows']].count('EXPECTED'))

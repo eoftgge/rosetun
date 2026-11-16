@@ -455,7 +455,20 @@ class LeakTests(unittest.TestCase):
             'arp-probe': arp(1, '0.0.0.0', wire.CLIENTS[4], src=self.test, dst=wire.BROADCAST, sha=self.test,
                              tha=zero),
             'ipv6-dad': neighbor(135, '::', 'ff02::1:ff00:2', wire.CLIENTS[6], src=self.test, dst='33:33:ff:00:00:02'),
-            'ipv6-unspecified-rs': ip_frame('::', 'ff02::2', 58, icmp(133, bytes(4)), dst='33:33:00:00:00:02')}
+            'ipv6-unspecified-rs': ip_frame('::', 'ff02::2', 58, icmp(133, bytes(4)), dst='33:33:00:00:00:02'),
+            'ipv6-link-local-echo': ip_frame(wire.LINK_LOCALS['test'], wire.LINK_LOCALS['lab'], 58,
+                                             icmp(128, bytes([0, 7, 0, 1])))}
+
+    def test_the_link_local_addresses_are_the_eui64_of_the_two_hardware_addresses(self):
+        self.assertEqual({'test': 'fe80::200:5eff:fe00:5361', 'lab': 'fe80::200:5eff:fe00:5362'}, wire.LINK_LOCALS)
+
+    def test_the_echo_of_the_two_link_local_addresses_is_allowed_both_ways_only_when_declared(self):
+        reply = ip_frame(wire.LINK_LOCALS['lab'], wire.LINK_LOCALS['test'], 58, icmp(129, bytes([0, 7, 0, 1])),
+                         src=self.lab, dst=self.test)
+        frames = [self.link_events()['ipv6-link-local-echo'], reply]
+        self.assertEqual(('DETECTED', 2), (lambda r: (r['leak'], r['categories']['unexpected']))(self.verdict(frames)))
+        result = self.verdict(frames, allowances=['ipv6-link-local-echo'])
+        self.assertEqual(('NONE', {'ipv6-link-local-echo': 2}), (result['leak'], result['categories']['allowed']))
 
     def test_a_link_event_is_a_leak_unless_its_allowance_is_declared(self):
         for name, frame in self.link_events().items():
@@ -473,7 +486,7 @@ class LeakTests(unittest.TestCase):
                                tha='00:00:00:00:00:00')
         extra = list(self.link_events().values()) + [lab_announcement]
         result = self.verdict(extra, allowances=wire_names())
-        self.assertEqual(dict(zip(sorted(wire_names()), (2, 1, 1, 1))), result['categories']['allowed'])
+        self.assertEqual(dict(zip(sorted(wire_names()), (2, 1, 1, 1, 1))), result['categories']['allowed'])
         self.assertEqual(('NONE', 0), (result['leak'], result['categories']['unexpected']))
 
     def test_a_frame_that_only_looks_like_an_allowance_stays_unexpected(self):
@@ -503,6 +516,19 @@ class LeakTests(unittest.TestCase):
             'router-solicitation-from-a-temporary-address': ip_frame(temporary, 'ff02::2', 58, icmp(133, bytes(4)),
                                                                      dst='33:33:00:00:00:02'),
         }
+        test_ll, lab_ll, ping = wire.LINK_LOCALS['test'], wire.LINK_LOCALS['lab'], bytes([0, 7, 0, 1])
+        cases.update({
+            'echo-from-the-global-address': ip_frame(wire.CLIENTS[6], lab_ll, 58, icmp(128, ping)),
+            'echo-to-the-global-address-of-the-lab': ip_frame(test_ll, wire.GATEWAYS[6], 58, icmp(128, ping)),
+            'echo-from-another-link-local-address': ip_frame('fe80::2', lab_ll, 58, icmp(128, ping)),
+            'echo-to-another-link-local-address': ip_frame(test_ll, 'fe80::9', 58, icmp(128, ping)),
+            'echo-reply-of-the-test-machine': ip_frame(test_ll, lab_ll, 58, icmp(129, ping)),
+            'echo-request-of-the-lab': ip_frame(lab_ll, test_ll, 58, icmp(128, ping), src=self.lab, dst=self.test),
+            'echo-to-another-machine': ip_frame(test_ll, lab_ll, 58, icmp(128, ping), dst=stranger),
+            'echo-to-all-nodes': ip_frame(test_ll, 'ff02::1', 58, icmp(128, ping), dst='33:33:00:00:00:01'),
+            'echo-with-a-code': ip_frame(test_ll, lab_ll, 58, struct.pack('!BBH', 128, 1, 0) + ping),
+            'echo-over-ipv4': ip_frame(wire.CLIENTS[4], wire.GATEWAYS[4], 1, icmp(8, ping)),
+        })
         for name, frame in cases.items():
             with self.subTest(name=name):
                 result = self.verdict([frame], allowances=wire_names())

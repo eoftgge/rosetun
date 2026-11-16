@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Copy an already provisioned lab test image, remove the legacy IPv4 probe route and, with --sshd, install
-sshd offline so that it listens only on the peer's side of the test machine."""
+sshd offline so that it listens only on the peer's side of the test machine; with --ipv6-router, make the lab's
+link-local address the IPv6 default router of the test machine."""
 
 import argparse
 import hashlib
@@ -70,6 +71,107 @@ systemctl enable {SOCKET_UNIT}
 rm -rf {DEB_STAGING}
 '''
 UNIT_DIRECTORIES = ('etc', 'lib')
+# Contract v6b: `ipv6.neighbor` of run-l3.sh needs an IPv6 default router on the physical interface. It is the lab's
+# link-local address, the modified EUI-64 of its MAC 00:00:5e:00:53:62, which answers in an L3 run. The test machine
+# accepts no router advertisement and gets no address beyond those it has; its own link-local address is the EUI-64
+# of its MAC, the one the observer's allowance for the echo names.
+IPV6_ROUTER = 'fe80::200:5eff:fe00:5362'
+IPV6_NETWORK = (('LinkLocalAddressing', 'ipv6'), ('IPv6LinkLocalAddressGenerationMode', 'eui64'),
+                ('IPv6AcceptRA', 'no'))
+IPV6_ROUTE = {'Destination': '::/0', 'Gateway': IPV6_ROUTER}
+
+
+def sections_of(text):
+    """The sections of a .network file as (raw text, header, [(key, value)]), comments left out."""
+    rows = []
+    for section in re.split(r'(?=^\[)', text, flags=re.MULTILINE):
+        lines = [line.strip() for line in section.splitlines()
+                 if line.strip() and not line.lstrip().startswith(('#', ';'))]
+        header = lines[0] if lines and lines[0].startswith('[') else None
+        fields = [tuple(part.strip() for part in line.split('=', 1)) for line in lines[1 if header else 0:]
+                  if '=' in line]
+        rows.append((section, header, fields))
+    return rows
+
+
+def ipv6_gateway(value):
+    """An IPv6 address, or the gateway a router advertisement names."""
+    return ':' in value or value == '_ipv6ra'
+
+
+def ipv6_router_route(values):
+    """A [Route] that makes an IPv6 default route or goes through a link-local or advertised gateway.
+
+    The routes of contract v6a to the lab's IPv6 target network through its global address are not one.
+    """
+    gateway = values.get('Gateway', '')
+    return (values.get('Destination') == '::/0' or gateway == '_ipv6ra' or gateway.lower().startswith('fe80:')
+            or (ipv6_gateway(gateway) and 'Destination' not in values))
+
+
+def check_no_ipv6_router(rows):
+    for _, header, fields in rows:
+        if header == '[Route]' and ipv6_router_route(dict(fields)):
+            raise ValueError('the network file has an IPv6 default or link-local route already')
+        if header == '[Network]' and any(key == 'Gateway' and ipv6_gateway(value) for key, value in fields):
+            raise ValueError('the network file has an IPv6 gateway already')
+
+
+def with_ipv6_router(text):
+    """The network file with the settings of contract v6b in its one [Network] section and the IPv6 default route.
+
+    A setting the file already has with another value, a second [Network] section or an IPv6 route through a
+    gateway is refused rather than overridden: the owner looks at the file.
+    """
+    rows = sections_of(text)
+    check_no_ipv6_router(rows)
+    network = [index for index, (_, header, _) in enumerate(rows) if header == '[Network]']
+    if len(network) != 1:
+        raise ValueError('expected one [Network] section')
+    raw, _, fields = rows[network[0]]
+    added = ''
+    for key, wanted in IPV6_NETWORK:
+        values = [value for name, value in fields if name == key]
+        if any(value != wanted for value in values):
+            raise ValueError(f'[Network] {key}={values[-1]} conflicts with {key}={wanted}')
+        if not values:
+            added += f'{key}={wanted}\n'
+    sections = [section for section, _, _ in rows]
+    body = raw.rstrip('\n') + '\n'
+    tail = raw[len(raw.rstrip('\n')):][1:]
+    sections[network[0]] = body + added + tail
+    joined = ''.join(sections)
+    route = '[Route]\n' + ''.join(f'{key}={value}\n' for key, value in IPV6_ROUTE.items())
+    return joined + ('' if joined.endswith('\n\n') or not joined else '\n' if joined.endswith('\n') else '\n\n') + route
+
+
+def check_ipv6_router(before, after):
+    """Refuse a network file read back from the image unless it is `before` with exactly what v6b adds.
+
+    One [Network] section with each setting of IPV6_NETWORK once and with its value, the same addresses as
+    `before`, exactly one IPv6 default or link-local route (IPV6_ROUTE) and every section of `before` kept.
+    """
+    rows, old = sections_of(after), sections_of(before)
+    networks = [fields for _, header, fields in rows if header == '[Network]']
+    if len(networks) != 1:
+        raise ValueError('ipv6-router: expected one [Network] section')
+    for key, wanted in IPV6_NETWORK:
+        if [value for name, value in networks[0] if name == key] != [wanted]:
+            raise ValueError(f'ipv6-router: [Network] does not set {key}={wanted} once')
+    addresses = sorted(value for _, header, fields in old if header == '[Network]' for key, value in fields
+                       if key == 'Address')
+    if sorted(value for key, value in networks[0] if key == 'Address') != addresses:
+        raise ValueError('ipv6-router: the addresses changed')
+    routes = [dict(fields) for _, header, fields in rows if header == '[Route]' and ipv6_router_route(dict(fields))]
+    if routes != [IPV6_ROUTE]:
+        raise ValueError(f'ipv6-router: the IPv6 default and link-local routes are {routes}')
+    if any(key == 'Gateway' and ipv6_gateway(value) for key, value in networks[0]):
+        raise ValueError('ipv6-router: [Network] names an IPv6 gateway')
+    kept = [fields for _, header, fields in rows]
+    for _, header, fields in old:
+        if header != '[Network]' and fields not in kept:
+            raise ValueError(f'ipv6-router: a section {header} of the source is gone')
+    return dict(gateway=IPV6_ROUTER, network=dict(IPV6_NETWORK))
 
 
 def network_for_l3(text):
@@ -196,14 +298,16 @@ def check_sshd(root, ssh_files, leftovers):
     return settings
 
 
-def image_descriptor(destination, debs=None):
-    """The descriptor of the new image; the fields of [image] and, with sshd, what was installed."""
+def image_descriptor(destination, debs=None, ipv6_router=None):
+    """The descriptor of the new image; the fields of [image] and, with sshd or the IPv6 router, what was changed."""
     descriptor = dict(schema='rosetun.matrix.image.v1', identifier=destination.stem,
                       guest_os='linux', architecture='x86_64', path=str(destination),
                       size_bytes=destination.stat().st_size, sha256=digest(destination),
                       format='qcow2', profile='bios-i440fx-v1')
     if debs is not None:
         descriptor['sshd'] = dict(listen=SSHD_LISTEN, socket=SOCKET_UNIT, debs=debs)
+    if ipv6_router is not None:
+        descriptor['ipv6_router'] = ipv6_router
     return descriptor
 
 
@@ -259,6 +363,8 @@ def arguments(argv=None):
     parser.add_argument('--sshd', action='store_true', help='install sshd for inbound.reply (image contract v6)')
     parser.add_argument('--sshd-debs', type=Path, metavar='DIR',
                         help='openssh-server and its Debian 13 dependencies as .deb files; nothing is downloaded')
+    parser.add_argument('--ipv6-router', action='store_true',
+                        help="make the lab's link-local address the IPv6 default router (image contract v6b)")
     args = parser.parse_args(argv)
     if args.sshd and args.sshd_debs is None:
         parser.error('--sshd needs --sshd-debs DIR')
@@ -287,7 +393,8 @@ def main(argv=None):
                            check=True)
             return target.read_text(encoding='utf-8')
     original = read(source)
-    updated = network_for_l3(original)
+    prepared = network_for_l3(original)
+    updated = with_ipv6_router(prepared) if args.ipv6_router else prepared
     with source.open('rb') as incoming, destination.open('xb') as outgoing:
         shutil.copyfileobj(incoming, outgoing, 1024 * 1024)
     try:
@@ -296,8 +403,10 @@ def main(argv=None):
             temp.flush()
             subprocess.run(['guestfish', '--rw', '-a', str(destination), '-i', 'upload', temp.name, NETWORK],
                            check=True)
-        if read(destination) != updated:
+        readback = read(destination)
+        if readback != updated:
             raise ValueError('network readback mismatch')
+        ipv6_router = check_ipv6_router(prepared, readback) if args.ipv6_router else None
         sshd = None
         if debs is not None:
             install_sshd(destination, args.sshd_debs.resolve(strict=True), debs)
@@ -310,12 +419,12 @@ def main(argv=None):
         raise
     if digest(source) != before:
         raise ValueError('source image changed')
-    descriptor = image_descriptor(destination, debs)
+    descriptor = image_descriptor(destination, debs, ipv6_router)
     with args.descriptor.open('x', encoding='utf-8') as stream:
         json.dump(descriptor, stream, indent=2)
         stream.write('\n')
     print(json.dumps(dict(source_sha256=before, network_before=original, network_after=updated, sshd=sshd,
-                          image=descriptor), indent=2))
+                          ipv6_router=ipv6_router, image=descriptor), indent=2))
 
 
 if __name__ == '__main__':

@@ -42,6 +42,71 @@ class PreparationTests(unittest.TestCase):
                 prepare(text)
 
 
+NETWORK_V6 = ('[Match]\nMACAddress=00:00:5e:00:53:61\n\n[Network]\nAddress=192.0.2.2/24\nAddress=2001:db8:6a:1::2/64\n\n'
+              + IPV6 + '\n' + DEFAULT)
+
+
+class Ipv6RouterTests(unittest.TestCase):
+    """Contract v6b: the lab's link-local address is the IPv6 default router, nothing else changes."""
+
+    def test_the_router_is_the_link_local_address_of_the_lab_on_the_wire(self):
+        from tools.vm.matrix import lab_protocol
+        self.assertEqual(lab_protocol.LINK_LOCALS['lab'], tool['IPV6_ROUTER'])
+
+    def test_the_settings_and_the_route_are_added_and_everything_else_is_kept(self):
+        updated = tool['with_ipv6_router'](NETWORK_V6)
+        self.assertEqual('[Match]\nMACAddress=00:00:5e:00:53:61\n\n[Network]\nAddress=192.0.2.2/24\n'
+                         'Address=2001:db8:6a:1::2/64\nLinkLocalAddressing=ipv6\n'
+                         'IPv6LinkLocalAddressGenerationMode=eui64\nIPv6AcceptRA=no\n\n' + IPV6 + '\n' + DEFAULT
+                         + '\n[Route]\nDestination=::/0\nGateway=fe80::200:5eff:fe00:5362\n', updated)
+        self.assertEqual(dict(gateway='fe80::200:5eff:fe00:5362',
+                              network=dict(LinkLocalAddressing='ipv6', IPv6LinkLocalAddressGenerationMode='eui64',
+                                           IPv6AcceptRA='no')), tool['check_ipv6_router'](NETWORK_V6, updated))
+        # The IPv4 default stays the one the L3 preparation needs.
+        self.assertEqual(updated, prepare(updated))
+
+    def test_a_setting_the_file_already_has_with_the_same_value_is_not_repeated(self):
+        source = NETWORK_V6.replace('Address=192.0.2.2/24\n', 'Address=192.0.2.2/24\nIPv6AcceptRA=no\n')
+        updated = tool['with_ipv6_router'](source)
+        self.assertEqual(1, updated.count('IPv6AcceptRA='))
+        tool['check_ipv6_router'](source, updated)
+
+    def test_a_conflicting_setting_an_ipv6_gateway_or_a_second_network_section_is_refused(self):
+        for change in (('Address=192.0.2.2/24\n', 'Address=192.0.2.2/24\nIPv6AcceptRA=yes\n'),
+                       ('Address=192.0.2.2/24\n', 'Address=192.0.2.2/24\nLinkLocalAddressing=no\n'),
+                       ('Address=192.0.2.2/24\n', 'Address=192.0.2.2/24\nIPv6LinkLocalAddressGenerationMode=stable-privacy\n'),
+                       ('Address=192.0.2.2/24\n', 'Address=192.0.2.2/24\nGateway=2001:db8:6a:1::1\n'),
+                       ('Address=192.0.2.2/24\n', 'Address=192.0.2.2/24\nGateway=_ipv6ra\n'),
+                       (DEFAULT, DEFAULT + '\n[Route]\nGateway=fe80::1\n'),
+                       (DEFAULT, DEFAULT + '\n[Route]\nDestination=::/0\nGateway=2001:db8:6a:1::1\n'),
+                       (DEFAULT, DEFAULT + '\n[Network]\nDNS=203.0.113.53\n')):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                tool['with_ipv6_router'](NETWORK_V6.replace(*change))
+        # An image prepared once is not prepared again.
+        with self.assertRaises(ValueError):
+            tool['with_ipv6_router'](tool['with_ipv6_router'](NETWORK_V6))
+
+    def test_a_file_read_back_with_anything_else_is_refused(self):
+        updated = tool['with_ipv6_router'](NETWORK_V6)
+        for change in (('Gateway=fe80::200:5eff:fe00:5362', 'Gateway=fe80::200:5eff:fe00:5363'),
+                       ('IPv6AcceptRA=no\n', 'IPv6AcceptRA=no\nIPv6AcceptRA=no\n'),
+                       ('IPv6AcceptRA=no\n', ''),
+                       ('Address=2001:db8:6a:1::2/64\n', 'Address=2001:db8:6a:1::2/64\nAddress=2001:db8:6a:1::9/64\n'),
+                       (IPV6, ''),
+                       ('Destination=::/0\n', 'Destination=::/0\nGatewayOnLink=yes\n'),
+                       (DEFAULT, DEFAULT + '\n[Route]\nDestination=::/0\nGateway=fe80::200:5eff:fe00:5362\n')):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                tool['check_ipv6_router'](NETWORK_V6, updated.replace(*change, 1))
+
+    def test_the_descriptor_records_the_router(self):
+        with tempfile.TemporaryDirectory() as temp:
+            image = Path(temp) / 'test-l3-v6b.qcow2'
+            image.write_bytes(b'image')
+            record = dict(gateway='fe80::200:5eff:fe00:5362', network={})
+            self.assertEqual(record, tool['image_descriptor'](image, None, record)['ipv6_router'])
+            self.assertNotIn('ipv6_router', tool['image_descriptor'](image))
+
+
 class ArgumentTests(unittest.TestCase):
     BASE = ['/srv/old.qcow2', '/srv/new.qcow2', '--source-sha256', '0' * 64, '--descriptor', '/srv/new.json']
 
@@ -65,7 +130,12 @@ class ArgumentTests(unittest.TestCase):
         args = self.parse('--sshd', '--sshd-debs', '/srv/debs')
         self.assertEqual((True, Path('/srv/debs')), (args.sshd, args.sshd_debs))
         args = self.parse()
-        self.assertEqual((False, None), (args.sshd, args.sshd_debs))
+        self.assertEqual((False, None, False), (args.sshd, args.sshd_debs, args.ipv6_router))
+
+    def test_the_ipv6_router_goes_alone_or_with_sshd(self):
+        self.assertTrue(self.parse('--ipv6-router').ipv6_router)
+        args = self.parse('--sshd', '--sshd-debs', '/srv/debs', '--ipv6-router')
+        self.assertEqual((True, True), (args.sshd, args.ipv6_router))
 
 
 class PackageTests(unittest.TestCase):

@@ -257,6 +257,42 @@ class FlowTests(unittest.TestCase):
                 self.assertEqual(1, direct['other_frames'])
                 self.assertEqual([0], [f['frames_back'] for f in direct['flows'] if f['client'] == CLIENT + ':42000'])
 
+    def router_ping(self):
+        from tools.vm.matrix.tests.test_lab import icmp, neighbor
+        test, lab = wire.LINK_LOCALS['test'], wire.LINK_LOCALS['lab']
+        return [neighbor(135, test, 'ff02::1:ff00:5362', lab, src=wire.MACS['test'], dst='33:33:ff:00:53:62'),
+                neighbor(136, lab, test, lab, src=wire.MACS['lab'], dst=wire.MACS['test']),
+                ip_frame(test, lab, 58, icmp(128, bytes(4))),
+                ip_frame(lab, test, 58, icmp(129, bytes(4)), src=wire.MACS['lab'], dst=wire.MACS['test'])]
+
+    def test_an_allowance_of_one_label_holds_in_its_windows_only(self):
+        labels = ['connect_ks', 'neighbor']
+        frames = self.router_ping() + session(0, 'connect_ks', self.router_ping()) + session(
+            1, 'neighbor', self.router_ping())
+        result = self.classify(frames, labels=labels, window_allowances={'neighbor': ['ipv6-link-local-echo']})
+        ks, neighbor = result['windows']
+        self.assertEqual(('DETECTED', 2, 2), (ks['leak'], ks['categories']['unexpected'],
+                                              ks['categories']['infrastructure']))
+        self.assertNotIn('allowed', ks['categories'])
+        self.assertEqual(('NONE', {'ipv6-link-local-echo': 2}, 2, 0),
+                         (neighbor['leak'], neighbor['categories']['allowed'], neighbor['categories']['infrastructure'],
+                          neighbor['categories']['unexpected']))
+        # Outside every window the echo is only counted, as any frame there.
+        self.assertEqual(2, result['outside_window']['categories']['outside-window'])
+        self.assertEqual(dict(flows=[], other_frames=2, omitted_frames=0), ks['direct'])
+
+    def test_an_allowance_of_one_label_must_be_known_and_needs_the_windows_found_in_the_capture(self):
+        frames = session(0, LABELS[0]) + session(1, LABELS[1])
+        for value in ({'neighbor': ['made-up']}, {'Bad Label': ['ipv6-link-local-echo']},
+                      {'neighbor': 'ipv6-link-local-echo'}, [('neighbor', ['ipv6-link-local-echo'])]):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                self.classify(frames, window_allowances=value)
+        with self.assertRaisesRegex(ValueError, 'invalid-windows'):
+            wire.classify_windows(timed(frames), RUN, [dict(label=LABELS[0]), dict(label=LABELS[1])],
+                                  health=health(served(list(enumerate(LABELS)))), ready=True,
+                                  window_allowances={'neighbor': ['ipv6-link-local-echo']})
+        self.assertEqual(['NONE', 'NONE'], [w['leak'] for w in self.classify(frames, window_allowances={})['windows']])
+
     def test_the_timestamps_of_a_capture_do_not_change_how_it_is_read(self):
         frames = self.two((), [out(GATEWAY, wire.NODE_PORT, flags=SYN)])
         self.assertEqual(list(wire.records(timed(frames))), frames)
