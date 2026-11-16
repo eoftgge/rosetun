@@ -127,10 +127,14 @@ else
 
     # Executables of the three targets, taken from cargo's own report.
     find_exe() {
-        # find_exe KIND NAME
-        grep '"reason":"compiler-artifact"' "$json" | grep -F "\"kind\":[\"$1\"]" | grep -F "\"name\":\"$2\"" |
-            grep '"executable":"' | grep -F '"test":'"${3-false}" |
-            sed -n 's/.*"executable":"\([^"]*\)".*/\1/p' | tail -n 1
+        # find_exe KIND NAME [TEST]: the one executable cargo reports for that target, built as a test or not.
+        # The flag is the one of the build profile: the target's own "test" field is true for every binary
+        # target, so it cannot tell the test harness from the program. Anything but one executable is none.
+        local found
+        found=$(grep '"reason":"compiler-artifact"' "$json" | grep -F "\"kind\":[\"$1\"]" | grep -F "\"name\":\"$2\"" |
+            grep '"executable":"' | grep -E '"profile":\{[^}]*"test":'"${3-false}"'\}' |
+            sed -n 's/.*"executable":"\([^"]*\)".*/\1/p' | sort -u)
+        if [ "$(printf '%s' "$found" | grep -c .)" -eq 1 ]; then printf '%s\n' "$found"; fi
     }
     fixture=$target_dir/debug/examples/l2_transport_fixture
     ipc_tests=$(find_exe lib rosetun_ipc true)
