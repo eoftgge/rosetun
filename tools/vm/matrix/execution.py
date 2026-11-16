@@ -244,6 +244,19 @@ def preflight(config, *, dry_run=False):
             actions[-2] = 'cross-check the Proxy group against the windows'
             limitations[3:5] = ['every scenario but the two-hop exits is in the group; their windows are judged',
                                 'run-proxy.sh adds the private address 192.168.77.2/24 for sharing and removes it']
+        if profile == 'l4':
+            actions[1] = 'create the test run and the lab run with their identities and a one-time SSH key for the poller'
+            actions[4] = 'write the three L4 lab requests into the test run'
+            actions[7] = 'lab setup: VPN node, HTTPS target, resolver, DoH, SSH poller, capture to the evidence disk'
+            actions[11] = 'submit run-l4.sh once (with LAB_MARKER_ADDRESS and the poller\'s public key); the job reboots the guest twice'
+            actions[12] = ('wait for the job by reading its status, at most ' + str(wait_seconds(suite, config['timeouts']['job']))
+                           + ' seconds (three phases, two reboots); each planned guest reset is taken from QMP')
+            actions[-2] = 'cross-check the L4 group, its one window and the poller against the capture'
+            limitations[3:5] = ['all 27 scenarios are in the group; the one window, `lockdown`, is judged',
+                                'the test image has the user bus, sshd on the job\'s addresses and nftables.service '
+                                '(contract v7); the lab image needs an SSH client',
+                                'the poller\'s private key is made for this run, goes to the lab machine alone and is '
+                                'never written to a summary or a run directory']
         if profile == 'l5':
             actions[4] = 'write the three L5 lab requests into the test run'
             actions[11] = 'submit run-l5.sh once (with LAB_MARKER_ADDRESS)'

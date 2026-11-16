@@ -50,8 +50,8 @@ def main(argv=None):
     run.add_argument('--config', required=True)
     run.add_argument('--dry-run', action='store_true')
     run.add_argument('--lab', action='store_true',
-                     help='run linux-l3, linux-proxy or linux-l5 inside the two-machine lab (needs an execution.v3 '
-                          'configuration)')
+                     help='run linux-l3, linux-proxy, linux-l5 or linux-l4 inside the two-machine lab (needs an '
+                          'execution.v3 configuration)')
     run.add_argument('--control', choices=L3_CONTROLS,
                      help='with --lab: the positive control of the observer; exit 0 only if it saw what the control did')
     run.add_argument('--diagnostic', action='store_true',
@@ -103,17 +103,15 @@ def main(argv=None):
             if args.diagnostic and (not args.lab or args.suite != 'linux-l3'):
                 raise ValueError('--diagnostic needs --lab and linux-l3')
             if args.control and (not args.lab or args.diagnostic or
-                                 args.suite not in ('linux-l3', 'linux-proxy', 'linux-l5')):
+                                 args.suite not in ('linux-l3', 'linux-proxy', 'linux-l5', 'linux-l4')):
                 raise ValueError('--control needs --lab and cannot go with --diagnostic')
             if args.dry_run:
                 result, code = preflight(config, dry_run=True), 0
             else:
                 from . import l3_lab, orchestrator
-                if args.lab and args.suite == 'linux-l4':
-                    raise ValueError('linux-l4 does not run in the lab yet')
                 if args.lab:
-                    run = {'linux-proxy': l3_lab.run_linux_proxy_lab, 'linux-l5': l3_lab.run_linux_l5_lab}.get(
-                        args.suite, l3_lab.run_linux_l3_lab)
+                    run = {'linux-proxy': l3_lab.run_linux_proxy_lab, 'linux-l5': l3_lab.run_linux_l5_lab,
+                           'linux-l4': l3_lab.run_linux_l4_lab}.get(args.suite, l3_lab.run_linux_l3_lab)
                 else:
                     run = {'linux-l3': orchestrator.run_linux_l3, 'linux-proxy': orchestrator.run_linux_proxy,
                            'linux-l5': orchestrator.run_linux_l5, 'linux-l4': orchestrator.run_linux_l4,

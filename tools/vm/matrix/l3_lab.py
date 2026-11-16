@@ -16,10 +16,10 @@ import sys
 import time
 import uuid
 
-from . import lab as labmod
+from . import lab as labmod, poller_key
 from .evidence import ReadbackError, write_file
 from .execution import lab_of, preflight
-from .config import job_span, wait_seconds
+from .config import job_span, planned_reboots_of, wait_seconds
 from .lab_protocol import (CAPTURE_SLACK, LOG_LIMIT, PORTS, TARGETS, EVIDENCE_PCAP_LIMIT, CLIENTS, EGRESS, HELPER_REASON,
                            ROUTE_FLOW_LIMIT, ROUTE_FLOWS_LIMIT, classify_windows, https_exchanges, marker_run_id,
                            probes)
@@ -31,12 +31,14 @@ from .resources import StandLease, completion_verified, create_run, resource_pat
 SCHEMA = 'rosetun.matrix.l3-summary.v1'
 # Each suite of the lab: the schema of its summary and the stage profile of its package.
 SCHEMAS = {'linux-l3': SCHEMA, 'linux-proxy': 'rosetun.matrix.proxy-summary.v1',
-           'linux-l5': 'rosetun.matrix.l5-summary.v1'}
-PROFILES = {'linux-l3': 'l3', 'linux-proxy': 'proxy', 'linux-l5': 'l5'}
+           'linux-l5': 'rosetun.matrix.l5-summary.v1', 'linux-l4': 'rosetun.matrix.l4-summary.v1'}
+PROFILES = {'linux-l3': 'l3', 'linux-proxy': 'proxy', 'linux-l5': 'l5', 'linux-l4': 'l4'}
 ROLES = ('lab', 'test')
 # What the lab machine keeps beside the capture, and the bound of each file.
 LAB_FILES = (('targets.json', LOG_LIMIT), ('health.json', LOG_LIMIT), ('https.json', LOG_LIMIT),
              ('node.log', LOG_LIMIT), ('dns.json', LOG_LIMIT))
+# What only a run with the SSH poller (Linux L4) reads besides: every attempt of the poller with its time and result.
+POLLER_FILE = ('poller.json', LOG_LIMIT)
 # What only a diagnostic run reads besides: the flows behind the node, which are never needed to judge anything.
 ROUTE_FILE = ('route-flows.json', ROUTE_FLOWS_LIMIT)
 
@@ -198,7 +200,7 @@ def fixtures_block(health, logs):
                          requests=sum(row.get('transport') == 'doh' for row in dns)))
 
 
-def lab_block(lab_id, evidence_disk, verdict, fixtures, hashes, refusals=(), route_flows=False):
+def lab_block(lab_id, evidence_disk, verdict, fixtures, hashes, refusals=(), route_flows=False, poller=None):
     """The observer's side: the fixtures, the evidence disk and every window the markers named.
 
     `https_refusals` are the connections the HTTPS target turned away, and each window has its `flows`:
@@ -211,6 +213,8 @@ def lab_block(lab_id, evidence_disk, verdict, fixtures, hashes, refusals=(), rou
         https_refusals=list(refusals))
     if route_flows is not False:
         block['route_flows'] = route_flows
+    if poller is not None:
+        block['poller'] = poller
     if verdict is not None:
         block.update(windows=verdict['windows'], outside_window=verdict['outside_window'],
                      missing_labels=verdict['missing_labels'], extra_windows=verdict['extra_windows'])
@@ -236,6 +240,11 @@ def run_linux_l5_lab(config, **options):
     return run_linux_lab(config, suite='linux-l5', **options)
 
 
+def run_linux_l4_lab(config, **options):
+    """One Linux L4 run in the lab (stage 8d): one window, the SSH poller and three boots of the test machine."""
+    return run_linux_lab(config, suite='linux-l4', **options)
+
+
 def run_linux_lab(config, *, suite, diagnostic=False, control=None, adapters=None, clock=time.monotonic,
                   sleep=time.sleep, progress=None):
     """One run of a suite of the real service in the lab; see `run_linux_l3_lab`."""
@@ -247,6 +256,10 @@ def run_linux_lab(config, *, suite, diagnostic=False, control=None, adapters=Non
     if diagnostic and suite != 'linux-l3':
         raise ValueError('lab-diagnostic-l3-only')
     profile = PROFILES[suite]
+    tables = tables_for(suite)
+    # A suite with the lab's SSH poller (L4) gets a key pair of its own for this run: the public half goes to the test
+    # machine in job.env, the private half to the lab machine alone, and neither is kept anywhere.
+    private_key, public_key = poller_key.new_pair() if tables.INBOUND_POLL else (None, None)
     progress = progress or (lambda stage: print(stage, file=sys.stderr, flush=True))
     l3, lab_config = config['l3'], config['lab']
     result = dict(schema=SCHEMAS[suite], suite=suite, mode='lab', identities={}, configuration=config, stages=[],
@@ -264,7 +277,7 @@ def run_linux_lab(config, *, suite, diagnostic=False, control=None, adapters=Non
     interrupted = False
     # What the finally block summarizes: kept as it arrives, so that a late failure loses nothing.
     seen = dict(raw_report=None, logs={}, hashes={}, health=None, verdict=None, evidence_disk=dict(
-        verified=False, reason='not-read', pcap_bytes=0, pcap_sha256=None))
+        verified=False, reason='not-read', pcap_bytes=0, pcap_sha256=None), secrets=[private_key], suite=suite)
 
     def step(name, operation):
         nonlocal stage
@@ -350,7 +363,8 @@ def run_linux_lab(config, *, suite, diagnostic=False, control=None, adapters=Non
         pair = step('evidence-disk', lambda: adapters.pair(lease, runs, lab_id, tunnel=True, evidence_disk=True,
                                                            dns=True,
                                                            **({'route_flows': True, 'journal_full': True}
-                                                              if diagnostic else {})))
+                                                              if diagnostic else {}),
+                                                           **({'poller': True} if private_key else {})))
         if clock() >= deadline:
             raise TimeoutError('preparation deadline')
 
@@ -360,7 +374,8 @@ def run_linux_lab(config, *, suite, diagnostic=False, control=None, adapters=Non
         options = dict(evidence_disk=True, duration_seconds=capture_seconds(config), dns=True, windows=True,
                        certificates=dict(https_sha256=lab_config['https_cert_sha256'],
                                          doh_sha256=lab_config['doh_cert_sha256']),
-                       **({'route_flows': True} if diagnostic else {}))
+                       **({'route_flows': True} if diagnostic else {}),
+                       **({'poller': dict(private_key=private_key)} if private_key else {}))
 
         def lab_call(operation):
             # A new facade each time: the capture's own deadline, not the facade's, bounds the run.
@@ -375,6 +390,8 @@ def run_linux_lab(config, *, suite, diagnostic=False, control=None, adapters=Non
         if ready.get('capture_ready') is not True:
             raise ValueError('capture-not-ready')
         vm = vms['test'] = step('start-test', lambda: adapters.start(runs['test'], lab=pair))
+        # The guest resets the suite plans (the three boots of L4) are taken as events; any other reset is an error.
+        vm.planned_reboots = planned_reboots_of(suite)
         step('resume-test', vm.resume)
         step('boot-test', lambda: vm.wait_initial_guest(timeout=config['deadlines']['boot'],
                                                        clock=clock, sleep=sleep))
@@ -388,7 +405,8 @@ def run_linux_lab(config, *, suite, diagnostic=False, control=None, adapters=Non
         attempt = step('import-create', lambda: adapters.importer(vm, enabled=True,
               guest_run_id=guest_run_id, import_id=identities['import_id'], **config['accounts'],
               **{k + '_timeout': v for k, v in config['timeouts'].items()},
-              l3=dict(l3, lab_marker_address=marker_address(), **({'lab_control': control} if control else {}))))
+              l3=dict(l3, lab_marker_address=marker_address(), **({'lab_control': control} if control else {}),
+                      **({'lab_poller_key': public_key} if public_key else {}))))
         attempt.deadline = min(attempt.deadline, clock() + config['deadlines']['import'])
         try:
             step('import', attempt.stage)
@@ -428,7 +446,7 @@ def run_linux_lab(config, *, suite, diagnostic=False, control=None, adapters=Non
 
         # The capture ends here; the lab machine says what it saw.
         guest, _ = step('lab-finish', lambda: lab_call('finish'))
-        for name, limit in LAB_FILES:
+        for name, limit in LAB_FILES + ((POLLER_FILE,) if private_key else ()):
             raw = step('lab-read-' + name, lambda: guest.read(name, limit))
             try:
                 write_file(runs['lab'], name, raw, mode='overwrite', readback=True, forbid=runs['lab']._identity[2])
@@ -490,10 +508,39 @@ def judge(lab_id, config, seen, suite='linux-l3'):
     """Split the capture into the windows its markers name; the labels of the group must each have one."""
     tables = tables_for(suite)
     seen['health'] = json.loads(seen['logs']['health.json'])
+    # The poller's answers are admitted from the moment the guest says its local network went on, less the slack of
+    # the two clocks; a run that never said so admits none.
+    poll = dict(replies_from=lan_on_seconds(seen.get('raw_report'), tables.LAN_ON_SLACK_SECONDS)) \
+        if tables.INBOUND_POLL else None
     seen['verdict'] = classify_windows(seen['logs']['capture.pcap'], lab_id, None, health=seen['health'], ready=True,
                                        tunnel_port=config['lab']['tunnel']['node_port'],
                                        required_labels=tables.GROUP_LABELS, limit=EVIDENCE_PCAP_LIMIT, flows=True,
-                                       window_allowances=tables.WINDOW_ALLOWANCES)
+                                       window_allowances=tables.WINDOW_ALLOWANCES, inbound_poll=poll)
+
+
+# The guest's note in `cleanup.actions` of its report: the epoch milliseconds at which its local network went on.
+LAN_ON = re.compile(r'(?:^|; )lan-on-ms=([0-9]{13})(?:;|$)')
+
+
+def lan_on_seconds(raw, slack):
+    """When the test machine's local network went on, as seconds on the clock of the machines less `slack`, or None."""
+    try:
+        actions = json.loads(raw)['cleanup']['actions']
+    except (TypeError, ValueError, KeyError):
+        return None
+    match = LAN_ON.search(actions) if type(actions) is str else None
+    return int(match[1]) / 1000 - slack if match else None
+
+
+def poller_block(rows):
+    """What the poller's log says, counted: its attempts by result and when the first login was accepted."""
+    rows = [row for row in rows if type(row) is dict] if type(rows) is list else []
+    results = [row.get('result') for row in rows]
+    accepted = [row.get('at') for row in rows if row.get('result') == 'accepted' and type(row.get('at')) is float]
+    return dict(attempts=len(rows), accepted=results.count('accepted'), failed=results.count('failed'),
+                timeouts=results.count('timeout'), errors=results.count('error'),
+                first_accepted_at=min(accepted) if accepted else None,
+                last_attempt_at=rows[-1].get('at') if rows else None)
 
 
 def finish(result, lease, pair, runs, vms, closed, job, attempt, seen, interrupted, lab_id, states=None):
@@ -537,7 +584,8 @@ def finish(result, lease, pair, runs, vms, closed, job, attempt, seen, interrupt
     result['lab'] = lab_block(lab_id, seen['evidence_disk'], seen['verdict'],
                               fixtures_block(seen['health'] or {}, parsed), seen['hashes'],
                               https_refusals(parsed.get('https.json')),
-                              route_flows_block(parsed.get('route-flows.json')) if result.get('diagnostic') else False)
+                              route_flows_block(parsed.get('route-flows.json')) if result.get('diagnostic') else False,
+                              poller_block(parsed.get('poller.json')) if seen.get('suite') == 'linux-l4' else None)
     if result.get('diagnostic'):
         # Which flows were open while each scenario ran; a diagnostic that judges nothing and may fail alone.
         try:
@@ -547,6 +595,14 @@ def finish(result, lease, pair, runs, vms, closed, job, attempt, seen, interrupt
             result['alignment_error'] = failure('alignment', error)
     from .l3_summary import decide
     decide(result, interrupted)
+    # The private key of the poller is in no summary: if it ever is, it is removed and the run cannot vouch for itself.
+    for secret in seen.get('secrets', ()):
+        # As the text of a JSON string: the key's lines are separated by newlines, which JSON writes escaped.
+        needle = json.dumps(secret)[1:-1] if secret else None
+        if needle and needle in json.dumps(result):
+            result.update(json.loads(json.dumps(result).replace(needle, '[redacted-key]')))
+            result['errors'].append(dict(stage='summary', kind='RedactionError', reason='poller-key-redacted'))
+            result['exit_code'] = 130 if interrupted else 2
     if runs:
         payload = json.dumps(result)
         for run in runs.values():

@@ -83,9 +83,9 @@ class TableTests(unittest.TestCase):
         self.assertEqual(40, len(l3.GROUP))
         self.assertEqual(27, len(summary.tables_for('linux-proxy').GROUP))
         self.assertEqual((None, None), (l3.COUNTER, summary.tables_for('linux-proxy').COUNTER))
-        self.assertEqual(('linux-l3', 'linux-proxy', 'linux-l5'), summary.LAB_SUITES)
+        self.assertEqual(('linux-l3', 'linux-proxy', 'linux-l5', 'linux-l4'), summary.LAB_SUITES)
         with self.assertRaises(ValueError):
-            summary.tables_for('linux-l4')
+            summary.tables_for('linux-l6')
 
 
 class L5Flow(Flow):

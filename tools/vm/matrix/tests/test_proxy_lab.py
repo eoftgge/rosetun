@@ -83,7 +83,7 @@ class TableTests(unittest.TestCase):
         self.assertEqual(summary.CONTROL_EXPECTATIONS, l3.CONTROL_EXPECTATIONS)
         self.assertEqual(40, len(l3.GROUP))
         with self.assertRaises(ValueError):
-            summary.tables_for('linux-l4')
+            summary.tables_for('linux-l6')
 
 
 class ProxyFlow(Flow):

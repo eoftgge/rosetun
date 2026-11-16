@@ -177,7 +177,10 @@ TABLES = ('GROUP', 'WINDOW_OF', 'OWN_WINDOW_WHEN_OPENED', 'GROUP_LABELS', 'WINDO
 # A table only some suites have, None for the others: the guest's own counter of direct packets and the window
 # whose observer is its twin (L5: `rosetun-l5-watch` and `upgrade_ks`).
 OPTIONAL_TABLES = ('COUNTER',)
-LAB_SUITES = ('linux-l3', 'linux-proxy', 'linux-l5')
+# Tables only L4 has (stage 8d), None for the others: how many boots the controller must have taken in order, whether
+# the lab's SSH poller is on (the observer's category `inbound-poll`) and the slack of the clocks it is judged with.
+OPTIONAL_TABLES += ('BOOT_CHAIN', 'INBOUND_POLL', 'LAN_ON_SLACK_SECONDS')
+LAB_SUITES = ('linux-l3', 'linux-proxy', 'linux-l5', 'linux-l4')
 
 
 def tables_for(suite='linux-l3'):
@@ -190,6 +193,9 @@ def tables_for(suite='linux-l3'):
     elif suite == 'linux-l5':
         from . import l5_tables
         source = vars(l5_tables)
+    elif suite == 'linux-l4':
+        from . import l4_tables
+        source = vars(l4_tables)
     else:
         raise ValueError('lab-suite-unknown')
     tables = SimpleNamespace(suite=suite, **{name: source[name] for name in TABLES},
@@ -458,6 +464,13 @@ def decide(result, interrupted):
         unproven.append('fixtures-not-seen:' + ','.join(missing))
     if qualification['observer']['reasons']:
         unproven.append('observer-not-clean')
+    chain = None
+    if tables.BOOT_CHAIN is not None:
+        # The controller's own chain of boots, taken from the guest's resets as QEMU said them; the guest's list of
+        # boots is only compared with it. A run that took fewer or more than the suite plans cannot vouch for itself.
+        chain = (result.get('execution') or {}).get('boot_chain')
+        if type(chain) is not list or len(chain) != tables.BOOT_CHAIN:
+            unproven.append(f"boot-chain:expected={tables.BOOT_CHAIN},seen={len(chain) if type(chain) is list else 'none'}")
     if any(row['agreement'] == 'UNOBSERVED' for row in table):
         unproven.append('pass-not-observed')
     for row in lab['window_counts']:
@@ -482,6 +495,10 @@ def decide(result, interrupted):
     if counter is not None:
         # Only a suite with a counter of its own (L5) has this field; the summaries of the others keep theirs.
         result['group']['counter'] = counter
+    if tables.BOOT_CHAIN is not None:
+        # Only L4: the boots the controller took (identities are never in the summary of the group), against the plan.
+        result['group']['boot_chain'] = dict(expected=tables.BOOT_CHAIN,
+                                             seen=len(chain) if type(chain) is list else None)
     if interrupted:
         result['exit_code'], result['outcome'] = 130, 'interrupted'
     elif findings:
