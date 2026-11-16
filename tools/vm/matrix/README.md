@@ -3623,6 +3623,149 @@ summaries and the retained artifacts.
 5. `run linux-l3 --lab --control stop-helper --config <l3-lab.toml>`: exit 0, `control_result.met` true.
 6. `run linux-l2 --config <l2.toml>`, then `runs --state-directory <state>`: every run `completion_verified`.
 
+## Stage 7c3: expectations of the windows with direct traffic, and a specific route
+
+After stage 7c2 the windows where direct traffic is expected by design (rules that send a program direct, a DNS lock
+without the kill switch) stayed outside the group: `DETECTED`, judged by nothing, so a leak beyond what they are meant
+to send was invisible. This stage fixes, in the controller, exactly what each of them may show, adds their scenarios to
+the group (**35 scenarios**), and adds the scenario `route.specific-bypass`. Nothing is accepted: the release gate stays
+false and the security invariants stay **UNVERIFIED**.
+
+### The flows of the unexpected frames
+
+Each row of `lab.windows` gains `direct`: the frames of the test machine in the window that are `unexpected` (not the
+tunnel, not the infrastructure), grouped by flow. A flow is a TCP connection or a UDP exchange by protocol and
+four-tuple, so a SYN or a datagram sent again stays one flow.
+
+```json
+{"flows": [{"protocol": "udp", "kind": "resolver", "client": "192.0.2.2:42724", "server": "203.0.113.53:53",
+            "frames_out": 2, "frames_back": 2, "opened": true}],
+ "other_frames": 0, "omitted_frames": 0}
+```
+
+- `kind` is `target` (TCP to the HTTPS target `203.0.113.2:443`), `resolver` (UDP to the lab resolver
+  `203.0.113.53:53`) or `other`.
+- `opened` says the test machine started the flow inside the window: a SYN without ACK it sent, or for UDP an
+  outbound first frame.
+- `other_frames` counts the unexpected frames of no flow (ARP, ICMP, a fragment), `omitted_frames` those beyond 64
+  flows. With the frames of the flows they account for every unexpected frame of the window.
+
+`flows`, the TCP connections of every category, stays as it was. `direct` is read from the same capture and changes no
+verdict by itself.
+
+### Expectations and verdicts
+
+`EXPECTED_FLOWS` in `l3_summary.py` names, by window (label, number), the flows the test machine opens past the tunnel
+by design, each with its exact count. The controller fixes them from what the functions of `run-l3.sh` send; the guest
+declares nothing and cannot change them. Every row of `lab.windows` gains `expected_flows` (empty without an
+expectation) and `verdict`; `leak` stays what the observer saw.
+
+| `verdict` | When |
+| --- | --- |
+| `EXPECTED` | every unexpected frame belongs to a flow the test machine opened that the expectation names, in exactly the expected number, and the window is clean otherwise |
+| `MISMATCH` | nothing beyond the expectation, but fewer flows: the script says traffic went out and the observer did not see it |
+| `DETECTED` | more of an expected flow, a flow of another kind or not opened by the test machine, or any frame of no flow, whatever else went wrong |
+| `UNVERIFIED` | nothing beyond the expectation, but the window cannot vouch for itself (the observer's reasons of stage 7b2b) |
+| `NONE` | a window without an expectation and without a leak, as before |
+
+A window without an expectation keeps the observer's verdict. In the cross-check a pass in an `EXPECTED` window is
+`AGREE`, a pass in a `MISMATCH` or `DETECTED` window is `DISAGREE`; a failure stays a failure. The exit codes keep
+their meaning: a `DISAGREE` is 1, a `DETECTED` window that is judged or beyond its count is 1
+(`leak-in-group-window`), a `MISMATCH` is 1 through the `DISAGREE` of its scenarios. A window of a label beyond its
+count has no expectation, so anything in it is a leak.
+
+| Window | Flows expected | Count | Where the count comes from |
+| --- | --- | --- | --- |
+| `capabilities` 1 (or `direct_for_other_account` 0) | TCP to `203.0.113.2:443`, opened by the test machine | 1 | `direct_for_other_account`: two `expect_route`, the curl of the other account `direct`, the other program `tunnel`; one `route_of` is one curl, one connection |
+| `through_vpn_by_program` 0 | the same | 1 | the same, the other way round: the other program `direct` |
+| `dns_lock` 0 | the same | 1 | `dns_lock`: `expect_udp_dns_refused` is refused in the guest and sends nothing, one `direct_https`; `dig` in `dns_tunnel` goes through the tunnel |
+| `dns_lock_unavailable` 0 | UDP to `203.0.113.53:53`, opened by the test machine | 1 | one `expect_udp_dns_sent` (curl's TFTP request, sent twice when the reply is no TFTP, one source port) |
+| `missing_through_restart` 0 | the same | 1 | one `expect_udp_dns_sent` while sing-box restarts |
+| `dns_lock_killed` 0 | TCP to `203.0.113.2:443` | 1 | the one `direct_https` of `kill_helper` while the lock still stands; the window closes once the restarted helper removed the table, before `expect_udp_dns_sent` and the last `direct_https` |
+| `specific_bypass_dns_lock` 0 | the same | 1 | the one `route_of` of the scenario below; outside the group |
+| `specific_bypass` 0 | none | 0 | `tunnel_https` and `direct_https` are both dropped in the guest |
+
+The qualification runs of stages 7b2b and 7c1 showed exactly these on the wire: in each of the target windows one
+connection (9 to 11 frames out, 7 or 8 back, SYN, SYN-ACK and FIN both ways), in each of the two resolver windows one
+exchange of two datagrams each way from one source port. Nothing else was unexpected in them. The windows of the new
+scenario have not run yet; their counts come from the script alone. The lab configuration
+must name the lab resolver as `dns_probe_address` (`203.0.113.53`), or it is refused: the expected UDP is an exchange
+with it.
+
+### The group
+
+| Label | Number | Scenarios judged in it |
+| --- | --- | --- |
+| (those of stage 7c2) | | the 27 of stage 7c2 |
+| `capabilities` (or `direct_for_other_account`, see below) | 1 | `rules.direct-other-account` |
+| `through_vpn_by_program` | 0 | `rules.proxy-default-direct` |
+| `dns_lock` | 0 | `dnslock.direct-blocked`, `dnslock.tunnel-passes` |
+| `dns_lock_unavailable` | 0 | `dnslock.unavailable` |
+| `missing_through_restart` | 0 | `dnslock.unavailable-restart` |
+| `dns_lock_killed` | 0 | `crash.dns-lock-killed` |
+| `specific_bypass` | 0 | `route.specific-bypass` |
+
+- `direct_for_other_account` connects only if the second session of `capabilities` is gone (after a failure there); it
+  then opens a window of its own and `rules.direct-other-account` is judged there (`OWN_WINDOW_WHEN_OPENED`, at most
+  one, as `forwarded`).
+- Where the windows close was checked in `run-l3.sh`, which this part does not change: every closing marker waits for
+  the table `inet rosetun` to be gone and the state `Disconnected`, and in none of these windows does a direct probe
+  meant for after the session come before the closing marker. `dns_lock_killed` closes after `! table_present` and
+  before its last probes (unlike `stopped` before stage 7c1).
+- `specific_bypass_dns_lock` (at most one) is outside the group: it only adds to the note of `route.specific-bypass`. A
+  `DETECTED` there is listed in `group.outside_leaks` and a `MISMATCH` changes nothing.
+- Outside the group stay only the Local network windows (`lan_on`, `lan_private_closed`, `lan_private_open`,
+  `lan_follows_change`, stage 7e), the window of `ipv6.neighbor` when it runs, and `specific_bypass_dns_lock`. So
+  `LEAK_OUTSIDE_THE_GROUP_FAILS` stays false.
+
+### The scenario `route.specific-bypass`
+
+Sing-box with `auto_route` leaves a route of the main table that is more specific than its own in force, so traffic to
+that address goes past the tunnel (the class of attack that uses a DHCP server's classless static routes, option 121).
+The scenario characterises this known weakness; the product is not changed.
+
+- It runs after the kill switch scenarios, not required (`required=no`), on the Hyper-V path too (the gateway is then
+  the Default Switch's).
+- Kill-switch session (`specific_bypass`): connect, then `<probe address>/32 via <default gateway> dev <physical>` into
+  the main table, `tunnel_https`, `direct_https`. PASS if the direct path is refused. The note says whether HTTPS
+  through the tunnel still answered (expected: no, the kill switch drops what the route sends past the tunnel). The
+  route is removed before the `disconnect`.
+- Only after that part passed, a session with the DNS lock alone (`specific_bypass_dns_lock`): connect, the same route,
+  one `route_of` as the first account, whose answer (`direct`, `tunnel`, `no answer ...`) goes into the note; the route
+  is removed, then `disconnect`. This part never changes the result.
+- The route is written to the state directory before it goes in; the scenario removes it at its end whatever the
+  outcome, and the cleanup (also in `finalize`) removes one that is left and names it in `cleanup.actions`.
+
+The catalog has 60 rows. A run without the lab records 35 ERROR "not run" (stage 7a), and the PowerShell harness test
+lists `route.specific-bypass` and `ipv6.neighbor` as the runnable scenarios that are not required.
+
+### What to reinstall
+
+No image changes. The content directory takes the new `guest/run-l3.sh` and `scenarios-l3.tsv` from the checkout (they
+are compared byte for byte). `lab_protocol.py` changed only in `classify_windows`, which the controller runs on the
+capture it read; `lab-entry.py` in the images never calls it, so the copies of `lab_protocol.py` in the images need not
+be reinstalled (doing so changes nothing). `l3_summary.py` and `execution.py` run on the controller.
+
+### Qualification
+
+Each command in its own run on the clean checkpoint. Stop at the first unexpected result and send back the summaries
+and the retained artifacts.
+
+1. Copy `guest/run-l3.sh` and `scenarios-l3.tsv` of the checkout into the content directory; images and their
+   descriptors as in stage 7c2.
+2. `run linux-l3 --config <l3.toml>` without the lab: 4 PASS, 1 FAIL (`preflight.baseline`), 20 SKIP, 35 ERROR,
+   exit 1.
+3. `run linux-l3 --lab --config <l3-lab.toml>`, twice in a row: the group 35 of 35 PASS, the cross-check `AGREE` or
+   `NOT_APPLICABLE` only, every window of the group `NONE` or `EXPECTED` (seven `EXPECTED`, counting
+   `specific_bypass_dns_lock`), `lab.window_counts` all `as_expected`, 22 windows, exit 0 both times. The note of
+   `route.specific-bypass` is expected to say that HTTPS through the tunnel did not answer and that with the DNS lock
+   alone it went `direct`; send it back whatever it says.
+4. `run linux-l3 --lab --control stop-helper --config <l3-lab.toml>`: exit 0, `control_result.met` true.
+5. `run linux-l2 --config <l2.toml>`, then `runs --state-directory <state>`: every run `completion_verified`.
+
+The owner alone runs the legacy L3 on Hyper-V (`Invoke-LinuxL2Matrix.ps1 -Run -Stage L3`): the new scenario runs there
+too, and its note shows the same two answers for the Default Switch.
+
 ## Stage 7a: Linux L3 delivery without network
 
 `run linux-l3` delivers the L3 package to one VM and runs the existing
