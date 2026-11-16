@@ -39,7 +39,7 @@ A report should not contain subscription links, server links, credentials or unr
 
 - Malware already running under your account or as administrator. Lockdown stops accidental leaks, not a program you run yourself (see [How it works](../how-it-works/)).
 - An administrator or root changing Rosetun, its service or its firewall rules.
-- What your VPN server or subscription provider can see by design: the traffic the server carries, and your real IP address when Rosetun updates a subscription without a connection.
+- What your VPN server or subscription provider can see by design: the traffic the server carries, and your real IP address when Rosetun updates a subscription without a connection or uses an ordinary direct path with VPN updates switched off. See [Updates through VPN](../subscriptions/#updates).
 - Bugs in sing-box, Xray or Wintun themselves: please report them to those projects. Do report to us when the way Rosetun runs them opens a hole. In 0.4 one such case was fixed: while connected, sing-box's own firewall permit let any account on the computer start Rosetun's `sing-box.exe` and get around the tunnel.
 
 ## A folder that was ever writable {#writable-folder}

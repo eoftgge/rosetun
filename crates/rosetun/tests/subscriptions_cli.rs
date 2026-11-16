@@ -20,7 +20,17 @@ impl TestDirectory {
             let path =
                 std::env::temp_dir().join(format!("rosetun-cli-{}-{sequence}", std::process::id()));
             match fs::create_dir(&path) {
-                Ok(()) => return Self(path),
+                Ok(()) => {
+                    let mut config = rosetun_config::AppConfig::default();
+                    // These HTTP fixtures test subscription parsing without a service.
+                    config.interface.subscriptions_via_vpn = false;
+                    fs::write(
+                        path.join("config.json"),
+                        serde_json::to_vec(&config).unwrap(),
+                    )
+                    .unwrap();
+                    return Self(path);
+                }
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
                 Err(error) => panic!("could not create test directory: {error}"),
             }
@@ -255,7 +265,7 @@ fn base64_add_select_and_remove_preserve_independent_rules() {
 #[test]
 fn rejected_add_preserves_existing_configuration_bytes() {
     let directory = TestDirectory::new();
-    let original = b"{}\n";
+    let original = b"{\"interface\":{\"subscriptions_via_vpn\":false}}\n";
     fs::write(directory.config_path(), original).unwrap();
 
     for (status, headers, body) in [
@@ -304,7 +314,7 @@ fn partial_update_returns_failure_but_persists_successful_subscription() {
             })
         })
         .collect();
-    let initial = serde_json::json!({ "subscriptions": subscriptions });
+    let initial = serde_json::json!({ "subscriptions": subscriptions, "interface": { "subscriptions_via_vpn": false } });
     fs::write(
         directory.config_path(),
         serde_json::to_vec(&initial).unwrap(),
@@ -366,8 +376,9 @@ fn gzip_limit_applies_to_decoded_body_not_wire_size() {
 }
 
 #[test]
-fn oversized_decoded_gzip_body_is_rejected_without_creating_config() {
+fn oversized_decoded_gzip_body_is_rejected_without_changing_config() {
     let directory = TestDirectory::new();
+    let original = fs::read(directory.config_path()).unwrap();
     let server = Server::start(
         200,
         b"Content-Encoding: gzip\r\n",
@@ -378,7 +389,7 @@ fn oversized_decoded_gzip_body_is_rejected_without_creating_config() {
     assert_eq!(output.status.code(), Some(1));
     assert_safe(&output);
     assert!(text(&output).contains("response too large"));
-    assert!(!directory.config_path().exists());
+    assert_eq!(fs::read(directory.config_path()).unwrap(), original);
 }
 
 #[test]

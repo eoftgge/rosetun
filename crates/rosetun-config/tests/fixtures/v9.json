@@ -40,6 +40,7 @@
     "close_to_tray": false,
     "connect_on_start": true,
     "auto_update_subscriptions": false,
+    "subscriptions_via_vpn": true,
     "check_updates": false,
     "skipped_version": "v9.9.9-test",
     "last_update_check": 1700000003,

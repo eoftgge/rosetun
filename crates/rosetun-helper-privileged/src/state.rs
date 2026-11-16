@@ -1,4 +1,5 @@
 mod apply;
+mod bypass;
 mod connections;
 mod dns;
 mod dns_cache;
@@ -280,6 +281,7 @@ struct Session {
     owner: Arc<Mutex<Option<AccountIdentity>>>,
     reconnect: Option<Reconnect>,
     missing_route_ticks: u8,
+    bypass: bypass::BypassWatch,
     missing_route_since: Option<Instant>,
     stopping: bool,
     dns_timeout: Duration,
@@ -396,6 +398,7 @@ impl Helper {
                 owner,
                 reconnect: None,
                 missing_route_ticks: 0,
+                bypass: bypass::BypassWatch::default(),
                 missing_route_since: None,
                 stopping: false,
                 dns_timeout: TUNNEL_DNS_TIMEOUT,
@@ -785,6 +788,7 @@ impl Helper {
         if session.stopping {
             return;
         }
+        session.observe_bypass(now);
         {
             let session = &mut *session;
             session
@@ -1422,6 +1426,9 @@ impl Helper {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let previous_state = status.state.clone();
         let result = apply(&mut status);
+        if status.state != ConnectionState::Connected {
+            status.bypass_detected = false;
+        }
         let previous = connection_state_name(&previous_state);
         let current = connection_state_name(&status.state);
         if previous != current {
@@ -2193,7 +2200,8 @@ impl Session {
             Ok(mut control) => {
                 // One account per outbound the repeated delay can time.
                 let tags = std::iter::once(PROXY_TAG.to_owned())
-                    .chain(outbounds.iter().map(|outbound| exit_tag(outbound.index)));
+                    .chain(outbounds.iter().map(|outbound| exit_tag(outbound.index)))
+                    .chain([rosetun_engine::SUBSCRIPTION_PROXY_USER.to_owned()]);
                 match DelayInbound::local(tags) {
                     Ok(delay) => control.delay = Some(delay),
                     Err(error) => tracing::warn!(%error, "repeated delay entry is unavailable"),
@@ -2849,6 +2857,11 @@ impl Session {
     }
 
     fn stop_engine(&mut self) -> Result<(), HelperError> {
+        self.bypass.reset();
+        self.status
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .bypass_detected = false;
         self.gate.close();
         self.tunnel_dns = None;
         if let Some(watchdog) = self.watchdog.take() {

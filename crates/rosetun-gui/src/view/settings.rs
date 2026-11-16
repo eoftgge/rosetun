@@ -595,6 +595,19 @@ fn connection(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
             actions.push(Action::SetAutoReconnect(auto_reconnect));
         }
         let mut auto_update_subscriptions = state.config.interface.auto_update_subscriptions;
+        let mut subscriptions_via_vpn = state.config.interface.subscriptions_via_vpn;
+        if card
+            .toggle(
+                tr!("subscriptions-via-vpn"),
+                None,
+                tr!("subscriptions-via-vpn-detail"),
+                &mut subscriptions_via_vpn,
+                editable,
+            )
+            .changed()
+        {
+            actions.push(Action::SetSubscriptionsViaVpn(subscriptions_via_vpn));
+        }
         if card
             .toggle(
                 tr!("auto-update-subscriptions"),
@@ -2233,7 +2246,7 @@ mod pending_notice_tests {
                         top_of(&shown, &to) - top_of(&shown, &from) - 1.0
                     };
                     let private = row(tr!("private-networks"), tr!("auto-reconnect"));
-                    let reconnect = row(tr!("auto-reconnect"), tr!("auto-update-subscriptions"));
+                    let reconnect = row(tr!("auto-reconnect"), tr!("subscriptions-via-vpn"));
                     assert!(
                         private <= limit,
                         "{language:?} {size:?}: {private} > {limit}"

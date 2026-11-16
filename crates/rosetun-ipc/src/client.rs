@@ -44,6 +44,13 @@ pub struct HelperClient {
 }
 
 impl HelperClient {
+    pub fn subscription_proxy(&mut self) -> Result<Option<crate::SubscriptionProxy>, ClientError> {
+        match self.request(Request::SubscriptionProxy)? {
+            Response::SubscriptionProxy(proxy) => Ok(proxy),
+            _ => Err(ClientError::Unexpected),
+        }
+    }
+
     pub fn connect(endpoint: &Path, client_name: &str) -> Result<Self, ClientError> {
         let connection = crate::connect(endpoint).map_err(|error| connect_error(&error))?;
         let mut client = Self {

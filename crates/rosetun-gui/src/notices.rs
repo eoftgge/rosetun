@@ -20,6 +20,7 @@ pub(crate) enum Notice {
     ConnectFailed,
     /// The connect after an upgrade failed and the network stays closed.
     HeldAfterUpgrade,
+    Bypass,
 }
 
 impl Notice {
@@ -30,6 +31,7 @@ impl Notice {
             Self::Restored => tr!("notice-restored"),
             Self::ConnectFailed => tr!("notice-connect-failed"),
             Self::HeldAfterUpgrade => tr!("notice-held-after-upgrade"),
+            Self::Bypass => tr!("vpn-bypass-warning"),
         }
     }
 }
@@ -86,6 +88,7 @@ pub(crate) fn announces_update(
 /// Follows the visible connection state between frames for `notice`.
 #[derive(Default)]
 pub(crate) struct Notices {
+    bypass_episode: bool,
     previous: Option<ConnectionState>,
     /// The user started the current drop, so its end is theirs too.
     drop_by_user: bool,
@@ -95,6 +98,12 @@ pub(crate) struct Notices {
 }
 
 impl Notices {
+    pub(crate) fn observe_bypass(&mut self, detected: bool, window_active: bool) -> Option<Notice> {
+        let announce = detected && !self.bypass_episode && !window_active;
+        self.bypass_episode = detected;
+        announce.then_some(Notice::Bypass)
+    }
+
     /// `next` is `None` while the service is unreachable: its first status
     /// after that is a fresh start, not a change. `user_busy` is whether a
     /// disconnect, connect or apply of the user's is in flight.
@@ -162,6 +171,18 @@ impl Notices {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_bypass_is_announced_once_until_it_clears() {
+        let mut notices = Notices::default();
+        assert_eq!(notices.observe_bypass(true, false), Some(Notice::Bypass));
+        assert_eq!(notices.observe_bypass(true, false), None);
+        assert_eq!(notices.observe_bypass(false, false), None);
+        assert_eq!(notices.observe_bypass(true, true), None);
+        assert_eq!(notices.observe_bypass(true, false), None);
+        assert_eq!(notices.observe_bypass(false, false), None);
+        assert_eq!(notices.observe_bypass(true, false), Some(Notice::Bypass));
+    }
 
     fn failed() -> ConnectionState {
         ConnectionState::Failed {

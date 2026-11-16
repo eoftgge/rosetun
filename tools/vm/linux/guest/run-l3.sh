@@ -826,6 +826,43 @@ scenario_lan_on() {
     check lan.follows-change "a network added during the session reached the table and, removed, left it, with the kill switch holding" lan_follows_change
 }
 
+cleanup_bypass_route() {
+    [ -f "$STATE/bypass-route" ] || return 0
+    local interface
+    interface=$(cat "$STATE/bypass-route")
+    [[ $interface =~ ^[A-Za-z0-9_.-]{1,15}$ ]] || return 1
+    ip route del 1.1.1.1/32 dev "$interface" proto 186 2>/dev/null || return 1
+    rm -f -- "$STATE/bypass-route"
+}
+
+scenario_bypass_warning() {
+    bypass_warning() {
+        connect_with request-dns-lock.json || return 1
+        # The helper only looks this address up; this scenario sends it no probe.
+        [ -z "$(ip route show exact 1.1.1.1/32)" ] || { fail_reason="the warning target already has a route"; return 1; }
+        printf '%s\n' "$PHYS" >"$STATE/bypass-route"
+        ip route add 1.1.1.1/32 dev "$PHYS" proto 186 || { rm -f -- "$STATE/bypass-route"; fail_reason="could not add the warning route"; return 1; }
+        local found=no attempt rc=0
+        for attempt in {1..10}; do
+            sleep 1
+            cli 15 status
+            if [ "$CLI_RC" -eq 0 ] && printf '%s\n' "$CLI_OUT" | grep -q '^warning: a route bypasses VPN;'; then found=yes; break; fi
+        done
+        cleanup_bypass_route || { fail_reason="could not remove the warning route"; return 1; }
+        [ "$found" = yes ] || { fail_reason="no bypass warning within ten seconds"; rc=1; }
+        for attempt in {1..5}; do
+            sleep 1
+            cli 15 status
+            if [ "$CLI_RC" -eq 0 ] && ! printf '%s\n' "$CLI_OUT" | grep -q '^warning: a route bypasses VPN;'; then break; fi
+        done
+        if [ "$CLI_RC" -ne 0 ] || printf '%s\n' "$CLI_OUT" | grep -q '^warning: a route bypasses VPN;'; then
+            fail_reason="the bypass warning did not clear"; rc=1
+        fi
+        [ "$rc" -eq 0 ]
+    }
+    check route.bypass-warning "an unprotected TUN reports a specific physical route and clears after its removal" bypass_warning
+}
+
 scenario_dns_lock() {
     dns_lock() {
         connect_with request-dns-lock.json || return 1
@@ -1133,6 +1170,9 @@ cleanup() {
     L2_CLEANUP_STATUS=PASS L2_CLEANUP_ACTIONS='' L2_CLEANUP_PROBLEMS=''
     note() { L2_CLEANUP_ACTIONS="$L2_CLEANUP_ACTIONS${L2_CLEANUP_ACTIONS:+; }$1"; }
     problem() { L2_CLEANUP_PROBLEMS="$L2_CLEANUP_PROBLEMS${L2_CLEANUP_PROBLEMS:+; }$1"; L2_CLEANUP_STATUS=ERROR; }
+    if [ -f "$STATE/bypass-route" ]; then
+        cleanup_bypass_route && note "removed the warning route" || problem "could not remove the warning route"
+    fi
     if [ -f "$STATE/nft-untrusted" ]; then
         chmod o-w "$NFT" && rm -f -- "$STATE/nft-untrusted" && note "gave $NFT its mode back" || problem "could not give $NFT its mode back"
     fi
@@ -1264,6 +1304,7 @@ if preflight_ok; then
         scenario_kill_switch
         scenario_program_rules
         scenario_lan_on
+        scenario_bypass_warning
         scenario_dns_lock
         scenario_ipv6
         scenario_peer

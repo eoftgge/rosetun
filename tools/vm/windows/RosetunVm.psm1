@@ -3367,6 +3367,15 @@ function Start-RosetunNameZone {
                             $read += $count
                         } while ($count -gt 0 -and $read -lt $buffer.Length -and
                             -not [Text.Encoding]::ASCII.GetString($buffer, 0, $read).Contains("`r`n`r`n"))
+                        $requestText = [Text.Encoding]::ASCII.GetString($buffer, 0, $read)
+                        if ($requestText -match '(?im)^User-Agent: (Rosetun-matrix-sub-[a-z0-9-]+)\r?$') {
+                            # Only a synthetic test token, never a subscription URL or credential.
+                            [pscustomobject]@{
+                                Kind = 'subscription-proof'
+                                Token = $Matches[1]
+                                Source = $client.Client.RemoteEndPoint.Address.IPAddressToString
+                            }
+                        }
                         $head = [Text.Encoding]::ASCII.GetBytes(
                             "HTTP/1.1 200 OK`r`nContent-Type: text/plain`r`nContent-Length: $($content.Length)`r`nConnection: close`r`n`r`n")
                         $stream.Write($head, 0, $head.Length)

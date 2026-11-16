@@ -42,6 +42,8 @@ pub const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Outbound tag of the session's main node.
 pub const PROXY_TAG: &str = "proxy";
+/// A separate credential for client subscription requests through the main node.
+pub const SUBSCRIPTION_PROXY_USER: &str = "subscription";
 
 /// A local-only control API that the engine serves for one session.
 #[derive(Clone, PartialEq, Eq)]

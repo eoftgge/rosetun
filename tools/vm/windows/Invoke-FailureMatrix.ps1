@@ -227,6 +227,103 @@ function Set-RuleColumnConfig {
     $configPath
 }
 
+function Test-RosetunBypassRoute {
+    param([Parameter(Mandatory)][bool]$Expected)
+    Invoke-RosetunGuest -ScriptBlock {
+        param($dir, $expected)
+        # This is a route lookup target of the helper; no probe is sent to it.
+        $prefix = '1.1.1.1/32'
+        if (@(Get-NetRoute -DestinationPrefix $prefix -ErrorAction SilentlyContinue).Count) {
+            throw 'A route for the warning target already exists; refusing to replace it.'
+        }
+        $physical = Get-NetRoute -DestinationPrefix '0.0.0.0/0' -AddressFamily IPv4 |
+            Where-Object { $_.InterfaceAlias -ne 'rosetun0' -and $_.NextHop -ne '0.0.0.0' } |
+            Sort-Object RouteMetric | Select-Object -First 1
+        if (-not $physical) { throw 'No physical default route for the warning scenario.' }
+        $route = $null
+        $cli = Join-Path $dir 'rosetun.exe'
+        try {
+            $route = New-NetRoute -DestinationPrefix $prefix -InterfaceIndex $physical.InterfaceIndex `
+                -NextHop $physical.NextHop -RouteMetric 1 -PolicyStore ActiveStore -ErrorAction Stop
+            $deadline = [DateTime]::UtcNow.AddSeconds(9)
+            do {
+                Start-Sleep -Milliseconds 500
+                $status = (& $cli status 2>&1) -join "`n"
+                $exitCode = $LASTEXITCODE
+                $global:LASTEXITCODE = 0
+                $detected = $status -match '(?m)^warning: a route bypasses VPN;'
+                if ($expected -and $detected) { break }
+            } while ([DateTime]::UtcNow -lt $deadline)
+            if ($exitCode -ne 0 -or $status -notmatch '(?m)^state: Connected\r?$' -or
+                $detected -ne $expected) { return $false }
+        }
+        finally {
+            if ($route) { $route | Remove-NetRoute -Confirm:$false -ErrorAction Stop }
+        }
+        $deadline = [DateTime]::UtcNow.AddSeconds(5)
+        do {
+            Start-Sleep -Milliseconds 500
+            $status = (& $cli status 2>&1) -join "`n"
+            $exitCode = $LASTEXITCODE
+            $global:LASTEXITCODE = 0
+        } while ($status -match '(?m)^warning: a route bypasses VPN;' -and [DateTime]::UtcNow -lt $deadline)
+        $exitCode -eq 0 -and $status -match '(?m)^state: Connected\r?$' -and
+            $status -notmatch '(?m)^warning: a route bypasses VPN;'
+    } -ArgumentList (Get-RosetunGuestDir), $Expected
+}
+
+function Test-RosetunSubscriptionVpnPath {
+    param([Parameter(Mandatory)]$Zone, [Parameter(Mandatory)][bool]$ThroughVpn)
+    $token = 'Rosetun-matrix-sub-' + [guid]::NewGuid().ToString('N')
+    $url = "http://$($Zone.HostAddress):$($Zone.HttpPort)/sub"
+    $config = Set-RuleColumnConfig 'request-subscription-direct.json'
+    $result = Invoke-RosetunGuest -ScriptBlock {
+        param($dir, $configPath, $url, $token, $throughVpn)
+        $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
+        $config | Add-Member -NotePropertyName interface -NotePropertyValue @{
+            subscriptions_via_vpn = $throughVpn
+        } -Force
+        $config.subscriptions += [pscustomobject]@{
+            id = 'subscription-proof'
+            name = 'Synthetic subscription'
+            url = $url
+            user_agent = $token
+            send_hwid = $false
+            nodes = @()
+        }
+        [IO.File]::WriteAllText($configPath, ($config | ConvertTo-Json -Depth 30))
+        $previous = $env:ROSETUN_CONFIG
+        try {
+            $env:ROSETUN_CONFIG = $configPath
+            $null = & (Join-Path $dir 'rosetun.exe') sub update subscription-proof 2>&1
+            $exitCode = $LASTEXITCODE
+            $global:LASTEXITCODE = 0
+            $exitCode -eq 0
+        }
+        finally { $env:ROSETUN_CONFIG = $previous }
+    } -ArgumentList (Get-RosetunGuestDir), $config, $url, $token, $ThroughVpn
+    $observed = @()
+    $deadline = [DateTime]::UtcNow.AddSeconds(5)
+    do {
+        $observed = @(Receive-Job -Job $Zone.Job -Keep | Where-Object {
+            $_ -isnot [string] -and $_.PSObject.Properties['Token'] -and $_.Token -eq $token
+        })
+        if ($observed.Count) { break }
+        Start-Sleep -Milliseconds 100
+    } while ([DateTime]::UtcNow -lt $deadline)
+    if (-not $result -or $observed.Count -ne 1) { return $false }
+    $sources = if ($ThroughVpn) {
+        @(Get-NetIPAddress -AddressFamily IPv4 -AddressState Preferred | ForEach-Object { $_.IPAddress })
+    }
+    else {
+        @(Invoke-RosetunGuest -ScriptBlock {
+            Get-NetIPAddress -AddressFamily IPv4 -AddressState Preferred |
+                Where-Object { $_.InterfaceAlias -ne 'rosetun0' } | ForEach-Object { $_.IPAddress }
+        })
+    }
+    $sources -contains $observed[0].Source
+}
+
 function Get-RosetunGuestAddresses {
     # The addresses a name resolves to in the guest, through the tunnel's DNS.
     param([Parameter(Mandatory)][string]$HostName)
@@ -443,6 +540,7 @@ public static class RosetunOtherLogon {
             disconnect = '"disconnect"'
             temporary = '"temporary_rules"'
             connections = '"connections"'
+            'subscription-proxy' = '"subscription_proxy"'
             # Ownership is checked before the id is looked at, so any id will do.
             close = '{"close_connection":{"id":"' + [guid]::NewGuid().ToString() + '"}}'
             apply ='{"apply":' + $requestJson + '}'
@@ -498,6 +596,11 @@ public static class RosetunOtherLogon {
                     elseif ($body.PSObject.Properties.Name -contains 'status') {
                         $state = [string]$body.status.state
                         $reply = "status $state"
+                        $succeeded = $true
+                    }
+                    elseif ($body.PSObject.Properties.Name -contains 'subscription_proxy') {
+                        # Even an authorization regression must not write credentials to evidence.
+                        $reply = 'subscription proxy credentials (redacted)'
                         $succeeded = $true
                     }
                     else {
@@ -781,6 +884,9 @@ Test-Step 'connect' 'tunnel delay works' -Note "exit $($delay.ExitCode)" {
 # it is lower than the full one by the connection and encryption round trips.
 $delayFull = Invoke-RosetunCli -Quiet 'delay' '--mode' 'full'
 $delayRepeated = Invoke-RosetunCli -Quiet 'delay' '--mode' 'repeated'
+Test-Step 'bypass warning' 'a forced physical route under the kill switch raises no bypass warning' {
+    Test-RosetunBypassRoute -Expected $false
+}
 Test-Step 'connect' 'full and repeated delay both work' `
     -Note "full $($delayFull.Output.Trim()); repeated $($delayRepeated.Output.Trim())" {
     $delayFull.ExitCode -eq 0 -and $delayFull.Output -match '(?m)^works \d+ ms$' -and
@@ -1326,8 +1432,8 @@ $otherPassword = New-OtherAccount -Name $otherAccountName
 try {
     $otherResults = @(Invoke-OtherAccountRequests -Name $otherAccountName -Password $otherPassword `
         -GuestDir (Get-RosetunGuestDir) -ProtocolVersion $protocolVersion `
-        -Commands @('status', 'disconnect', 'temporary', 'connections', 'close', 'apply'))
-    foreach ($command in @('status', 'disconnect', 'temporary', 'connections', 'close', 'apply')) {
+        -Commands @('status', 'disconnect', 'temporary', 'connections', 'subscription-proxy', 'close', 'apply'))
+    foreach ($command in @('status', 'disconnect', 'temporary', 'connections', 'subscription-proxy', 'close', 'apply')) {
         $result = $otherResults | Where-Object Command -eq $command | Select-Object -First 1
         $note = if ($result) { $result.Reply } else { 'no result' }
         if ($command -eq 'status') {
@@ -2152,6 +2258,48 @@ Disconnect-RosetunTunnel | Out-Null
 
 Write-Host 'DNS lock without the kill switch...'
 Connect-RosetunTunnel -RequestName 'request-dns-lock.json' | Out-Null
+if ($UseHostNode) {
+    $subscriptionZone = $null
+    try {
+        $subscriptionZone = Start-RosetunNameZone -SubscriptionBody "trojan://fixture-password@192.0.2.123:443#Fixture`n"
+        Invoke-RosetunGuest -ScriptBlock {
+            param($dir, $hostAddress)
+            $request = Get-Content -LiteralPath (Join-Path $dir 'request-dns-lock.json') -Raw | ConvertFrom-Json
+            $request.rule_set.rules = @([pscustomobject]@{
+                id = 'subscription-direct'
+                enabled = $true
+                matcher = @{ ip_cidr = "$hostAddress/32" }
+                target = 'direct'
+            }) + @($request.rule_set.rules)
+            [IO.File]::WriteAllText((Join-Path $dir 'request-subscription-direct.json'), ($request | ConvertTo-Json -Depth 30))
+        } -ArgumentList (Get-RosetunGuestDir), $subscriptionZone.HostAddress
+        $applySubscription = Invoke-RosetunApply 'request-subscription-direct.json' -Quiet
+        Test-Step 'subscription VPN' 'the Direct rule for the synthetic provider applies' {
+            $applySubscription.ExitCode -eq 0 -and (Get-RosetunState) -eq 'Connected'
+        }
+        if ($applySubscription.ExitCode -eq 0) {
+            Test-Step 'subscription VPN' 'enabled: the provider observes the VPN node despite the Direct rule' {
+                Test-RosetunSubscriptionVpnPath -Zone $subscriptionZone -ThroughVpn $true
+            }
+            Test-Step 'subscription VPN' 'disabled: the same provider observes the client through the Direct rule' {
+                Test-RosetunSubscriptionVpnPath -Zone $subscriptionZone -ThroughVpn $false
+            }
+        }
+    }
+    finally {
+        try { if ($subscriptionZone) { Stop-RosetunNameZone -Zone $subscriptionZone } }
+        finally {
+            $restoreSubscription = Invoke-RosetunApply 'request-dns-lock.json' -Quiet
+            Test-Step 'subscription VPN' 'the original rules are restored' { $restoreSubscription.ExitCode -eq 0 }
+        }
+    }
+}
+else {
+    $results.Add([pscustomobject]@{ Result = 'UNRUN'; Scenario = 'subscription VPN'; Check = 'provider source-address proof'; Note = 'requires -UseHostNode' })
+}
+Test-Step 'bypass warning' 'a forced physical route without the kill switch is reported and clears after removal' {
+    Test-RosetunBypassRoute -Expected $true
+}
 Test-Step 'dns lock' 'state is Connected' { Wait-RosetunState 'Connected' }
 $egress = Wait-RosetunTunnelEgress
 Test-Step 'dns lock' 'tunnel carries traffic' -Note (Format-Egress $egress) { $egress.Ok }

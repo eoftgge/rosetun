@@ -950,6 +950,18 @@ impl App {
                 tray.notify(notice);
             }
             let interface = &self.state.config.interface;
+            let bypass_notice = self.notices.observe_bypass(
+                self.state
+                    .visible_status()
+                    .is_some_and(|status| status.bypass_detected),
+                window_shown && focused,
+            );
+            if let Some(notice) = bypass_notice
+                && interface.notifications
+                && let Some(tray) = &self.tray
+            {
+                tray.notify(notice);
+            }
             let announce = self.notices.observe_update(
                 self.state
                     .available_update()

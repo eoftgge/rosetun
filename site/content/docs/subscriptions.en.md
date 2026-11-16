@@ -15,3 +15,17 @@ overview = "Subscriptions and servers"
 - **TLS fragmentation** (Settings → Advanced): splits the first packets to the server, which helps when a provider cuts the connection by its first packet. Servers that Xray carries go through Xray while it is on; the connection screen says whether it applies to the current server.
 - **DNS through the tunnel** via a configurable DNS-over-HTTPS resolver.
 - **Server checks:** a TCP ping and a URL test that sends a request through each server, even while connected, through the same chain as the connection.
+
+## Updates through VPN {#updates}
+
+**Settings → Connection → Update subscriptions through VPN** is on by default.
+While connected, subscription downloads and updates use the main VPN server,
+even when a rule sends the provider's site directly. This works in TUN and
+system proxy mode, in the app and in `rosetun sub update`.
+
+A failed VPN request shows an error and is never retried directly. Without a
+connection, or with the setting off, the ordinary path is used; in TUN it
+follows your rules. If the service is unavailable and the connection state is
+unknown, the enabled setting stops the update with an error. Turn it off only
+when you want to use the ordinary path. Lists and app update checks are not
+changed by this setting.

@@ -402,6 +402,12 @@ fn dispatch(
             Ok(exits) => Response::SessionExits(exits),
             Err(error) => Response::Error(error),
         },
+        Request::SubscriptionProxy => {
+            match helper.subscription_proxy_as(caller.expect("caller checked")) {
+                Ok(proxy) => Response::SubscriptionProxy(proxy),
+                Err(error) => Response::Error(error),
+            }
+        }
         Request::DiagnosticLog => match helper.diagnostic_log_as(caller.expect("caller checked")) {
             Ok(text) => Response::DiagnosticLog { text },
             Err(error) => Response::Error(error),
@@ -629,6 +635,7 @@ mod tests {
         for request in [
             Request::TemporaryRules,
             Request::SessionExits,
+            Request::SubscriptionProxy,
             Request::DiagnosticLog,
             Request::ForeignRules,
             Request::Connections,

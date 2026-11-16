@@ -1,4 +1,5 @@
 id	required	evidence	group	detail	title
+route.bypass-warning	yes	real-service	routing	-	without the kill switch, a specific physical route raises a bypass warning within ten seconds; removing only that route clears the warning
 preflight.identity	yes	infrastructure	preflight	-	the guest is the designated test machine on the expected boot, x86_64, with systemd
 preflight.accounts	yes	infrastructure	preflight	-	group rosetun and two distinct ordinary accounts exist, both in the group, neither an administrator
 preflight.no-foreign-service	yes	infrastructure	preflight	-	no Rosetun unit, helper process, installed files or nftables table rosetun exist

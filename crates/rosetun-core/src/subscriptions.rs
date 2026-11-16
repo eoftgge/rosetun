@@ -2,7 +2,7 @@ use rosetun_config::{Subscription, SubscriptionId};
 use rosetun_subscription::Parsed;
 
 use crate::update::apply_update;
-use crate::{FetchError, Store, StoreError, SubscriptionUrlError, Timeouts, UpdateReport, fetch};
+use crate::{FetchError, Store, StoreError, SubscriptionUrlError, Timeouts, UpdateReport};
 
 #[derive(Debug, Clone)]
 pub struct AddOptions {
@@ -111,7 +111,10 @@ pub fn add_prepared_subscription(
     prepared: PreparedSubscription,
     timeouts: Timeouts,
 ) -> Result<(Subscription, UpdateReport), AddFromUrlError> {
-    add_prepared_subscription_with(store, prepared, timeouts, fetch)
+    let via_vpn = store.load()?.interface.subscriptions_via_vpn;
+    add_prepared_subscription_with(store, prepared, timeouts, |subscription, timeouts| {
+        crate::fetch::fetch_via_vpn(subscription, timeouts, via_vpn)
+    })
 }
 
 pub(crate) fn add_prepared_subscription_with(
@@ -171,7 +174,10 @@ pub fn update_subscription(
     id: &SubscriptionId,
     timeouts: Timeouts,
 ) -> Result<(Subscription, UpdateReport), UpdateSubscriptionError> {
-    update_subscription_with(store, id, timeouts, &mut fetch)
+    let via_vpn = store.load()?.interface.subscriptions_via_vpn;
+    update_subscription_with(store, id, timeouts, &mut |subscription, timeouts| {
+        crate::fetch::fetch_via_vpn(subscription, timeouts, via_vpn)
+    })
 }
 
 fn update_subscription_with(
@@ -211,7 +217,10 @@ pub fn update_all(
     store: &Store,
     timeouts: Timeouts,
 ) -> Result<Vec<SubscriptionUpdateResult>, StoreError> {
-    update_all_with(store, timeouts, fetch)
+    let via_vpn = store.load()?.interface.subscriptions_via_vpn;
+    update_all_with(store, timeouts, |subscription, timeouts| {
+        crate::fetch::fetch_via_vpn(subscription, timeouts, via_vpn)
+    })
 }
 
 pub(crate) fn update_all_with(

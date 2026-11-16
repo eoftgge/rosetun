@@ -21,3 +21,16 @@ In Settings → Connection, Lockdown is nested under Kill switch. While Lockdown
 - **Reconnect** in the tray menu or `rosetun reconnect` restarts the tunnel to the same server under the same protection.
 - Change the server, rules or DNS while connected: Rosetun restarts the tunnel in a second or two without disconnecting, and the kill switch keeps traffic blocked meanwhile.
 - **Reconnect automatically** after sleep, a network outage or an engine failure, with a DNS watchdog while connected.
+
+## Tunnel bypass warning {#bypass-warning}
+
+Without the kill switch, Rosetun checks whether the ordinary route still uses
+the TUN. If it persistently selects another interface, the main screen shows
+**A route bypasses VPN · turn on the kill switch** and the tray announces the
+episode once. The button saves the kill switch for the next connection:
+reconnect to apply it. The warning clears when the route returns.
+
+This checks selected routes, not the path of every connection. It cannot detect
+every bypass or stalled engine and does not replace the kill switch. Deliberate
+**Direct** rules are not what this warning detects. It does not run in system
+proxy mode.

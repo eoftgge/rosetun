@@ -413,6 +413,9 @@ fn status(client: &mut HelperClient) -> ExitCode {
             }
             println!("temporary rules: {temporary_count}");
             println!("lockdown: {}", if status.lockdown { "on" } else { "off" });
+            if status.bypass_detected {
+                println!("warning: a route bypasses VPN; turn on the kill switch");
+            }
             for line in protection_lines(&status.protection) {
                 println!("{line}");
             }

@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt::Formatter;
 use std::time::Duration;
 
-pub const PROTOCOL_VERSION: u32 = 23;
+pub const PROTOCOL_VERSION: u32 = 24;
 const LOCAL_PROXY_PORT_BUSY: &str = "another program holds the local proxy port ";
 const TUNNEL_ADDRESS_IN_USE: &str = "the tunnel address is still held by the previous session";
 
@@ -41,6 +41,8 @@ pub enum Request {
     Status,
     TemporaryRules,
     SessionExits,
+    /// Credentials for the main outbound, for the connected session's owner only.
+    SubscriptionProxy,
     DiagnosticLog,
     /// The firewall tables other programs have put redirects in (protocol 21, Linux).
     ForeignRules,
@@ -119,6 +121,7 @@ impl std::fmt::Debug for Request {
             Self::Status => f.write_str("Status"),
             Self::TemporaryRules => f.write_str("TemporaryRules"),
             Self::SessionExits => f.write_str("SessionExits"),
+            Self::SubscriptionProxy => f.write_str("SubscriptionProxy"),
             Self::DiagnosticLog => f.write_str("DiagnosticLog"),
             Self::ForeignRules => f.write_str("ForeignRules"),
             Self::Connections => f.write_str("Connections"),
@@ -555,6 +558,7 @@ pub enum Response {
     Status(Status),
     TemporaryRules(Vec<Rule>),
     SessionExits(Vec<SessionExit>),
+    SubscriptionProxy(Option<SubscriptionProxy>),
     DiagnosticLog {
         text: String,
     },
@@ -574,6 +578,20 @@ pub enum Response {
     Delay(TunnelDelays),
     Ok,
     Error(HelperError),
+}
+
+/// A session-only SOCKS credential. It carries no node or subscription secrets.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SubscriptionProxy {
+    pub port: u16,
+    pub username: String,
+    pub password: String,
+}
+
+impl std::fmt::Debug for SubscriptionProxy {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SubscriptionProxy").finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -820,7 +838,7 @@ mod tests {
             serde_json::to_string(&super::ErrorCode::AccessDenied).unwrap(),
             "\"access_denied\""
         );
-        assert_eq!(super::PROTOCOL_VERSION, 23);
+        assert_eq!(super::PROTOCOL_VERSION, 24);
         assert_eq!(
             serde_json::to_string(&super::Request::OpenNetwork).unwrap(),
             "\"open_network\""
