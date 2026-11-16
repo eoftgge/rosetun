@@ -5,6 +5,7 @@ import hashlib
 import io
 import os
 from pathlib import Path
+import re
 import runpy
 import tempfile
 import unittest
@@ -314,6 +315,215 @@ class SshdCheckTests(unittest.TestCase):
         self.assertNotIn('apt', script)
         self.assertNotIn('ssh.socket.d', script)
         self.assertEqual('ListenAddress 198.51.100.1:22\n', tool['SSHD_CONFIG_TEXT'])
+
+
+def deb(control, compression='xz'):
+    """A .deb with this control text and an empty data member, built with the standard library only."""
+    import tarfile
+
+    def tar(files):
+        buffer = io.BytesIO()
+        with tarfile.open(fileobj=buffer, mode='w:' + compression) as archive:
+            for name, data in files.items():
+                info = tarfile.TarInfo(name)
+                info.size = len(data)
+                archive.addfile(info, io.BytesIO(data))
+        return buffer.getvalue()
+
+    members = [('debian-binary', b'2.0\n'), ('control.tar.' + compression, tar({'./control': control.encode()})),
+               ('data.tar.' + compression, tar({}))]
+    out = b'!<arch>\n'
+    for name, data in members:
+        out += f'{name:<16}{0:<12}{0:<6}{0:<6}{100644:<8}{len(data):<10}'.encode() + b'`\n' + data
+        out += b'\n' if len(data) % 2 else b''
+    return out
+
+
+CONTROL = ('Package: rosetun\nVersion: 0.5.1\nArchitecture: amd64\nDepends: nftables, systemd, '
+           'init-system-helpers (>= 1.65.2), libc6 (>= 2.34), libgcc-s1 (>= 4.2), libegl1 (>= 1.6.0)\n'
+           'Recommends: desktop-file-utils\nDescription: VPN client\n Two lines.\n')
+
+
+def status(**packages):
+    """A dpkg database with these installed packages: name -> version, or (version, provides)."""
+    rows = []
+    for name, value in packages.items():
+        version, provides = value if type(value) is tuple else (value, None)
+        rows.append(f'Package: {name}\nStatus: install ok installed\nVersion: {version}\n'
+                    + (f'Provides: {provides}\n' if provides else '') + 'Description: x\n continued\n')
+    return '\n'.join(rows)
+
+
+INSTALLED = {name: '9.0' for name in tool['L5_DEPENDS']}
+
+
+class L5DependencyTests(unittest.TestCase):
+    """The L5 image (stage 8b): what the package needs, read from the build script, installed and checked by reading."""
+
+    def test_the_list_is_what_the_package_build_names_and_the_desktop_database(self):
+        script = (Path(__file__).resolve().parents[4] / 'installer/linux/build-deb.sh').read_text(encoding='utf-8')
+        gui = re.search(r"^GUI_LIBRARIES='([^']*)'", script, re.MULTILINE).group(1)
+        depends = re.search(r'^Depends: (.*)$', script, re.MULTILINE).group(1)
+        fixed = [name for name in depends.split(', ') if not name.startswith('$')]
+        names = [re.match(r'[a-z0-9.+-]+', item.strip()).group(0) for item in fixed + gui.split(',')]
+        self.assertEqual(tuple(names) + ('desktop-file-utils',), tool['L5_DEPENDS'])
+        self.assertEqual('nftables, systemd, init-system-helpers (>= 1.65.2), $libraries, $GUI_LIBRARIES', depends)
+        self.assertIn('desktop-file-utils', re.search(r'^Recommends: (.*)$', script, re.MULTILINE).group(1))
+        run_l5 = (Path(__file__).resolve().parents[2] / 'linux/guest/run-l5.sh').read_text(encoding='utf-8')
+        self.assertIn('desktop-file-validate', run_l5)
+
+    def test_versions_compare_as_dpkg_compares_them(self):
+        compare = tool['compare_versions']
+        for low, high in (('1.0~rc1', '1.0'), ('1.65.2', '1.68'), ('2:1.8.4', '2:1.8.10'), ('9.9', '1:0.1'),
+                          ('1.0', '1.0-1'), ('1.0', '1.0a'), ('1.0', '1.0.0'), ('0.0.1~stand', '0.0.1'),
+                          ('1.0~~', '1.0~'), ('1.2-1~deb13u1', '1.2-1'), ('2.36-9', '2.41-12')):
+            with self.subTest(low=low, high=high):
+                self.assertLess(compare(low, high), 0)
+                self.assertGreater(compare(high, low), 0)
+        for same in (('1.0', '1.0'), ('0:1.0', '1.0'), ('1.01', '1.1')):
+            self.assertEqual(0, compare(*same))
+
+    def test_relations_are_read_with_alternatives_versions_and_architecture_qualifiers(self):
+        self.assertEqual([[('aa', None, None)], [('bb', '>=', '1.2'), ('cc', None, None)], [('dd', '<<', '2')]],
+                         tool['relations']('aa, bb:any (>= 1.2) | cc, dd (<< 2)'))
+        for text in ('aa (>= )', 'a', 'aa, '):
+            with self.subTest(text=text), self.assertRaisesRegex(ValueError, 'cannot read'):
+                tool['relations'](text)
+
+    def test_an_image_without_a_dependency_or_with_rosetun_is_refused(self):
+        check = tool['check_dependencies']
+        result = check(status(**INSTALLED))
+        self.assertEqual(INSTALLED, result['installed'])
+        absent = dict(INSTALLED)
+        del absent['desktop-file-utils']
+        with self.assertRaisesRegex(ValueError, 'not installed: desktop-file-utils'):
+            check(status(**absent))
+        with self.assertRaisesRegex(ValueError, 'rosetun package is installed'):
+            check(status(rosetun='0.5.1', **INSTALLED))
+        half = status(**INSTALLED).replace('Package: libgl1\nStatus: install ok installed',
+                                           'Package: libgl1\nStatus: install ok unpacked')
+        with self.assertRaisesRegex(ValueError, 'not installed: libgl1'):
+            check(half)
+
+    def test_every_depends_of_the_built_package_must_be_met_at_its_version(self):
+        check, control = tool['check_dependencies'], tool['stanzas'](CONTROL)[0]
+        met = dict(INSTALLED, libc6='2.41-12', **{'libgcc-s1': '14.2.0-19'})
+        result = check(status(**met), [('rosetun-new.deb', control)])
+        self.assertEqual([dict(file='rosetun-new.deb', package='rosetun', version='0.5.1', depends=control['Depends'])],
+                         result['checked_packages'])
+        with self.assertRaisesRegex(ValueError, r'rosetun-new.deb needs .*libc6 \(>= 2.34\)'):
+            check(status(**dict(met, libc6='2.31-13')), [('rosetun-new.deb', control)])
+        without = dict(met)
+        del without['libgcc-s1']
+        with self.assertRaisesRegex(ValueError, r'libgcc-s1 \(>= 4.2\)'):
+            check(status(**without), [('rosetun-new.deb', control)])
+        provided = dict(without, other=('1.0', 'libgcc-s1 (= 14.2.0)'))
+        check(status(**provided), [('rosetun-new.deb', control)])
+        unversioned = dict(without, other=('1.0', 'libgcc-s1'))
+        with self.assertRaisesRegex(ValueError, 'libgcc-s1'):
+            check(status(**unversioned), [('rosetun-new.deb', control)])
+
+    def test_the_control_file_is_read_from_the_package_without_unpacking_it(self):
+        with tempfile.TemporaryDirectory() as temp:
+            for compression in ('xz', 'gz'):
+                path = Path(temp) / f'rosetun_0.5.1_amd64.{compression}.deb'
+                path.write_bytes(deb(CONTROL, compression))
+                control = tool['package_control'](path)
+                self.assertEqual(('rosetun', '0.5.1', 'VPN client\nTwo lines.'),
+                                 (control['Package'], control['Version'], control['Description']))
+            path = Path(temp) / 'not.deb'
+            path.write_bytes(b'\x7fELF' + bytes(60))
+            with self.assertRaisesRegex(ValueError, 'not a Debian package'):
+                tool['package_control'](path)
+
+    def links(self, *rows):
+        return {tuple(row) for row in rows}
+
+    def test_a_unit_the_dependencies_enable_is_refused_unless_it_is_allowed(self):
+        check = tool['check_quiet']
+        before = self.links(('etc', '.', 'systemd-timesyncd.service', '/dev/null'),
+                            ('etc', 'multi-user.target.wants', 'systemd-networkd.service', '/x'))
+        for folder in ('timers.target.wants', 'multi-user.target.wants', 'sockets.target.requires',
+                       'graphical.target.upholds'):
+            after = before | self.links(('lib', folder, 'refresh.timer', '/usr/lib/systemd/system/refresh.timer'))
+            with self.subTest(folder=folder), self.assertRaisesRegex(ValueError, 'enabled refresh.timer'):
+                check(before, after)
+        after = before | self.links(('etc', 'timers.target.wants', 'refresh.timer', '/x'))
+        self.assertEqual(['etc/timers.target.wants/refresh.timer'], check(before, after, ('refresh.timer',))['enabled'])
+        self.assertEqual((), tool['L5_ALLOWED_UNITS'])
+
+    def test_an_alias_or_a_new_mask_is_listed_and_a_lost_mask_is_refused(self):
+        check = tool['check_quiet']
+        before = self.links(('etc', '.', 'systemd-timesyncd.service', '/dev/null'))
+        after = before | self.links(('etc', '.', 'apt-daily.timer', '/dev/null'),
+                                    ('lib', '.', 'dbus-org.example.service', 'example.service'))
+        self.assertEqual(dict(enabled=[], other_links=['etc/./apt-daily.timer', 'lib/./dbus-org.example.service']),
+                         check(before, after))
+        with self.assertRaisesRegex(ValueError, 'mask is gone: systemd-timesyncd.service'):
+            check(before, set())
+
+    def test_the_links_are_read_from_a_copy_of_the_unit_directories(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            for directory in ('etc', 'lib'):
+                (root / directory / 'timers.target.wants').mkdir(parents=True)
+            os.symlink('/dev/null', root / 'etc' / 'apt-daily.timer')
+            os.symlink('/usr/lib/systemd/system/x.timer', root / 'lib' / 'timers.target.wants' / 'x.timer')
+            (root / 'lib' / 'x.timer').write_text('[Timer]\n', encoding='utf-8')
+            self.assertEqual({('etc', '.', 'apt-daily.timer', '/dev/null'),
+                              ('lib', 'timers.target.wants', 'x.timer', '/usr/lib/systemd/system/x.timer')},
+                             tool['unit_links'](root))
+
+    def test_the_packages_are_regular_debs_none_of_them_rosetun(self):
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            with self.assertRaisesRegex(ValueError, 'no package'):
+                tool['deps_debs'](directory)
+            names = ['libegl1_1.7.0-1+b2_amd64.deb', 'xkb-data_2.42-1_all.deb']
+            for name in names:
+                (directory / name).write_bytes(name.encode())
+            self.assertEqual(names, [d['name'] for d in tool['deps_debs'](directory)])
+            (directory / 'rosetun_0.5.1_amd64.deb').write_bytes(b'x')
+            with self.assertRaisesRegex(ValueError, 'never installed'):
+                tool['deps_debs'](directory)
+            (directory / 'rosetun_0.5.1_amd64.deb').unlink()
+            os.symlink(directory / names[0], directory / 'libgl1_1.7.0-1+b2_amd64.deb')
+            with self.assertRaisesRegex(ValueError, 'unexpected entry'):
+                tool['deps_debs'](directory)
+
+    def test_the_install_script_starts_nothing_downloads_nothing_and_leaves_nothing_half_installed(self):
+        script = tool['DEPS_INSTALL_SCRIPT']
+        self.assertIn("printf '#!/bin/sh\\nexit 101\\n' >/usr/sbin/policy-rc.d", script)
+        self.assertIn("trap 'rm -f /usr/sbin/policy-rc.d' EXIT", script)
+        self.assertIn('dpkg -i /var/cache/rosetun-lab-debs/*.deb', script)
+        self.assertIn('[ -z "$(dpkg --audit)" ]', script)
+        for word in ('start', 'apt', 'systemctl', 'rosetun_', 'curl', 'wget'):
+            self.assertNotIn(word, script)
+
+    def test_the_l5_image_goes_alone_and_its_check_needs_it(self):
+        parse = ArgumentTests.parse
+        case = ArgumentTests()
+        args = parse(case, '--deps-debs', '/srv/debs', '--check-package', '/srv/a.deb', '--check-package', '/srv/b.deb')
+        self.assertEqual((Path('/srv/debs'), [Path('/srv/a.deb'), Path('/srv/b.deb')]),
+                         (args.deps_debs, args.check_package))
+        for extra in (('--sshd', '--sshd-debs', '/srv/s'), ('--ipv6-router',)):
+            with self.assertRaises(SystemExit):
+                parse(case, '--deps-debs', '/srv/debs', *extra)
+            self.assertIn('--deps-debs goes neither', case.errors.getvalue())
+        with self.assertRaises(SystemExit):
+            parse(case, '--check-package', '/srv/a.deb')
+        self.assertIn('--check-package is only for --deps-debs', case.errors.getvalue())
+        self.assertEqual(([], None), (parse(case).check_package, parse(case).deps_debs))
+
+    def test_the_descriptor_records_the_dependencies_and_nothing_else_changes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            image = Path(temp) / 'test-l5-v1.qcow2'
+            image.write_bytes(b'image')
+            record = dict(debs=[], installed={}, checked_packages=[], units=dict(enabled=[], other_links=[]))
+            descriptor = tool['image_descriptor'](image, None, None, record)
+            self.assertEqual(record, descriptor['l5_dependencies'])
+            self.assertNotIn('sshd', descriptor)
+            self.assertNotIn('l5_dependencies', tool['image_descriptor'](image))
 
 
 if __name__ == '__main__':
