@@ -70,7 +70,7 @@ def copy_verified(source, target, sha, size):
 
 
 def write_requests(run, server, port, diagnostic=False, profile='l3'):
-    """After qemu.prepare, before attach_media: create the requests of the profile (L3 or Proxy) as run resources."""
+    """After qemu.prepare, before attach_media: create the requests of the profile (L3, Proxy or L5) as run resources."""
     from . import l3_requests
     manifest = run._read()
     if manifest['state'] != 'prepared' or len(manifest['resources']) != 3 + len(execution_resources(manifest)):

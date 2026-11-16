@@ -1298,9 +1298,9 @@ class ScriptControlTests(unittest.TestCase):
                       reads)
         self.assertTrue(any('DNS_PROBE_ADDRESS LAB_MARKER_ADDRESS LAB_CONTROL || return 1' in line for line in reads))
 
-    def test_the_job_may_name_the_control_only_for_an_l3_or_proxy_stage(self):
+    def test_the_job_may_name_the_control_only_for_an_l3_proxy_or_l5_stage(self):
         start = (SCRIPT.parent / 'start.sh').read_text(encoding='utf-8')
-        self.assertIn('case $stage in l3 | proxy) keys+=(LAB_MARKER_ADDRESS LAB_CONTROL) ;; esac', start)
+        self.assertIn('case $stage in l3 | proxy | l5) keys+=(LAB_MARKER_ADDRESS LAB_CONTROL) ;; esac', start)
         self.assertEqual(1, start.count('LAB_MARKER_ADDRESS LAB_CONTROL'))
 
 

@@ -313,3 +313,31 @@ class ProxyRequestTests(unittest.TestCase):
             (Path(temp) / 'request-proxy.json').write_bytes(b'{}\n')
             with self.assertRaises(ValueError):
                 req.write_all(temp, profile='proxy')
+
+
+class L5RequestTests(unittest.TestCase):
+    """The three requests of the L5 job: the L3 files of the same names, byte for byte."""
+
+    def test_exactly_the_three_files_start_sh_requires_in_its_order(self):
+        text = (ROOT / 'tools/vm/linux/guest/start.sh').read_text(encoding='utf-8')
+        required = re.search(r'L5_START_REQUIRED=\(([^)]*)\)', text).group(1).split()
+        self.assertEqual(req.L5_NAMES, tuple(name.rpartition('/')[2] for name in required if 'request-' in name))
+        self.assertEqual(req.L5_NAMES, tuple(req.render_l5()))
+        script = (ROOT / 'tools/vm/linux/guest/run-l5.sh').read_text(encoding='utf-8')
+        self.assertLessEqual(set(re.findall(r'request-[a-z-]+\.json', script)), set(req.L5_NAMES))
+
+    def test_each_file_is_the_l3_one_and_the_bytes_are_pinned(self):
+        for (server, port), digests in RequestTests.ORDINARY.items():
+            rendered = req.render_for('l5', server, port)
+            self.assertEqual({n: req.render_all(server, port)[n] for n in req.L5_NAMES}, rendered)
+            self.assertEqual({n: digests[n] for n in req.L5_NAMES},
+                             {n: hashlib.sha256(b).hexdigest() for n, b in rendered.items()})
+
+    def test_written_once_and_never_overwritten(self):
+        with tempfile.TemporaryDirectory() as temp:
+            req.write_all(temp, profile='l5')
+            req.write_all(temp, profile='l5')
+            self.assertEqual(sorted(req.L5_NAMES), sorted(p.name for p in Path(temp).iterdir()))
+            (Path(temp) / 'request-dns-lock.json').write_bytes(b'{}\n')
+            with self.assertRaises(ValueError):
+                req.write_all(temp, profile='l5')

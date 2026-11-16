@@ -92,6 +92,12 @@ PROXY_CONTENT = ('guest/launch.sh', 'guest/start.sh', 'guest/lib.sh', 'guest/run
                      'rosetun-helper.service', 'rosetun-engine.rules', 'rosetun-lockdown.service',
                      'request-kill-switch.json', 'request-proxy.json', 'request-proxy-strict.json',
                      'request-proxy-share.json')) + ('artifacts/provenance.json',)
+# The L5 stage: two Debian packages of one commit instead of programs, and three of the L3 requests.
+L5_PACKAGES = ('rosetun-old.deb', 'rosetun-new.deb')
+L5_CONTENT = ('guest/launch.sh', 'guest/start.sh', 'guest/lib.sh', 'guest/run-l5.sh',
+              'scenarios-l5.tsv') + tuple('artifacts/' + n for n in L5_PACKAGES + (
+                  'request-kill-switch.json', 'request-lan.json', 'request-dns-lock.json')) + (
+                  'artifacts/provenance.json',)
 ENV_L2 = ('RUN_ID STAND_ID EXPECTED_BOOT_ID USER_A USER_B BIOS_GUID SCENARIO_TIMEOUT_SECONDS '
           'UNIT_TIMEOUT_SECONDS JOB_TIMEOUT_SECONDS').split()
 ENV_L3 = ENV_L2 + ['HOST_ADDRESS', 'NODE_PORT', 'PROBE_ADDRESS', 'DNS_PROBE_ADDRESS']
@@ -99,14 +105,19 @@ LAB_MARKER, MARKER_PORT = 'LAB_MARKER_ADDRESS', '9100'
 LAB_CONTROL = 'LAB_CONTROL'
 PROFILES = {'l2': dict(content=CONTENT, binaries=BINARIES, env=ENV_L2),
             'l3': dict(content=L3_CONTENT, binaries=L3_BINARIES, env=ENV_L3),
-            'proxy': dict(content=PROXY_CONTENT, binaries=PROXY_BINARIES, env=ENV_L3)}
+            'proxy': dict(content=PROXY_CONTENT, binaries=PROXY_BINARIES, env=ENV_L3),
+            'l5': dict(content=L5_CONTENT, binaries=(), env=ENV_L3, packages=L5_PACKAGES)}
 # The stages of the real service: they take the host node's values and may run inside the lab.
-SERVICE = ('l3', 'proxy')
+SERVICE = ('l3', 'proxy', 'l5')
 EXECUTABLE = set(BINARIES) | set(L3_BINARIES) | set(PROXY_BINARIES)
 DOCUMENTATION_V4 = tuple(ipaddress.ip_network(n) for n in ('192.0.2.0/24', '198.51.100.0/24', '203.0.113.0/24'))
 SERIAL = 'rosetun-l2-media'
 ISO_LIMIT = 1700 * 1024 * 1024
 TOTAL_LIMIT = 1600 * 1024 * 1024
+ELF_LIMIT = 512 * 1024 * 1024
+PACKAGE_LIMIT = 128 * 1024 * 1024
+# A Debian package is an ar archive; nothing of it is read beyond these bytes, and it is never unpacked here.
+DEB_MAGIC = b'!<arch>\n'
 
 
 def sha(raw):
@@ -148,12 +159,14 @@ def request(raw):
         require(type(i[k]) is str and re.fullmatch('[0-9a-f]{64}', i[k]))
     require(type(i['media_size']) is int and 0 < i['media_size'] <= ISO_LIMIT)
     require(set(hashes) == set(sizes) == set(content))
+    packages = tuple('artifacts/' + b for b in PROFILES[profile].get('packages', ()))
     for n in content:
         require(type(hashes[n]) is str and re.fullmatch('[0-9a-f]{64}', hashes[n]))
-        limit = 512 * 1024 * 1024 if n in tuple('artifacts/' + b for b in binaries) else 256 * 1024
+        limit = (ELF_LIMIT if n in tuple('artifacts/' + b for b in binaries) else
+                 PACKAGE_LIMIT if n in packages else 256 * 1024)
         require(type(sizes[n]) is int and 0 < sizes[n] <= limit)
     require(sum(sizes.values()) <= TOTAL_LIMIT)
-    # Only an L3 or Proxy run inside the lab names the observer's marker service, last in the file.
+    # Only an L3, Proxy or L5 run inside the lab names the observer's marker service, last in the file.
     marker = profile in SERVICE and LAB_MARKER in env
     # The one control of the lab is named only together with the marker service, after it.
     control = marker and LAB_CONTROL in env
@@ -313,6 +326,9 @@ def import_media(i, hashes, sizes, env, final, adapter):
         require(content.read_bytes() == expected_content)
         for n in names:
             copy_file(mountpoint / n, package / n, sizes[n], hashes[n])
+        for n in PROFILES[i.get('profile', 'l2')].get('packages', ()):
+            with (package / 'artifacts' / n).open('rb') as stream:
+                require(stream.read(len(DEB_MAGIC)) == DEB_MAGIC)
         write_new(package / 'job.env', env)
         write_new(package / 'manifest.sha256', final)
         for n in ('job.env', 'manifest.sha256'):

@@ -22,10 +22,13 @@ from tools.vm.matrix.tests.test_qga import BOOT, read
 
 L3 = l2.PROFILES['l3']
 PROXY = l2.PROFILES['proxy']
+L5 = l2.PROFILES['l5']
 ELF = b'\x7fELF\x02\x01' + b'\0' * 10 + b'\x02\0\x3e\0'
 SING_BOX = ELF + b'inert sing-box fixture; never execute'
 SING_BOX_SHA = hashlib.sha256(SING_BOX).hexdigest()
 L3_BLOCK = dict(sing_box_sha256=SING_BOX_SHA, **l2.L3_DEFAULTS)
+# An inert stand-in for a Debian package: the magic of an ar archive and nothing a tool could install.
+DEB = b'!<arch>\ninert package fixture; never install '
 
 
 def lines_of(path, array):
@@ -38,7 +41,7 @@ def checkout_bytes(name):
 
 
 def package_l3(root, vm_uuid, stand='synthetic-l3', profile=L3, **env_overrides):
-    """A complete L3 (or Proxy) package: real scripts, units and requests, inert binaries."""
+    """A complete L3 (or Proxy, or L5) package: real scripts, units and requests, inert binaries and packages."""
     for name in profile.sources:
         path = root / name
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -47,6 +50,10 @@ def package_l3(root, vm_uuid, stand='synthetic-l3', profile=L3, **env_overrides)
     artifacts = {}
     for name in profile.binaries:
         data = SING_BOX if name == 'sing-box' else ELF + name.encode() + b' inert fixture'
+        (root / 'artifacts' / name).write_bytes(data)
+        artifacts[name] = dict(sha256=hashlib.sha256(data).hexdigest())
+    for name in profile.packages:
+        data = DEB + name.encode()
         (root / 'artifacts' / name).write_bytes(data)
         artifacts[name] = dict(sha256=hashlib.sha256(data).hexdigest())
     for name, source in profile.packaged:
@@ -118,13 +125,42 @@ class ProfileTableTests(unittest.TestCase):
                          tuple(a for a, _ in PROXY.packaged))
         self.assertEqual(l3_requests.PROXY_NAMES, PROXY.requests)
         self.assertEqual(('proxy', 'proxy', L3.env), (PROXY.name, PROXY.stage, PROXY.env))
-        self.assertEqual(('l3', 'proxy'), l2.SERVICE_PROFILES)
+        self.assertEqual(('l3', 'proxy'), l2.SERVICE_PROFILES[:2])
         self.assertEqual(l2.evidence_files('l3'), l2.evidence_files('proxy'))
 
     def test_the_proxy_build_records_the_three_attested_binaries(self):
         script = (CHECKOUT / 'tools/vm/linux/build-artifacts.sh').read_text(encoding='utf-8')
         self.assertIn('provenance rosetun-helper-privileged rosetun desktop_proxy >', script)
         self.assertEqual(('rosetun-helper-privileged', 'rosetun', 'desktop_proxy'), PROXY.attested)
+
+    def test_l5_is_exactly_what_start_sh_requires(self):
+        self.assertEqual(sorted(lines_of('tools/vm/linux/guest/start.sh', 'L5_START_REQUIRED')), sorted(L5.payload))
+        self.assertEqual((), L5.binaries)
+        self.assertEqual(('rosetun-old.deb', 'rosetun-new.deb'), L5.packages)
+        self.assertEqual((), L5.packaged)
+        self.assertEqual(('request-kill-switch.json', 'request-lan.json', 'request-dns-lock.json'), L5.requests)
+        self.assertEqual(('l5', 'l5', L3.env), (L5.name, L5.stage, L5.env))
+        self.assertEqual(('l3', 'proxy', 'l5'), l2.SERVICE_PROFILES)
+        self.assertEqual(l2.evidence_files('l3'), l2.evidence_files('l5'))
+        self.assertEqual(tuple(helper.PROFILES['l5']['packages']), L5.packages)
+        self.assertIn('l5', helper.SERVICE)
+        self.assertEqual((l2.ELF_LIMIT, l2.PACKAGE_LIMIT, l2.DEB_MAGIC),
+                         (helper.ELF_LIMIT, helper.PACKAGE_LIMIT, helper.DEB_MAGIC))
+        self.assertFalse(set(L5.packages) & helper.EXECUTABLE)
+
+    def test_the_l5_build_records_the_two_attested_packages(self):
+        script = (CHECKOUT / 'tools/vm/linux/build-artifacts.sh').read_text(encoding='utf-8')
+        self.assertIn('provenance rosetun-old.deb rosetun-new.deb >', script)
+        self.assertEqual(L5.packages, L5.attested)
+
+    def test_the_other_profiles_have_no_packages_and_keep_their_limits(self):
+        for name in ('l2', 'l3', 'proxy'):
+            profile = l2.PROFILES[name]
+            self.assertEqual((), profile.packages)
+            self.assertNotIn('packages', helper.PROFILES[name])
+            for artifact in profile.payload:
+                self.assertEqual(512 * 1024 * 1024 if artifact in profile.elf else 256 * 1024,
+                                 profile.limit(artifact))
 
     def test_l3_delivers_the_documented_artifacts(self):
         self.assertEqual(('rosetun-helper-privileged', 'rosetun', 'sing-box'), L3.binaries)
@@ -1249,6 +1285,199 @@ class ProxyDeliveryTests(unittest.TestCase):
             found = {p.relative_to(installed).as_posix() for p in installed.rglob('*') if p.is_file()}
             self.assertEqual(set(PROXY.files), found)
         self.assertIn('desktop_proxy', helper.EXECUTABLE)
+
+
+class L5DeliveryTests(unittest.TestCase):
+    """The L5 profile: two packages instead of programs, no engine hash, the lab's keys and the importer in the image."""
+
+    def setUp(self):
+        self.fixture = test_jobs.JobsTests()
+        self.fixture.setUp()
+        self.addCleanup(self.fixture.doCleanups)
+        self.vm = self.fixture.vm
+        del self.vm._smoke_job
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name)
+        package_l3(self.root, self.vm.vm_uuid, self.vm.run._identity[1], profile=L5)
+        with patch.object(l2, 'source_identity', return_value=SOURCE):
+            self.full = l2.validate_package(self.root, checkout=CHECKOUT, profile='l5')
+        (self.root / 'job.env').unlink()
+        (self.root / 'manifest.sha256').unlink()
+        self.package = self.immutable()
+        names = media.content('l5')
+        # The media holds the listing beside the content; the owner's tree does not.
+        self.listing = media.manifest(self.package['hashes'], names)
+        self.vm._l2_media = dict(package=self.package, sha256='c' * 64, size=2048,
+                                 content_sha256=hashlib.sha256(self.listing).hexdigest())
+        from tools.vm.matrix.resources import _atomic_manifest
+        record = self.vm.run._read()
+        for index, name in enumerate(media.resources('l5')):
+            record['resources'].append(dict(id='import-test-' + str(index), kind='file', path=name))
+            path = self.vm.run.directory / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.touch()
+        _atomic_manifest(self.vm.run.directory, record)
+        for name in names:
+            (self.vm.run.directory / 'l2-package' / name).write_bytes((self.root / name).read_bytes())
+
+    def immutable(self, **options):
+        with patch.object(l2, 'source_identity', return_value=SOURCE):
+            return l2.validate_package(self.root, checkout=CHECKOUT, immutable=True, profile='l5', **options)
+
+    def attest(self, name, data):
+        (self.root / 'artifacts' / name).write_bytes(data)
+        path = self.root / 'artifacts/provenance.json'
+        provenance = json.loads(path.read_bytes())
+        provenance['artifacts'][name] = dict(sha256=hashlib.sha256(data).hexdigest())
+        path.write_text(json.dumps(provenance), encoding='ascii')
+
+    def importer(self, ids='d', **block):
+        # The L5 block names no engine hash: the packages bring their engines.
+        return delivery.L2Import(self.vm, guest_run_id=GUEST, import_id=ids * 32, user_a='l2a', user_b='l2b',
+                                 enabled=True, l3=dict(l2.L3_DEFAULTS, **block))
+
+    def test_the_package_carries_the_l5_catalog_profile_and_both_packages(self):
+        self.assertEqual('l5', self.full['profile'])
+        self.assertEqual(17, len(self.full['catalog']))
+        self.assertEqual(set(L5.files), set(self.full['hashes']))
+        self.assertEqual(list(L3.env), list(self.full['env']))
+        self.assertNotIn('artifacts/sing-box', self.full['hashes'])
+        for name in L5.packages:
+            self.assertEqual(hashlib.sha256(DEB + name.encode()).hexdigest(),
+                             self.full['hashes']['artifacts/' + name])
+
+    def test_an_engine_hash_is_refused_for_the_packages_bring_their_own(self):
+        with self.assertRaisesRegex(ValueError, 'l3-sing-box-sha256-unused'):
+            self.immutable(sing_box_sha256=SING_BOX_SHA)
+
+    def test_a_package_without_the_magic_of_an_ar_archive_is_refused(self):
+        for data in (ELF + b'not a package', b'!<arch> no newline', bytes(64)):
+            self.attest('rosetun-new.deb', data)
+            with self.assertRaisesRegex(ValueError, 'l2-artifact-not-a-debian-package'):
+                self.immutable()
+
+    def test_each_package_must_match_its_provenance(self):
+        (self.root / 'artifacts/rosetun-old.deb').write_bytes(DEB + b'another build')
+        with self.assertRaisesRegex(ValueError, 'l2-provenance-artifact-hash'):
+            self.immutable()
+
+    def test_a_package_has_a_bound_of_its_own(self):
+        size = (self.root / 'artifacts/rosetun-old.deb').stat().st_size
+        self.assertEqual(128 * 1024 * 1024, L5.limit('artifacts/rosetun-old.deb'))
+        with patch.object(l2, 'PACKAGE_LIMIT', size - 1), self.assertRaisesRegex(ValueError, 'l2-package-file-size'):
+            self.immutable()
+        with patch.object(l2, 'PACKAGE_LIMIT', size):
+            self.assertEqual(self.package, self.immutable())
+
+    def test_the_package_of_another_profile_is_not_an_l5_package_and_the_reverse(self):
+        with patch.object(l2, 'source_identity', return_value=SOURCE), self.assertRaises(ValueError):
+            l2.validate_package(self.root, checkout=CHECKOUT, immutable=True, profile='l3',
+                                sing_box_sha256=SING_BOX_SHA)
+        with tempfile.TemporaryDirectory() as temp:
+            package_l3(Path(temp), self.vm.vm_uuid)
+            with patch.object(l2, 'source_identity', return_value=SOURCE), self.assertRaises(ValueError):
+                l2.validate_package(Path(temp), checkout=CHECKOUT, profile='l5')
+
+    def test_requests_of_the_l5_job_are_the_l3_files_of_the_same_names(self):
+        (self.root / 'artifacts/request-lan.json').write_bytes(l3_requests.render_all()['request-lan-private.json'])
+        with self.assertRaises(ValueError):
+            self.immutable()
+
+    def test_job_env_takes_the_lab_marker_and_the_control_last_and_the_helper_in_the_image_agrees(self):
+        plain = self.importer('a')
+        package = self.vm.run.directory / 'l2-package'
+        self.assertEqual('l5', plain.identity['profile'])
+        self.assertNotIn('LAB_MARKER_ADDRESS', plain.request['env'])
+        plain_raw = (package / 'job.env').read_bytes()
+        for ids, extra in (('b', dict(lab_marker_address='203.0.113.2:9100')),
+                           ('c', dict(lab_marker_address='203.0.113.2:9100', lab_control='stop-helper'))):
+            del self.vm._l2_import
+            for name in ('job.env', 'manifest.sha256'):
+                (package / name).write_bytes(b'')
+            obj = self.importer(ids, **extra)
+            raw = (package / 'job.env').read_bytes()
+            self.assertEqual(b'LAB_MARKER_ADDRESS=203.0.113.2:9100', raw.splitlines()[13])
+            l2.validate_env(raw, 'l5')
+            identity, hashes, sizes, env, final = helper.request(
+                base64.b64encode(json.dumps(obj.request).encode()).decode())
+            self.assertEqual((raw, 'l5'), (env, identity['profile']))
+        for value in ('10.0.0.1:9100', '203.0.113.2:9101'):
+            with self.assertRaises(ValueError):
+                l2.validate_env(plain_raw + b'LAB_MARKER_ADDRESS=' + value.encode() + b'\n', 'l5')
+
+    def test_the_helper_in_the_image_bounds_a_package_by_its_own_limit(self):
+        request = copy.deepcopy(self.importer().request)
+        request['sizes']['artifacts/rosetun-new.deb'] = helper.PACKAGE_LIMIT + 1
+        with self.assertRaises(ValueError):
+            helper.request(base64.b64encode(json.dumps(request).encode()).decode())
+
+    def test_the_block_of_the_real_service_must_accompany_an_l5_media(self):
+        with self.assertRaisesRegex(ValueError, 'profile'):
+            delivery.L2Import(self.vm, guest_run_id=GUEST, import_id='e' * 32, user_a='l2a',
+                              user_b='l2b', enabled=True)
+
+    def install(self, request, root, listing=None):
+        """Run the importer of the image on `request` with the content tree `root`; the installed directory."""
+        listing = self.listing if listing is None else listing
+
+        class Adapter:
+            def find(inner): return Path('/unused'), 2048
+            def verify(inner, *args): pass
+
+            def mount(inner, device, target):
+                shutil.copytree(root, target, dirs_exist_ok=True)
+                (Path(target) / 'content.sha256').write_bytes(listing)
+
+            def unmount(inner, target): pass
+
+        def publish(source, target):
+            source.rename(target)
+        import os
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        with patch.object(helper, 'ROOT', Path(temp.name)), \
+                patch.object(helper, 'sync_dir'), patch.object(helper, 'trusted'), patch.object(os, 'fsync'), \
+                patch.object(helper, 'publish', side_effect=publish), \
+                patch.object(os, 'chown', create=True), patch.object(os, 'fchown', create=True), \
+                patch.object(os, 'fchmod', create=True), \
+                patch.object(os, 'O_NOFOLLOW', getattr(os, 'O_NOFOLLOW', 0), create=True), \
+                patch.object(os, 'O_NONBLOCK', getattr(os, 'O_NONBLOCK', 0), create=True):
+            i, hashes, sizes, env, final = helper.request(base64.b64encode(json.dumps(request).encode()).decode())
+            helper.import_media(i, hashes, sizes, env, final, Adapter())
+        return Path(temp.name) / GUEST
+
+    def test_the_importer_installs_the_l5_content_and_the_packages_are_not_executable(self):
+        installed = self.install(self.importer().request, self.root)
+        found = {p.relative_to(installed).as_posix() for p in installed.rglob('*') if p.is_file()}
+        self.assertEqual(set(L5.files), found)
+        for name in L5.packages:
+            self.assertEqual(DEB + name.encode(), (installed / 'artifacts' / name).read_bytes())
+            self.assertNotIn(name, helper.EXECUTABLE)
+
+    def test_the_importer_refuses_a_package_without_the_magic_even_when_its_hash_is_the_requested_one(self):
+        base = self.importer().request
+        env = (self.vm.run.directory / 'l2-package/job.env').read_bytes()
+        names = tuple(helper.PROFILES['l5']['content'])
+
+        def attempt(data):
+            """The request and the media for an old package with these bytes, consistent in every hash."""
+            request = copy.deepcopy(base)
+            (Path(temp) / 'artifacts/rosetun-old.deb').write_bytes(data)
+            request['hashes']['artifacts/rosetun-old.deb'] = hashlib.sha256(data).hexdigest()
+            request['sizes']['artifacts/rosetun-old.deb'] = len(data)
+            listing = helper.make_manifest(request['hashes'], names)
+            request['identity']['content_sha256'] = hashlib.sha256(listing).hexdigest()
+            final = helper.make_manifest(dict(request['hashes'], **{'job.env': hashlib.sha256(env).hexdigest()}),
+                                         names[:5] + ('job.env',) + names[5:])
+            request['identity']['manifest_sha256'] = hashlib.sha256(final).hexdigest()
+            return self.install(request, Path(temp), listing)
+        with tempfile.TemporaryDirectory() as temp:
+            shutil.copytree(self.root, temp, dirs_exist_ok=True)
+            with self.assertRaises(ValueError):
+                attempt(ELF + b'not a package')
+            # The same bytes behind the magic are installed: only the magic was refused.
+            self.assertTrue((attempt(b'!<arch>\n' + ELF) / 'artifacts/rosetun-old.deb').is_file())
 
 
 if __name__ == '__main__':

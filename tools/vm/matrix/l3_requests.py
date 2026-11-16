@@ -34,6 +34,8 @@ PROXY = {'request-proxy.json': (False, False),
          'request-proxy-strict.json': (True, False),
          'request-proxy-share.json': (False, True)}
 PROXY_NAMES = ('request-kill-switch.json',) + tuple(PROXY)
+# The Linux L5 job: the three L3 requests that L5_START_REQUIRED of guest/start.sh names, byte for byte, in its order.
+L5_NAMES = ('request-kill-switch.json', 'request-lan.json', 'request-dns-lock.json')
 
 
 def _unique(pairs):
@@ -145,7 +147,13 @@ def render_proxy(server=DEFAULT_SERVER, port=DEFAULT_PORT, *, diagnostic=False):
     return files
 
 
-RENDERERS = {'l3': render_all, 'proxy': render_proxy}
+def render_l5(server=DEFAULT_SERVER, port=DEFAULT_PORT, *, diagnostic=False):
+    """Return the three request files of the L5 job: the L3 files of the same names, byte for byte."""
+    files = render_all(server, port, diagnostic=diagnostic)
+    return {name: files[name] for name in L5_NAMES}
+
+
+RENDERERS = {'l3': render_all, 'proxy': render_proxy, 'l5': render_l5}
 
 
 def render_for(profile, server=DEFAULT_SERVER, port=DEFAULT_PORT, *, diagnostic=False):

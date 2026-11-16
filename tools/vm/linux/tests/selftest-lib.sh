@@ -241,8 +241,15 @@ expect "run-l3.sh takes LAB_MARKER_ADDRESS as an optional key of job.env" \
 lib=$here/../guest/lib.sh
 expect "lib.sh sends no marker unless the address is set" grep -q '^    \[ -n "\$LAB_MARKER_ADDRESS" \] || return 0$' "$lib"
 expect_not "run-l3.sh keeps no marker function of its own" grep -Eq '^lab_(mark|label|send|run_id)\(\)' "$l3"
-expect "start.sh lets only an L3 or Proxy stage read LAB_MARKER_ADDRESS" \
-    grep -q '^    case \$stage in l3 | proxy) keys+=(LAB_MARKER_ADDRESS LAB_CONTROL) ;; esac$' "$start"
+expect "start.sh lets only an L3, Proxy or L5 stage read LAB_MARKER_ADDRESS" \
+    grep -q '^    case \$stage in l3 | proxy | l5) keys+=(LAB_MARKER_ADDRESS LAB_CONTROL) ;; esac$' "$start"
+expect "run-l5.sh takes LAB_MARKER_ADDRESS and LAB_CONTROL as optional keys of job.env" \
+    grep -q 'DNS_PROBE_ADDRESS LAB_MARKER_ADDRESS LAB_CONTROL || return 1' "$here/../guest/run-l5.sh"
+expect "run-l5.sh refuses a control without a marker address" \
+    grep -q '^    \[ -z "\$LAB_CONTROL" \] || { \[ "\$LAB_CONTROL" = stop-helper \] && \[ -n "\$LAB_MARKER_ADDRESS" \]; } ||$' "$here/../guest/run-l5.sh"
+l5_start=$work/l5-start.sh
+expect "start.sh reads the lab keys of a Hyper-V L5 job.env as before: they are absent" \
+    bash -c '. "$1" && RUN_ID= LAB_MARKER_ADDRESS= && printf "RUN_ID=x\n" >"$2" && l2_read_env_file "$2" RUN_ID LAB_MARKER_ADDRESS LAB_CONTROL && [ -z "$LAB_MARKER_ADDRESS" ]' _ "$lib" "$l5_start"
 expect "run-proxy.sh takes LAB_MARKER_ADDRESS and LAB_CONTROL as optional keys of job.env" \
     grep -q 'DNS_PROBE_ADDRESS LAB_MARKER_ADDRESS LAB_CONTROL || return 1' "$here/../guest/run-proxy.sh"
 expect "run-proxy.sh refuses a control without a marker address" \
