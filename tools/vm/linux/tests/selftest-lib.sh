@@ -326,6 +326,53 @@ else
 '
 fi
 
+# --- run-proxy.sh: the lab's private address for sharing (only with LAB_MARKER_ADDRESS)
+proxy=$here/../guest/run-proxy.sh
+share_functions=$work/share-functions.sh
+awk '/^lab_share_up\(\) \{/ { on = 1 } on { print } on && /^share_address\(\) \{/ { last = 1 } last && /^\}/ { exit }' \
+    "$proxy" >"$share_functions"
+expect "the lab share functions were found in run-proxy.sh" grep -q '^share_address() {' "$share_functions"
+expect "run-proxy.sh adds only the owner-approved private address" grep -qx 'LAB_SHARE_ADDRESS=192.168.77.2/24' "$proxy"
+cat >"$work/share-harness.sh" <<'SH'
+. "$SHARE_FUNCTIONS"
+STATE=$SHARE_STATE PHYS=eth9 LAB_SHARE_ADDRESS=192.168.77.2/24
+# A stand-in for ip(8): every call is logged, the address list is a file.
+ip() {
+    printf '%s\n' "$*" >>"$SHARE_STATE/ip-calls"
+    case "$1 $2" in
+        "addr add") printf '    inet %s scope global %s\n' "$3" "$5" >>"$SHARE_STATE/addresses" ;;
+        "addr del") grep -vF " $3 " "$SHARE_STATE/addresses" >"$SHARE_STATE/a.tmp"; mv "$SHARE_STATE/a.tmp" "$SHARE_STATE/addresses" ;;
+        "-4 -o") printf '2: eth9    inet 192.0.2.2/24 brd 192.0.2.255 scope global eth9\n'; sed 's/^/2: eth9/' "$SHARE_STATE/addresses" ;;
+    esac
+}
+phys_address() { printf '192.0.2.2'; }
+"$@"
+SH
+share() { SHARE_FUNCTIONS=$share_functions SHARE_STATE=$share_state LAB_MARKER_ADDRESS=$SHARE_MARKER bash "$work/share-harness.sh" "$@"; }
+share_state=$work/share-state
+mkdir -p "$share_state"
+: >"$share_state/addresses"
+SHARE_MARKER=''
+share lab_share_up
+expect "without a lab the private address is never added" test ! -e "$share_state/ip-calls"
+expect "without a lab nothing is kept in STATE for it" test ! -e "$share_state/lab-share-address"
+expect "without a lab sharing is looked for on the physical interface's own address" test "$(share share_address)" = 192.0.2.2
+expect "without a lab there is nothing to remove" share lab_share_down
+expect "without a lab no ip command runs at all" test ! -e "$share_state/ip-calls"
+SHARE_MARKER=203.0.113.2:9100
+share lab_share_up
+expect "with a lab the private address goes on the physical interface" grep -qx 'addr add 192.168.77.2/24 dev eth9' "$share_state/ip-calls"
+expect "with a lab the interface is kept in STATE for a later finalize" grep -qx eth9 "$share_state/lab-share-address"
+expect "with a lab sharing is looked for on the private address" test "$(share share_address)" = 192.168.77.2
+expect "the private address is removed again" share lab_share_down
+expect "the removal names the same address and interface" grep -qx 'addr del 192.168.77.2/24 dev eth9' "$share_state/ip-calls"
+expect_not "nothing of it is left in STATE" test -e "$share_state/lab-share-address"
+expect "after the removal sharing is looked for on the physical interface's own address" test "$(share share_address)" = 192.0.2.2
+expect "a removal after the last scenario is a cleanup action" grep -q 'private address ${LAB_SHARE_ADDRESS%/\*} after the last scenario"$' "$proxy"
+expect "a removal by the cleanup is a cleanup action" grep -q '^        lab_share_down && note ' "$proxy"
+expect "the address goes on only after the service is installed, before the first session" \
+    bash -c 'grep -A1 "^    if passed install.service; then$" "$1" | grep -qx "        lab_share_up"' _ "$proxy"
+
 read_manifest() { bash -c '. "$1" && l2_launch_read_manifest "$2"' _ "$launch" "$1"; }
 h=$(printf '0%.0s' $(seq 1 64))
 printf '%s  guest/start.sh\n%s  job.env\n' "$h" "$h" >"$work/m-ok"
