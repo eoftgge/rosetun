@@ -162,17 +162,19 @@ class RunTests(Flow):
         self.assertEqual((False, False), (unlisted['in_group'], unlisted['judged']))
         self.assertEqual((0, []), (result['exit_code'], result['group']['unproven']))
 
-    def test_a_leak_in_a_window_outside_the_group_is_listed_and_decides_nothing_by_default(self):
+    def test_a_leak_in_a_window_outside_the_group_is_listed_and_is_a_finding(self):
         outside = 'specific_bypass_dns_lock'
         result = self.go(Machines(self, windows=windows(leak_in=outside)))
         self.assertEqual(['DETECTED' if w['label'] == outside else 'EXPECTED' if w['expected_flows'] else 'NONE'
                           for w in result['lab']['windows']], [w['verdict'] for w in result['lab']['windows']])
         self.assertEqual({'AGREE'}, set(self.agreements(result).values()) - {'NOT_APPLICABLE'})
+        self.assertEqual((1, [outside], ['leak-outside-group']), (result['exit_code'], result['group']['outside_leaks'],
+                                                                 result['group']['findings']))
+        # Before stage 7e such a leak was listed and decided nothing.
+        with patch.object(summary, 'LEAK_OUTSIDE_THE_GROUP_FAILS', False):
+            result = self.go_again(windows=windows(leak_in=outside))
         self.assertEqual((0, [outside], []), (result['exit_code'], result['group']['outside_leaks'],
                                              result['group']['findings']))
-        with patch.object(summary, 'LEAK_OUTSIDE_THE_GROUP_FAILS', True):
-            result = self.go_again(windows=windows(leak_in=outside))
-        self.assertEqual((1, ['leak-outside-group']), (result['exit_code'], result['group']['findings']))
 
     def test_a_leak_in_a_window_beyond_the_count_of_a_label_of_the_group_is_a_finding(self):
         spec = windows()
@@ -417,7 +419,7 @@ class GroupOf7c2Tests(unittest.TestCase):
         self.assertTrue(set(OUTSIDE) <= set(ids))
         for label, _ in filter(None, summary.WINDOW_OF.values()):
             self.assertIn(label, summary.WINDOWS_PER_LABEL)
-        self.assertFalse(summary.LEAK_OUTSIDE_THE_GROUP_FAILS)
+        self.assertTrue(summary.LEAK_OUTSIDE_THE_GROUP_FAILS)
 
     def test_the_windows_of_a_run_with_sshd_make_the_whole_group_agree(self):
         # As in the 7b2b and 7c1 runs: the windows where a program, UDP 53 or the own network goes direct by design
@@ -744,6 +746,80 @@ class LocalNetworkTests(unittest.TestCase):
         self.assertEqual('192.0.2.1', host)
 
 
+class EveryWindowTests(unittest.TestCase):
+    """Stage 7e: every window of a run is judged, inside the group or not."""
+
+    def decide(self, labels=WINDOWS_7E, direct=None):
+        result = synthetic(labels)
+        for index, shown in (direct or {}).items():
+            result['lab']['windows'][index].update(
+                direct=shown, leak='DETECTED' if shown['flows'] or shown['other_frames'] else 'NONE')
+        summary.decide(result, False)
+        return result
+
+    def test_a_run_with_every_window_as_expected_is_zero_and_one_window_stays_outside(self):
+        result = self.decide()
+        verdicts = [w['verdict'] for w in result['lab']['windows']]
+        self.assertEqual((23, 9, {'NONE', 'EXPECTED'}), (len(verdicts), verdicts.count('EXPECTED'), set(verdicts)))
+        self.assertEqual([dict(label='specific_bypass_dns_lock', number=0, verdict='EXPECTED')],
+                         result['group']['outside_windows'])
+        self.assertEqual((0, [], [], []), (result['exit_code'], result['group']['outside_leaks'],
+                                           result['group']['outside_mismatches'], result['group']['findings']))
+
+    def test_one_more_udp_flow_in_lan_on_is_one(self):
+        result = self.decide(direct={WINDOWS_7E.index('lan_on'): direct_of('neighbor', 'behind')})
+        self.assertEqual((1, ['leak-in-group-window', 'pass-contradicted-by-window']),
+                         (result['exit_code'], sorted(result['group']['findings'])))
+
+    def test_a_leak_beyond_the_expectation_of_the_specific_route_under_the_dns_lock_is_one(self):
+        index = WINDOWS_7E.index('specific_bypass_dns_lock')
+        for shown in (direct_of('target', 'target'), direct_of('target', 'resolver'), direct_of('target', other_frames=1)):
+            with self.subTest(shown=shown):
+                result = self.decide(direct={index: shown})
+                self.assertEqual((1, ['leak-outside-group'], ['specific_bypass_dns_lock']),
+                                 (result['exit_code'], result['group']['findings'], result['group']['outside_leaks']))
+
+    def test_a_mismatch_there_is_a_characteristic_shown_in_the_summary_and_not_a_finding(self):
+        result = self.decide(direct={WINDOWS_7E.index('specific_bypass_dns_lock'): direct_of()})
+        self.assertEqual((0, [], ['specific_bypass_dns_lock']), (result['exit_code'], result['group']['findings'],
+                                                                 result['group']['outside_mismatches']))
+        self.assertEqual('MISMATCH', result['group']['outside_windows'][0]['verdict'])
+        self.assertEqual('AGREE', next(r for r in result['crosscheck']
+                                       if r['id'] == 'route.specific-bypass')['agreement'])
+
+    def test_a_leak_in_a_window_of_a_label_no_table_names_is_one(self):
+        labels = list(WINDOWS_7E) + ['unlisted']
+        result = self.decide(labels, direct={len(labels) - 1: direct_of('other')})
+        self.assertEqual((1, ['leak-outside-group'], ['unlisted']),
+                         (result['exit_code'], result['group']['findings'], result['group']['outside_leaks']))
+        clean = self.decide(labels)
+        self.assertEqual((0, 'NONE'), (clean['exit_code'], clean['group']['outside_windows'][-1]['verdict']))
+
+    def test_a_window_of_a_label_short_of_its_count_is_listed_and_leaves_the_run_unproven(self):
+        # Which of the two sessions of `capabilities` is missing is unknown, so the direct request the second one
+        # makes by design cannot be told from a leak in the first.
+        labels = list(WINDOWS_7E)
+        del labels[6]
+        result = self.decide(labels, direct={5: direct_of('target')})
+        self.assertEqual((2, [], ['capabilities']), (result['exit_code'], result['group']['findings'],
+                                                    result['group']['outside_leaks']))
+        self.assertIn('window-count:capabilities:expected=2,seen=1', result['group']['unproven'])
+
+    def test_every_function_of_the_script_that_opens_a_session_has_a_label_in_a_table(self):
+        lines = SCRIPT.read_text(encoding='utf-8').splitlines()
+        opened = set()
+        for number, line in enumerate(lines):
+            if 'connect_with request-' not in line:
+                continue
+            depth = len(line) - len(line.lstrip())
+            for previous in reversed(lines[:number]):
+                found = re.fullmatch(r'(\s*)(\w+)\(\) \{', previous)
+                if found and len(found.group(1)) < depth:
+                    opened.add(found.group(2))
+                    break
+        self.assertEqual(set(summary.GROUP_LABELS) | set(summary.WINDOWS_AT_MOST), opened)
+
+
 class Ipv6NeighborTests(Flow):
     """Stage 7e: `ipv6.neighbor` with the lab's link-local address as the IPv6 router, judged in its own window."""
 
@@ -839,15 +915,19 @@ class SpecificRouteTests(unittest.TestCase):
         self.assertEqual(1, result['exit_code'])
         self.assertIn('leak-in-group-window', result['group']['findings'])
 
-    def test_the_dns_lock_session_only_adds_to_the_note(self):
-        # Fewer flows (the route no longer bypasses the tunnel) or more: shown, never the result of the scenario.
-        for shown, verdict, outside in ((direct_of(), 'MISMATCH', []),
-                                        (direct_of('target', 'target'), 'DETECTED', ['specific_bypass_dns_lock'])):
+    def test_the_dns_lock_session_only_adds_to_the_note_but_a_leak_there_is_a_finding(self):
+        # Fewer flows (the route no longer bypasses the tunnel): shown, never the result of the scenario. More than
+        # the one request: a leak in a window outside the group, which since stage 7e is a finding of its own.
+        for shown, verdict, code, outside, mismatches in (
+                (direct_of(), 'MISMATCH', 0, [], ['specific_bypass_dns_lock']),
+                (direct_of('target', 'target'), 'DETECTED', 1, ['specific_bypass_dns_lock'], [])):
             with self.subTest(verdict=verdict):
                 result, table = self.decide(direct={4: shown})
                 self.assertEqual(verdict, result['lab']['windows'][4]['verdict'])
-                self.assertEqual(('AGREE', 0, outside), (table['route.specific-bypass']['agreement'],
-                                                         result['exit_code'], result['group']['outside_leaks']))
+                self.assertEqual(('AGREE', code, outside, mismatches),
+                                 (table['route.specific-bypass']['agreement'], result['exit_code'],
+                                  result['group']['outside_leaks'], result['group']['outside_mismatches']))
+                self.assertEqual(['leak-outside-group'] if code else [], result['group']['findings'])
 
     def test_a_second_dns_lock_session_of_the_specific_route_is_beyond_its_count(self):
         labels = list(WINDOWS_7E)

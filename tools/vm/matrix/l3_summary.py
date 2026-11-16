@@ -150,11 +150,15 @@ WINDOW_ALLOWANCES = {'neighbor': ('ipv6-link-local-echo',)}
 # helper's DNS check at connect (`check_cancellable` in `state/dns.rs`) goes through the DoH server that
 # `dns_section` of the sing-box render configures, so no scenario connects without it.
 REQUIRED_FIXTURES = ('node', 'https', 'dns', 'doh')
-# Whether a leak seen in a window outside the group changes the exit code. Since stage 7e the one window outside
-# the group a run expects is the DNS-lock session of `route.specific-bypass`, which only adds to that scenario's
-# note: a leak there is listed (`group.outside_leaks`, and DETECTED in `lab.windows`) and does not decide the
-# code. Set this to make any leak in any window exit 1.
-LEAK_OUTSIDE_THE_GROUP_FAILS = False
+# Whether a leak seen in a window outside the group changes the exit code: since stage 7e it does, so every window
+# of a run is judged. A window is outside when no scenario of the group is judged in it and it is not beyond the
+# count of a label of the group. A run expects one: the DNS-lock session of `route.specific-bypass`, which only adds
+# to that scenario's note and is held against its expectation; a window of a label no table names (a function of
+# the script that opened a session nobody expected) is the other kind. A leak in either, DETECTED after the
+# expectation, is a finding (`leak-outside-group`, the window in `group.outside_leaks`); EXPECTED is no leak, and a
+# MISMATCH there characterises the weakness rather than a protection, so it is listed (`group.outside_mismatches`)
+# and changes no code.
+LEAK_OUTSIDE_THE_GROUP_FAILS = True
 # The positive control of stage 7c1: the script stops the service inside the window of the kill-switch
 # session and sends one direct request, so a run is a success only if the observer saw exactly that.
 CONTROLS = ('stop-helper',)
@@ -304,8 +308,8 @@ def decide(result, interrupted):
     0: the whole group passed, every cross-check row agrees or does not apply, the observer is clean,
     the fixtures answered, the evidence disk is verified and both machines completed.
     1: the run found something: a scenario of the group failed, a pass is contradicted by a window
-    (DISAGREE), or a leak in a judged window or in a window of a label of the group beyond its count (a
-    leak in any other window counts only if LEAK_OUTSIDE_THE_GROUP_FAILS). A seen leak and a failed check stand whatever else went wrong, so 1
+    (DISAGREE), or a leak in a judged window or in a window of a label of the group beyond its count, or,
+    with LEAK_OUTSIDE_THE_GROUP_FAILS (since stage 7e), a leak in any other window. A seen leak and a failed check stand whatever else went wrong, so 1
     comes before 2.
     2: nothing was found but the run cannot vouch for itself: a controller error, a machine that did
     not stop, no report, an unverified evidence disk, a fixture that did not answer, an unclean
@@ -350,9 +354,14 @@ def decide(result, interrupted):
         findings.append('pass-contradicted-by-window')
     if any(window['verdict'] == 'DETECTED' and (window['judged'] or window['beyond']) for window in windows):
         findings.append('leak-in-group-window')
-    outside = [window['label'] for window in windows
-               if window['verdict'] == 'DETECTED' and not window['judged'] and not window['beyond']]
-    if outside and LEAK_OUTSIDE_THE_GROUP_FAILS:
+    unjudged = [window for window in windows if not window['judged'] and not window['beyond']]
+    outside = [window['label'] for window in unjudged if window['verdict'] == 'DETECTED']
+    # A label of the group with fewer windows than expected cannot be numbered, so none of its windows is judged
+    # and what one of them should show is unknown (`capabilities` 0 shows nothing, 1 a direct request): such a
+    # window is listed, and the run cannot vouch for itself (`window-count`), but it is no finding of its own.
+    short = {row['label'] for row in lab['window_counts'] if row['expected'] is not None and not row['as_expected']
+             and row['seen'] < row['expected']}
+    if any(label not in short for label in outside) and LEAK_OUTSIDE_THE_GROUP_FAILS:
         findings.append('leak-outside-group')
     if result['errors']:
         unproven.append('controller-error')
@@ -379,8 +388,12 @@ def decide(result, interrupted):
         unproven.append('diagnostic-run')
     result['group'] = dict(scenarios=list(GROUP), results=results, passed=all(o == 'PASS' for o in results.values()),
                            failed=failed, not_run=not_run, labels=list(GROUP_LABELS),
-                           missing_labels=lab['missing_labels'], outside_leaks=outside, findings=findings,
-                           unproven=unproven)
+                           missing_labels=lab['missing_labels'], outside_leaks=outside,
+                           outside_windows=[dict(label=window['label'], number=window['number'],
+                                                 verdict=window['verdict']) for window in unjudged],
+                           outside_mismatches=[window['label'] for window in unjudged
+                                               if window['verdict'] == 'MISMATCH'],
+                           findings=findings, unproven=unproven)
     if interrupted:
         result['exit_code'], result['outcome'] = 130, 'interrupted'
     elif findings:
