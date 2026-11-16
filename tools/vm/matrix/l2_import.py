@@ -65,7 +65,10 @@ class L2Import:
                 env['LAB_MARKER_ADDRESS'] = l3['lab_marker_address']
                 if l3.get('lab_control') is not None:
                     env['LAB_CONTROL'] = l3['lab_control']
-            elif l3.get('lab_control') is not None:
+                # The public half of the poller's key (L4 only); the private half goes to the lab machine alone.
+                if l3.get('lab_poller_key') is not None:
+                    env['LAB_POLLER_KEY'] = l3['lab_poller_key']
+            elif l3.get('lab_control') is not None or l3.get('lab_poller_key') is not None:
                 raise JobError('l3-job-env-lab-control')
             self.l3 = dict(l3)
         raw_env = ''.join(k + '=' + v + '\n' for k, v in env.items()).encode('ascii')

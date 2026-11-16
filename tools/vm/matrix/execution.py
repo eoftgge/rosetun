@@ -10,6 +10,7 @@ import re
 import sys
 import tomllib
 
+from .config import job_span, wait_seconds
 from .images import ImageDescriptor, local_file
 from .qemu import QemuConfig
 from .resources import _identifier, _state_path, inspect_runs
@@ -18,13 +19,13 @@ SCHEMA = 'rosetun.matrix.execution.v1'
 SCHEMA_V2 = 'rosetun.matrix.execution.v2'
 # Version 3 is version 2 for the L3, Proxy or L5 suite plus the block that makes it a run inside the lab.
 SCHEMA_V3 = 'rosetun.matrix.execution.v3'
-SUITES = ('linux-l2', 'linux-l3', 'linux-proxy', 'linux-l5', 'linux-reboot-smoke')
+SUITES = ('linux-l2', 'linux-l3', 'linux-proxy', 'linux-l5', 'linux-l4', 'linux-reboot-smoke')
 # The suites of the real service: they carry the `[l3]` block (the node, the probes, the engine's hash) and may
 # run inside the lab. Proxy and L5 take the same block as L3, under the same name; L5 without the engine's hash,
 # since its packages bring their engines (provenance.json vouches for the packages).
-SERVICE_SUITES = ('linux-l3', 'linux-proxy', 'linux-l5')
+SERVICE_SUITES = ('linux-l3', 'linux-proxy', 'linux-l5', 'linux-l4')
 # The stage profile of each suite's package.
-PROFILE_OF = {'linux-l2': 'l2', 'linux-l3': 'l3', 'linux-proxy': 'proxy', 'linux-l5': 'l5',
+PROFILE_OF = {'linux-l2': 'l2', 'linux-l3': 'l3', 'linux-proxy': 'proxy', 'linux-l5': 'l5', 'linux-l4': 'l4',
               'linux-reboot-smoke': 'reboot-smoke'}
 # The suites whose package carries no engine of its own and whose `[l3]` block names no engine hash.
 WITHOUT_ENGINE = ('linux-l5',)
@@ -70,10 +71,10 @@ def lab_of(config):
     return config.get('lab') if config.get('schema') == SCHEMA_V3 else None
 
 
-def validate_lab(block, l3, job_timeout):
+def validate_lab(block, l3, job_timeout, span=None):
     """The lab machine's image, the pinned fixtures of stage 7b1 and the certificates of stage 7b2a."""
     from .lab import validate_tunnel
-    from .lab_protocol import GATEWAYS, JOB_TIMEOUT_SECONDS, RESOLVER, TARGETS
+    from .lab_protocol import CAPTURE_SLACK, DURATION_MAX, GATEWAYS, JOB_TIMEOUT_SECONDS, RESOLVER, TARGETS
     exact(block, ('image', 'tunnel', 'https_cert_sha256', 'doh_cert_sha256'))
     exact(block['image'], [f.name for f in fields(ImageDescriptor)])
     validate_tunnel(block['tunnel'])
@@ -89,6 +90,10 @@ def validate_lab(block, l3, job_timeout):
         raise ValueError('the L3 DNS probe address must be the lab resolver')
     if job_timeout > JOB_TIMEOUT_SECONDS:
         raise ValueError('the lab capture covers a job of at most ' + str(JOB_TIMEOUT_SECONDS) + ' seconds')
+    # The capture also covers the boots and the import around the job (CAPTURE_SLACK of the lab run).
+    if (span or job_timeout) + CAPTURE_SLACK > DURATION_MAX:
+        raise ValueError('the lab capture covers a job of at most ' + str(DURATION_MAX - CAPTURE_SLACK) +
+                         ' seconds, every phase and every reboot of it counted')
 
 
 def validate(config):
@@ -127,10 +132,14 @@ def validate(config):
             raise ValueError('invalid execution deadline')
     if config['deadlines']['import'] > 900 or config['deadlines']['boot'] > 300:
         raise ValueError('deadline exceeds supported stage limit')
-    if config['deadlines']['execution'] != config['timeouts']['job'] + 180:
-        raise ValueError('execution deadline must equal job timeout plus 180 seconds')
+    # A job that reboots the guest has the job timeout for each of its phases and room for each reboot.
+    span = job_span(suite_of(config), config['timeouts']['job'])
+    if config['deadlines']['execution'] != span + 180:
+        raise ValueError('execution deadline must equal job timeout plus 180 seconds' if span == config['timeouts']['job']
+                         else 'execution deadline must equal the span of the job (every phase and every reboot) '
+                              'plus 180 seconds')
     if config['schema'] == SCHEMA_V3:
-        validate_lab(config['lab'], config['l3'], config['timeouts']['job'])
+        validate_lab(config['lab'], config['l3'], config['timeouts']['job'], span)
     _identifier(config['stand_id'])
     for name in ('state_directory', 'content_directory', 'source_checkout'):
         _state_path(config[name])
@@ -204,6 +213,14 @@ def preflight(config, *, dry_run=False):
     if l3 and profile == 'l5':
         actions[2] = 'write the three L5 lab requests into the run directory'
         limitations[-1] = 'the two packages are hashed and their magic read, never installed, on the controller'
+    if l3 and profile == 'l4':
+        actions[2] = 'write the three L4 requests into the run directory'
+        actions[9] = 'submit once (the job reboots the guest twice)'
+        actions[10] = ('wait for the job by reading its status, at most ' + str(wait_seconds(suite, config['timeouts']['job']))
+                       + ' seconds (three phases, two reboots); each planned guest reset is taken from QMP, then a new '
+                       'agent session and the new boot ID')
+        limitations += ['attach carries the run on after a reboot as well as before it; any other guest reset is an '
+                        'error', 'the guest has no network: the scenarios after preflight.baseline are expected to ERROR']
     if lab:
         actions = ['lease', 'create the test run and the lab run with their identities',
                    'overlays of both machines', 'evidence disk of the lab machine (64 MiB, zeroed)',

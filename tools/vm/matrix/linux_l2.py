@@ -13,7 +13,7 @@ from typing import NamedTuple
 
 from . import l3_requests, run_state
 from .catalog import digest, parse_catalog
-from .config import REBOOT_SECONDS, make_plan, validate_plan
+from .config import REBOOT_SECONDS, job_span, make_plan, validate_plan
 from .evidence import write_file
 from .jobs import JobError, LAUNCHER, SmokeJob, _uuid
 from .lifecycle import LifecycleError, _guest_serialized
@@ -31,6 +31,10 @@ ENV_L3 = ENV_L2 + ('HOST_ADDRESS', 'NODE_PORT', 'PROBE_ADDRESS', 'DNS_PROBE_ADDR
 # Only a run inside the lab names the observer's marker service; it comes last in job.env.
 LAB_MARKER_KEY = 'LAB_MARKER_ADDRESS'
 LAB_CONTROL_KEY = 'LAB_CONTROL'
+# Only a Linux L4 run inside the lab, after the two above: the public half of the one-time key the lab's SSH poller
+# uses, as the base64 blob of an ssh-ed25519 public key (the part of an authorized_keys line after its type).
+LAB_POLLER_KEY = 'LAB_POLLER_KEY'
+POLLER_KEY_HEAD = b'\x00\x00\x00\x0bssh-ed25519\x00\x00\x00\x20'
 DOCUMENTATION_V4 = tuple(ipaddress.ip_network(n) for n in ('192.0.2.0/24', '198.51.100.0/24', '203.0.113.0/24'))
 L3_DEFAULTS = dict(host_address='192.0.2.1', node_port=8388, probe_address='203.0.113.2',
                    dns_probe_address='203.0.113.53')
@@ -106,6 +110,16 @@ PROFILES = {
                   ('guest/launch.sh', 'guest/start.sh', 'guest/lib.sh', 'guest/run-l5.sh', 'scenarios-l5.tsv'),
                   (), ('rosetun-old.deb', 'rosetun-new.deb'), (), l3_requests.L5_NAMES, ENV_L3,
                   ('rosetun-old.deb', 'rosetun-new.deb')),
+    # The set is L4_START_REQUIRED of guest/start.sh: the L3 programs and units with the Lockdown unit, and three of
+    # the L3 requests. The job reboots the guest twice (config.PLANNED_REBOOTS).
+    'l4': Profile('l4', 'l4',
+                  ('guest/launch.sh', 'guest/start.sh', 'guest/lib.sh', 'guest/run-l4.sh', 'scenarios-l4.tsv'),
+                  ('rosetun-helper-privileged', 'rosetun', 'sing-box'),
+                  ('rosetun-helper-privileged', 'rosetun'),
+                  (('rosetun-helper.service', 'packaging/linux/rosetun-helper.service'),
+                   ('rosetun-engine.rules', 'packaging/linux/rosetun-engine.rules'),
+                   ('rosetun-lockdown.service', 'packaging/linux/rosetun-lockdown.service')),
+                  l3_requests.L4_NAMES, ENV_L3),
     # The smoke job of the planned guest reboot: the guest scripts and the record of the build, no program and no
     # service of Rosetun. Its suite plans one reset (config.PLANNED_REBOOTS).
     'reboot-smoke': Profile('reboot-smoke', 'reboot-smoke',
@@ -114,7 +128,7 @@ PROFILES = {
                             (), (), (), (), ENV_L2),
 }
 # The stages that install the real service, take the host node's values and may run inside the lab.
-SERVICE_PROFILES = ('l3', 'proxy', 'l5')
+SERVICE_PROFILES = ('l3', 'proxy', 'l5', 'l4')
 
 
 def profile_of(name):
@@ -390,6 +404,14 @@ def validate_package(directory, *, checkout, immutable=False, check_source=True,
     return result
 
 
+def poller_key_shape(value):
+    """Whether a value is the blob of an ssh-ed25519 public key: its type, then 32 bytes, and nothing else."""
+    if not re.fullmatch('[A-Za-z0-9+/]{68}', value):
+        return False
+    blob = base64.b64decode(value, validate=True)
+    return len(blob) == 51 and blob.startswith(POLLER_KEY_HEAD)
+
+
 def validate_env(raw, profile='l2'):
     profile = profile_of(profile)
     env = {}
@@ -399,6 +421,8 @@ def validate_env(raw, profile='l2'):
             raise JobError('l2-invalid-job-env')
         env[match[1]] = match[2]
     optional = {LAB_MARKER_KEY, LAB_CONTROL_KEY} if profile.name in SERVICE_PROFILES else set()
+    if profile.name == 'l4':
+        optional.add(LAB_POLLER_KEY)
     if not set(profile.env) <= set(env) <= set(profile.env) | optional:
         raise JobError('l2-job-env-fields')
     if not re.fullmatch(r'[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}', env['RUN_ID']):
@@ -441,6 +465,8 @@ def validate_env(raw, profile='l2'):
                 raise JobError('l3-job-env-lab-marker')
         if LAB_CONTROL_KEY in env and (LAB_MARKER_KEY not in env or env[LAB_CONTROL_KEY] != 'stop-helper'):
             raise JobError('l3-job-env-lab-control')
+    if LAB_POLLER_KEY in env and (LAB_MARKER_KEY not in env or not poller_key_shape(env[LAB_POLLER_KEY])):
+        raise JobError('l4-job-env-poller-key')
     return env
 
 
@@ -569,10 +595,12 @@ class LinuxL2Job:
         self.grace = 0
         self.handles = {}
         self.assessment = None
-        self.deadline = time.monotonic() + int(env['JOB_TIMEOUT_SECONDS']) + 180
+        # Each phase of a job with planned reboots has the job timeout, and each reboot its room.
+        span = job_span(identity['job_id'], int(env['JOB_TIMEOUT_SECONDS']))
+        self.deadline = time.monotonic() + span + 180
         state = run_state.of(vm.run)
         if state is not None:
-            self._record(lambda: state.deadline('job_deadline', int(env['JOB_TIMEOUT_SECONDS']) + 180))
+            self._record(lambda: state.deadline('job_deadline', span + 180))
         vm._linux_l2_job = self
         self._save('plan.json', self._plan)
         self._save('package.json', json.dumps(dict(package, identity=identity), sort_keys=True).encode())

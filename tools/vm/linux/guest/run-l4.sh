@@ -67,6 +67,14 @@ NETWORK_MANAGERS=(NetworkManager.service systemd-networkd.service networking.ser
 
 RUN_ID='' STAND_ID='' EXPECTED_BOOT_ID='' USER_A='' USER_B='' BIOS_GUID=''
 HOST_ADDRESS='' NODE_PORT='' PROBE_ADDRESS='' DNS_PROBE_ADDRESS=''
+# ADDRESS:PORT of the lab observer's marker service. Empty (the default, and always on Hyper-V) means no markers:
+# nothing below sends a datagram or writes a file for them.
+LAB_MARKER_ADDRESS=''
+# A control of the lab (only `stop-helper`, only with a marker address; empty on Hyper-V).
+LAB_CONTROL=''
+# The public half of the lab poller's one-time SSH key, as the base64 blob of an ssh-ed25519 key. Empty on Hyper-V,
+# where the host polls with a key of its own.
+LAB_POLLER_KEY=''
 SCENARIO_TIMEOUT_SECONDS=30 UNIT_TIMEOUT_SECONDS=180 JOB_TIMEOUT_SECONDS=3000
 EXPECTED_ARCH=x86_64
 PHYS=''
@@ -1006,13 +1014,19 @@ finalize() {
 
 load_job() {
     l2_read_env_file "$RUN/job.env" RUN_ID STAND_ID EXPECTED_BOOT_ID USER_A USER_B BIOS_GUID \
-        SCENARIO_TIMEOUT_SECONDS UNIT_TIMEOUT_SECONDS JOB_TIMEOUT_SECONDS HOST_ADDRESS NODE_PORT PROBE_ADDRESS DNS_PROBE_ADDRESS || return 1
+        SCENARIO_TIMEOUT_SECONDS UNIT_TIMEOUT_SECONDS JOB_TIMEOUT_SECONDS HOST_ADDRESS NODE_PORT PROBE_ADDRESS DNS_PROBE_ADDRESS LAB_MARKER_ADDRESS LAB_CONTROL LAB_POLLER_KEY || return 1
     l2_valid_run_id "$RUN_ID" || { echo "invalid run id" >&2; return 1; }
     [ "$(basename -- "$RUN")" = "$RUN_ID" ] || { echo "run directory does not match the run id" >&2; return 1; }
     [[ $HOST_ADDRESS =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || { echo "invalid host address" >&2; return 1; }
     [[ $PROBE_ADDRESS =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || { echo "invalid probe address" >&2; return 1; }
     [[ $DNS_PROBE_ADDRESS =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || { echo "invalid DNS probe address" >&2; return 1; }
     [[ $JOB_TIMEOUT_SECONDS =~ ^[0-9]{2,5}$ ]] || { echo "invalid job time limit" >&2; return 1; }
+    [ -z "$LAB_MARKER_ADDRESS" ] || [[ $LAB_MARKER_ADDRESS =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}:[0-9]{1,5}$ ]] ||
+        { echo "invalid lab marker address" >&2; return 1; }
+    [ -z "$LAB_CONTROL" ] || { [ "$LAB_CONTROL" = stop-helper ] && [ -n "$LAB_MARKER_ADDRESS" ]; } ||
+        { echo "invalid lab control" >&2; return 1; }
+    [ -z "$LAB_POLLER_KEY" ] || { [[ $LAB_POLLER_KEY =~ ^AAAAC3NzaC1lZDI1NTE5AAAAI[A-Za-z0-9+/]{43}$ ]] && [ -n "$LAB_MARKER_ADDRESS" ]; } ||
+        { echo "invalid lab poller key" >&2; return 1; }
 }
 
 load_job || exit 65

@@ -19,7 +19,8 @@ import uuid
 from . import lab as labmod
 from .evidence import ReadbackError, write_file
 from .execution import lab_of, preflight
-from .lab_protocol import (LOG_LIMIT, PORTS, TARGETS, EVIDENCE_PCAP_LIMIT, CLIENTS, EGRESS, HELPER_REASON,
+from .config import job_span, wait_seconds
+from .lab_protocol import (CAPTURE_SLACK, LOG_LIMIT, PORTS, TARGETS, EVIDENCE_PCAP_LIMIT, CLIENTS, EGRESS, HELPER_REASON,
                            ROUTE_FLOW_LIMIT, ROUTE_FLOWS_LIMIT, classify_windows, https_exchanges, marker_run_id,
                            probes)
 from .orchestrator import _RETAINED_LEASES, begin_state, failure, finish_state, mark_step, save
@@ -38,8 +39,6 @@ LAB_FILES = (('targets.json', LOG_LIMIT), ('health.json', LOG_LIMIT), ('https.js
              ('node.log', LOG_LIMIT), ('dns.json', LOG_LIMIT))
 # What only a diagnostic run reads besides: the flows behind the node, which are never needed to judge anything.
 ROUTE_FILE = ('route-flows.json', ROUTE_FLOWS_LIMIT)
-# The capture outlives the job by this much: it also covers the boot and the import of the test machine.
-CAPTURE_SLACK = 300
 
 
 class Adapters:
@@ -59,7 +58,8 @@ def marker_address():
 
 
 def capture_seconds(config):
-    return config['timeouts']['job'] + CAPTURE_SLACK
+    """The span of the job (every phase and every planned reboot) and the room for the boots around it."""
+    return job_span(config.get('suite'), config['timeouts']['job']) + CAPTURE_SLACK
 
 
 def saved_report(run, job, profile='l3'):
@@ -409,7 +409,7 @@ def run_linux_lab(config, *, suite, diagnostic=False, control=None, adapters=Non
             if vm.qga.valid or job.submission != 'unknown':
                 raise
             step('submit-recovery', recovery)
-        step('wait', lambda: job.wait(config['timeouts']['job'] + 125, sleep=sleep, clock=clock))
+        step('wait', lambda: job.wait(wait_seconds(suite, config['timeouts']['job']), sleep=sleep, clock=clock))
         try:
             step('collect', job.collect)
         except Exception:

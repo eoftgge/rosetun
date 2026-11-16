@@ -8,6 +8,8 @@ from .catalog import LINUX_ROOT, SUITES, digest, read_catalog, validate_snapshot
 PLAN_SCHEMA = "rosetun.matrix.plan.v1"
 # The guest resets a suite plans: any other reset of its run is an error.
 PLANNED_REBOOTS = {"linux-l4": 2, "linux-reboot-smoke": 1}
+# The suites whose job runs in phases of the job timeout each, one more than its reboots (see `job_span`).
+PHASES = {"linux-l4": 3}
 
 
 # How long the controller gives the new boot of a planned guest reset before its agent must answer.
@@ -16,6 +18,21 @@ REBOOT_SECONDS = 240
 
 def planned_reboots_of(suite):
     return PLANNED_REBOOTS.get(suite, 0)
+
+
+def job_span(suite, job_timeout):
+    """The longest a job of the suite may take: each phase gets the job timeout, each planned reboot its room.
+
+    A job of one phase has the job timeout alone. Only the suites of `PHASES` run in several, each at the job timeout
+    (the guest's systemd limits every phase by it); the reboot smoke job reboots once inside its one phase.
+    """
+    phases = PHASES.get(suite, 1)
+    return job_timeout * phases + REBOOT_SECONDS * (phases - 1)
+
+
+def wait_seconds(suite, job_timeout):
+    """How long the controller waits for the job's status to be final: its span and 125 seconds for the end."""
+    return job_span(suite, job_timeout) + 125
 
 
 def validate_profile(profile):

@@ -141,7 +141,7 @@ class ProfileTableTests(unittest.TestCase):
         self.assertEqual((), L5.packaged)
         self.assertEqual(('request-kill-switch.json', 'request-lan.json', 'request-dns-lock.json'), L5.requests)
         self.assertEqual(('l5', 'l5', L3.env), (L5.name, L5.stage, L5.env))
-        self.assertEqual(('l3', 'proxy', 'l5'), l2.SERVICE_PROFILES)
+        self.assertEqual(('l3', 'proxy', 'l5', 'l4'), l2.SERVICE_PROFILES)
         self.assertEqual(l2.evidence_files('l3'), l2.evidence_files('l5'))
         self.assertEqual(tuple(helper.PROFILES['l5']['packages']), L5.packages)
         self.assertIn('l5', helper.SERVICE)
@@ -170,7 +170,7 @@ class ProfileTableTests(unittest.TestCase):
         self.assertEqual('l3', L3.stage)
         self.assertEqual(13, len(L3.env))
         with self.assertRaises(JobError):
-            l2.profile_of('l4')
+            l2.profile_of('l6')
 
 
 class L2BytesTests(unittest.TestCase):

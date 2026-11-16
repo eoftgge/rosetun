@@ -55,7 +55,13 @@ RESPONSE_TIMEOUT = 5
 MARKER_TIMEOUT = 5
 # The longest legacy L3 job (run-l3.sh) plus the time to finish and read the evidence.
 JOB_TIMEOUT_SECONDS = 1800
-DURATION_MAX = JOB_TIMEOUT_SECONDS + 300
+# The capture outlives the job by this much: it also covers the boot and the import of the test machine.
+CAPTURE_SLACK = 300
+# The longest capture: the job's span (`config.job_span`: every phase at its timeout and every planned reboot at
+# `REBOOT_SECONDS`) plus CAPTURE_SLACK. Linux L4 has three phases and two reboots, so a phase of 600 seconds asks for
+# 3 * 600 + 2 * 240 + 300 = 2580, and 640 seconds a phase is the most that fits. A one-phase job is held to
+# JOB_TIMEOUT_SECONDS + CAPTURE_SLACK (2100) as before.
+DURATION_MAX = 2700
 # Stage 7b2a: the capture of a long run lives on its own disk, behind a fixed header.
 EVIDENCE_SERIAL = 'rosetun-lab-evidence'
 EVIDENCE_SIZE = 64 * 1024 * 1024

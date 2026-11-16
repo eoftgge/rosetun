@@ -266,8 +266,16 @@ expect "run-l3.sh takes LAB_MARKER_ADDRESS as an optional key of job.env" \
 lib=$here/../guest/lib.sh
 expect "lib.sh sends no marker unless the address is set" grep -q '^    \[ -n "\$LAB_MARKER_ADDRESS" \] || return 0$' "$lib"
 expect_not "run-l3.sh keeps no marker function of its own" grep -Eq '^lab_(mark|label|send|run_id)\(\)' "$l3"
-expect "start.sh lets only an L3, Proxy or L5 stage read LAB_MARKER_ADDRESS" \
-    grep -q '^    case \$stage in l3 | proxy | l5) keys+=(LAB_MARKER_ADDRESS LAB_CONTROL) ;; esac$' "$start"
+expect "start.sh lets only an L3, Proxy, L5 or L4 stage read LAB_MARKER_ADDRESS" \
+    grep -q '^    case \$stage in l3 | proxy | l5 | l4) keys+=(LAB_MARKER_ADDRESS LAB_CONTROL) ;; esac$' "$start"
+expect "start.sh lets the L4 stage alone read LAB_POLLER_KEY" \
+    grep -q '^    \[ "\$stage" != l4 \] || keys+=(LAB_POLLER_KEY)$' "$start"
+expect "run-l4.sh takes the lab keys of job.env, the poller's key among them, as optional keys" \
+    grep -q 'DNS_PROBE_ADDRESS LAB_MARKER_ADDRESS LAB_CONTROL LAB_POLLER_KEY || return 1' "$here/../guest/run-l4.sh"
+expect "run-l4.sh refuses a control without a marker address" \
+    grep -q '^    \[ -z "\$LAB_CONTROL" \] || { \[ "\$LAB_CONTROL" = stop-helper \] && \[ -n "\$LAB_MARKER_ADDRESS" \]; } ||$' "$here/../guest/run-l4.sh"
+expect "run-l4.sh refuses a poller key that is not an ed25519 blob or has no marker address" \
+    grep -q 'AAAAC3NzaC1lZDI1NTE5AAAAI\[A-Za-z0-9+/\]{43}\$ \]\] && \[ -n "\$LAB_MARKER_ADDRESS" \]' "$here/../guest/run-l4.sh"
 expect "run-l5.sh takes LAB_MARKER_ADDRESS and LAB_CONTROL as optional keys of job.env" \
     grep -q 'DNS_PROBE_ADDRESS LAB_MARKER_ADDRESS LAB_CONTROL || return 1' "$here/../guest/run-l5.sh"
 expect "run-l5.sh refuses a control without a marker address" \

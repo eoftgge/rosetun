@@ -223,11 +223,11 @@ class RequestTests(Base):
 
     def test_the_duration_is_a_whole_number_of_seconds_from_a_minute_to_the_job_and_five_minutes(self):
         plain = {k: v for k, v in self.request.items() if k != 'tunnel'}
-        self.assertEqual((60, 2100), (wire.DURATION, wire.DURATION_MAX))
-        for good in (60, 61, 1800, 2100):
+        self.assertEqual((60, 2700), (wire.DURATION, wire.DURATION_MAX))
+        for good in (60, 61, 1800, 2700):
             with self.subTest(good=good):
                 self.assertEqual('enp7s0', self.identity(dict(plain, duration_seconds=good)))
-        for bad in (59, 0, -60, 2101, True, 60.0, '60', None):
+        for bad in (59, 0, -60, 2701, True, 60.0, '60', None):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
                 self.identity(dict(plain, duration_seconds=bad))
 
@@ -538,7 +538,7 @@ class SmokeTests(unittest.TestCase):
                       qemu=asdict(replace(fixture.config, machine='pc-i440fx-10.0', qga=True)),
                       test_image=fixture.image.record(), lab_image=fixture.image.record())
         with patch.object(lab, '_state_path', side_effect=lambda value: value):
-            for seconds in (59, 2101, True, '60'):
+            for seconds in (59, 2701, True, '60'):
                 with self.subTest(seconds=seconds), self.assertRaisesRegex(ValueError, 'lab-duration-out-of-range'):
                     lab.lab_smoke(config, duration_seconds=seconds, adapters=sentinel)
 

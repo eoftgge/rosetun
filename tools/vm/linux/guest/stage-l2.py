@@ -101,18 +101,28 @@ L5_CONTENT = ('guest/launch.sh', 'guest/start.sh', 'guest/lib.sh', 'guest/run-l5
 # The reboot smoke stage: the guest scripts and the record of the build, no program and no service of Rosetun.
 REBOOT_SMOKE_CONTENT = ('guest/launch.sh', 'guest/start.sh', 'guest/lib.sh', 'guest/run-reboot-smoke.sh',
                         'scenarios-reboot-smoke.tsv', 'artifacts/provenance.json')
+# The L4 stage: the L3 programs with the Lockdown unit and three of the L3 requests.
+L4_CONTENT = ('guest/launch.sh', 'guest/start.sh', 'guest/lib.sh', 'guest/run-l4.sh',
+              'scenarios-l4.tsv') + tuple('artifacts/' + n for n in L3_BINARIES + (
+                  'rosetun-helper.service', 'rosetun-engine.rules', 'rosetun-lockdown.service',
+                  'request-kill-switch.json', 'request-lan.json', 'request-dns-lock.json')) + (
+                  'artifacts/provenance.json',)
 ENV_L2 = ('RUN_ID STAND_ID EXPECTED_BOOT_ID USER_A USER_B BIOS_GUID SCENARIO_TIMEOUT_SECONDS '
           'UNIT_TIMEOUT_SECONDS JOB_TIMEOUT_SECONDS').split()
 ENV_L3 = ENV_L2 + ['HOST_ADDRESS', 'NODE_PORT', 'PROBE_ADDRESS', 'DNS_PROBE_ADDRESS']
 LAB_MARKER, MARKER_PORT = 'LAB_MARKER_ADDRESS', '9100'
 LAB_CONTROL = 'LAB_CONTROL'
+# Only the L4 stage inside the lab: the public half of the poller's one-time key, an ssh-ed25519 blob.
+LAB_POLLER = 'LAB_POLLER_KEY'
+POLLER_HEAD = b'\x00\x00\x00\x0bssh-ed25519\x00\x00\x00\x20'
 PROFILES = {'l2': dict(content=CONTENT, binaries=BINARIES, env=ENV_L2),
             'l3': dict(content=L3_CONTENT, binaries=L3_BINARIES, env=ENV_L3),
             'proxy': dict(content=PROXY_CONTENT, binaries=PROXY_BINARIES, env=ENV_L3),
             'l5': dict(content=L5_CONTENT, binaries=(), env=ENV_L3, packages=L5_PACKAGES),
+            'l4': dict(content=L4_CONTENT, binaries=L3_BINARIES, env=ENV_L3),
             'reboot-smoke': dict(content=REBOOT_SMOKE_CONTENT, binaries=(), env=ENV_L2)}
 # The stages of the real service: they take the host node's values and may run inside the lab.
-SERVICE = ('l3', 'proxy', 'l5')
+SERVICE = ('l3', 'proxy', 'l5', 'l4')
 EXECUTABLE = set(BINARIES) | set(L3_BINARIES) | set(PROXY_BINARIES)
 DOCUMENTATION_V4 = tuple(ipaddress.ip_network(n) for n in ('192.0.2.0/24', '198.51.100.0/24', '203.0.113.0/24'))
 SERIAL = 'rosetun-l2-media'
@@ -174,7 +184,10 @@ def request(raw):
     marker = profile in SERVICE and LAB_MARKER in env
     # The one control of the lab is named only together with the marker service, after it.
     control = marker and LAB_CONTROL in env
-    order = order + ([LAB_MARKER] if marker else []) + ([LAB_CONTROL] if control else [])
+    # The poller's key follows them, for the L4 stage only.
+    poller = marker and profile == 'l4' and LAB_POLLER in env
+    order = order + ([LAB_MARKER] if marker else []) + ([LAB_CONTROL] if control else []) + (
+        [LAB_POLLER] if poller else [])
     require(set(env) == set(order))
     require(all(type(v) is str for v in env.values()))
     require(env['RUN_ID'] == i['guest_run_id'] and env['STAND_ID'] == i['stand_id'] and
@@ -196,6 +209,10 @@ def request(raw):
             require(any(ipaddress.IPv4Address(env[LAB_MARKER].split(':')[0]) in net for net in DOCUMENTATION_V4))
         if control:
             require(env[LAB_CONTROL] == 'stop-helper')
+        if poller:
+            require(re.fullmatch('[A-Za-z0-9+/]{68}', env[LAB_POLLER]))
+            blob = base64.b64decode(env[LAB_POLLER], validate=True)
+            require(len(blob) == 51 and blob.startswith(POLLER_HEAD))
     raw_env = ''.join(k + '=' + env[k] + '\n' for k in order).encode('ascii')
     final = make_manifest(dict(hashes, **{'job.env': sha(raw_env)}), content[:5] + ('job.env',) + content[5:])
     require(sha(final) == i['manifest_sha256'])

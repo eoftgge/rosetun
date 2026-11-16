@@ -9,7 +9,7 @@ import sys
 import time
 import uuid
 
-from .config import REBOOT_SECONDS, planned_reboots_of
+from .config import REBOOT_SECONDS, planned_reboots_of, wait_seconds
 from .evidence import write_file
 from .execution import preflight
 from .lab_protocol import HELPER_REASON
@@ -309,7 +309,7 @@ def attach_run(state_directory, run_id, *, timeout=5, sleep=time.sleep, now=time
                 wait_until = state.document['deadlines'].get('wait_until')
                 if wait_until is None:
                     # The controller died while submitting: wait as a fresh submission would.
-                    wait_until = now() + config['timeouts']['job'] + 125
+                    wait_until = now() + wait_seconds(config.get('suite', 'linux-l2'), config['timeouts']['job'])
                     state.update('deadlines', wait_until=wait_until)
                 step('wait', lambda: job.wait(max(0, wait_until - now()), sleep=sleep, clock=clock))
                 try:
@@ -430,6 +430,12 @@ def run_linux_l5(config, **options):
     return run_linux(config, **options)
 
 
+def run_linux_l4(config, **options):
+    if config.get('suite') != 'linux-l4':
+        raise ValueError('configuration is for another suite')
+    return run_linux(config, **options)
+
+
 def run_linux_reboot_smoke(config, **options):
     if config.get('suite') != 'linux-reboot-smoke':
         raise ValueError('configuration is for another suite')
@@ -441,8 +447,8 @@ def run_linux(config, *, adapters=None, clock=time.monotonic, sleep=time.sleep,
     """One path for every stage; only L3, Proxy and L5 add their requests to the run and pass their profile on."""
     progress = progress or (lambda stage: print(stage, file=sys.stderr, flush=True))
     suite = config.get('suite', 'linux-l2')
-    l3 = config.get('l3') if suite in ('linux-l3', 'linux-proxy', 'linux-l5') else None
-    profile = {'linux-proxy': 'proxy', 'linux-l5': 'l5'}.get(suite, 'l3')
+    l3 = config.get('l3') if suite in ('linux-l3', 'linux-proxy', 'linux-l5', 'linux-l4') else None
+    profile = {'linux-proxy': 'proxy', 'linux-l5': 'l5', 'linux-l4': 'l4'}.get(suite, 'l3')
     result = dict(schema=SUMMARY_SCHEMA, suite=suite, identities={}, configuration=config, stages=[],
                   evidence=[], assessment=None, delivery=None, execution=None,
                   completion=False, manual_recovery_required=False, errors=[],
@@ -550,8 +556,9 @@ def run_linux(config, *, adapters=None, clock=time.monotonic, sleep=time.sleep,
                 raise
             step('submit-recovery', recovery)
         # The wait reads the job's status file, so it ends when the job does and spends no collect attempt.
-        state.deadline('wait_until', config['timeouts']['job'] + 125)
-        step('wait', lambda: job.wait(config['timeouts']['job'] + 125, sleep=sleep, clock=clock))
+        waiting = wait_seconds(suite, config['timeouts']['job'])
+        state.deadline('wait_until', waiting)
+        step('wait', lambda: job.wait(waiting, sleep=sleep, clock=clock))
         try:
             step('collect', job.collect)
         except Exception:

@@ -45,7 +45,8 @@ def main(argv=None):
     lab.add_argument('--evidence-disk', action='store_true',
                      help='keep the capture on a separate disk of the lab machine and read it after it stops')
     run = commands.add_parser('run', help='execute exploratory Linux L2 or L3 on an explicitly selected stand')
-    run.add_argument('suite', choices=['linux-l2', 'linux-l3', 'linux-proxy', 'linux-l5', 'linux-reboot-smoke'])
+    run.add_argument('suite', choices=['linux-l2', 'linux-l3', 'linux-proxy', 'linux-l5', 'linux-l4',
+                                       'linux-reboot-smoke'])
     run.add_argument('--config', required=True)
     run.add_argument('--dry-run', action='store_true')
     run.add_argument('--lab', action='store_true',
@@ -108,12 +109,14 @@ def main(argv=None):
                 result, code = preflight(config, dry_run=True), 0
             else:
                 from . import l3_lab, orchestrator
+                if args.lab and args.suite == 'linux-l4':
+                    raise ValueError('linux-l4 does not run in the lab yet')
                 if args.lab:
                     run = {'linux-proxy': l3_lab.run_linux_proxy_lab, 'linux-l5': l3_lab.run_linux_l5_lab}.get(
                         args.suite, l3_lab.run_linux_l3_lab)
                 else:
                     run = {'linux-l3': orchestrator.run_linux_l3, 'linux-proxy': orchestrator.run_linux_proxy,
-                           'linux-l5': orchestrator.run_linux_l5,
+                           'linux-l5': orchestrator.run_linux_l5, 'linux-l4': orchestrator.run_linux_l4,
                            'linux-reboot-smoke': orchestrator.run_linux_reboot_smoke}.get(
                         args.suite, orchestrator.run_linux_l2)
                 result = run(config, **({'diagnostic': True} if args.diagnostic else {}),

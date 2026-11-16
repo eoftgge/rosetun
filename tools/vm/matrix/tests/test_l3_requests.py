@@ -301,7 +301,7 @@ class ProxyRequestTests(unittest.TestCase):
         self.assertEqual(req.render_all(), req.render_for('l3'))
         self.assertEqual(RequestTests.ORDINARY[('192.0.2.1', 8388)],
                          {n: hashlib.sha256(b).hexdigest() for n, b in req.render_for('l3').items()})
-        for profile in ('l2', 'l4', None):
+        for profile in ('l2', 'l6', None):
             with self.assertRaises(ValueError):
                 req.render_for(profile)
 

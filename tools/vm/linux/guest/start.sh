@@ -162,7 +162,9 @@ l2_start_main() {
         SCENARIO_TIMEOUT_SECONDS UNIT_TIMEOUT_SECONDS JOB_TIMEOUT_SECONDS)
     case $stage in l2 | reboot-smoke) ;; *) keys+=(HOST_ADDRESS NODE_PORT PROBE_ADDRESS DNS_PROBE_ADDRESS) ;; esac
     # The lab observer's marker service; absent from every job.env of the Hyper-V matrix.
-    case $stage in l3 | proxy | l5) keys+=(LAB_MARKER_ADDRESS LAB_CONTROL) ;; esac
+    case $stage in l3 | proxy | l5 | l4) keys+=(LAB_MARKER_ADDRESS LAB_CONTROL) ;; esac
+    # The public half of the lab's one-time SSH poller key, for L4 alone.
+    [ "$stage" != l4 ] || keys+=(LAB_POLLER_KEY)
     l2_read_env_file "$run/job.env" "${keys[@]}" || die "job.env is not valid"
     [ "$RUN_ID" = "$run_id" ] || die "job.env belongs to another run"
     [[ $JOB_TIMEOUT_SECONDS =~ ^[0-9]{2,5}$ ]] || die "invalid job time limit"
