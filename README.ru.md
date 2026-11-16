@@ -23,7 +23,7 @@ Rosetun: VPN-клиент для Windows и Linux на sing-box и Xray.
 
 **Стабильный выпуск: 0.5.1 · Windows и Linux.**
 
-**Молодой проект:** один разработчик с помощью ИИ-агентов, пока мало пользователей. О проблемах пишите в [Issues](https://github.com/eoftgge/rosetun/issues).
+**Молодой проект:** один мейнтейнер ведет с помощью LLM-агентов, пока мало пользователей. О проблемах пишите в [Issues](https://github.com/eoftgge/rosetun/issues).
 
 ## Главное
 
@@ -51,15 +51,20 @@ sudo reboot
 
 Debian 13 проверен. Ubuntu 24.04+, Linux Mint 22+ и совместимые производные должны работать; см. [поддержку Linux и требования](https://eoftgge.github.io/rosetun/docs/linux/).
 
-**Arch Linux:** соберите бинарный пакет по рецепту из этого репозитория; публикация в AUR и проверка работы пока не выполнены. [Установка и безопасное обновление](https://eoftgge.github.io/rosetun/docs/install/#arch-linux).
+**Arch Linux:** соберите бинарный пакет по рецепту из этого репозитория, AUR пакет будет публикован позже. [Установка и безопасное обновление](https://eoftgge.github.io/rosetun/docs/install/#arch-linux).
 
 [Проверка загрузки, обновление, удаление и выход из Lockdown](https://eoftgge.github.io/rosetun/docs/install/).
 
 ## Документация
 
-[Руководство](https://eoftgge.github.io/rosetun/docs/) · [Помощь](https://eoftgge.github.io/rosetun/help/) · [Для провайдеров](https://eoftgge.github.io/rosetun/providers/).
+### Для пользователей
+[Руководство](https://eoftgge.github.io/rosetun/docs/) 
+[Помощь](https://eoftgge.github.io/rosetun/help/) [Для провайдеров](https://eoftgge.github.io/rosetun/providers/).
 
-[Сборка из исходников](https://eoftgge.github.io/rosetun/docs/build/) · [Безопасность](SECURITY.md) · [модель безопасности](https://eoftgge.github.io/rosetun/docs/security/).
+### Для разработчиков
+- [Сборка из исходников](https://eoftgge.github.io/rosetun/docs/build/)
+- [Безопасность](SECURITY.md) 
+- [Модель безопасности](https://eoftgge.github.io/rosetun/docs/security/)
 
 ## Устранение неполадок
 

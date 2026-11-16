@@ -23,7 +23,7 @@ A system service protects against leaks independently of the engine.
 
 **Stable release: 0.5.1 · Windows and Linux.**
 
-**Young project:** one developer with AI coding agents, and few users yet. Report problems in [Issues](https://github.com/eoftgge/rosetun/issues).
+**Young project:** one maintainer leads with LLM coding agents, and few users yet. Report problems in [Issues](https://github.com/eoftgge/rosetun/issues).
 
 ## Highlights
 
@@ -51,15 +51,21 @@ sudo reboot
 
 Debian 13 is verified. Ubuntu 24.04+, Linux Mint 22+ and compatible derivatives are expected to work; see [Linux support and requirements](https://eoftgge.github.io/rosetun/en/docs/linux/).
 
-**Arch Linux:** build the binary package from the recipe in this repository; AUR publication and runtime verification are pending. [Install and update safely](https://eoftgge.github.io/rosetun/en/docs/install/#arch-linux).
+**Arch Linux:** build the binary package from the recipe in this repository, the AUR package will be published later. [Install and update safely](https://eoftgge.github.io/rosetun/en/docs/install/#arch-linux).
 
 [Verify downloads, update, remove and recover from Lockdown](https://eoftgge.github.io/rosetun/en/docs/install/).
 
 ## Documentation
 
-[Guide](https://eoftgge.github.io/rosetun/en/docs/) · [Help](https://eoftgge.github.io/rosetun/en/help/) · [For providers](https://eoftgge.github.io/rosetun/en/providers/).
+### For users:
+- [Guide](https://eoftgge.github.io/rosetun/en/docs/) 
+- [Help](https://eoftgge.github.io/rosetun/en/help/) 
+- [For providers](https://eoftgge.github.io/rosetun/en/providers/)
 
-[Build from source](https://eoftgge.github.io/rosetun/en/docs/build/) · [Security](SECURITY.md) · [Security model](https://eoftgge.github.io/rosetun/en/docs/security/).
+### For developers
+- [Build from source](https://eoftgge.github.io/rosetun/en/docs/build/) 
+- [Security](SECURITY.md) 
+- [Security model](https://eoftgge.github.io/rosetun/en/docs/security/)
 
 ## Troubleshooting
 
