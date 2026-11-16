@@ -3155,7 +3155,9 @@ fn server_check_grace_deadline(
 }
 
 fn startup_timeout(hints: rosetun_engine::StartupHints, cold_start: bool) -> Duration {
-    if hints.slow_tunnel_creation || cold_start {
+    // Windows can stall in post-start after creating the TUN without emitting
+    // the open-interface warning. Only observed progress gets that extra time.
+    if hints.slow_tunnel_creation || cold_start || (cfg!(windows) && hints.tunnel_created) {
         SLOW_START_READY_TIMEOUT
     } else {
         TUNNEL_READY_TIMEOUT
@@ -3172,6 +3174,7 @@ fn wait_for_engine_ready_from(
     cold_start: bool,
     cancelled: &AtomicBool,
 ) -> Result<(), HelperError> {
+    let mut progress_grace_logged = false;
     loop {
         check_cancelled(cancelled)?;
         let running = process
@@ -3198,8 +3201,31 @@ fn wait_for_engine_ready_from(
             }
             return Ok(());
         }
-        let timeout = startup_timeout(process.startup_hints(), cold_start);
+        let hints = process.startup_hints();
+        let timeout = startup_timeout(hints, cold_start);
+        if !progress_grace_logged
+            && !cold_start
+            && hints.tunnel_created
+            && spawned_at.elapsed() >= TUNNEL_READY_TIMEOUT
+            && timeout > TUNNEL_READY_TIMEOUT
+        {
+            progress_grace_logged = true;
+            tracing::warn!(
+                elapsed_ms = spawned_at.elapsed().as_millis(),
+                timeout_seconds = timeout.as_secs(),
+                "TUN created; still waiting for final engine readiness"
+            );
+        }
         if Instant::now() >= spawned_at + timeout {
+            tracing::warn!(
+                elapsed_ms = spawned_at.elapsed().as_millis(),
+                timeout_seconds = timeout.as_secs(),
+                cold_start,
+                tunnel_created = hints.tunnel_created,
+                slow_tunnel_creation = hints.slow_tunnel_creation,
+                adapter_still_removing = hints.adapter_still_removing,
+                "engine startup readiness timed out"
+            );
             return Err(HelperError::new(
                 ErrorCode::EngineNotReady,
                 format!(

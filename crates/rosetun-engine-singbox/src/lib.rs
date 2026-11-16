@@ -530,12 +530,18 @@ fn find_in_neighbours() -> Option<PathBuf> {
 #[derive(Debug, Default)]
 struct HintFlags {
     slow_tunnel: AtomicBool,
+    tunnel_created: AtomicBool,
     adapter_still_removing: AtomicBool,
     tunnel_address_in_use: AtomicBool,
 }
 
 impl HintFlags {
     fn observe(&self, line: &str) {
+        if readiness::is_tunnel_created_message(line)
+            && !self.tunnel_created.swap(true, Ordering::AcqRel)
+        {
+            tracing::debug!("TUN created; waiting for engine post-start readiness");
+        }
         if readiness::is_slow_tunnel_message(line) {
             self.slow_tunnel.store(true, Ordering::Release);
         }
@@ -582,6 +588,7 @@ impl EngineProcess for SingBoxProcess {
     fn startup_hints(&self) -> rosetun_engine::StartupHints {
         rosetun_engine::StartupHints {
             slow_tunnel_creation: self.hints.slow_tunnel.load(Ordering::Acquire),
+            tunnel_created: self.hints.tunnel_created.load(Ordering::Acquire),
             adapter_still_removing: self.hints.adapter_still_removing.load(Ordering::Acquire),
             tunnel_address_in_use: self.hints.tunnel_address_in_use.load(Ordering::Acquire),
         }
@@ -709,6 +716,16 @@ mod tests {
         assert!(!safe.contains("198.51.100.20"));
         assert!(!safe.contains("203.0.113.10"));
         assert!(safe.contains("dial tcp [hidden]:443: i/o timeout"));
+    }
+
+    #[test]
+    fn tunnel_progress_is_latched_without_logging_destinations() {
+        let hints = super::HintFlags::default();
+        hints.observe("INFO[0000] inbound/tun[tun-in]: started at rosetun0");
+        assert!(hints.tunnel_created.load(std::sync::atomic::Ordering::Acquire));
+        assert!(!hints.slow_tunnel.load(std::sync::atomic::Ordering::Acquire));
+        hints.observe("WARN[0010] inbound/tun[tun-in]: starting tun stack take too much time to finish!");
+        assert!(hints.slow_tunnel.load(std::sync::atomic::Ordering::Acquire));
     }
 
     #[test]

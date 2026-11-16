@@ -696,16 +696,27 @@ public static class RosetunEntryLogon {
                 $methods = if ($WithAccount) { [byte[]]@(5, 2, 0, 2) } else { [byte[]]@(5, 1, 0) }
                 $stream.Write($methods, 0, $methods.Length)
                 $choice = [byte[]]::new(2)
-                if ($stream.Read($choice, 0, 2) -lt 2) { return 'closed' }
+                $received = 0
+                while ($received -lt 2) {
+                    $count = $stream.Read($choice, $received, 2 - $received)
+                    if ($count -eq 0) { return 'closed' }
+                    $received += $count
+                }
+                if ($choice[0] -ne 5) { return 'refused' }
                 if ($choice[1] -eq 0) { return 'open' }
                 if ($choice[1] -ne 2) { return 'refused' }
-                $user = [Text.Encoding]::UTF8.GetBytes($User)
-                $pass = [Text.Encoding]::UTF8.GetBytes($Pass)
-                $login = [byte[]](@(1, $user.Length) + $user + @($pass.Length) + $pass)
+                $userBytes = [Text.Encoding]::UTF8.GetBytes($User)
+                $passwordBytes = [Text.Encoding]::UTF8.GetBytes($Pass)
+                $login = [byte[]](@(1, $userBytes.Length) + $userBytes + @($passwordBytes.Length) + $passwordBytes)
                 $stream.Write($login, 0, $login.Length)
                 $answer = [byte[]]::new(2)
-                if ($stream.Read($answer, 0, 2) -lt 2) { return 'closed' }
-                if ($answer[1] -eq 0) { return 'accepted' }
+                $received = 0
+                while ($received -lt 2) {
+                    $count = $stream.Read($answer, $received, 2 - $received)
+                    if ($count -eq 0) { return 'closed' }
+                    $received += $count
+                }
+                if ($answer[0] -eq 1 -and $answer[1] -eq 0) { return 'accepted' }
                 return 'refused'
             }
             catch { return 'closed' }
@@ -2341,29 +2352,56 @@ Test-Step 'dns lock exhausted' 'state is Failed within 90 s' {
 Test-Step 'dns lock exhausted' 'direct DNS works again' { Test-RosetunDirectDns }
 Set-RosetunEngineAvailable $true
 
-Write-Host 'DNS lock with automatic reconnect disabled...'
-Connect-RosetunTunnel -RequestName 'request-dns-lock-manual.json' | Out-Null
-Test-Step 'dns lock manual' 'state is Connected' { Wait-RosetunState 'Connected' }
-Stop-RosetunEngine
-Test-Step 'dns lock manual' 'state is Failed' { Wait-RosetunState 'Failed' }
-Test-Step 'dns lock manual' 'direct DNS works again' { Test-RosetunDirectDns }
-Disconnect-RosetunTunnel | Out-Null
-
-Write-Host 'Disconnect with the DNS lock...'
-Connect-RosetunTunnel -RequestName 'request-dns-lock.json' | Out-Null
-Disconnect-RosetunTunnel | Out-Null
-Test-Step 'dns lock disconnect' 'state is Disconnected' { Wait-RosetunState 'Disconnected' }
-Test-Step 'dns lock disconnect' 'direct DNS works again' { Test-RosetunDirectDns }
-Test-Step 'dns lock disconnect' 'IPv6 works again' { Test-RosetunIpv6Egress }
-
-Write-Host 'Helper killed with the DNS lock...'
-Connect-RosetunTunnel -RequestName 'request-dns-lock.json' | Out-Null
-Wait-RosetunState 'Connected' | Out-Null
-Stop-RosetunHelper
-Test-Step 'dns lock helper killed' 'direct DNS works again' {
-    Wait-RosetunCondition { Test-RosetunDirectDns }
+function Test-RosetunDnsLockLifecycle {
+    foreach ($scenario in 'dns lock manual', 'dns lock disconnect', 'dns lock helper killed') {
+        Write-Host "Checking $scenario..."
+        $requestName = if ($scenario -eq 'dns lock manual') { 'request-dns-lock-manual.json' } else { 'request-dns-lock.json' }
+        $connect = Connect-RosetunTunnel -RequestName $requestName -Quiet
+        $connected = $connect.ExitCode -eq 0 -and (Wait-RosetunState 'Connected')
+        Test-Step $scenario 'connect succeeds and state is Connected' -Note "exit $($connect.ExitCode); $($connect.Output)" {
+            $connected
+        }
+        if (-not $connected) {
+            $checks = switch ($scenario) {
+                'dns lock manual' { 'state is Failed'; 'direct DNS works again' }
+                'dns lock disconnect' { 'state is Disconnected'; 'direct DNS works again'; 'IPv6 works again' }
+                'dns lock helper killed' { 'direct DNS works again' }
+            }
+            foreach ($check in $checks) {
+                $results.Add([pscustomobject]@{
+                    Result = 'UNRUN'
+                    Scenario = $scenario
+                    Check = $check
+                    Note = 'The initial tunnel did not connect; lifecycle behaviour was not exercised'
+                })
+            }
+            Disconnect-RosetunTunnel | Out-Null
+            continue
+        }
+        switch ($scenario) {
+            'dns lock manual' {
+                Stop-RosetunEngine
+                Test-Step $scenario 'state is Failed' { Wait-RosetunState 'Failed' }
+                Test-Step $scenario 'direct DNS works again' { Test-RosetunDirectDns }
+                Disconnect-RosetunTunnel | Out-Null
+            }
+            'dns lock disconnect' {
+                Disconnect-RosetunTunnel | Out-Null
+                Test-Step $scenario 'state is Disconnected' { Wait-RosetunState 'Disconnected' }
+                Test-Step $scenario 'direct DNS works again' { Test-RosetunDirectDns }
+                Test-Step $scenario 'IPv6 works again' { Test-RosetunIpv6Egress }
+            }
+            'dns lock helper killed' {
+                Stop-RosetunHelper
+                Test-Step $scenario 'direct DNS works again' {
+                    Wait-RosetunCondition { Test-RosetunDirectDns }
+                }
+                Start-RosetunHelper
+            }
+        }
+    }
 }
-Start-RosetunHelper
+Test-RosetunDnsLockLifecycle
 
 Write-Host 'DNS lock that cannot go in...'
 # With the session's sublayer key taken the service's preflight fails: the DNS lock is
@@ -2541,8 +2579,11 @@ foreach ($scenario in @(Import-Csv -LiteralPath (Join-Path $PSScriptRoot 'two-ho
     })
 }
 
-# Result first, so a long note cannot push it off the screen.
-$results | Format-Table Result, Scenario, Check, Note -AutoSize
+# Keep complete notes independently of the terminal width.
+$resultPath = Join-Path $RepoRoot 'target\failure-matrix-results.json'
+$results | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $resultPath -Encoding UTF8
+Write-Host "Structured results: $resultPath"
+$results | Format-Table Result, Scenario, Check, Note -AutoSize -Wrap | Out-String -Width 240 | Write-Host
 
 if ($results.Result -contains 'FAIL') {
     Write-Host '--- helper log (tail) ---'

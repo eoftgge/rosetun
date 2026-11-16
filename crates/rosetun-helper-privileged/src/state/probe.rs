@@ -18,7 +18,7 @@ use rosetun_ipc::{
 };
 use rosetun_routing::RoutingGuard;
 
-use super::repeated::repeated_delay;
+use super::repeated::repeated_delay_any;
 use super::{
     Acquired, Caller, Helper, NameLookup, SESSION_WAIT, SessionHolder, lockdown,
     node_with_endpoint, resolve_quiet, select_endpoint, validate_tun_name, wait_for_engine_ready,
@@ -631,7 +631,7 @@ fn repeated_outcome(entry: Option<&DelayInbound>, target: UrlTestTarget<'_>) -> 
         tracing::debug!("repeated delay: no entry for the target");
         return ProbeOutcome::Fails;
     };
-    match repeated_delay(entry.address, account, PROBE_URLS[0], PROBE_TIMEOUT) {
+    match repeated_delay_any(entry.address, account, &PROBE_URLS, PROBE_TIMEOUT) {
         Ok(delay) => probe_outcome::<()>(Ok(delay)),
         Err(reason) => {
             tracing::debug!(%reason, "repeated delay gave no answer");

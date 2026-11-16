@@ -124,6 +124,67 @@ fn a_cold_start_gets_the_slow_start_deadline() {
 }
 
 #[test]
+fn only_windows_tun_post_start_progress_extends_a_warm_start() {
+    let hints = rosetun_engine::StartupHints {
+        tunnel_created: true,
+        ..Default::default()
+    };
+    assert_eq!(
+        startup_timeout(hints, false),
+        Duration::from_secs(if cfg!(windows) { 45 } else { 15 })
+    );
+    assert_eq!(
+        startup_timeout(rosetun_engine::StartupHints::default(), false),
+        Duration::from_secs(15)
+    );
+}
+
+#[test]
+fn tunnel_creation_alone_never_completes_readiness_and_can_be_cancelled() {
+    #[derive(Debug)]
+    struct PostStartProcess;
+
+    impl EngineProcess for PostStartProcess {
+        fn is_running(&mut self) -> Result<bool, EngineError> {
+            Ok(true)
+        }
+
+        fn is_ready(&mut self) -> Result<bool, EngineError> {
+            Ok(false)
+        }
+
+        fn startup_hints(&self) -> rosetun_engine::StartupHints {
+            rosetun_engine::StartupHints {
+                tunnel_created: true,
+                ..Default::default()
+            }
+        }
+
+        fn stop(&mut self) -> Result<(), EngineError> {
+            Ok(())
+        }
+    }
+
+    let error = wait_for_engine_ready_from(
+        &mut PostStartProcess,
+        Instant::now() - Duration::from_secs(46),
+        false,
+        &AtomicBool::new(false),
+    )
+    .unwrap_err();
+    assert_eq!(error.code, ErrorCode::EngineNotReady);
+    assert!(error.message.contains(if cfg!(windows) { "45" } else { "15" }));
+    let error = wait_for_engine_ready_from(
+        &mut PostStartProcess,
+        Instant::now(),
+        false,
+        &AtomicBool::new(true),
+    )
+    .unwrap_err();
+    assert_eq!(error.code, ErrorCode::Cancelled);
+}
+
+#[test]
 fn the_first_engine_start_is_cold_and_clears_it_on_success() {
     let mut engines = EngineRegistry::new();
     engines.register(Box::new(StubEngine));

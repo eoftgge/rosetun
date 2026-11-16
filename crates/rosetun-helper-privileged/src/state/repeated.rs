@@ -5,6 +5,8 @@
 //! and to the site; the second does not, so its time is close to a ping.
 
 use std::net::SocketAddr;
+use std::sync::mpsc;
+use std::thread;
 use std::time::{Duration, Instant};
 
 use rosetun_engine::DelayAccount;
@@ -22,6 +24,50 @@ pub(super) enum RepeatedError {
     TimedOut,
     #[error("the second request failed")]
     Second,
+    #[error("a repeated check worker is unavailable")]
+    Worker,
+}
+
+/// Independent providers race within one deadline; a blocked provider must not
+/// hide a working one. Each worker still times two requests on its own connection.
+pub(super) fn repeated_delay_any(
+    entry: SocketAddr,
+    account: &DelayAccount,
+    urls: &[&str],
+    timeout: Duration,
+) -> Result<Duration, RepeatedError> {
+    let started = Instant::now();
+    let (sender, receiver) = mpsc::channel();
+    for url in urls {
+        let url = (*url).to_owned();
+        let account = account.clone();
+        let sender = sender.clone();
+        thread::Builder::new()
+            .name("rosetun-repeated-delay".into())
+            .spawn(move || {
+                let result = timeout
+                    .checked_sub(started.elapsed())
+                    .filter(|left| !left.is_zero())
+                    .ok_or(RepeatedError::TimedOut)
+                    .and_then(|left| repeated_delay(entry, &account, &url, left));
+                let _ = sender.send(result);
+            })
+            .map_err(|_| RepeatedError::Worker)?;
+    }
+    drop(sender);
+    let mut last_error = RepeatedError::Worker;
+    loop {
+        let left = timeout
+            .checked_sub(started.elapsed())
+            .filter(|left| !left.is_zero())
+            .ok_or(RepeatedError::TimedOut)?;
+        match receiver.recv_timeout(left) {
+            Ok(Ok(delay)) => return Ok(delay),
+            Ok(Err(error)) => last_error = error,
+            Err(mpsc::RecvTimeoutError::Disconnected) => return Err(last_error),
+            Err(mpsc::RecvTimeoutError::Timeout) => return Err(RepeatedError::TimedOut),
+        }
+    }
 }
 
 /// Sends two `HEAD` requests for `url` on one connection through the SOCKS5
@@ -124,6 +170,16 @@ pub(super) mod fake {
             delays: Vec<Duration>,
             answers: bool,
         ) -> Self {
+            Self::start_with_blocked_host(address, accounts, delays, answers, None)
+        }
+
+        pub(super) fn start_with_blocked_host(
+            address: Option<SocketAddr>,
+            accounts: Vec<(String, String)>,
+            delays: Vec<Duration>,
+            answers: bool,
+            blocked_host: Option<String>,
+        ) -> Self {
             let listener =
                 TcpListener::bind(address.unwrap_or_else(|| "127.0.0.1:0".parse().unwrap()))
                     .expect("fake entry");
@@ -152,7 +208,8 @@ pub(super) mod fake {
                             }
                             Err(error) => panic!("fake entry accept failed: {error}"),
                         };
-                        let (accounts, delays) = (accounts.clone(), delays.clone());
+                        let (accounts, delays, blocked_host) =
+                            (accounts.clone(), delays.clone(), blocked_host.clone());
                         let (connections, refused, users, seen) = (
                             Arc::clone(&connections),
                             Arc::clone(&refused),
@@ -166,7 +223,14 @@ pub(super) mod fake {
                                 users: &users,
                                 seen: &seen,
                             };
-                            let _ = serve(socket, &accounts, &delays, answers, &counts);
+                            let _ = serve(
+                                socket,
+                                &accounts,
+                                &delays,
+                                answers,
+                                blocked_host.as_deref(),
+                                &counts,
+                            );
                         });
                     }
                 })
@@ -204,6 +268,7 @@ pub(super) mod fake {
         accounts: &[(String, String)],
         delays: &[Duration],
         answers: bool,
+        blocked_host: Option<&str>,
         counts: &Counts<'_>,
     ) -> std::io::Result<()> {
         socket.set_nonblocking(false)?;
@@ -277,11 +342,16 @@ pub(super) mod fake {
                         .then(|| value.trim().to_owned())
                 })
                 .unwrap_or_default();
+            let blocked = blocked_host == Some(host.as_str());
             counts.seen.lock().unwrap().push(Seen {
                 user: user.clone(),
                 host,
                 method,
             });
+            if blocked {
+                thread::sleep(Duration::from_secs(2));
+                return Ok(());
+            }
             let delay = delays
                 .get(index)
                 .or(delays.last())
@@ -327,6 +397,52 @@ mod tests {
             repeated_delay(fake.address, &account("proxy"), URL, Duration::from_secs(5)).unwrap();
         assert!(delay >= Duration::from_millis(120), "{delay:?}");
         assert!(delay < Duration::from_millis(450), "{delay:?}");
+    }
+
+    #[test]
+    fn a_blocked_provider_does_not_delay_the_repeated_check_of_another_provider() {
+        let fake = FakeEntry::start_with_blocked_host(
+            None,
+            vec![("proxy".to_owned(), "fixture-password".to_owned())],
+            vec![Duration::from_millis(10)],
+            true,
+            Some("blocked.example.invalid".into()),
+        );
+        let started = Instant::now();
+        repeated_delay_any(
+            fake.address,
+            &account("proxy"),
+            &[
+                "http://blocked.example.invalid/generate_204",
+                "http://healthy.example.invalid/generate_204",
+            ],
+            Duration::from_secs(5),
+        )
+        .unwrap();
+        assert!(started.elapsed() < Duration::from_millis(1_500));
+        let seen = fake.seen.lock().unwrap();
+        assert_eq!(
+            seen.iter()
+                .filter(|request| request.host == "healthy.example.invalid")
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn two_silent_providers_share_one_deadline() {
+        let fake = entry(&[2_000]);
+        let started = Instant::now();
+        assert!(
+            repeated_delay_any(
+                fake.address,
+                &account("proxy"),
+                &[URL, "http://another.example.invalid/generate_204"],
+                Duration::from_millis(300),
+            )
+            .is_err()
+        );
+        assert!(started.elapsed() < Duration::from_millis(1_500));
     }
 
     #[test]
