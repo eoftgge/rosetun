@@ -152,15 +152,18 @@ class RunTests(Flow):
         result = self.go(Machines(self, rows=rows))
         self.assertEqual((2, 'MISSING'), (result['exit_code'], result['group']['results']['engine.files']))
 
-    def test_scenarios_and_windows_outside_the_group_change_nothing_unless_they_saw_a_leak(self):
+    def test_scenarios_outside_the_group_change_nothing_but_an_unverified_window_outside_it_is_two(self):
         rows = results(two_hop__domain_b=('FAIL', 'x'), two_hop__b_auth=('ERROR', 'y'))
+        result = self.go(Machines(self, rows=rows))
+        self.assertEqual((0, []), (result['exit_code'], result['group']['unproven']))
         # A window that never closed spoils the ones after it, so the unclosed one is the last of the run. Its label
-        # is one no table names.
-        result = self.go(Machines(self, rows=rows, windows=windows(extra=[('unlisted', (), False)])))
+        # is one no table names. Since stage 7e every window is judged, so it leaves the run unable to vouch.
+        result = self.go_again(rows=rows, windows=windows(extra=[('unlisted', (), False)]))
         unlisted = result['lab']['windows'][-1]
         self.assertEqual(('unlisted', 'UNVERIFIED'), (unlisted['label'], unlisted['leak']))
         self.assertEqual((False, False), (unlisted['in_group'], unlisted['judged']))
-        self.assertEqual((0, []), (result['exit_code'], result['group']['unproven']))
+        self.assertEqual((2, ['outside-window-not-verified:unlisted:0:UNVERIFIED']),
+                         (result['exit_code'], result['group']['unproven']))
 
     def test_a_leak_in_a_window_outside_the_group_is_listed_and_is_a_finding(self):
         outside = 'specific_bypass_dns_lock'
@@ -794,6 +797,28 @@ class EveryWindowTests(unittest.TestCase):
                          (result['exit_code'], result['group']['findings'], result['group']['outside_leaks']))
         clean = self.decide(labels)
         self.assertEqual((0, 'NONE'), (clean['exit_code'], clean['group']['outside_windows'][-1]['verdict']))
+
+    def unverified(self, label='specific_bypass_dns_lock', **changes):
+        result = synthetic(**changes)
+        window = result['lab']['windows'][WINDOWS_7E.index(label)]
+        window.update(leak='UNVERIFIED', observer_reasons=['window-markers-missing-or-repeated'])
+        return result
+
+    def test_an_unverified_window_outside_the_group_in_an_otherwise_clean_run_is_two(self):
+        result = self.unverified()
+        summary.decide(result, False)
+        self.assertEqual((2, 'unverified', [], ['outside-window-not-verified:specific_bypass_dns_lock:0:UNVERIFIED']),
+                         (result['exit_code'], result['outcome'], result['group']['findings'],
+                          result['group']['unproven']))
+        self.assertEqual('UNVERIFIED', result['group']['outside_windows'][0]['verdict'])
+
+    def test_an_unverified_window_outside_the_group_does_not_hide_a_finding_elsewhere(self):
+        result = self.unverified()
+        result['lab']['windows'][WINDOWS_7E.index('connect_ks')]['leak'] = 'DETECTED'
+        summary.decide(result, False)
+        self.assertEqual(1, result['exit_code'])
+        self.assertIn('leak-in-group-window', result['group']['findings'])
+        self.assertIn('outside-window-not-verified:specific_bypass_dns_lock:0:UNVERIFIED', result['group']['unproven'])
 
     def test_a_window_of_a_label_short_of_its_count_is_listed_and_leaves_the_run_unproven(self):
         # Which of the two sessions of `capabilities` is missing is unknown, so the direct request the second one

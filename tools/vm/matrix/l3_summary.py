@@ -157,7 +157,8 @@ REQUIRED_FIXTURES = ('node', 'https', 'dns', 'doh')
 # the script that opened a session nobody expected) is the other kind. A leak in either, DETECTED after the
 # expectation, is a finding (`leak-outside-group`, the window in `group.outside_leaks`); EXPECTED is no leak, and a
 # MISMATCH there characterises the weakness rather than a protection, so it is listed (`group.outside_mismatches`)
-# and changes no code.
+# and changes no code. Any other verdict (UNVERIFIED) is a window that cannot vouch for itself: without a finding
+# the run exits 2 (`outside-window-not-verified:<label>:<number>:<verdict>` in `group.unproven`).
 LEAK_OUTSIDE_THE_GROUP_FAILS = True
 # The positive control of stage 7c1: the script stops the service inside the window of the kill-switch
 # session and sends one direct request, so a run is a success only if the observer saw exactly that.
@@ -315,10 +316,10 @@ def decide(result, interrupted):
     not stop, no report, an unverified evidence disk, a fixture that did not answer, an unclean
     observer, a pass nobody observed (UNOBSERVED, which includes a window that never closed), a
     scenario of the group that did not run, or a label of the group with another count of windows than
-    expected. 130: interrupted.
+    expected, or (since stage 7e) a window outside the group that is not verified. 130: interrupted.
     A diagnostic run (`diagnostic: true`) never exits below 2, whatever it found: what it found stays
     in `outcome` and `group`, but it is not counted toward a qualification.
-    Scenarios outside the group, and windows outside it that cannot be verified, change nothing.
+    Scenarios outside the group change nothing.
     A window with an expectation (EXPECTED_FLOWS) has the verdict of the comparison with it: EXPECTED confirms
     a pass like NONE, MISMATCH contradicts it like DETECTED, and only DETECTED is a leak.
     """
@@ -384,6 +385,10 @@ def decide(result, interrupted):
         if not row['as_expected']:
             wanted = row['expected'] if row['expected'] is not None else f"at-most-{row['at_most']}"
             unproven.append(f"window-count:{row['label']}:expected={wanted},seen={row['seen']}")
+    # Every window is judged: one outside the group that cannot vouch for itself leaves the run unable to vouch.
+    for window in unjudged:
+        if window['verdict'] not in ('NONE', 'EXPECTED', 'MISMATCH', 'DETECTED'):
+            unproven.append(f"outside-window-not-verified:{window['label']}:{window['number']}:{window['verdict']}")
     if result.get('diagnostic'):
         unproven.append('diagnostic-run')
     result['group'] = dict(scenarios=list(GROUP), results=results, passed=all(o == 'PASS' for o in results.values()),

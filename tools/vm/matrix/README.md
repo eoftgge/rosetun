@@ -3885,10 +3885,17 @@ If another address, another IPv6 route or a router advertisement shows up, stop 
 ### Every window is judged
 
 `LEAK_OUTSIDE_THE_GROUP_FAILS` is now true. A window is outside when no scenario of the group is judged in it and it is
-not beyond the count of a label of the group. Its verdict after the expectation decides: `DETECTED` is a finding
-(`leak-outside-group`, exit 1), `EXPECTED` and `NONE` are not, and a `MISMATCH` characterises rather than protects: it
-changes no code and is listed in `group.outside_mismatches`. `group.outside_windows` lists every window outside with
-its verdict.
+not beyond the count of a label of the group. Its verdict after the expectation decides:
+
+| Verdict of a window outside | Effect |
+| --- | --- |
+| `NONE`, `EXPECTED` | nothing |
+| `MISMATCH` | characterises rather than protects: no code of its own, listed in `group.outside_mismatches` |
+| `DETECTED` | a finding, `leak-outside-group`, exit 1 |
+| any other (`UNVERIFIED`) | the run cannot vouch for itself: `outside-window-not-verified:<label>:<number>:<verdict>` in `group.unproven`, exit 2 unless something else is a finding (1 comes before 2) |
+
+`group.outside_windows` lists every window outside with its verdict. The exit codes keep the meanings of stage 7b2b;
+the new reasons are `leak-outside-group` for 1 and `outside-window-not-verified:...` for 2.
 
 What stays outside, and why it is judged all the same:
 
@@ -3900,7 +3907,12 @@ What stays outside, and why it is judged all the same:
 A window of a label of the group with fewer windows than expected is not judged and is no finding of its own: which
 session is missing is unknown, so is what the window should show (`capabilities` 0 shows nothing, 1 a direct request).
 It is listed in `group.outside_leaks` if `DETECTED`, and the run cannot vouch for itself (`window-count`, exit 2), as
-in stage 7c2. An outside window that cannot be verified still changes nothing.
+in stage 7c2.
+
+The owner accepted these choices of the stage: the ARP requests for a neighbor are one flow per target address with
+any number of requests (the kernel's timers decide the number); a destination unreachable about a UDP flow is a
+frame back of that flow in every window; a window of a label short of its count is exit 2 and no finding; and the IPv6
+default route is there in every session, since the observer sees any IPv6 frame the engine sends past the tunnel.
 
 ### What to reinstall
 
