@@ -4408,6 +4408,223 @@ Each command in its own run. Stop at the first unexpected result and send back t
 6. The lab L3 once (`run linux-l3 --lab --config <l3-lab.toml>`): the same results and windows as in stage 7e; the wait
    by reading must not change the capture or its windows.
 
+## Stage 8d: Linux L4 in the lab
+
+`run linux-l4` delivers the L4 job (the real service under Lockdown, ending in two reboots of the guest) as a stage
+profile, and `run linux-l4 --lab` runs `run-l4.sh` inside the lab of stage 7b2b on a test image of its own, with the
+lab machine polling the guest over SSH and the controller carrying the job through its reboots (stage 8c). Nothing is
+accepted: the release gate stays false and the security invariants stay **UNVERIFIED**. No L4 run has been through the
+lab yet: every count below comes from `run-l4.sh` alone, and the runs of the qualification below are what confirms it.
+The Hyper-V L4 stays the owner's: without `LAB_MARKER_ADDRESS`, `LAB_CONTROL` and `LAB_POLLER_KEY` in `job.env`
+`run-l4.sh` sends nothing, notes nothing and installs no key (`Test-LinuxHarness.ps1` and `selftest-lib.sh` pin that).
+
+### Profile and delivery
+
+- The stage profile `l4` (`PROFILES` in `linux_l2.py`, the importer `guest/stage-l2.py`) is exactly `L4_START_REQUIRED`
+  of `guest/start.sh`: the sources with `guest/run-l4.sh` and `scenarios-l4.tsv`, the three programs of the L3 job
+  (`rosetun-helper-privileged`, `rosetun`, `sing-box`), `rosetun-helper.service`, `rosetun-engine.rules`,
+  `rosetun-lockdown.service` (all three from the checkout, compared byte for byte) and three requests, which are
+  `request-kill-switch.json`, `request-lan.json` and `request-dns-lock.json` of the L3 generator byte for byte
+  (`l3_requests.render_l4`). Its evidence goes to `linux-l4/`, the service's journal included.
+- `build-artifacts.sh --l4 OUTPUT_DIR` builds the same two programs as `--l3` and records them as `"stage": "l4"` in
+  `provenance.json`, which the profile requires. The Hyper-V path keeps `--l3`.
+- `job.env` takes the lab keys last, in this order: `LAB_MARKER_ADDRESS`, `LAB_CONTROL`, `LAB_POLLER_KEY` (the last for
+  L4 alone, and only with the marker address). `start.sh`, `validate_env`, `stage-l2.py` and `run-l4.sh` agree on the
+  shape of the key: the base64 blob of an `ssh-ed25519` public key (68 characters, 51 bytes, checked in all four).
+  The Hyper-V path writes none of them.
+- The configuration is `rosetun.matrix.execution.v2` (without the lab) or `v3` (with it) with `suite = "linux-l4"` and
+  the `[l3]` table **with** `sing_box_sha256` (the engine is delivered by the owner, as for L3). The examples are
+  `execution-l4.example.toml` and `execution-l4-lab.example.toml`.
+
+### The window and the expectations
+
+One window, `lockdown` (the variant of the single coarse window): `run-l4.sh` opens it right before Lockdown goes on the
+first time (`lockdown --lan off` of `turned_on`; the label is the name of that function) and closes it in `reset` of
+`exit.reset-firewall`, once the table is gone and before its direct request. Under Lockdown no marker can leave the test
+machine, so nothing divides the window: it holds `lockdown.direct-blocked` to `exit.reset-firewall` (19 scenarios), the
+first reboot among them. The index and the label live in the guest's state directory, which survives the reboot, so the
+close comes from the resume phase. `lockdown.denied`, the preflight, `install.service` and `reboot.without-record`
+(after the second reboot, with no record the network is open and the direct request leaves) are outside any window. The
+group is all 27 scenarios; the summary schema is `rosetun.matrix.l4-summary.v1` (tables in `l4_tables.py`, judged by
+`l3_summary.py` as the other suites are).
+
+What the window shows, counted from the code of the script (the numbers a test reads out of it):
+
+| Flow of the test machine | Count | Where it comes from |
+| --- | --- | --- |
+| TCP to `203.0.113.2:443` | 4 | `scope_probe` of the scopes Lockdown permits: `gui_scope` (`rosetun-gui`), `cli_scope` (`rosetun-cli`), `after` (`rosetun-gui`, after the session), `killed` (`rosetun-cli`, after the restart): one HTTPS connection each |
+| UDP to `203.0.113.53:53` | 4 | the same four probes: one TFTP datagram each (curl sends it twice from one socket when the answer is no TFTP: one flow by four-tuple) |
+| none | 0 | `others` (`rosetun-other`) and `scope_closed` (`rosetun-gui` during a session) are refused in the guest, and so is every `direct_https`, `routed_https` and `user_direct_https` under Lockdown |
+| `tunnel` | not counted | the connects of `lockdown.session`, `after`'s and `reboot.service-completes`: the engine's connections to the node |
+| `inbound-poll` | any number | the poller's frames, below |
+| `ipv6-dad` allowance | any number | the guest's kernel checking its own IPv6 addresses (neighbor solicitation from `::`) while the first reboot brings the interface up |
+
+Neighbor discovery and MLD are infrastructure already. The allowance is the one the boot needs and nothing wider: an ARP
+probe or announcement, should the network manager send one, would be a finding to look at, not to admit. The second boot
+comes after the window closed, so its frames are only counted (`outside_window`). A flow beyond these counts is
+`DETECTED` (exit 1), one fewer is `MISMATCH`, which contradicts the passes of the window. `REQUIRED_FIXTURES` are the
+node, the HTTPS target and DoH: no scenario of L4 asks the plain resolver a question (its datagrams are TFTP), so it is not
+required. Without a `lockdown` window or with a second one the run exits 2 (`window-count`).
+
+### Reboots
+
+`planned_reboots = 2` (`config.PLANNED_REBOOTS`), taken by the mechanism of stage 8c: the controller takes each guest
+`RESET` from QMP, recovers the agent's session and takes a new boot ID, three boots in all. `group.boot_chain` of the
+summary says `expected` 3 and `seen`; fewer or more than three cannot vouch for the run (`boot-chain:expected=3,seen=N`,
+exit 2). Any other guest reset is an error that ends the run (`unplanned-guest-reset`, exit 2, no collection). The test
+machine's `vm.planned_reboots` is set before it starts, as `run linux-l4` sets it. A lab run is never attached: after the
+death of its controller, `recover --close`.
+
+### The SSH poller
+
+`inbound.lan-open` waits for a new SSH connection from the host node after the local network went on. In the lab the
+host node is the lab machine (`192.0.2.1`), so the lab helper now has a poller: the `ssh` client logs in as `root` to
+`192.0.2.2:22` every 10 seconds (`-b 192.0.2.1`, `ConnectTimeout=5`, killed after 15), from the moment the capture is ready
+to the end of the run, and runs `true`. sshd's journal then holds the `Accepted publickey ... from 192.0.2.1` that the
+script reads. Each attempt is a row of `poller.json` (time, result `accepted`, `failed`, `timeout` or `error`, exit code,
+elapsed milliseconds; at most 256 rows, about 23 KB of the 32 KiB bound; an attempt past the 256th is `poller-log-limit`),
+a file of the lab run, counted in the summary as `lab.poller`.
+
+- **The key is one-time.** The controller makes a new Ed25519 pair for each run (`poller_key.py`: the public key by the
+  reference construction of RFC 8032, which needs no `ssh-keygen` on the controller, and the private key in the OpenSSH
+  format `ssh -i` reads; a test has `ssh-keygen -y` read it where one exists). The private key goes to the lab machine
+  alone, in the `poller` block of the request that sets it up and of the one that finishes it, and is never written to the
+  controller. On the lab machine the helper keeps only its hash in `claim.json` and `identity.json`, writes the key to
+  `poller.key` (mode 0600, on the tmpfs) for the length of the capture and removes it. It is in no image, no summary and no
+  report: the controller checks every summary for it and, if it ever finds it, replaces it and exits 2
+  (`poller-key-redacted`). The command line of the lab helper holds it while the capture runs, as it holds the node's
+  password. A fingerprint of the public key may be quoted; the key itself never.
+- **Where the public half is installed** (decided here): `run-l4.sh` appends one line to `/root/.ssh/authorized_keys` before
+  the install phase and removes exactly that line, and what it created, in its cleanup. The line is
+  `restrict,command="/bin/true" ssh-ed25519 BLOB rosetun-lab-poller`: the key can run nothing but `true`, forward nothing and
+  allocate no terminal. The alternative, a file of the package that the image copies, would add a file to `L4_START_REQUIRED`,
+  which the Hyper-V path does not send; the value rides in `job.env`, the one file the controller already writes for the run,
+  and the image holds no key at all. The cost is that `run-l4.sh` touches `/root/.ssh` on a lab run, which its cleanup
+  undoes and its report says (`removed the poller's key`).
+- **The observer.** The category `inbound-poll` (`lab_protocol.classify_windows(..., inbound_poll=...)`) is exactly: TCP
+  from `192.0.2.1` to port 22 of `192.0.2.2`, between the two machines' MACs, whenever it is sent (a SYN nobody answers is
+  the poller's own business), and the test machine's segments from port 22 back to a port the poller used, **from the moment
+  its local network went on**. Any other frame of that pair, a reply before that moment or to another port, is an unexpected
+  frame and a leak. The moment is the guest's note: `lockdown_lan_on` writes the epoch milliseconds to the state directory
+  before it runs `lockdown on --lan on`, and cleanup says `lan-on-ms=N` in `cleanup.actions`. The two machines' clocks are
+  the host's at boot and drift by a fraction of a second, so answers count from that moment less 2 seconds
+  (`LAN_ON_SLACK_SECONDS`); a run that never says it admits no answer. The poller's frames are never part of a window's
+  `flows`.
+- **The test image** has sshd on `192.0.2.2:22` and `169.254.77.1:22` (below). The first is where the poller connects, the
+  second the guest's end of the veth to the peer namespace (`inbound.closed`, `inbound.lan-link-local-closed`). That is a
+  change of the contract of image v6, which never let sshd listen on the guest's own address, and it holds for the L4
+  image only.
+- **The lab image** needs `/usr/bin/ssh` (openssh-client, installed offline by its owner). The helper checks it as a
+  root-owned regular file in `setup`, before it changes anything, and refuses with `poller-ssh-missing`.
+- What the run cannot know is whether Lockdown's local network lets the own segment `192.0.2.0/24` in (it is no private
+  range): the script looks for `iifname PHYS ip saddr ... accept` for its own segment, and if only private ranges get one,
+  `inbound.lan-open` fails in the lab for that reason. The qualification shows it.
+
+### The L4 test image (v7)
+
+Made from the L3 test image with sshd and the IPv6 router (v6b, with the lab helper installed), by the same tool:
+
+```sh
+python tools/vm/linux/prepare-l3-image.py /srv/test-v6c.qcow2 /srv/test-l4.qcow2 \
+  --source-sha256 V6C_SHA256 --descriptor /srv/test-l4.image.json --l4 --deps-debs /srv/l4-debs
+```
+
+- `--l4` needs `--deps-debs DIR` (only `.deb` files, no `rosetun_*`, installed offline with `dpkg -i` under a `policy-rc.d`
+  that starts nothing, `dpkg --audit` silent) and goes with none of `--sshd`, `--sshd-debs`, `--ipv6-router`,
+  `--check-package`. The directory holds the closure of `dbus-user-session`, `nftables` and `openssh-server` that v6c lacks.
+- It adds `l4-lab-sshd.socket` (`ListenStream=192.0.2.2:22` and `169.254.77.1:22`, `FreeBind=yes`, `Accept=yes`) and
+  `l4-lab-sshd@.service` (the lines of the packaged per-connection template), enabled in `sockets.target`, beside the v6
+  socket, which stays. Neither name starts with `rosetun`, which `preflight.no-foreign-service` refuses.
+- **Checked by reading** (a copy of the unit directories, `/var/lib/dpkg/status`, `/etc/ssh`, `/etc/nftables.conf`): the
+  three packages installed and no `rosetun`; `/usr/lib/systemd/user/dbus.socket` there; `nftables.service` there and **not
+  enabled** (the job enables it itself, after it looked at a boot without it); `/etc/nftables.conf` there with a line
+  `flush ruleset` (it is never written: a package without it is refused); the v6 sshd check as it was; the L4 socket
+  listening exactly on the two addresses, with `FreeBind` and `Accept=yes`, the template exactly the one this tool writes
+  and without a drop-in; the installation adding that one link (`sockets.target.wants/l4-lab-sshd.socket`) and taking none
+  away; no `policy-rc.d`, package directory or script left.
+- **Quiet.** The unit links are read before and after the dependencies: any unit they enable is refused (`L4_ALLOWED_UNITS`
+  names none), a lost mask is refused, new masks and aliases are listed.
+- The descriptor gets `l4` with the packages' hashes, the installed versions, the sockets and the hash of
+  `/etc/nftables.conf`; the output of v6c's other fields stays as it was. After the image is built, install the importer
+  `stage-l2.py` of this commit in it and copy the fields of the descriptor into `[image]` except `l4`.
+
+### Limits
+
+`timeouts.job` is the time limit of **each** of the three phases (the guest's systemd limits each by it), so the budgets
+come from `config.job_span` (a suite with `PHASES`; every other suite and the reboot smoke job keep their one phase):
+
+| | One phase of 600 s | Where |
+| --- | --- | --- |
+| span of the job | 3 * 600 + 2 * 240 (`REBOOT_SECONDS`) = **2280 s** | `config.job_span` |
+| the controller's wait | 2280 + 125 = **2405 s**, a look every 151 s, 16 looks at most | `config.wait_seconds`, `LinuxL2Job.wait` |
+| job deadline, `deadlines.execution` | 2280 + 180 = **2460 s** (`execution` must equal it) | `linux_l2`, `execution.validate` |
+| the lab's capture | 2280 + 300 = **2580 s** | `l3_lab.capture_seconds`, `CAPTURE_SLACK` |
+| longest capture, `DURATION_MAX` | **2700 s** (was 2100) | `lab_protocol` |
+| longest phase that fits | (2700 - 300 - 480) / 3 = **640 s** | `execution.validate_lab` |
+
+A one-phase job keeps its limit, 1800 s, so that 1800 + 300 fits in 2700 with room. The estimate of a run is 10 to 15
+minutes with three boots, far under the span. The other numbers:
+
+- **Calls of the job:** 112, of which the submission takes 6, each of the two collections at most 28 and the wait's 16 looks
+  3 each (48): 110.
+- **Lifecycle journal:** 14 rows of the 110 ordinary ones with two reboots (22 with four merged RESETs each), the reserve of 18
+  untouched; 2 rows per reboot.
+- **QGA recoveries:** 6 (4 + 2): the import's, an uncertain submit's or collection's, and one per reboot. A boot that takes
+  the retries costs observations only (8 per reboot at most of 32).
+- **QMP events:** 5 per reboot at most, 10 of 128.
+- **Capture:** under 1 MB expected (the poller's logins are 5 to 10 KB each, 60 to 100 of them in a run), 64 MiB on the
+  evidence disk (60 MiB of capture). To be measured in the first run: write down `evidence.disk.pcap_bytes`.
+- **Lab files:** six of at most 32 KiB each (`poller.json` the sixth); one window of at most 100.
+
+### Control
+
+`run linux-l4 --lab --control stop-helper`: with the service stopped for the first reboot, `run-l4.sh` turns the boot
+unit of Lockdown off (`control_stop_helper`), so nothing closes the network early in the next boot, and right after that
+boot, before any scenario runs, makes one direct request (`control_direct_request`). The network is open then and the
+request reaches the target, so the window shows a **fifth** connection to the target where the script asks for four:
+`DETECTED`. The point is chosen because the request is guaranteed to leave (no table before the helper starts, the resume
+unit waits for `network-online.target`, and the request is the script's own `direct_https`) and the window cannot miss it
+(it spans the first reboot). The scenario the control contradicts is `exit.denied-without-root`, the last one that passed
+before the reboot (the scenarios after it, `reboot.*`, fail without the boot unit). Exit 0 only when `lockdown` is
+`DETECTED` with a TCP flow to `203.0.113.2:443` that the target answered, that scenario is `DISAGREE`, an ordinary run
+would have exited 1, and both machines completed.
+
+### What to reinstall or build
+
+- **The L4 test image** (above), from the L3 test image with sshd and the IPv6 router, with `stage-l2.py` of this
+  commit (it knows the profile and the poller's key) and the lab helper of this commit; it needs the `.deb` closure
+  directory for `--deps-debs`. The other test images need nothing: their importers do not change in what they accept.
+- **The lab image, a new letter** (the owner names it): install `linux/guest/lab-entry.py` and `matrix/lab_protocol.py`
+  together (the poller, the category and the longer capture are in both) and `openssh-client`. The lab image of L3, Proxy and
+  L5 runs with the new helper as before: a run without a `poller` block starts no poller.
+- **The L4 content directory** (new): `build-artifacts.sh --l4` (both programs and `provenance.json`), the owner's
+  `sing-box`, `guest/launch.sh`, `start.sh`, `lib.sh`, `run-l4.sh`, `scenarios-l4.tsv` and the three units and the rules of
+  `packaging/linux` as artifacts; never a request. The L2, L3, Proxy and L5 content directories take the new `start.sh`.
+- The Hyper-V path takes the new `run-l4.sh` and `start.sh` only when its owner does.
+
+### Qualification
+
+Each command in its own run. Stop at the first unexpected result and send back the summaries and the retained
+artifacts (`poller.json`, `run-state.json`, `lifecycle.jsonl` and the capture of each lab run).
+
+1. Build the L4 image as above and install `stage-l2.py` and the lab helper in it; build the new lab image letter; prepare
+   the L4 content directory; copy the new `start.sh` into the other content directories; update the descriptors.
+2. `run linux-l4 --config <l4.toml>` without the lab (`--dry-run` first): the four first preflight checks PASS,
+   `preflight.baseline` FAIL (no route to `203.0.113.2`), 22 ERROR "not run", no reboot (one boot in the chain),
+   `completion` true, exit 1. The job needs `timeouts.job = 600` and `deadlines.execution = 2460`.
+3. `run linux-l4 --lab --config <l4-lab.toml>`, twice in a row: the group 27 of 27 PASS, the cross-check `AGREE` or
+   `NOT_APPLICABLE` only, one window `lockdown` with the verdict `EXPECTED` (4 TCP, 4 UDP), `lab.window_counts` as
+   expected, `group.boot_chain` of three, `lab.poller` with an `accepted` attempt after the local network went on, no
+   `findings`, no `unproven`, exit 0. Write down `evidence.disk.pcap_bytes`, the number of poll attempts and when the
+   first one was accepted, how long each reboot took and the tries of its new boot. In the capture, any answer of the test
+   machine to the poller before `lan-on-ms` less 2 s would show as an unexpected frame.
+4. `run linux-l4 --lab --control stop-helper --config <l4-lab.toml>`: exit 0, `control_result.met` true.
+5. `run linux-l3 --lab`, `run linux-proxy --lab` and `run linux-l5 --lab` once each, as in stages 7e, 8a and 8b: none is
+   broken (the longer `DURATION_MAX` and the new helper are the changes they share).
+6. `run linux-l2 --config <l2.toml>`, then `runs --state-directory <state>`: every run `completion_verified`.
+
+Hyper-V L4 stays with the owner: the guest scripts are the ones of that matrix, with the wrappers above.
+
 ## Stage 7a: Linux L3 delivery without network
 
 `run linux-l3` delivers the L3 package to one VM and runs the existing
