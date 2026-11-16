@@ -421,23 +421,32 @@ def run_linux_lab(config, *, suite, diagnostic=False, control=None, adapters=Non
             step('receipt', attempt.check_receipt)
         result['delivery'] = dict(state=attempt.state, receipt_verified=attempt.receipt_verified)
         job = step('job-create', lambda: attempt.linux_l2_job(checkout=config['source_checkout'], enabled=True))
+        job_failed = False
         try:
-            step('submit', job.submit)
-        except Exception:
-            if vm.qga.valid or job.submission != 'unknown':
-                raise
-            step('submit-recovery', recovery)
-        step('wait', lambda: job.wait(wait_seconds(suite, config['timeouts']['job']), sleep=sleep, clock=clock))
-        try:
-            step('collect', job.collect)
-        except Exception:
-            if not vm.qga.valid:
-                step('collect-recovery', recovery)
-            sleep(15)
-            step('collect-final', job.collect)
+            try:
+                step('submit', job.submit)
+            except Exception:
+                if vm.qga.valid or job.submission != 'unknown':
+                    raise
+                step('submit-recovery', recovery)
+            step('wait', lambda: job.wait(wait_seconds(suite, config['timeouts']['job']), sleep=sleep, clock=clock))
+            try:
+                step('collect', job.collect)
+            except Exception:
+                if not vm.qga.valid:
+                    step('collect-recovery', recovery)
+                sleep(15)
+                step('collect-final', job.collect)
+        except Exception as error:
+            # The job failed, but the lab machine is still capturing and its disk still holds what it saw: the run
+            # goes on to read both, so that the summary says what the lab saw and not "not-read". The failure stays
+            # and decides the exit code.
+            job_failed = True
+            result['errors'].append(failure(stage, error))
         result['execution'] = job.snapshot()
         seen['raw_report'] = saved_report(runs['test'], job, profile)
-        if diagnostic:
+        seen['job_failed'] = job_failed
+        if diagnostic and not job_failed:
             # The report is in; a journal the guest cannot give is noted and changes nothing already collected.
             try:
                 step('journal-full', job.full_journal)
@@ -466,7 +475,7 @@ def run_linux_lab(config, *, suite, diagnostic=False, control=None, adapters=Non
                 seen['hashes'][ROUTE_FILE[0]] = hashlib.sha256(raw).hexdigest()
                 seen['logs'][ROUTE_FILE[0]] = raw
         # Both machines stop, and only then is the lab's disk read: nothing may still be writing.
-        step('close-test', lambda: close_machine('test', False))
+        step('close-test', lambda: close_machine('test', job_failed))
         step('close-lab', lambda: close_machine('lab', False))
         lab_run = runs['lab']
         if not completion_verified(lab_run.directory, lab_run._read()):
@@ -510,8 +519,14 @@ def judge(lab_id, config, seen, suite='linux-l3'):
     seen['health'] = json.loads(seen['logs']['health.json'])
     # The poller's answers are admitted from the moment the guest says its local network went on, less the slack of
     # the two clocks; a run that never said so admits none.
-    poll = dict(replies_from=lan_on_seconds(seen.get('raw_report'), tables.LAN_ON_SLACK_SECONDS)) \
-        if tables.INBOUND_POLL else None
+    poll = None
+    if tables.INBOUND_POLL:
+        replies_from = lan_on_seconds(seen.get('raw_report'), tables.LAN_ON_SLACK_SECONDS)
+        if replies_from is None and seen.get('job_failed') and seen.get('raw_report') is None:
+            # A job that failed before it gave a report has said nothing about its network, so there is no moment
+            # to judge the poller's answers by: the run is unproven by its error, and they are not called leaks.
+            replies_from = 0
+        poll = dict(replies_from=replies_from)
     seen['verdict'] = classify_windows(seen['logs']['capture.pcap'], lab_id, None, health=seen['health'], ready=True,
                                        tunnel_port=config['lab']['tunnel']['node_port'],
                                        required_labels=tables.GROUP_LABELS, limit=EVIDENCE_PCAP_LIMIT, flows=True,

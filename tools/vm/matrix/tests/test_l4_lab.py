@@ -391,6 +391,19 @@ class BootTests(L4Flow):
         self.assertEqual('wait', result['errors'][0]['stage'])
         self.assertIn('controller-error', result['group']['unproven'])
 
+    def test_a_boot_nobody_observed_is_an_error_of_the_wait_and_the_disk_of_the_lab_is_read_all_the_same(self):
+        from tools.vm.matrix.lifecycle import LifecycleError
+        machines = self.machines(wait_error=LifecycleError('guest-reboot-unobserved'))
+        result = self.go(machines)
+        self.assertEqual(('wait', 'guest-reboot-unobserved'), (result['errors'][0]['stage'], result['errors'][0]['reason']))
+        evidence = result['lab']['qualification']['evidence']
+        self.assertEqual((True, None), (evidence['verified'], evidence['reason']))
+        self.assertGreater(evidence['pcap_bytes'], 0)
+        self.assertEqual(1, len(result['lab']['windows']))
+        self.assertIn('controller-error', result['group']['unproven'])
+        # The guest gave no report and so no moment of its own to judge the poller's answers by: not leaks.
+        self.assertEqual(([], 2), (result['group']['findings'], result['exit_code']))
+
     def test_findings_stand_before_an_unproven_boot_chain(self):
         result = self.go(self.machines(chain=BOOTS[:2], windows=windows(extra=direct_flow('target', 46000))))
         self.assertEqual(1, result['exit_code'])

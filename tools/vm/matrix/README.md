@@ -3161,8 +3161,15 @@ Order: lease; the two runs; both overlays; the evidence disk; the L3 requests an
 run; the lab machine starts and is set up (node, HTTPS target, resolver, DoH, capture to the
 disk, `capture_ready`); the test machine starts; import; `job.env` with `LAB_MARKER_ADDRESS`; the
 job; collection; `finish` on the lab; both machines stop; the evidence disk is read and checked; the
-windows are found; the summary. A failure after the first machine started closes both. The lab
-machine pins the certificates: the helper refuses a certificate whose hash is not in the request.
+windows are found; the summary. A failure after the first machine started closes both. A job
+that fails (`submit`, `wait` or the collections) does not stop there: the lab machine is still capturing, so the run
+goes on to `finish`, the lab's files, the stop of both machines (the test machine hard, the lab machine as ever), the
+disk and the windows, and the error of the job stays first in `errors` and decides the exit code. Before, such a failure
+left the disk unread (`evidence.reason` `not-read`, no windows, fixtures not seen) and said nothing of what the lab had
+seen. A guest that gave no report has no note of when its network went on, and the poller's answers are then not called
+leaks (the run is unproven by its error either way). A failure of the lab itself, or before the job exists, still leaves
+the disk unread. The lab machine pins the certificates: the helper refuses a certificate whose hash is not in the
+request.
 
 ### Reinstall
 

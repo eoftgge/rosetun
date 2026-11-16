@@ -1057,9 +1057,28 @@ class FailureTests(Flow):
                         self.assertFalse(result['completed'])
                     else:
                         self.assertTrue(all(vm.closed for vm in machines.vms.values()))
-                    self.assertFalse(result['lab']['qualification']['evidence']['verified'])
+                    # A job that failed leaves the lab machine capturing, so its disk is read all the same.
+                    self.assertEqual(point in ('submit', 'collect'),
+                                     result['lab']['qualification']['evidence']['verified'])
                 finally:
                     case.doCleanups()
+
+    def test_a_collection_that_failed_leaves_the_disk_of_the_lab_read_and_its_windows_counted(self):
+        machines = Machines(self, fault='collect')
+        result = self.go(machines)
+        self.assertEqual(2, result['exit_code'])
+        self.assertEqual('collect-final', result['errors'][0]['stage'])
+        evidence = result['lab']['qualification']['evidence']
+        self.assertEqual((True, None), (evidence['verified'], evidence['reason']))
+        self.assertGreater(evidence['pcap_bytes'], 0)
+        self.assertTrue(result['lab']['windows'])
+        stages = [row['stage'] for row in result['stages']]
+        self.assertEqual(['collect', 'collect-final', 'lab-finish'], stages[stages.index('collect'):][:3])
+        self.assertLess(stages.index('close-lab'), stages.index('evidence-read'))
+        self.assertTrue(all(vm.closed for vm in machines.vms.values()))
+        # The test machine is not read again, so it stops at once; the lab machine stops as it always does.
+        self.assertEqual([('hard', 'test', True), ('hard', 'lab', False)],
+                         [e for e in machines.events if type(e) is tuple and e[0] == 'hard'])
 
     def test_a_failed_start_of_the_test_machine_still_closes_the_lab_machine(self):
         machines = Machines(self, fault='start-test')
