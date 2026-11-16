@@ -16,6 +16,7 @@ from unittest.mock import patch
 
 from tools.vm.matrix import cli, execution, lifecycle, linux_l2 as l2, l2_media as media, orchestrator, run_state
 from tools.vm.matrix.jobs import JobError
+from tools.vm.matrix.qmp_adapter import ResetEvent
 from tools.vm.matrix.qga import QgaError
 from tools.vm.matrix.tests import test_jobs, test_orchestrator, test_qemu
 from tools.vm.matrix.tests.test_l2_media import helper
@@ -270,6 +271,168 @@ class BudgetTests(RebootCase):
         with self.assertRaisesRegex(lifecycle.LifecycleError, 'journal-limit'):
             self.vm.watch_resets()
         self.assertEqual((0, False), (self.vm.guest_resets, self.vm.reset_pending))
+
+
+T0 = 1_700_000_000_000_000
+
+
+def at(milliseconds, *, reason='guest-reset', guest=True, micro=0):
+    """A RESET that QEMU stamped `milliseconds` after the first of the tests (QEMU's own clock, microseconds)."""
+    return ResetEvent(guest, reason, T0 + milliseconds * 1000 + micro)
+
+
+class CoalescedResetTests(RebootCase):
+    """Linux resets a machine by several ways in a row and QEMU reports each: those are one reboot."""
+
+    def seen(self, *events):
+        self.control.resets.extend(events)
+        self.vm.watch_resets()
+
+    def collects(self):
+        self.publish(boot=NEW, boots=[BOOT, NEW])
+        result = self.job.collect()
+        self.assertTrue(result['assessment']['acceptance']['accepted'], result['assessment']['validation'])
+        return result
+
+    def test_two_guest_resets_67_ms_apart_are_one_reboot_that_the_job_goes_through(self):
+        self.job.submit()
+        self.publish('running')
+        before, recoveries = self.vm.events, self.vm.qga_recoveries
+        self.seen(at(0), at(67))
+        self.assertEqual((1, 1, True), (self.vm.guest_resets, self.vm.reset_merged, self.vm.reset_pending))
+        self.assertEqual([('guest-reset-observed', '1-of-1 reason=guest-reset qemu=1700000000.000000'),
+                          ('guest-reset-coalesced', '1-of-1 merged=1 +67ms reason=guest-reset qemu=1700000000.067000')],
+                         self.rows()[-2:])
+        row = self.reboot(NEW)
+        self.assertEqual(('changed', True), (row['boot_comparison'], row['new_boot_confirmed']))
+        self.assertEqual(([BOOT, NEW], NEW, False), (self.vm.boot_chain, self.vm.last_boot_id, self.vm.reset_pending))
+        # The merged reset cost a row and nothing of the plan: one recovery, the same as a reboot of one reset.
+        self.assertEqual((lifecycle.RESET_ROWS + 1, 1), (self.vm.events - before, self.vm.qga_recoveries - recoveries))
+        self.assertEqual('boot-chain-extended', self.rows()[-1][0])
+        self.assertEqual([BOOT, NEW], self.collects()['boot_chain'])
+
+    def test_three_resets_in_the_window_are_the_same_reboot(self):
+        self.seen(at(0), at(67), at(130))
+        self.assertEqual((1, 2), (self.vm.guest_resets, self.vm.reset_merged))
+        self.assertEqual(['guest-reset-observed', 'guest-reset-coalesced', 'guest-reset-coalesced'],
+                         [action for action, _ in self.rows()[-3:]])
+        self.assertTrue(self.rows()[-1][1].startswith('1-of-1 merged=2 +130ms'))
+        self.reboot(NEW)
+        self.assertEqual([BOOT, NEW], self.vm.boot_chain)
+
+    def test_a_reset_that_arrives_in_a_later_look_is_merged_by_its_own_time_not_by_when_it_was_read(self):
+        self.seen(at(0))
+        self.seen(at(300))
+        self.assertEqual((1, 1), (self.vm.guest_resets, self.vm.reset_merged))
+
+    def test_the_window_closes_after_one_second_of_qemus_time_to_the_microsecond(self):
+        self.seen(at(0), at(1000))
+        self.assertEqual(1, self.vm.reset_merged)
+        with self.assertRaisesRegex(lifecycle.LifecycleError, 'unplanned-guest-reset'):
+            self.seen(at(1000, micro=1))
+        self.assertEqual('unplanned-guest-reset reason=guest-reset qemu=1700000001.000001', self.rows()[-1][1])
+
+    def test_a_second_reset_after_the_window_before_the_boot_is_confirmed_counts_against_the_plan(self):
+        self.seen(at(0))
+        with self.assertRaisesRegex(lifecycle.LifecycleError, 'unplanned-guest-reset'):
+            self.seen(at(2500))
+        self.assertEqual(('guest-reset-observed', 'unplanned-guest-reset reason=guest-reset qemu=1700000002.500000'),
+                         self.rows()[-1])
+        self.assertEqual((1, 0), (self.vm.guest_resets, self.vm.reset_merged))
+
+    def test_a_plan_of_two_takes_a_reset_after_the_window_as_the_second_reboot(self):
+        self.vm.planned_reboots = 2
+        self.seen(at(0), at(60), at(2500), at(2560))
+        self.assertEqual((2, 1), (self.vm.guest_resets, self.vm.reset_merged))
+        self.assertEqual(['guest-reset-observed', 'guest-reset-coalesced', 'guest-reset-observed',
+                          'guest-reset-coalesced'], [action for action, _ in self.rows()[-4:]])
+
+    def test_a_reset_within_the_window_of_a_boot_already_confirmed_is_a_new_reboot(self):
+        self.seen(at(0))
+        self.reboot(NEW)
+        with self.assertRaisesRegex(lifecycle.LifecycleError, 'unplanned-guest-reset'):
+            self.seen(at(67))
+        self.assertEqual([BOOT, NEW], self.vm.boot_chain)
+
+    def test_more_merged_resets_than_the_limit_end_the_run(self):
+        self.seen(at(0), *[at(50 * n) for n in range(1, lifecycle.RESET_MERGE_LIMIT + 1)])
+        self.assertEqual((1, lifecycle.RESET_MERGE_LIMIT), (self.vm.guest_resets, self.vm.reset_merged))
+        with self.assertRaisesRegex(lifecycle.LifecycleError, 'guest-reset-merge-limit'):
+            self.seen(at(300))
+        self.assertTrue(self.rows()[-1][1].startswith('guest-reset-merge-limit reason=guest-reset'))
+        # The refusal is sticky, as every other refusal of a reset.
+        with self.assertRaisesRegex(lifecycle.LifecycleError, 'guest-reset-merge-limit'):
+            self.vm.observe_guest()
+        self.assertEqual([BOOT], self.vm.boot_chain)
+
+    def test_events_with_a_reason_without_one_and_with_neither_are_told_as_they_came(self):
+        self.vm.planned_reboots = 2
+        self.seen(ResetEvent(True, None, T0), ResetEvent(True, 'guest-shutdown', T0 + 5000))
+        self.assertEqual([('guest-reset-observed', '1-of-2 qemu=1700000000.000000'),
+                          ('guest-reset-coalesced', '1-of-2 merged=1 +5ms reason=guest-shutdown qemu=1700000000.005000')],
+                         self.rows()[-2:])
+
+    def test_a_reset_with_no_time_is_never_merged_and_costs_the_plan_as_before(self):
+        self.seen(at(0))
+        for event in (ResetEvent(True), ResetEvent(True, 'guest-reset', None)):
+            with self.assertRaisesRegex(lifecycle.LifecycleError, 'unplanned-guest-reset'):
+                self.seen(event)
+            self.vm.unplanned_reset = None
+        self.assertEqual('unplanned-guest-reset reason=guest-reset', self.rows()[-1][1])
+
+    def test_a_reset_of_the_host_inside_the_window_is_still_an_error(self):
+        self.seen(at(0))
+        with self.assertRaisesRegex(lifecycle.LifecycleError, 'host-reset-outside-reset'):
+            self.seen(at(10, guest=False, reason='host-qmp-system-reset'))
+        self.assertEqual(0, self.vm.reset_merged)
+
+    def test_a_merge_that_would_take_the_rows_of_the_boot_is_refused_and_leaves_no_trace(self):
+        self.seen(at(0))
+        self.vm.events = lifecycle.ORDINARY_ROWS - 1
+        with self.assertRaisesRegex(lifecycle.LifecycleError, 'journal-limit'):
+            self.seen(at(67))
+        self.assertEqual((0, lifecycle.ORDINARY_ROWS - 1), (self.vm.reset_merged, self.vm.events))
+
+    def test_the_time_of_the_first_reset_and_the_merged_count_are_kept_in_the_run_state(self):
+        from tools.vm.matrix.resources import StandLease, create_run
+        stand = tempfile.TemporaryDirectory()
+        self.addCleanup(stand.cleanup)
+        lease = StandLease(stand.name, 'synthetic').acquire()
+        self.addCleanup(lease.release)
+        # The state of a run of its own: the run of the fixture takes no more resources.
+        run = create_run(lease)
+        run.register(dict(run_state.RESOURCE))
+        state = run_state.RunState.create(run, phase='running', boot_id=BOOT)
+        self.vm.state = state
+        self.seen(at(0), at(67), at(90))
+        collected = run_state.RunState.load(run).document['collected']
+        self.assertEqual((T0, 2), (collected['guest_reset_1_us'], collected['guest_reset_1_merged']))
+        self.reboot(NEW)
+        steps = [(row['step'], row['status']) for row in state.document['transitions']]
+        self.assertEqual([('guest-reset-1', 'intent'), ('guest-reset-1', 'done')], steps)
+        self.assertEqual((None, 0), (self.vm.reset_first_us, self.vm.reset_merged))
+
+
+class CoalescedBudgetTests(RebootCase):
+    planned = 2
+
+    def test_two_planned_reboots_of_the_most_merged_resets_fit_in_the_ordinary_rows_with_the_teardown(self):
+        self.vm.resume()
+        self.job.submit()
+        before = self.vm.events
+        for index, boot in enumerate((NEW, THIRD)):
+            base = index * 60_000
+            self.control.resets.extend(at(base + 50 * n) for n in range(lifecycle.RESET_MERGE_LIMIT + 1))
+            self.vm.watch_resets()
+            self.assertEqual(lifecycle.RESET_MERGE_LIMIT, self.vm.reset_merged)
+            self.reboot(boot)
+        self.assertEqual([BOOT, NEW, THIRD], self.vm.boot_chain)
+        # Per reboot: observed, the merged ones, and the extension of the chain.
+        rows_per_reboot = lifecycle.RESET_ROWS + lifecycle.RESET_MERGE_LIMIT
+        self.assertEqual((6, before + 2 * rows_per_reboot), (rows_per_reboot, self.vm.events))
+        self.assertLessEqual(self.vm.events, lifecycle.ORDINARY_ROWS)
+        self.assertLessEqual(self.vm.events + lifecycle.TEARDOWN_ROWS, lifecycle.JOURNAL_LIMIT)
+        self.assertEqual(2, self.vm.guest_resets)
 
 
 class WaitTests(RebootCase):

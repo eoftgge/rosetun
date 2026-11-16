@@ -12,7 +12,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from tools.vm.matrix.qmp_adapter import Qmp, ByteRelay
+from tools.vm.matrix.qmp_adapter import Qmp, ByteRelay, ResetEvent
 from tools.vm.matrix.diagnostics import StderrSink
 
 try:
@@ -145,10 +145,37 @@ class AdapterTests(unittest.TestCase):
                     b'{"event":"RESET","data":{}}', b'{"event":"RESET"}', b'{"event":"STOP"}', b'not json',
                     b'{"event":"RESET","data":{"guest":"yes"}}'):
             adapter._event(Message(raw))
-        self.assertEqual([True, False, False, False, False], adapter.take_resets())
+        self.assertEqual([ResetEvent(True, 'guest-reset', None), ResetEvent(False, 'host-qmp-system-reset', None),
+                          ResetEvent(False), ResetEvent(False), ResetEvent(False)], adapter.take_resets())
         self.assertEqual([], adapter.take_resets())
         # Every event counts against the budget, the ones that say nothing as well.
         self.assertEqual(7, adapter.events)
+
+    def test_a_reset_event_keeps_its_reason_and_qemus_time_and_nothing_malformed(self):
+        adapter = self.adapter()
+
+        class Message:
+            def __init__(self, value):
+                self.text = json.dumps(value).encode()
+
+            def __bytes__(self):
+                return self.text
+
+        def reset(data, stamp):
+            event = {'event': 'RESET', 'data': data}
+            if stamp is not None:
+                event['timestamp'] = stamp
+            adapter._event(Message(event))
+        reset({'guest': True, 'reason': 'guest-reset'}, {'seconds': 1700000000, 'microseconds': 67000})
+        reset({'guest': True}, {'seconds': 5, 'microseconds': 0})
+        # A reason that is not a short plain word is dropped, and a time that is not a pair of in-range integers too.
+        reset({'guest': True, 'reason': 'a b\n'},{'seconds': 5, 'microseconds': 1000000})
+        reset({'guest': True, 'reason': 7}, {'seconds': -1, 'microseconds': 0})
+        reset({'guest': True, 'reason': 'x' * 65}, {'seconds': True, 'microseconds': 0})
+        reset({'guest': True}, {'seconds': 1.5, 'microseconds': 0})
+        reset({'guest': True}, None)
+        self.assertEqual([ResetEvent(True, 'guest-reset', 1700000000067000), ResetEvent(True, None, 5000000),
+                          ResetEvent(True)] + [ResetEvent(True)] * 4, adapter.take_resets())
 
     def test_pump_runs_the_loop_without_sending_a_command_or_spending_the_budget(self):
         adapter = self.adapter()
@@ -323,7 +350,7 @@ class InstalledAdapterTests(unittest.TestCase):
             release.set()
             adapter.pump(0.5)
             # The library hands over its own message type; the adapter reads its bytes.
-            self.assertEqual([True, False], adapter.take_resets())
+            self.assertEqual([True, False], [event.guest for event in adapter.take_resets()])
             self.assertEqual(2, adapter.events)
         finally:
             adapter.close()

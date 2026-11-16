@@ -8,9 +8,26 @@ import asyncio
 import json
 import math
 from importlib.metadata import version
+from typing import NamedTuple
+import re
 import select
 import socket
 import threading
+
+
+_REASON = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,63}')
+
+
+class ResetEvent(NamedTuple):
+    """One QMP `RESET`: whether the guest made it, QEMU's `reason` (since 6.0) and its time, each None if absent.
+
+    `at` is QEMU's own timestamp of the event in microseconds since the epoch; it is read from the event, never from
+    the moment the controller looked, so two resets QEMU sent a few milliseconds apart stay that far apart.
+    """
+
+    guest: bool
+    reason: str = None
+    at: int = None
 
 
 # Bytes the relay may move past what is already on record before it records more.
@@ -133,7 +150,7 @@ class Qmp:
         self.events = spent.get('events', 0)
         self.calls = spent.get('calls', 0)
         self.persist = persist
-        # What each RESET event said, in order: True for a reset the guest made, False for any other.
+        # What each RESET event said, in order, as `ResetEvent`s.
         self.resets = []
         self.valid = True
         self.closed = False
@@ -159,10 +176,19 @@ class Qmp:
             return
         if type(message) is dict and message.get('event') == 'RESET':
             data = message.get('data')
-            self.resets.append(type(data) is dict and data.get('guest') is True)
+            data = data if type(data) is dict else {}
+            reason = data.get('reason')
+            stamp = message.get('timestamp')
+            stamp = stamp if type(stamp) is dict else {}
+            seconds, micro = stamp.get('seconds'), stamp.get('microseconds')
+            ok = (type(seconds) is int and type(micro) is int and 0 <= seconds < 2**40 and 0 <= micro < 10**6)
+            self.resets.append(ResetEvent(
+                data.get('guest') is True,
+                reason if type(reason) is str and _REASON.fullmatch(reason) else None,
+                seconds * 10**6 + micro if ok else None))
 
     def take_resets(self):
-        """The RESET events read since the last call, oldest first: `True` for a guest's own reset."""
+        """The RESET events read since the last call, oldest first, each a `ResetEvent`."""
         taken, self.resets = self.resets, []
         return taken
 

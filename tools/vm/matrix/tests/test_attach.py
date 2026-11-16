@@ -196,10 +196,63 @@ class AttachTests(unittest.TestCase):
         self.assertEqual(0, result['exit_code'])
         self.assert_stand_free()
 
+    def attached_to_a_pending_reset(self):
+        run_id = self.killed('reset-seen', 'reboot')
+        lease = StandLease(self.state, 'stand').acquire(recovery=True)
+        self.addCleanup(lease.release)
+        run = bind_run(lease, run_id)
+        from tools.vm.matrix.run_state import RunState
+        RunState.load(run)
+        vm = lifecycle.attach(run)
+        self.addCleanup(vm.close)
+        vm.planned_reboots = 1
+        return run_id, vm
+
+    def rows_of(self, run_id, *actions):
+        rows = map(json.loads, self.journal(run_id).splitlines())
+        return [(row['action'], row['result']) for row in rows if row['action'] in actions]
+
+    def test_attach_goes_on_merging_resets_of_a_reboot_from_the_time_of_its_first_reset(self):
+        run_id, vm = self.attached_to_a_pending_reset()
+        # The dead controller recorded the first RESET (QEMU's time 1.000000); the next one comes 67 ms later.
+        self.assertEqual((1, True, 1000000, 0), (vm.guest_resets, vm.reset_pending, vm.reset_first_us, vm.reset_merged))
+        fake_controller.steer('reset-event guest guest-reset 1 67000')
+        vm.watch_resets()
+        self.assertEqual((1, 1), (vm.guest_resets, vm.reset_merged))
+        self.assertEqual([('guest-reset-coalesced', '1-of-1 merged=1 +67ms reason=guest-reset qemu=1.067000')],
+                         self.rows_of(run_id, 'guest-reset-coalesced'))
+        self.assertEqual(1, self.record(run_id)['collected']['guest_reset_1_merged'])
+        # Two seconds on, with the boot still unconfirmed, a reset is a reboot of its own: over the plan of one.
+        fake_controller.steer('reset-event guest guest-reset 3 0')
+        with self.assertRaisesRegex(lifecycle.LifecycleError, 'unplanned-guest-reset'):
+            vm.watch_resets()
+
+    def test_attach_to_a_reset_with_no_recorded_time_merges_nothing(self):
+        run_id = self.killed('reset-seen', 'reboot')
+        path = self.directory(run_id) / 'run-state.json'
+        record = json.loads(path.read_text())
+        # A run state of a controller that saw a reset without a time of QEMU's.
+        record['collected'] = {}
+        path.write_text(json.dumps(record))
+        lease = StandLease(self.state, 'stand').acquire(recovery=True)
+        self.addCleanup(lease.release)
+        run = bind_run(lease, run_id)
+        from tools.vm.matrix.run_state import RunState
+        RunState.load(run)
+        vm = lifecycle.attach(run)
+        self.addCleanup(vm.close)
+        vm.planned_reboots = 1
+        self.assertEqual((None, True), (vm.reset_first_us, vm.reset_pending))
+        fake_controller.steer('reset-event guest guest-reset 1 67000')
+        with self.assertRaisesRegex(lifecycle.LifecycleError, 'unplanned-guest-reset'):
+            vm.watch_resets()
+
     def test_the_journal_of_a_run_with_a_reboot_says_what_the_controller_saw(self):
         run_id = self.killed('wait', 'reboot')
         rows = [(row['action'], row['result']) for row in map(json.loads, self.journal(run_id).splitlines())]
-        self.assertEqual([('guest-reset-observed', '1-of-1'), ('boot-chain-extended', '2')],
+        # The row says what QEMU said of the reset: its reason and its own time.
+        self.assertEqual([('guest-reset-observed', '1-of-1 reason=guest-reset qemu=1.000000'),
+                          ('boot-chain-extended', '2')],
                          [row for row in rows if row[0] in ('guest-reset-observed', 'boot-chain-extended')])
         self.assertTrue(self.process_alive(run_id))
         self.assertEqual(0, orchestrator.close_run(self.state, run_id)[1])

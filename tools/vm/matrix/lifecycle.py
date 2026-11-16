@@ -55,8 +55,17 @@ QGA_SOCKET = 'qga.sock'
 # sun_path holds 108 bytes with the terminating zero.
 SOCKET_PATH_LIMIT = 107
 # One planned guest reset takes two rows of the ordinary journal: `guest-reset-observed` when the controller sees
-# the RESET event and `boot-chain-extended` when the new boot ID is confirmed. A refused reset takes one.
+# the RESET event and `boot-chain-extended` when the new boot ID is confirmed. A refused reset takes one. Every RESET
+# merged into it (below) takes one more, `guest-reset-coalesced`: 2 + RESET_MERGE_LIMIT = 6 rows for a reboot at most.
 RESET_ROWS = 2
+# Linux tries several ways to reset a machine in a row (the ACPI reset register, port 0xCF9, the keyboard controller),
+# tens of milliseconds apart, and QEMU reports each one as a RESET. A guest RESET that QEMU stamped within this long of
+# the first of a reboot belongs to it: no guest gets through firmware, bootloader and kernel to a userspace whose agent
+# answers in one second, while the attempts of one reboot are two orders of magnitude closer (67 ms was seen).
+RESET_MERGE_US = 1_000_000
+# How many RESETs one reboot may take in after its first: Linux has about five ways to reset, so a fifth merged one is
+# no reboot but a guest that keeps resetting, and ends the run.
+RESET_MERGE_LIMIT = 4
 # How long the controller lets QMP read events that already arrived, and how many agent sessions one reset may try.
 RESET_PUMP_SECONDS = 0.25
 RESET_ATTEMPTS = 8
@@ -266,6 +275,9 @@ class Vm:
         # Who made the pending reset: `guest` (a RESET event seen by the controller) or `controller` (`reset()`).
         self.reset_kind = None
         self.guest_resets = 0
+        # QEMU's time (microseconds) of the first RESET of the reboot pending, and how many more were merged into it.
+        self.reset_first_us = None
+        self.reset_merged = 0
         self.unplanned_reset = None
         self._planned_reboots = 0
         self.qga_reason = 'initial'
@@ -509,6 +521,7 @@ class Vm:
             if row['new_boot_confirmed']:
                 self.reset_pending = False
                 self.reset_kind = None
+                self.reset_first_us, self.reset_merged = None, 0
             elif not self.boot_chain:
                 self.boot_chain = [row['boot_id']]
             row['result'] = 'observed'
@@ -560,26 +573,71 @@ class Vm:
         self._ingest_resets(resets)
 
     def _ingest_resets(self, resets, *, expected_host=0):
-        """Register each RESET: only a guest's own reset within the plan is accepted, the host's `reset()` apart."""
-        for guest in resets:
-            if not guest and expected_host > 0:
+        """Register each RESET: only a guest's own reset within the plan is accepted, the host's `reset()` apart.
+
+        A guest RESET that comes while the boot of an earlier one is unconfirmed, within `RESET_MERGE_US` of that one
+        by QEMU's time, is the same reboot and spends nothing of the plan.
+        """
+        for event in resets:
+            if not event.guest and expected_host > 0:
                 expected_host -= 1
                 continue
-            if not guest:
-                self._refuse_reset('host-reset-outside-reset')
+            if not event.guest:
+                self._refuse_reset('host-reset-outside-reset', event)
+            if self._merges(event):
+                self._merge_guest_reset(event)
+                continue
             if not self.boot_chain:
-                self._refuse_reset('guest-reset-before-first-boot')
+                self._refuse_reset('guest-reset-before-first-boot', event)
             if self.guest_resets >= self._planned_reboots:
-                self._refuse_reset('unplanned-guest-reset')
-            self._register_guest_reset()
+                self._refuse_reset('unplanned-guest-reset', event)
+            self._register_guest_reset(event)
 
-    def _refuse_reset(self, reason):
+    @staticmethod
+    def _described(event):
+        """What QEMU said of a RESET, as the tail of a journal result: its reason and its time, as far as it gave them."""
+        text = '' if event is None or event.reason is None else ' reason=%s' % event.reason
+        if event is not None and event.at is not None:
+            text += ' qemu=%d.%06d' % divmod(event.at, 10**6)
+        return text
+
+    def _refuse_reset(self, reason, event=None):
         """An unplanned reset ends the run: no boot ID is taken after it, and the row says what was seen."""
         self.unplanned_reset = reason
         self.reset_pending = True
         self.operation_errors.append(reason)
-        self._event('guest-reset-observed', reason)
+        self._event('guest-reset-observed', reason + self._described(event))
         raise LifecycleError(reason, self)
+
+    def _merges(self, event):
+        """Whether a guest RESET is one more of the reboot already pending; with no time to judge by, it is not."""
+        if not (self.reset_pending and self.reset_kind == 'guest' and self.unplanned_reset is None):
+            return False
+        if self.reset_first_us is None or event.at is None:
+            return False
+        return 0 <= event.at - self.reset_first_us <= RESET_MERGE_US
+
+    def _merge_guest_reset(self, event):
+        if self.reset_merged >= RESET_MERGE_LIMIT:
+            self._refuse_reset('guest-reset-merge-limit', event)
+        # The row of the merge and, still to come, the one that confirms the boot.
+        self._reserve(RESET_ROWS)
+        self.reset_merged += 1
+        self._record_reset_time()
+        self._event('guest-reset-coalesced', '%d-of-%d merged=%d +%dms%s' % (
+            self.guest_resets, self._planned_reboots, self.reset_merged,
+            (event.at - self.reset_first_us) // 1000, self._described(event)))
+
+    def _record_reset_time(self):
+        """Keep the first RESET's time and the merged count with the run state, so that an attached controller goes on."""
+        if self.state is None or self.reset_first_us is None:
+            return
+        try:
+            self.state.update('collected', **{'guest_reset_%d_us' % self.guest_resets: self.reset_first_us,
+                                              'guest_reset_%d_merged' % self.guest_resets: self.reset_merged})
+        except (OSError, ValueError):
+            self.evidence_failed = True
+            raise LifecycleError('run-state-write-failed', self) from None
 
     def _step(self, name, status):
         """One step of the run state, in the phase it is in; it says that a reset was seen or that its boot was taken."""
@@ -590,9 +648,11 @@ class Vm:
                 self.evidence_failed = True
                 raise LifecycleError('run-state-write-failed', self) from None
 
-    def _register_guest_reset(self):
+    def _register_guest_reset(self, event):
         self._reserve(RESET_ROWS)
         self.guest_resets += 1
+        self.reset_first_us, self.reset_merged = event.at, 0
+        self._record_reset_time()
         # The intent goes to disk first: a controller that dies from here on is attached with the reset pending.
         self._step('guest-reset-%d' % self.guest_resets, 'intent')
         self.reset_boot_id = self.boot_chain[-1]
@@ -602,7 +662,8 @@ class Vm:
         self.guest_observation = None
         if self.qga is not None:
             self.qga.invalidate()
-        self._event('guest-reset-observed', '%d-of-%d' % (self.guest_resets, self._planned_reboots))
+        self._event('guest-reset-observed', '%d-of-%d%s' % (self.guest_resets, self._planned_reboots,
+                                                            self._described(event)))
 
     def _extend_chain(self, boot_id, kind):
         """Take a boot ID the controller confirmed: the run state first, then the journal."""
@@ -933,6 +994,12 @@ def attach(run, *, timeout=5):
     if resets and resets[-1]['status'] == 'intent' and vm.boot_chain:
         vm.reset_boot_id, vm.reset_pending, vm.reset_kind = vm.boot_chain[-1], True, 'guest'
         vm.qga_reason = 'guest-reset'
+        # The merge window goes on from the time of the first RESET the dead controller recorded, if it recorded one.
+        collected = state.document['collected']
+        first = collected.get('guest_reset_%d_us' % vm.guest_resets)
+        merged = collected.get('guest_reset_%d_merged' % vm.guest_resets)
+        if type(first) is int and type(merged) is int and 0 <= merged <= RESET_MERGE_LIMIT:
+            vm.reset_first_us, vm.reset_merged = first, merged
     try:
         vm.control_lock = lock_run(run.directory)
     except (OSError, ValueError):

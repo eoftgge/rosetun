@@ -7,6 +7,7 @@ import unittest
 from unittest.mock import patch
 
 from tools.vm.matrix import lifecycle
+from tools.vm.matrix.qmp_adapter import ResetEvent
 from tools.vm.matrix.tests import test_qemu
 
 REAL_HOST = lifecycle._host
@@ -80,7 +81,8 @@ class Control:
         self.state = 'prelaunch'
         self.commands = []
         self.bad_uuid = False
-        # What the monitor reported as RESET events: True for the guest's own.
+        # What the monitor reported as RESET events: True for the guest's own, False for any other, or a whole
+        # `ResetEvent` with its reason and QEMU's time. A bare boolean carries no time, so it is never merged.
         self.resets = []
 
     def handshake(self, timeout):
@@ -91,7 +93,7 @@ class Control:
 
     def take_resets(self):
         taken, self.resets = self.resets, []
-        return taken
+        return [item if isinstance(item, ResetEvent) else ResetEvent(item) for item in taken]
 
     def command(self, name, timeout, *, event=None):
         self.commands.append(name)

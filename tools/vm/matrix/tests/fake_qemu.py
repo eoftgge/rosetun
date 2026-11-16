@@ -11,7 +11,8 @@ A test steers the guest through the control socket named by the environment
 variable FAKE_QEMU_CONTROL, one line per command: `guest-reset [BOOT_ID]`
 (the agent session ends, the boot ID changes if one is given, and the monitor
 reports a RESET event of the guest), `host-reset` (a RESET that is not the
-guest's), `boot BOOT_ID` (a boot ID changes with no event), `agent-down` and
+guest's), `reset-event guest|host REASON SECONDS MICROSECONDS` (one more RESET at the time named, nothing
+else changes), `boot BOOT_ID` (a boot ID changes with no event), `agent-down` and
 `agent-up` (the agent socket stops answering, or answers again).
 """
 
@@ -147,6 +148,9 @@ def steer(server, files, state):
                     except (OSError, AttributeError):
                         pass
                     event(state, True, 'guest-reset')
+                elif words[0] == 'reset-event':
+                    # `reset-event guest|host REASON SECONDS MICROSECONDS`: one RESET at the time the test names.
+                    event(state, words[1] == 'guest', words[2], (int(words[3]), int(words[4])))
                 elif words[0] == 'host-reset':
                     event(state, False, 'host-qmp-system-reset')
                 elif words[0] == 'boot':
@@ -156,10 +160,10 @@ def steer(server, files, state):
                 send(stream, {'ok': words[0]})
 
 
-def event(state, guest, reason):
+def event(state, guest, reason, stamp=(1, 0)):
     with state['lock']:
         send(state['monitor'], {'event': 'RESET', 'data': {'guest': guest, 'reason': reason},
-                                'timestamp': {'seconds': 1, 'microseconds': 0}})
+                                'timestamp': {'seconds': stamp[0], 'microseconds': stamp[1]}})
 
 
 def main(argv):

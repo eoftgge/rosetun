@@ -4247,10 +4247,24 @@ fake QEMU on named sockets and scripted agents.
   the run-state step `guest-reset-N` at intent (before anything else), the current agent session invalidated, and the
   VM `reset_pending` with `reset_kind = guest`. The plan is `planned_reboots` of the suite (`config.PLANNED_REBOOTS`:
   `linux-reboot-smoke` 1, `linux-l4` 2, every other suite 0; at most 2, `run_state.MAX_PLANNED_REBOOTS`).
+- **One reboot is often several RESETs.** Linux tries more than one way to reset a machine in a row (the ACPI reset
+  register, port 0xCF9, the keyboard controller), and QEMU reports each with `guest: true`; on QEMU 10.0 one
+  `systemctl reboot` gave two, 67 ms apart. `Qmp.take_resets()` hands every RESET over as a `ResetEvent` (`guest`, QEMU's
+  `reason` field when it has one, and QEMU's own timestamp in microseconds, each `None` when absent or malformed), and the
+  rows say what was seen. A guest RESET that comes **while the reboot is unconfirmed** (registered, new boot ID not yet
+  taken) and is stamped within `RESET_MERGE_US` = **1 second** after the *first* RESET of that reboot is part of it: the
+  row `guest-reset-coalesced` (`1-of-1 merged=1 +67ms reason=... qemu=SECONDS.MICROSECONDS`), no step, nothing spent of the
+  plan. The window is by QEMU's time, so a late look does not change it, and it is counted from the first RESET, not from
+  the last. Why one second: the attempts of a reboot are tens of milliseconds apart, while no guest gets through firmware,
+  bootloader and kernel to a userspace that answers the agent in that time. At most `RESET_MERGE_LIMIT` = **4** RESETs
+  are merged into one reboot (five in all, about the number of ways Linux has); a fifth merge is `guest-reset-merge-limit`.
+  A RESET with no time, one after the window, or one after the new boot ID was taken is a reboot of its own and counts
+  against the plan as below.
 - Every other reset is an **error that ends the run** (`LifecycleError`, exit 2, the VM closed hard), and no later boot ID
   is taken: `unplanned-guest-reset` (more guest resets than planned, or any when none is), `host-reset-outside-reset`
-  (a `RESET` without `guest: true` that `Vm.reset()` did not cause), `guest-reset-before-first-boot`. The row
-  `guest-reset-observed` says which, and the refusal is sticky.
+  (a `RESET` without `guest: true` that `Vm.reset()` did not cause), `guest-reset-before-first-boot`,
+  `guest-reset-merge-limit` (see above). The row `guest-reset-observed` says which, with the event's reason and time, and
+  the refusal is sticky.
 - After a registered reset `await_rebooted_guest` gives the new session: the first try is `recover_guest` (the one
   recovery the reset earns), then up to seven more tries, 15 seconds apart, each a new session that spends an
   observation and no recovery. A boot ID is taken only when it **differs** from the last of the chain: the same one is
@@ -4268,7 +4282,10 @@ fake QEMU on named sockets and scripted agents.
 - `attach` takes the chain from the run state and the last boot ID from its end. A controller that died after it saw a
   reset and before it confirmed the boot left `guest-reset-N` at intent: the attached controller starts with the reset
   pending and waits for the boot as the first one would (`attach-guest` then uses `await_rebooted_guest`); the count of
-  registered resets is the number of those intents. The budgets continue from the file, so the recoveries of the reboot
+  registered resets is the number of those intents. The merge window goes on from the first RESET's time, which the
+  controller keeps in the run state's `collected` section (`guest_reset_N_us`, QEMU's microseconds, and
+  `guest_reset_N_merged`, the count so far; no new schema version) before it writes the intent of `guest-reset-N`. A run
+  state without them (a reset that carried no time) merges nothing. The budgets continue from the file, so the recoveries of the reboot
   stay spent. A lab run is never attached, as before: after the death of its controller, `recover --close`.
 
 ### Budgets (the numbers)
@@ -4276,18 +4293,21 @@ fake QEMU on named sockets and scripted agents.
 | | before | with `planned_reboots` = n |
 |---|---|---|
 | `qga_recoveries` | 4 | 4 + n (one per reboot; the file allows 6 at most) |
-| journal rows of the lifecycle | 110 ordinary + 18 reserve | the same; 2 per reboot |
+| journal rows of the lifecycle | 110 ordinary + 18 reserve | the same; 2 per reboot, 6 at most (up to 4 merged RESETs) |
 | `qmp_calls` | 128 | the same; a reboot sends none |
-| `qmp_events` | 128 | the same; one per reset |
+| `qmp_events` | 128 | the same; one per RESET, so 5 per reboot at most |
 | `qga_observations` | 32 | the same; 1 per reboot when its first try succeeds, 8 at most |
 | `job_calls` | 112 | the same; 3 per look of the wait |
 
 - **Journal rows.** One reboot takes two rows of the ordinary journal: `guest-reset-observed` and
-  `boot-chain-extended` (a refused reset takes one). An ordinary run is 10 rows (start 2, resume 3, close 5); with two
-  planned reboots it is 14, of the 110 ordinary rows, and the teardown reserve of 18 is untouched
-  (`test_two_planned_resets_fit_in_the_ordinary_rows...`). A reset that would take the ordinary rows over their limit is
+  `boot-chain-extended` (a refused reset takes one), and each RESET merged into it one more, `guest-reset-coalesced`: 6
+  rows for a reboot at most. An ordinary run is 10 rows (start 2, resume 3, close 5); with two planned reboots it is 14,
+  and with two reboots of four merged RESETs each 22, of the 110 ordinary rows, and the teardown reserve of 18 is
+  untouched (`test_two_planned_resets_fit_in_the_ordinary_rows...`, `CoalescedBudgetTests`). A merge reserves the row of
+  the merge and the one that will confirm the boot. A reset that would take the ordinary rows over their limit is
   refused with `lifecycle-journal-limit` and leaves no trace.
-- **Run-state steps.** A reboot writes `guest-reset-N` twice (intent, done) into the 256 transitions.
+- **Run-state steps.** A reboot writes `guest-reset-N` twice (intent, done) into the 256 transitions, merged RESETs
+  none (each writes the run state's `collected` section once: at most 4 + 1 writes a reboot).
 - **QGA.** The rule is 4 + planned: `import-refresh` takes one, an uncertain submit or collection at most two more, each
   reboot one; the retries of a slow boot cost observations only.
 
