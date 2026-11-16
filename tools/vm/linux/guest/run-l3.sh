@@ -141,69 +141,6 @@ wait_state() {
     return 1
 }
 
-# ---------------------------------------------------------------- lab windows
-#
-# Only with a lab (LAB_MARKER_ADDRESS set). The lab's observer judges the traffic between
-# an `open` and a `close` marker, one pair per protected session. A marker is a UDP
-# datagram to the lab, so it can only go out while nothing of Rosetun is in the way: no
-# table inet rosetun and the state Disconnected (a close also goes while the service is
-# stopped, when there is no state to read). Otherwise nothing is sent and nothing
-# else changes; the window then stays open and the observer calls it unverified. These
-# functions never change a result, a note, CLI_OUT or the return code of their caller.
-
-# The function the window belongs to: the first caller that is not a session helper.
-lab_label() {
-    local name
-    for name in "${FUNCNAME[@]:1}"; do
-        case $name in lab_* | connect_with | disconnect) continue ;; esac
-        printf '%s' "$name" | tr 'A-Z' 'a-z' | tr -c 'a-z0-9_.-' '_' | cut -c1-48
-        return
-    done
-}
-
-# The marker grammar asks for 32 hexadecimal digits; they are derived from the run id,
-# and the controller derives the same ones for the lab.
-lab_run_id() { printf '%s' "rosetun-lab-run:$RUN_ID" | sha256sum | cut -c1-32; }
-
-# lab_send TEXT: one datagram, then the echo for at most two seconds.
-lab_send() {
-    (
-        exec 7<>"/dev/udp/${LAB_MARKER_ADDRESS%:*}/${LAB_MARKER_ADDRESS##*:}" || exit 1
-        printf '%s' "$1" >&7 || exit 1
-        IFS= read -r -t 2 -n 1 _ <&7
-    ) 2>/dev/null
-}
-
-# lab_mark open|close: the index and the label of the open window are kept in STATE,
-# so that finalize and a restarted function still know them.
-lab_mark() {
-    [ -n "$LAB_MARKER_ADDRESS" ] || return 0
-    table_present && return 0
-    # A stopped service answers no status, so only a close may go without Disconnected.
-    if ! [[ $(state_line) =~ ^Disconnected ]]; then
-        [ "${1-}" = close ] && ! systemctl is-active --quiet rosetun-helper.service || return 0
-    fi
-    local index label
-    case ${1-} in
-        open)
-            index=$(cat "$STATE/lab-index" 2>/dev/null || echo 0)
-            [[ $index =~ ^[0-9]{1,2}$ ]] && [ "$index" -lt 100 ] || return 0
-            label=$(lab_label)
-            [ -n "$label" ] || return 0
-            printf '%s\n' "$((index + 1))" >"$STATE/lab-index"
-            printf '%s %s\n' "$index" "$label" >"$STATE/lab-window"
-            lab_send "rosetun-lab-marker:$(lab_run_id).$index.open.$label"
-            ;;
-        close)
-            [ -f "$STATE/lab-window" ] || return 0
-            read -r index label <"$STATE/lab-window"
-            rm -f -- "$STATE/lab-window"
-            lab_send "rosetun-lab-marker:$(lab_run_id).$index.close.$label"
-            ;;
-    esac
-    return 0
-}
-
 connect_with() {
     local request=$1
     # A scenario that failed half-way may have left a session.

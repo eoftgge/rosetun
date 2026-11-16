@@ -14,6 +14,8 @@ from tools.vm.matrix.tests.test_lab import icmp, ip_frame, tcp
 
 LEAK = ip_frame(wire.CLIENTS[4], wire.TARGETS[4], 1, icmp(8))
 SCRIPT = Path(__file__).resolve().parents[2] / 'linux' / 'guest' / 'run-l3.sh'
+# The marker functions live in the shared helpers that run-l3.sh sources.
+LIB = SCRIPT.parent / 'lib.sh'
 SESSIONS = ('killswitch.direct-blocked', 'killswitch.tunnel-passes', 'lan.off', 'killswitch.foreign-table',
             'killswitch.engine-killed', 'killswitch.flush-restored', 'killswitch.disconnect')
 # The scenarios stage 7c2 adds to the group, in order, with the window each is judged in.
@@ -1041,7 +1043,7 @@ class TableTests(unittest.TestCase):
 
     def test_a_window_closes_after_the_service_stops_but_never_with_the_table_there(self):
         text = SCRIPT.read_text(encoding='utf-8')
-        body = text.split('lab_mark() {' + chr(10), 1)[1].split(chr(10) + '}' + chr(10), 1)[0]
+        body = LIB.read_text(encoding='utf-8').split('lab_mark() {' + chr(10), 1)[1].split(chr(10) + '}' + chr(10), 1)[0]
         guard = [line.strip() for line in body.splitlines()]
         self.assertLess(guard.index('table_present && return 0'),
                         guard.index('[ "${1-}" = close ] && ! systemctl is-active --quiet rosetun-helper.service || return 0'))
@@ -1053,7 +1055,7 @@ class TableTests(unittest.TestCase):
 
     def test_without_a_lab_address_the_markers_do_nothing(self):
         text = SCRIPT.read_text(encoding='utf-8')
-        body = text.split('lab_mark() {' + chr(10), 1)[1].split(chr(10) + '}' + chr(10), 1)[0]
+        body = LIB.read_text(encoding='utf-8').split('lab_mark() {' + chr(10), 1)[1].split(chr(10) + '}' + chr(10), 1)[0]
         self.assertEqual('[ -n "$LAB_MARKER_ADDRESS" ] || return 0', body.splitlines()[0].strip())
 
 
