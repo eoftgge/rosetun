@@ -4069,6 +4069,144 @@ and the retained artifacts.
 5. `run linux-l3 --lab --config <l3-lab.toml>` once: as in stage 7e (40 of 40, exit 0); L3 is not broken.
 6. `run linux-l2 --config <l2.toml>`, then `runs --state-directory <state>`: every run `completion_verified`.
 
+## Stage 8b: Linux L5 in the lab
+
+`run linux-l5` delivers the L5 package (the real `.deb` installed, upgraded under the kill switch and under Lockdown,
+removed and purged) as `run linux-l3` delivers L3, and `run linux-l5 --lab` runs `run-l5.sh` inside the lab of stage
+7b2b on a test image of its own. Nothing is accepted: the release gate stays false and the security invariants stay
+**UNVERIFIED**. No L5 run has been through the lab yet: every count below comes from `run-l5.sh` alone.
+
+### Profile and the package class
+
+- The stage profile `l5` (`PROFILES` in `linux_l2.py`, the importer `guest/stage-l2.py`) is exactly
+  `L5_START_REQUIRED` of `guest/start.sh`: the sources with `guest/run-l5.sh` and `scenarios-l5.tsv`, the two packages
+  `rosetun-old.deb` and `rosetun-new.deb` that `build-artifacts.sh --deb` makes of one commit (both recorded in
+  `provenance.json`, `"stage": "l5"`, and checked against it), and three generated requests. No ELF binary and no
+  `sing-box`: the packages bring the programs, the units and the engines. Its evidence goes to `linux-l5/`, the
+  service's journal included.
+- A new file class, **package**: a file of `Profile.packages` must start with the magic of an ar archive
+  (`!<arch>\n`), is at most 128 MiB (`PACKAGE_LIMIT`; ELF stays at 512 MiB, text at 256 KiB), is hashed in the media
+  manifest like every other file and is never opened beyond its first bytes on the controller. The importer in the
+  image checks the same bound and, after the copy, the magic again; packages are installed with mode `0644`.
+- The requests are `request-kill-switch.json`, `request-lan.json` and `request-dns-lock.json` of the L3 generator,
+  byte for byte (`l3_requests.render_l5`; a test pins their digests). `run-l5.sh` itself only uses the first.
+- `job.env` takes `LAB_MARKER_ADDRESS` and `LAB_CONTROL` for `l5` as for `l3` and `proxy` (the importer, `start.sh`,
+  `validate_env` and `run-l5.sh`). The Hyper-V path writes neither, and `start.sh` reads them only as optional keys.
+- The configuration is `rosetun.matrix.execution.v2` (without the lab) or `v3` (with it) with `suite = "linux-l5"`
+  and the `[l3]` table **without** `sing_box_sha256`: the engines come inside the packages, which `provenance.json`
+  vouches for. A `sing_box_sha256` there is refused, as a package with an engine hash is. Start from the L3 examples,
+  change the suite and delete that line. `timeouts.job = 900` is enough (the estimate is 4 to 6 minutes).
+
+### The L5 test image
+
+A separate image (owner, 2026-11-16), made from the test image **v5k** (no sshd, no IPv6 router: L5 uses neither):
+
+```sh
+python tools/vm/linux/prepare-l3-image.py /srv/test-v5k.qcow2 /srv/test-l5.qcow2 \
+  --source-sha256 V5K_SHA256 --descriptor /srv/test-l5.image.json \
+  --deps-debs /srv/l5-debs --check-package /srv/content-l5/artifacts/rosetun-new.deb \
+  --check-package /srv/content-l5/artifacts/rosetun-old.deb
+```
+
+- `--deps-debs DIR` holds only `.deb` files (no link, no other entry, no `rosetun_*` package). They are installed
+  offline with `dpkg -i` under a `policy-rc.d` that starts nothing, and `dpkg --audit` must print nothing; the
+  descriptor gets `l5_dependencies` with every file's hash. It goes neither with `--sshd` nor with `--ipv6-router`.
+  The network file gets the same change as for L3 (the legacy probe route goes).
+- **What the package needs.** `Depends:` of the package is written by `installer/linux/build-deb.sh`:
+  `nftables, systemd, init-system-helpers (>= 1.65.2)`, the shared libraries `dpkg-shlibdeps` finds in
+  `rosetun-helper-privileged`, `rosetun-gui` and `rosetun` at build time, and `GUI_LIBRARIES`: `libegl1`, `libgl1`,
+  `libwayland-client0`, `libwayland-egl1`, `libx11-6`, `libx11-xcb1`, `libxcb1`, `libxcursor1`, `libxi6`,
+  `libxkbcommon-x11-0`, `libxkbcommon0`, `libxrender1` (each with the floor in the script). `install.desktop` needs
+  `desktop-file-utils` too, which the package only recommends. These sixteen names (`L5_DEPENDS`, compared with the
+  build script by a test) must be installed in the image, or it is refused. The shared libraries are known only from
+  a built package: with `--check-package` the tool reads the control file of each package (with the standard library,
+  nothing is unpacked or installed) and refuses an image where any group of its `Pre-Depends` and `Depends` is not met
+  at its version (dpkg's version order, `Provides` counted). The directory must hold the transitive closure of what
+  v5k lacks; nothing is downloaded.
+- **Quiet.** The unit directories are read before and after the installation. Any unit a dependency enables (a link
+  in a `.wants`, `.requires` or `.upholds` folder of `/etc/systemd/system` or `/usr/lib/systemd/system`) is refused
+  unless `L5_ALLOWED_UNITS` names it; it names none. A mask of v5k that is gone is refused too. New masks and aliases
+  are listed in the output.
+- **No rosetun.** The tool refuses a `rosetun` package among the files and in the package database of the image, and
+  `preflight.no-foreign-service` of `run-l5.sh` refuses any rosetun unit, file or package on the machine.
+- After the image is built, install the importer `stage-l2.py` of this commit in it (as for the other test images)
+  and copy the fields of the descriptor into `[image]` except `l5_dependencies`.
+
+### Windows
+
+`connect_with` and `disconnect` of `run-l5.sh` are those of `run-l3.sh` (markers from `lib.sh`); the functions that
+open a window are named after it.
+
+| Label | Scenarios | Opens | Closes | Expectation |
+| --- | --- | --- | --- | --- |
+| none | `preflight.*`, `install.*`, `upgrade.watch` | | | the direct request of `upgrade.watch` comes before any window |
+| `upgrade_ks` | `upgrade.kill-switch-no-leak`, `upgrade.kill-switch-hold`, `upgrade.reconnect` | `connect_with request-kill-switch.json` | the `disconnect` of `do_reconnect`, once the table is gone, before its `direct_https` | `NONE`; the engine's connections to the node are `tunnel`, many of them while the prober runs, their number not fixed |
+| `upgrade_lockdown` | `upgrade.lockdown`, `remove.refused`, `remove.lockdown` | `lab_mark open` after the downgrade, right before `lockdown on --lan on` | `lab_mark close` in `do_remove` after `dpkg -r` and `table_present` false, before `direct_https` | `NONE` |
+| none | `purge.state` | | | |
+
+Between the two connects of `upgrade_ks` the hold keeps the table, so no marker goes and the window is one, as
+`upgraded` in L3. Under Lockdown no marker goes either, so `upgrade_lockdown` is one coarse window. `upgrade_lockdown`
+begins with `lab_mark close`, which closes a window `upgrade_ks` left open when one of its scenarios failed before the
+disconnect (nothing is sent otherwise). Every close waits for the table to be gone. A clean run has these two
+windows, one of each label. The group is all 17 scenarios; the summary schema is `rosetun.matrix.l5-summary.v1`
+(tables in `l5_tables.py`, judged by `l3_summary.py` as L3 and Proxy are, whose tables did not change).
+
+### The counter and its twin
+
+`upgrade.kill-switch-no-leak` counts, in the table `inet rosetun-l5-watch` (postrouting, priority 300), every packet
+that leaves the physical interface for the probe address while dpkg upgrades the package; it passes only with none.
+The observer of `upgrade_ks` is its twin, and `group.counter` of the summary sets them side by side: `script_count`
+(0 for a pass, the number at the head of the reason for a failure, else unknown), `observer_direct_frames` (the
+unexpected frames of the window) and `observer_frames_to_address` (those sent to `203.0.113.2`). `agreement` is
+`AGREE` when both saw some or both none, `DISAGREE` when one did and the other did not (a finding,
+`counter-contradicted-by-window`, exit 1), `UNKNOWN` when a number is missing. The observer's window is wider than
+the counter's span (it also holds the hold and the reconnect), so a direct frame there that the counter could not
+see is a disagreement too.
+
+### Control
+
+`run linux-l5 --lab --control stop-helper`: right after `upgrade.kill-switch-no-leak` passed, inside `upgrade_ks`,
+`run-l5.sh` stops the service and makes one `direct_https` (`control_stop_helper`, as in L3). Without Lockdown the
+hold an upgrade leaves ends with an ordinary stop (the routing crate's Linux backend), so the request leaves. The
+scenarios after it may fail. Exit 0 only when `upgrade_ks` is `DETECTED` with a TCP flow to `203.0.113.2:443` that
+the target answered, `upgrade.kill-switch-no-leak` is `DISAGREE` (and so is the counter), an ordinary run would have
+exited 1 and both machines completed.
+
+### Limits
+
+The lab's limits are enough for L5 and did not change: a job of at most 1800 s in the lab (`timeouts.job = 900`
+suggested), the capture of 60 MiB on the evidence disk (1 to 3 MB expected, to be measured), up to 100 windows (two).
+The media holds the two packages (about 41 MB each) within `TOTAL_LIMIT`.
+
+### What to reinstall or build
+
+- The L5 test image (above), with the new `stage-l2.py`; the L3 and Proxy test image takes the new `stage-l2.py` too.
+  The lab image does not change.
+- The content directories: `guest/start.sh` changed, so the L2, L3 and Proxy content directories take the new copy.
+  The L5 content directory is new: `build-artifacts.sh --deb` (both packages and `provenance.json`), `guest/launch.sh`,
+  `start.sh`, `lib.sh`, `run-l5.sh` and `scenarios-l5.tsv`; never a request or `sing-box`.
+- The Hyper-V path takes the new `run-l5.sh` and `start.sh` only when its owner does; without `LAB_MARKER_ADDRESS`
+  and `LAB_CONTROL` neither sends a marker nor stops anything.
+
+### Qualification
+
+Each command in its own run. Stop at the first unexpected result and send back the summaries and the retained
+artifacts.
+
+1. Build the L5 image as above (with `--check-package` for both packages) and install `stage-l2.py` in it and in the
+   L3 test image; update the descriptors; prepare the L5 content directory; copy the new `start.sh` into the L2, L3
+   and Proxy content directories.
+2. `run linux-l5 --config <l5.toml>` without the lab (`--dry-run` first): 4 PASS, `preflight.baseline` FAIL (no route
+   to `203.0.113.2`), 12 ERROR "not run", `completion` true, exit 1.
+3. `run linux-l5 --lab --config <l5-lab.toml>`, twice in a row: the group 17 of 17 PASS, the cross-check `AGREE` or
+   `NOT_APPLICABLE` only, two windows, both `NONE`, `group.counter.agreement` `AGREE` with `script_count` 0 and
+   `observer_direct_frames` 0, `lab.window_counts` all `as_expected`, no `findings`, exit 0. Write down the size of
+   `capture.pcap` (`evidence.disk.pcap_bytes`) and the number of `tunnel` frames of `upgrade_ks`.
+4. `run linux-l5 --lab --control stop-helper --config <l5-lab.toml>`: exit 0, `control_result.met` true.
+5. `run linux-l3 --lab --config <l3-lab.toml>` and `run linux-proxy --lab --config <proxy-lab.toml>` once each: as in
+   stages 7e and 8a; neither is broken.
+6. `run linux-l2 --config <l2.toml>`, then `runs --state-directory <state>`: every run `completion_verified`.
+
 ## Stage 7a: Linux L3 delivery without network
 
 `run linux-l3` delivers the L3 package to one VM and runs the existing
