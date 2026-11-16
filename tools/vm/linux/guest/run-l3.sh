@@ -995,8 +995,11 @@ scenario_ipv6() {
         connect_with request-lan.json || return 1
         # Without a cache entry the ping needs neighbor discovery first.
         ip -6 neigh flush dev "$PHYS"
-        ping -6 -c 2 -W 3 "$router%$PHYS" >/dev/null 2>&1 ||
-            { fail_reason="the IPv6 router $router did not answer under the kill switch: $(ip -6 neigh show "$router" dev "$PHYS")"; return 1; }
+        # On failure the reason keeps ping's own error and the route the kernel picks, so that a refusal on this
+        # machine (no route, unreachable) is told apart from a request that left and got no answer.
+        local ping_error
+        ping_error=$(ping -6 -c 2 -W 3 "$router%$PHYS" 2>&1 >/dev/null) ||
+            { fail_reason="the IPv6 router $router did not answer under the kill switch: $(ip -6 neigh show "$router" dev "$PHYS"); ping: $(printf '%s' "$ping_error" | tr '\n' ' ' | cut -c 1-200); route: $(ip -6 route get "$router" oif "$PHYS" 2>&1 | head -n 1)"; return 1; }
         local out
         out=$(curl -v -s -o /dev/null --connect-timeout 3 --max-time 4 --interface "$PHYS" "tftp://[2001:db8::1]:69/rosetun-l3" 2>&1 </dev/null)
         printf '%s' "$out" | grep -q 'Operation not permitted' ||
@@ -1009,11 +1012,22 @@ scenario_ipv6() {
         record "$id" FAIL "${fail_reason:-the condition did not hold}" "$started"
     fi
     fail_reason=''
+    # A failure above returns before the disconnect: the next scenario starts without Rosetun.
+    [[ $(state_line) =~ ^Disconnected ]] || cli 60 disconnect
+    lab_mark close
 }
 
 scenario_peer() {
     FORWARD_BEFORE=''
     inbound() {
+        # The peer and its baseline are set up without Rosetun; a session an earlier scenario left would stand in
+        # the way of both.
+        if ! [[ $(state_line) =~ ^Disconnected ]]; then
+            cli 60 disconnect
+            wait_state '^Disconnected' 30 ||
+                { fail_reason="a session an earlier scenario left did not end before the peer was set up"; return 1; }
+            lab_mark close
+        fi
         peer_up || return 1
         FORWARD_BEFORE=$(peer_https)
         # The peer opens a TCP session to sshd and reads its banner; once the
