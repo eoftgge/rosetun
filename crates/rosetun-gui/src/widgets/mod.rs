@@ -50,6 +50,7 @@ pub(crate) use segmented::{segmented, segmented_width};
 pub(crate) use settings_card::{RowOptions, SettingsCard, row_detail, settings_card};
 pub(crate) use status_pill::{status_pill, status_pill_width};
 pub(crate) use swatches::{Swatch, swatches};
+pub(crate) use tag::text_chip;
 pub(crate) use text_field::{TextField, field_height, field_row};
 pub(crate) use toggle::{toggle, toggle_row, toggle_row_with_detail};
 pub(crate) use transitions::{appear, appear_progress, reveal, reveal_progress, show_modal};

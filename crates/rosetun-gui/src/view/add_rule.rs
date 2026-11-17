@@ -38,9 +38,6 @@ const DIALOG_CHROME: f32 = 300.0;
 const ADDRESS_ROWS: usize = 5;
 /// The rows of chips the address field is tall enough for while it is empty.
 const ADDRESS_MIN_ROWS: usize = 3;
-const RECENT_CHIP_HEIGHT: f32 = 24.0;
-/// Inside a recent site's button, at its ends.
-const RECENT_CHIP_PADDING: f32 = theme::space::S;
 const DESTINATION_POPUP_MARGIN: f32 = theme::space::XL;
 const MIN_DESTINATION_POPUP: f32 = 120.0;
 
@@ -778,44 +775,16 @@ fn recent_site_button(
     } else {
         palette.text
     };
-    let galley = ui.painter().layout_no_wrap(
-        label.to_owned(),
-        egui::TextStyle::Body.resolve(ui.style()),
+    let response = widgets::text_chip(
+        ui,
+        label,
         color,
-    );
-    let size = egui::vec2(
-        galley.size().x + 2.0 * RECENT_CHIP_PADDING,
-        RECENT_CHIP_HEIGHT,
-    );
-    let (rect, response) = ui.allocate_exact_size(
-        size,
         if enabled {
             egui::Sense::click()
         } else {
             egui::Sense::hover()
         },
-    );
-    let (fill, border) = if added {
-        (palette.input, palette.accent_dark)
-    } else if response.hovered() && enabled {
-        (palette.border, palette.border_strong)
-    } else {
-        (palette.card, palette.border)
-    };
-    ui.painter().rect(
-        rect,
-        egui::CornerRadius::same(theme::RADIUS_INNER),
-        fill,
-        Stroke::new(theme::stroke::HAIRLINE, border),
-        egui::StrokeKind::Inside,
-    );
-    ui.painter().galley(
-        egui::pos2(
-            rect.left() + RECENT_CHIP_PADDING,
-            rect.center().y - galley.size().y / 2.0,
-        ),
-        galley,
-        color,
+        added,
     );
     let response = if has_rule {
         response.on_hover_text(tr!("recent-site-has-rule"))

@@ -4,6 +4,9 @@ use rosetun_config::{ListSource, RuleMatcher, rules_exchange::Warning};
 use crate::state::{Action, State};
 use crate::{theme, widgets};
 
+/// Leave room for the export choices even when many hosts are listed.
+const EXPORT_HOSTS_MAX_HEIGHT: f32 = 4.0 * theme::space::XXL;
+
 pub(crate) fn show(ctx: &egui::Context, state: &mut State, actions: &mut Vec<Action>) {
     let busy = state.rules.exchange.busy;
     let destinations: Vec<_> = state
@@ -48,9 +51,24 @@ pub(crate) fn show(ctx: &egui::Context, state: &mut State, actions: &mut Vec<Act
                 if urls {
                     ui.add_space(theme::space::L);
                     ui.label(tr!("rules-transfer-url-warning"));
-                    for host in &export.hosts {
-                        ui.label(host);
-                    }
+                    egui::ScrollArea::vertical()
+                        .id_salt("rules_export_hosts")
+                        .max_height(EXPORT_HOSTS_MAX_HEIGHT)
+                        .auto_shrink([false, true])
+                        .show(ui, |ui| {
+                            ui.horizontal_wrapped(|ui| {
+                                ui.spacing_mut().item_spacing = egui::Vec2::splat(theme::space::XS);
+                                for host in &export.hosts {
+                                    widgets::text_chip(
+                                        ui,
+                                        host,
+                                        theme::palette().text,
+                                        egui::Sense::hover(),
+                                        false,
+                                    );
+                                }
+                            });
+                        });
                 }
                 let mut footer = widgets::DialogFooter::new(
                     if urls {
@@ -473,6 +491,32 @@ mod tests {
                     .iter()
                     .any(|(text, _)| text == &tr!("rules-transfer-copied"))
             );
+        });
+    }
+
+    #[test]
+    fn export_source_hosts_wrap_as_chips_and_keep_the_consent_choices_visible() {
+        i18n::in_language(Language::English, || {
+            let mut state = state();
+            state.act(Action::OpenRulesExport(false));
+            let hosts: Vec<_> = (1..=8)
+                .map(|n| format!("list-source-{n}.example.com"))
+                .collect();
+            state.rules.exchange.export.as_mut().unwrap().hosts = hosts.clone();
+            let mut screen = TestScreen::new(egui::vec2(900.0, 720.0));
+            let shown = screen.settle(|ui| {
+                crate::view::show(ui, &mut state);
+            });
+            let rect = |label: &str| {
+                shown
+                    .iter()
+                    .find(|(text, _)| text == label)
+                    .unwrap_or_else(|| panic!("missing {label}"))
+                    .1
+            };
+            assert_eq!(rect(&hosts[0]).top(), rect(&hosts[1]).top());
+            assert!(rect(&hosts[0]).top() < rect(&hosts[7]).top());
+            assert!(rect(&hosts[7]).bottom() < rect(&tr!("rules-transfer-include")).top());
         });
     }
 
