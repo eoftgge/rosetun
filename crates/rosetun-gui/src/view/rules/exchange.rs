@@ -29,7 +29,7 @@ pub(crate) fn show(ctx: &egui::Context, state: &mut State, actions: &mut Vec<Act
                     tr!("rules-transfer-all")
                 });
                 ui.add_space(theme::space::M);
-                #[cfg(windows)]
+                #[cfg(any(windows, target_os = "linux"))]
                 if let Some(file) = widgets::segmented(
                     ui,
                     "rules_export_destination",
@@ -42,11 +42,6 @@ pub(crate) fn show(ctx: &egui::Context, state: &mut State, actions: &mut Vec<Act
                     !busy,
                 ) {
                     export.file = file;
-                }
-                #[cfg(target_os = "linux")]
-                {
-                    ui.label(tr!("rules-transfer-to-clipboard"));
-                    ui.label(tr!("rules-transfer-linux"));
                 }
                 if urls {
                     ui.add_space(theme::space::L);

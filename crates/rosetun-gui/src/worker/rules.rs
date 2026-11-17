@@ -206,65 +206,60 @@ impl WorkerDispatcher {
         });
     }
 }
+const RULES_FILE_FILTER: crate::file_dialog::Filter<'static> = crate::file_dialog::Filter {
+    name: "JSON",
+    extensions: &["json"],
+};
+
 fn write_rules_document(
     text: String,
     file: bool,
     clipboard: &Mutex<Option<arboard::Clipboard>>,
-) -> Result<RulesExportOutcome, String> {
+) -> Result<RulesExportOutcome, RulesTransferError> {
     if file {
-        #[cfg(windows)]
-        {
-            let Some(path) = rfd::FileDialog::new()
-                .set_title(tr!("rules-transfer-export"))
-                .add_filter("JSON", &["json"])
-                .set_file_name("rules.json")
-                .save_file()
-            else {
-                return Ok(RulesExportOutcome::Cancelled);
-            };
-            return std::fs::write(path, text)
-                .map(|()| RulesExportOutcome::Saved)
-                .map_err(|_| "write".into());
-        }
-        #[cfg(not(windows))]
-        return Err("file dialogs unavailable".into());
+        let Some(path) = crate::file_dialog::save_file(
+            &tr!("rules-transfer-export"),
+            "rules.json",
+            Some(RULES_FILE_FILTER),
+        )
+        .map_err(|_| RulesTransferError::FileDialogUnavailable)?
+        else {
+            return Ok(RulesExportOutcome::Cancelled);
+        };
+        return std::fs::write(path, text)
+            .map(|()| RulesExportOutcome::Saved)
+            .map_err(|_| RulesTransferError::Io);
     }
-    let mut clipboard = clipboard.lock().map_err(|_| "clipboard")?;
+    let mut clipboard = clipboard.lock().map_err(|_| RulesTransferError::Io)?;
     if clipboard.is_none() {
-        *clipboard = Some(arboard::Clipboard::new().map_err(|_| "clipboard")?);
+        *clipboard = Some(arboard::Clipboard::new().map_err(|_| RulesTransferError::Io)?);
     }
     clipboard
         .as_mut()
-        .ok_or("clipboard")?
+        .ok_or(RulesTransferError::Io)?
         .set_text(text)
         .map(|()| RulesExportOutcome::Copied)
-        .map_err(|_| "clipboard".into())
+        .map_err(|_| RulesTransferError::Io)
 }
-fn read_rules_document(file: bool) -> Result<Option<String>, String> {
+fn read_rules_document(file: bool) -> Result<Option<String>, RulesTransferError> {
     if file {
-        #[cfg(windows)]
-        {
-            use std::io::Read;
-            let Some(path) = rfd::FileDialog::new()
-                .set_title(tr!("rules-transfer-import"))
-                .add_filter("JSON", &["json"])
-                .pick_file()
-            else {
-                return Ok(None);
-            };
-            let input = std::fs::File::open(path).map_err(|_| "read")?;
-            let mut text = String::new();
-            input
-                .take((rosetun_config::rules_exchange::MAX_DOCUMENT_BYTES + 1) as u64)
-                .read_to_string(&mut text)
-                .map_err(|_| "read")?;
-            return Ok(Some(text));
-        }
-        #[cfg(not(windows))]
-        return Err("file dialogs unavailable".into());
+        use std::io::Read;
+        let Some(path) =
+            crate::file_dialog::pick_file(&tr!("rules-transfer-import"), Some(RULES_FILE_FILTER))
+                .map_err(|_| RulesTransferError::FileDialogUnavailable)?
+        else {
+            return Ok(None);
+        };
+        let input = std::fs::File::open(path).map_err(|_| RulesTransferError::Io)?;
+        let mut text = String::new();
+        input
+            .take((rosetun_config::rules_exchange::MAX_DOCUMENT_BYTES + 1) as u64)
+            .read_to_string(&mut text)
+            .map_err(|_| RulesTransferError::Io)?;
+        return Ok(Some(text));
     }
     arboard::Clipboard::new()
         .and_then(|mut clipboard| clipboard.get_text())
         .map(Some)
-        .map_err(|_| "clipboard".into())
+        .map_err(|_| RulesTransferError::Io)
 }
