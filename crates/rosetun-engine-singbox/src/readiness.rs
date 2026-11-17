@@ -132,8 +132,13 @@ pub(super) fn is_tunnel_created_message(line: &str) -> bool {
     }
     let plain = strip_ansi_csi(line);
     let mut words = plain.split_whitespace();
-    words.by_ref().take(4).any(|word| word == "INFO" || word.starts_with("INFO["))
-        && words.next().is_some_and(|word| word.starts_with("inbound/tun[") && word.ends_with("]:"))
+    words
+        .by_ref()
+        .take(4)
+        .any(|word| word == "INFO" || word.starts_with("INFO["))
+        && words
+            .next()
+            .is_some_and(|word| word.starts_with("inbound/tun[") && word.ends_with("]:"))
         && words.next() == Some("started")
         && words.next() == Some("at")
         && words.next().is_some()

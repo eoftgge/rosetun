@@ -173,7 +173,11 @@ fn tunnel_creation_alone_never_completes_readiness_and_can_be_cancelled() {
     )
     .unwrap_err();
     assert_eq!(error.code, ErrorCode::EngineNotReady);
-    assert!(error.message.contains(if cfg!(windows) { "45" } else { "15" }));
+    assert!(
+        error
+            .message
+            .contains(if cfg!(windows) { "45" } else { "15" })
+    );
     let error = wait_for_engine_ready_from(
         &mut PostStartProcess,
         Instant::now(),

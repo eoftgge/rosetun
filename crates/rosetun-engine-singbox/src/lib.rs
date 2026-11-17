@@ -722,9 +722,15 @@ mod tests {
     fn tunnel_progress_is_latched_without_logging_destinations() {
         let hints = super::HintFlags::default();
         hints.observe("INFO[0000] inbound/tun[tun-in]: started at rosetun0");
-        assert!(hints.tunnel_created.load(std::sync::atomic::Ordering::Acquire));
+        assert!(
+            hints
+                .tunnel_created
+                .load(std::sync::atomic::Ordering::Acquire)
+        );
         assert!(!hints.slow_tunnel.load(std::sync::atomic::Ordering::Acquire));
-        hints.observe("WARN[0010] inbound/tun[tun-in]: starting tun stack take too much time to finish!");
+        hints.observe(
+            "WARN[0010] inbound/tun[tun-in]: starting tun stack take too much time to finish!",
+        );
         assert!(hints.slow_tunnel.load(std::sync::atomic::Ordering::Acquire));
     }
 
