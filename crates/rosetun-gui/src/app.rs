@@ -372,9 +372,6 @@ impl App {
         self.cloak_before_leaving();
     }
 
-    #[cfg(target_os = "linux")]
-    fn closing_for_good(&self) {}
-
     /// For a window that is closing without a command of ours: eframe closes it once the
     /// close request goes unanswered.
     #[cfg(windows)]
@@ -1019,8 +1016,10 @@ impl App {
                         QuitDecision::Leave => self.workers.restore_system_proxy(),
                     }
                 }
-                #[cfg(any(windows, target_os = "linux"))]
+                #[cfg(windows)]
                 self.closing_for_good();
+                #[cfg(target_os = "linux")]
+                self.remember_shape(ctx);
             }
         }
     }
