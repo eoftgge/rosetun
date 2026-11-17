@@ -86,9 +86,9 @@ The file lists in `packaging/linux` go into the package as they are. `packaging/
 
 ## Releases
 
-All development takes place on `dev`; `master` contains only released commits and remains the default branch. There are no pull requests between these branches. CI runs on pushes to both branches. A signed `v<version>` tag matching the version in `Cargo.toml` builds and publishes a GitHub Release with the installer, the Debian package, `SHA256SUMS.txt`, the engines' sources and a build provenance attestation of the installer and the package. The tag goes on `master`, or on `dev` for an alpha or beta of a version above the one on `master`; the workflow refuses any other. Versions with `-alpha.N` or another prerelease suffix are marked as prereleases. Existing releases are never overwritten. A `~` in the package's version becomes `-` in the asset's name, because GitHub would change it anyway.
+Development takes place on `dev`. The default branch, `master`, tracks stable releases. CI runs on both branches. A signed `v<version>` tag matching `Cargo.toml` starts the release workflow. Tag a stable release on `master` or a prerelease of a newer version on `dev`. The workflow publishes the Windows installer, Debian package, Linux archive, engine sources, checksums and bilingual release notes. It attests build provenance for the installer, package and archive. Debian prerelease filenames use `-` where the package's internal version uses `~`.
 
-First use **Actions → Release → Run workflow** on `dev` for a test build: it uploads the installer, the Debian package, checksums and release notes as an artifact without publishing a release. Then fast-forward `master` and tag the released commit:
+First use **Actions → Release → Run workflow** on `dev` for a trial build. It uploads release assets for review. Check the rendered notes and checksums, then fast-forward `master` and tag the released commit.
 
 ```sh
 # Trial: Actions → Release → Run workflow on dev
@@ -98,4 +98,4 @@ git tag -s vX.Y.Z -m "Rosetun X.Y.Z"
 git push origin master vX.Y.Z
 ```
 
-Run `./installer/build.ps1 -Release` to build the same assets locally, including the sing-box source archive, `SHA256SUMS.txt` and bilingual release notes. The sing-box and Xray source archives must match SHA-256 hashes pinned in `build.ps1`; update them together with the engine versions. To fix an already released version, commit the fix on `master`, tag and push the corrected release, then bring that commit back to `dev` with `git switch dev && git merge -S master` and push `dev`.
+Run `./installer/build.ps1 -Release` to build the Windows installer, verify the engine source archives and render the Windows and engine fields in [release-notes.md](release-notes.md). The release workflow fills in the Debian package and Linux archive fields after both assets are built. The SHA-256 pins for engine sources in `build.ps1` need to match their versions. To ship a fix after release, use a new version and tag.

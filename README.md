@@ -21,9 +21,7 @@ English | [Русский](README.ru.md)
 Rosetun is a VPN client for Windows and Linux, built on sing-box and Xray.
 A system service protects against leaks independently of the engine.
 
-**Stable release: 0.5.1 · Windows and Linux.**
-
-**Young project:** one maintainer leads with LLM coding agents, and few users yet. Report problems in [Issues](https://github.com/eoftgge/rosetun/issues).
+One developer maintains Rosetun with help from coding agents. Report problems in [Issues](https://github.com/eoftgge/rosetun/issues).
 
 ## Highlights
 
@@ -31,45 +29,34 @@ A system service protects against leaks independently of the engine.
 - Experimental Lockdown: protection while disconnected too.
 - TUN and System proxy.
 - Rules by program, website, IP and list, with separate exits.
-- Two-hop exits, a proxy exit that connects through another exit (experimental).
 - Provider subscriptions, QR codes and `rosetun://` links.
 - Local network access and automatic reconnect.
 - Tray, notifications and CLI; English and Russian interfaces.
 
+## New in 0.6
+
+- Share rules as a JSON file or through the clipboard. Preview imports and check where a rule sends an address or program. [Rules](https://eoftgge.github.io/rosetun/en/docs/rules/)
+- Send selected traffic through two proxy exits in sequence (experimental). [Two-hop exits](https://eoftgge.github.io/rosetun/en/docs/rules/#two-hop)
+- Update subscriptions through the main VPN server by default while connected. In TUN mode, a warning can flag a persistent route past the tunnel when the kill switch is off. [Subscriptions](https://eoftgge.github.io/rosetun/en/docs/subscriptions/#updates) · [Protection](https://eoftgge.github.io/rosetun/en/docs/protection/#bypass-warning)
+- Choose whether the delay test opens a new connection or reuses one. [Everyday use](https://eoftgge.github.io/rosetun/en/docs/everyday/)
+- On Linux, Local network is limited to directly attached networks. Reports, system checks and window restore are available on both systems. [Linux support](https://eoftgge.github.io/rosetun/en/docs/linux/)
+
 ## Install
 
-Choose a file from the release linked above:
+- **Windows 11 x64.** Download the `-setup.exe` installer from the release linked above. [Windows installation](https://eoftgge.github.io/rosetun/en/docs/install/#windows)
+- **Debian 13 amd64.** Install the `.deb` package, add your account to the `rosetun` group and restart the computer. The guide lists requirements for Ubuntu and Linux Mint. [Debian installation](https://eoftgge.github.io/rosetun/en/docs/install/#debian-13)
+- **Arch Linux.** Build `rosetun-bin` with the recipe in this repository. [Arch installation](https://eoftgge.github.io/rosetun/en/docs/install/#arch-linux)
 
-- **Windows 11 x64:** run `rosetun-0.5.1-setup.exe`.
-- **Debian / Ubuntu / Linux Mint, amd64:** install `rosetun_0.5.1_amd64.deb`, join the service group and restart the computer:
-
-```sh
-sudo apt install ./rosetun_0.5.1_amd64.deb
-sudo usermod -aG rosetun "$USER"
-sudo reboot
-```
-
-Debian 13 is verified. Ubuntu 24.04+, Linux Mint 22+ and compatible derivatives are expected to work; see [Linux support and requirements](https://eoftgge.github.io/rosetun/en/docs/linux/).
-
-**Arch Linux:** build the binary package from the recipe in this repository, the AUR package will be published later. [Install and update safely](https://eoftgge.github.io/rosetun/en/docs/install/#arch-linux).
-
-[Verify downloads, update, remove and recover from Lockdown](https://eoftgge.github.io/rosetun/en/docs/install/).
+**Updating from 0.5?** Back up your settings first. The first save in 0.6 moves them to format 9. Keep `config.v8.json` if you need to return to 0.5.1. [Verify downloads, update and restore settings](https://eoftgge.github.io/rosetun/en/docs/install/)
 
 ## Documentation
 
-### For users:
-- [Guide](https://eoftgge.github.io/rosetun/en/docs/) 
-- [Help](https://eoftgge.github.io/rosetun/en/help/) 
+- [User guide](https://eoftgge.github.io/rosetun/en/docs/)
+- [Help and troubleshooting](https://eoftgge.github.io/rosetun/en/help/)
 - [For providers](https://eoftgge.github.io/rosetun/en/providers/)
-
-### For developers
-- [Build from source](https://eoftgge.github.io/rosetun/en/docs/build/) 
-- [Security](SECURITY.md) 
+- [Build from source](https://eoftgge.github.io/rosetun/en/docs/build/)
+- [Security policy and private reporting](SECURITY.md)
 - [Security model](https://eoftgge.github.io/rosetun/en/docs/security/)
-
-## Troubleshooting
-
-[Windows and Linux instructions, Lockdown recovery and logs](https://eoftgge.github.io/rosetun/en/docs/troubleshooting/).
 
 ## Licenses
 

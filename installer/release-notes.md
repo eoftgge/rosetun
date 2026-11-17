@@ -1,261 +1,79 @@
 # Rosetun {{version}}
 
-Rosetun 0.6.0-beta.1 is a beta of the next version. It adds exits that connect through other exits and export and import of rules, and it brings Linux closer to Windows. The stable release is 0.5.1. In the app, this beta is offered later betas and the final 0.6, never 0.5.1.
+Rosetun 0.6 adds rule sharing, experimental two-hop exits and subscription updates through the VPN. On Linux, **Local network** now opens only the networks directly attached to your computer.
 
-**Settings format 9.** After 0.6 has started, your settings no longer open in 0.5: 0.5 refuses a file of a newer format and does not overwrite it. Copy your settings folder before you install (`%APPDATA%\Rosetun` on Windows, `~/.config/rosetun` on Linux); see **Updating from 0.5** and **Going back to 0.5** below.
+## What’s new
 
-## What's new in 0.6
+- **Import and export rules.** Open the menu beside a rule set to exchange a JSON file or use the clipboard. Import previews the rules, skips duplicates when adding and can create a new set. The default rule has its own checkbox. Ctrl+Z undoes the import. Export includes list links only after you approve the displayed hosts. The CLI offers `rosetun rules export` and `rosetun rules import`. [Rules](https://eoftgge.github.io/rosetun/en/docs/rules/#exchange)
+- **Check where a rule sends an address or program.** Use the check field on the Rules tab or `rosetun rules test`. The check sends no network requests and tells you when it lacks enough information for a definite answer. [Rule check](https://eoftgge.github.io/rosetun/en/docs/rules/)
+- **Two-hop exits (experimental).** In exit B, select exit A under **Connect through** and point a rule at B. A can use Xray. B must be an HTTP, HTTPS or SOCKS5 proxy at an IP address. The path carries TCP. UDP, including QUIC, is blocked, and a failed hop never falls back to a shorter path. [Setup and limits](https://eoftgge.github.io/rosetun/en/docs/rules/#two-hop)
+- **Update subscriptions through VPN.** On by default, this sends subscription downloads and updates through the main VPN server while connected, even when a rule sends the provider’s site directly. A failed VPN request stops with an error. When disconnected, updates use the ordinary path. [Subscriptions](https://eoftgge.github.io/rosetun/en/docs/subscriptions/#updates)
+- **Tunnel bypass warning.** With a TUN connection and the kill switch off, Rosetun reports a persistent route outside the tunnel on the connection screen and in the tray. You can enable the kill switch for the next connection from the warning. [Connection and protection](https://eoftgge.github.io/rosetun/en/docs/protection/#bypass-warning)
+- **Choose how to measure delay.** In **Settings → Connection**, choose **Full request** or **Repeated request**. The latter is the default and measures the second request over an open connection. [Everyday use](https://eoftgge.github.io/rosetun/en/docs/everyday/)
+- **Linux desktop and local network.** Rule files use the desktop’s file dialog. **Collect report**, folder buttons and system checks are available, and Rosetun verifies the system proxy settings it writes on GNOME. Window size and maximized state are restored on Wayland and X11. X11 also restores the position when the monitor is still available. **Private networks behind the router** remains a separate option for wider access. [Linux support](https://eoftgge.github.io/rosetun/en/docs/linux/) · [Local network](https://eoftgge.github.io/rosetun/en/docs/local-network/)
+- **Windows startup.** Rosetun allows extra time for a new TUN adapter. If Windows still holds a tunnel address from the previous session, Rosetun asks you to restart the computer.
 
-- **Subscription updates through VPN**, on by default while connected, use the main server even when a rule sends the provider directly. A failed VPN update is not retried directly. Without a connection the ordinary path is used; lists and app update checks keep their existing path. See [Subscriptions](https://eoftgge.github.io/rosetun/en/docs/subscriptions/#updates).
-- **A tunnel bypass warning** without the kill switch: a persistent ordinary route outside the TUN is reported on the main screen and in the tray, with an action to turn on the kill switch. It checks selected routes and does not replace protection. See [Connection and protection](https://eoftgge.github.io/rosetun/en/docs/protection/#bypass-warning).
-- **Full or repeated delay**, chosen in Settings → Connection. Repeated times the second request on an open connection and is the default.
-- **Check an address or program against your rules**, without connecting or sending a network request, on the Rules tab and with `rosetun rules test`. The answer says when it depends on information the client does not have.
+## Engines and security
 
-- **Two-hop exits (experimental).** An exit can connect through another exit: create A and B, choose A under **Connect through** in B's editor, then point a rule at B. Only the traffic that rule selects takes the path A → B. B is an HTTP, HTTPS or SOCKS5 proxy with an IP address as its server. A may run through Xray, so VLESS with REALITY works as A; B through Xray, a name instead of an address for B, UDP and QUIC, and TLS fragmentation are not supported, and the editor says why the list is empty. See [setup and limits](https://eoftgge.github.io/rosetun/en/docs/rules/#two-hop).
-- **Export and import of rules**, in the menu beside the rule set and in `rosetun rules export` and `rosetun rules import`. Import shows a preview first, skips duplicates, leaves the default rule alone unless you select it, and the whole import undoes with Ctrl+Z. List contents are never exported; links to lists only with your consent. See [Export and import](https://eoftgge.github.io/rosetun/en/docs/rules/#exchange).
-- **Linux: Local network opens only your own network**, on its own interface, with the VPN servers' addresses left out, as on Windows. **Private networks behind the router** keeps the wide ranges. See [Local network](https://eoftgge.github.io/rosetun/en/docs/local-network/).
-- **Linux, as on Windows:** file dialogs through the desktop portal, **Collect report** and the folder buttons, the system checks (proxy and traffic interception), the remembered window, and a system proxy on GNOME that is read back after it is set. See [Linux](https://eoftgge.github.io/rosetun/en/docs/linux/).
-- **Building from source needs Rust 1.99.**
-- **sing-box {{sing_box_version}} and Xray {{xray_version}}.** Xray uses an updated Chrome fingerprint.
-
-## Fixed in 0.6
-
-- **Xray TCP listeners disable MPTCP by default**, reducing exposure to [CVE-2026-98432 in the Linux kernel](https://security-tracker.debian.org/tracker/CVE-2026-98432). The complete fix requires an updated OS kernel.
-
-- **Windows: a tunnel address that the last session left behind.** After a fast startup, Windows may still hold the previous session's tunnel. Rosetun no longer retries in vain: it says "Windows still holds the tunnel of the last session · restart the computer".
-- **Menus.** The rule set menu, the rules menu and the check menu fit their labels, and the failure actions stand in one row.
+Includes sing-box {{sing_box_version}} and [Xray-core {{xray_version}}](https://github.com/XTLS/Xray-core/releases/tag/v{{xray_version}}). Xray updates its default Chrome fingerprint and disables Multipath TCP by default on its TCP listeners. Updates for [CVE-2026-98432 in the Linux kernel](https://security-tracker.debian.org/tracker/CVE-2026-98432) come from your OS distribution. Building Rosetun from source requires Rust 1.99 or later.
 
 ## Updating from 0.5
 
-Install it over 0.5; settings and Lockdown are carried over.
+Back up your settings before installing. The settings folder is `%APPDATA%\Rosetun` on Windows and `~/.config/rosetun` on Linux. Install over 0.5 to keep your settings and Lockdown. The first save in 0.6 writes **settings format 9** and keeps the format 8 file as `config.v8.json`. Rosetun 0.5 refuses to open a format 9 file and leaves it intact.
 
-- **Settings format 9.** Settings are converted when 0.6 first saves them, and the previous file stays as `config.v8.json`. 0.5 refuses to read the new format and does not overwrite it.
-- **Keep a copy before you install.** Copy your settings folder somewhere else first; it is the simplest way back.
+**Returning to 0.5.1.** Disconnect and uninstall 0.6 while keeping your settings. Install 0.5.1, close it and restore your backup or copy `config.v8.json` over `config.json`. You lose settings changes made in 0.6. Re-enable autostart and Lockdown if you used them. [Install, update and roll back](https://eoftgge.github.io/rosetun/en/docs/install/)
 
-## Going back to 0.5
+## Download and verify
 
-Not tested.
+- **Windows 11 x64:** `{{setup}}`, SHA-256 `{{sha256}}`. The installer is unsigned. [Code signing policy](https://github.com/eoftgge/rosetun/blob/master/CODE_SIGNING_POLICY.md)
+- **Debian 13 amd64:** `{{deb}}`, SHA-256 `{{deb_sha256}}`. Install with `sudo apt install ./{{deb}}`, run `sudo usermod -aG rosetun "$USER"` and restart the computer. See the guide for compatible distributions. [Linux installation](https://eoftgge.github.io/rosetun/en/docs/install/#debian-13)
+- **Arch Linux:** build `rosetun-bin` from the repository recipe. It uses the Linux archive `{{linux_archive}}`, SHA-256 `{{linux_archive_sha256}}`. [Arch installation](https://eoftgge.github.io/rosetun/en/docs/install/#arch-linux)
 
-1. In 0.6, disconnect, so your own proxy settings come back.
-2. Uninstall 0.6 and keep your settings. This removes Lockdown, an update's hold and the sign-in task.
-3. Install 0.5.1.
-4. Close Rosetun and put your old settings back: the copy you made before installing, or `config.v8.json` renamed to `config.json` over the newer file. Changes made in 0.6, including two-hop paths, are lost.
-5. Turn on **Start with Windows** and Lockdown again if you use them.
+Compare the file’s hash with `SHA256SUMS.txt`. To verify build provenance, run `gh attestation verify <file> --repo eoftgge/rosetun` with the downloaded filename. [Verification instructions](https://eoftgge.github.io/rosetun/en/docs/install/#verify-the-download)
 
-## Fixed in 0.5.1
+Lockdown and two-hop exits remain experimental. For desktop support and portal requirements see [Linux support](https://eoftgge.github.io/rosetun/en/docs/linux/). For tested protection and its limits see [Protection guarantees](https://eoftgge.github.io/rosetun/en/docs/guarantees/).
 
-- **Arch Linux: kill switch and DNS lock.** The nftables executable check now supports the `/usr/bin/nft` layout used by Arch Linux, where `/usr/sbin` points to `/usr/bin`. The kill switch and DNS lock are no longer disabled solely because of this directory layout.
+Report problems in [Issues](https://github.com/eoftgge/rosetun/issues). For vulnerabilities, use [private reporting](https://github.com/eoftgge/rosetun/security/advisories/new). Review the file from **Settings → Service and log → Collect report** before sharing it. Leave out credentials and subscription links.
 
-## What's new in 0.5
+Rosetun bundles the official sing-box and Xray-core builds. Their corresponding sources are attached as `sing-box-{{sing_box_version}}-source.tar.gz` (GPL-3.0-or-later) and `xray-{{xray_version}}-source.tar.gz` (MPL-2.0). On Windows, sing-box includes Wintun {{wintun_version}} under the Wintun Prebuilt Binaries License. [Component notices](https://eoftgge.github.io/rosetun/en/docs/licenses/)
 
-Details are in the [README](https://eoftgge.github.io/rosetun/en/docs/).
+---
 
-- **Linux:** Debian 13, amd64, as a `.deb` package. Kill switch, DNS lock and Lockdown on nftables, engines without root, tray, notifications, autostart and `rosetun://` links. Checked by hand on GNOME, not yet on KDE Plasma; see [Requirements](https://eoftgge.github.io/rosetun/en/docs/install/#requirements).
-- **System proxy mode**, beside TUN: a local proxy your desktop's settings point at, with a strict kill switch and access from your network. See [TUN and System proxy](https://eoftgge.github.io/rosetun/en/docs/modes/).
-- **The protection in place** shows in the window and in `rosetun status`, with what is missing and whether it stays if the service crashes.
-- **The network stays closed through an update** while the kill switch is on. See [Protection guarantees](https://eoftgge.github.io/rosetun/en/docs/guarantees/).
-- **Local network** on Windows opens only your own network, each on its own adapter, and finding devices works. **Private networks behind the router** is the old, wider behaviour, as a separate setting. See [Local network](https://eoftgge.github.io/rosetun/en/docs/local-network/).
-- **Reconnect** in the tray and `rosetun reconnect` restart the tunnel without dropping protection.
-- **Your own HTTP, HTTPS and SOCKS5 proxies**, on a tab of the add dialog.
-- **TLS fragmentation** of the connection to the server, through Xray.
-- **Rules:** undo with Ctrl+Z, **Revert** to the applied rules, Del for the selected rule, and a new **New rule** dialog that adds several programs or addresses at once.
-- **Names in other scripts**, drawn with system fonts, and input in them.
-- **Windows:** the window draws with Direct3D 12, and autostart moves to a scheduled task at sign-in.
-- **sing-box {{sing_box_version}} and Xray {{xray_version}}.**
+## По-русски
 
-## Updating from 0.4
+Rosetun {{version}} добавляет обмен правилами, экспериментальные двухзвенные направления и обновление подписок через VPN. На Linux **Локальная сеть** теперь открывает только сети, к которым компьютер подключён напрямую.
 
-Install it over 0.4; settings and Lockdown are carried over.
+### Что нового
 
-- **Settings format 8.** Settings are converted when 0.5 first saves them, and the previous file stays as `config.v7.json`. 0.4 refuses to read the new format and does not overwrite it.
-- **Lockdown stays on** through the update.
-- **With the kill switch on, the network stays closed** through the update. The app starts and connects again; if it cannot, the connection screen offers **Connect** and **Open network**, and `rosetun open-network` does the same. Without the kill switch the update has a moment with nothing closed, as before.
+- **Импорт и экспорт правил.** Откройте меню рядом с набором правил, чтобы выбрать JSON-файл или буфер обмена. Импорт показывает предпросмотр, пропускает дубликаты при добавлении и позволяет создать новый набор. Для правила по умолчанию есть отдельный флажок. Весь импорт отменяется через Ctrl+Z. Ссылки на списки попадают в экспорт после подтверждения показанных доменов. В командной строке есть `rosetun rules export` и `rosetun rules import`. [Правила](https://eoftgge.github.io/rosetun/docs/rules/#exchange)
+- **Проверка адреса или программы по правилам.** Воспользуйтесь полем на вкладке **Правила** или командой `rosetun rules test`. Проверка обходится без сетевых запросов и сообщает, если данных для точного ответа не хватает. [Проверка правил](https://eoftgge.github.io/rosetun/docs/rules/)
+- **Двухзвенные направления (экспериментально).** В направлении B выберите A в поле **Подключаться через** и направьте правило в B. A может работать через Xray. Для B нужен HTTP-, HTTPS- или SOCKS5-прокси с IP-адресом. Цепочка пропускает TCP. UDP, в том числе QUIC, блокируется, а при сбое звена более короткий маршрут не используется. [Настройка и ограничения](https://eoftgge.github.io/rosetun/docs/rules/#two-hop)
+- **Обновление подписок через VPN.** По умолчанию при подключении загрузка и обновление подписок идут через основной VPN-сервер, даже если правило отправляет сайт провайдера напрямую. При сбое запрос завершается ошибкой. Без подключения подписка обновляется обычным путём. [Подписки](https://eoftgge.github.io/rosetun/docs/subscriptions/#updates)
+- **Предупреждение об обходе туннеля.** Если при активном TUN и выключенном kill switch появится устойчивый маршрут в обход туннеля, Rosetun сообщит об этом на экране подключения и в трее. Из предупреждения можно включить kill switch для следующего подключения. [Подключение и защита](https://eoftgge.github.io/rosetun/docs/protection/#bypass-warning)
+- **Два способа измерить задержку.** В разделе **Настройки → Подключение** можно выбрать **Полный запрос** или **Повторный запрос**. По умолчанию работает второй способ, который измеряет запрос по уже открытому соединению. [Повседневное использование](https://eoftgge.github.io/rosetun/docs/everyday/)
+- **Рабочий стол и локальная сеть на Linux.** Файлы правил открываются через системный диалог. Доступны сбор отчёта, открытие папок и проверка системы. На GNOME Rosetun проверяет, что настройки системного прокси применились. Размер окна и состояние развёртывания восстанавливаются на Wayland и X11. На X11 восстанавливается и положение, если монитор по-прежнему доступен. Более широкий доступ к локальным адресам можно включить отдельно через **Частные сети за роутером**. [Поддержка Linux](https://eoftgge.github.io/rosetun/docs/linux/) · [Локальная сеть](https://eoftgge.github.io/rosetun/docs/local-network/)
+- **Запуск на Windows.** Rosetun даёт новому адаптеру TUN больше времени на запуск. Если Windows ещё держит адрес туннеля прошлого сеанса, Rosetun предлагает перезагрузить компьютер.
 
-## Going back to 0.4
+### Движки и безопасность
 
-Not tested.
+В комплекте sing-box {{sing_box_version}} и [Xray-core {{xray_version}}](https://github.com/XTLS/Xray-core/releases/tag/v{{xray_version}}). В Xray обновлён отпечаток Chrome по умолчанию, а на слушающих TCP-сокетах по умолчанию выключен Multipath TCP. Исправление [CVE-2026-98432 в ядре Linux](https://security-tracker.debian.org/tracker/CVE-2026-98432) поставляется с обновлением ядра от вашего дистрибутива. Для сборки Rosetun из исходников нужен Rust 1.99 или новее.
 
-1. In 0.5, disconnect, so your own proxy settings come back.
-2. Uninstall 0.5 and keep your settings. This removes Lockdown, an update's hold and the sign-in task.
-3. Install 0.4.
-4. Close Rosetun. If `%APPDATA%\Rosetun\config.v7.json` exists, rename it to `config.json` over the newer file; changes made in 0.5 are lost.
-5. Turn on **Start with Windows** and Lockdown again if you use them.
+### Переход с 0.5
 
-## Known limitations
+Перед установкой сделайте копию настроек. На Windows они находятся в `%APPDATA%\Rosetun`, на Linux в `~/.config/rosetun`. Установите 0.6 поверх 0.5, чтобы сохранить настройки и Lockdown. При первом сохранении 0.6 записывает **формат 9** и оставляет файл формата 8 как `config.v8.json`. Rosetun 0.5 отказывается открывать файл формата 9 и оставляет его целым.
 
-- **Two-hop exits are experimental.** A step that fails never falls back to a shorter path.
-- **Windows: multicast without a chosen adapter goes into the tunnel.** mDNS or SSDP from a program that leaves the choice to Windows does not reach your network, also with **Local network** on. Programs that pick the adapter are fine, as is broadcast to 255.255.255.255. On Linux this has not been measured.
-- **Linux: Local network leaves out wide networks.** A network wider than /16 (IPv6: /48) or one that overlaps the tunnel stays closed, and so does a network that holds more than eight of your VPN servers.
-- **Linux: rules by program have a price.** A session with such a rule gives its engine `CAP_SYS_PTRACE` and `CAP_DAC_READ_SEARCH`, nearly root for anything that takes the engine over. A sing-box error sometimes attributes a connection to the wrong program ([#4501](https://github.com/SagerNet/sing-box/issues/4501), open), so a **Direct** rule for a program can now and then let another program's connection past the tunnel. If this matters, use rules by site and IP, with **Through VPN** as the default and no **Direct** rule by program.
-- **Linux: what the system limits.** A file dialog needs a desktop portal, otherwise you type the full path. The service log in the report needs an account in the `systemd-journal` or `adm` group. The firewall check sees nftables and not legacy iptables. A QR code is read from a file or the clipboard, not from the screen. On Wayland only the window's size comes back, not its place.
-- **Lockdown is experimental.** Not tested: Windows 10, other firewalls or antivirus programs with their own network filters, firewalld on Linux, hibernation, sleep on real hardware (on Linux, sleep at all) and a power cut on Linux.
-- **With Lockdown on, Wi-Fi with a sign-in page** cannot open its page, and **the system cannot set the clock** without the tunnel. Turn Lockdown off for a moment, sign in or correct the clock, connect, and turn it on again.
-- **Lockdown leaves virtual machines on this computer without network**: Hyper-V on Windows, and most likely WSL2, Docker Desktop, Windows Sandbox and Mobile hotspot. On Linux, virtual machines and containers, without a Rosetun connection. Turn Lockdown off while you need them.
-- **Desktops.** KDE Plasma has not been checked on a real desktop yet. On GNOME, without an extension that provides a tray, closing the window closes the program.
-- **The Windows installer is not code-signed yet.**
-- If you switch between networks (for example Wi-Fi and cable) while connected through Xray, the connection may stop until Rosetun reconnects.
+**Возврат к 0.5.1.** Отключитесь и удалите 0.6, сохранив настройки. Установите 0.5.1, закройте приложение и восстановите резервную копию или скопируйте `config.v8.json` поверх `config.json`. Изменения настроек в 0.6 пропадут. Включите автозапуск и Lockdown заново, если пользовались ими. [Установка, обновление и возврат](https://eoftgge.github.io/rosetun/docs/install/)
 
-## Install
+### Загрузка и проверка
 
-**Windows 11, x64.** Windows 10 runs on one tester's computer; the failure tests have not run on it. Download `{{setup}}` from this release. [Code signing policy](https://github.com/eoftgge/rosetun/blob/dev/CODE_SIGNING_POLICY.md): if SmartScreen says "Windows protected your PC", select **More info** and then **Run anyway**.
+- **Windows 11 x64:** `{{setup}}`, SHA-256 `{{sha256}}`. Установщик без подписи. [Политика подписи кода](https://github.com/eoftgge/rosetun/blob/master/CODE_SIGNING_POLICY.md)
+- **Debian 13 amd64:** `{{deb}}`, SHA-256 `{{deb_sha256}}`. Установите пакет через `sudo apt install ./{{deb}}`, выполните `sudo usermod -aG rosetun "$USER"` и перезагрузите компьютер. Совместимые дистрибутивы перечислены в руководстве. [Установка на Linux](https://eoftgge.github.io/rosetun/docs/install/#debian-13)
+- **Arch Linux:** соберите `rosetun-bin` по рецепту из репозитория. Он использует архив `{{linux_archive}}`, SHA-256 `{{linux_archive_sha256}}`. [Установка на Arch](https://eoftgge.github.io/rosetun/docs/install/#arch-linux)
 
-**Debian 13, amd64.** Download `{{deb}}`, then:
+Сравните хеш файла с `SHA256SUMS.txt`. Чтобы проверить происхождение сборки, выполните `gh attestation verify <файл> --repo eoftgge/rosetun`, подставив имя скачанного файла. [Инструкция по проверке](https://eoftgge.github.io/rosetun/docs/install/#verify-the-download)
 
-```sh
-sudo apt install ./{{deb}}
-sudo usermod -aG rosetun "$USER"
-```
+Lockdown и двухзвенные направления остаются экспериментальными. Поддержка рабочих столов и требования к порталу описаны на странице [Поддержка Linux](https://eoftgge.github.io/rosetun/docs/linux/). Проверки защиты и их границы описаны на странице [Гарантии защиты](https://eoftgge.github.io/rosetun/docs/guarantees/).
 
-Then restart the computer: logging out is not enough.
+О проблемах пишите в [Issues](https://github.com/eoftgge/rosetun/issues), об уязвимостях сообщайте [приватно](https://github.com/eoftgge/rosetun/security/advisories/new). Перед отправкой просмотрите файл из **Настройки → Служба и журнал → Собрать отчёт**. Исключите пароли и ссылки подписок.
 
-## Verify
-
-Compare the hash with this release's `SHA256SUMS.txt`, and verify the provenance. An attestation says which workflow built the file; it is not a code signature.
-
-- Windows: `Get-FileHash .\{{setup}} -Algorithm SHA256` gives `{{sha256}}`. Then `gh attestation verify .\{{setup}} --repo eoftgge/rosetun`.
-- Linux archive: `{{linux_archive}}`, SHA-256 `{{linux_archive_sha256}}`; verify with `gh attestation verify {{linux_archive}} --repo eoftgge/rosetun`.
-- Debian: `sha256sum {{deb}}` gives `{{deb_sha256}}`. Then `gh attestation verify {{deb}} --repo eoftgge/rosetun`.
-
-## Report a problem
-
-[Issues](https://github.com/eoftgge/rosetun/issues), with the steps and the error text. On Windows attach **Collect report**; on Linux see [Troubleshooting](https://eoftgge.github.io/rosetun/en/docs/troubleshooting/). Report a vulnerability privately through [Security](https://github.com/eoftgge/rosetun/security/advisories/new), without subscription links or credentials.
-
-## Included
-
-Rosetun includes the unmodified official sing-box {{sing_box_version}} build, licensed under GPL-3.0-or-later. The corresponding source is attached as `sing-box-{{sing_box_version}}-source.tar.gz`.
-
-Rosetun includes the unmodified official Xray-core {{xray_version}} build, licensed under MPL-2.0. The corresponding source is attached as `xray-{{xray_version}}-source.tar.gz`; the license is installed in `licenses/` on Windows and in `/usr/share/doc/rosetun/licenses` on Linux. Xray's `geoip.dat` and `geosite.dat` are not installed.
-
-On Windows, the sing-box executable embeds Wintun {{wintun_version}}, distributed under the Wintun Prebuilt Binaries License; the license and notice are installed in `licenses/wintun-prebuilt-binaries-license.txt` and `licenses/wintun.txt`.
-
-## Русский
-
-Rosetun 0.6.0-beta.1 это бета следующей версии. В ней направления, которые подключаются через другие направления, экспорт и импорт правил, а Linux стал ближе к Windows. Стабильный выпуск: 0.5.1. Приложение предлагает этой бете более поздние беты и итоговую 0.6, но не 0.5.1.
-
-**Формат настроек 9.** После запуска 0.6 ваши настройки не открываются в 0.5: 0.5 отказывается читать файл более нового формата и не перезаписывает его. Перед установкой скопируйте папку настроек (`%APPDATA%\Rosetun` на Windows, `~/.config/rosetun` на Linux); см. **Обновление с 0.5** и **Возврат на 0.5** ниже.
-
-### Что нового в 0.6
-
-- **Обновление подписок через VPN** включено по умолчанию при подключении: через основной сервер, даже если правило отправляет провайдера напрямую. При сбое прямого повтора нет. Без подключения используется обычный путь; списки и проверка обновлений приложения работают как прежде. См. [Подписки](https://eoftgge.github.io/rosetun/docs/subscriptions/#updates).
-- **Предупреждение об обходе туннеля** без kill switch: устойчивый обычный маршрут вне TUN виден на главном экране и в трее, с действием включения kill switch. Проверяются выбранные маршруты; это не замена защите. См. [Подключение и защита](https://eoftgge.github.io/rosetun/docs/protection/#bypass-warning).
-- **Полный или повторный замер задержки** в Настройки → Подключение. Повторный измеряет второй запрос по открытому соединению и выбран по умолчанию.
-- **Проверка адреса или программы по правилам**, без подключения и сетевых запросов: на вкладке «Правила» и командой `rosetun rules test`. Если клиенту не хватает данных, ответ говорит об этом.
-
-- **Двухзвенные направления (экспериментально).** Направление может подключаться через другое направление: создайте A и B, в редакторе B выберите A в поле **Подключаться через**, затем укажите B в правиле. Путь A → B проходит только трафик, который выбирает это правило. B это прокси HTTP, HTTPS или SOCKS5, а его сервер задан IP-адресом. A может идти через Xray, поэтому VLESS с REALITY работает как A; B через Xray, имя вместо адреса у B, UDP и QUIC и фрагментация TLS не поддерживаются, а редактор объясняет, почему список пуст. См. [настройку и ограничения](https://eoftgge.github.io/rosetun/ru/docs/rules/#two-hop).
-- **Экспорт и импорт правил** в меню рядом с набором правил, а также `rosetun rules export` и `rosetun rules import`. Импорт сначала показывает предпросмотр, пропускает дубликаты, не трогает правило по умолчанию без вашей отметки, а весь импорт отменяется Ctrl+Z. Содержимое списков не экспортируется; ссылки на списки только с вашего согласия. См. [Экспорт и импорт](https://eoftgge.github.io/rosetun/ru/docs/rules/#exchange).
-- **Linux: «Локальная сеть» открывает только вашу сеть**, на её интерфейсе, без адресов VPN-серверов, как на Windows. **Частные сети за роутером** сохраняет широкие диапазоны. См. [Локальная сеть](https://eoftgge.github.io/rosetun/ru/docs/local-network/).
-- **Linux, как на Windows:** диалоги выбора файла через портал рабочего стола, **Собрать отчёт** и кнопки папок, проверки системы (прокси и перехват трафика), запоминание окна и системный прокси на GNOME, который читается обратно после установки. См. [Linux](https://eoftgge.github.io/rosetun/ru/docs/linux/).
-- **Для сборки из исходников нужен Rust 1.99.**
-- **sing-box {{sing_box_version}} и Xray {{xray_version}}.** В Xray обновлён Chrome fingerprint.
-
-### Исправлено в 0.6
-
-- **У TCP-слушателей Xray MPTCP выключен по умолчанию**, что сокращает поверхность атаки для [CVE-2026-98432 в ядре Linux](https://security-tracker.debian.org/tracker/CVE-2026-98432). Для полного исправления нужно обновлённое ядро ОС.
-
-- **Windows: адрес туннеля, оставшийся от прошлого сеанса.** После быстрого запуска Windows может ещё держать туннель предыдущего сеанса. Rosetun больше не повторяет попытки впустую: он пишет «Windows ещё держит туннель прошлой сессии · перезагрузите компьютер».
-- **Меню.** Меню набора правил, меню правил и меню проверки подгоняются под свои подписи, а кнопки при сбое стоят в одной строке.
-
-### Обновление с 0.5
-
-Устанавливайте поверх 0.5; настройки и Lockdown сохраняются.
-
-- **Формат настроек 9.** Настройки преобразуются при первом сохранении в 0.6, прежний файл остаётся как `config.v8.json`. 0.5 отказывается читать новый формат и не перезаписывает его.
-- **Сохраните копию перед установкой.** Скопируйте папку настроек в другое место; это самый простой путь назад.
-
-### Возврат на 0.5
-
-Не проверено.
-
-1. В 0.6 отключитесь, чтобы вернулись ваши настройки прокси.
-2. Удалите 0.6, сохранив настройки. Это снимает Lockdown, удержание после обновления и задачу запуска при входе.
-3. Установите 0.5.1.
-4. Закройте Rosetun и верните старые настройки: копию, сделанную перед установкой, или `config.v8.json`, переименованный в `config.json` поверх нового файла. Изменения, сделанные в 0.6, включая двухзвенные пути, пропадут.
-5. Снова включите **Запускать вместе с Windows** и Lockdown, если они нужны.
-
-### Исправлено в 0.5.1
-
-Rosetun 0.5.1 исправляет несовместимость проверки nftables с Arch Linux. Когда `/usr/sbin` является символической ссылкой на `/usr/bin`, Rosetun отклонял исполняемый файл `nft` и сообщал, что kill switch и замок DNS недоступны. Теперь стандартное расположение `nft` в Arch Linux поддерживается без ослабления проверок владельца и прав доступа.
-
-- **Arch Linux: kill switch и замок DNS.** Проверка nftables принимает `/usr/bin/nft`, если путь проходит проверку безопасности. Защита больше не становится недоступной только из-за устройства каталогов Arch Linux.
-
-### Что нового в 0.5
-
-Подробности в [README](https://eoftgge.github.io/rosetun/ru/docs/).
-
-- **Linux:** Debian 13, amd64, пакетом `.deb`. Kill switch, замок DNS и Lockdown на nftables, ядра без root, трей, уведомления, автозапуск и ссылки `rosetun://`. Вручную проверено на GNOME, на KDE Plasma пока нет; см. [Требования](https://eoftgge.github.io/rosetun/ru/docs/install/#requirements).
-- **Режим «Системный прокси»** рядом с TUN: локальный прокси, на который указывают настройки системы, со строгим kill switch и доступом из вашей сети. См. [TUN и системный прокси](https://eoftgge.github.io/rosetun/ru/docs/modes/).
-- **Действующая защита** видна в окне и в `rosetun status`, вместе с тем, чего не хватает и останется ли защита при падении службы.
-- **Сеть остаётся закрытой при обновлении**, если включён kill switch. См. [Гарантии защиты](https://eoftgge.github.io/rosetun/ru/docs/guarantees/).
-- **Локальная сеть** на Windows открывает только вашу сеть, каждую на своём адаптере, и поиск устройств работает. **Частные сети за роутером** это прежнее, более широкое поведение отдельной настройкой. См. [Локальная сеть](https://eoftgge.github.io/rosetun/ru/docs/local-network/).
-- **Переподключиться** в трее и `rosetun reconnect` перезапускают туннель, не снимая защиту.
-- **Собственные прокси HTTP, HTTPS и SOCKS5** на вкладке окна добавления.
-- **Фрагментация TLS** соединения с сервером, через Xray.
-- **Правила:** Ctrl+Z, **Вернуть** к применённым правилам, Del для выделенного правила и новое окно **Новое правило**, которое добавляет сразу несколько программ или адресов.
-- **Имена на других письменностях**, которые рисуют системные шрифты, и ввод на них.
-- **Windows:** окно рисуется через Direct3D 12, а автозапуск переходит на задачу планировщика при входе в систему.
-- **sing-box {{sing_box_version}} и Xray {{xray_version}}.**
-
-### Обновление с 0.4
-
-Устанавливайте поверх 0.4; настройки и Lockdown сохраняются.
-
-- **Формат настроек 8.** Настройки преобразуются при первом сохранении в 0.5, прежний файл остаётся как `config.v7.json`. 0.4 отказывается читать новый формат и не перезаписывает его.
-- **Lockdown остаётся включённым** при обновлении.
-- **Если включён kill switch, сеть при обновлении остаётся закрытой.** Приложение запускается и подключается снова; если не удалось, экран подключения предлагает **Подключиться** и **Открыть сеть**, то же делает `rosetun open-network`. Без kill switch при обновлении, как и раньше, есть момент, когда ничего не закрыто.
-
-### Возврат на 0.4
-
-Не проверено.
-
-1. В 0.5 отключитесь, чтобы вернулись ваши настройки прокси.
-2. Удалите 0.5, сохранив настройки. Это снимает Lockdown, удержание после обновления и задачу запуска при входе.
-3. Установите 0.4.
-4. Закройте Rosetun. Если есть `%APPDATA%\Rosetun\config.v7.json`, переименуйте его в `config.json` поверх нового файла; изменения, сделанные в 0.5, пропадут.
-5. Снова включите **Запускать вместе с Windows** и Lockdown, если они нужны.
-
-### Известные ограничения
-
-- **Двухзвенные направления экспериментальные.** Сбой звена никогда не переключает на более короткий путь.
-- **Windows: multicast без выбранного адаптера уходит в туннель.** mDNS или SSDP от программы, которая оставляет выбор Windows, до вашей сети не доходит, в том числе при включённой **Локальной сети**. У программ, которые выбирают адаптер, всё работает, как и широковещательные запросы на 255.255.255.255. На Linux это не измерялось.
-- **Linux: «Локальная сеть» обходит широкие сети.** Сеть шире /16 (IPv6: /48) и сеть, пересекающаяся с туннелем, остаются закрытыми, как и сеть, в которой больше восьми ваших VPN-серверов.
-- **Linux: у правил по программам есть цена.** Сеанс с таким правилом даёт своему ядру `CAP_SYS_PTRACE` и `CAP_DAC_READ_SEARCH`, почти root для того, кто захватит ядро. Ошибка sing-box иногда приписывает соединение не той программе ([#4501](https://github.com/SagerNet/sing-box/issues/4501), открыта), поэтому правило «Напрямую» для программы может изредка пропустить мимо туннеля чужое соединение. Если это важно, используйте правила по сайтам и IP, а по умолчанию оставьте «Через VPN» без правил «Напрямую» по программам.
-- **Linux: что ограничивает система.** Диалогу выбора файла нужен портал рабочего стола, иначе полный путь вводится вручную. Для журнала службы в отчёте нужна учётная запись в группе `systemd-journal` или `adm`. Проверка брандмауэра видит nftables, но не старый iptables. QR-код читается из файла или буфера обмена, не с экрана. На Wayland возвращается только размер окна, не его место.
-- **Lockdown экспериментальный.** Не проверены: Windows 10, другие брандмауэры и антивирусы со своими сетевыми фильтрами, firewalld на Linux, гибернация, сон на настоящем компьютере (на Linux сон вообще) и отключение питания на Linux.
-- **С включённым Lockdown Wi-Fi со страницей входа** не может открыть эту страницу, а **система не может выставить время** без туннеля. Выключите Lockdown на минуту, войдите или поправьте время, подключитесь и включите его снова.
-- **Lockdown оставляет без сети виртуальные машины на этом компьютере**: Hyper-V на Windows и, скорее всего, WSL2, Docker Desktop, Windows Sandbox и мобильный хот-спот. На Linux виртуальные машины и контейнеры, пока нет подключения Rosetun. Выключайте Lockdown, пока они нужны.
-- **Рабочие столы.** KDE Plasma на настоящем рабочем столе пока не проверен. На GNOME без расширения, которое даёт трей, закрытие окна закрывает программу.
-- **Установщик Windows пока не подписан.**
-- Если переключать сети (например, Wi-Fi и кабель) при подключении через Xray, соединение может остановиться, пока Rosetun не переподключится.
-
-### Установка
-
-**Windows 11, x64.** Windows 10 работает на компьютере одного тестировщика; проверки отказов на ней не прогонялись. Скачайте `{{setup}}` из этого выпуска. [Политика подписи кода](https://github.com/eoftgge/rosetun/blob/dev/CODE_SIGNING_POLICY.md) (Code signing policy): если SmartScreen показывает «Windows protected your PC», нажмите **More info**, затем **Run anyway**.
-
-**Debian 13, amd64.** Скачайте `{{deb}}`, затем:
-
-```sh
-sudo apt install ./{{deb}}
-sudo usermod -aG rosetun "$USER"
-```
-
-Затем перезагрузите компьютер: выхода из системы мало.
-
-### Проверка
-
-Сравните хеш с `SHA256SUMS.txt` этого выпуска и проверьте происхождение. Аттестация говорит, какой workflow собрал файл; это не подпись кода.
-
-- Windows: `Get-FileHash .\{{setup}} -Algorithm SHA256` даёт `{{sha256}}`. Затем `gh attestation verify .\{{setup}} --repo eoftgge/rosetun`.
-- Linux archive: `{{linux_archive}}`, SHA-256 `{{linux_archive_sha256}}`; verify with `gh attestation verify {{linux_archive}} --repo eoftgge/rosetun`.
-- Debian: `sha256sum {{deb}}` даёт `{{deb_sha256}}`. Затем `gh attestation verify {{deb}} --repo eoftgge/rosetun`.
-
-### Сообщить о проблеме
-
-[Issues](https://github.com/eoftgge/rosetun/issues), с шагами и текстом ошибки. На Windows приложите **Собрать отчёт**; для Linux см. [Устранение неполадок](https://eoftgge.github.io/rosetun/ru/docs/troubleshooting/). Об уязвимостях сообщайте приватно через [Security](https://github.com/eoftgge/rosetun/security/advisories/new), без ссылок подписок и паролей.
-
-### Состав
-
-Rosetun включает официальную сборку sing-box {{sing_box_version}} без изменений, лицензия GPL-3.0-or-later. Соответствующие исходники приложены в архиве `sing-box-{{sing_box_version}}-source.tar.gz`.
-
-Rosetun включает официальную сборку Xray-core {{xray_version}} без изменений, лицензия MPL-2.0. Соответствующие исходники приложены в архиве `xray-{{xray_version}}-source.tar.gz`; текст лицензии устанавливается в `licenses/` на Windows и в `/usr/share/doc/rosetun/licenses` на Linux. Файлы Xray `geoip.dat` и `geosite.dat` не устанавливаются.
-
-На Windows исполняемый файл sing-box содержит Wintun {{wintun_version}}, который распространяется по лицензии Wintun Prebuilt Binaries License; текст лицензии и уведомление устанавливаются в `licenses/wintun-prebuilt-binaries-license.txt` и `licenses/wintun.txt`.
+В комплект входят официальные сборки sing-box и Xray-core. Соответствующие исходники приложены в архивах `sing-box-{{sing_box_version}}-source.tar.gz` (GPL-3.0-or-later) и `xray-{{xray_version}}-source.tar.gz` (MPL-2.0). На Windows sing-box включает Wintun {{wintun_version}} по лицензии Wintun Prebuilt Binaries License. [Компоненты и лицензии](https://eoftgge.github.io/rosetun/docs/licenses/)

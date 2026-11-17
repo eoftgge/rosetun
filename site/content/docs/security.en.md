@@ -14,6 +14,8 @@ What Rosetun protects, what counts as a vulnerability and what does not. To repo
 
 - **Traffic outside the tunnel:** a way around the kill switch, the DNS lock or Lockdown, including from another account on the same computer while connected. Name the moment and the mode, as in the table of [Protection guarantees](../guarantees/), where that cell says the network is closed.
 - **Leaks:** subscription links, credentials, server addresses or visited sites in logs, in **Collect report**, in notifications or in the interface where they should be hidden.
+- **Rule exchange:** an import that changes a rule set before confirmation, or an export that includes list URLs without consent.
+- **Subscription updates:** a direct request after a VPN request fails while **Update subscriptions through VPN** is enabled. Include the connection mode and whether Rosetun showed an active connection. [Subscription updates](../subscriptions/#updates)
 - **Input from outside:** a `rosetun://` link that adds or downloads anything before you confirm it; a subscription or list that makes Rosetun write outside its folders or run anything; an update offer that points anywhere but this repository's releases; a program icon read from a network path.
 
 **On Windows:**
@@ -33,7 +35,7 @@ What Rosetun protects, what counts as a vulnerability and what does not. To repo
 - **The `.deb` package:** a maintainer script that opens the network during an upgrade, removes the way out before Lockdown is gone, or leaves a file others can write; an upgrade marker in `/run/rosetun` that an ordinary account can set.
 - **`rosetun://` links through the socket** in `$XDG_RUNTIME_DIR`: another account delivering a link to your Rosetun, or the `.desktop` handler running anything but `rosetun-gui --open-url`.
 
-A report should not contain subscription links, server links, credentials or unredacted logs: such links can contain passwords. **Collect report** (Settings → Service and log) removes them and is safe to attach.
+Include the Rosetun version, system, connection mode, protection settings and steps to reproduce. **Collect report** (Settings → Service and log) prepares a redacted report. Review it before attaching it and leave out subscription links, server links, credentials and raw logs.
 
 ## Out of scope {#out-of-scope}
 

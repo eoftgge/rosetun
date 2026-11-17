@@ -42,15 +42,16 @@ def fetch(url, api=False):
 
 def banner(version, linux):
     """The documentation banner of each language, from the stable version and its platforms."""
+    release = tuple(map(int, version.split('.')))
     result = {}
     for lang, label, platforms, baseline in (
-        ('ru', 'Стабильный выпуск', 'Windows и Linux', 'Документация: 0.5'),
-        ('en', 'Stable release', 'Windows and Linux', 'Documentation: 0.5'),
+        ('ru', 'Стабильный выпуск', 'Windows и Linux', 'Документация: 0.6'),
+        ('en', 'Stable release', 'Windows and Linux', 'Documentation: 0.6'),
     ):
-        if tuple(map(int, version.split('.'))) >= (0, 5, 0):
-            result[lang] = f'{label}: {version} · {platforms if linux else "Windows"}.'
-        else:
-            result[lang] = f'{label}: {version} · Windows. {baseline}.'
+        supported = platforms if linux and release >= (0, 5, 0) else 'Windows'
+        result[lang] = f'{label}: {version} · {supported}.'
+        if release < (0, 6, 0):
+            result[lang] += f' {baseline}.'
     return result
 
 
