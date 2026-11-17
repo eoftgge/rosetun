@@ -48,6 +48,9 @@ pub(crate) fn drop_down(
                     );
                 })
                 .show_ui(ui, |ui| {
+                    // The combo's scroll area starts a new layout. Full-width menu rows
+                    // need its content width before the first item is placed.
+                    ui.set_min_width(ui.available_width());
                     // A chosen item is filled with the accent itself, not the faint wash
                     // behind selected text.
                     ui.visuals_mut().selection.bg_fill = palette.accent_base;
@@ -176,6 +179,40 @@ mod tests {
         screen.click_text("Русский", |ui| show(&mut picked, ui));
         assert_eq!(picked, "Русский");
     }
+
+    #[test]
+    fn the_first_choice_row_leaves_room_for_its_label_and_check() {
+        use crate::widgets::{MenuItem, menu_item};
+
+        let mut screen = screen();
+        let mut row = egui::Rect::NOTHING;
+        let mut field = egui::Rect::NOTHING;
+        let shown = screen.click_text("Current", |ui| {
+            field = drop_down(ui, "choice", Some(200.0), "Current", |ui| {
+                row = menu_item(
+                    ui,
+                    MenuItem {
+                        label: "Selected choice",
+                        enabled: true,
+                        selected: true,
+                        danger: false,
+                        note: None,
+                    },
+                )
+                .rect;
+            })
+            .rect;
+        });
+        let label = shown
+            .iter()
+            .find(|(label, _)| label == "Selected choice")
+            .unwrap()
+            .1;
+        assert!(row.left() >= field.left());
+        assert!(row.right() <= field.right());
+        assert!(row.right() > label.right() + 24.0);
+    }
+
     #[test]
     fn a_drop_down_popup_keeps_its_field_width_in_a_wide_parent() {
         for width in [180.0, 400.0] {

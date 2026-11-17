@@ -157,110 +157,123 @@ pub(crate) fn show(ctx: &egui::Context, state: &mut State, actions: &mut Vec<Act
                 }
                 ui.add_space(theme::space::M);
 
-                ui.label(format!(
-                    "{} {} · {} {} · {} {} · {} {}",
-                    tr!("rules-transfer-add"),
-                    import.add.rules.len(),
-                    tr!("rules-transfer-duplicates"),
-                    import.add.duplicates,
-                    tr!("rules-transfer-disabled"),
-                    import.add.rules.iter().filter(|rule| !rule.enabled).count(),
-                    tr!("rules-transfer-invalid-rows"),
-                    import
-                        .add
-                        .entries
-                        .iter()
-                        .filter(|entry| entry.invalid)
-                        .count()
-                ));
-                if import.destination.is_some() {
+                let shown = widgets::appear_progress(
+                    ui.ctx(),
+                    egui::Id::unique("rules_import_preview"),
+                    &import.destination,
+                    crate::motion::reduced(),
+                );
+                widgets::appear(ui, shown, |ui| {
                     ui.label(format!(
-                        "{}: {}",
-                        tr!("rules-transfer-replace"),
-                        import.replace.rules.len()
+                        "{} {} · {} {} · {} {} · {} {}",
+                        tr!("rules-transfer-add"),
+                        import.add.rules.len(),
+                        tr!("rules-transfer-duplicates"),
+                        import.add.duplicates,
+                        tr!("rules-transfer-disabled"),
+                        import.add.rules.iter().filter(|rule| !rule.enabled).count(),
+                        tr!("rules-transfer-invalid-rows"),
+                        import
+                            .add
+                            .entries
+                            .iter()
+                            .filter(|entry| entry.invalid)
+                            .count()
                     ));
-                }
-                egui::ScrollArea::vertical()
-                    .max_height(widgets::DialogWidth::Narrow.points())
-                    .show(ui, |ui| {
-                        for (row, rule) in import.replace.rules.iter().enumerate() {
-                            let label = match &rule.matcher {
-                                RuleMatcher::List { list, category } => {
-                                    let entry = import
-                                        .replace
-                                        .lists
-                                        .iter()
-                                        .chain(&state.config.lists)
-                                        .find(|entry| &entry.id == list);
-                                    entry.map_or_else(
-                                        || tr!("rules-transfer-needs-list"),
-                                        |entry| {
-                                            let file = match &entry.source {
-                                                ListSource::File { original_name }
-                                                    if original_name == "list-required" =>
-                                                {
-                                                    String::new()
-                                                }
-                                                ListSource::File { original_name } => {
-                                                    format!(" ({original_name})")
-                                                }
-                                                ListSource::Url(value) => url::Url::parse(value)
-                                                    .ok()
-                                                    .and_then(|url| {
-                                                        url.host_str()
-                                                            .map(|host| format!(" ({host})"))
-                                                    })
-                                                    .unwrap_or_default(),
-                                            };
+                    if import.destination.is_some() {
+                        ui.label(format!(
+                            "{}: {}",
+                            tr!("rules-transfer-replace"),
+                            import.replace.rules.len()
+                        ));
+                    }
+                    egui::ScrollArea::vertical()
+                        .max_height(widgets::DialogWidth::Narrow.points())
+                        .show(ui, |ui| {
+                            for (row, rule) in import.replace.rules.iter().enumerate() {
+                                let label = match &rule.matcher {
+                                    RuleMatcher::List { list, category } => {
+                                        let entry = import
+                                            .replace
+                                            .lists
+                                            .iter()
+                                            .chain(&state.config.lists)
+                                            .find(|entry| &entry.id == list);
+                                        entry.map_or_else(
+                                            || tr!("rules-transfer-needs-list"),
+                                            |entry| {
+                                                let file = match &entry.source {
+                                                    ListSource::File { original_name }
+                                                        if original_name == "list-required" =>
+                                                    {
+                                                        String::new()
+                                                    }
+                                                    ListSource::File { original_name } => {
+                                                        format!(" ({original_name})")
+                                                    }
+                                                    ListSource::Url(value) => {
+                                                        url::Url::parse(value)
+                                                            .ok()
+                                                            .and_then(|url| {
+                                                                url.host_str().map(|host| {
+                                                                    format!(" ({host})")
+                                                                })
+                                                            })
+                                                            .unwrap_or_default()
+                                                    }
+                                                };
+                                                format!(
+                                                    "{}{} {}",
+                                                    entry.name,
+                                                    file,
+                                                    category.as_deref().unwrap_or_default()
+                                                )
+                                            },
+                                        )
+                                    }
+                                    matcher => rosetun_core::rule_value_text(matcher),
+                                };
+                                let target = rule
+                                    .exit
+                                    .as_ref()
+                                    .and_then(|id| {
+                                        state.config.exits.iter().find(|exit| &exit.id == id)
+                                    })
+                                    .map_or_else(
+                                        || super::target_label(rule.target),
+                                        |exit| {
                                             format!(
-                                                "{}{} {}",
-                                                entry.name,
-                                                file,
-                                                category.as_deref().unwrap_or_default()
+                                                "{}: {}",
+                                                super::target_label(rule.target),
+                                                exit.name
                                             )
                                         },
-                                    )
+                                    );
+                                let index = import.replace.indexes[row];
+                                ui.label(format!("{}: {label} → {target}", index + 1));
+                                if !import.add.indexes.contains(&index) {
+                                    ui.label(tr!("rules-transfer-duplicate-add"));
                                 }
-                                matcher => rosetun_core::rule_value_text(matcher),
-                            };
-                            let target = rule
-                                .exit
-                                .as_ref()
-                                .and_then(|id| {
-                                    state.config.exits.iter().find(|exit| &exit.id == id)
-                                })
-                                .map_or_else(
-                                    || super::target_label(rule.target),
-                                    |exit| {
-                                        format!(
-                                            "{}: {}",
-                                            super::target_label(rule.target),
-                                            exit.name
-                                        )
-                                    },
-                                );
-                            let index = import.replace.indexes[row];
-                            ui.label(format!("{}: {label} → {target}", index + 1));
-                            if !import.add.indexes.contains(&index) {
-                                ui.label(tr!("rules-transfer-duplicate-add"));
                             }
-                        }
-                        for entry in &import.replace.entries {
-                            for warning in &entry.warnings {
-                                let text = match warning {
-                                    Warning::OtherSystem => tr!("rules-transfer-other-system"),
-                                    Warning::NeedsList => tr!("rules-transfer-needs-list"),
-                                    Warning::NeedsFile => tr!("rules-transfer-needs-file"),
-                                    Warning::ExitReplaced => tr!("rules-transfer-exit-replaced"),
-                                    Warning::BroadDirect => tr!("rules-transfer-broad"),
-                                };
-                                ui.colored_label(
-                                    theme::ERROR,
-                                    format!("{}: {text}", entry.index + 1),
-                                );
+                            for entry in &import.replace.entries {
+                                for warning in &entry.warnings {
+                                    let text = match warning {
+                                        Warning::OtherSystem => tr!("rules-transfer-other-system"),
+                                        Warning::NeedsList => tr!("rules-transfer-needs-list"),
+                                        Warning::NeedsFile => tr!("rules-transfer-needs-file"),
+                                        Warning::ExitReplaced => {
+                                            tr!("rules-transfer-exit-replaced")
+                                        }
+                                        Warning::BroadDirect => tr!("rules-transfer-broad"),
+                                    };
+                                    ui.colored_label(
+                                        theme::ERROR,
+                                        format!("{}: {text}", entry.index + 1),
+                                    );
+                                }
                             }
-                        }
-                    });
+                        });
+                });
                 if let Some(target) = import.add.default_target {
                     widgets::checkbox(
                         ui,
@@ -633,6 +646,38 @@ mod tests {
                     .is_none()
             );
             assert_eq!(state.config.rule_sets.len(), 1);
+        });
+    }
+
+    #[test]
+    fn import_destination_menu_shows_the_first_name_and_can_select_another_set() {
+        i18n::in_language(Language::Russian, || {
+            let mut state = state();
+            state.config.rule_sets[0].name = "Основной".into();
+            let other = RuleSetId::new("2");
+            state
+                .config
+                .rule_sets
+                .push(RuleSet::new(other.clone(), "Другой", RuleTarget::Direct));
+            state.reduce(WorkerEvent::RulesRead(Ok(Some(r#"{"format":"rosetun-rules","version":1,"exported_by":"test","system":"windows","rules":[],"lists":[]}"#.into()))));
+            let mut screen = TestScreen::new(egui::vec2(900.0, 720.0));
+            let mut show = |ui: &mut egui::Ui| {
+                show(ui.ctx(), &mut state, &mut Vec::new());
+            };
+            let open = screen.click_text("Основной", &mut show);
+            let main: Vec<_> = open
+                .iter()
+                .filter(|(text, _)| text == "Основной")
+                .map(|(_, rect)| *rect)
+                .collect();
+            assert_eq!(main.len(), 2, "{open:?}");
+            assert!((main[0].width() - main[1].width()).abs() < 2.0);
+            let changed = screen.click_text("Другой", &mut show);
+            assert!(changed.iter().any(|(text, _)| text == "Другой"));
+            assert_eq!(
+                state.rules.exchange.import.as_ref().unwrap().destination,
+                Some(other)
+            );
         });
     }
 }
