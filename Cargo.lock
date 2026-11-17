@@ -3014,6 +3014,7 @@ dependencies = [
  "tracing-subscriber",
  "ureq",
  "windows-sys 0.61.2",
+ "zbus",
 ]
 
 [[package]]

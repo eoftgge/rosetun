@@ -103,6 +103,7 @@ git clone https://aur.archlinux.org/rosetun-bin.git
 cd rosetun-bin
 makepkg -si
 sudo systemctl enable --now rosetun-helper rosetun-lockdown
+sudo systemctl enable --now systemd-resolved.service
 sudo usermod -aG rosetun "$USER"
 sudo reboot
 ```
@@ -110,8 +111,12 @@ sudo reboot
 After reboot, `systemctl is-active rosetun-helper rosetun-lockdown` must report
 both active, `id -nG` must include rosetun, and `rosetun status` must answer.
 Open `rosetun-gui`, import an owner's test subscription, enable the kill switch,
-connect and verify tunnel traffic. Direct traffic bound to the physical interface
-must fail. Keep probing it during the next package installation and both calls:
+connect in TUN mode and verify tunnel traffic. In `resolvectl status rosetun0`,
+check that the tunnel DNS server is listed. If you started `systemd-resolved`
+during a connection, disconnect and connect again to register DNS. [System DNS on Arch](https://eoftgge.github.io/rosetun/en/docs/install/#arch-dns)
+
+Direct traffic bound to the physical interface must fail. Keep probing it
+during the next package installation and both calls:
 
 ```sh
 sudo pacman -U ./rosetun-bin-<next-version>-1-x86_64.pkg.tar.zst

@@ -71,6 +71,23 @@ sudo reboot
 
 Пакет устанавливает файлы выпуска вместе с соответствующими сборками sing-box и Xray.
 
+### Системный DNS в режиме TUN {#arch-dns}
+
+Включите `systemd-resolved`, чтобы sing-box мог зарегистрировать DNS-сервер туннеля в системе.
+
+```sh
+sudo systemctl enable --now systemd-resolved.service
+```
+
+Если Rosetun уже подключён, отключитесь и подключитесь снова. Затем проверьте DNS на интерфейсе туннеля и выполните системный запрос.
+
+```sh
+resolvectl status rosetun0
+timeout 5s getent ahosts example.org
+```
+
+В строке **DNS Servers** должен появиться сервер туннеля. Если он есть, а запрос по-прежнему не проходит, проверьте, использует ли система `systemd-resolved`. Для его локального DNS рекомендуемая настройка `/etc/resolv.conf` представляет собой символическую ссылку на `/run/systemd/resolve/stub-resolv.conf`. [Справка systemd-resolved](https://man.archlinux.org/man/systemd-resolved.service.8.en)
+
 **Обновление:** обновите пакет и выполните `sudo rosetun-helper-privileged --restart-for-upgrade`. Обычный `systemctl restart` при kill switch открывает сеть. Специальная команда сохраняет удержание до подключения или `rosetun open-network`. Службы включает пользователь, а не пакет.
 
 **Удаление:** `sudo pacman -R rosetun-bin`. Хук транзакции снимает Lockdown до удаления файлов и прерывает удаление при ошибке. Для аварийного выхода: `sudo rosetun reset-firewall`. Настройки пользователя и группа остаются.

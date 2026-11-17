@@ -70,6 +70,23 @@ sudo reboot
 
 The package installs the release binaries with their matching sing-box and Xray builds.
 
+### System DNS in TUN mode {#arch-dns}
+
+Enable `systemd-resolved` so sing-box can register the tunnel's DNS server with the system.
+
+```sh
+sudo systemctl enable --now systemd-resolved.service
+```
+
+If Rosetun is already connected, disconnect and connect again. Then check the DNS servers on the tunnel interface and try a system lookup.
+
+```sh
+resolvectl status rosetun0
+timeout 5s getent ahosts example.org
+```
+
+The tunnel's DNS should appear under **DNS Servers**. If it appears but the lookup still fails, check that the system resolver uses `systemd-resolved`. The recommended `/etc/resolv.conf` setup for its local DNS stub is a symlink to `/run/systemd/resolve/stub-resolv.conf`. [systemd-resolved manual](https://man.archlinux.org/man/systemd-resolved.service.8.en)
+
 **Update:** update the package, then run `sudo rosetun-helper-privileged --restart-for-upgrade`. A normal `systemctl restart` opens the network with the kill switch on. The upgrade command preserves the hold until you reconnect or run `rosetun open-network`. Services are enabled by you, never by the package.
 
 **Remove:** `sudo pacman -R rosetun-bin`. A transaction hook resets Lockdown before deleting files and refuses removal if that fails. To recover first: `sudo rosetun reset-firewall`. User settings and the group stay.

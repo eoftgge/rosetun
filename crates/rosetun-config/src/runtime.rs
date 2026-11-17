@@ -246,6 +246,9 @@ pub struct Status {
     /// A routing signal, not a measurement of every program's traffic.
     #[serde(default)]
     pub bypass_detected: bool,
+    /// On Linux, systemd-resolved has not registered this TUN's DNS server.
+    #[serde(default)]
+    pub tunnel_dns_unregistered: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reconnect_failure_kind: Option<FailureKind>,
     #[serde(

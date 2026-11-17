@@ -291,6 +291,7 @@ auto-reconnect = Reconnect automatically
 auto-reconnect-detail = After an engine failure or sleep.
 subscriptions-via-vpn = Update subscriptions through VPN
 vpn-bypass-warning = A route bypasses VPN · turn on the kill switch
+tunnel-dns-warning = The tunnel DNS is missing from systemd-resolved. Check the service, then reconnect the VPN.
 enable-kill-switch = Turn on the kill switch
 subscriptions-via-vpn-detail = Without a connection, updates use the ordinary network path.
 error-fetch-vpn-unavailable = The VPN update path is unavailable. Turn off subscription updates through VPN to use the ordinary path.

@@ -300,6 +300,7 @@ auto-reconnect = Переподключаться при обрыве
 auto-reconnect-detail = После сбоя ядра или сна компьютера.
 subscriptions-via-vpn = Обновлять подписки через VPN
 vpn-bypass-warning = Маршрут идёт мимо VPN · включите kill switch
+tunnel-dns-warning = DNS туннеля не зарегистрирован в systemd-resolved. Проверьте службу и переподключите VPN.
 enable-kill-switch = Включить kill switch
 subscriptions-via-vpn-detail = Без подключения обновления идут обычным путём.
 error-fetch-vpn-unavailable = Обновление через VPN недоступно. Выключите обновление подписок через VPN, чтобы использовать обычный путь.

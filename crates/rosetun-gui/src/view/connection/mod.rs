@@ -53,6 +53,15 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
         protection_strip(ui, tr!("protection-unverified"));
         ui.add_space(theme::SECTION_GAP);
     }
+    if state.visible_status().is_some_and(|status| {
+        status.state == ConnectionState::Connected && status.tunnel_dns_unregistered
+    }) {
+        widgets::card_frame().show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.colored_label(theme::WARNING, tr!("tunnel-dns-warning"));
+        });
+        ui.add_space(theme::SECTION_GAP);
+    }
     if state
         .visible_status()
         .is_some_and(|status| status.bypass_detected)

@@ -12,6 +12,8 @@ mod probe;
 mod protection;
 mod repeated;
 mod session_lock;
+#[cfg(target_os = "linux")]
+mod system_dns_linux;
 #[cfg(test)]
 mod tests;
 mod watchdog;
@@ -1428,6 +1430,7 @@ impl Helper {
         let result = apply(&mut status);
         if status.state != ConnectionState::Connected {
             status.bypass_detected = false;
+            status.tunnel_dns_unregistered = false;
         }
         let previous = connection_state_name(&previous_state);
         let current = connection_state_name(&status.state);
@@ -2723,6 +2726,18 @@ impl Session {
         let Some(server) = self.tunnel_dns else {
             return;
         };
+        #[cfg(target_os = "linux")]
+        if !cfg!(test)
+            && let Some(request) = &self.request
+            && request.settings.connection_mode == rosetun_config::ConnectionMode::Tun
+            && system_dns_linux::registered(&request.settings.tun.name, server.ip()) == Some(false)
+        {
+            tracing::warn!("systemd-resolved has not registered the tunnel DNS server");
+            self.status
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .tunnel_dns_unregistered = true;
+        }
         match DnsWatchdog::start(
             Arc::clone(&self.status),
             server,
