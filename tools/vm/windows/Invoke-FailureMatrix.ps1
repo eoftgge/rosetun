@@ -904,7 +904,8 @@ Test-Step 'connect' 'full and repeated delay both work' `
         $delayRepeated.ExitCode -eq 0 -and $delayRepeated.Output -match '(?m)^works \d+ ms$'
 }
 # The same check as through Xray: if it fails here too, the test or the lab is at fault.
-Test-Step 'connect' 'UDP reaches the internet through the node (NTP)' { Test-RosetunUdpInternet }
+$udp = Test-RosetunUdpInternet -Detailed
+Test-Step 'connect' 'UDP reaches the internet through the node (NTP)' -Note ($udp | ConvertTo-Json -Depth 6 -Compress) { $udp.Ok }
 $connectionsHost = ([uri](Get-RosetunTunnelProbeUrl)).Host
 $listed = Invoke-RosetunConnectionsDuring -Url (Get-RosetunTunnelProbeUrl) `
     -ConfigPath (Set-RuleColumnConfig 'request.json')
@@ -1205,7 +1206,8 @@ if ($UseHostNode) {
         $egress.Ok
     }
     Test-Step 'REALITY auto' 'UDP DNS resolves inside the tunnel' { Test-RealityTunnelDns }
-    Test-Step 'REALITY auto' 'UDP reaches the internet through Xray (NTP)' { Test-RosetunUdpInternet }
+    $udp = Test-RosetunUdpInternet -Detailed
+    Test-Step 'REALITY auto' 'UDP reaches the internet through Xray (NTP)' -Note ($udp | ConvertTo-Json -Depth 6 -Compress) { $udp.Ok }
     Test-Step 'REALITY auto' 'direct egress is blocked' { -not (Test-RosetunDirectEgress) }
     Test-Step 'REALITY auto' 'direct UDP DNS is blocked' { -not (Test-RosetunDirectDns) }
     $probe = Invoke-RosetunProbe 'request-reality.json'
@@ -1213,7 +1215,7 @@ if ($UseHostNode) {
         $probe.ExitCode -eq 0 -and $probe.Output -match '(?m)^works \d+ ms$'
     }
     $delay = Invoke-RosetunCli -Quiet 'delay'
-    Test-Step 'REALITY auto' 'tunnel delay works' -Note "exit $($delay.ExitCode)" {
+    Test-Step 'REALITY auto' 'tunnel delay works' -Note "exit $($delay.ExitCode); $($delay.Output)" {
         $delay.ExitCode -eq 0 -and $delay.Output -match '(?m)^works \d+ ms$'
     }
     Disconnect-RosetunTunnel | Out-Null

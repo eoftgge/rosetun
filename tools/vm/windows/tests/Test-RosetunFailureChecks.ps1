@@ -153,4 +153,72 @@ foreach ($setup in @(
         Assert-RosetunCheck 'connected scenarios exercise both crash paths' ($stops -eq 2 -and $starts -eq 1)
     }
 }
+$moduleAst = [Management.Automation.Language.Parser]::ParseFile(
+    [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\RosetunVm.psm1')), [ref]$null, [ref]$null)
+$udpDefinition = $moduleAst.Find({
+    param($node)
+    $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Test-RosetunUdpInternet'
+}, $true)
+. ([scriptblock]::Create($udpDefinition.Extent.Text))
+function Invoke-RosetunGuest {
+    param([scriptblock]$ScriptBlock, [object[]]$ArgumentList)
+    & $ScriptBlock @ArgumentList
+}
+Add-Type -TypeDefinition @'
+public sealed class RosetunSyntheticNtp : System.IDisposable {
+    readonly System.Net.Sockets.UdpClient socket;
+    readonly System.Threading.Thread worker;
+    volatile bool stop;
+    public int Port { get; private set; }
+    public RosetunSyntheticNtp(string mode) {
+        socket = new System.Net.Sockets.UdpClient(new System.Net.IPEndPoint(System.Net.IPAddress.Loopback, 0));
+        Port = ((System.Net.IPEndPoint)socket.Client.LocalEndPoint).Port;
+        socket.Client.ReceiveTimeout = 100;
+        worker = new System.Threading.Thread(() => {
+            while (!stop) {
+                try {
+                    var remote = new System.Net.IPEndPoint(System.Net.IPAddress.Any, 0);
+                    socket.Receive(ref remote);
+                    if (mode == "silent") continue;
+                    byte[] reply = new byte[mode == "short" ? 12 : 48];
+                    reply[0] = 0x24;
+                    reply[1] = 2;
+                    socket.Send(reply, reply.Length, remote);
+                }
+                catch (System.Net.Sockets.SocketException) { }
+                catch (System.ObjectDisposedException) { break; }
+            }
+        });
+        worker.IsBackground = true;
+        worker.Start();
+    }
+    public void Dispose() {
+        stop = true;
+        socket.Dispose();
+        if (!worker.Join(2000)) throw new System.Exception("Synthetic NTP peer did not stop.");
+    }
+}
+'@
+foreach ($mode in 'reply', 'short', 'silent') {
+    $peer = [RosetunSyntheticNtp]::new($mode)
+    try {
+        $result = Test-RosetunUdpInternet -Server '127.0.0.1' -Port $peer.Port -Attempts 2 -TimeoutMilliseconds 100 -Detailed
+        Assert-RosetunCheck "UDP $mode outcome" ($result.Ok -eq ($mode -eq 'reply'))
+        Assert-RosetunCheck "UDP $mode sent byte count" ($result.Attempts[0].SentBytes -eq 48)
+        if ($mode -eq 'silent') {
+            Assert-RosetunCheck 'UDP timeout phase' ($result.Attempts[0].Phase -eq 'receive')
+            Assert-RosetunCheck 'UDP timeout code' ($result.Attempts[0].SocketError -eq 'TimedOut')
+            Assert-RosetunCheck 'UDP records each attempt' ($result.Attempts.Count -eq 2)
+        }
+        else {
+            $length = if ($mode -eq 'reply') { 48 } else { 12 }
+            Assert-RosetunCheck "UDP $mode byte count" ($result.Attempts[0].ReplyBytes -eq $length)
+            Assert-RosetunCheck "UDP $mode source" $result.Attempts[0].SourceMatches
+            Assert-RosetunCheck "UDP $mode NTP metadata" ($result.Attempts[0].NtpMode -eq 4 -and $result.Attempts[0].Stratum -eq 2)
+        }
+        $boolean = Test-RosetunUdpInternet -Server '127.0.0.1' -Port $peer.Port -Attempts 1 -TimeoutMilliseconds 100
+        Assert-RosetunCheck "UDP $mode keeps the boolean API" ($boolean -is [bool] -and $boolean -eq $result.Ok)
+    }
+    finally { $peer.Dispose() }
+}
 Write-Host "Test-RosetunFailureChecks: $passed passed"

@@ -99,6 +99,29 @@ To compare with another sing-box version, download its `sing-box-<version>-windo
 .\tools\vm\windows\Invoke-PowerCutConnectProbe.ps1 -SingBoxPath .\tools\sing-box-1.14.1.exe -RequestPath .\tools\vm\windows\request-local.json -UseHostNode -Build *>&1 | Tee-Object -FilePath .\target\power-cut-probe-1.14.1.txt
 ```
 
+## Failure diagnostics
+
+The failure matrix writes full notes to `target/failure-matrix-results.json`.
+Its NTP rows include each attempt's send/receive phase, elapsed time, byte
+counts, response source, NTP mode/stratum and socket/native error codes.
+The boolean pass condition remains an NTP response of at least 48 bytes.
+The host Xray node's warning output is saved as `test-node-xray-*.stdout.log`
+and `*.stderr.log` under `tools/vm/logs/`; their paths are printed at startup.
+
+For Repeated delay, the helper debug log has a `check` id and `provider` index
+(0: Cloudflare, 1: Google), with request 1/2, headers/body phase, timing,
+HTTP status and a safe error category. A shared deadline message does not
+claim that either provider finished its first request. URL and credential
+values and raw HTTP/TLS error payloads are not logged. Compare both providers
+using the same `check` id; a losing worker may finish after the result returns.
+
+Run the diagnostic regression checks without a VM:
+
+```powershell
+pwsh -NoProfile -File tools/vm/windows/tests/Test-RosetunFailureChecks.ps1
+powershell.exe -NoProfile -File tools/vm/windows/tests/Test-RosetunFailureChecks.ps1
+```
+
 ## Two-hop exits
 
 The owner runs qualification. Before Hyper-V, turn off Lockdown on the Windows host. The Linux VM needs a working recovery console.

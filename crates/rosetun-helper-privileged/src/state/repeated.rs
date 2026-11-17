@@ -5,12 +5,22 @@
 //! and to the site; the second does not, so its time is close to a ping.
 
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use rosetun_engine::DelayAccount;
 use ureq::Agent;
+
+static NEXT_CHECK: AtomicU64 = AtomicU64::new(1);
+
+#[derive(Clone, Copy)]
+struct Diagnostic {
+    check: u64,
+    provider: usize,
+    started: Instant,
+}
 
 /// Why a repeated check has no time. The reason is for the debug log only; the
 /// user sees "no answer", as for a full check.
@@ -20,7 +30,7 @@ pub(super) enum RepeatedError {
     Proxy,
     #[error("the first request failed")]
     First,
-    #[error("the time is spent before the second request")]
+    #[error("the shared repeated-check deadline expired")]
     TimedOut,
     #[error("the second request failed")]
     Second,
@@ -37,19 +47,36 @@ pub(super) fn repeated_delay_any(
     timeout: Duration,
 ) -> Result<Duration, RepeatedError> {
     let started = Instant::now();
+    let check = NEXT_CHECK.fetch_add(1, Ordering::Relaxed);
+    tracing::debug!(check, target = %account.tag, timeout_ms = timeout.as_millis(), providers = urls.len(), "repeated check started");
     let (sender, receiver) = mpsc::channel();
-    for url in urls {
+    for (provider, url) in urls.iter().enumerate() {
         let url = (*url).to_owned();
         let account = account.clone();
         let sender = sender.clone();
         thread::Builder::new()
             .name("rosetun-repeated-delay".into())
             .spawn(move || {
+                let diagnostic = Diagnostic {
+                    check,
+                    provider,
+                    started,
+                };
+                tracing::debug!(check, provider, "repeated provider started");
                 let result = timeout
                     .checked_sub(started.elapsed())
                     .filter(|left| !left.is_zero())
                     .ok_or(RepeatedError::TimedOut)
-                    .and_then(|left| repeated_delay(entry, &account, &url, left));
+                    .and_then(|left| {
+                        repeated_delay_observed(entry, &account, &url, left, diagnostic)
+                    });
+                tracing::debug!(
+                    check,
+                    provider,
+                    elapsed_ms = started.elapsed().as_millis(),
+                    success = result.is_ok(),
+                    "repeated provider finished"
+                );
                 let _ = sender.send(result);
             })
             .map_err(|_| RepeatedError::Worker)?;
@@ -62,10 +89,24 @@ pub(super) fn repeated_delay_any(
             .filter(|left| !left.is_zero())
             .ok_or(RepeatedError::TimedOut)?;
         match receiver.recv_timeout(left) {
-            Ok(Ok(delay)) => return Ok(delay),
+            Ok(Ok(delay)) => {
+                tracing::debug!(
+                    check,
+                    elapsed_ms = started.elapsed().as_millis(),
+                    "repeated check succeeded"
+                );
+                return Ok(delay);
+            }
             Ok(Err(error)) => last_error = error,
             Err(mpsc::RecvTimeoutError::Disconnected) => return Err(last_error),
-            Err(mpsc::RecvTimeoutError::Timeout) => return Err(RepeatedError::TimedOut),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                tracing::debug!(
+                    check,
+                    elapsed_ms = started.elapsed().as_millis(),
+                    "repeated shared deadline expired"
+                );
+                return Err(RepeatedError::TimedOut);
+            }
         }
     }
 }
@@ -75,11 +116,32 @@ pub(super) fn repeated_delay_any(
 /// the entry as it is, so nothing is resolved here: under a kill switch the
 /// helper has no DNS. The whole check keeps to `timeout`. Any HTTP answer
 /// counts, as it does for the engine's own check.
-pub(super) fn repeated_delay(
+#[cfg(test)]
+fn repeated_delay(
     entry: SocketAddr,
     account: &DelayAccount,
     url: &str,
     timeout: Duration,
+) -> Result<Duration, RepeatedError> {
+    repeated_delay_observed(
+        entry,
+        account,
+        url,
+        timeout,
+        Diagnostic {
+            check: 0,
+            provider: 0,
+            started: Instant::now(),
+        },
+    )
+}
+
+fn repeated_delay_observed(
+    entry: SocketAddr,
+    account: &DelayAccount,
+    url: &str,
+    timeout: Duration,
+    diagnostic: Diagnostic,
 ) -> Result<Duration, RepeatedError> {
     let proxy = ureq::Proxy::builder(ureq::ProxyProtocol::Socks5h)
         .host(&entry.ip().to_string())
@@ -99,31 +161,93 @@ pub(super) fn repeated_delay(
     );
 
     let started = Instant::now();
-    send(&agent, url, timeout).map_err(|_| RepeatedError::First)?;
+    send(&agent, url, timeout, diagnostic, 1).map_err(|_| RepeatedError::First)?;
     let left = timeout
         .checked_sub(started.elapsed())
         .filter(|left| !left.is_zero())
         .ok_or(RepeatedError::TimedOut)?;
     let second = Instant::now();
-    send(&agent, url, left).map_err(|_| RepeatedError::Second)?;
+    send(&agent, url, left, diagnostic, 2).map_err(|_| RepeatedError::Second)?;
     Ok(second.elapsed())
 }
 
 /// One request and its answer read to the end, which hands the connection back
 /// to the agent for the next request.
-fn send(agent: &Agent, url: &str, timeout: Duration) -> Result<(), ureq::Error> {
+fn send(
+    agent: &Agent,
+    url: &str,
+    timeout: Duration,
+    diagnostic: Diagnostic,
+    request: u8,
+) -> Result<(), ureq::Error> {
+    let Diagnostic {
+        check,
+        provider,
+        started,
+    } = diagnostic;
+    let request_started = Instant::now();
+    tracing::debug!(
+        check,
+        provider,
+        request,
+        elapsed_ms = started.elapsed().as_millis(),
+        budget_ms = timeout.as_millis(),
+        "repeated request waiting for headers"
+    );
     let mut response = agent
         .head(url)
         .config()
         .timeout_global(Some(timeout))
         .build()
-        .call()?;
+        .call()
+        .inspect_err(|error| {
+            tracing::debug!(check, provider, request, phase = "headers", elapsed_ms = started.elapsed().as_millis(), kind = %safe_error_kind(error), "repeated request failed");
+        })?;
+    tracing::debug!(
+        check,
+        provider,
+        request,
+        headers_ms = request_started.elapsed().as_millis(),
+        status = response.status().as_u16(),
+        "repeated response headers received"
+    );
     response
         .body_mut()
         .with_config()
         .limit(1024)
-        .read_to_vec()?;
+        .read_to_vec()
+        .inspect_err(|error| {
+            tracing::debug!(check, provider, request, phase = "body", elapsed_ms = started.elapsed().as_millis(), kind = %safe_error_kind(error), "repeated request failed");
+        })?;
+    tracing::debug!(
+        check,
+        provider,
+        request,
+        elapsed_ms = started.elapsed().as_millis(),
+        request_ms = request_started.elapsed().as_millis(),
+        "repeated request completed"
+    );
     Ok(())
+}
+
+// Error Display/Debug may contain a URI or credentials. Keep only typed causes.
+fn safe_error_kind(error: &ureq::Error) -> String {
+    match error {
+        ureq::Error::Timeout(stage) => format!("timeout:{stage:?}"),
+        ureq::Error::Io(error) => format!(
+            "io:{:?}:{}",
+            error.kind(),
+            error.raw_os_error().unwrap_or(0)
+        ),
+        ureq::Error::HostNotFound => "host-not-found".into(),
+        ureq::Error::ConnectionFailed => "connection-failed".into(),
+        ureq::Error::InvalidProxyUrl => "invalid-proxy".into(),
+        ureq::Error::ConnectProxyFailed(_) => "proxy-connect".into(),
+        ureq::Error::Tls(_) | ureq::Error::Rustls(_) => "tls".into(),
+        ureq::Error::Protocol(_) => "http-protocol".into(),
+        ureq::Error::BodyExceedsLimit(_) => "body-limit".into(),
+        _ => "request".into(),
+    }
 }
 
 #[cfg(test)]
@@ -372,6 +496,21 @@ mod tests {
     use super::*;
 
     const URL: &str = "http://delay.example.invalid/generate_204";
+
+    #[test]
+    fn diagnostic_error_kinds_never_include_error_payloads() {
+        let secret = "https://user:private-password@private.example.invalid/path";
+        for error in [
+            ureq::Error::BadUri(secret.into()),
+            ureq::Error::Io(std::io::Error::other(secret)),
+            ureq::Error::Tls("private TLS error payload"),
+        ] {
+            let kind = safe_error_kind(&error);
+            assert!(!kind.contains("private"));
+            assert!(!kind.contains("https"));
+            assert!(!kind.contains("password"));
+        }
+    }
 
     fn account(tag: &str) -> DelayAccount {
         DelayAccount {
