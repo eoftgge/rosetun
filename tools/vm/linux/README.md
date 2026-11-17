@@ -63,7 +63,7 @@ runs, the job goes on in the guest; reconnect with
   `pwsh` in that window and `cd` to the repository. An elevated 5.1 window passes
   its rights to the `pwsh` started in it.
 - The **Windows OpenSSH client** (`ssh`, `scp`, `ssh-keygen`), part of Windows.
-- **WSL with Debian** as an ordinary default user, with git, a C linker and
+- **WSL with Debian** as an ordinary default user, with git, Python 3, a C linker and
   Rust 1.99.1 (the project toolchain):
 
   ```powershell
@@ -374,6 +374,16 @@ Use the Hyper-V console (the VM's window) when SSH is gone.
 A run id is used once; start a new run instead of repeating an old one.
 
 ## Tests of the stand (no VM, no privileges)
+
+The L2 builder uses Python 3 to read Cargo JSON and requires exactly one matching
+`profile.test == true` executable for each unit-test target. Before staging it,
+the builder runs `--list --format terse` and checks every test name referenced
+by the L2 scenario catalog. A regular helper binary, missing test or ambiguous
+artifact stops the build before a payload is created.
+
+```sh
+python3 -m unittest discover -s tools/vm/linux/tests -p 'test_l2_test_artifacts.py'
+```
 
 ```powershell
 pwsh -NoProfile -File tools/vm/linux/tests/Test-LinuxHarness.ps1

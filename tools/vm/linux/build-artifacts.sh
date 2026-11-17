@@ -118,16 +118,13 @@ else
     cargo +1.99.1 build -q --locked -p rosetun-ipc --example l2_transport_fixture
     cargo +1.99.1 test -q --locked --no-run --message-format=json -p rosetun-ipc -p rosetun-helper-privileged >"$json"
 
-    # Executables of the three targets, taken from cargo's own report.
-    find_exe() {
-        # find_exe KIND NAME
-        grep '"reason":"compiler-artifact"' "$json" | grep -F "\"kind\":[\"$1\"]" | grep -F "\"name\":\"$2\"" |
-            grep '"executable":"' | grep -F '"test":'"${3-false}" |
-            sed -n 's/.*"executable":"\([^"]*\)".*/\1/p' | tail -n 1
-    }
+    # target.test also appears on ordinary binaries; only profile.test selects
+    # the test harness. Verify its scenario names before creating the payload.
     fixture=$target_dir/debug/examples/l2_transport_fixture
-    ipc_tests=$(find_exe lib rosetun_ipc true)
-    helper_tests=$(find_exe bin rosetun-helper-privileged true)
+    ipc_tests=$(python3 tools/vm/linux/l2_test_artifacts.py "$json" lib rosetun_ipc \
+        tools/vm/linux/scenarios.tsv unit_ipc)
+    helper_tests=$(python3 tools/vm/linux/l2_test_artifacts.py "$json" bin rosetun-helper-privileged \
+        tools/vm/linux/scenarios.tsv unit_helper)
     for file in "$fixture" "$ipc_tests" "$helper_tests"; do
         if [ -z "$file" ] || [ ! -f "$file" ]; then
             echo "build-artifacts.sh: a build product was not found" >&2
