@@ -87,10 +87,7 @@ def autounattend(config, password):
 
     international = _component(pe, 'Microsoft-Windows-International-Core-WinPE')
     _add(_add(international, 'SetupUILanguage'), 'UILanguage', config.language)
-    _add(international, 'InputLocale', _keyboard(config.language))
-    _add(international, 'SystemLocale', config.language)
-    _add(international, 'UILanguage', config.language)
-    _add(international, 'UserLocale', config.language)
+    _locale(international, config)
 
     setup = _component(pe, 'Microsoft-Windows-Setup')
     disk_configuration = _add(setup, 'DiskConfiguration')
@@ -156,6 +153,9 @@ def autounattend(config, password):
 
     specialize = _add(root, 'settings')
     specialize.set('pass', 'specialize')
+    # The windowsPE component does not reach the installed system: the language, the locale and the
+    # keyboard are given again for the passes that run in it, or the out-of-box experience asks.
+    _locale(_component(specialize, 'Microsoft-Windows-International-Core'), config)
     shell = _component(specialize, 'Microsoft-Windows-Shell-Setup')
     _add(shell, 'ComputerName', config.hostname)
     # The guest clock is the host's RTC in UTC; a UTC zone keeps both readings equal.
@@ -165,6 +165,7 @@ def autounattend(config, password):
 
     oobe = _add(root, 'settings')
     oobe.set('pass', 'oobeSystem')
+    _locale(_component(oobe, 'Microsoft-Windows-International-Core'), config)
     shell = _component(oobe, 'Microsoft-Windows-Shell-Setup')
     options = _add(shell, 'OOBE')
     _add(options, 'HideEULAPage', 'true')
@@ -194,6 +195,14 @@ def autounattend(config, password):
 
     ET.indent(root)
     return ET.tostring(root, encoding='utf-8', xml_declaration=True) + b'\n'
+
+
+def _locale(component, config):
+    """The four locale settings, valid in windowsPE (WinPE component), specialize and oobeSystem."""
+    _add(component, 'InputLocale', _keyboard(config.language))
+    _add(component, 'SystemLocale', config.language)
+    _add(component, 'UILanguage', config.language)
+    _add(component, 'UserLocale', config.language)
 
 
 def _keyboard(language):

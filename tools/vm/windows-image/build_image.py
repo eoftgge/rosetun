@@ -37,6 +37,12 @@ AGENT_WAIT_SECONDS = 900
 # Run states that end a build at once: the machine will not shut down or answer by itself.
 FATAL_STATES = frozenset({'internal-error', 'guest-panicked', 'io-error', 'paused', 'watchdog'})
 LOG_TAIL_LINES = 20
+# The build takes a screenshot every two minutes and keeps the last thirty. A frame that has not changed
+# for twenty minutes is a page waiting for an answer nobody gives (an OOBE page, for example): copying
+# files and restarts change the frame all the time.
+SCREEN_INTERVAL_SECONDS = 120
+SCREEN_STALL_SECONDS = 20 * 60
+SCREENS_KEPT = 30
 # Primary volume descriptor of ISO 9660: sector 16; the volume identifier is 32 bytes at offset 40.
 PVD_OFFSET = 16 * 2048
 
@@ -86,14 +92,30 @@ class GuestWatch:
     A machine in `internal-error` never shuts down and never answers the agent, so waiting for either
     only wastes the build timeout. The failure carries a screenshot and the end of the QEMU log, and
     QEMU is then asked to quit.
+
+    QMP serves one client, so this is the only one that can take a screenshot while the build waits.
+    With `screen_interval` it takes one at that interval into `screens/` of the directory (the last
+    `keep` stay), reports each through `record(**fields)`, and fails with `screen-stalled` when the
+    frame has not changed for `stall_seconds`.
     """
 
-    def __init__(self, qemu, connect, directory, log_path):
+    def __init__(self, qemu, connect, directory, log_path, *, screen_interval=None,
+                 stall_seconds=SCREEN_STALL_SECONDS, keep=SCREENS_KEPT, record=None,
+                 clock=time.monotonic):
         self.qemu = qemu
         self.connect = connect
         self.directory = str(directory).replace('\\', '/')
         self.log_path = log_path
         self.qmp = None
+        self.screen_interval = screen_interval
+        self.stall_seconds = stall_seconds
+        self.keep = keep
+        self.record = record
+        self.clock = clock
+        self.shots = 0
+        self.last_shot = None
+        self.last_hash = None
+        self.last_change = None
 
     def _own(self):
         if self.qmp is None:
@@ -110,13 +132,41 @@ class GuestWatch:
         if self.qemu.poll() is not None:
             return
         try:
-            status = (qmp or self._own()).status()
+            qmp = qmp or self._own()
+            status = qmp.status()
         except (OSError, image_guest.GuestError, ValueError):
             if qmp is None:
                 self._drop()
             return
         if status in FATAL_STATES:
             raise self.failure(f'the guest is in state {status}', qmp)
+        if self.screen_interval is not None:
+            self._watch_screen(qmp)
+
+    def _watch_screen(self, qmp):
+        now = self.clock()
+        if self.last_shot is not None and now - self.last_shot < self.screen_interval:
+            return
+        screens = Path(self.directory) / 'screens'
+        screens.mkdir(exist_ok=True)
+        self.shots += 1
+        shot = screens / f'screen-{self.shots:04d}.ppm'
+        try:
+            qmp.screendump(str(shot).replace('\\', '/'))
+            digest = image_plan.sha256_file(shot)[0]
+        except (OSError, image_guest.GuestError, ValueError):
+            return
+        self.last_shot = now
+        if digest != self.last_hash or self.last_change is None:
+            self.last_change = now
+        self.last_hash = digest
+        if self.record is not None:
+            self.record(stage='screen', file=shot.name, sha256=digest)
+        for old in sorted(screens.glob('screen-*.ppm'))[:-self.keep]:
+            old.unlink(missing_ok=True)
+        if now - self.last_change >= self.stall_seconds:
+            raise self.failure(f'screen-stalled: the screen did not change for '
+                               f'{round(self.stall_seconds / 60)} minutes', qmp)
 
     def failure(self, reason, qmp=None):
         """Collect the evidence, close QEMU through QMP and return the error to raise."""
@@ -265,7 +315,9 @@ def build(config):
         wait_for_path(layout.tpm_socket, 10, swtpm)
         qemu = start(image_plan.qemu_argv(config, layout, machine_uuid, install=True), output / 'qemu.log')
         event(layout, stage='qemu-started', vnc=f'127.0.0.1:{5900 + config.vnc_display}')
-        watch = GuestWatch(qemu, unix_connection(layout.qmp), output, output / 'qemu.log')
+        watch = GuestWatch(qemu, unix_connection(layout.qmp), output, output / 'qemu.log',
+                           screen_interval=SCREEN_INTERVAL_SECONDS,
+                           record=lambda **fields: event(layout, **fields))
         # The Windows disc asks for a key before Setup starts; the answer file cannot answer that.
         image_guest.press_until(unix_connection(layout.qmp), image_plan.PRESS_KEY,
                                 config.press_any_key_seconds, inspect=watch.check)

@@ -45,8 +45,9 @@ username = "rosetun"
 language = "en-US"
 # Select the edition by name, or by image index (set image_index and leave edition_name out).
 edition_name = "Windows 11 Pro"
-# Fallback when Setup stops on the product key page: add an empty Key element (still no key).
-empty_product_key_element = false
+# An empty Key element in the answer file; there is still no key. Measured on the 26H2 disc: without
+# the element Setup stops on the product key page, with it Setup goes on.
+empty_product_key_element = true
 
 [build]
 output_directory = "/srv/rosetun-images/windows-11-26h2-pro-v1"

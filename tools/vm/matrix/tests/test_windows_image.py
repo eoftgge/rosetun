@@ -63,7 +63,7 @@ def text(root, path):
 class AnswerFileTests(unittest.TestCase):
     def setUp(self):
         self.password = image_answers.generate_password()
-        self.data = image_answers.autounattend(config(), self.password)
+        self.data = image_answers.autounattend(config(empty_product_key_element=False), self.password)
         self.root = ET.fromstring(self.data)
 
     def test_the_answer_file_is_well_formed_with_the_three_passes_setup_reads(self):
@@ -103,6 +103,41 @@ class AnswerFileTests(unittest.TestCase):
         paths = [path.text for path in self.root.findall('.//u:DriverPaths//u:Path', NS)]
         for driver in ('viostor', 'NetKVM', 'vioserial'):
             self.assertTrue(any(f'\\{driver}\\w11\\amd64' in path for path in paths), driver)
+
+    def test_the_example_gives_the_empty_product_key_element_that_the_26h2_disc_needs(self):
+        loaded = image_config.load(EXAMPLE)
+        self.assertTrue(loaded.empty_product_key_element)
+        data = image_answers.autounattend(loaded, self.password)
+        key = ET.fromstring(data).find('.//u:ProductKey/u:Key', NS)
+        self.assertFalse((key.text or '').strip())
+
+    def components(self, root, settings_pass):
+        settings = next(s for s in root.findall('u:settings', NS) if s.get('pass') == settings_pass)
+        return {c.get('name'): c for c in settings.findall('u:component', NS)}
+
+    def test_the_language_the_locale_and_the_keyboard_are_given_to_the_installed_system_as_well(self):
+        for language, keyboard in (('en-US', '0409:00000409'), ('de-DE', 'de-DE')):
+            root = ET.fromstring(image_answers.autounattend(config(language=language), self.password))
+            for settings_pass in ('specialize', 'oobeSystem'):
+                component = self.components(root, settings_pass)['Microsoft-Windows-International-Core']
+                self.assertEqual(keyboard, text(component, 'u:InputLocale'), settings_pass)
+                for name in ('SystemLocale', 'UILanguage', 'UserLocale'):
+                    self.assertEqual(language, text(component, f'u:{name}'), (settings_pass, name))
+            pe = self.components(root, 'windowsPE')['Microsoft-Windows-International-Core-WinPE']
+            self.assertEqual(language, text(pe, 'u:SetupUILanguage/u:UILanguage'))
+
+    def test_the_international_component_is_not_in_the_windows_pe_pass_by_that_name(self):
+        pe = self.components(self.root, 'windowsPE')
+        self.assertNotIn('Microsoft-Windows-International-Core', pe)
+
+    def test_every_documented_setting_that_removes_an_out_of_box_page_is_set(self):
+        options = self.root.find('.//u:OOBE', NS)
+        values = {child.tag.split('}')[1]: child.text for child in options}
+        for name in ('HideEULAPage', 'HideOEMRegistrationScreen', 'HideOnlineAccountScreens',
+                     'HideWirelessSetupInOOBE'):
+            self.assertEqual('true', values[name], name)
+        self.assertEqual('3', values['ProtectYourPC'])
+        self.assertIsNotNone(self.root.find('.//u:LocalAccounts/u:LocalAccount', NS))
 
     def test_the_machine_is_named_and_set_to_utc(self):
         self.assertEqual('UTC', text(self.root, './/u:TimeZone'))
@@ -576,6 +611,91 @@ class GuestWatchTests(SocketServing, unittest.TestCase):
         build_image.wait_for_shutdown(qemu, watch, 600, interval=0, sleep=sleep)
         self.assertEqual(3, len(sleeps))
         self.assertNotIn('quit', seen)
+
+    def screen_server(self, qemu, frames):
+        """A QMP server whose screendump writes the next frame; `frames` repeats its last entry."""
+        seen = []
+
+        def handler(stream):
+            stream.sendall(b'{"QMP": {"version": {}}}\r\n')
+            for line in self.lines(stream):
+                request = json.loads(line)
+                command = request['execute']
+                seen.append(command)
+                reply = {'return': {}}
+                if command == 'query-status':
+                    reply = {'return': {'status': 'running', 'running': True}}
+                elif command == 'screendump':
+                    frame = frames.pop(0) if len(frames) > 1 else frames[0]
+                    Path(request['arguments']['filename']).write_bytes(frame)
+                stream.sendall(json.dumps(reply).encode() + b'\r\n')
+                if command == 'quit':
+                    qemu.exited = True
+                    break
+            stream.close()
+        return self.serve(handler), seen
+
+    def watch(self, qemu, host, directory, clock, **options):
+        events = []
+        watch = build_image.GuestWatch(qemu, lambda: host, directory, Path(directory) / 'qemu.log',
+                                       screen_interval=120, clock=clock,
+                                       record=lambda **fields: events.append(fields), **options)
+        return watch, events
+
+    def test_a_screen_that_does_not_change_for_twenty_minutes_fails_as_stalled_and_qemu_quits(self):
+        qemu = FakeQemu()
+        host, seen = self.screen_server(qemu, [b'frame one', b'frame two', b'oobe page'])
+        now = [0.0]
+        with tempfile.TemporaryDirectory() as directory:
+            watch, events = self.watch(qemu, host, directory, lambda: now[0])
+            with self.assertRaisesRegex(build_image.BuildError, 'screen-stalled.*20 minutes') as raised:
+                while True:
+                    watch.check()
+                    now[0] += 120
+                    self.assertLess(now[0], 3000)
+            # Two changes at 0 and 120 s, then the same page from 240 s: twenty minutes later it stalls.
+            self.assertEqual(240 + 20 * 60, now[0])
+            self.assertIn('failure-screen.ppm', str(raised.exception))
+            self.assertEqual(['screendump', 'quit'], seen[-2:])
+            self.assertTrue(qemu.exited)
+            self.assertTrue((Path(directory) / 'screens' / 'screen-0001.ppm').is_file())
+        self.assertEqual('screen', events[0]['stage'])
+        self.assertEqual(64, len(events[0]['sha256']))
+        self.assertNotEqual(events[0]['sha256'], events[1]['sha256'])
+        self.assertEqual(events[2]['sha256'], events[3]['sha256'])
+
+    def test_a_screen_that_keeps_changing_never_stalls_and_only_the_last_frames_are_kept(self):
+        qemu = FakeQemu()
+        host, _ = self.screen_server(qemu, [f'frame {n}'.encode() for n in range(40)])
+        now = [0.0]
+        with tempfile.TemporaryDirectory() as directory:
+            watch, events = self.watch(qemu, host, directory, lambda: now[0], keep=5)
+            for _ in range(40):
+                watch.check()
+                now[0] += 120
+            kept = sorted(path.name for path in (Path(directory) / 'screens').iterdir())
+        self.assertEqual([f'screen-{n:04d}.ppm' for n in range(36, 41)], kept)
+        self.assertEqual(40, len(events))
+
+    def test_a_screenshot_is_taken_only_once_per_interval(self):
+        qemu = FakeQemu()
+        host, seen = self.screen_server(qemu, [b'a', b'b'])
+        now = [0.0]
+        with tempfile.TemporaryDirectory() as directory:
+            watch, events = self.watch(qemu, host, directory, lambda: now[0])
+            for _ in range(10):
+                watch.check()
+                now[0] += 5
+        self.assertEqual(1, seen.count('screendump'))
+        self.assertEqual(1, len(events))
+
+    def test_without_an_interval_no_screenshot_is_taken(self):
+        qemu = FakeQemu()
+        host, seen = self.screen_server(qemu, [b'a'])
+        with tempfile.TemporaryDirectory() as directory:
+            build_image.GuestWatch(qemu, lambda: host, directory, Path(directory) / 'qemu.log').check()
+            self.assertFalse((Path(directory) / 'screens').exists())
+        self.assertNotIn('screendump', seen)
 
     def test_the_time_running_out_is_a_failure_with_evidence_too(self):
         qemu = FakeQemu()

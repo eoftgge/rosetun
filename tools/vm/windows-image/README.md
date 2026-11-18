@@ -135,6 +135,9 @@ The wait for a failed machine was also tried on the real crash of the finding (D
 `smm=on`, the same disc): the watch saw `internal-error` after 17 seconds, took the screenshot,
 printed the end of the QEMU log with the `entry failed` register dump, and QEMU and `swtpm` exited
 with code 0 after the QMP `quit`. The label check read `CCCOMA_X64FRE_EN-US_DV9` from the disc.
+The screenshot watch was tried on a real QEMU with shortened times (every 4 seconds, a stall after
+20) on the static text screen of a firmware that has nothing to boot: it stopped the machine as
+`screen-stalled`, kept only the last three frames, and QEMU and `swtpm` exited with code 0.
 
 ## Files
 
@@ -167,6 +170,12 @@ The tests are `../matrix/tests/test_windows_image.py`.
    It then hashes the results and writes `image.json`. VNC is on `127.0.0.1:5900` plus
    `vnc_display`, for diagnostics only. The build is an unattended install of about 30 to 90
    minutes; the first sign of trouble is a screen that does not change for ten minutes.
+   The command takes a screenshot every two minutes into `screens/` of the build directory (the last
+   thirty stay as `screen-NNNN.ppm`) and writes the SHA-256 of each to `build.jsonl`, because QMP serves
+   one client and nobody else can take one while the build waits. A frame that has not changed for
+   twenty minutes ends the build as `screen-stalled`, the same way as a failed machine below: an
+   out-of-box page that waits for an answer looks exactly like that, while copying files and restarts
+   change the frame all the time.
    While it waits, the command asks QEMU for its run state every few seconds over QMP. A machine in
    `internal-error`, `guest-panicked`, `io-error` or `paused` ends the build at once with the
    reason, a screenshot (`failure-screen.ppm` in the build directory) and the end of `qemu.log`;
@@ -243,13 +252,30 @@ product key behaviour, `AutoLogon`, `HideOnlineAccountScreens`, `PreventDeviceEn
 the connectivity indicator and diagnostic data behaviour. The rest of the table is from knowledge
 of Windows and has not been checked line by line against the documentation of this release.
 
+## Measured on the stand
+
+- Without a key element Setup of the 26H2 disc stops on the product key page. With
+  `empty_product_key_element = true` (an empty element, never a key) it goes on, copies the files and
+  restarts. The documentation says the element must not be empty, so this is a measured behaviour of
+  this disc, not a recommendation; `example.toml` sets it.
+- The out-of-box experience stopped on "Is this the right country or region?" because the answer file
+  gave the language and the keyboard only in the windowsPE pass, whose component does not reach the
+  installed system. The file now has `Microsoft-Windows-International-Core` with `InputLocale`,
+  `SystemLocale`, `UILanguage` and `UserLocale`, from `language`, in `specialize` and in `oobeSystem`
+  (the documentation lists exactly these two passes for each of the four settings). Whether it clears
+  the page is the next run's result.
+
 ## Known risks, all UNRUN
 
-- Setup with no product key and no key element may stop on the product key page. The fallback is
-  `empty_product_key_element = true` (an empty element, never a key); the documentation says the
-  element must not be empty, so this is a measured fallback, not a recommendation.
-- The out-of-box experience of Windows 11 may still ask for a network or an account in spite of
-  `HideOnlineAccountScreens`; the answer is `network = "nat"` for the build, not `BypassNRO`.
+- Of the `OOBE` settings the documentation lists, the file already has `HideEULAPage`,
+  `HideOEMRegistrationScreen`, `HideOnlineAccountScreens`, `HideWirelessSetupInOOBE`,
+  `NetworkLocation` and `ProtectYourPC` (3); `HideLocalAccountScreen` is there too although the
+  documentation says it applies to Windows Server editions only, so it does nothing on Pro and the
+  local account comes from `LocalAccounts`. `VMModeOptimizations` needs `sysprep /mode:vm` and is not
+  used. The documentation says the sign-in page appears only when there is an Internet connection, and
+  names no setting that removes the network page itself: with `network = "restricted"` the out-of-box
+  experience may still ask for a network, and the answer is `network = "nat"` for the build, not
+  `BypassNRO`.
 - The disc language must match `language` (English by default): the guest agent output and the
   controller's parsing of it are written for English. The build checks the label of the disc, which
   names the language on Microsoft discs; a disc relabelled by someone else could pass it.
