@@ -1,0 +1,51 @@
+# Example configuration of the Windows image build. Paths are the ones of one stand; replace them.
+# Nothing in this file is a secret: the account password is generated per build.
+schema = "rosetun.windows-image.config.v1"
+
+[inputs]
+# The owner's installation disc, used as it is (no key, no edits).
+windows_iso = "/mnt/d/Iso/win11_25h2.iso"
+# Optional pin; the digest is recorded in the image descriptor either way.
+windows_iso_sha256 = ""
+# Downloaded by whoever builds the image. Fill in the release and the digest of the file you downloaded.
+virtio_win_iso = "/srv/rosetun-images/inputs/virtio-win-0.1.285.iso"
+virtio_win_version = "0.1.285-1"
+virtio_win_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+
+[tools]
+qemu_system = "/opt/qemu-10.0.13/bin/qemu-system-x86_64"
+qemu_img = "/opt/qemu-10.0.13/bin/qemu-img"
+xorriso = "/usr/bin/xorriso"
+swtpm = "/usr/bin/swtpm"
+
+[firmware]
+# Debian package `ovmf`: the Secure Boot build of the code, and the variable template with the
+# Microsoft keys already enrolled.
+ovmf_code = "/usr/share/OVMF/OVMF_CODE_4M.secboot.fd"
+ovmf_vars_template = "/usr/share/OVMF/OVMF_VARS_4M.ms.fd"
+
+[vm]
+memory_mib = 4096
+vcpus = 4
+disk_gib = 64
+# The lab's test machine address; any other value is refused.
+mac = "00:00:5e:00:53:61"
+# VNC listens on 127.0.0.1:5900 + this number, for the owner's diagnostics only.
+vnc_display = 0
+
+[guest]
+identifier = "windows-11-25h2-pro-v1"
+hostname = "ROSETUN-WIN"
+username = "rosetun"
+language = "en-US"
+# Select the edition by name, or by image index (set image_index and leave edition_name out).
+edition_name = "Windows 11 Pro"
+# Fallback when Setup stops on the product key page: add an empty Key element (still no key).
+empty_product_key_element = false
+
+[build]
+output_directory = "/srv/rosetun-images/windows-11-25h2-pro-v1"
+# restricted: the guest gets an address and nothing beyond it. nat: the guest may reach the Internet.
+network = "restricted"
+press_any_key_seconds = 60
+timeout_minutes = 180

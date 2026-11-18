@@ -1,0 +1,283 @@
+#!/usr/bin/env python3
+"""Build and measure the Windows 11 guest image for the QEMU matrix (Linux, outside the controller).
+
+    build_image.py plan    CONFIG    print every command line, run nothing
+    build_image.py build   CONFIG    install Windows unattended into a new qcow2 and describe it
+    build_image.py measure CONFIG    boot a copy of the built image and measure it
+
+Nothing here is part of a matrix run. See README.md for the stop point after the measurements.
+"""
+
+import argparse
+import datetime
+import json
+import os
+from pathlib import Path
+import shutil
+import socket
+import subprocess
+import sys
+import time
+import uuid
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import image_answers  # noqa: E402
+import image_config  # noqa: E402
+import image_guest  # noqa: E402
+import image_plan  # noqa: E402
+
+HERE = Path(__file__).resolve().parent
+# Thresholds of the stop point: past either of them, do not go on to the next stage.
+BOOT_LIMIT_SECONDS = 300
+CPU_LIMIT_PERCENT = 10.0
+SETTLE_SECONDS = 300
+CPU_SAMPLES = 60
+AGENT_WAIT_SECONDS = 900
+
+
+class BuildError(RuntimeError):
+    pass
+
+
+def unix_connection(path):
+    def connect():
+        stream = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            stream.connect(path)
+        except OSError:
+            stream.close()
+            raise
+        return stream
+    return connect
+
+
+def sha256_stream(path):
+    return image_plan.sha256_file(path)[0]
+
+
+def check_inputs(config):
+    for name in ('windows_iso', 'virtio_win_iso', 'ovmf_code', 'ovmf_vars_template',
+                 'qemu_system', 'qemu_img', 'xorriso', 'swtpm'):
+        if not Path(getattr(config, name)).is_file():
+            raise BuildError(f'{name}: no such file')
+    virtio = sha256_stream(config.virtio_win_iso)
+    if virtio != config.virtio_win_sha256:
+        raise BuildError('virtio-win disc does not match the pinned SHA-256')
+    windows = sha256_stream(config.windows_iso)
+    if config.windows_iso_sha256 and windows != config.windows_iso_sha256:
+        raise BuildError('Windows disc does not match the pinned SHA-256')
+    return windows
+
+
+def write_secret(path, value):
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, 'w', encoding='ascii', newline='\n') as stream:
+        stream.write(value + '\n')
+
+
+def event(layout, **fields):
+    fields['at'] = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='seconds')
+    with open(layout.events, 'a', encoding='utf-8', newline='\n') as stream:
+        stream.write(json.dumps(fields, sort_keys=True) + '\n')
+
+
+def run_checked(argv, what):
+    result = subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, timeout=600, check=False)
+    if result.returncode != 0:
+        raise BuildError(f'{what} failed with exit code {result.returncode}')
+
+
+def wait_for_path(path, seconds, process):
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if Path(path).exists():
+            return
+        if process.poll() is not None:
+            raise BuildError('swtpm exited before its socket appeared')
+        time.sleep(0.2)
+    raise BuildError('swtpm socket did not appear')
+
+
+def start(argv, log_path):
+    log = open(log_path, 'ab')
+    try:
+        return subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=log, stderr=log)
+    finally:
+        log.close()
+
+
+def stop(process, seconds=15):
+    if process is None or process.poll() is not None:
+        return
+    process.terminate()
+    try:
+        process.wait(timeout=seconds)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=seconds)
+
+
+def prepare_answers(config, layout, password):
+    tree = Path(layout.answers_tree)
+    tree.mkdir()
+    (tree / 'Autounattend.xml').write_bytes(image_answers.autounattend(config, password))
+    shutil.copyfile(HERE / 'first-logon.ps1', tree / 'first-logon.ps1')
+    run_checked(image_plan.xorriso_argv(config, image_answers.xorriso_arguments(tree, layout.answers_iso)),
+                'xorriso')
+
+
+def build(config):
+    windows_sha = check_inputs(config)
+    output = Path(config.output_directory)
+    if output.exists() or not output.parent.is_dir():
+        raise BuildError('output directory must be new, in an existing parent')
+    output.mkdir()
+    layout = image_plan.Layout(output)
+    machine_uuid = str(uuid.uuid4())
+    event(layout, stage='inputs-verified')
+    password = image_answers.generate_password()
+    write_secret(layout.secret, password)
+    prepare_answers(config, layout, password)
+    run_checked(image_plan.qemu_img_create_argv(config, layout), 'qemu-img create')
+    shutil.copyfile(config.ovmf_vars_template, layout.vars)
+    Path(layout.tpm_state).mkdir()
+    swtpm = qemu = None
+    try:
+        swtpm = start(image_plan.swtpm_argv(config, layout), output / 'swtpm.out')
+        wait_for_path(layout.tpm_socket, 10, swtpm)
+        qemu = start(image_plan.qemu_argv(config, layout, machine_uuid, install=True), output / 'qemu.log')
+        event(layout, stage='qemu-started', vnc=f'127.0.0.1:{5900 + config.vnc_display}')
+        # The Windows disc asks for a key before Setup starts; the answer file cannot answer that.
+        image_guest.press_until(unix_connection(layout.qmp), image_plan.PRESS_KEY,
+                                config.press_any_key_seconds)
+        deadline = time.monotonic() + config.timeout_minutes * 60
+        while qemu.poll() is None:
+            if time.monotonic() > deadline:
+                raise BuildError('the guest did not shut down in time; VNC shows where it stopped')
+            time.sleep(5)
+        if qemu.returncode != 0:
+            raise BuildError(f'QEMU exited with code {qemu.returncode}')
+        event(layout, stage='guest-shut-down')
+    finally:
+        stop(qemu)
+        stop(swtpm)
+    disk_sha, disk_size = image_plan.sha256_file(layout.disk)
+    vars_sha = sha256_stream(layout.vars)
+    tpm_files = {entry.name: sha256_stream(entry) for entry in sorted(Path(layout.tpm_state).iterdir())
+                 if entry.is_file()}
+    if image_plan.TPM_STATE_FILE not in tpm_files:
+        raise BuildError('the TPM state file is missing: nothing was written by Windows')
+    record = image_plan.descriptor(
+        config, layout, uuid=machine_uuid, windows_iso_sha256=windows_sha, disk_sha256=disk_sha,
+        disk_size=disk_size, vars_sha256=vars_sha, tpm_files=tpm_files,
+        built_at=datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='seconds'))
+    Path(layout.descriptor).write_text(json.dumps(record, indent=2, sort_keys=True) + '\n',
+                                       encoding='utf-8', newline='\n')
+    # The answer file carries the account password in its obfuscated form; it is not needed again.
+    shutil.rmtree(layout.answers_tree)
+    Path(layout.answers_iso).unlink()
+    event(layout, stage='described')
+    return {'descriptor': layout.descriptor, 'sha256': disk_sha, 'size_bytes': disk_size,
+            'password_file': layout.secret}
+
+
+def measure(config, *, settle=SETTLE_SECONDS):
+    source = image_plan.Layout(config.output_directory)
+    descriptor = json.loads(Path(source.descriptor).read_text(encoding='utf-8'))
+    if sha256_stream(source.disk) != descriptor['sha256']:
+        raise BuildError('the image does not match its descriptor')
+    stamp = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+    work = Path(config.output_directory) / f'measure-{stamp}'
+    work.mkdir()
+    layout = image_plan.Layout(work)
+    overlay = layout.disk
+    # A measurement boots a copy: the built image, its firmware variables and its TPM state stay as they were.
+    run_checked(image_plan.qemu_img_overlay_argv(config, source.disk, overlay), 'qemu-img overlay')
+    shutil.copyfile(source.vars, layout.vars)
+    shutil.copytree(source.tpm_state, layout.tpm_state)
+    swtpm = qemu = None
+    result = {'image': descriptor['identifier'], 'size_bytes': descriptor['size_bytes'],
+              'boot_limit_seconds': BOOT_LIMIT_SECONDS, 'cpu_limit_percent': CPU_LIMIT_PERCENT}
+    try:
+        swtpm = start(image_plan.swtpm_argv(config, layout), work / 'swtpm.out')
+        wait_for_path(layout.tpm_socket, 10, swtpm)
+        qemu = start(image_plan.qemu_argv(config, layout, descriptor['windows']['devices']['uuid_at_build'],
+                                          install=False), work / 'qemu.log')
+        connect = unix_connection(layout.qga)
+        boot = image_guest.wait_for_agent(connect, AGENT_WAIT_SECONDS)
+        result['agent_ready_seconds'] = None if boot is None else round(boot, 1)
+        if boot is None:
+            result['verdict'] = 'STOP: the guest agent never answered'
+            return result
+        time.sleep(settle)
+        stream = connect()
+        try:
+            agent = image_guest.Qga(stream, timeout=30)
+            agent.sync()
+            code, out = agent.run(image_guest.TYPEPERF, image_guest.typeperf_arguments(CPU_SAMPLES),
+                                  timeout=CPU_SAMPLES + 60)
+            result['cpu_percent'] = round(image_guest.average_cpu_percent(out), 1)
+            log = agent.read_file('C:\\ProgramData\\rosetun-image\\first-logon.log').decode('utf-8', 'replace')
+            failed, complete = image_guest.failed_steps(log)
+            result['first_logon_complete'] = complete
+            result['first_logon_failed'] = failed
+            agent.call('guest-shutdown', {'mode': 'powerdown'})
+        finally:
+            stream.close()
+        problems = []
+        if boot > BOOT_LIMIT_SECONDS:
+            problems.append('boot to the agent took longer than the limit')
+        if result['cpu_percent'] >= CPU_LIMIT_PERCENT:
+            problems.append('CPU load at rest is at or above the limit')
+        if not complete or failed:
+            problems.append('the first-logon script is incomplete or has failed steps')
+        result['verdict'] = 'STOP: ' + '; '.join(problems) if problems else 'within the limits (UNQUALIFIED)'
+        deadline = time.monotonic() + 120
+        while qemu.poll() is None and time.monotonic() < deadline:
+            time.sleep(2)
+    finally:
+        stop(qemu)
+        stop(swtpm)
+        (work / 'measure.json').write_text(json.dumps(result, indent=2, sort_keys=True) + '\n',
+                                           encoding='utf-8', newline='\n')
+    return result
+
+
+def plan(config):
+    layout = image_plan.Layout(config.output_directory)
+    machine_uuid = '00000000-0000-4000-8000-000000000000'
+    return {
+        'swtpm': image_plan.swtpm_argv(config, layout),
+        'xorriso': image_plan.xorriso_argv(config, image_answers.xorriso_arguments(
+            layout.answers_tree, layout.answers_iso)),
+        'qemu_img': image_plan.qemu_img_create_argv(config, layout),
+        'qemu_install': image_plan.qemu_argv(config, layout, machine_uuid, install=True),
+        'qemu_measure': image_plan.qemu_argv(config, layout, machine_uuid, install=False),
+    }
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument('command', choices=('plan', 'build', 'measure'))
+    parser.add_argument('config')
+    arguments = parser.parse_args(argv)
+    try:
+        config = image_config.load(arguments.config)
+        if arguments.command == 'plan':
+            output = plan(config)
+        elif arguments.command == 'build':
+            output = build(config)
+        else:
+            output = measure(config)
+    except (BuildError, image_config.ConfigError, image_guest.GuestError, OSError,
+            subprocess.SubprocessError) as error:
+        print(f'error: {error}', file=sys.stderr)
+        return 1
+    print(json.dumps(output, indent=2, sort_keys=True))
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())
