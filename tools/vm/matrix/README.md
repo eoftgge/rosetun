@@ -22,10 +22,10 @@ runner is already longer than that. A test that goes through the real
 `tests/posix_only.py` giving the reason, instead of weakening the path check.
 The Windows helpers (`windows_*`, the PowerShell producers) are not skipped.
 
-Windows skips 259 of 1381 tests. Of these 28 were skipped before (no Linux
-`/proc` or bash, POSIX-only fixtures, `qemu.qmp` not installed). A Linux host
-skips only the Windows pieces it cannot run (18 without PowerShell). The other
-231 are the controller groups:
+Windows skips 272 of 1516 tests, a Linux host with `qemu.qmp` 18 (the Windows
+pieces it cannot run without PowerShell). On Windows, besides those that need
+Linux `/proc`, bash, POSIX-only fixtures or `qemu.qmp`, the skipped ones are the
+controller groups:
 
 - `lifecycle.start` and what is built on it: `test_lifecycle`, `test_jobs`,
   `test_staging`, `test_qga_recovery`, `test_reboots` (chains, budgets, waits),
@@ -4805,3 +4805,82 @@ L2 run uses it too.
 
 Send back the summary, the saved `linux-l3/` evidence and the receipt if any
 expectation differs.
+
+## Stage 12: release evidence pack
+
+`evidence` copies the records of chosen finished runs into one new directory and
+builds the parity tables from them. It reads the stand's state and writes nothing
+there. It accepts nothing: **a pack is not an acceptance**. The release gate stays
+false, the security invariants stay UNVERIFIED, and judging the pack and signing it
+are the owner's, outside this tool.
+
+```
+python -m tools.vm.matrix evidence --state-directory STATE --run RUN [--run RUN ...] --out DIR
+```
+
+- `--run` is a run as `runs` lists it (`<id>-test`, `<id>-lab`), or the base
+  identifier of a lab run, which stands for its `-lab` and `-test` directories
+  together. Name each run once; the order of the arguments does not matter.
+- `--out` must not exist and must lie outside the state. The pack is written to
+  `DIR.partial` and renamed on success, so a refusal or a failure leaves nothing.
+- Exit 0: built. Exit 1: refused (`built: false`, `reason`, and `run` when one run
+  caused it). Exit 2: the state is unreadable or invalid.
+
+### What the pack holds
+
+- `runs/<directory>/`: `execution-summary.json`, `completion.json`,
+  `run-state.json`, `lifecycle.jsonl` and every `report.json` under a
+  `linux-*` or `windows-*` suite directory, byte for byte. The image descriptors
+  are in the summary and in the manifest. Nothing else is copied: no `manifest.json`
+  of the run (it carries the owner token), no execution identity, no disks, no
+  media, and **no capture**. Only the capture's size and SHA-256 are recorded; when
+  `capture.pcap` is in the lab's directory it is hashed and must match the summary.
+  The owner token of a run and a private key are never evidence: a copied file that
+  contains either stops the pack.
+- `parity-<set>.tsv` for each suite (`l3`, `proxy`, `l4`, `l5`): the columns of the
+  stage 8g tables (`id`, `required`, `result1..N`, `crosscheck1..N`, `window`,
+  `window_verdict1..N`, `note`) and an empty `hyperv` column last, for the owner.
+  The runs of a suite are the columns, in the order of their start. The `note` says
+  only where the runs differ or a scenario is not among the assessment rows.
+- `parity-summary.json`: per suite, per run: commit, `source_dirty`, images, run
+  directories, exit code, summary hash, capture size and hash, start and end from the
+  lifecycle journal, windows, scenario counts. It interprets nothing.
+- `manifest.json`, schema `rosetun.matrix.release-evidence.v1`:
+  `release_gate: false`, `security_invariants: "UNVERIFIED"`,
+  `owner_signature: null`; `sets` (commit, run list and table per suite); `runs`
+  (`run`, `suite`, `commit`, `source_dirty`, `source_dirty_digest`, `images`,
+  `directories`, `exit_code`, `outcome`, `summary_schema`, `summary_sha256`,
+  `completion_verified`, `attached`, `findings`, `unproven`, `pcap`, `started_utc`,
+  `finished_utc`, `windows`, `window_counts_all_as_expected`, `scenario_counts`);
+  `files` (bytes and SHA-256 of every file of the pack but the manifest).
+
+The same runs give the same bytes: keys and files are sorted, and the content holds
+no time of the build.
+
+### Refusals
+
+`run-not-found`, `duplicate-run`, `completion-not-verified` (the run's own
+completion check fails), `summaries-differ` (the `-lab` and `-test` summaries are
+not the same bytes), `summary-invalid`, `source-unknown`, `source-dirty`,
+`commits-differ-in-a-set` (runs of one suite from different commits; suites may
+differ), `diagnostic-run`, `attached-run` (`attached: true`, or no
+`attached: false` in a summary that is not a lab's: a qualifying step needs
+`attached: false`), `pcap-does-not-match-its-record`, `secret-in-evidence`,
+`set-names-collide`, `out-exists`, `out-parent-missing`, `out-inside-state`.
+
+### The owner's part
+
+The owner fills `hyperv` for each scenario (the last legacy Hyper-V run: its number
+and commit), notes the scenarios the lab sees differently, decides on the findings
+and on `unproven`, and signs the pack or its manifest hash by a means of the owner's
+own. The tool writes no signature and checks none; `owner_signature` stays `null` in
+the pack. A table with an empty `hyperv` column is a draft.
+
+### CI
+
+`vm-matrix.yml` runs the tests of the pack (`test_release_evidence`) on both
+runners with the rest of the offline tests; the one test that closes a run through
+the real controller is `controller_only`. A Linux-only step validates every
+`execution*.example.toml` with `execution.validate`: it needs no stand, but the
+examples name Linux paths that are not absolute on Windows. CI has no release gate
+and needs no KVM.
