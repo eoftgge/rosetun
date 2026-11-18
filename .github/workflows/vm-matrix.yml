@@ -41,3 +41,19 @@ jobs:
       - name: Run offline VM matrix tests
         # qemu.qmp is not installed here: tests that need it are skipped.
         run: python -m unittest discover -s tools/vm/matrix/tests -t .
+      - name: Validate the execution examples
+        # No stand is needed, but the examples name the stand's Linux paths, which are not absolute on Windows.
+        if: runner.os == 'Linux'
+        run: |
+          python -B - <<'PY'
+          import glob
+          import tomllib
+          from tools.vm.matrix import execution
+
+          paths = sorted(glob.glob('tools/vm/matrix/execution*.example.toml'))
+          assert paths, 'no execution example found'
+          for path in paths:
+              with open(path, 'rb') as stream:
+                  config = execution.validate(tomllib.load(stream))
+              print(path, execution.suite_of(config))
+          PY
