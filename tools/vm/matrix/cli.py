@@ -60,6 +60,12 @@ def main(argv=None):
     attach = commands.add_parser('attach', help='connect to a live run whose controller died and finish it')
     attach.add_argument('--state-directory', required=True)
     attach.add_argument('--run-id', required=True)
+    evidence = commands.add_parser('evidence', help='copy the records of chosen finished runs into a new release '
+                                   'evidence directory, with parity tables (reads the state, accepts nothing)')
+    evidence.add_argument('--state-directory', required=True)
+    evidence.add_argument('--run', action='append', required=True, dest='runs',
+                          help='a run as `runs` lists it, or the base identifier of a lab run (-lab and -test); repeatable')
+    evidence.add_argument('--out', required=True, help='a directory that does not exist yet')
     plan = commands.add_parser("plan", help="write a deterministic catalog snapshot to stdout")
     plan.add_argument("suite", choices=[*SUITES, "windows-list", "windows-proxy"])
     plan.add_argument("--without-host-node", action="store_true", help="plan the limited Windows Proxy variant")
@@ -120,6 +126,12 @@ def main(argv=None):
                 result = run(config, **({'diagnostic': True} if args.diagnostic else {}),
                              **({'control': args.control} if args.control else {}))
                 code = result['exit_code']
+        elif args.command == 'evidence':
+            from . import release_evidence
+            try:
+                result, code = release_evidence.build_pack(args.state_directory, args.runs, args.out), 0
+            except release_evidence.EvidenceRefused as error:
+                result, code = release_evidence.refusal(error), 1
         elif args.command == 'attach':
             from .orchestrator import attach_run
             result = attach_run(args.state_directory, args.run_id)
@@ -176,6 +188,11 @@ def main(argv=None):
                           mode='exploratory only; release unsupported',
                           security_invariants='UNVERIFIED', release_gate=False)
             print(json.dumps(result, sort_keys=True, indent=2))
+            return 2
+        if args.command == 'evidence':
+            print(json.dumps({'schema': 'rosetun.matrix.release-evidence-result.v1', 'built': False,
+                              'error': 'resource state is unreadable or invalid', 'release_gate': False,
+                              'security_invariants': 'UNVERIFIED', 'owner_signature': None}, sort_keys=True, indent=2))
             return 2
         if args.command in ("runs", "recover", "attach"):
             print(json.dumps({"error": "resource state is unreadable or invalid", "cleanup_executed": False}))
