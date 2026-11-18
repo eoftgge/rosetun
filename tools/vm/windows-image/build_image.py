@@ -34,6 +34,11 @@ CPU_LIMIT_PERCENT = 10.0
 SETTLE_SECONDS = 300
 CPU_SAMPLES = 60
 AGENT_WAIT_SECONDS = 900
+# Run states that end a build at once: the machine will not shut down or answer by itself.
+FATAL_STATES = frozenset({'internal-error', 'guest-panicked', 'io-error', 'paused', 'watchdog'})
+LOG_TAIL_LINES = 20
+# Primary volume descriptor of ISO 9660: sector 16; the volume identifier is 32 bytes at offset 40.
+PVD_OFFSET = 16 * 2048
 
 
 class BuildError(RuntimeError):
@@ -56,6 +61,114 @@ def sha256_stream(path):
     return image_plan.sha256_file(path)[0]
 
 
+def iso_volume_label(path):
+    """The volume identifier of an ISO 9660 disc, read straight from its primary volume descriptor."""
+    with open(path, 'rb') as stream:
+        stream.seek(PVD_OFFSET)
+        descriptor = stream.read(72)
+    if len(descriptor) < 72 or descriptor[0] != 1 or descriptor[1:6] != b'CD001':
+        raise BuildError('windows_iso: not an ISO 9660 image')
+    return descriptor[40:72].decode('ascii', 'replace').strip()
+
+
+def check_language(config):
+    """Refuse a disc of another language before anything is created: Microsoft discs carry it in the label,
+    as in `CCCOMA_X64FRE_EN-US_DV9`, and the guest agent output is parsed in English."""
+    label = iso_volume_label(config.windows_iso)
+    if config.language.upper() not in label.upper():
+        raise BuildError(f"windows_iso: the volume label '{label}' does not name the language "
+                         f'{config.language} of the configuration')
+
+
+class GuestWatch:
+    """Follows the run state of QEMU over QMP and ends the build when the machine has failed.
+
+    A machine in `internal-error` never shuts down and never answers the agent, so waiting for either
+    only wastes the build timeout. The failure carries a screenshot and the end of the QEMU log, and
+    QEMU is then asked to quit.
+    """
+
+    def __init__(self, qemu, connect, directory, log_path):
+        self.qemu = qemu
+        self.connect = connect
+        self.directory = str(directory).replace('\\', '/')
+        self.log_path = log_path
+        self.qmp = None
+
+    def _own(self):
+        if self.qmp is None:
+            self.qmp = image_guest.Qmp(self.connect())
+        return self.qmp
+
+    def _drop(self):
+        if self.qmp is not None:
+            self.qmp.close()
+            self.qmp = None
+
+    def check(self, qmp=None):
+        """Raise `BuildError` if the machine is in a fatal state; an unreachable QMP is not one."""
+        if self.qemu.poll() is not None:
+            return
+        try:
+            status = (qmp or self._own()).status()
+        except (OSError, image_guest.GuestError, ValueError):
+            if qmp is None:
+                self._drop()
+            return
+        if status in FATAL_STATES:
+            raise self.failure(f'the guest is in state {status}', qmp)
+
+    def failure(self, reason, qmp=None):
+        """Collect the evidence, close QEMU through QMP and return the error to raise."""
+        shot = f'{self.directory}/failure-screen.ppm'
+        try:
+            qmp = qmp or self._own()
+        except (OSError, image_guest.GuestError, ValueError):
+            qmp = None
+        if qmp is not None:
+            try:
+                qmp.screendump(shot)
+            except (OSError, image_guest.GuestError, ValueError):
+                shot = None
+            qmp.quit()
+            try:
+                self.qemu.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                pass
+        else:
+            shot = None
+        self._drop()
+        tail = self._log_tail()
+        return BuildError(f'{reason}; screenshot: {shot or "none"}; end of the QEMU log:\n{tail}')
+
+    def _log_tail(self):
+        try:
+            with open(self.log_path, 'rb') as stream:
+                stream.seek(0, os.SEEK_END)
+                stream.seek(max(0, stream.tell() - 8192))
+                data = stream.read()
+        except OSError:
+            return '(no log)'
+        return '\n'.join(data.decode('utf-8', 'replace').splitlines()[-LOG_TAIL_LINES:]) or '(empty)'
+
+
+def wait_for_shutdown(qemu, watch, seconds, *, interval=5, clock=time.monotonic, sleep=time.sleep):
+    """Wait until QEMU exits; a fatal run state or the end of the time is a `BuildError` with evidence."""
+    deadline = clock() + seconds
+    while qemu.poll() is None:
+        if clock() > deadline:
+            raise watch.failure('the guest did not shut down in time; VNC shows where it stopped')
+        watch.check()
+        sleep(interval)
+
+
+def sleep_watching(watch, seconds, *, interval=5, clock=time.monotonic, sleep=time.sleep):
+    deadline = clock() + seconds
+    while clock() < deadline:
+        watch.check()
+        sleep(min(interval, max(0.0, deadline - clock())))
+
+
 def check_inputs(config):
     for name in ('windows_iso', 'virtio_win_iso', 'ovmf_code', 'ovmf_vars_template',
                  'qemu_system', 'qemu_img', 'xorriso', 'swtpm'):
@@ -64,6 +177,7 @@ def check_inputs(config):
     virtio = sha256_stream(config.virtio_win_iso)
     if virtio != config.virtio_win_sha256:
         raise BuildError('virtio-win disc does not match the pinned SHA-256')
+    check_language(config)
     windows = sha256_stream(config.windows_iso)
     if config.windows_iso_sha256 and windows != config.windows_iso_sha256:
         raise BuildError('Windows disc does not match the pinned SHA-256')
@@ -130,6 +244,8 @@ def prepare_answers(config, layout, password):
 
 def build(config):
     windows_sha = check_inputs(config)
+    code_sha = sha256_stream(config.ovmf_code)
+    template_sha = sha256_stream(config.ovmf_vars_template)
     output = Path(config.output_directory)
     if output.exists() or not output.parent.is_dir():
         raise BuildError('output directory must be new, in an existing parent')
@@ -149,14 +265,11 @@ def build(config):
         wait_for_path(layout.tpm_socket, 10, swtpm)
         qemu = start(image_plan.qemu_argv(config, layout, machine_uuid, install=True), output / 'qemu.log')
         event(layout, stage='qemu-started', vnc=f'127.0.0.1:{5900 + config.vnc_display}')
+        watch = GuestWatch(qemu, unix_connection(layout.qmp), output, output / 'qemu.log')
         # The Windows disc asks for a key before Setup starts; the answer file cannot answer that.
         image_guest.press_until(unix_connection(layout.qmp), image_plan.PRESS_KEY,
-                                config.press_any_key_seconds)
-        deadline = time.monotonic() + config.timeout_minutes * 60
-        while qemu.poll() is None:
-            if time.monotonic() > deadline:
-                raise BuildError('the guest did not shut down in time; VNC shows where it stopped')
-            time.sleep(5)
+                                config.press_any_key_seconds, inspect=watch.check)
+        wait_for_shutdown(qemu, watch, config.timeout_minutes * 60)
         if qemu.returncode != 0:
             raise BuildError(f'QEMU exited with code {qemu.returncode}')
         event(layout, stage='guest-shut-down')
@@ -171,7 +284,8 @@ def build(config):
         raise BuildError('the TPM state file is missing: nothing was written by Windows')
     record = image_plan.descriptor(
         config, layout, uuid=machine_uuid, windows_iso_sha256=windows_sha, disk_sha256=disk_sha,
-        disk_size=disk_size, vars_sha256=vars_sha, tpm_files=tpm_files,
+        disk_size=disk_size, vars_sha256=vars_sha, code_sha256=code_sha, template_sha256=template_sha,
+        tpm_files=tpm_files,
         built_at=datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='seconds'))
     Path(layout.descriptor).write_text(json.dumps(record, indent=2, sort_keys=True) + '\n',
                                        encoding='utf-8', newline='\n')
@@ -181,6 +295,20 @@ def build(config):
     event(layout, stage='described')
     return {'descriptor': layout.descriptor, 'sha256': disk_sha, 'size_bytes': disk_size,
             'password_file': layout.secret}
+
+
+def record_platform(agent, result):
+    """Secure Boot and the TPM as the guest itself reports them; False or an error is a stop point."""
+    try:
+        result['secure_boot'] = image_guest.secure_boot_state(agent)
+    except image_guest.GuestError as error:
+        result['secure_boot'] = None
+        result['secure_boot_error'] = str(error)
+    try:
+        result['tpm'] = image_guest.tpm_state(agent)
+    except image_guest.GuestError as error:
+        result['tpm'] = None
+        result['tpm_error'] = str(error)
 
 
 def measure(config, *, settle=SETTLE_SECONDS):
@@ -205,13 +333,14 @@ def measure(config, *, settle=SETTLE_SECONDS):
         wait_for_path(layout.tpm_socket, 10, swtpm)
         qemu = start(image_plan.qemu_argv(config, layout, descriptor['windows']['devices']['uuid_at_build'],
                                           install=False), work / 'qemu.log')
+        watch = GuestWatch(qemu, unix_connection(layout.qmp), work, work / 'qemu.log')
         connect = unix_connection(layout.qga)
-        boot = image_guest.wait_for_agent(connect, AGENT_WAIT_SECONDS)
+        boot = image_guest.wait_for_agent(connect, AGENT_WAIT_SECONDS, check=watch.check)
         result['agent_ready_seconds'] = None if boot is None else round(boot, 1)
         if boot is None:
             result['verdict'] = 'STOP: the guest agent never answered'
             return result
-        time.sleep(settle)
+        sleep_watching(watch, settle)
         stream = connect()
         try:
             agent = image_guest.Qga(stream, timeout=30)
@@ -219,6 +348,7 @@ def measure(config, *, settle=SETTLE_SECONDS):
             code, out = agent.run(image_guest.TYPEPERF, image_guest.typeperf_arguments(CPU_SAMPLES),
                                   timeout=CPU_SAMPLES + 60)
             result['cpu_percent'] = round(image_guest.average_cpu_percent(out), 1)
+            record_platform(agent, result)
             log = agent.read_file('C:\\ProgramData\\rosetun-image\\first-logon.log').decode('utf-8', 'replace')
             failed, complete = image_guest.failed_steps(log)
             result['first_logon_complete'] = complete
@@ -233,10 +363,17 @@ def measure(config, *, settle=SETTLE_SECONDS):
             problems.append('CPU load at rest is at or above the limit')
         if not complete or failed:
             problems.append('the first-logon script is incomplete or has failed steps')
+        if result['secure_boot'] is not True:
+            problems.append('Secure Boot is not confirmed enabled in the guest')
+        if not (result['tpm'] and result['tpm']['present'] and result['tpm']['ready']):
+            problems.append('the TPM is not present and ready in the guest')
         result['verdict'] = 'STOP: ' + '; '.join(problems) if problems else 'within the limits (UNQUALIFIED)'
         deadline = time.monotonic() + 120
         while qemu.poll() is None and time.monotonic() < deadline:
             time.sleep(2)
+    except BuildError as error:
+        result['verdict'] = f'STOP: {error}'
+        raise
     finally:
         stop(qemu)
         stop(swtpm)

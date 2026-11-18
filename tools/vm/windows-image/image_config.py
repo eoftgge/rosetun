@@ -13,7 +13,7 @@ SECTIONS = {
     'inputs': {'windows_iso', 'windows_iso_sha256', 'virtio_win_iso', 'virtio_win_version',
                'virtio_win_sha256'},
     'tools': {'qemu_system', 'qemu_img', 'xorriso', 'swtpm'},
-    'firmware': {'ovmf_code', 'ovmf_vars_template'},
+    'firmware': {'ovmf_code', 'ovmf_vars_template', 'smm'},
     'vm': {'memory_mib', 'vcpus', 'disk_gib', 'mac', 'vnc_display'},
     'guest': {'identifier', 'hostname', 'username', 'language', 'edition_name', 'image_index',
               'empty_product_key_element'},
@@ -33,6 +33,9 @@ DEFAULTS = {
               'edition_name': '', 'image_index': 0, 'empty_product_key_element': False},
     'build': {'network': 'restricted', 'press_any_key_seconds': 60, 'timeout_minutes': 180},
     'inputs': {'windows_iso_sha256': ''},
+    # The Secure Boot firmware of the Linux distributions needs system management mode; the
+    # firmware built by `build-ovmf.sh` does not.
+    'firmware': {'smm': True},
 }
 
 
@@ -70,6 +73,7 @@ class ImageConfig:
     swtpm: str
     ovmf_code: str
     ovmf_vars_template: str
+    smm: bool
     memory_mib: int
     vcpus: int
     disk_gib: int
@@ -134,6 +138,8 @@ def parse(data):
             raise ConfigError(f'{name}: an integer from {low} to {high}')
     if values['network'] not in ('restricted', 'nat'):
         raise ConfigError("network: 'restricted' or 'nat'")
+    if type(values['smm']) is not bool:
+        raise ConfigError('smm: a boolean')
     if type(values['empty_product_key_element']) is not bool:
         raise ConfigError('empty_product_key_element: a boolean')
     if type(values['edition_name']) is not str:

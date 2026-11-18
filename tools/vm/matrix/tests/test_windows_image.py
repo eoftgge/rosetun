@@ -142,6 +142,7 @@ class AnswerFileTests(unittest.TestCase):
         layout = image_plan.Layout('/srv/image')
         record = image_plan.descriptor(config(), layout, uuid='u', windows_iso_sha256='0' * 64,
                                        disk_sha256='1' * 64, disk_size=1, vars_sha256='2' * 64,
+                                       code_sha256='3' * 64, template_sha256='4' * 64,
                                        tpm_files={}, built_at='t')
         for output in (stdout.getvalue(), json.dumps(record), SCRIPT, README,
                        ' '.join(image_answers.xorriso_arguments('a', 'b')), image_answers.first_logon_command()):
@@ -197,6 +198,15 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(image_config.TEST_MAC, loaded.mac)
         self.assertEqual('restricted', loaded.network)
 
+    def test_the_example_is_the_english_26h2_disc_with_the_firmware_without_smm(self):
+        loaded = image_config.load(EXAMPLE)
+        self.assertEqual('/mnt/d/Iso/win11_26h2.iso', loaded.windows_iso)
+        self.assertEqual('windows-11-26h2-pro-v1', loaded.identifier)
+        self.assertEqual('en-US', loaded.language)
+        self.assertFalse(loaded.smm)
+        self.assertTrue(loaded.ovmf_code.endswith('/OVMF_CODE.fd'))
+        self.assertTrue(loaded.ovmf_vars_template.endswith('/OVMF_VARS.ms.fd'))
+
     def test_unknown_keys_and_a_foreign_address_are_refused(self):
         data = image_config_data()
         data['vm']['surprise'] = 1
@@ -230,16 +240,36 @@ class QemuPlanTests(unittest.TestCase):
         return found[0]
 
     def test_the_machine_is_q35_with_secure_boot_firmware_in_pflash(self):
-        self.assertIn('q35,smm=on', self.install)
         code = self.value(self.install, '-drive', 'unit=0')
         variables = self.value(self.install, '-drive', 'unit=1')
         self.assertIn('if=pflash', code)
         self.assertIn('readonly=on', code)
-        self.assertIn('OVMF_CODE_4M.secboot.fd', code)
+        self.assertIn('/OVMF_CODE.fd', code)
         self.assertIn('/srv/image/OVMF_VARS.fd', variables)
         self.assertNotIn('readonly', variables)
-        self.assertIn('driver=cfi.pflash01,property=secure,value=on', self.install)
         self.assertIn('ICH9-LPC.disable_s3=1', self.install)
+
+    def test_without_smm_the_machine_has_none_and_the_variable_store_is_not_locked_to_it(self):
+        self.assertFalse(self.config.smm)
+        self.assertIn('q35,smm=off', self.install)
+        self.assertNotIn('q35,smm=on', self.install)
+        self.assertNotIn('driver=cfi.pflash01,property=secure,value=on', self.install)
+        self.assertNotIn('secure=on', ' '.join(self.install))
+
+    def test_with_smm_the_machine_and_the_locked_variable_store_are_those_of_the_distribution_firmware(self):
+        argv = image_plan.qemu_argv(config(smm=True), self.layout, 'u', install=True)
+        self.assertIn('q35,smm=on', argv)
+        self.assertNotIn('q35,smm=off', argv)
+        self.assertEqual(1, argv.count('driver=cfi.pflash01,property=secure,value=on'))
+        self.assertIn('ICH9-LPC.disable_s3=1', argv)
+
+    def test_smm_is_a_boolean_of_the_configuration_that_defaults_to_the_distribution_machine(self):
+        data = image_config_data()
+        del data['firmware']['smm']
+        self.assertTrue(image_config.parse(data).smm)
+        data['firmware']['smm'] = 'no'
+        with self.assertRaises(image_config.ConfigError):
+            image_config.parse(data)
 
     def test_the_tpm_is_a_two_point_zero_swtpm_over_a_socket_that_swtpm_serves(self):
         self.assertIn('tpm-crb,tpmdev=tpm0', self.install)
@@ -253,8 +283,9 @@ class QemuPlanTests(unittest.TestCase):
         self.assertIn(f'type=unixio,path={socket_path}', swtpm)
         self.assertIn('dir=/srv/image/tpm', swtpm)
 
-    def test_vmx_is_hidden_from_the_guest(self):
-        self.assertEqual('host,-vmx', self.install[self.install.index('-cpu') + 1])
+    def test_hardware_virtualization_of_both_vendors_is_hidden_from_the_guest(self):
+        for argv in (self.install, self.measure):
+            self.assertEqual('host,-vmx,-svm', argv[argv.index('-cpu') + 1])
 
     def test_vnc_is_on_loopback_only_and_nothing_else_listens(self):
         displays = [self.install[i + 1] for i, item in enumerate(self.install) if item == '-display']
@@ -297,15 +328,32 @@ class QemuPlanTests(unittest.TestCase):
         self.assertIn('drive=answers,bus=ide.2', ' '.join(self.install))
 
     def test_the_descriptor_extends_the_image_contract_and_claims_nothing_yet(self):
-        record = image_plan.descriptor(self.config, self.layout, uuid='u', windows_iso_sha256='0' * 64,
-                                       disk_sha256='1' * 64, disk_size=5, vars_sha256='2' * 64,
-                                       tpm_files={'tpm2-00.permall': '3' * 64}, built_at='t')
+        record = self.descriptor(self.config)
         self.assertEqual('rosetun.matrix.image.v1', record['schema'])
         self.assertEqual(('windows', 'x86_64', 'qcow2'),
                          (record['guest_os'], record['architecture'], record['format']))
         self.assertEqual((False, False), (record['windows']['activated'], record['windows']['qualified']))
         self.assertTrue(record['windows']['uefi']['secure_boot'])
         self.assertEqual('2.0', record['windows']['tpm']['version'])
+        self.assertEqual('host,-vmx,-svm', record['windows']['devices']['cpu'])
+
+    def descriptor(self, loaded):
+        return image_plan.descriptor(loaded, self.layout, uuid='u', windows_iso_sha256='0' * 64,
+                                     disk_sha256='1' * 64, disk_size=5, vars_sha256='2' * 64,
+                                     code_sha256='4' * 64, template_sha256='5' * 64,
+                                     tpm_files={'tpm2-00.permall': '3' * 64}, built_at='t')
+
+    def test_the_descriptor_names_the_firmware_hashes_it_and_says_the_variable_store_is_unprotected(self):
+        uefi = self.descriptor(self.config)['windows']['uefi']
+        self.assertEqual('secboot-nosmm', uefi['flavour'])
+        self.assertFalse(uefi['smm'])
+        self.assertEqual('varstore not SMM-protected', uefi['note'])
+        self.assertEqual('4' * 64, uefi['code']['sha256'])
+        self.assertEqual('5' * 64, uefi['vars_template']['sha256'])
+        self.assertEqual('2' * 64, uefi['vars']['sha256'])
+        protected = self.descriptor(config(smm=True))['windows']['uefi']
+        self.assertEqual('secboot-smm', protected['flavour'])
+        self.assertNotIn('note', protected)
 
     def test_the_plan_command_prints_the_commands_and_runs_none(self):
         stdout = io.StringIO()
@@ -316,7 +364,7 @@ class QemuPlanTests(unittest.TestCase):
         self.assertEqual('/usr/bin/xorriso', plan['xorriso'][0])
 
 
-class GuestClientTests(unittest.TestCase):
+class SocketServing:
     def serve(self, handler):
         host, guest = socket.socketpair()
         thread = threading.Thread(target=handler, args=(guest,), daemon=True)
@@ -340,6 +388,8 @@ class GuestClientTests(unittest.TestCase):
             line, _, buffer = buffer.partition(b'\n')
             yield line
 
+
+class GuestClientTests(SocketServing, unittest.TestCase):
     def test_qmp_negotiates_and_sends_one_key(self):
         seen = []
 
@@ -425,6 +475,238 @@ class GuestClientTests(unittest.TestCase):
         self.assertEqual(([], False), image_guest.failed_steps('start\nOK   a: why\n'))
 
 
+def iso_image(label):
+    """The first 18 sectors of an ISO 9660 disc: a primary volume descriptor with the given label."""
+    start = build_image.PVD_OFFSET
+    data = bytearray(start + 2048)
+    data[start] = 1
+    data[start + 1:start + 6] = b'CD001'
+    data[start + 6] = 1
+    data[start + 40:start + 72] = label.encode('ascii').ljust(32)
+    return bytes(data)
+
+
+ENGLISH_LABEL = 'CCCOMA_X64FRE_EN-US_DV9'
+
+
+def stand(directory, label=ENGLISH_LABEL, **overrides):
+    """Configuration data whose inputs are small files in `directory`; returns (data, paths)."""
+    paths = {name: os.path.join(directory, name) for name in (
+        'win.iso', 'virtio.iso', 'code.fd', 'vars.fd', 'qemu', 'img', 'xorriso', 'swtpm')}
+    for name, path in paths.items():
+        Path(path).write_bytes(iso_image(label) if name == 'win.iso' else b'x')
+    data = image_config_data()
+    data['inputs'].update(windows_iso=paths['win.iso'], virtio_win_iso=paths['virtio.iso'],
+                          virtio_win_sha256=image_plan.sha256_file(paths['virtio.iso'])[0])
+    data['tools'].update(qemu_system=paths['qemu'], qemu_img=paths['img'], xorriso=paths['xorriso'],
+                         swtpm=paths['swtpm'])
+    data['firmware'].update(ovmf_code=paths['code.fd'], ovmf_vars_template=paths['vars.fd'])
+    data['build']['output_directory'] = os.path.join(directory, 'output')
+    for section, values in overrides.items():
+        data[section].update(values)
+    return data, paths
+
+
+class FakeQemu:
+    """Stands in for the QEMU process: alive until the fake QMP server is told to quit."""
+
+    def __init__(self):
+        self.exited = False
+        self.returncode = None
+
+    def poll(self):
+        return 0 if self.exited else None
+
+    def wait(self, timeout=None):
+        return 0
+
+
+class GuestWatchTests(SocketServing, unittest.TestCase):
+    def qmp_server(self, qemu, statuses):
+        seen = []
+
+        def handler(stream):
+            stream.sendall(b'{"QMP": {"version": {}}}\r\n')
+            for line in self.lines(stream):
+                command = json.loads(line)['execute']
+                seen.append(command)
+                reply = {'return': {}}
+                if command == 'query-status':
+                    status = statuses.pop(0) if len(statuses) > 1 else statuses[0]
+                    reply = {'return': {'status': status, 'running': status == 'running'}}
+                stream.sendall(json.dumps(reply).encode() + b'\r\n')
+                if command == 'quit':
+                    qemu.exited = True
+                    break
+            stream.close()
+        return self.serve(handler), seen
+
+    def test_a_machine_in_internal_error_fails_at_once_with_a_screenshot_and_the_log_and_quits_qemu(self):
+        qemu = FakeQemu()
+        host, seen = self.qmp_server(qemu, ['running', 'internal-error'])
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory) / 'qemu.log'
+            log.write_text('noise\n' * 50 + 'KVM: entry failed, hardware error 0xffffffff\n')
+            watch = build_image.GuestWatch(qemu, lambda: host, directory, log)
+            with self.assertRaises(build_image.BuildError) as raised:
+                build_image.wait_for_shutdown(qemu, watch, 600, interval=0, sleep=lambda _: None)
+        message = str(raised.exception)
+        self.assertIn('internal-error', message)
+        self.assertIn('failure-screen.ppm', message)
+        self.assertIn('entry failed', message)
+        self.assertLessEqual(message.count('noise'), build_image.LOG_TAIL_LINES)
+        self.assertEqual(['qmp_capabilities', 'query-status', 'query-status', 'screendump', 'quit'], seen)
+        self.assertTrue(qemu.exited)
+
+    def test_every_state_that_never_recovers_by_itself_is_fatal(self):
+        for state in ('internal-error', 'guest-panicked', 'io-error'):
+            self.assertIn(state, build_image.FATAL_STATES)
+        for state in ('running', 'prelaunch', 'shutdown'):
+            self.assertNotIn(state, build_image.FATAL_STATES)
+
+    def test_a_running_machine_is_left_alone_until_it_shuts_itself_down(self):
+        qemu = FakeQemu()
+        host, seen = self.qmp_server(qemu, ['running'])
+        sleeps = []
+
+        def sleep(seconds):
+            sleeps.append(seconds)
+            qemu.exited = len(sleeps) >= 3
+        watch = build_image.GuestWatch(qemu, lambda: host, '.', 'no-such-log')
+        build_image.wait_for_shutdown(qemu, watch, 600, interval=0, sleep=sleep)
+        self.assertEqual(3, len(sleeps))
+        self.assertNotIn('quit', seen)
+
+    def test_the_time_running_out_is_a_failure_with_evidence_too(self):
+        qemu = FakeQemu()
+        host, seen = self.qmp_server(qemu, ['running'])
+        ticks = iter(range(0, 1000, 100))
+        with tempfile.TemporaryDirectory() as directory:
+            watch = build_image.GuestWatch(qemu, lambda: host, directory, Path(directory) / 'qemu.log')
+            with self.assertRaisesRegex(build_image.BuildError, 'did not shut down in time'):
+                build_image.wait_for_shutdown(qemu, watch, 250, interval=0, clock=lambda: next(ticks),
+                                              sleep=lambda _: None)
+        self.assertEqual(['screendump', 'quit'], seen[-2:])
+
+    def test_a_qmp_that_cannot_be_reached_is_not_a_failure_of_the_machine(self):
+        qemu = FakeQemu()
+
+        def refuse():
+            raise ConnectionRefusedError()
+        build_image.GuestWatch(qemu, refuse, '.', 'no-such-log').check()
+
+    def test_a_failure_found_while_pressing_keys_is_examined_over_the_same_connection(self):
+        qemu = FakeQemu()
+        host, seen = self.qmp_server(qemu, ['internal-error'])
+        connections = []
+
+        def connect():
+            connections.append(1)
+            return host
+        with tempfile.TemporaryDirectory() as directory:
+            watch = build_image.GuestWatch(qemu, connect, directory, Path(directory) / 'qemu.log')
+            with self.assertRaisesRegex(build_image.BuildError, 'internal-error'):
+                image_guest.press_until(connect, 'spc', 60, interval=0, inspect=watch.check,
+                                        sleep=lambda _: None)
+        self.assertEqual([1], connections)
+        self.assertEqual('send-key', seen[1])
+        self.assertEqual(['query-status', 'screendump', 'quit'], seen[2:])
+
+    def test_the_wait_for_the_agent_stops_when_the_check_raises(self):
+        def check():
+            raise build_image.BuildError('the guest is in state internal-error')
+        with self.assertRaisesRegex(build_image.BuildError, 'internal-error'):
+            image_guest.wait_for_agent(lambda: None, 60, check=check)
+
+
+class FakeAgent:
+    def __init__(self, answers):
+        self.answers = answers
+
+    def run(self, path, arguments, *, timeout=300):
+        code, out = self.answers[arguments[-1].split()[0]]
+        return code, out
+
+
+class PlatformStateTests(unittest.TestCase):
+    def agent(self, secure, tpm):
+        return FakeAgent({'Confirm-SecureBootUEFI': secure, 'Get-Tpm': tpm})
+
+    def test_secure_boot_and_the_tpm_are_read_from_the_guest_and_recorded(self):
+        agent = self.agent((0, b'True\r\n'), (0, b'{"TpmPresent":true,"TpmReady":true}\r\n'))
+        result = {}
+        build_image.record_platform(agent, result)
+        self.assertEqual({'secure_boot': True, 'tpm': {'present': True, 'ready': True}}, result)
+
+    def test_secure_boot_off_is_recorded_as_false_so_the_stop_point_applies(self):
+        agent = self.agent((0, b'False\r\n'), (0, b'{"TpmPresent":true,"TpmReady":false}'))
+        result = {}
+        build_image.record_platform(agent, result)
+        self.assertIs(False, result['secure_boot'])
+        self.assertEqual({'present': True, 'ready': False}, result['tpm'])
+
+    def test_an_error_of_either_command_is_recorded_not_guessed(self):
+        agent = self.agent((1, b'Confirm-SecureBootUEFI : Cmdlet not supported on this platform'), (0, b'garbage'))
+        result = {}
+        build_image.record_platform(agent, result)
+        self.assertIsNone(result['secure_boot'])
+        self.assertIn('secure_boot_error', result)
+        self.assertIsNone(result['tpm'])
+        self.assertIn('tpm_error', result)
+        with self.assertRaises(image_guest.GuestError):
+            image_guest.tpm_state(self.agent((0, b'True'), (1, b'{"TpmPresent":true,"TpmReady":true}')))
+
+
+class DiscLanguageTests(unittest.TestCase):
+    def test_the_label_is_read_from_the_primary_volume_descriptor(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'disc.iso'
+            path.write_bytes(iso_image(ENGLISH_LABEL))
+            self.assertEqual(ENGLISH_LABEL, build_image.iso_volume_label(path))
+
+    def test_a_file_that_is_not_an_iso_is_refused(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'disc.iso'
+            path.write_bytes(b'x' * 40000)
+            with self.assertRaisesRegex(build_image.BuildError, 'ISO 9660'):
+                build_image.iso_volume_label(path)
+            path.write_bytes(b'x')
+            with self.assertRaisesRegex(build_image.BuildError, 'ISO 9660'):
+                build_image.iso_volume_label(path)
+
+    def test_an_english_disc_passes_and_a_russian_one_is_refused_before_the_directory_exists(self):
+        with tempfile.TemporaryDirectory() as directory:
+            data, _ = stand(directory)
+            self.assertIsNotNone(build_image.check_inputs(image_config.parse(data)))
+        with tempfile.TemporaryDirectory() as directory:
+            data, _ = stand(directory, label='CCCOMA_X64FRE_RU-RU_DV9')
+            loaded = image_config.parse(data)
+            with self.assertRaisesRegex(build_image.BuildError, 'RU-RU.*en-US'):
+                build_image.build(loaded)
+            self.assertFalse(Path(loaded.output_directory).exists())
+
+
+class FirmwareScriptTests(unittest.TestCase):
+    SCRIPT = (TOOL / 'build-ovmf.sh').read_text(encoding='utf-8')
+
+    def test_the_firmware_has_secure_boot_and_tpm_but_no_smm_at_a_pinned_tag(self):
+        for flag in ('SECURE_BOOT_ENABLE=TRUE', 'SMM_REQUIRE=FALSE', 'TPM2_ENABLE=TRUE', 'FD_SIZE_4MB'):
+            self.assertIn(flag, self.SCRIPT)
+        self.assertRegex(self.SCRIPT, r'(?m)^EDK2_TAG=edk2-stable\d{6}$')
+        self.assertNotIn('SECURE_BOOT_ENABLE=FALSE', self.SCRIPT)
+
+    def test_the_build_tools_are_pinned_debian_packages_unpacked_and_never_installed(self):
+        digests = re.findall(r"\|([0-9a-f]{64})'", self.SCRIPT)
+        self.assertEqual(3, len(digests))
+        self.assertIn('dpkg -x', self.SCRIPT)
+        for word in ('apt-get install', 'sudo', 'dpkg -i'):
+            self.assertNotIn(word, self.SCRIPT)
+
+    def test_the_script_does_not_name_the_private_notes_or_a_stand(self):
+        self.assertNotIn('tools/docs', self.SCRIPT)
+        self.assertNotIn('/home/', self.SCRIPT)
+
+
 class BuildHelperTests(unittest.TestCase):
     @controller_only
     def test_the_password_file_is_private_and_never_overwritten(self):
@@ -437,32 +719,15 @@ class BuildHelperTests(unittest.TestCase):
 
     def test_a_build_into_an_existing_directory_is_refused_before_anything_runs(self):
         with tempfile.TemporaryDirectory() as directory:
-            inputs = {name: os.path.join(directory, name) for name in (
-                'win.iso', 'virtio.iso', 'code.fd', 'vars.fd', 'qemu', 'img', 'xorriso', 'swtpm')}
-            for path in inputs.values():
-                Path(path).write_bytes(b'x')
-            digest = image_plan.sha256_file(inputs['virtio.iso'])[0]
-            data = image_config_data()
-            data['inputs'].update(windows_iso=inputs['win.iso'], virtio_win_iso=inputs['virtio.iso'],
-                                  virtio_win_sha256=digest)
-            data['tools'].update(qemu_system=inputs['qemu'], qemu_img=inputs['img'],
-                                 xorriso=inputs['xorriso'], swtpm=inputs['swtpm'])
-            data['firmware'].update(ovmf_code=inputs['code.fd'], ovmf_vars_template=inputs['vars.fd'])
+            data, _ = stand(directory)
             data['build']['output_directory'] = directory
-            with self.assertRaises(build_image.BuildError):
+            with self.assertRaisesRegex(build_image.BuildError, 'output directory'):
                 build_image.build(image_config.parse(data))
 
     def test_a_virtio_disc_that_differs_from_the_pin_is_refused(self):
         with tempfile.TemporaryDirectory() as directory:
-            paths = {name: os.path.join(directory, name) for name in (
-                'win.iso', 'virtio.iso', 'code.fd', 'vars.fd', 'qemu', 'img', 'xorriso', 'swtpm')}
-            for path in paths.values():
-                Path(path).write_bytes(b'x')
-            data = image_config_data()
-            data['inputs'].update(windows_iso=paths['win.iso'], virtio_win_iso=paths['virtio.iso'])
-            data['tools'].update(qemu_system=paths['qemu'], qemu_img=paths['img'],
-                                 xorriso=paths['xorriso'], swtpm=paths['swtpm'])
-            data['firmware'].update(ovmf_code=paths['code.fd'], ovmf_vars_template=paths['vars.fd'])
+            data, _ = stand(directory)
+            data['inputs']['virtio_win_sha256'] = '0' * 64
             with self.assertRaisesRegex(build_image.BuildError, 'virtio-win'):
                 build_image.check_inputs(image_config.parse(data))
 

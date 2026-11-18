@@ -51,36 +51,57 @@ class Qmp:
             if 'event' in message:
                 continue
             if 'error' in message:
-                raise GuestError('QMP command failed: ' + command)
+                raise GuestError(f"QMP command failed: {command}: {message['error'].get('desc', '')}")
             return message.get('return')
 
     def press(self, qcode):
         self._call('send-key', {'keys': [{'type': 'qcode', 'data': qcode}]})
 
+    def status(self):
+        """The run state of the machine, such as `running` or `internal-error`."""
+        return self._call('query-status')['status']
+
+    def screendump(self, filename):
+        self._call('screendump', {'filename': filename})
+
+    def quit(self):
+        """Ask QEMU to exit cleanly. It may close the connection before it answers."""
+        try:
+            self._call('quit')
+        except (OSError, GuestError, ValueError):
+            pass
+
     def close(self):
         self._out.close()
 
 
-def press_until(open_connection, qcode, seconds, interval=0.5, clock=time.monotonic, sleep=time.sleep):
+def press_until(open_connection, qcode, seconds, interval=0.5, clock=time.monotonic, sleep=time.sleep,
+                inspect=None):
     """Send one key repeatedly for a while; the Windows disc asks for a key for a few seconds only.
 
     Returns the number of key presses. A connection that cannot be opened yet is retried, because
-    the QMP socket appears a moment after QEMU starts.
+    the QMP socket appears a moment after QEMU starts. `inspect`, if given, is called with the live
+    connection after each press, and whatever it raises ends the loop: QMP serves one client at a
+    time, so a failure found while pressing must be examined over this very connection.
     """
     deadline = clock() + seconds
     sent = 0
     qmp = None
-    while clock() < deadline:
-        try:
-            if qmp is None:
-                qmp = Qmp(open_connection())
-            qmp.press(qcode)
-            sent += 1
-        except (OSError, GuestError):
-            qmp = None
-        sleep(interval)
-    if qmp is not None:
-        qmp.close()
+    try:
+        while clock() < deadline:
+            try:
+                if qmp is None:
+                    qmp = Qmp(open_connection())
+                qmp.press(qcode)
+                sent += 1
+            except (OSError, GuestError):
+                qmp = None
+            if inspect is not None and qmp is not None:
+                inspect(qmp)
+            sleep(interval)
+    finally:
+        if qmp is not None:
+            qmp.close()
     return sent
 
 
@@ -142,10 +163,17 @@ class Qga:
             self.call('guest-file-close', {'handle': handle})
 
 
-def wait_for_agent(open_connection, seconds, *, interval=2.0, clock=time.monotonic, sleep=time.sleep):
-    """Seconds until the guest agent answers a ping, or None. Measured on the host's monotonic clock."""
+def wait_for_agent(open_connection, seconds, *, interval=2.0, check=None, clock=time.monotonic,
+                   sleep=time.sleep):
+    """Seconds until the guest agent answers a ping, or None. Measured on the host's monotonic clock.
+
+    `check` runs before each attempt; whatever it raises ends the wait (a machine that has failed will
+    never answer).
+    """
     started = clock()
     while clock() - started < seconds:
+        if check is not None:
+            check()
         try:
             stream = open_connection()
             try:
@@ -183,3 +211,34 @@ def failed_steps(log_text):
     failed = [line.split(' ', 1)[1] for line in lines if ' FAIL ' in line]
     complete = any(' done, failed steps:' in line for line in lines)
     return failed, complete
+
+
+POWERSHELL = 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe'
+
+
+def powershell(agent, command, *, timeout=120):
+    """Run one PowerShell command through the agent; returns (exit code, output text)."""
+    code, out = agent.run(POWERSHELL, ['-NoProfile', '-NonInteractive', '-Command', command],
+                          timeout=timeout)
+    return code, out.decode('utf-8', 'replace').strip()
+
+
+def secure_boot_state(agent):
+    """True when `Confirm-SecureBootUEFI` says so. Anything else, including an error, is a failure."""
+    code, out = powershell(agent, 'Confirm-SecureBootUEFI')
+    if code != 0 or out not in ('True', 'False'):
+        raise GuestError(f'Confirm-SecureBootUEFI failed (exit code {code})')
+    return out == 'True'
+
+
+def tpm_state(agent):
+    """`TpmPresent` and `TpmReady` of `Get-Tpm`, as booleans."""
+    code, out = powershell(agent, 'Get-Tpm | Select-Object TpmPresent, TpmReady | ConvertTo-Json -Compress')
+    try:
+        value = json.loads(out)
+        present, ready = value['TpmPresent'], value['TpmReady']
+    except (ValueError, KeyError, TypeError):
+        raise GuestError(f'Get-Tpm gave no usable answer (exit code {code})') from None
+    if code != 0 or type(present) is not bool or type(ready) is not bool:
+        raise GuestError(f'Get-Tpm failed (exit code {code})')
+    return {'present': present, 'ready': ready}

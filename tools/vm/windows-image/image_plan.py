@@ -20,6 +20,12 @@ PCI_SLOTS = {'vga': '0x1', 'disk': '0x3', 'net': '0x4', 'serial': '0x5'}
 # Press-any-key of the Windows disc needs a keyboard event while it is on screen; Setup itself is
 # unattended. These are the QMP key names sent for that.
 PRESS_KEY = 'spc'
+# Both virtualization flags are hidden, VMX (Intel) and SVM (AMD): the flag that matters depends on
+# the host, and a minus on a flag the host lacks is accepted and does nothing.
+CPU = 'host,-vmx,-svm'
+FLAVOUR_NO_SMM = 'secboot-nosmm'
+FLAVOUR_SMM = 'secboot-smm'
+VARSTORE_NOTE = 'varstore not SMM-protected'
 
 
 def _join(directory, name):
@@ -69,12 +75,16 @@ def qemu_argv(config, layout, uuid, *, install, disk=None, vars_file=None, tpm_s
               qmp_socket=None, qga_socket=None, answers_iso=None):
     """The one QEMU command line. `install` adds the three optical drives and the boot order for Setup.
 
-    - `-machine q35,smm=on` and the pflash pair: Secure Boot firmware keeps its variable store writable
-      by system management mode only (`secure=on`) and cannot do S3 (`disable_s3=1`); both are the
-      edk2 requirements of the secboot build.
-    - `-cpu host,-vmx`: hides VMX from the guest, so Windows cannot start Hyper-V or virtualization-based
-      security. They would put a second hypervisor under the first inside WSL2's nested KVM, which is
-      slow and changes timing, and the matrix gains nothing from them.
+    - the pflash pair and, with `smm = true`, `-machine q35,smm=on`: the Secure Boot firmware of the
+      distributions keeps its variable store writable by system management mode only (`secure=on`) and
+      cannot do S3 (`disable_s3=1`); both are the edk2 requirements of that build. With `smm = false`
+      (the firmware of `build-ovmf.sh`) the machine has no SMM and the store is an ordinary flash
+      device, writable by the guest operating system: Secure Boot is enforced, the store is not
+      protected from the guest.
+    - `-cpu host,-vmx,-svm`: hides hardware virtualization from the guest, so Windows cannot start
+      Hyper-V or virtualization-based security. They would put a second hypervisor under the first
+      inside WSL2's nested KVM, which is slow and changes timing, and the matrix gains nothing from
+      them.
     - virtio-blk, virtio-net and virtio-serial, the same as the Linux guests: the driver set to qualify
       is the one the matrix controller already knows. No USB, no sound, no balloon.
     - the network is a user-mode stack with `restrict=on`: the guest gets an address and nothing
@@ -85,10 +95,11 @@ def qemu_argv(config, layout, uuid, *, install, disk=None, vars_file=None, tpm_s
     tpm_socket = tpm_socket or layout.tpm_socket
     netdev = 'user,id=buildnet,restrict=on' if config.network == 'restricted' else 'user,id=buildnet'
     argv = [config.qemu_system, '-no-user-config', '-nodefaults',
-            '-machine', 'q35,smm=on', '-accel', 'kvm',
-            '-global', 'ICH9-LPC.disable_s3=1',
-            '-global', 'driver=cfi.pflash01,property=secure,value=on',
-            '-cpu', 'host,-vmx', '-m', str(config.memory_mib), '-smp', str(config.vcpus),
+            '-machine', 'q35,smm=on' if config.smm else 'q35,smm=off', '-accel', 'kvm',
+            '-global', 'ICH9-LPC.disable_s3=1']
+    if config.smm:
+        argv += ['-global', 'driver=cfi.pflash01,property=secure,value=on']
+    argv += ['-cpu', CPU, '-m', str(config.memory_mib), '-smp', str(config.vcpus),
             '-uuid', uuid,
             '-drive', f'if=pflash,format=raw,unit=0,readonly=on,file={config.ovmf_code}',
             '-drive', f'if=pflash,format=raw,unit=1,file={vars_file}',
@@ -129,8 +140,19 @@ def sha256_file(path, block=1024 * 1024):
     return digest.hexdigest(), size
 
 
+def uefi_record(config, layout, code_sha256, template_sha256, vars_sha256):
+    record = {'secure_boot': True, 'smm': config.smm,
+              'flavour': FLAVOUR_SMM if config.smm else FLAVOUR_NO_SMM,
+              'code': {'path': config.ovmf_code, 'sha256': code_sha256},
+              'vars_template': {'path': config.ovmf_vars_template, 'sha256': template_sha256},
+              'vars': {'path': layout.vars, 'sha256': vars_sha256}}
+    if not config.smm:
+        record['note'] = VARSTORE_NOTE
+    return record
+
+
 def descriptor(config, layout, *, uuid, windows_iso_sha256, disk_sha256, disk_size, vars_sha256,
-               tpm_files, built_at):
+               code_sha256, template_sha256, tpm_files, built_at):
     """The image descriptor. The Windows fields are an extension of the Linux contract; the controller
     accepts none of it until the launch profile of stage 9b exists, so `qualified` stays false."""
     return {
@@ -143,11 +165,10 @@ def descriptor(config, layout, *, uuid, windows_iso_sha256, disk_sha256, disk_si
             'activated': False, 'qualified': False, 'built_at': built_at,
             'installation_media': {'sha256': windows_iso_sha256},
             'virtio_win': {'version': config.virtio_win_version, 'sha256': config.virtio_win_sha256},
-            'uefi': {'secure_boot': True, 'code': config.ovmf_code,
-                     'vars': {'path': layout.vars, 'sha256': vars_sha256}},
+            'uefi': uefi_record(config, layout, code_sha256, template_sha256, vars_sha256),
             'tpm': {'version': '2.0', 'device': 'tpm-crb', 'emulator': 'swtpm',
                     'state': {'directory': layout.tpm_state, 'files': tpm_files}},
-            'devices': {'machine': 'q35', 'cpu': 'host,-vmx', 'memory_mib': config.memory_mib,
+            'devices': {'machine': 'q35', 'cpu': CPU, 'memory_mib': config.memory_mib,
                         'vcpus': config.vcpus, 'disk': 'virtio-blk-pci', 'net': 'virtio-net-pci',
                         'mac': config.mac, 'serial': 'virtio-serial-pci', 'qga': QGA_NAME,
                         'pci_slots': dict(PCI_SLOTS), 'uuid_at_build': uuid},

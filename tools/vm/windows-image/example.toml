@@ -4,7 +4,7 @@ schema = "rosetun.windows-image.config.v1"
 
 [inputs]
 # The owner's installation disc, used as it is (no key, no edits).
-windows_iso = "/mnt/d/Iso/win11_25h2.iso"
+windows_iso = "/mnt/d/Iso/win11_26h2.iso"
 # Optional pin; the digest is recorded in the image descriptor either way.
 windows_iso_sha256 = ""
 # Downloaded by whoever builds the image. Fill in the release and the digest of the file you downloaded.
@@ -19,10 +19,15 @@ xorriso = "/usr/bin/xorriso"
 swtpm = "/usr/bin/swtpm"
 
 [firmware]
-# Debian package `ovmf`: the Secure Boot build of the code, and the variable template with the
-# Microsoft keys already enrolled.
-ovmf_code = "/usr/share/OVMF/OVMF_CODE_4M.secboot.fd"
-ovmf_vars_template = "/usr/share/OVMF/OVMF_VARS_4M.ms.fd"
+# The output of `build-ovmf.sh`: OVMF with Secure Boot and without SMM, and the variable template
+# with the Microsoft keys already enrolled. Copy `out/OVMF_CODE.fd` and `out/OVMF_VARS.ms.fd` here.
+# The Debian firmware (`OVMF_CODE_4M.secboot.fd`) needs SMM, and the first system management
+# interrupt of the Windows boot loader stops a vCPU of nested KVM; with it set `smm = true`.
+ovmf_code = "/srv/rosetun-images/firmware/OVMF_CODE.fd"
+ovmf_vars_template = "/srv/rosetun-images/firmware/OVMF_VARS.ms.fd"
+# false: the machine has no SMM and the variable store is not protected from the guest. Secure Boot
+# is still enabled and enforced. true: the machine of the distribution firmware, with SMM.
+smm = false
 
 [vm]
 memory_mib = 4096
@@ -34,7 +39,7 @@ mac = "00:00:5e:00:53:61"
 vnc_display = 0
 
 [guest]
-identifier = "windows-11-25h2-pro-v1"
+identifier = "windows-11-26h2-pro-v1"
 hostname = "ROSETUN-WIN"
 username = "rosetun"
 language = "en-US"
@@ -44,7 +49,7 @@ edition_name = "Windows 11 Pro"
 empty_product_key_element = false
 
 [build]
-output_directory = "/srv/rosetun-images/windows-11-25h2-pro-v1"
+output_directory = "/srv/rosetun-images/windows-11-26h2-pro-v1"
 # restricted: the guest gets an address and nothing beyond it. nat: the guest may reach the Internet.
 network = "restricted"
 press_any_key_seconds = 60
