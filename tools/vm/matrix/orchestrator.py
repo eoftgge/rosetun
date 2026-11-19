@@ -12,6 +12,7 @@ import uuid
 from .config import REBOOT_SECONDS, planned_reboots_of, wait_seconds
 from .evidence import write_file
 from .execution import preflight
+from .images import IMAGE_REFUSALS
 from .lab_protocol import HELPER_REASON
 from .report import read_json
 from .resources import (StandLease, bind_run, create_run, resource_path, stand_of, EXECUTION_FILES,
@@ -43,12 +44,18 @@ def _raised_here(error):
 
 def failure(stage, error):
     reason = str(error)
+    # The refusals of an image's files are fixed sentences of the controller's own, so they are shown as they are,
+    # also when preparation reports them under its own name.
+    refusal = getattr(error, 'image_refusal', None)
+    if refusal in IMAGE_REFUSALS:
+        reason = refusal
+    named = reason in IMAGE_REFUSALS
     ours = type(error).__module__.startswith('tools.vm.matrix.')
     # The controllers raise the builtin ValueError and OSError with a code of their own as the message.
     builtin = type(error).__module__ == 'builtins' and isinstance(error, (ValueError, OSError))
     shown = ours or (builtin and _raised_here(error))
     row = dict(stage=stage, kind=type(error).__name__,
-               reason=reason if shown and re.fullmatch(r'[A-Za-z0-9_-]{1,96}', reason) else 'operation-failed')
+               reason=reason if shown and (named or re.fullmatch(r'[A-Za-z0-9_-]{1,96}', reason)) else 'operation-failed')
     # The code a guest helper printed, when it fits the fixed alphabet: it says which exchange failed.
     helper = getattr(error, 'helper_reason', None)
     if ours and type(helper) is str and HELPER_REASON.fullmatch(helper):

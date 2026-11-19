@@ -641,8 +641,29 @@ class SmokeTests(Base):
             result = self.smoke()
         self.assertEqual(2, result['exit_code'])
         self.assertEqual('prepare', result['errors'][0]['stage'])
+        # The summary says which refusal it was, not only that an operation failed.
+        self.assertEqual('Windows image firmware digest mismatch', result['errors'][0]['reason'])
         self.assertFalse(result['execution']['accepted'])
         self.assertIsNone(result['execution']['uuid'])
+
+    def refused(self):
+        with patch.object(lifecycle.subprocess, 'Popen', side_effect=AssertionError('no process')):
+            result = self.smoke()
+        return [(e['stage'], e['reason']) for e in result['errors']]
+
+    def test_the_reason_of_a_refusal_of_the_disk_is_in_the_summary(self):
+        self.fixture.base.write_bytes(self.fixture.base.read_bytes()[:-1] + b'!')
+        self.assertEqual([('prepare', 'base image size or digest mismatch')], self.refused())
+
+    def test_the_reason_of_a_refusal_of_the_tpm_state_is_in_the_summary(self):
+        (self.fixture.directory / 'tpm' / 'tpm2-00.permall').write_bytes(b'changed')
+        self.assertEqual([('prepare', 'Windows image TPM state digest mismatch')], self.refused())
+
+    def test_a_message_that_is_not_one_of_the_fixed_refusals_stays_unnamed(self):
+        self.assertEqual('operation-failed', orchestrator.failure(
+            'x', lifecycle.LifecycleError('a path /home/x was not found'))['reason'])
+        self.assertEqual('base image size or digest mismatch', orchestrator.failure(
+            'x', lifecycle.LifecycleError('base image size or digest mismatch'))['reason'])
 
 
 class CommandTests(Base):

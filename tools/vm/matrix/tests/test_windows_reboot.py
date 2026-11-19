@@ -283,6 +283,45 @@ class LimitTests(RebootSmokeTests):
 
 
 @controller_only
+class SlowEvidenceTests(RebootSmokeTests):
+    def setUp(self):
+        super().setUp()
+        patcher = patch.object(windows_reboot, 'EVIDENCE_SECONDS', 1)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_a_first_powershell_that_does_not_finish_is_asked_again_once_on_a_new_session_and_the_run_is_accepted(self):
+        with patch.dict(os.environ, FAKE_QEMU_PS_HANGS='1'):
+            result = self.smoke()
+        self.assertEqual([], result['errors'])
+        self.assertEqual(0, result['exit_code'], result['errors'])
+        execution = result['execution']
+        self.assertTrue(execution['accepted'])
+        rows = self.evidence(result)
+        self.assertEqual([('guest-evidence-timeout', 'before'), ('guest-evidence', 'before'),
+                          ('guest-evidence', 'after')], [(row['operation'], row['when']) for row in rows])
+        self.assertEqual((1, 1, 'qga-exec-timeout'), (rows[0]['attempt'], rows[0]['seconds'], rows[0]['reason']))
+        # The repeat is one more recovery, within the plan's 4 + 1: the reset's own and this one.
+        self.assertEqual(2, execution['qga_recoveries'])
+        self.assertLessEqual(execution['qga_recoveries'], 5)
+
+    def test_two_tries_in_a_row_that_do_not_finish_are_an_honest_refusal(self):
+        with patch.dict(os.environ, FAKE_QEMU_PS_HANGS='2'):
+            result = self.smoke()
+        self.assertEqual(2, result['exit_code'])
+        self.assertEqual([('evidence', 'qga-exec-timeout')], self.reasons(result))
+        self.assertEqual(['guest-evidence-timeout'], [row['operation'] for row in self.evidence(result)])
+        self.assertFalse(result['execution']['accepted'])
+        self.assertTrue(result['completion'])
+
+    def test_a_powershell_that_fails_is_not_asked_again(self):
+        with patch.dict(os.environ, FAKE_QEMU_PS_FAIL='1'):
+            result = self.smoke()
+        self.assertEqual([('evidence', 'qga-powershell-failed')], self.reasons(result))
+        self.assertEqual([], self.evidence(result))
+
+
+@controller_only
 class ReadingTests(RebootSmokeTests):
     def test_a_guest_whose_secure_boot_is_off_is_recorded_and_the_run_is_not_accepted(self):
         with patch.dict(os.environ, FAKE_QEMU_SECURE_BOOT='0'):
@@ -490,6 +529,12 @@ class CommandTests(base.Base):
 
 
 class LimitsTests(unittest.TestCase):
+    def test_one_try_of_the_evidence_gets_five_minutes_and_its_polls_fit_in_the_calls_of_a_session(self):
+        self.assertEqual(300, windows_reboot.EVIDENCE_SECONDS)
+        # The first looks are soon and the later ones every 5 seconds: 300 seconds take about 60 of the 128 calls.
+        polls = len(qga.EXEC_POLL_SECONDS) - 1 + (300 - sum(qga.EXEC_POLL_SECONDS[:-1])) / qga.EXEC_POLL_SECONDS[-1]
+        self.assertLess(polls + 10, 128)
+
     def test_the_limits_leave_room_for_the_observations_of_the_run(self):
         # The first boot may take 7 tries (30 seconds and a pause of 15), the new boot 12; the run has 32.
         first = 300 // (windows_reboot.TRY_SECONDS + windows_reboot.INITIAL_PAUSE_SECONDS) + 1

@@ -129,6 +129,11 @@ FIRMWARE_LIMIT = 64 * 1024 * 1024
 # several times. A pass already made counts as long as the file's identity is the one it saw, and a change of
 # the file's bytes changes its change time.
 _HASHED = {}
+# What a refusal of an image's bytes says: the sentences `verify_bytes`, `sha256_of` and `validate` raise, which a
+# summary shows as they are (they name no file and no value).
+IMAGE_REFUSALS = frozenset({
+    'base image size mismatch', 'base image size or digest mismatch', 'Windows image firmware digest mismatch',
+    'Windows image TPM state digest mismatch', 'file changed while it was read', 'file too large'})
 # The same memory between processes: one small record per disk in the stand's state directory, written after a
 # full pass that matched the descriptor and trusted only while the file's identity is the one it records. A record
 # that is missing, unreadable or unlike the file is no record: the disk is hashed in full.
@@ -164,15 +169,25 @@ def _cache_record(path, digest, identity):
                 mtime_ns=mtime, ctime_ns=ctime)
 
 
+def _ours_alone(info):
+    """Whether a file or directory belongs to the controller's user and no one else can write or read it (POSIX)."""
+    return os.name != 'posix' or (info.st_uid == os.geteuid() and not info.st_mode & 0o077)
+
+
 def _cache_hit(cache, path, digest, identity):
-    """Whether a record in `cache` says that this file, as it is now, hashed to `digest`; any doubt is a miss."""
+    """Whether a record in `cache` says that this file, as it is now, hashed to `digest`; any doubt is a miss.
+
+    A record that someone else owns or that others can read or write is no record, and neither is one in a directory
+    like that: the stand's user is the only one whose word about a disk counts.
+    """
     try:
         file = _cache_file(cache, path)
-        if cache.is_symlink() or file.is_symlink():
+        if cache.is_symlink() or file.is_symlink() or not _ours_alone(cache.lstat()):
             return False
         descriptor = os.open(file, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
         with os.fdopen(descriptor, 'rb') as stream:
-            if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+            held = os.fstat(stream.fileno())
+            if not stat.S_ISREG(held.st_mode) or not _ours_alone(held):
                 return False
             raw = stream.read(DIGEST_CACHE_LIMIT + 1)
         if len(raw) > DIGEST_CACHE_LIMIT:
@@ -190,6 +205,13 @@ def _cache_store(cache, path, digest, identity):
         if cache.is_symlink():
             return
         cache.mkdir(mode=0o700, exist_ok=True)
+        info = cache.lstat()
+        if not stat.S_ISDIR(info.st_mode) or (os.name == 'posix' and info.st_uid != os.geteuid()):
+            # Not ours: nothing is written there.
+            return
+        if not _ours_alone(info):
+            # Ours but wider than 0700 (a umask, a chmod): made right before a record is put in it.
+            os.chmod(cache, 0o700)
         file = _cache_file(cache, path)
         temporary = file.with_name(file.name + '.' + secrets.token_hex(8) + '.tmp')
         raw = (json.dumps(_cache_record(path, digest, identity), sort_keys=True) + '\n').encode()

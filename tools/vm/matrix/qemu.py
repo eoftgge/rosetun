@@ -9,7 +9,7 @@ import subprocess
 import threading
 import uuid
 
-from .images import WindowsImageDescriptor, image_chain, local_file
+from .images import IMAGE_REFUSALS, WindowsImageDescriptor, image_chain, local_file
 from . import windows_run
 from .evidence import append_row
 from .resources import resource_path, execution_resources
@@ -313,4 +313,8 @@ def prepare(run, image, config, *, executor=execute):
             pass
         if isinstance(error, AssertionError) or not isinstance(error, Exception):
             raise
-        raise ValueError('QEMU preparation failed; retain run evidence') from None
+        failed = ValueError('QEMU preparation failed; retain run evidence')
+        # Which of the image's files was refused is a fixed sentence of the controller's own: the summary may say it.
+        if str(error) in IMAGE_REFUSALS:
+            failed.image_refusal = str(error)
+        raise failed from None

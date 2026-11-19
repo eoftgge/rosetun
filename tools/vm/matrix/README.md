@@ -22,7 +22,7 @@ runner is already longer than that. A test that goes through the real
 `tests/posix_only.py` giving the reason, instead of weakening the path check.
 The Windows helpers (`windows_*`, the PowerShell producers) are not skipped.
 
-Windows skips 327 of 1722 tests, a Linux host with `qemu.qmp` 18 (the Windows
+Windows skips 337 of 1732 tests, a Linux host with `qemu.qmp` 18 (the Windows
 pieces it cannot run without PowerShell). On Windows, besides those that need
 Linux `/proc`, bash, POSIX-only fixtures or `qemu.qmp`, the skipped ones are the
 controller groups:
@@ -4997,7 +4997,11 @@ digest the pass found (and that the descriptor says), and the file's identity as
 - A record that is not there, cannot be read, is a link, is larger than 4 KiB, is not JSON, has other fields than
   these eight, has a number that is not an integer, or names another path, digest or schema, is no record: the disk is
   hashed in full and a good record is written over it. The directory of the records is created `0700`, the records
-  `0600`, and neither the directory nor a record is followed when it is a link.
+  `0600`, and neither the directory nor a record is followed when it is a link. A record that another user owns or
+  that others can read or write (a mode wider than `0600`), or one in a directory like that (wider than `0700`, or
+  another user's), is no record either: the disk is hashed in full and the record is written again with the right mode;
+  a directory that is ours and too wide is made `0700` first, and one that is not ours is left alone and written to
+  not at all.
 - A record is written only after a full pass that **matched** the descriptor, atomically (a temporary file in the same
   directory, `fsync`, `rename`, `fsync` of the directory), and a pass that fails writes nothing. A cache that cannot be
   written is no error: the next process hashes again.
@@ -5034,7 +5038,7 @@ none: preparation took seconds.
   (`Qga.run_program`, `Qga.start_program`). The two streams come apart (`capture-output: separated`; `merged` does not
   exist on Windows); each is cut off at 64 KiB and a truncated or not base64 stream, a missing exit code, a `signal` (an
   unhandled exception is told that way) and a pid that is not a plain integer are refusals that end the session. The
-  status is asked for 0.25, 0.5, 1 and then every 2 seconds, each ask one of the session's 128 calls, and a program that
+  status is asked for 0.25, 0.5, 1, 2 and then every 5 seconds (300 seconds of waiting take about 60 calls), each ask one of the session's 128 calls, and a program that
   outlives its time ends the session (it may still run: nothing here kills it). A program that takes the guest down is
   started and not waited for.
 - **PowerShell 5.1 and UTF-8.** A command runs as `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass
@@ -5089,12 +5093,21 @@ The steps are those of the boot smoke up to `resume`, then `boot`, `evidence`, `
 **Limits.** In stages 9a and 9b the agent answered 28 to 78 seconds after QEMU started; on the first run of this stage
 about 50 seconds after the resume and about 40 seconds after the RESET of the restart, which came 24 seconds after the
 request. So: 300 seconds for the first boot (four times the slowest start seen; the first `wait_initial_guest` allows
-no more than 300), 180 seconds for the RESET (Windows stops its services first), 300 for the new boot, 180 for the
-evidence's PowerShell, which is slow on a fresh boot of the image. The Linux limits (10 seconds a try and 180 in all)
-would have ended a Windows reboot as `rebooted-guest-deadline`.
+no more than 300), 180 seconds for the RESET (Windows stops its services first), 300 for the new boot, and **300 for one
+try of the evidence's PowerShell**, which is slow on a fresh boot of the image: the qualifier saw the first one take 10, 82,
+108 and more than 180 seconds on a cold disk, and the first version's limit of 180 ended a run as `qga-exec-timeout`. A
+try that times out is made **once more** on a new session (the journal of the evidence says so: the row
+`guest-evidence-timeout` with the attempt, the seconds and the reason, and the repeat is one recovery, taken with
+`recover_guest`); two tries in a row that time out are an honest refusal (`qga-exec-timeout` at the step `evidence`, exit
+2), and a PowerShell that fails is not asked again. The run has no total time of its own, only those of its steps, so the
+longest it can spend on the evidence is two readings of two tries of 300 seconds each, 20 minutes, and with the other
+limits (300 + 180 + 300 + 240 seconds, and the preparation's) well under any limit of the controller; the 128 calls of a
+session hold a try of 300 seconds. The Linux limits (10 seconds a try and 180 in all) would have ended a Windows reboot
+as `rebooted-guest-deadline`.
 
 **Budgets.** `planned_reboots` is 1 (`config.PLANNED_REBOOTS`), so `qga_recoveries` may be 4 + 1: a run takes exactly one
-(the recovery of the reset); `qga_observations` (32): about 7 at the most for the first boot and 12 for the new one,
+(the recovery of the reset), and a repeat of the evidence takes one more each, three at the most with the two readings,
+still within the limit; `qga_observations` (32): about 7 at the most for the first boot and 12 for the new one,
 the stand used 6; the journal of the lifecycle has 106 ordinary rows and a reboot takes 4 (2 for the request, 2 for the
 reset and the chain) and 1 more for each merged RESET. Reading QMP every two seconds writes nothing unless it finds a RESET.
 
@@ -5167,8 +5180,9 @@ quick (it was not on the first run).
 ### Not done here, UNRUN
 
 - No lab (9d) and no sleep, power cut or fast startup; the restart is the guest's own, not a power cut.
-- The first PowerShell of a boot can take more than a minute: the evidence has 180 seconds, and the run has not been
-  seen to need more. Whether that is the image (its first boot after a build) or any fresh boot is not known.
+- The first PowerShell of a boot can take more than a minute (10 to more than 180 seconds were seen): the evidence has
+  300 seconds a try and a repeat. The repeat was run on the stand-in guest only. Whether the slowness is the image (its
+  first boot after a build) or any fresh boot of a cold disk is not known.
 - A restart that gives more than one RESET on Windows was not seen; the merge is the Linux mechanism and is covered by the
   stand-in guest only.
 - An `attach` whose RESET came while nobody was connected was run offline only.

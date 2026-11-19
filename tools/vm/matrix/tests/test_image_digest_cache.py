@@ -210,6 +210,43 @@ class BrokenRecordTests(Cache):
 
 
 @controller_only
+class OwnershipTests(Cache):
+    def test_a_record_that_others_can_read_or_write_is_no_record_and_is_replaced_with_the_right_mode(self):
+        for mode in (0o644, 0o660, 0o604, 0o666):
+            with self.subTest(mode=oct(mode)):
+                self.passes(self.process())
+                path, _ = self.record()
+                path.chmod(mode)
+                self.assertEqual(1, self.passes(self.process()))
+                self.assertEqual(0o600, path.stat().st_mode & 0o777)
+                self.assertEqual(0, self.passes(self.process()))
+
+    def test_a_directory_wider_than_0700_is_no_cache_and_is_made_right_when_it_is_ours(self):
+        self.passes(self.process())
+        self.cache.chmod(0o755)
+        self.assertEqual(1, self.passes(self.process()))
+        self.assertEqual(0o700, self.cache.stat().st_mode & 0o777)
+        self.assertEqual(0o600, self.record()[0].stat().st_mode & 0o777)
+        self.assertEqual(0, self.passes(self.process()))
+        self.cache.chmod(0o770)
+        self.assertEqual(1, self.passes(self.process()))
+        self.assertEqual(0o700, self.cache.stat().st_mode & 0o777)
+
+    def test_a_record_or_a_directory_of_another_user_is_no_record_and_nothing_is_written_there(self):
+        self.passes(self.process())
+        before = self.record()
+        other = os.geteuid() + 1
+        with patch.object(images.os, 'geteuid', return_value=other):
+            self.assertEqual(1, self.passes(self.process()))
+        # The directory is not ours then, so the record is left as it was, and the pass is made every time.
+        self.assertEqual(before, self.record())
+        self.assertEqual(0o700, self.cache.stat().st_mode & 0o777)
+        with patch.object(images.os, 'geteuid', return_value=other):
+            self.assertEqual(1, self.passes(self.process()))
+        self.assertEqual(0, self.passes(self.process()))
+
+
+@controller_only
 class WriteTests(Cache):
     def test_a_record_is_written_whole_or_not_at_all(self):
         self.passes(self.process())

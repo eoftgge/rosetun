@@ -38,9 +38,9 @@ DIAGNOSTIC_RELAY_LIMIT = 2 * DIAGNOSTIC_LINE_LIMIT
 
 # What one program started through `guest-exec` may say on each of its two streams, and how often its status is asked
 # for: the first look comes soon (a small program is done within a second), the later ones are spaced out because each
-# one spends one of the session's 128 calls.
+# one spends one of the session's 128 calls: a program that is waited for 300 seconds takes about 60 of them.
 EXEC_OUTPUT_LIMIT = 64 * 1024
-EXEC_POLL_SECONDS = (0.25, 0.5, 1.0, 2.0)
+EXEC_POLL_SECONDS = (0.25, 0.5, 1.0, 2.0, 5.0)
 GUEST_SYSTEMS = ('linux', 'windows')
 
 

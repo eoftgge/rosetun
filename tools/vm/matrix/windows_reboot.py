@@ -12,7 +12,8 @@ The limits are those of a Windows guest. In stages 9a and 9b the agent answered 
 (and about 40 seconds after the RESET of a restart in the first run of this stage): one try gets 30 seconds, tries are
 5 seconds apart after a restart, and the first boot and the new boot get 300 seconds each, about four times the slowest
 start seen. The RESET itself comes when Windows has stopped its services, 24 seconds after the request on the stand,
-so the wait for it is 180 seconds, and the evidence, whose PowerShell is slow on a boot that is fresh, gets 180.
+so the wait for it is 180 seconds, and the evidence, whose PowerShell is slow on a boot that is fresh, gets 300 a try
+and one repeat.
 """
 
 import json
@@ -27,9 +28,13 @@ SUITE = 'windows-reboot-smoke'
 PLANNED_REBOOTS = 1
 # One try of an observation: the synchronization, the agent's two probes and `reg.exe`, which reads the boot ID.
 TRY_SECONDS = 30
-# The evidence is the one PowerShell of the run that is waited for, and the first PowerShell of a fresh boot of the
-# image took more than a minute on the stand while later ones took seconds.
-EVIDENCE_SECONDS = 180
+# The evidence is the one PowerShell of the run that is waited for. The first PowerShell of a fresh boot of the image
+# took 10, 82, 108 and more than 180 seconds on a cold disk of the stand, later ones seconds: one try gets 300 seconds,
+# and a try that times out is made once more on a new session (the one recovery's worth of the plan's limit of 4 + 1
+# leaves room for it: the run takes 1, each repeat 1). The longest a run can spend on the evidence is 2 x 2 x 300
+# seconds, which is within the limits of the run: it has no total time of its own, only those of its steps.
+EVIDENCE_SECONDS = 300
+EVIDENCE_TIMEOUTS = ('qga-exec-timeout', 'qga-operation-timeout')
 # A restarted guest is tried again every 5 seconds until its time (the observations of the run are 32 at most: the
 # first boot takes 7 of them at the most and the new boot 12, with the recovery's own).
 RETRY_SECONDS = 5
@@ -60,8 +65,19 @@ def record(vm, operation, **fields):
 
 def guest_evidence(vm, when):
     """What the guest says of itself, through the agent, kept in the run's evidence and returned."""
+    for attempt in (1, 2):
+        try:
+            text = vm.guest_powershell(windows_guest.EVIDENCE_SCRIPT, seconds=EVIDENCE_SECONDS)
+            break
+        except LifecycleError as error:
+            if attempt == 2 or str(error) not in EVIDENCE_TIMEOUTS:
+                raise
+            # The PowerShell may still be starting: the session is no more use, a new one asks again, once.
+            record(vm, 'guest-evidence-timeout', when=when, attempt=attempt, seconds=EVIDENCE_SECONDS,
+                   reason=str(error))
+            vm.recover_guest()
     try:
-        value = windows_guest.evidence(vm.guest_powershell(windows_guest.EVIDENCE_SCRIPT, seconds=EVIDENCE_SECONDS))
+        value = windows_guest.evidence(text)
     except windows_guest.GuestAnswerError as error:
         raise LifecycleError(str(error), vm) from None
     # The count of boots that names the boot (read by `reg.exe`) and the one PowerShell reads are the same value.

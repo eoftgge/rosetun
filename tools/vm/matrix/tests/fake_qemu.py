@@ -18,7 +18,7 @@ command is read back from its encoded script and answered with the boot readings
 bytes on the output stream, and `shutdown.exe /r /t 0` restarts the guest: the agent goes away, the monitor reports
 `FAKE_QEMU_RESETS` RESET events (default 1, 67 ms apart), and after `FAKE_QEMU_BOOT_SECONDS` (default 0.3) the agent
 answers again with the next boot count and time. `FAKE_QEMU_SECURE_BOOT=0`, `FAKE_QEMU_LATIN1=1` and
-`FAKE_QEMU_PS_FAIL=1` make the guest say Secure Boot is off, answer in a code page that is not UTF-8, or fail.
+`FAKE_QEMU_PS_FAIL=1` (and `FAKE_QEMU_PS_HANGS=N`, the first N evidence PowerShells never finish) make the guest say Secure Boot is off, answer in a code page that is not UTF-8, or fail.
 
 A test steers the guest through the control socket named by the environment
 variable FAKE_QEMU_CONTROL, one line per command: `guest-reset [BOOT_ID]`
@@ -138,6 +138,10 @@ def windows_exec(state, arguments):
         script = base64.b64decode(words[-1]).decode('utf-16-le')
         if os.environ.get('FAKE_QEMU_PS_FAIL'):
             answer = say(b'', 1, b'System.Exception: failed')
+        elif 'Confirm-SecureBootUEFI' in script and guest['hangs'] > 0:
+            # A first PowerShell of a fresh boot that does not finish in the time it is given.
+            guest['hangs'] -= 1
+            answer = {'exited': False}
         elif 'Confirm-SecureBootUEFI' in script:
             reading = windows_boot(state)
             evidence = dict(caption='Microsoft Windows 11 Pro', version='10.0.26200', build='26200',
@@ -211,7 +215,9 @@ def agent(server, files, state):
                 elif name == 'guest-exec' and state.get('windows') is not None:
                     value = windows_exec(state, arguments)
                 elif name == 'guest-exec-status' and state.get('windows') is not None:
-                    value = state['windows']['execs'].pop(arguments['pid'], {'exited': True, 'exitcode': 0})
+                    value = state['windows']['execs'].get(arguments['pid'], {'exited': True, 'exitcode': 0})
+                    if value.get('exited'):
+                        state['windows']['execs'].pop(arguments['pid'], None)
                 elif name == 'guest-exec':
                     value = {'pid': 4242}
                 elif name == 'guest-exec-status':
@@ -270,7 +276,7 @@ def main(argv):
         connection.connect(paths['chrtpm'])
     state = {'status': 'prelaunch', 'agent_up': True, 'lock': threading.Lock()}
     if 'chrtpm' in paths:
-        state['windows'] = {'boots': 0, 'pid': 100, 'execs': {}}
+        state['windows'] = {'boots': 0, 'pid': 100, 'execs': {}, 'hangs': int(os.environ.get('FAKE_QEMU_PS_HANGS', '0'))}
     files = {'/proc/sys/kernel/random/boot_id': (BOOT + '\n').encode()}
     servers = [listen(paths['control'])]
     threads = [threading.Thread(target=monitor, args=(servers[0], uuid, state), daemon=True)]
