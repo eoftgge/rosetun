@@ -37,7 +37,10 @@ pub(crate) fn drop_missing_glyphs(
 ) -> String {
     ctx.fonts_mut(|fonts| {
         text.chars()
-            .filter(|&character| character == '\n' || fonts.has_glyph(font_id, character))
+            .filter(|&character| {
+                matches!(character, '\n' | '\u{200d}' | '\u{fe0e}'..='\u{fe0f}' | '\u{e0020}'..='\u{e007f}')
+                    || fonts.has_glyph(font_id, character)
+            })
             .collect()
     })
 }

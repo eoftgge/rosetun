@@ -13,6 +13,7 @@ workspace = true
 [dependencies]
 arboard.workspace = true
 eframe.workspace = true
+epaint.workspace = true
 fluent-bundle.workspace = true
 image.workspace = true
 unic-langid.workspace = true

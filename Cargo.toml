@@ -58,6 +58,7 @@ url = "2.5.8"
 base64 = "0.23.1"
 percent-encoding = "2.3.2"
 eframe = { version = "0.37", default-features = false, features = ["glow", "default_fonts", "accesskit", "clipboard", "links", "x11", "wayland"] }
+epaint = { version = "0.37", default-features = false, features = ["color_fonts"] }
 wgpu = { version = "30", default-features = false }
 fluent-bundle = "0.16.0"
 fluent-syntax = "0.12.0"

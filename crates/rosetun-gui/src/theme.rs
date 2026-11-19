@@ -7,6 +7,7 @@ use rosetun_config::AccentPreset;
 
 pub(crate) const BRAND_FONT: &str = "brand";
 pub(crate) const UI_SEMIBOLD: &str = "ui-semibold";
+const EMOJI_FONT: &str = "noto-color-emoji";
 
 fn fonts() -> egui::FontDefinitions {
     let mut fonts = egui::FontDefinitions::default();
@@ -22,13 +23,26 @@ fn fonts() -> egui::FontDefinitions {
             "../assets/fonts/Manrope-SemiBold.ttf"
         ))),
     );
+    fonts.font_data.insert(
+        EMOJI_FONT.to_owned(),
+        // The pinned OFL font keeps emoji independent of the installed system fonts.
+        std::sync::Arc::new(egui::FontData::from_static(include_bytes!(
+            "../assets/fonts/Noto-COLRv1.ttf"
+        ))),
+    );
     let proportional = fonts
         .families
         .get_mut(&FontFamily::Proportional)
         .expect("default proportional font family");
+    proportional.insert(0, EMOJI_FONT.to_owned());
     let mut semibold = vec!["manrope-semibold".to_owned()];
     semibold.extend(proportional.iter().cloned());
     proportional.insert(0, "manrope-regular".to_owned());
+    let monospace = fonts
+        .families
+        .get_mut(&FontFamily::Monospace)
+        .expect("default monospace font family");
+    monospace.insert(1, EMOJI_FONT.to_owned());
     fonts
         .families
         .insert(FontFamily::Name(UI_SEMIBOLD.into()), semibold);
@@ -657,5 +671,32 @@ mod tests {
                 assert!(dim >= 4.5, "dim text {dim:.2} in {palette:?}");
             }
         }
+    }
+}
+#[test]
+fn dice_renders_in_color_with_the_bundled_font() {
+    for font in [
+        FontId::proportional(font::BODY),
+        font::semibold(font::BODY),
+        font::mono_small(),
+    ] {
+        let ctx = egui::Context::default();
+        apply(&ctx);
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let text = crate::display::drop_missing_glyphs(ui.ctx(), &font, "🎲");
+            assert_eq!(text, "🎲");
+            ui.label(egui::RichText::new(text).font(font.clone()));
+        });
+        let has_color = output.textures_delta.set.iter().any(|(_, deltas)| {
+            deltas.iter().any(|delta| {
+                let egui::ImageData::Color(image) = &delta.image;
+                image
+                    .pixels
+                    .iter()
+                    .any(|color| color.r() != color.g() || color.g() != color.b())
+            })
+        });
+        output.textures_delta.clear();
+        assert!(has_color, "{font:?}");
     }
 }
