@@ -6,6 +6,8 @@ import json
 import os
 from pathlib import Path
 import re
+import secrets
+import stat
 
 from .resources import DEVICES, _identifier, _regular_file, _state_path
 
@@ -57,10 +59,15 @@ class ImageDescriptor:
         path = local_file(self.path)
         if path.is_relative_to(directory):
             raise ValueError("base image must be outside the run")
-        self.verify_bytes()
+        self.verify_bytes(directory)
         return path
 
-    def verify_bytes(self):
+    def verify_bytes(self, run_directory=None, *, fresh=False):
+        """Hash the whole file and compare; returns the file's identity as it was read.
+
+        `run_directory` and `fresh` are for the Windows disk, whose digest is remembered between passes: a Linux
+        disk is small and is hashed every time.
+        """
         path = local_file(self.path)
         before = path.stat()
         if before.st_size != self.size_bytes:
@@ -76,14 +83,22 @@ class ImageDescriptor:
                 remaining -= len(block)
             held = os.fstat(stream.fileno())
         after = path.stat()
-        def identity(info):
-            return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
-        if (identity(before) != identity(held) or identity(held) != identity(after)
+        if (_identity(before) != _identity(held) or _identity(held) != _identity(after)
                 or digest.hexdigest() != self.sha256):
             raise ValueError("base image size or digest mismatch")
+        return _identity(held)
 
     def record(self):
         return asdict(self)
+
+
+def _identity(info):
+    """What a file is for the digest cache: device, inode, size and both change times, in nanoseconds.
+
+    The modification time can be set by the file's owner, the change time (`st_ctime_ns`) cannot: any write,
+    rename over or `utime` moves it, so a file replaced with its old modification time restored still differs.
+    """
+    return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
 
 
 def sha256_of(path, limit):
@@ -103,9 +118,7 @@ def sha256_of(path, limit):
             remaining -= len(block)
         held = os.fstat(stream.fileno())
     after = path.stat()
-    def identity(info):
-        return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
-    if identity(before) != identity(held) or identity(held) != identity(after):
+    if _identity(before) != _identity(held) or _identity(held) != _identity(after):
         raise ValueError("file changed while it was read")
     return digest.hexdigest()
 
@@ -114,8 +127,15 @@ FIRMWARE_LIMIT = 64 * 1024 * 1024
 # The identity (device, inode, size, change times) of each Windows disk this process hashed in full, by path and
 # digest. The disk is tens of gigabytes: the stand needs minutes for one pass, and a run asks for the check
 # several times. A pass already made counts as long as the file's identity is the one it saw, and a change of
-# the file's bytes changes its change time. The final check of a run asks for a fresh pass.
+# the file's bytes changes its change time.
 _HASHED = {}
+# The same memory between processes: one small record per disk in the stand's state directory, written after a
+# full pass that matched the descriptor and trusted only while the file's identity is the one it records. A record
+# that is missing, unreadable or unlike the file is no record: the disk is hashed in full.
+DIGEST_CACHE = 'image-digests'
+DIGEST_CACHE_SCHEMA = 'rosetun.matrix.image-digest.v1'
+DIGEST_CACHE_LIMIT = 4096
+DIGEST_CACHE_FIELDS = ('schema', 'path', 'sha256', 'device', 'inode', 'size', 'mtime_ns', 'ctime_ns')
 HEX64 = re.compile('[0-9a-f]{64}')
 SLOT = re.compile('0x[0-9a-f]{1,2}')
 # `host`, then switches and values of one CPU option each: nothing that could carry another QEMU option.
@@ -124,6 +144,76 @@ MAC = re.compile('([0-9a-f]{2}:){5}[0-9a-f]{2}')
 TPM_FILE = re.compile(r'[A-Za-z0-9._-]{1,64}')
 TPM_STATE_FILE = 'tpm2-00.permall'
 QGA_PORT = 'org.qemu.guest_agent.0'
+
+
+def _cache_directory(run_directory):
+    """The stand's digest directory for a run directory `STATE/runs/ID`; none for any other place."""
+    if run_directory is None:
+        return None
+    directory = Path(run_directory)
+    return directory.parent.parent / DIGEST_CACHE if directory.parent.name == 'runs' else None
+
+
+def _cache_file(cache, path):
+    return cache / (hashlib.sha256(str(path).encode()).hexdigest() + '.json')
+
+
+def _cache_record(path, digest, identity):
+    device, inode, size, mtime, ctime = identity
+    return dict(schema=DIGEST_CACHE_SCHEMA, path=str(path), sha256=digest, device=device, inode=inode, size=size,
+                mtime_ns=mtime, ctime_ns=ctime)
+
+
+def _cache_hit(cache, path, digest, identity):
+    """Whether a record in `cache` says that this file, as it is now, hashed to `digest`; any doubt is a miss."""
+    try:
+        file = _cache_file(cache, path)
+        if cache.is_symlink() or file.is_symlink():
+            return False
+        descriptor = os.open(file, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
+        with os.fdopen(descriptor, 'rb') as stream:
+            if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+                return False
+            raw = stream.read(DIGEST_CACHE_LIMIT + 1)
+        if len(raw) > DIGEST_CACHE_LIMIT:
+            return False
+        value = json.loads(raw.decode('utf-8'))
+    except (OSError, ValueError, RecursionError):
+        return False
+    return value == _cache_record(path, digest, identity) and all(
+        type(value[name]) is int for name in DIGEST_CACHE_FIELDS[3:]) and set(value) == set(DIGEST_CACHE_FIELDS)
+
+
+def _cache_store(cache, path, digest, identity):
+    """Replace the record atomically; a cache that cannot be written is only a cache that is not there."""
+    try:
+        if cache.is_symlink():
+            return
+        cache.mkdir(mode=0o700, exist_ok=True)
+        file = _cache_file(cache, path)
+        temporary = file.with_name(file.name + '.' + secrets.token_hex(8) + '.tmp')
+        raw = (json.dumps(_cache_record(path, digest, identity), sort_keys=True) + '\n').encode()
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0), 0o600)
+        try:
+            with os.fdopen(descriptor, 'wb') as stream:
+                stream.write(raw)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, file)
+        except BaseException:
+            try:
+                os.unlink(temporary)
+            except OSError:
+                pass
+            raise
+        if os.name == 'posix':
+            directory = os.open(cache, os.O_RDONLY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+    except OSError:
+        return
 
 
 def _shape(value, required, optional=()):
@@ -163,17 +253,29 @@ class WindowsImageDescriptor(ImageDescriptor):
 
     windows: dict
 
-    def verify_bytes(self, *, fresh=False):
+    def verify_bytes(self, run_directory=None, *, fresh=False):
+        """Hash the disk in full unless this process or an earlier one already did and the file is the same.
+
+        The file is the same when its device, inode, size, modification time and change time are all what they were
+        after that pass. `run_directory` (`STATE/runs/ID`) says which state directory holds the stand's record of
+        earlier passes; `fresh` asks for a pass whatever the records say.
+        """
         path = local_file(self.path)
         key = (str(path), self.sha256)
-        info = path.stat()
-        now = (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
-        if not fresh and _HASHED.get(key) == now and info.st_size == self.size_bytes:
-            return
+        now = _identity(path.stat())
+        cache = _cache_directory(run_directory)
+        if not fresh and now[2] == self.size_bytes:
+            if _HASHED.get(key) == now:
+                return now
+            if cache is not None and _cache_hit(cache, path, self.sha256, now):
+                _HASHED[key] = now
+                return now
         _HASHED.pop(key, None)
-        super().verify_bytes()
-        info = path.stat()
-        _HASHED[key] = (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+        identity = super().verify_bytes()
+        _HASHED[key] = identity
+        if cache is not None:
+            _cache_store(cache, path, self.sha256, identity)
+        return identity
 
     def validate(self, directory, *, fresh=False):
         if (self.schema != SCHEMA or self.guest_os != "windows"
@@ -181,7 +283,7 @@ class WindowsImageDescriptor(ImageDescriptor):
                 or self.profile != WINDOWS_PROFILE):
             raise ValueError("unsupported image contract")
         if fresh:
-            self.verify_bytes(fresh=True)
+            self.verify_bytes(directory, fresh=True)
         path = self._validate_base(directory)
         facts = self.facts()
         for name in ('code', 'vars'):

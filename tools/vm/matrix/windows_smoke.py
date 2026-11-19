@@ -247,10 +247,11 @@ def run_windows_boot_smoke(config, *, adapters=None, clock=time.monotonic, sleep
             except (OSError, ValueError):
                 result['completion'] = False
         if run is not None and result['completion'] and image is not None:
-            # The run read the image and wrote only its own copies: the disk and the files it started from still hash
-            # as the descriptor says.
+            # The run read the image and wrote only its own copies: the disk and the files it started from still are
+            # what the descriptor says. The disk is hashed again only if its identity changed since it was last
+            # hashed (the same rule as before the run, the stand's record of passes included).
             try:
-                step('image-unchanged', lambda: image.validate(run.directory, fresh=True))
+                step('image-unchanged', lambda: image.validate(run.directory))
                 measured['image_unchanged'] = True
             except BaseException as error:
                 interrupted |= isinstance(error, KeyboardInterrupt)

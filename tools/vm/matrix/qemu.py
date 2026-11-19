@@ -262,7 +262,7 @@ def prepare(run, image, config, *, executor=execute):
 
         stage = 'base-info'
         size = image_chain(info(base), [base])
-        image.verify_bytes()
+        image.verify_bytes(run.directory)
         event({'stage': stage, 'status': 'verified', 'path': str(base), 'format': 'qcow2',
                'virtual_size': size, 'size_bytes': image.size_bytes, 'sha256': image.sha256,
                'backing': None, 'external_data_file': False})
@@ -276,7 +276,7 @@ def prepare(run, image, config, *, executor=execute):
         local_file(overlay)
         stage = 'overlay-info'
         image_chain(info(overlay), [overlay, base], size)
-        image.verify_bytes()
+        image.verify_bytes(run.directory)
         event({'stage': stage, 'status': 'verified', 'path': str(overlay), 'format': 'qcow2',
                'virtual_size': size, 'backing': str(base), 'external_data_file': False})
         if isinstance(image, WindowsImageDescriptor):

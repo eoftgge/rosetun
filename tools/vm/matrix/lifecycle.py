@@ -1240,7 +1240,7 @@ def start(run, *, timeout=5, executor=execute, lab=None):
                 or max(len(result.stdout), len(result.stderr)) > OUTPUT_LIMIT):
             raise LifecycleError('prelaunch-image-check-failed')
         image_chain(result.stdout, [overlay, Path(image.path)])
-        image.verify_bytes()
+        image.verify_bytes(run.directory)
     except (KeyError, TypeError, OSError, ValueError):
         raise LifecycleError('prelaunch-validation-failed') from None
     _private_directory(run.directory)
