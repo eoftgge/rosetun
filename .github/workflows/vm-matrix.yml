@@ -48,12 +48,15 @@ jobs:
           python -B - <<'PY'
           import glob
           import tomllib
-          from tools.vm.matrix import execution
+          from tools.vm.matrix import execution, windows_smoke
 
           paths = sorted(glob.glob('tools/vm/matrix/execution*.example.toml'))
           assert paths, 'no execution example found'
           for path in paths:
               with open(path, 'rb') as stream:
-                  config = execution.validate(tomllib.load(stream))
-              print(path, execution.suite_of(config))
+                  config = tomllib.load(stream)
+              if config['schema'].startswith('rosetun.matrix.execution.windows.'):
+                  print(path, windows_smoke.validate(config)['suite'])
+              else:
+                  print(path, execution.suite_of(execution.validate(config)))
           PY
