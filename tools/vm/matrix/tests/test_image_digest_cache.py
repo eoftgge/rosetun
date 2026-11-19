@@ -8,6 +8,7 @@ the part a file's owner cannot set, so a file replaced and given back its old mo
 
 import json
 import os
+import time
 import unittest
 from unittest.mock import patch
 
@@ -38,6 +39,21 @@ class Cache(base.Base):
                           side_effect=ImageDescriptor.verify_bytes) as hashed:
             (operation or (lambda: image.validate(self.run_directory)))()
         return hashed.call_count
+
+    def touched(self, operation):
+        """Run `operation`, which changes the disk, until the file system gives the file another change time.
+
+        The kernel stamps a file with a coarse clock (a few milliseconds), so a change made in the same tick as the one before
+        leaves the identity as it was; the checks here are about a file whose identity did change.
+        """
+        before = self.disk.stat()
+        for _ in range(1000):
+            operation()
+            after = self.disk.stat()
+            if after.st_ctime_ns != before.st_ctime_ns:
+                return after
+            time.sleep(0.002)
+        self.fail('the file system never gave the disk another change time')
 
     def records(self):
         return sorted(self.cache.glob('*')) if self.cache.exists() else []
@@ -84,10 +100,12 @@ class RecordTests(Cache):
         info = self.disk.stat()
         changed = bytearray(self.disk.read_bytes())
         changed[0] ^= 1
-        self.disk.write_bytes(bytes(changed))
-        # The same size and the old modification time: only the change time tells.
-        os.utime(self.disk, ns=(info.st_atime_ns, info.st_mtime_ns))
-        after = self.disk.stat()
+
+        def tamper():
+            self.disk.write_bytes(bytes(changed))
+            # The same size and the old modification time: only the change time tells.
+            os.utime(self.disk, ns=(info.st_atime_ns, info.st_mtime_ns))
+        after = self.touched(tamper)
         self.assertEqual((info.st_size, info.st_mtime_ns), (after.st_size, after.st_mtime_ns))
         self.assertNotEqual(info.st_ctime_ns, after.st_ctime_ns)
         image = self.process()
@@ -99,7 +117,7 @@ class RecordTests(Cache):
     def test_a_file_with_the_same_bytes_and_another_identity_is_hashed_again_and_recorded_again(self):
         self.passes(self.process())
         original = self.disk.read_bytes()
-        self.disk.write_bytes(original)
+        self.touched(lambda: self.disk.write_bytes(original))
         image = self.process()
         self.assertEqual(1, self.passes(image))
         self.assertEqual(self.disk.stat().st_ctime_ns, self.record()[1]['ctime_ns'])

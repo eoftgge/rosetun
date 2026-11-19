@@ -107,8 +107,12 @@ LAB_NETWORKS = tuple(ipaddress.ip_network(n) for n in (
 # The only traffic between the two machines that is neither a probe nor a window
 # marker. Rows are (name, kind, message code, where the frame may go); a frame must
 # also come from one machine and be addressed to the other or to a link-scope group.
+# `arp-neighbor-poll` is the unicast request with which a stack checks that a neighbor it knows still answers (RFC 1122,
+# 2.3.2.1): only the test machine sends it, only for the lab's own address, to the lab's hardware address, which is also
+# the target hardware address it names.
 INFRASTRUCTURE = (
     ('arp-request', 'arp', 1, 'broadcast-or-peer'),
+    ('arp-neighbor-poll', 'arp', 1, 'lab-unicast'),
     ('arp-reply', 'arp', 2, 'peer'),
     ('neighbor-solicitation', 'icmpv6', 135, 'solicited-node-or-peer'),
     ('neighbor-advertisement', 'icmpv6', 136, 'all-nodes-or-peer'),
@@ -318,7 +322,7 @@ def dns_question(packet):
 def dns_reply(packet):
     """(reply or None, (name, type) or None) for one query; the lab answers and recurses to nothing.
 
-    An A question of class IN gets the one fixed address, any other question an empty
+    A question of class IN gets the one fixed address, any other question an empty
     NOERROR. A message that cannot be read is answered with an error code only when its
     identifier can be echoed; a response is never answered.
     """
@@ -683,6 +687,8 @@ def _infrastructure(frame):
                 continue
             if destination == 'peer':
                 allowed = tha == frame.dst_mac == MACS[peer]
+            elif destination == 'lab-unicast':
+                allowed = sender == 'test' and tha == frame.dst_mac == MACS['lab']
             else:
                 allowed = tha == '00:00:00:00:00:00' and frame.dst_mac in (BROADCAST, MACS[peer])
         elif kind == 'icmpv6' and frame.family == 6 and frame.icmp is not None and frame.icmp[0] == code:

@@ -232,6 +232,33 @@ class LeakTests(unittest.TestCase):
         self.assertEqual(8, result['categories']['infrastructure'])
         self.assertEqual('NONE', result['leak'])
 
+    def test_the_unicast_poll_of_the_test_machine_for_the_gateway_is_infrastructure_and_nothing_near_it_is(self):
+        stranger = '00:00:5e:00:53:70'
+        # Reachability check of a known neighbor (RFC 1122, 2.3.2.1): to the lab's hardware address, naming it as target.
+        fields = dict(src=self.test, dst=self.lab, sha=self.test, tha=self.lab)
+
+        def poll(op=1, sender=wire.CLIENTS[4], target=wire.GATEWAYS[4], **changes):
+            return arp(op, sender, target, **(fields | changes))
+        result = self.verdict([poll()])
+        self.assertEqual((1, 0, 'NONE'), (result['categories']['infrastructure'], result['categories']['unexpected'],
+                                          result['leak']))
+        others = {
+            'another-target-hardware-address': poll(tha=stranger),
+            'the-test-machines-own-address-as-target-hardware-address': poll(tha=self.test),
+            'another-destination': poll(dst=stranger),
+            'the-broadcast-with-the-lab-as-target': poll(dst=wire.BROADCAST),
+            'another-target-address': poll(target='192.0.2.99'),
+            'another-sender-address': poll(sender='192.0.2.77'),
+            'another-sender-hardware-address': poll(sha=stranger),
+            'the-lab-asking-the-test-machine': arp(1, wire.GATEWAYS[4], wire.CLIENTS[4], src=self.lab, dst=self.test,
+                                                   sha=self.lab, tha=self.test),
+            'the-lab-asking-another-hardware-address-for-the-test-machine': arp(
+                1, wire.GATEWAYS[4], wire.CLIENTS[4], src=self.lab, dst=stranger, sha=self.lab, tha=stranger)}
+        for name, frame in others.items():
+            with self.subTest(name=name):
+                categories = self.verdict([frame])['categories']
+                self.assertEqual((0, 1), (categories['infrastructure'], categories['unexpected']))
+
     def test_service_traffic_outside_the_listed_exchanges_is_a_leak(self):
         extra = [
             arp(1, wire.CLIENTS[4], '192.0.2.99', src=self.test, dst=wire.BROADCAST, sha=self.test,
