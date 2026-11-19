@@ -9,7 +9,8 @@ import subprocess
 import threading
 import uuid
 
-from .images import image_chain, local_file
+from .images import WindowsImageDescriptor, image_chain, local_file
+from . import windows_run
 from .evidence import append_row
 from .resources import resource_path, execution_resources
 
@@ -111,6 +112,9 @@ class QemuConfig:
                 or self.cpu != 'host' or type(self.machine) is not str
                 or not re.fullmatch(r'pc-i440fx-[0-9]+\.[0-9]+', self.machine)):
             raise ValueError("unsupported QEMU configuration")
+        self._validate_common()
+
+    def _validate_common(self):
         if type(self.memory_mib) is not int or not 256 <= self.memory_mib <= 65536:
             raise ValueError("memory out of range")
         if type(self.vcpus) is not int or not 1 <= self.vcpus <= 64:
@@ -121,10 +125,46 @@ class QemuConfig:
             local_file(path)
 
 
+@dataclass(frozen=True)
+class WindowsQemuConfig(QemuConfig):
+    """The launch configuration of a Windows image: machine `q35`, the agent channel, and the TPM emulator.
+
+    `bios` is the firmware code the image was built with. The configuration of a Linux guest has no such
+    field, so the Linux execution files keep their exact field list.
+    """
+
+    swtpm: str = ''
+
+    def validate(self):
+        # The image's device list has the agent channel, so the profile always has it.
+        if (self.schema != 'rosetun.matrix.qemu.v1' or self.accelerator != 'kvm' or self.cpu != 'host'
+                or self.machine != 'q35' or self.qga is not True or type(self.swtpm) is not str):
+            raise ValueError("unsupported QEMU configuration")
+        local_file(self.swtpm)
+        self._validate_common()
+
+
+def qemu_config_of(record):
+    """The configuration a launch plan carries: the Windows one when it names a TPM emulator."""
+    return WindowsQemuConfig(**record) if type(record) is dict and 'swtpm' in record else QemuConfig(**record)
+
+
 def _launch_plan(config, image, overlay, vm_uuid, *, media=None):
     """Build only after prepare has verified the owned overlay and image chain."""
     config.validate()
     uuid.UUID(vm_uuid)
+    windows = isinstance(image, WindowsImageDescriptor)
+    if windows != isinstance(config, WindowsQemuConfig):
+        raise ValueError('image-profile-machine-mismatch')
+    if windows:
+        if media is not None:
+            raise ValueError('unsupported-windows-media')
+        argv, record = windows_run.launch(config, image, overlay, vm_uuid)
+        configuration = asdict(config)
+        return {'schema': 'rosetun.matrix.qemu-launch.v1', 'executed': False,
+                'kvm_qualified': False, 'firmware_profile': image.profile,
+                'uuid': vm_uuid, 'image': image.record(), 'config': configuration, 'argv': argv,
+                'windows_run': record}
     # JSON avoids the -drive keyval grammar. The verified base is read-only and
     # its backing is explicitly null rather than discovered at VM startup.
     base = {'driver': 'qcow2', 'read-only': True, 'backing': None,
@@ -186,6 +226,10 @@ def prepare(run, image, config, *, executor=execute):
     try:
         event({'stage': stage, 'status': 'started'}, initial=True)
         config.validate()
+        if isinstance(image, WindowsImageDescriptor) != isinstance(config, WindowsQemuConfig):
+            raise ValueError("image profile and machine do not match")
+        if isinstance(image, WindowsImageDescriptor):
+            windows_run.check(config, image)
         if run._identity[2] in json.dumps({'image': image.record(), 'config': asdict(config),
                                           'directory': str(run.directory)}):
             raise ValueError("ownership identity cannot appear in preparation inputs")
@@ -235,6 +279,10 @@ def prepare(run, image, config, *, executor=execute):
         image.verify_bytes()
         event({'stage': stage, 'status': 'verified', 'path': str(overlay), 'format': 'qcow2',
                'virtual_size': size, 'backing': str(base), 'external_data_file': False})
+        if isinstance(image, WindowsImageDescriptor):
+            # The run's own copies of the firmware variables and of the TPM state; the image is only read.
+            stage = 'windows-files'
+            windows_run.prepare_files(run, image, event)
         stage = 'save-plan'
         plan = _launch_plan(config, image, overlay, str(uuid.uuid4()))
         run._read()

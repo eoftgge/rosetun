@@ -161,7 +161,7 @@ def uefi_record(config, layout, code_sha256, template_sha256, vars_sha256):
 def descriptor(config, layout, *, uuid, windows_iso_sha256, disk_sha256, disk_size, vars_sha256,
                code_sha256, template_sha256, tpm_files, built_at, calm=None):
     """The image descriptor. The Windows fields are an extension of the Linux contract; the controller
-    accepts none of it until the launch profile of stage 9b exists, so `qualified` stays false.
+    reads them since stage 9b and accepts only `qualified` false, which is what this writes.
 
     `calm` is the record of the boot that waited for the guest to come to rest (see `build_image.calm`)."""
     record = {

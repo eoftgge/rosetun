@@ -29,12 +29,12 @@ from .qmp_adapter import Qmp
 from .qga import Qga, QgaError, LINE_LIMIT, DIAGNOSTIC_LINE_LIMIT
 from .diagnostics import StderrSink
 
-from .images import ImageDescriptor, image_chain, local_file
-from .qemu import QemuConfig, CommandResult, _launch_plan, execute, OUTPUT_LIMIT
+from .images import WindowsImageDescriptor, image_chain, image_of, local_file
+from .qemu import CommandResult, _launch_plan, execute, qemu_config_of, OUTPUT_LIMIT
 from .report import _unique_object, _invalid_constant
 from .evidence import append_row
 from .resources import resource_path, execution_resources, lock_run, unlock_run, RUN_LOCK
-from . import run_state
+from . import run_state, windows_run
 
 
 JOURNAL_LIMIT = 128
@@ -112,14 +112,14 @@ def _host():
     os.close(fd)
 
 
-def _identity(process, executable):
+def _identity(process, executable, identifier='qemu'):
     boot = Path('/proc/sys/kernel/random/boot_id').read_text().strip()
     text = Path(f'/proc/{process.pid}/stat').read_text()
     start = text[text.rfind(')') + 2:].split()[19]
     actual = os.readlink(f'/proc/{process.pid}/exe')
     if actual != os.path.realpath(executable) or process.poll() is not None:
         raise LifecycleError('child-identity-unavailable')
-    return {'id': 'qemu', 'kind': 'process', 'pid': process.pid, 'platform': 'posix',
+    return {'id': identifier, 'kind': 'process', 'pid': process.pid, 'platform': 'posix',
             'boot_id': boot, 'start_id': start, 'executable': executable}
 
 
@@ -230,6 +230,30 @@ class ForeignProcess:
             os.close(fd)
 
 
+class _Gone:
+    """A recorded process that was already gone when a controller attached: nothing to signal, no status to read."""
+
+    returncode = None
+
+    def __init__(self, resource):
+        self.pid = resource['pid']
+
+    def poll(self):
+        return ForeignProcess.EXITED
+
+    def wait(self, timeout):
+        return None
+
+    def terminate(self):
+        pass
+
+    def kill(self):
+        pass
+
+    def close(self):
+        pass
+
+
 def _journal_rows(run):
     """The number of rows of a complete, consecutive lifecycle journal: the journal is its own counter."""
     raw = resource_path(run.directory, 'lifecycle.jsonl').read_bytes()
@@ -261,6 +285,11 @@ class Vm:
         self._owner_run = run
         self.timeout = timeout
         self.process = None
+        # The software TPM of a Windows run: started before QEMU, which connects to it, and stopped after it.
+        self.swtpm = None
+        self.swtpm_done = False
+        self.windows = False
+        self.ordinary_rows = ORDINARY_ROWS
         self.qmp = None
         self.qga = None
         self.qga_path = None
@@ -347,13 +376,13 @@ class Vm:
         Called before the operation's first row and before any command, so the
         refusal leaves no trace: it is neither evidence loss nor an operation error.
         """
-        if self.events + rows > ORDINARY_ROWS:
+        if self.events + rows > self.ordinary_rows:
             raise LifecycleError('lifecycle-journal-limit')
 
     def _event(self, action, result, *, teardown=False):
         try:
             self.run._read()
-            if self.events >= (JOURNAL_LIMIT if teardown else ORDINARY_ROWS):
+            if self.events >= (JOURNAL_LIMIT if teardown else self.ordinary_rows):
                 raise ValueError('lifecycle-journal-limit')
             self.events += 1
             row = {'schema': 'rosetun.matrix.lifecycle.v2',
@@ -823,16 +852,42 @@ class Vm:
         """Compatibility API: request ACPI only, without confirming shutdown."""
         return self._control('system_powerdown')
 
-    def request_shutdown(self, *, timeout=None):
-        """ACPI request plus bounded child-exit observation. Timeout stays an error."""
+    def screendump(self, name=windows_run.SCREENSHOT, form='png'):
+        """Ask QEMU to write the guest's display into a registered, empty file of the run; an empty result is an error."""
+        self._check()
+        if self.process.poll() is not None:
+            raise LifecycleError('vm-child-has-exited')
+        self._reserve(3)  # intent, command-accepted, error
+        path = resource_path(self.run.directory, name)
+        if not any(r['kind'] == 'file' and r['path'] == name for r in self.run._read()['resources']):
+            raise LifecycleError('screendump-not-registered', self)
+        self._event('screendump', 'intent')
+        try:
+            self.qmp.command('screendump', self.timeout, arguments=dict(filename=str(path), format=form))
+            self._event('screendump', 'command-accepted')
+            if path.stat().st_size <= 0:
+                raise ValueError('screendump-empty')
+        except (OSError, ValueError):
+            self.operation_errors.append('screendump-unconfirmed')
+            self._event('screendump', 'error')
+            raise LifecycleError('control-operation-unconfirmed', self) from None
+
+    def request_shutdown(self, *, timeout=None, wait=None):
+        """ACPI request plus bounded child-exit observation. Timeout stays an error.
+
+        `wait` is how long the child may take to exit, up to ten minutes: a guest that shuts itself down needs more
+        than the minute a control command may take, which `timeout` still bounds.
+        """
         timeout = self.timeout if timeout is None else _limit(timeout)
+        if wait is not None and (type(wait) not in (int, float) or not math.isfinite(wait) or not 0 < wait <= 600):
+            raise LifecycleError('invalid-shutdown-wait')
         self._check()
         self._reserve(4)  # intent, command-accepted, child-exit-observed, confirmed
         self._event('shutdown', 'intent')
         try:
             self.qmp.command('system_powerdown', timeout)
             self._event('shutdown', 'command-accepted')
-            self.process.wait(timeout=timeout)
+            self.process.wait(timeout=timeout if wait is None else wait)
             self._event('shutdown', 'child-exit-observed')
         except (OSError, ValueError, subprocess.TimeoutExpired):
             self.operation_errors.append('shutdown-unconfirmed')
@@ -890,6 +945,7 @@ class Vm:
                 if self.process.poll() is None:
                     raise LifecycleError('vm-exit-unconfirmed', self)
                 self.process.wait(timeout=self.timeout)
+            self._stop_swtpm()
             self.exited = True
             self._event('exit', 'exit-observed' if self.attached else 'child-reaped', teardown=True)
             for stream in list(self.launch_sockets):
@@ -912,12 +968,11 @@ class Vm:
                 raise LifecycleError('completion-evidence-unavailable', self)
             manifest = self.run._read()
             processes = [r for r in manifest['resources'] if r['kind'] == 'process']
-            if self.process is None or len(processes) != 1 or processes[0]['pid'] != self.process.pid:
-                raise LifecycleError('completion-process-identity-missing', self)
+            exits = self._exits(processes)
             self._event('hard-off' if hard else 'close', 'confirmed', teardown=True)
             self.run.mark('exited')
             self._event('completion', 'controls-closed-child-reaped', teardown=True)
-            self.run._complete([{'resource': processes[0], 'returncode': self.process.returncode}], self.vm_uuid)
+            self.run._complete(exits, self.vm_uuid)
             self.completed = True
         except (OSError, ValueError, subprocess.TimeoutExpired):
             reason = ('vm-exit-unconfirmed' if not self.exited else
@@ -949,9 +1004,61 @@ class Vm:
                     if self.completed:
                         self._release_control_lock()
 
+    def _exits(self, processes):
+        """The exit of each recorded process in the ledger's order; a process that is not this VM's refuses completion."""
+        known = {'qemu': self.process}
+        if self.windows:
+            known['swtpm'] = self.swtpm
+        if (self.process is None or len(processes) != len(known) or {r['id'] for r in processes} != set(known)
+                or any(known[r['id']] is None or r['pid'] != known[r['id']].pid for r in processes)):
+            raise LifecycleError('completion-process-identity-missing', self)
+        return [{'resource': r, 'returncode': known[r['id']].returncode} for r in processes]
+
+    def _start_swtpm(self, argv, executable, path):
+        """Start the TPM and wait for its control socket. The controller never connects to it: swtpm ends when
+        the first connection closes, and that connection is QEMU's."""
+        self.run._read()
+        self.windows = True
+        self.ordinary_rows = ORDINARY_ROWS - windows_run.JOURNAL_MARGIN
+        self.swtpm = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                      stderr=subprocess.DEVNULL, shell=False, close_fds=True, start_new_session=True,
+                                      umask=0o177)
+        self.run.register(_identity(self.swtpm, executable, 'swtpm'))
+        self._event('swtpm', 'started', teardown=True)
+        deadline = time.monotonic() + self.timeout
+        while not os.path.lexists(path):
+            if self.swtpm.poll() is not None:
+                raise LifecycleError('swtpm-exited', self)
+            if time.monotonic() >= deadline:
+                raise LifecycleError('swtpm-socket-unavailable', self)
+            time.sleep(.05)
+        _own_socket(path)
+
+    def _stop_swtpm(self):
+        """The TPM ends by itself once QEMU is gone (`--terminate`); a signal is for one that does not."""
+        if self.swtpm is None or self.swtpm_done:
+            return
+        # With no QEMU ever started nothing will end it, so waiting for it to end is waiting for nothing.
+        for action in ((None, 'terminate', 'kill') if self.process is not None else ('terminate', 'kill')):
+            if self.swtpm.poll() is not None:
+                break
+            if action:
+                self.run._read()
+                getattr(self.swtpm, action)()
+            try:
+                self.swtpm.wait(timeout=self.timeout)
+            except subprocess.TimeoutExpired:
+                continue
+        if self.swtpm.poll() is None:
+            raise LifecycleError('vm-exit-unconfirmed', self)
+        self.swtpm.wait(timeout=self.timeout)
+        self.swtpm_done = True
+        self._event('swtpm', 'exit-observed' if self.attached else 'child-reaped', teardown=True)
+
     def _release_control_lock(self):
-        if isinstance(self.process, ForeignProcess):
-            self.process.close()
+        for process in (self.process, self.swtpm):
+            if isinstance(process, ForeignProcess):
+                process.close()
         if self.control_lock is not None:
             lock, self.control_lock = self.control_lock, None
             try:
@@ -978,22 +1085,37 @@ def attach(run, *, timeout=5):
     manifest = run._read()
     resources = {r['id']: r for r in manifest['resources']}
     processes = [r for r in manifest['resources'] if r['kind'] == 'process']
-    if (manifest['state'] not in ('starting', 'running', 'stopping') or len(processes) != 1
+    by_id = {r['id']: r for r in processes}
+    if (manifest['state'] not in ('starting', 'running', 'stopping') or len(by_id) != len(processes)
+            or 'qemu' not in by_id or set(by_id) - {'qemu', 'swtpm'}
             or resources.get('qmp-socket', {}).get('kind') != 'socket'):
         raise LifecycleError('run-not-attachable')
     try:
         plan = _json(local_file(resource_path(run.directory, 'launch-plan.json')).read_bytes())
         vm_uuid = plan['uuid']
+        windows = 'windows_run' in plan
         # One in-memory copy per run: a second one would write back stale budgets.
         state = run_state.of(run) or run_state.RunState.load(run)
         events = _journal_rows(run)
     except (KeyError, TypeError, OSError, ValueError):
         raise LifecycleError('run-records-unusable') from None
+    if windows != ('swtpm' in by_id):
+        raise LifecycleError('run-not-attachable')
     if state.document['host']['boot_id'] != run_state.host_boot_id():
         raise LifecycleError('host-boot-changed')
-    process = ForeignProcess(processes[0])
+    process = ForeignProcess(by_id['qemu'])
+    swtpm = None
+    if windows:
+        # The TPM ends when QEMU's connection to it does; one that is gone already is closed with the run.
+        try:
+            swtpm = ForeignProcess(by_id['swtpm'])
+        except LifecycleError:
+            swtpm = _Gone(by_id['swtpm'])
     vm = Vm(run, timeout)
     vm.process, vm.attached, vm.state, vm.vm_uuid, vm.events = process, True, state, vm_uuid, events
+    vm.swtpm, vm.windows = swtpm, windows
+    if windows:
+        vm.ordinary_rows = ORDINARY_ROWS - windows_run.JOURNAL_MARGIN
     vm.qga_recoveries = state.budget('qga_recoveries')
     vm.qga_observations = state.budget('qga_observations')
     vm.boot_chain = list(state.document['boot_chain'])
@@ -1013,7 +1135,7 @@ def attach(run, *, timeout=5):
     try:
         vm.control_lock = lock_run(run.directory)
     except (OSError, ValueError):
-        process.close()
+        vm._release_control_lock()
         raise LifecycleError('run-control-locked') from None
     if 'qga-socket' in resources:
         vm.qga_path = socket_path(run.directory, QGA_SOCKET)
@@ -1062,6 +1184,9 @@ def start(run, *, timeout=5, executor=execute, lab=None):
     expected = {'preparation': 'preparation.jsonl', 'launch-plan': 'launch-plan.json',
                 'overlay': 'root.qcow2'}
     expected.update({r['id']: r['path'] for r in execution_resources(manifest)})
+    # A Windows run holds copies of the image's firmware variables and TPM state; `windows_run` checks them below.
+    expected.update({r['id']: r['path'] for r in manifest['resources']
+                     if r['id'] == windows_run.VARS_ID or r['id'].startswith(windows_run.TPM_ID)})
     if lab is not None:
         expected.update(lab.resources(run))
     stage = 'l2'
@@ -1084,10 +1209,20 @@ def start(run, *, timeout=5, executor=execute, lab=None):
     try:
         if run._identity[2] in json.dumps(plan):
             raise LifecycleError('ownership-identity-in-launch-input')
-        image = ImageDescriptor(**plan['image'])
-        config = QemuConfig(**plan['config'])
+        image = image_of(plan['image'])
+        config = qemu_config_of(plan['config'])
         overlay = local_file(resource_path(run.directory, 'root.qcow2'))
+        windows = isinstance(image, WindowsImageDescriptor)
+        if windows != ('windows_run' in plan) or windows != any(r['id'] == windows_run.VARS_ID
+                                                               for r in manifest['resources']):
+            raise LifecycleError('windows-preparation-incomplete')
+        if windows and lab is not None:
+            # The lab's wire needs the image's test address in the guest: stage 9d.
+            raise LifecycleError('windows-lab-unsupported')
         image.validate(run.directory)
+        if windows:
+            windows_run.check_resources(manifest, image)
+            windows_run.verify_files(run.directory, image)
         media = plan.get('l2_media')
         if (media is not None) != any(r['id'].startswith('l2-media-') for r in manifest['resources']):
             raise LifecycleError('l2-media-preparation-incomplete')
@@ -1112,7 +1247,9 @@ def start(run, *, timeout=5, executor=execute, lab=None):
     sockets = {'qmp-socket': socket_path(run.directory, QMP_SOCKET)}
     if config.qga:
         sockets['qga-socket'] = socket_path(run.directory, QGA_SOCKET)
-    if any(os.path.lexists(path) for path in (*sockets.values(), resource_path(run.directory, RUN_LOCK))):
+    tpm_socket = socket_path(run.directory, windows_run.SWTPM_SOCKET) if windows else None
+    if any(os.path.lexists(path) for path in (*sockets.values(), resource_path(run.directory, RUN_LOCK),
+                                              *([tpm_socket] if windows else []))):
         raise LifecycleError('control-path-exists')
     # No process exists yet, so a failure here leaves partial resources and a
     # quarantined run instead of a prepared one that later starts refuse.
@@ -1127,7 +1264,14 @@ def start(run, *, timeout=5, executor=execute, lab=None):
         for name in (('qemu-stderr.log', 'completion.json', 'qga-observations.jsonl', 'job-evidence.jsonl')
                      if config.qga else ('qemu-stderr.log', 'completion.json')):
             run.register({'id': name.split('.')[0], 'kind': 'file', 'path': name})
-        if config.qga:
+        if windows:
+            run.register({'id': 'swtpm-socket', 'kind': 'socket', 'path': windows_run.SWTPM_SOCKET})
+            run.register({'id': 'swtpm-log', 'kind': 'file', 'path': windows_run.SWTPM_LOG})
+            resource_path(run.directory, windows_run.SWTPM_LOG).touch(mode=0o600, exist_ok=False)
+            run.register({'id': 'screendump', 'kind': 'file', 'path': windows_run.SCREENSHOT})
+            resource_path(run.directory, windows_run.SCREENSHOT).touch(mode=0o600, exist_ok=False)
+        # The Linux guest's evidence and smoke package are of its own job; a Windows run has neither yet.
+        if config.qga and not windows:
             from .linux_l2 import evidence_files
             for index, name in enumerate(evidence_files(stage)):
                 relative = 'linux-' + stage + '/' + name
@@ -1181,13 +1325,16 @@ def start(run, *, timeout=5, executor=execute, lab=None):
         if config.qga:
             vm.qga_path = sockets['qga-socket']
             argv += ['-chardev', f'socket,id=guestagent,path={vm.qga_path},server=on,wait=off',
-                     '-device', 'virtio-serial-pci,id=guestserial',
+                     '-device', plan['windows_run']['qga_device'] if windows else 'virtio-serial-pci,id=guestserial',
                      '-device', 'virtserialport,bus=guestserial.0,chardev=guestagent,name=org.qemu.guest_agent.0']
             resource_path(run.directory, 'qga-observations.jsonl').touch(exist_ok=False)
             resource_path(run.directory, 'job-evidence.jsonl').touch(exist_ok=False)
         run._read()
         if media is not None:
             verify_media(media)
+        if windows:
+            # QEMU connects to the TPM while it starts, so the TPM goes first.
+            vm._start_swtpm(plan['windows_run']['swtpm_argv'], config.swtpm, tpm_socket)
         # umask 0177: QEMU creates the sockets owner read-write only.
         vm.process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                       stderr=subprocess.PIPE, shell=False, close_fds=True, bufsize=0,

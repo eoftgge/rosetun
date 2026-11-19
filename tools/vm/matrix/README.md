@@ -22,7 +22,7 @@ runner is already longer than that. A test that goes through the real
 `tests/posix_only.py` giving the reason, instead of weakening the path check.
 The Windows helpers (`windows_*`, the PowerShell producers) are not skipped.
 
-Windows skips 272 of 1516 tests, a Linux host with `qemu.qmp` 18 (the Windows
+Windows skips 289 of 1652 tests, a Linux host with `qemu.qmp` 18 (the Windows
 pieces it cannot run without PowerShell). On Windows, besides those that need
 Linux `/proc`, bash, POSIX-only fixtures or `qemu.qmp`, the skipped ones are the
 controller groups:
@@ -31,7 +31,8 @@ controller groups:
   `test_staging`, `test_qga_recovery`, `test_reboots` (chains, budgets, waits),
   `test_linux_l2`, `test_l2_media` (import), `test_lab_controls`, the joint
   start of two machines in `test_l3_lab`, `test_lab` and `test_lab_evidence`
-  (disk pairs), the delivery groups of `test_stage_profiles`;
+  (disk pairs), the delivery groups of `test_stage_profiles`, the start, attach and
+  smoke groups of `test_windows_run` (stand-in QEMU and swtpm processes);
 - tests that take those fixtures to look at evidence bytes: `test_evidence`
   (journals, owner token), `test_orchestrator` (reservation);
 - the relay budget over an AF_UNIX socket pair in `test_run_state`;
@@ -4821,6 +4822,150 @@ L2 run uses it too.
 
 Send back the summary, the saved `linux-l3/` evidence and the receipt if any
 expectation differs.
+
+## Stage 9b: the Windows launch profile and `windows-boot-smoke`
+
+Status: **offline tests only, the stand result below is of one developer run and qualifies nothing.** The
+controller starts and closes one Windows guest of the image of stage 9a (`../windows-image/`): no guest agent
+job (stage 9c) and no lab (9d). Linux profiles, their configuration files and their plans are unchanged (the
+Linux execution files keep their exact field lists). The release gate is false and the security invariants
+are UNVERIFIED.
+
+### The image and what `qualified: false` means
+
+`images.WindowsImageDescriptor` is the descriptor `image.json` of stage 9a: the Linux contract
+(`rosetun.matrix.image.v1`) with `guest_os: windows`, profile `windows-uefi-q35-v1` and a `windows` block. The
+block is read strictly (unknown or missing fields, a PCI slot twice, a CPU string that is not `host` and
+switches, a TPM file name with a path, are refused). The controller hashes what it will use: the disk like a
+Linux disk, the firmware code, the variable store and every TPM state file the descriptor lists. The disk is
+tens of gigabytes and the stand needs minutes for a pass, so a pass counts for the later checks of the same
+controller process as long as the file's identity (device, inode, size, change times) is the one it saw; the
+check after the run asks for a fresh pass.
+
+`activated` must be false and `qualified` must be false, and no other value is accepted: the controller has no
+qualification of a Windows image, so it never reads `qualified` as a permission. A run of such an image is
+**diagnostic**: its summary says `qualified: false` and `diagnostic: true`, it counts for no parity table and
+the release gate stays false. The image becomes qualified by the owner's decision after stage 9d, with a
+controller that has a rule for it; until then `true` is refused, not trusted. Only the suite
+`windows-boot-smoke` takes a Windows image; the Linux suites refuse it (`guest_os` is not `linux`).
+
+### The command line
+
+`QemuConfig` stays the Linux configuration (machine `pc-i440fx-N.N`). A Windows run uses
+`WindowsQemuConfig`: the same fields plus `swtpm`, with machine `q35` and `qga = true`. Its values must be the
+image's: `bios` is the firmware code the descriptor names, `memory_mib` and `vcpus` are the descriptor's,
+`machine` is `q35`; anything else is refused before a run is created. `_launch_plan` then gives, as the plan
+(`launch-plan.json`) and `windows_run.launch` build it:
+
+- `-machine q35,smm=off` (or `smm=on` with the secure flash property, as the descriptor's `uefi.smm` says),
+  `-global ICH9-LPC.disable_s3=1`: the machine of the build.
+- `-cpu` is the string of the descriptor (`devices.cpu`: the hidden virtualization flags and the Hyper-V
+  enlightenments the idle measurement needed).
+- `-rtc base=utc`: the guest keeps UTC (the answer file sets the zone and the time service is off), so its
+  clock is the host's RTC read as UTC. That is QEMU's default and the build used it; it is given so that
+  nothing depends on a default.
+- Firmware: the code as a read-only pflash and **the run's own copy** of the variable store as the second.
+- The disk is an overlay of the run over the verified, read-only image, as for Linux.
+- Devices, slots and the MAC are those of the descriptor, because Windows binds its network settings to the
+  adapter: virtio-blk at the disk slot, virtio-net (the test MAC, id `test-wire`) at the net slot,
+  `tpm-crb` on the swtpm socket, VGA at its slot, and, added by `lifecycle.start` as for Linux, the
+  virtio-serial adapter at its slot with the `org.qemu.guest_agent.0` port. The NIC has no network backend:
+  the adapter exists and is connected to nothing (`-nic none`).
+- `-display none`, no VNC, no listener. The VGA adapter is there for `screendump`, which reads it.
+- QMP is the Linux one: QEMU listens on `qmp.sock` in the private run directory, started with `-S`.
+
+### State of the run: the copies
+
+`prepare` copies the image's variable store (`OVMF_VARS.fd`) and every TPM state file (`tpm/NAME`) into the
+run directory, registers each one before it is written, and checks the bytes against the descriptor's digest
+while they move and again once written. The image's own files are only read. `start` checks the copies again
+before it spawns anything, so a copy that is not the image's file stops the run with no process. After the run
+the copies differ from the image's files (the guest wrote its firmware store and the TPM its state); the
+image's files do not, and the smoke checks it.
+
+### swtpm as a resource of the run
+
+`swtpm socket --tpm2 --terminate` is started by `lifecycle.start` before QEMU, with the state in the run's
+`tpm/`, its control socket `swtpm.sock` (mode 0600: swtpm gives a control socket mode 0660 whatever its umask says, and the controller refuses a socket that others can reach) and its log `swtpm.log` (level 1) in the run directory. The
+controller never connects to the socket: swtpm ends when the first connection closes, and that connection is
+QEMU's. The process is recorded in the ledger as a `process` resource with the id `swtpm` (pid, host boot,
+start time, executable, like `qemu`), registered before QEMU is spawned.
+
+- Journal (`lifecycle.jsonl`): `swtpm started` after its identity is recorded, `swtpm child-reaped` (or
+  `exit-observed` for an attached controller) after it ended, which is after QEMU's own exit was confirmed
+  and before the row `exit`. A Windows run keeps four rows of the ordinary journal in reserve for these.
+- Closing: QEMU first (ACPI power-down, `quit`, signals, as for Linux), then the TPM ends by itself; if it does
+  not within the timeout it is terminated, then killed. A TPM that survives is `vm-exit-unconfirmed` like a
+  QEMU that does. A QEMU that cannot be spawned takes the already started TPM down with it, and the run is
+  quarantined as before.
+- `completion.json` lists both processes, in the ledger's order (`swtpm`, then `qemu`), each with its return
+  code; `completion_verified` needs both.
+- A controller that dies leaves both processes: `runs` shows them (`process_status: alive`), `recover --archive`
+  refuses while either lives, and `recover --run-id R --close` (the attach of `lifecycle.attach`) takes a pidfd of
+  each, ends QEMU through QMP and the TPM with it, and records the completion. A TPM that is already gone when
+  the controller attaches is recorded as gone, not as an error. A controller that dies between the spawn of
+  swtpm and the spawn of QEMU leaves only the TPM: the run is not attachable (`run-not-attachable`), and the
+  TPM is visible in `runs` as alive; it is stopped by hand after checking its recorded identity.
+
+### `run windows-boot-smoke`
+
+    python3 -B -m tools.vm.matrix run windows-boot-smoke --config CONFIG [--dry-run]
+
+The configuration is its own (`execution-windows-boot-smoke.example.toml`, schema
+`rosetun.matrix.execution.windows.v1`): the state directory, the stand id, the path of the descriptor
+(`image_descriptor`), the `[qemu]` block of `WindowsQemuConfig`, `[smoke]` with `boot_wait_seconds` and
+`shutdown_wait_seconds`, and the preparation deadline. It has no L2 content, accounts or lab; `--lab`,
+`--control` and `--diagnostic` are refused. Use a state directory of its own: a diagnostic run is not a
+qualification and shares no stand with one.
+
+The steps are `preflight`, `lease`, `create-run`, `save-identities`, `prepare`, `start`, `resume`, `watch`,
+`screendump`, `shutdown`, `close` and `image-unchanged`. The machine is resumed and watched for
+`boot_wait_seconds`: every ten seconds `query-status` must say `running` and no RESET may have been
+reported (a guest reset is `unplanned-guest-reset` or `guest-reset-before-first-boot`, an error). Then
+`screendump` writes `screendump.png` into the run, `request_shutdown(wait=shutdown_wait_seconds)` sends the
+ACPI power-down (the image's power button is set to shut down) and waits for QEMU to exit, and the run closes.
+A guest that does not shut down in time is `shutdown-unconfirmed`: the run closes hard, as a Linux run does
+after an error, and exits with 2. There is no `guest-shutdown`: the guest agent is stage 9c. After the close,
+the disk, the firmware and the TPM files of the image are hashed again (`image-unchanged`).
+
+Exit code: 0 when nothing failed, the completion is verified, the shutdown was the ACPI one, a screenshot was
+taken and the image is unchanged; 1 never; 2 for any error or an unverified completion; 130 interrupted. The
+summary (`execution-summary.json`, `rosetun.matrix.execution-summary.v1`) carries `execution` with the VM UUID,
+`kvm_qualified` (the plan's, false), `boot_wait_seconds`, the number of samples, `guest_status`, the
+screenshot's size and SHA-256, `shutdown` (`acpi` or `forced`), `image_unchanged`, the image's identifier and
+digest with `qualified: false`, and the duration; the run's `completion` (`completion_verified`) and the
+digests of every retained file are in the summary as for Linux.
+
+### Checked on the stand (2026-11-19, a developer's run, not a qualification)
+
+Debian 13 on WSL2, QEMU 10.0.13, swtpm from the distribution, the image of 9a
+(`windows-11-26h2-pro-v1`, disk SHA-256 `1c9c5a60...32ea`), `boot_wait_seconds = 90`, one guest at a time,
+a state directory of its own. Two runs, nothing else:
+
+- The first one stopped in `start`: swtpm gives its control socket mode 0660 whatever the umask says, and the
+  controller refuses a control socket others can reach (`vm-start-failed`). swtpm was started, recorded and
+  reaped; QEMU was never spawned; the run is quarantined, as for any failed start. The command line now says
+  `mode=0600`. The stand-in swtpm of the offline tests now sets its socket's mode the same way.
+- The second one: exit 0, `completion_verified` true, `shutdown: acpi`, `image_unchanged: true`, 426 s in all
+  (the two passes over the 12.4 GB disk take most of it). QEMU started paused 3 s after swtpm, ran 91 s
+  (10 samples, `running`), the screenshot (`screendump.png`, PNG, 1280x800, 490042 bytes) shows the Windows 11
+  lock screen with the time of the host in UTC, and the ACPI power-down made the guest shut down by itself in
+  26 s (`shutdown child-exit-observed`). Both processes were reaped (return codes 0 and 0, swtpm first in the
+  ledger). The run's `OVMF_VARS.fd` differs from the image's after the run and the image's does not. QEMU printed
+  one line on stderr, `warning: nic test-wire has no peer`: the adapter has no backend, as intended.
+
+What this does not show: that the guest has Secure Boot or the TPM (the agent asks that, stage 9c), that it is
+at rest, that a controller killed while the guest runs is recovered on the real stand (the offline tests do it
+on stand-in processes), or anything about the observer.
+
+### Not done here, UNRUN
+
+- No guest agent job, no boot ID, no reboot (9c) and no lab (9d): a Windows reboot during the watch is an
+  error, not a planned one.
+- Whether the guest answers the power button at the logon screen is what the smoke shows; the guest never logs
+  on by itself in this image.
+- The variable store of the guest is writable by it (the firmware has no SMM), as the descriptor says.
+- A run needs the whole disk hashed twice (about two and a half minutes a pass on the stand).
 
 ## Stage 12: release evidence pack
 

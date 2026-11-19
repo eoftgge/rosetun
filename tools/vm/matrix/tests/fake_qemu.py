@@ -7,6 +7,12 @@ when a test says so. One client per socket at a time, as QEMU serves a
 chardev. `quit` and `system_powerdown` end the process. Nothing here is a
 real VM.
 
+A Windows run's command line (a `chrtpm` chardev, a firmware-variables drive) adds three things: the process
+connects to the TPM socket and keeps the connection until it ends, which is what makes the real swtpm end; it
+appends to the variables file, as a guest writes its firmware store; and `screendump` writes a small file. With
+FAKE_QEMU_IGNORE_POWERDOWN in the environment `system_powerdown` is answered and nothing more, like a guest that
+does not react to its power button.
+
 A test steers the guest through the control socket named by the environment
 variable FAKE_QEMU_CONTROL, one line per command: `guest-reset [BOOT_ID]`
 (the agent session ends, the boot ID changes if one is given, and the monitor
@@ -33,6 +39,8 @@ def options(argv):
     for index, value in enumerate(argv):
         if value == '-uuid':
             uuid = argv[index + 1]
+        if value == '-drive' and ',unit=1,' in argv[index + 1]:
+            paths['vars'] = argv[index + 1].split('file=', 1)[1]
         if value == '-chardev':
             fields = dict(part.partition('=')[::2] for part in argv[index + 1].split(',')[1:])
             paths[fields['id']] = fields['path']
@@ -84,8 +92,11 @@ def monitor(server, uuid, state):
                     state['status'] = 'running'
                 elif name == 'system_reset':
                     event(state, False, 'host-qmp-system-reset')
+                elif name == 'screendump':
+                    with open(request['arguments']['filename'], 'wb') as picture:
+                        picture.write(b'PNG fake ' + request['arguments']['format'].encode())
                 send(stream, {'return': value, 'id': ident})
-                if name in ('quit', 'system_powerdown'):
+                if name == 'quit' or (name == 'system_powerdown' and not os.environ.get('FAKE_QEMU_IGNORE_POWERDOWN')):
                     os._exit(0)
 
 
@@ -168,6 +179,13 @@ def event(state, guest, reason, stamp=(1, 0)):
 
 def main(argv):
     uuid, paths = options(argv)
+    if 'vars' in paths:
+        with open(paths['vars'], 'ab') as store:
+            store.write(b'|written by the fake guest')
+    if 'chrtpm' in paths:
+        # The connection is held until the process ends; the real QEMU opens it while it starts.
+        connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        connection.connect(paths['chrtpm'])
     state = {'status': 'prelaunch', 'agent_up': True, 'lock': threading.Lock()}
     files = {'/proc/sys/kernel/random/boot_id': (BOOT + '\n').encode()}
     servers = [listen(paths['control'])]

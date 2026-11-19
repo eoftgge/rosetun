@@ -30,6 +30,17 @@ class ResetEvent(NamedTuple):
     at: int = None
 
 
+def _arguments_valid(name, arguments):
+    if name == 'set_link':
+        return (set(arguments) == {'name', 'up'} and type(arguments['up']) is bool
+                and arguments['name'] in ('test-wire', 'lab-wire'))
+    # A screenshot goes to one absolute file of the run directory, which the caller chose; QEMU writes it.
+    path = arguments.get('filename')
+    return (set(arguments) == {'filename', 'format'} and arguments['format'] in ('png', 'ppm')
+            and type(path) is str and path.startswith('/') and ',' not in path
+            and not any(ord(c) < 32 for c in path))
+
+
 # Bytes the relay may move past what is already on record before it records more.
 RESERVATION_BYTES = 65536
 
@@ -219,12 +230,11 @@ class Qmp:
 
     def command(self, name, timeout, *, event=None, arguments=None):
         if name not in ('query-status', 'query-uuid', 'query-kvm', 'stop', 'cont',
-                        'system_reset', 'system_powerdown', 'quit', 'set_link'):
+                        'system_reset', 'system_powerdown', 'quit', 'set_link', 'screendump'):
             raise ValueError('unsupported-qmp-command')
-        # Only the carrier of a lab wire takes arguments, and only these two.
-        if (arguments is not None) != (name == 'set_link') or (
-                arguments is not None and (set(arguments) != {'name', 'up'} or type(arguments['up']) is not bool
-                                           or arguments['name'] not in ('test-wire', 'lab-wire'))):
+        # Only the carrier of a lab wire and a screenshot take arguments, and only these.
+        if (arguments is not None) != (name in ('set_link', 'screendump')) or (
+                arguments is not None and not _arguments_valid(name, arguments)):
             raise ValueError('invalid-qmp-arguments')
         self.last_command_accepted = False
         # The last of the 128 calls belongs to quit, so that an exhausted budget

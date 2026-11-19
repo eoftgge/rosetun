@@ -32,6 +32,7 @@ from tools.vm.matrix.tests import test_qemu
 from tools.vm.matrix.tests.mini_qmp import MiniClient
 
 FAKE_QEMU = Path(__file__).resolve().parent / 'fake_qemu.py'
+FAKE_SWTPM = Path(__file__).resolve().parent / 'fake_swtpm.py'
 PHASES = ('preparing', 'boot', 'submit', 'reset-seen', 'wait', 'collect', 'close', 'end')
 NEW_BOOT = '22345678-1234-4234-8234-123456789abc'
 REAL_POPEN = subprocess.Popen
@@ -39,7 +40,8 @@ REAL_POPEN = subprocess.Popen
 
 def fake_popen(argv, **kwargs):
     # The recorded executable stays the interpreter, so the process identity check is the real one.
-    return REAL_POPEN([argv[0], '-I', str(FAKE_QEMU), *argv[1:]], **kwargs)
+    # swtpm is told from QEMU by its first argument: QEMU always starts with `-no-user-config`.
+    return REAL_POPEN([argv[0], '-I', str(FAKE_SWTPM if argv[1:2] == ['socket'] else FAKE_QEMU), *argv[1:]], **kwargs)
 
 
 def patches():
@@ -140,5 +142,57 @@ def main(state, phase, reboot=False):
     lease.release()
 
 
+def main_windows(state, phase):
+    """A Windows run as `run windows-boot-smoke` walks it, up to PHASE: `preparing`, `start`, `watch` or `end`."""
+    from tools.vm.matrix.tests import windows_fixture
+    fixture = windows_fixture.WindowsFixture(state)
+    fixture.build(Path(state).parent)
+    lease = StandLease(state, 'stand').acquire()
+    config = dict(suite='windows-boot-smoke', synthetic=True)
+    run = create_run(lease)
+    fixture.run = run
+    for identifier, name in EXECUTION_FILES.items():
+        run.register(dict(id=identifier, kind='file', path=name))
+    state_record = orchestrator.begin_state(run, config, {}, host_run_id=run._identity[0])
+    summary = dict(schema=orchestrator.SUMMARY_SCHEMA, suite=config['suite'], identities={}, configuration=config,
+                   stages=[], evidence=[], assessment=None, delivery=None, execution=None, completion=False,
+                   manual_recovery_required=False, errors=[], attached=False, attachments=0,
+                   security_invariants='UNVERIFIED', release_gate=False, exit_code=2)
+    orchestrator.save(run, 'execution-identity.json', dict(schema='rosetun.matrix.execution-identity.v1'),
+                      initial=True)
+    orchestrator.save(run, 'execution-summary.json', summary, initial=True)
+
+    def step(name, operation=lambda: None):
+        orchestrator.mark_step([state_record], name, 'intent')
+        if name == phase or (phase == 'preparing' and name == 'prepare'):
+            print('READY', run._identity[0], flush=True)
+            threading.Event().wait()
+        value = operation()
+        orchestrator.mark_step([state_record], name, 'done')
+        return value
+
+    def prepare():
+        fixture.prepare()
+        fixture.calls = fixture.calls[:2]
+
+    step('prepare', prepare)
+    for item in patches():
+        item.start()
+
+    def info(argv, *, timeout, output_limit):
+        return fixture.fake(argv, timeout=30, output_limit=output_limit)
+
+    vm = step('start', lambda: lifecycle.start(run, timeout=5, executor=info))
+    step('resume', vm.resume)
+    step('watch')
+    step('shutdown', lambda: vm.request_shutdown(wait=30))
+    step('close', vm.close)
+    print('CLOSED', run._identity[0], flush=True)
+    lease.release()
+
+
 if __name__ == '__main__':
-    main(sys.argv[1], sys.argv[2], sys.argv[3:] == ['reboot'])
+    if sys.argv[3:] == ['windows']:
+        main_windows(sys.argv[1], sys.argv[2])
+    else:
+        main(sys.argv[1], sys.argv[2], sys.argv[3:] == ['reboot'])
