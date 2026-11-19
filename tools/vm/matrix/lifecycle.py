@@ -625,12 +625,12 @@ class Vm:
             raise LifecycleError('guest-boot-not-confirmed', self)
 
     @_guest_serialized
-    def guest_powershell(self, script, *, seconds=60):
+    def guest_powershell(self, script, *, seconds=60, limit=windows_guest.SCRIPT_LIMIT):
         """One PowerShell script on the current session of a Windows guest: the text it returned, as UTF-8."""
         self._windows_session()
         self.qga.deadline = time.monotonic() + seconds + 5
         try:
-            return self.qga.powershell(script, self.timeout, seconds=seconds)
+            return self.qga.powershell(script, self.timeout, seconds=seconds, limit=limit)
         except (QgaError, windows_guest.GuestAnswerError) as error:
             raise LifecycleError(str(error), self) from None
 
@@ -1286,9 +1286,9 @@ def start(run, *, timeout=5, executor=execute, lab=None):
         if windows != ('windows_run' in plan) or windows != any(r['id'] == windows_run.VARS_ID
                                                                for r in manifest['resources']):
             raise LifecycleError('windows-preparation-incomplete')
-        if windows and lab is not None:
-            # The lab's wire needs the image's test address in the guest: stage 9d.
-            raise LifecycleError('windows-lab-unsupported')
+        if windows and lab is not None and lab.role(run) != 'test':
+            # Only the test machine of the lab is a Windows guest: the lab machine is the Linux image of the lab.
+            raise LifecycleError('windows-lab-role-mismatch')
         image.validate(run.directory)
         if windows:
             windows_run.check_resources(manifest, image)
@@ -1389,7 +1389,13 @@ def start(run, *, timeout=5, executor=execute, lab=None):
                 '-mon', 'chardev=control,mode=control']
         descriptors = []
         if lab is not None:
-            network_argv, network_fd = lab.network(run)
+            network_argv, network_fd = lab.network(run, adapter=windows)
+            if windows:
+                # The image's own adapter takes the wire; the guest's addresses are set in it during the run.
+                try:
+                    argv = windows_run.join_wire(argv, image.facts()['mac'])
+                except ValueError as error:
+                    raise LifecycleError(str(error)) from None
             argv += network_argv
             descriptors.append(network_fd)
         if config.qga:

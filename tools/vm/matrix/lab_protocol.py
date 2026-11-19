@@ -1562,6 +1562,40 @@ def classify_windows(raw, run, windows_expected, *, health, ready, allowances=()
     return answer
 
 
+def classified_frames(raw, run, *, probes=(), https=None, tunnel_port=None, allowances=(), limit=CAPTURE_LIMIT):
+    """Every frame of a capture with its time, the window it fell in and the category the classifier gives it.
+
+    Returns `(rows, unparsed, problem, labels)`: `labels` maps the index of each window the markers name to its label (the
+    first one named, as `classify_windows` takes it); a row is `(record number, capture time in seconds, Frame, window index or
+    None, category)`, the category being one of those of `classify_windows` (`marker`, `probe`, `infrastructure`,
+    `tunnel`, `allowed:NAME`, `unexpected`, `foreign`). A window is the span between the markers of one index, as in
+    `classify_windows`; only the frames, not the verdict, are given, so nothing here tolerates anything the
+    classifier does not. `unparsed` counts the records that could not be read, `problem` is the pcap's own fault.
+    """
+    names = _declared(allowances)
+    if tunnel_port is not None:
+        _tunnel_port(tunnel_port)
+    parsed, unparsed, problem = _parse_capture(raw, limit)
+    is_probe = _probe_matcher([frame for _, frame in parsed], probes, direct_connection(https))
+    times = _record_times(raw, limit)
+    rows, labels, current = [], {}, None
+    for position, frame in parsed:
+        at = times[position] if position < len(times) else None
+        hit = _phase_hit(frame, run)
+        if hit is not None:
+            direction, index, word, label = hit
+            labels.setdefault(index, label)
+            if direction == 'request':
+                current = index if word == 'open' else None
+            rows.append((position, at, frame, index, 'marker'))
+            continue
+        category = _category(frame, is_probe, names, tunnel_port)
+        if type(category) is tuple:
+            category = category[0] + ':' + category[1]
+        rows.append((position, at, frame, current, category))
+    return rows, len(unparsed), problem, labels
+
+
 def _window_times(health, window):
     """Capture start, marker service times and capture end, all from the lab machine's clock."""
     if type(health) is not dict:

@@ -27,6 +27,10 @@ REBOOT_ARGUMENTS = ['/r', '/t', '0']
 BOOT_KEY = r'HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management\PrefetchParameters'
 BOOT_ARGUMENTS = ['query', BOOT_KEY, '/v', 'BootId']
 SCRIPT_LIMIT = 6000
+# The scripts of the lab (stage 9d) are longer: the probes, their helpers and the data. The command line of a Windows
+# program is 32767 characters at the most and the script travels as UTF-16LE in base64 (2.67 characters for each one of
+# the script), so no script may pass this.
+SCRIPT_LIMIT_MAX = 10000
 OUTPUT_LIMIT = 16 * 1024
 # What the guest must give back for a text that does not fit the console's code page: the proof that the answer is
 # UTF-8 bytes (e acute and the CJK ideograph for "world").
@@ -59,9 +63,10 @@ class GuestAnswerError(ValueError):
     pass
 
 
-def arguments(script):
+def arguments(script, limit=SCRIPT_LIMIT):
     """The command line words that run `script` under PowerShell 5.1 and return its answer as UTF-8."""
-    if type(script) is not str or not 0 < len(script) <= SCRIPT_LIMIT:
+    if (type(script) is not str or type(limit) is not int or not SCRIPT_LIMIT <= limit <= SCRIPT_LIMIT_MAX
+            or not 0 < len(script) <= limit):
         raise GuestAnswerError('invalid-powershell-script')
     encoded = base64.b64encode((_WRAPPER % script).encode('utf-16-le')).decode('ascii')
     return ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded]

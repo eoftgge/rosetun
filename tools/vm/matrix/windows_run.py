@@ -108,6 +108,26 @@ def launch(config, image, overlay, vm_uuid):
     return argv, record
 
 
+WIRE_BACKEND = 'labwire'
+
+
+def join_wire(argv, mac, wire_id='test-wire'):
+    """`argv` with the image's network adapter attached to the lab's wire backend.
+
+    The adapter is the one the launch profile names, with the image's MAC; it is never added a second time, because
+    a second adapter would leave the first one's network settings behind. The MAC must be the test machine's of the
+    lab: an adapter with another address would not be the machine the lab's observer judges.
+    """
+    from .lab_protocol import MACS
+    if mac != MACS['test']:
+        raise ValueError('windows-mac-is-not-the-labs-test-machine')
+    wanted = f'virtio-net-pci,id={wire_id},mac={mac},'
+    found = [index for index, item in enumerate(argv) if item.startswith(wanted)]
+    if len(found) != 1:
+        raise ValueError('windows-network-adapter-not-found')
+    return [item + ',netdev=' + WIRE_BACKEND if index == found[0] else item for index, item in enumerate(argv)]
+
+
 def _copy(source, target, digest):
     """Copy one small file into the run, checking the bytes against the image's digest while they move."""
     hasher = hashlib.sha256()

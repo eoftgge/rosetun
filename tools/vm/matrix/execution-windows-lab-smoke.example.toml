@@ -1,0 +1,74 @@
+schema = "rosetun.matrix.execution.windows.v2"
+suite = "windows-lab-smoke"
+mode = "exploratory"
+platform = "linux-x86_64-kvm"
+# A state directory of its own: a diagnostic run is not a qualification and shares no stand with one. The stand's
+# record of the disk's digest lives in it too (image-digests/), so the disk is hashed in full only the first time.
+state_directory = "/srv/rosetun-state-windows-lab"
+stand_id = "windows-lab-smoke-example"
+# The image.json the image build of stage 9a wrote; its `qualified` must be false, and it is.
+image_descriptor = "/srv/rosetun-images/windows-11-26h2-pro-v1/image.json"
+
+# The Windows guest: the image's own devices and firmware, as in the other Windows suites.
+[qemu]
+schema = "rosetun.matrix.qemu.v1"
+executable = "/opt/qemu-10.0.13/bin/qemu-system-x86_64"
+image_executable = "/opt/qemu-10.0.13/bin/qemu-img"
+bios = "/srv/rosetun-images/firmware/OVMF_CODE.fd"
+machine = "q35"
+accelerator = "kvm"
+cpu = "host"
+memory_mib = 4096
+vcpus = 4
+qga = true
+swtpm = "/usr/bin/swtpm"
+
+[smoke]
+# The longest the guest may take to answer through its agent after it starts.
+agent_wait_seconds = 300
+# The longest one PowerShell of the guest may take. The first one of a boot took more than 180 seconds on the stand.
+script_seconds = 300
+# How long the guest is left alone in the window `rest`: the noise report is of this window.
+rest_seconds = 600
+shutdown_wait_seconds = 240
+
+[deadlines]
+preparation = 1800
+# The lab machine's boot to its agent.
+boot = 300
+
+# The lab: its machine, the pinned fixtures of stage 7 and the CA the guest imports. The lab machine is the Linux
+# image of the lab on the pinned i440fx machine; its memory and processors are its own.
+[lab]
+https_cert_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+doh_cert_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+# The lab's CA as a PEM file on the controller. Its SHA-256 must be `ca_sha256` below, which the lab machine pins too.
+ca_certificate = "/srv/rosetun-lab-pki/rosetun-lab-ca.crt"
+
+[lab.image]
+schema = "rosetun.matrix.image.v1"
+identifier = "prepared-lab-router-v5"
+guest_os = "linux"
+architecture = "x86_64"
+path = "/srv/images/lab-router-v5.qcow2"
+size_bytes = 1
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+format = "qcow2"
+profile = "bios-i440fx-v1"
+
+[lab.qemu]
+schema = "rosetun.matrix.qemu.v1"
+executable = "/opt/qemu-10.0.13/bin/qemu-system-x86_64"
+image_executable = "/opt/qemu-10.0.13/bin/qemu-img"
+bios = "/opt/qemu-10.0.13/share/qemu/bios.bin"
+machine = "pc-i440fx-10.0"
+accelerator = "kvm"
+cpu = "host"
+memory_mib = 2048
+vcpus = 2
+qga = true
+
+[lab.tunnel]
+sing_box_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+ca_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+node_port = 8388

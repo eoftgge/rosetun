@@ -205,15 +205,21 @@ class LabPair:
         if len(self.lease._active) >= 2:
             raise ValueError('lab-capacity')
 
-    def network(self, run):
+    def network(self, run, *, adapter=False):
+        """The arguments that join the machine to its end of the wire, and the descriptor to pass on.
+
+        A machine whose image already has its network adapter (a Windows guest binds its settings to it, so the
+        launch profile names it) gets only the backend, `adapter=True`, and the adapter is told to use `labwire`.
+        """
         self.lease._check_live()
         role = self.role(run)
         if self.closed or role in self.used:
             raise ValueError('lab-endpoint-already-consumed')
         self.used.add(role)
         fd = self.sockets[role].fileno()
-        argv = ['-netdev', f'stream,id=labwire,addr.type=fd,addr.str={fd},server=off',
-                '-device', f'virtio-net-pci,netdev=labwire,id={role}-wire,mac={MACS[role]}']
+        argv = ['-netdev', f'stream,id=labwire,addr.type=fd,addr.str={fd},server=off']
+        if not adapter:
+            argv += ['-device', f'virtio-net-pci,netdev=labwire,id={role}-wire,mac={MACS[role]}']
         if self.evidence_disk and role == 'lab':
             # A second, writable raw disk that only the lab machine has.
             image = resource_path(run.directory, EVIDENCE_IMAGE)

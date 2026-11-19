@@ -19,7 +19,7 @@ import time
 import tomllib
 import uuid
 
-from . import windows_reboot, windows_run
+from . import windows_lab, windows_reboot, windows_run
 from .images import load_windows_descriptor
 from .orchestrator import (SUMMARY_SCHEMA, begin_state, failure, finish_state, mark_step, save, seal,
                            _RETAINED_LEASES)
@@ -44,6 +44,8 @@ def _exact(value, names):
 
 
 def validate(config):
+    if type(config) is dict and config.get('schema') == windows_lab.SCHEMA:
+        return windows_lab.validate(config)
     if type(config) is not dict or config.get('schema') != SCHEMA or config.get('suite') not in SMOKE_TIMES:
         raise ValueError('unsupported execution schema')
     _exact(config, FIELDS)
@@ -79,6 +81,8 @@ def preflight(config, *, dry_run=False):
     The image's disk is hashed by the preparation, not here, so a dry run is quick and touches nothing.
     """
     validate(config)
+    if config['suite'] == windows_lab.SUITE:
+        return windows_lab.preflight(config, dry_run=dry_run)
     image = load_windows_descriptor(config['image_descriptor'])
     qemu = WindowsQemuConfig(**config['qemu'])
     qemu.validate()

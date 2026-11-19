@@ -288,7 +288,7 @@ class Qga:
             streams.append(data)
         return ExecResult(exitcode, *streams)
 
-    def powershell(self, script, timeout, *, seconds=60):
+    def powershell(self, script, timeout, *, seconds=60, limit=windows_guest.SCRIPT_LIMIT):
         """Run a PowerShell 5.1 script in a Windows guest: the text it returned, decoded as UTF-8.
 
         A non-zero exit code or an answer that is not UTF-8 is an error that names no guest text; what the script
@@ -296,7 +296,7 @@ class Qga:
         """
         if not self.windows:
             raise QgaError('qga-powershell-needs-windows')
-        result = self.run_program(windows_guest.POWERSHELL, windows_guest.arguments(script), timeout,
+        result = self.run_program(windows_guest.POWERSHELL, windows_guest.arguments(script, limit), timeout,
                                   seconds=seconds)
         try:
             text, self.stderr_text = result.stdout.decode('utf-8'), result.stderr.decode('utf-8')

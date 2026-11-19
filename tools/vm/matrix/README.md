@@ -22,7 +22,7 @@ runner is already longer than that. A test that goes through the real
 `tests/posix_only.py` giving the reason, instead of weakening the path check.
 The Windows helpers (`windows_*`, the PowerShell producers) are not skipped.
 
-Windows skips 337 of 1732 tests, a Linux host with `qemu.qmp` 18 (the Windows
+Windows skips 339 of 1784 tests, a Linux host with `qemu.qmp` 18 (the Windows
 pieces it cannot run without PowerShell). On Windows, besides those that need
 Linux `/proc`, bash, POSIX-only fixtures or `qemu.qmp`, the skipped ones are the
 controller groups:
@@ -33,7 +33,7 @@ controller groups:
   start of two machines in `test_l3_lab`, `test_lab` and `test_lab_evidence`
   (disk pairs), the delivery groups of `test_stage_profiles`, the start, attach and
   smoke groups of `test_windows_run`, `test_windows_reboot` and `test_image_digest_cache` (stand-in QEMU and swtpm
-  processes, `st_ctime`);
+  processes, `st_ctime`), and the start of the Windows guest on the lab's wire in `test_windows_lab`;
 - tests that take those fixtures to look at evidence bytes: `test_evidence`
   (journals, owner token), `test_orchestrator` (reservation);
 - the relay budget over an AF_UNIX socket pair in `test_run_state`;
@@ -5194,6 +5194,194 @@ quick (it was not on the first run).
 
 Nothing in the image. The controller needs only the files of the checkout and the stand's state directory, which fills
 its `image-digests/` itself.
+
+## Stage 9d: a Windows guest on the lab's wire, `windows-lab-smoke`
+
+Status: **offline tests, and the developer's run on the stand written below, which qualifies nothing.** The Windows guest
+of the 9a image is connected to the wire of the lab like the Linux test machine of stages 7 and 8, without Rosetun in it,
+and the observer says what it sends: the eight probes of the lab contract and, after them, ten minutes of nothing. The
+release gate is false and the security invariants are UNVERIFIED. The image stays `qualified: false` and the run is
+diagnostic whatever it reports. Linux suites, their configurations and budgets are unchanged.
+
+### Why this is a stopping point
+
+The classifier of the lab knows ARP, neighbor discovery and multicast listener messages between the two machines as
+`infrastructure`, and every other frame of the test machine is `unexpected` (stage 6b). A Windows guest says more than
+that by itself. This stage does not decide what may be allowed: **no tolerance is added to `lab_protocol` and the observer
+is not weakened.** What the resting guest sends is written down, group by group, as `windows-noise-report`, and each group
+outside `infrastructure` is a finding for the owner, who decides whether the image is made quieter (a standard setting
+of the operating system, a change of `first-logon.ps1` and a new build by the qualifier) or whether the observer learns
+to allow it (and with it the rule that a window is judged whole). The Windows Firewall of the guest is not touched: it is
+a filtering layer of its own and would distort what is judged.
+
+### The machines
+
+Two machines run under one lease, as for the Linux suites of the lab: the lab machine (the image of the lab, 2048 MiB: the
+routing, the targets, the lab resolver, the HTTPS target and the capture to its evidence disk) and the Windows guest
+(4096 MiB, the image's own devices). Both are needed at once, so the preflight refuses a host whose available memory is
+less than both and 768 MiB for QEMU, swtpm and the controller (`host-memory-too-small`); the guest's memory is never
+reduced to make it fit.
+
+The guest's network adapter is the one of the image (the same device, slot and MAC, `00:00:5e:00:53:61`, which is the
+lab's test machine): `lifecycle.start` gives it the lab's wire backend (`netdev=labwire`) instead of adding a second
+adapter, which would leave the settings of the first one behind. An image whose MAC is not the lab's test MAC is refused.
+The lab machine is started first and sets up its capture; the guest starts after it, so the capture holds the boot too.
+
+### The network of the guest
+
+The image is qualified and frozen, so the addresses are **not** in it: the controller sets them through the guest agent
+once the guest answers, in the guest's own PowerShell 5.1 (the mechanism of 9c: encoded command, UTF-8 on the raw
+streams, exit code). The first script is `network`: on the adapter that has the MAC it turns DHCP off, removes what DHCP
+and the link-local fallback made, sets `192.0.2.2/24` with the gateway `192.0.2.1`, `2001:db8:6a:1::2/64` with the
+default route through `2001:db8:6a:1::1`, and the DNS server `203.0.113.53` (the lab resolver); then it waits until both
+addresses are `Preferred` and reads back the addresses, the default routes and the DNS servers. The controller compares
+that with the contract (`address-v4-missing`, `address-v6-not-preferred`, `route-v4-missing`, `dns-servers`, `adapter-mac`
+...): **any difference stops the run** (`windows-network-not-as-the-lab-says`, exit 2) before anything else is sent, and
+the readings are in the summary and in the job evidence. The lab sends no router advertisement, so the IPv6 address and
+route are static.
+
+The second is `certificate`: the lab's CA (a PEM file on the controller whose SHA-256 must be the `ca_sha256` the lab
+machine pins; the file is decoded on the controller and its DER goes to the guest) is added to `Cert:\LocalMachine\Root`,
+and the answer must carry the thumbprint of those bytes. The HTTPS probe then goes through the system's own validation.
+
+The frames the set-up itself makes (the guest's DHCP attempts before the address is set, the ARP probe and announcement of
+the new address, DAD, neighbor solicitations and advertisements, router solicitations, multicast listener reports) happen
+before the first window opens, so the observer counts them in `outside_window` and in the `outside` part of the noise
+report, and they judge nothing. Those of them that fall in a window are judged by the same rules as everything else.
+
+### The probes (window `probes`)
+
+One PowerShell, between an opening and a closing marker (the marker is a UDP datagram to the lab's marker service, which
+the guest sends and the lab acknowledges, as the Linux script's functions do), runs:
+
+- the **eight probes of the lab contract**, IPv4 and IPv6: `http` (TCP 8080), `udp` (9000), `dns-udp` and `dns-tcp` (53) to
+  the lab's targets. The bytes are exactly the ones the Linux helper sends (the request is built in the guest from the
+  run's name and the probe's nonce, which is all the guest is told), on `System.Net.Sockets.TcpClient` and `UdpClient`
+  bound to the guest's own address; the controller compares what came back with what the lab answers
+  (`lab_protocol.answer`), and the lab machine's own log of the same exchanges and the capture decide again
+  (`lab_protocol.qualify`);
+- one **HTTPS** request to the target (`203.0.113.2:443`, IPv4: the target has no IPv6 listener) with `SslStream`, which
+  checks the certificate against the machine's root store, the lab's CA among them, and its IP address; the guest reports the
+  port it used, and the target's log must hold the one request from that port, which is what lets the observer tell the
+  connection from a leak (as for `https-direct` of stage 7b1);
+- one **lookup** of a name of the run at the lab resolver, `Resolve-DnsName -Server 203.0.113.53 -DnsOnly`, which the
+  resolver's log must hold once, from the guest's address.
+
+The ten exchanges are judged by the window: a frame in it outside the probes, the markers and `infrastructure` is
+`unexpected`, and the window is `DETECTED`.
+
+### Rest (window `rest`)
+
+A second pair of markers brackets `rest_seconds` (600 in the example) in which the controller sends **nothing** to the guest:
+it only reads QMP events and the state of the two processes (no command, so no budget is spent). The report is made from
+that window. `windows_noise.report` takes the capture the lab machine kept and gives, for each sender, protocol,
+destination, port and category of the frames of the window: the number of frames and bytes, the number of source ports (the
+flows of a TCP or UDP group), and the first and last time (seconds after the opening marker and UTC). It lists the
+`unexpected` groups apart, and the frames before the first window as context (`outside`, seconds from the start of the
+capture). **`noise` is `NONE` only when every frame of the window is `infrastructure`; otherwise it is `FOUND`, and each
+group outside `infrastructure` is in `unexpected` or `other`;** a missing or untimed window is `UNVERIFIED`. The groups are
+also in the summary as `noise_table` (one line each).
+
+### `run windows-lab-smoke`
+
+    python3 -B -m tools.vm.matrix run windows-lab-smoke --config CONFIG [--dry-run]
+
+The configuration is `execution-windows-lab-smoke.example.toml`, schema `rosetun.matrix.execution.windows.v2`: the
+fields of the other Windows suites, a `[smoke]` of `agent_wait_seconds`, `script_seconds` (one PowerShell of the guest, up to
+300: the first of a boot took more than 180 on the stand), `rest_seconds` (60 to 900) and `shutdown_wait_seconds`, and a
+`[lab]` block with the lab's image, its QEMU (the pinned i440fx machine), the pins of stage 7 (`sing_box_sha256`,
+`ca_sha256`, the two certificate hashes) and the path of the CA's PEM. The lab capture lasts
+`agent_wait + 4 * script + rest + 300` seconds and may not pass the observer's 2700. `--lab`, `--control` and
+`--diagnostic` are refused; `attach` does not take this suite (a run killed in the middle is closed with
+`recover --run-id R --close`, then examined).
+
+The steps are `preflight`, `lease`, `create-run-lab`, `create-run-test`, `prepare-lab`, `prepare-test`, `evidence-disk`,
+`start-lab`, `resume-lab`, `boot-lab`, `lab-setup`, `start-test`, `resume-test`, `boot-test`, `wire-close`, `network`,
+`certificate`, `probes`, `rest`, `lab-finish`, `lab-read-*`, `shutdown-test` (the ACPI power button), `close-test`,
+`close-lab`, `evidence-read`, `windows`, `image-unchanged`.
+
+Exit code: **0** when nothing failed, both machines completed, the guest shut down by its own power button, the image is
+unchanged, the network stood, every probe passed (and was seen by the lab machine and the capture), both windows are `NONE`
+and the noise is `NONE`; **1** when the run completed but found something: a probe that failed, a window that is not
+`NONE`, noise; **2** for any error (a network that is not the lab's, a guest that cannot run its script, a machine that
+left, an unverified completion) and **130** for an interruption. A failed probe script does not end the run (the capture
+still holds what the guest did, and the rest is the point), but it is an error. The summary
+(`rosetun.matrix.windows-lab-summary.v1`, in both runs) has `execution` with the network, the certificate, `probes`,
+`windows` (leak, reason and counts of each), `noise`, `noise_report` and `noise_table`, and `lab` with the observer's
+windows and the digests of what the lab machine kept.
+
+### Checked on the stand (2026-11-19, a developer's run, not a qualification)
+
+Debian 13 on WSL2 (7.9 GB), QEMU 10.0.13, the image of 9a (`windows-11-26h2-pro-v1`), the lab image of stage 7 (2048 MiB,
+2 vCPUs) and the guest (4096 MiB, 4 vCPUs) together, `rest_seconds = 600`, a state directory of its own, one run and
+nothing else that counts. The checkout was not clean (this stage's files).
+
+- **The run:** exit 1, 738 s in all, both machines `completion_verified`, the guest shut down by its power button, the image
+  unchanged, no error, no QGA recovery (2 observations), the capture 81501 bytes and its evidence disk read back whole. The
+  network stood at the first try (`Ethernet`, both addresses `Preferred`, both default routes, the lab resolver as the only DNS
+  server), the CA was added to the machine store (`CN=Rosetun lab CA`, thumbprint as the controller computed it), and **all
+  ten exchanges passed**: the eight probes, the HTTPS request (validated by the system against the lab CA and the IP address
+  of the target) and the lookup at the lab resolver. The lab machine's own `qualify` said `qualified: true`.
+- **Window `probes`: `NONE`** (64 frames of probes, 4 of markers, nothing else).
+- **Window `rest` (601 s): `DETECTED`, `noise: FOUND`**, 462 frames, 19 `infrastructure` and 443 `unexpected`. What the
+  guest did, with the names read from its own frames:
+  - **DNS** to the lab resolver, 30 questions over 575 s: `ctldl.windowsupdate.com` (A and AAAA, 17), `settings-win.data.microsoft.com`,
+    `fs.microsoft.com`, `msedge.api.cdp.microsoft.com`, `config.edge.skype.com`, `ecs.office.com`, `go.microsoft.com`,
+    `mobile.events.data.microsoft.com` (one A or AAAA or both each). The lab resolver answers every A question with the
+    target's address, so each name was followed by a connection.
+  - **TCP to the target, port 443**: 19 connections (107 frames), each a TLS ClientHello whose server name is one of
+    `config.edge.skype.com` (4), `msedge.api.cdp.microsoft.com` (4), `mobile.events.data.microsoft.com` (4), `ecs.office.com` (3),
+    `go.microsoft.com` (2), `fs.microsoft.com`, `settings-win.data.microsoft.com`; the target's certificate does not
+    fit those names and the guest ended each one (the target logged 8 `ssl-unexpected_eof_while_reading`, the most it keeps).
+  - **TCP to the target, port 80**: 18 connections (90 frames), a SYN each, refused by the lab (nothing listens there);
+    the names are those of the DNS questions, `ctldl.windowsupdate.com` for most.
+  - **ARP**: 9 unicast ARP requests of the guest for the gateway (neighbor reachability, `tha` is the gateway's MAC, not
+    zero), classified `unexpected` because the classifier takes only a request whose target hardware address is zero; the lab's
+    replies and the lab's own requests with the guest's replies are `infrastructure` (9 + 4 + 4 frames), as are one
+    neighbor solicitation and its advertisement at the start.
+  - The bursts come all through the window (first at 4 s, the last at 579 s), densest between 449 s and 471 s; no group stops.
+- Before the first window (boot and the set-up of the guest, 64 frames, in `outside`): the guest's ARP probes for
+  an address of `169.254.0.0/16` and `192.0.2.2`, four DHCP discovers, router solicitations, neighbor discovery and multicast listener
+  reports, all of it before the first window opened.
+
+What this says: the image is quiet on its own at the link level and **not quiet once its DNS works**. The traffic is that of
+Windows components that look for their servers by name, not of the lab's set-up. The report is in the summary and was also
+made again from the retained capture (`windows_noise.report`), which is how the names above reached it.
+
+### What can be done about it (proposals, none applied, all UNRUN)
+
+Each is a standard setting of the operating system, so a step of `first-logon.ps1` and a new build of the image by the
+qualifier, not an exception in the observer; the sources are the pages of Microsoft Learn on connection endpoints
+and on managing connections from Windows components. Whether a setting does what the page says on this build is what a
+new resting capture decides.
+
+| Seen at rest | Setting the documentation names | Remark |
+|---|---|---|
+| `ctldl.windowsupdate.com` (A, AAAA, TCP 80), the most frequent | `HKLM\SOFTWARE\Policies\Microsoft\SystemCertificates\AuthRoot\DisableRootAutoUpdate` = 1 (policy "Turn off Automatic Root Certificates Update") | the page warns that sites may stop working; it is the component that checks the trust list when a chain is built, as the HTTPS probe does with the lab CA |
+| `fs.microsoft.com` (font streaming) | `HKLM\SOFTWARE\Policies\Microsoft\Windows\System\EnableFontProviders` = 0 (policy "Enable Font Providers" disabled), restart | |
+| `msedge.api.cdp.microsoft.com` (Edge update), `config.edge.skype.com` (Edge configuration) | Edge policies `EdgeUpdate\UpdateDefault` = 0, `AutoUpdateCheckPeriodMinutes` = 0 and `ExperimentationAndConfigurationServiceControl` = 0 | the image already disables the updater's services and policy, so another component may be the one that asks: which is not known |
+| `settings-win.data.microsoft.com` | listed under "Settings" (apps update their configuration); the page names no switch of its own | `AllowTelemetry` = 0 and the services are already off |
+| `mobile.events.data.microsoft.com`, `ecs.office.com`, `go.microsoft.com` | not on those pages | |
+| unicast ARP requests for the gateway | none: it is the stack's neighbor reachability check | a question for the classifier (it takes a request only with a zero target hardware address), which is the owner's |
+
+The other way is to make the lab not answer these names (the resolver would refuse them, so nothing follows the question).
+That changes the lab, not the image, and with it what "rest" means; it is not done here either.
+
+### Not done here, UNRUN
+
+- Nothing qualifies: the image is `qualified: false`, the run is diagnostic, and no parity table or gate is touched.
+- Only a run of ten minutes of rest has been seen (see below). Whether the guest's noise changes after longer rest, after a
+  reboot or with the real Internet is not known; stage 10 scenarios (WFP) are not started.
+- IPv6 has the lab's static address and default route; no router advertisement, DHCPv4 or DHCPv6 server exists in the lab, so
+  nothing says what the guest does when it is offered them.
+- The probes go from the guest's own PowerShell; the HTTPS probe uses `SslStream`, not `curl.exe` or `Invoke-WebRequest`, so that the
+  request has the exact bytes the target accepts for its exchange.
+- A controller killed in the middle of the run is not attached (`recover --close` and a new run).
+
+### What to reinstall
+
+Nothing in the images: the lab machine's `lab-entry.py` and its pinned fixtures are those of stage 8, and `lab_protocol.py`
+gains only `classified_frames`, which runs on the controller.
 
 ## Stage 12: release evidence pack
 
