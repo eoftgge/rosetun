@@ -411,6 +411,70 @@ fn node_picker(ui: &mut egui::Ui, dialog: &mut ExitDialog, config: &AppConfig, b
     }
 }
 
+fn via_picker(ui: &mut egui::Ui, dialog: &mut ExitDialog, config: &AppConfig, busy: bool) {
+    let candidates = dialog.via_candidates(config).to_vec();
+    if candidates.is_empty() {
+        if dialog.via.is_some() {
+            ui.add_space(theme::space::M);
+            note(ui, tr!("exit-path-unsupported"), theme::WARNING);
+            if widgets::outline_button_compact(ui, &tr!("exit-via-direct"), !busy).clicked() {
+                dialog.via = None;
+                dialog.error = None;
+            }
+        }
+        return;
+    }
+    let selected = dialog.via.as_ref().map_or_else(
+        || tr!("exit-via-direct"),
+        |id| {
+            config
+                .exits
+                .iter()
+                .find(|exit| &exit.id == id)
+                .map_or_else(|| tr!("connection-exit-removed"), exit_title)
+        },
+    );
+    ui.add_space(theme::space::M);
+    ui.label(tr!("exit-via"));
+    ui.add_enabled_ui(!busy, |ui| {
+        widgets::drop_down(ui, "exit_via", None, selected, |ui| {
+            if ui
+                .selectable_value(&mut dialog.via, None, tr!("exit-via-direct"))
+                .changed()
+            {
+                dialog.error = None;
+            }
+            for parent in config
+                .exits
+                .iter()
+                .filter(|exit| candidates.contains(&exit.id))
+            {
+                if ui
+                    .selectable_value(&mut dialog.via, Some(parent.id.clone()), exit_title(parent))
+                    .changed()
+                {
+                    dialog.error = None;
+                }
+            }
+        });
+    });
+    if let Some(via) = &dialog.via {
+        let parent = config
+            .exits
+            .iter()
+            .find(|exit| &exit.id == via)
+            .map_or_else(|| tr!("connection-exit-removed"), exit_title);
+        note(
+            ui,
+            format!("{parent} → {}", display::safe_text(&dialog.name)),
+            theme::palette().text_muted,
+        );
+        if !candidates.contains(via) {
+            note(ui, tr!("exit-path-unsupported"), theme::WARNING);
+        }
+    }
+}
+
 pub(crate) fn exit_dialog(ctx: &egui::Context, state: &mut State, actions: &mut Vec<Action>) {
     let full = destinations::exits_full(&state.config);
     let config = &state.config;
@@ -465,64 +529,7 @@ pub(crate) fn exit_dialog(ctx: &egui::Context, state: &mut State, actions: &mut 
                         ExitKind::Country => country_picker(ui, dialog, config, busy),
                         ExitKind::Node => node_picker(ui, dialog, config, busy),
                     });
-                    ui.add_space(theme::space::M);
-                    ui.label(tr!("exit-via"));
-                    let selected = dialog.via.as_ref().map_or_else(
-                        || tr!("exit-via-direct"),
-                        |id| {
-                            config
-                                .exits
-                                .iter()
-                                .find(|exit| &exit.id == id)
-                                .map_or_else(|| tr!("connection-exit-removed"), exit_title)
-                        },
-                    );
-                    let candidates = dialog.via_candidates(config).to_vec();
-                    // A saved path that no longer works stays changeable.
-                    let nothing_to_pick =
-                        dialog.target().is_some() && candidates.is_empty() && dialog.via.is_none();
-                    ui.add_enabled_ui(!busy && !nothing_to_pick, |ui| {
-                        widgets::drop_down(ui, "exit_via", None, selected, |ui| {
-                            ui.selectable_value(&mut dialog.via, None, tr!("exit-via-direct"));
-                            for parent in config
-                                .exits
-                                .iter()
-                                .filter(|exit| candidates.contains(&exit.id))
-                            {
-                                ui.selectable_value(
-                                    &mut dialog.via,
-                                    Some(parent.id.clone()),
-                                    exit_title(parent),
-                                );
-                            }
-                        })
-                        .on_disabled_hover_text(tr!("exit-via-none"));
-                    });
-                    if nothing_to_pick {
-                        note(ui, tr!("exit-via-none"), theme::palette().text_muted);
-                    }
-                    if let Some(via) = &dialog.via {
-                        let parent = config
-                            .exits
-                            .iter()
-                            .find(|exit| &exit.id == via)
-                            .map_or_else(|| tr!("connection-exit-removed"), exit_title);
-                        note(
-                            ui,
-                            format!("{parent} → {}", display::safe_text(&dialog.name)),
-                            theme::palette().text_muted,
-                        );
-                        if dialog.target().is_some_and(|target| {
-                            !destinations::exit_path_supported(
-                                config,
-                                dialog.editing.as_ref(),
-                                &target,
-                                dialog.via.as_ref(),
-                            )
-                        }) {
-                            note(ui, tr!("exit-path-unsupported"), theme::WARNING);
-                        }
-                    }
+                    via_picker(ui, dialog, config, busy);
                     if dialog.editing.is_none() && full {
                         ui.add_space(theme::space::S);
                         note(
@@ -711,6 +718,58 @@ mod tests {
                 Some(country("NL"))
             );
         });
+    }
+
+    #[test]
+    fn via_picker_requires_a_supported_server_and_parent() {
+        use crate::test_ui::TestScreen;
+
+        for (proxy, address, parent, expected) in [
+            (false, "192.0.2.10", true, false),
+            (true, "proxy.example.com", true, false),
+            (true, "192.0.2.10", false, false),
+            (true, "192.0.2.10", true, true),
+        ] {
+            let mut state = state();
+            state.config.exits.truncate(usize::from(parent));
+            let first = &mut state.config.subscriptions[0].nodes[0];
+            first.outbound = rosetun_config::Outbound::Socks5(Default::default());
+            first.server = "192.0.2.20".to_owned();
+            let node = &mut state.config.subscriptions[0].nodes[1];
+            if proxy {
+                node.outbound = rosetun_config::Outbound::Socks5(Default::default());
+            }
+            node.server = address.to_owned();
+            state.act(Action::OpenNewExit);
+            let dialog = state.exits.dialog.as_mut().unwrap();
+            dialog.kind = ExitKind::Node;
+            dialog.pick_node(&state.config, selection("plain"));
+            let mut screen = TestScreen::new(egui::vec2(960.0, 640.0));
+            let texts = screen.settle(|ui| via_picker(ui, dialog, &state.config, false));
+            assert_eq!(
+                texts.iter().any(|(text, _)| text == &tr!("exit-via")),
+                expected,
+                "{proxy} {address} {parent}",
+            );
+        }
+    }
+
+    #[test]
+    fn an_unavailable_saved_path_can_be_cleared_explicitly() {
+        use crate::test_ui::TestScreen;
+
+        let mut state = state();
+        state.act(Action::OpenNewExit);
+        let dialog = state.exits.dialog.as_mut().unwrap();
+        dialog.kind = ExitKind::Node;
+        dialog.pick_node(&state.config, selection("plain"));
+        dialog.via = Some(ExitId::new("1"));
+        let mut screen = TestScreen::new(egui::vec2(960.0, 640.0));
+        let texts = screen.click_text(&tr!("exit-via-direct"), |ui| {
+            via_picker(ui, dialog, &state.config, false);
+        });
+        assert!(dialog.via.is_none());
+        assert!(!texts.iter().any(|(text, _)| text == &tr!("exit-via")));
     }
 
     #[test]

@@ -445,6 +445,8 @@ impl State {
             !dialog.busy && dialog.editing.as_ref().is_some_and(|id| !exists(id))
         }) {
             self.exits.dialog = None;
+        } else if let Some(dialog) = &mut self.exits.dialog {
+            dialog.via_candidates = None;
         }
     }
 }

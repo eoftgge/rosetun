@@ -1378,6 +1378,5 @@ error-exit-limit = too many exits for one connection
 
 exit-via = Connect through
 exit-via-direct = Directly
-exit-via-none = Only HTTP and SOCKS5 proxies connect through another exit.
 exit-path-unsupported = This connection path is unavailable. Choose another exit or server.
 exit-used-by = Used by: { $names }. Change their connection path first.
