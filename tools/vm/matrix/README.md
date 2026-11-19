@@ -2445,7 +2445,7 @@ Every parsed frame has exactly one category, counted in `categories`:
 | --- | --- |
 | `probe` | A frame of one of the eight expected exchanges: same family, protocol, addresses, hardware addresses, service port, and the run's marker or answer in the payload. A TCP segment without data counts only on a connection that carried a matching request or answer, so SYN, ACK, FIN, RST and repeats of that connection are probe frames and a bare connection to a service port is not. All probe frames with data and every SYN must lie between the opening answer and the closing request; the data-free, SYN-free segments of a connection that carried data (the final ACK or FIN of the close) may also come after the closing request, wherever in the capture, and do not affect the order. |
 | `marker` | The run's opening or closing marker, request or answer. |
-| `infrastructure` | Only the listed service traffic between the two machines, kept in one table (`INFRASTRUCTURE`) next to the addresses in `lab_protocol.py`: ARP requests and replies between `192.0.2.2` and `192.0.2.1`, and ICMPv6 neighbor solicitation and advertisement between the two lab addresses and their link-local addresses, router solicitation and advertisement, and multicast listener messages. |
+| `infrastructure` | Only the listed service traffic between the two machines, kept in one table (`INFRASTRUCTURE`) next to the addresses in `lab_protocol.py`: ARP requests and replies between `192.0.2.2` and `192.0.2.1` (a request is the broadcast or unicast one with a zero target hardware address, or the unicast neighbor poll the test machine sends the lab, whose destination and target hardware address are the lab's: how a stack checks that a neighbor it knows still answers, RFC 1122 2.3.2.1; the same frame from the lab to the test machine, or with any other address, stays `unexpected`), and ICMPv6 neighbor solicitation and advertisement between the two lab addresses and their link-local addresses, router solicitation and advertisement, and multicast listener messages. |
 | `unexpected` | Any other frame whose sender or receiver hardware address is the test machine's, or whose sender or receiver address is the test machine's: ICMP, another port or target, another prefix, another EtherType, broadcast or multicast outside the table, and any IPv4 or IPv6 fragment sent by or addressed to the test machine (the lab exchanges are never fragmented; the description is `fragment`, judged from the Ethernet and IP headers only). A fragment whose IP header cannot be read, or one between other machines, stays `unparsed`. |
 | `foreign` | A frame with neither the test machine's hardware address nor its addresses, such as the lab machine's own traffic. Counted; it never changes the verdict. |
 
@@ -5199,8 +5199,8 @@ its `image-digests/` itself.
 
 Status: **offline tests, and the developer's run on the stand written below, which qualifies nothing.** The Windows guest
 of the 9a image is connected to the wire of the lab like the Linux test machine of stages 7 and 8, without Rosetun in it,
-and the observer says what it sends: the eight probes of the lab contract and, after them, ten minutes of nothing. The
-release gate is false and the security invariants are UNVERIFIED. The image stays `qualified: false` and the run is
+and the observer says what it sends: the eight probes of the lab contract and, after them, ten minutes of nothing, which
+are listed and not judged (see "Decisions of 2026-11-20"). The release gate is false and the security invariants are UNVERIFIED. The image stays `qualified: false` and the run is
 diagnostic whatever it reports. Linux suites, their configurations and budgets are unchanged.
 
 ### Why this is a stopping point
@@ -5213,6 +5213,33 @@ outside `infrastructure` is a finding for the owner, who decides whether the ima
 of the operating system, a change of `first-logon.ps1` and a new build by the qualifier) or whether the observer learns
 to allow it (and with it the rule that a window is judged whole). The Windows Firewall of the guest is not touched: it is
 a filtering layer of its own and would distort what is judged.
+
+### Decisions of 2026-11-20
+
+The first run on the stand (below) showed what a resting Windows says, and the owner decided what follows from it:
+
+- **The poll of the gateway is infrastructure.** A unicast ARP request from the test machine to the lab's hardware address,
+  naming the lab's address as target and the lab's hardware address as target hardware address, is `infrastructure` for
+  every suite (a stack sends it to check a neighbor it knows, RFC 1122 2.3.2.1; Linux does the same). Only this frame:
+  another target hardware address or destination, another target or sender address, the broadcast with a lab target
+  hardware address, and the same request from the lab to the test machine keep the category they had.
+- **The guest settles before the probes** (`settle_seconds`, below), so that what the download of updates and the set-up
+  leave behind does not fall in the one-second window of the probes. The window of the probes is judged as before: a
+  foreign frame in it is `DETECTED`.
+- **The rest only lists.** The window `rest` and the `windows-noise-report` stay as they were (every group, `unexpected`,
+  the names of the DNS questions and TLS hellos), but the report is information: `noise: FOUND` or `NONE` changes neither
+  the exit code nor the verdict of the run. The run is decided by the network, the CA, the probes, the window of the
+  probes, the `qualify` of the lab and the observer (a rest that was not observed, `UNVERIFIED`, is still an error). The
+  classifier and the observer are not weakened, no tolerance by name is added and the lab's resolver is unchanged. The
+  telemetry of Windows stays as natural traffic on purpose: the stages with a tunnel (10) are where it has to go into the
+  tunnel, or not leave at all while the tunnel is blocked.
+- **Operating system settings against the noise are not applied.** `DisableRootAutoUpdate`, `EnableFontProviders` = 0 and
+  the policies of Edge for updates and experiments (the table below) are planned for the next rebuild of the image,
+  together with the work of stage 10c, not for this one.
+- The report also accounts for the frames outside the window: `outside` (before the first marker), `between` (in no
+  window, from the first marker to the end of the rest) and `after`, and `accounting` counts every frame of the capture
+  once (markers, those three, the frames of the window of rest and those of the other windows; `complete` says the sum is
+  the number of frames read).
 
 ### The machines
 
@@ -5270,6 +5297,12 @@ the guest sends and the lab acknowledges, as the Linux script's functions do), r
 The ten exchanges are judged by the window: a frame in it outside the probes, the markers and `infrastructure` is
 `unexpected`, and the window is `DETECTED`.
 
+### Settling (before the window `probes`)
+
+After the network and the CA, and before the opening marker of the probes, the controller sends nothing to the guest for
+`settle_seconds` (0 to 300; 60 when the field is left out, 60 in the example), as in the rest: it only looks at the two
+machines. The step is `settle`; the seconds waited are `settle` in the summary, and the lab's capture is as much longer.
+
 ### Rest (window `rest`)
 
 A second pair of markers brackets `rest_seconds` (600 in the example) in which the controller sends **nothing** to the guest:
@@ -5280,7 +5313,10 @@ flows of a TCP or UDP group), and the first and last time (seconds after the ope
 `unexpected` groups apart, and the frames before the first window as context (`outside`, seconds from the start of the
 capture). **`noise` is `NONE` only when every frame of the window is `infrastructure`; otherwise it is `FOUND`, and each
 group outside `infrastructure` is in `unexpected` or `other`;** a missing or untimed window is `UNVERIFIED`. The groups are
-also in the summary as `noise_table` (one line each).
+also in the summary as `noise_table` (one line each). **The report informs and decides nothing**: the `leak` of the window
+`rest` may be `DETECTED` and the run still ends with 0; only a window that was not observed (`UNVERIFIED`, or reasons of the
+observer) fails the run. The frames outside the window are in `outside`, `between` and `after`, and `accounting` adds
+them to those of the window and the markers.
 
 ### `run windows-lab-smoke`
 
@@ -5288,22 +5324,22 @@ also in the summary as `noise_table` (one line each).
 
 The configuration is `execution-windows-lab-smoke.example.toml`, schema `rosetun.matrix.execution.windows.v2`: the
 fields of the other Windows suites, a `[smoke]` of `agent_wait_seconds`, `script_seconds` (one PowerShell of the guest, up to
-300: the first of a boot took more than 180 on the stand), `rest_seconds` (60 to 900) and `shutdown_wait_seconds`, and a
+300: the first of a boot took more than 180 on the stand), `settle_seconds` (0 to 300, optional, 60 when left out), `rest_seconds` (60 to 900) and `shutdown_wait_seconds`, and a
 `[lab]` block with the lab's image, its QEMU (the pinned i440fx machine), the pins of stage 7 (`sing_box_sha256`,
 `ca_sha256`, the two certificate hashes) and the path of the CA's PEM. The lab capture lasts
-`agent_wait + 4 * script + rest + 300` seconds and may not pass the observer's 2700. `--lab`, `--control` and
+`agent_wait + 4 * script + settle + rest + 300` seconds and may not pass the observer's 2700. `--lab`, `--control` and
 `--diagnostic` are refused; `attach` does not take this suite (a run killed in the middle is closed with
 `recover --run-id R --close`, then examined).
 
 The steps are `preflight`, `lease`, `create-run-lab`, `create-run-test`, `prepare-lab`, `prepare-test`, `evidence-disk`,
 `start-lab`, `resume-lab`, `boot-lab`, `lab-setup`, `start-test`, `resume-test`, `boot-test`, `wire-close`, `network`,
-`certificate`, `probes`, `rest`, `lab-finish`, `lab-read-*`, `shutdown-test` (the ACPI power button), `close-test`,
+`certificate`, `settle`, `probes`, `rest`, `lab-finish`, `lab-read-*`, `shutdown-test` (the ACPI power button), `close-test`,
 `close-lab`, `evidence-read`, `windows`, `image-unchanged`.
 
 Exit code: **0** when nothing failed, both machines completed, the guest shut down by its own power button, the image is
-unchanged, the network stood, every probe passed (and was seen by the lab machine and the capture), both windows are `NONE`
-and the noise is `NONE`; **1** when the run completed but found something: a probe that failed, a window that is not
-`NONE`, noise; **2** for any error (a network that is not the lab's, a guest that cannot run its script, a machine that
+unchanged, the network stood, every probe passed (and was seen by the lab machine and the capture), the window `probes` is
+`NONE` and the window `rest` was observed (whatever it holds: `noise` is information); **1** when the run completed but
+found something: a probe that failed, a window `probes` that is not `NONE`, a rest that was not observed; **2** for any error (a network that is not the lab's, a guest that cannot run its script, a machine that
 left, an unverified completion) and **130** for an interruption. A failed probe script does not end the run (the capture
 still holds what the guest did, and the rest is the point), but it is an error. The summary
 (`rosetun.matrix.windows-lab-summary.v1`, in both runs) has `execution` with the network, the certificate, `probes`,
@@ -5348,7 +5384,48 @@ What this says: the image is quiet on its own at the link level and **not quiet 
 Windows components that look for their servers by name, not of the lab's set-up. The report is in the summary and was also
 made again from the retained capture (`windows_noise.report`), which is how the names above reached it.
 
+### Checked on the stand again (2026-11-20, after the decisions above, not a qualification)
+
+The same image, the lab image and the machines as above, `settle_seconds = 60`, `rest_seconds = 600`, a state directory of its
+own, one run that counts. (Two attempts before it did not: the first ended with `qga-exchange-failed` when the closing
+marker of the rest was sent, the guest's agent not answering after the ten minutes, with no further evidence of the cause;
+the next two were stopped when the WSL virtual machine itself was restarted while the guest booted, at a time the host's
+commit memory was almost used up by other programs. Nothing of them is counted.)
+
+- **The run:** exit **0**, 759 s, no error, both machines `completion_verified`, the guest shut down by its power button,
+  the image unchanged, `accepted`. The network stood, the CA was imported, **all ten exchanges passed** and the lab's `qualify`
+  said `qualified: true`. The guest was left alone for 60.0 s before the probes and for 600.0 s in the rest.
+- **Window `probes`: `NONE`** (64 frames of probes, 4 of markers, nothing else). What the guest was still saying after its
+  set-up (DNS questions to the lab resolver, the first connections to the target) came before the opening marker, in the
+  frames the report counts as `outside`.
+- **Window `rest` (601 s):** `noise: FOUND`, shown and not judged: 470 frames, 24 `infrastructure` and 446 `unexpected`. The
+  unicast ARP requests of the guest for the gateway (7) and the lab's answers are `infrastructure`.
+
+| from | protocol | peer | port | frames | class | first (s) | last (s) |
+|---|---|---|---|---|---|---|---|
+| test | udp | 203.0.113.53 | 53 | 32 | unexpected | 3.357 | 517.991 |
+| lab | udp | 203.0.113.53 | 53 | 32 | unexpected | 3.357 | 517.992 |
+| test | tcp | 203.0.113.2 | 443 | 118 | unexpected | 3.358 | 528.554 |
+| lab | tcp | 203.0.113.2 | 443 | 94 | unexpected | 3.358 | 528.553 |
+| test | tcp | 203.0.113.2 | 80 | 85 | unexpected | 3.652 | 518.557 |
+| lab | tcp | 203.0.113.2 | 80 | 85 | unexpected | 3.652 | 518.557 |
+| test | arp | 192.0.2.1 | request | 7 | infrastructure | 9.412 | 456.413 |
+| lab | arp | 192.0.2.2 | reply | 7 | infrastructure | 9.412 | 456.413 |
+| lab | arp | 192.0.2.2 | request | 2 | infrastructure | 70.855 | 447.176 |
+| test | arp | 192.0.2.1 | reply | 2 | infrastructure | 70.856 | 447.178 |
+| lab / test | icmpv6 | link-local addresses | 135, 136 | 6 | infrastructure | 3.527 | 13.514 |
+
+  The names asked for: DNS `ctldl.windowsupdate.com` (A 7, AAAA 11), `config.edge.skype.com`, `msedge.api.cdp.microsoft.com`
+  (2 A and 2 AAAA each), `fs.microsoft.com`, `go.microsoft.com`, `settings-win.data.microsoft.com` (one each); TLS server
+  names `config.edge.skype.com` (8), `msedge.api.cdp.microsoft.com` (8), `ecs.office.com` (2), `go.microsoft.com` (2),
+  `fs.microsoft.com` and `settings-win.data.microsoft.com` (1).
+- **Accounting:** the capture has 699 frames, all read: 8 markers, 157 before the first marker, 64 in the window of the probes,
+  470 in the rest, none between the windows and none after, and the sum is 699 (`accounting.complete`).
+
 ### What can be done about it (proposals, none applied, all UNRUN)
+
+The owner's decision of 2026-11-20 is that these settings are **planned for the next rebuild of the image** (with stage
+10c) and not made now; the rest is listed meanwhile.
 
 Each is a standard setting of the operating system, so a step of `first-logon.ps1` and a new build of the image by the
 qualifier, not an exception in the observer; the sources are the pages of Microsoft Learn on connection endpoints
@@ -5362,7 +5439,7 @@ new resting capture decides.
 | `msedge.api.cdp.microsoft.com` (Edge update), `config.edge.skype.com` (Edge configuration) | Edge policies `EdgeUpdate\UpdateDefault` = 0, `AutoUpdateCheckPeriodMinutes` = 0 and `ExperimentationAndConfigurationServiceControl` = 0 | the image already disables the updater's services and policy, so another component may be the one that asks: which is not known |
 | `settings-win.data.microsoft.com` | listed under "Settings" (apps update their configuration); the page names no switch of its own | `AllowTelemetry` = 0 and the services are already off |
 | `mobile.events.data.microsoft.com`, `ecs.office.com`, `go.microsoft.com` | not on those pages | |
-| unicast ARP requests for the gateway | none: it is the stack's neighbor reachability check | a question for the classifier (it takes a request only with a zero target hardware address), which is the owner's |
+| unicast ARP requests for the gateway | none: it is the stack's neighbor reachability check | done: the classifier takes this one frame as `infrastructure` (see "Decisions of 2026-11-20") |
 
 The other way is to make the lab not answer these names (the resolver would refuse them, so nothing follows the question).
 That changes the lab, not the image, and with it what "rest" means; it is not done here either.

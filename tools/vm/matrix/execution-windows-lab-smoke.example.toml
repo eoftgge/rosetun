@@ -30,6 +30,8 @@ agent_wait_seconds = 300
 script_seconds = 300
 # How long the guest is left alone in the window `rest`: the noise report is of this window.
 rest_seconds = 600
+# How long the guest is left alone after its set-up and before the probes (0 to 300; 60 when left out).
+settle_seconds = 60
 shutdown_wait_seconds = 240
 
 [deadlines]

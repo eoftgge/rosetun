@@ -4,7 +4,11 @@ The report reads the capture the lab machine kept and says, for the window in wh
 of frame the wire carried: who sent it, the address and port at the other end, how many frames, which category the observer's
 classifier gives it, and when the first and the last came. It adds nothing to the classifier and tolerates nothing: a
 frame is `infrastructure` only when `lab_protocol` says so, and any other frame is a finding for the owner, who decides
-what, if anything, is allowed. `noise` is `NONE` only when no frame of the window is outside `infrastructure`.
+what, if anything, is allowed. `noise` is `NONE` only when no frame of the window is outside `infrastructure`; it informs
+and decides nothing (the run is judged by the network, the probes, the window of the probes and the observer), and
+`UNVERIFIED` says the window was not observed.
+The frames outside the window are in `outside` (before the first marker), `between` (in no window, up to the end of the
+rest) and `after`, and `accounting` counts every frame of the capture once.
 """
 
 from datetime import datetime, timezone
@@ -13,8 +17,8 @@ from . import lab_protocol as wire
 
 SCHEMA = 'rosetun.matrix.windows-noise-report.v1'
 REST_LABEL = 'rest'
-# The most groups a report keeps for the frames outside the windows (the boot and the set-up of the guest): they are
-# context, the window of rest is the report.
+# The most groups a report keeps for each section of the frames outside the window of rest (the boot and the set-up of the
+# guest, what falls between the windows, what comes after the rest): they are context, the window of rest is the report.
 OUTSIDE_LIMIT = 200
 
 
@@ -140,7 +144,8 @@ def report(raw, lab_id, *, probes=(), https=None, label=REST_LABEL, limit=wire.C
         rows, unparsed, problem, labels = wire.classified_frames(raw, lab_id, probes=probes, https=https, limit=limit)
     except ValueError as error:
         return dict(schema=SCHEMA, noise='UNVERIFIED', reason='classification-failed:' + str(error)[:48], window=None,
-                    groups=[], unexpected=[], other=[], outside=None, frames=None)
+                    groups=[], unexpected=[], other=[], outside=None, between=None, after=None,
+                    accounting=None, frames=None)
     marks = {}
     for position, at, frame, index, category in rows:
         if category == 'marker':
@@ -149,18 +154,37 @@ def report(raw, lab_id, *, probes=(), https=None, label=REST_LABEL, limit=wire.C
     base = dict(schema=SCHEMA, unparsed_frames=unparsed, capture_problem=problem)
     if len(found) != 1 or any(at is None for at in marks.get(found[0], [None])):
         return dict(base, noise='UNVERIFIED', reason='window-missing' if not found else 'window-repeated-or-untimed',
-                    window=None, groups=[], unexpected=[], other=[], outside=None, frames=None)
+                    window=None, groups=[], unexpected=[], other=[], outside=None, between=None, after=None,
+                    accounting=None, frames=None)
     index = found[0]
     opened, closed = min(marks[index]), max(marks[index])
     inside = [row for row in rows if row[3] == index and row[4] != 'marker']
     first_marker = min(row[0] for row in rows if row[4] == 'marker')
+    closing = max(row[0] for row in rows if row[4] == 'marker' and row[3] == index)
     before = [row for row in rows if row[0] < first_marker]
+    # Every frame of the capture is in exactly one of these: the markers, the frames before the first one, those of the
+    # window of rest, those of any other window, and those in no window, before the end of the rest or after it.
+    elsewhere = [row for row in rows if row[4] != 'marker' and row[0] > first_marker
+                 and row[3] is not None and row[3] != index]
+    between = [row for row in rows if row[4] != 'marker' and row[0] > first_marker and row[3] is None
+               and row[0] < closing]
+    after = [row for row in rows if row[4] != 'marker' and row[3] is None and row[0] > closing]
+    markers = sum(1 for row in rows if row[4] == 'marker')
+    sections = dict(markers=markers, before=len(before), rest=len(inside), other_windows=len(elsewhere),
+                    between=len(between), after=len(after))
+    accounting = dict(sections, sum=sum(sections.values()), parsed=len(rows), unparsed=unparsed,
+                      capture_records=len(rows) + unparsed)
+    accounting['complete'] = accounting['sum'] == accounting['parsed']
     groups = _groups(inside, opened)
     counts = {}
     for row in inside:
         counts[row[4]] = counts.get(row[4], 0) + 1
     start = next((row[1] for row in rows if row[1] is not None), None)
-    outside = _groups(before, start)
+    def section(selected):
+        listed = _groups(selected, start)
+        return dict(frames=len(selected), seconds_from='capture-start', groups=listed[:OUTSIDE_LIMIT],
+                    groups_omitted=max(0, len(listed) - OUTSIDE_LIMIT))
+
     unexpected = [row for row in groups if row['category'] == 'unexpected']
     other = [row for row in groups if row['category'] not in ('infrastructure', 'unexpected')]
     noise = 'NONE' if all(row['category'] == 'infrastructure' for row in groups) else 'FOUND'
@@ -169,8 +193,7 @@ def report(raw, lab_id, *, probes=(), https=None, label=REST_LABEL, limit=wire.C
                             seconds=round(closed - opened, 3)),
                 frames=dict(total=len(inside), by_category=dict(sorted(counts.items()))),
                 groups=groups, unexpected=unexpected, other=other,
-                outside=dict(frames=len(before), seconds_from='capture-start', groups=outside[:OUTSIDE_LIMIT],
-                             groups_omitted=max(0, len(outside) - OUTSIDE_LIMIT)))
+                outside=section(before), between=section(between), after=section(after), accounting=accounting)
 
 
 def table(document):

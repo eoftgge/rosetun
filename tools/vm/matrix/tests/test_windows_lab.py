@@ -59,6 +59,12 @@ def request_arp():
                sha=wire.MACS['test'], tha='00:00:00:00:00:00')
 
 
+def poll_arp():
+    """The unicast request with which a stack checks that the gateway it knows still answers."""
+    return arp(1, wire.CLIENTS[4], wire.GATEWAYS[4], src=wire.MACS['test'], dst=wire.MACS['lab'],
+               sha=wire.MACS['test'], tha=wire.MACS['lab'])
+
+
 def llmnr(port=50000):
     return ip_frame(wire.CLIENTS[4], '224.0.0.252', 17, udp(port, 5355, b'name'), dst='01:00:5e:00:00:fc')
 
@@ -312,6 +318,15 @@ class NoiseTests(unittest.TestCase):
                          tuple(row[k] for k in ('sender', 'protocol', 'peer', 'port', 'frames', 'category')))
         self.assertEqual((50.0, 51.0), (row['first_seconds'], row['last_seconds']))
 
+    def test_the_poll_of_the_gateway_by_hardware_address_is_infrastructure_and_a_poll_of_any_other_is_not(self):
+        other = arp(1, wire.CLIENTS[4], wire.GATEWAYS[4], src=wire.MACS['test'], dst='00:00:5e:00:53:70',
+                    sha=wire.MACS['test'], tha='00:00:5e:00:53:70')
+        document = windows_noise.report(self.window([(150.0, poll_arp()), (151.0, poll_arp())]), RUN)
+        self.assertEqual(('NONE', {'infrastructure': 2}), (document['noise'], document['frames']['by_category']))
+        document = windows_noise.report(self.window([(150.0, poll_arp()), (151.0, other)]), RUN)
+        self.assertEqual(('FOUND', {'infrastructure': 1, 'unexpected': 1}),
+                         (document['noise'], document['frames']['by_category']))
+
     def test_every_frame_outside_infrastructure_is_listed_with_its_flow_and_times(self):
         body = [(120.0, llmnr(50000)), (121.0, llmnr(50000)), (130.0, llmnr(50001)), (140.0, request_arp()),
                 (200.0, ip_frame(wire.CLIENTS[4], '203.0.113.9', 6, tcp(50100, 80, flags=0x02)))]
@@ -413,6 +428,9 @@ class ConfigTests(unittest.TestCase):
                    lambda c: c['smoke'].update(rest_seconds=59), lambda c: c['smoke'].update(rest_seconds=901),
                    lambda c: c['smoke'].update(script_seconds=29), lambda c: c['smoke'].update(agent_wait_seconds=301),
                    lambda c: c['smoke'].update(rest_seconds='600'),
+                   lambda c: c['smoke'].update(settle_seconds=301), lambda c: c['smoke'].update(settle_seconds=-1),
+                   lambda c: c['smoke'].update(settle_seconds='60'), lambda c: c['smoke'].update(settle_seconds=True),
+                   lambda c: c['smoke'].update(extra_seconds=1), lambda c: c['smoke'].pop('rest_seconds'),
                    lambda c: c['lab']['qemu'].update(machine='q35'), lambda c: c['lab']['qemu'].update(qga=False),
                    lambda c: c['lab']['tunnel'].update(node_port=443), lambda c: c['lab'].update(doh_cert_sha256='A' * 64),
                    lambda c: c['lab'].update(ca_certificate=''), lambda c: c['deadlines'].update(boot=301),
@@ -428,11 +446,29 @@ class ConfigTests(unittest.TestCase):
 
     def test_a_capture_that_would_not_cover_the_run_is_refused(self):
         config = self.example()
-        config['smoke'].update(rest_seconds=900, script_seconds=300, agent_wait_seconds=300)
+        config['smoke'].update(rest_seconds=900, script_seconds=300, agent_wait_seconds=300, settle_seconds=0)
         self.assertEqual(wire.DURATION_MAX, windows_lab.capture_seconds(config))
-        with patch.object(windows_lab, 'CAPTURE_SLACK', windows_lab.CAPTURE_SLACK + 1):
-            with self.assertRaises(ValueError):
+        with patch.object(windows_lab, '_state_path'):
+            windows_lab.validate(config)
+            config['smoke']['settle_seconds'] = 1
+            with self.assertRaisesRegex(ValueError, 'lab capture covers'):
                 windows_lab.validate(config)
+            config['smoke']['settle_seconds'] = 0
+            with patch.object(windows_lab, 'CAPTURE_SLACK', windows_lab.CAPTURE_SLACK + 1):
+                with self.assertRaisesRegex(ValueError, 'lab capture covers'):
+                    windows_lab.validate(config)
+
+    def test_the_settling_is_part_of_the_capture_and_is_sixty_seconds_when_left_out(self):
+        config = self.example()
+        self.assertEqual(60, config['smoke'].pop('settle_seconds'))
+        left_out = windows_lab.capture_seconds(config)
+        config['smoke']['settle_seconds'] = 60
+        self.assertEqual((60, left_out), (windows_lab.SETTLE_DEFAULT, windows_lab.capture_seconds(config)))
+        config['smoke']['settle_seconds'] = 90
+        self.assertEqual(left_out + 30, windows_lab.capture_seconds(config))
+        with patch.object(windows_lab, '_state_path'):
+            del config['smoke']['settle_seconds']
+            windows_lab.validate(config)
 
     def test_the_command_takes_the_suite_and_refuses_the_lab_flags(self):
         import contextlib
@@ -448,8 +484,10 @@ class ConfigTests(unittest.TestCase):
 class Machines:
     """The two machines of the run, the lab guest and the Windows guest: each answers from the data it was given."""
 
-    def __init__(self, test, *, network=None, rest_body=(), fault=None, probe_changes=None):
+    def __init__(self, test, *, network=None, rest_body=(), fault=None, probe_changes=None, probes_body=(),
+                 between_body=(), after_body=()):
         self.test, self.fault, self.rest_body = test, fault, list(rest_body)
+        self.probes_body, self.between_body, self.after_body = list(probes_body), list(between_body), list(after_body)
         self.network = network or network_answer()
         self.probe_changes = probe_changes or {}
         self.events, self.scripts, self.recorded, self.calls, self.vms, self.reads = [], [], [], [], {}, []
@@ -598,10 +636,13 @@ class Machines:
         reply = ip_frame(wire.RESOLVER, wire.CLIENTS[4], 17, udp(53, 52000, wire.query(plain)),
                          src=wire.MACS['lab'], dst=wire.MACS['test'])
         rows += [(at + 0.02, request), (at + 0.03, reply)]
+        rows += [(19.0 + n / 10, frame) for n, frame in enumerate(self.probes_body)]
         rows += marker_rows(0, 'close', 'probes', 20.0, lab_id)
+        rows += [(30.0 + n, frame) for n, frame in enumerate(self.between_body)]
         rows += marker_rows(1, 'open', 'rest', 100.0, lab_id)
         rows += [(110.0 + n, frame) for n, frame in enumerate(self.rest_body)]
         rows += marker_rows(1, 'close', 'rest', 700.0, lab_id)
+        rows += [(710.0 + n, frame) for n, frame in enumerate(self.after_body)]
         return rows, plain
 
     def served(self):
@@ -715,7 +756,7 @@ class RunTests(Flow):
         (_, expected, window, tunnel, options), finish = machines.calls
         self.assertEqual(8, len(expected))
         self.assertEqual([], window)
-        self.assertEqual(dict(evidence_disk=True, dns=True, windows=True, duration_seconds=30 + 4 * 60 + 60 + 300,
+        self.assertEqual(dict(evidence_disk=True, dns=True, windows=True, duration_seconds=30 + 4 * 60 + 60 + 60 + 300,
                               certificates=dict(https_sha256='a' * 64, doh_sha256='b' * 64)), options)
         self.assertEqual(self.config['lab']['tunnel']['ca_sha256'], tunnel['ca_sha256'])
         self.assertEqual(dict(tunnel=True, evidence_disk=True, dns=True), machines.pair_options)
@@ -729,19 +770,79 @@ class RunTests(Flow):
         self.assertEqual(['network', 'ca', 'probes', 'marker', 'marker'], kinds)
         self.assertEqual(['guest-network', 'guest-ca', 'guest-probes'], [op for op, _ in machines.recorded][:3])
 
-    def test_noise_in_the_rest_window_is_a_finding_and_the_run_still_ends_clean(self):
-        machines = Machines(self, rest_body=[request_arp(), llmnr(50000), llmnr(50000)])
+    def test_noise_in_the_rest_window_is_listed_and_the_run_is_judged_without_it(self):
+        machines = Machines(self, rest_body=[request_arp(), poll_arp(), llmnr(50000), llmnr(50000)])
         result = self.go(machines)
         self.assertEqual([], result['errors'])
-        self.assertEqual(1, result['exit_code'])
+        self.assertEqual(0, result['exit_code'])
         execution = result['execution']
         self.assertEqual(('FOUND', 'DETECTED', 'NONE'), (execution['noise'], execution['windows']['rest']['leak'],
                                                          execution['windows']['probes']['leak']))
         row, = execution['noise_report']['unexpected']
         self.assertEqual((2, '224.0.0.252', 5355), (row['frames'], row['peer'], row['port']))
         self.assertIn('224.0.0.252', '\n'.join(execution['noise_table']))
-        self.assertFalse(execution['accepted'])
+        self.assertEqual({'infrastructure': 2, 'unexpected': 2}, execution['noise_report']['frames']['by_category'])
+        self.assertTrue(execution['accepted'])
         self.assertTrue(result['completed'])
+
+    def test_a_frame_in_the_window_of_the_probes_still_makes_the_run_negative(self):
+        machines = Machines(self, probes_body=[llmnr(50000)])
+        result = self.go(machines)
+        self.assertEqual([], result['errors'])
+        self.assertEqual(1, result['exit_code'])
+        execution = result['execution']
+        self.assertEqual(('DETECTED', 'NONE', 'NONE'), (execution['windows']['probes']['leak'],
+                                                        execution['windows']['rest']['leak'], execution['noise']))
+        self.assertFalse(execution['accepted'])
+
+    def test_a_rest_that_was_not_observed_is_still_an_error_whatever_the_noise(self):
+        machines = Machines(self, rest_body=[llmnr()])
+        unobserved = dict(windows_noise.report(b'', 'a' * 32), noise='UNVERIFIED', reason='window-missing')
+        with patch.object(windows_lab.windows_noise, 'report', return_value=unobserved):
+            result = self.go(machines)
+        self.assertEqual(1, result['exit_code'])
+        self.assertEqual(('UNVERIFIED', False), (result['execution']['noise'], result['execution']['accepted']))
+
+    def test_the_frames_around_the_windows_are_in_the_report_and_every_frame_is_in_one_section(self):
+        machines = Machines(self, rest_body=[llmnr()], between_body=[llmnr(50001), request_arp()],
+                            after_body=[llmnr(50002), llmnr(50003), poll_arp()])
+        result = self.go(machines)
+        self.assertEqual(0, result['exit_code'])
+        report = result['execution']['noise_report']
+        self.assertEqual((2, 3), (report['between']['frames'], report['after']['frames']))
+        self.assertEqual((1, 1), (report['frames']['total'], len(report['groups'])))
+        sections = report['accounting']
+        self.assertTrue(sections['complete'])
+        self.assertEqual(len(machines.frames()[0]), sections['sum'])
+        self.assertEqual(sections['sum'], sections['capture_records'])
+        self.assertEqual((8, 1, 1, 2, 3), tuple(sections[name] for name in ('markers', 'before', 'rest', 'between', 'after')))
+
+    def test_the_guest_is_left_alone_after_its_set_up_and_before_the_probes(self):
+        machines = Machines(self)
+        result = self.go(machines)
+        settle = self.config['smoke'].get('settle_seconds', windows_lab.SETTLE_DEFAULT)
+        self.assertEqual(60, settle)
+        self.assertGreaterEqual(result['execution']['settle']['waited_seconds'], settle)
+        self.assertGreaterEqual(sum(self.sleeps), settle + self.config['smoke']['rest_seconds'])
+        # No script goes to the guest between the certificate and the probes, and both machines are only looked at.
+        events = machines.events
+        waiting = events[events.index('guest-ca'):events.index('guest-probes')]
+        self.assertTrue(any(type(e) is tuple and e[0] == 'watch' for e in waiting))
+        self.assertEqual(['guest-ca'], [e for e in waiting if type(e) is str])
+
+    def settled(self, seconds):
+        self.config['smoke']['settle_seconds'] = seconds
+        result = self.go(Machines(self))
+        self.assertEqual(0, result['exit_code'])
+        self.assertEqual(seconds, result['execution']['capture_seconds'] - 30 - 4 * 60 - 60 - 300)
+        self.assertAlmostEqual(seconds, result['execution']['settle']['waited_seconds'], delta=5)
+        self.assertGreaterEqual(sum(self.sleeps), seconds + self.config['smoke']['rest_seconds'])
+
+    def test_a_settling_of_another_length_is_taken(self):
+        self.settled(130)
+
+    def test_a_settling_of_zero_seconds_waits_for_nothing(self):
+        self.settled(0)
 
     def test_a_probe_that_failed_makes_the_run_negative_and_the_rest_is_still_observed(self):
         machines = Machines(self)

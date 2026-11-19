@@ -6,11 +6,14 @@ network adapter is the one of the image, with the MAC the lab calls the test mac
 when the machine starts. The addresses are not in the image (it is qualified and frozen): the controller sets them
 through the guest agent once the guest answers, imports the lab's CA into the machine's root store, and then runs, in
 the guest's own PowerShell, the eight probes of the lab contract, one HTTPS request that the system itself validates
-and one lookup against the lab resolver, between two window markers. The guest is then left alone for the length of the
-rest window, and the capture of that window is the noise report.
+and one lookup against the lab resolver, between two window markers. Before the probes the guest is left alone for
+`settle_seconds`, so that what the set-up leaves behind does not fall in their window. It is left alone again for the
+length of the rest window, and the capture of that window is the noise report, which lists and decides nothing.
 
-Nothing is tolerated that the observer does not tolerate: a frame outside `infrastructure` in a window is a finding and
-makes the window `DETECTED`. The image is not qualified, so the run is diagnostic whatever it reports.
+Nothing is tolerated that the observer does not tolerate: a frame outside `infrastructure` in the window of the probes
+makes it `DETECTED`. In the window of rest it is listed (`noise: FOUND`) and the run is not judged by it: what Windows
+says when it is left alone is the natural traffic the later stages (with a tunnel) have to keep in the tunnel or off the
+wire. The image is not qualified, so the run is diagnostic whatever it reports.
 """
 
 from dataclasses import fields
@@ -49,7 +52,9 @@ DEADLINE_FIELDS = ('preparation', 'boot')
 # The lowest and the highest each time of `[smoke]` may be, in seconds. `script_seconds` is what one PowerShell of the
 # guest may take; the first one of a boot took more than 180 seconds on the stand.
 SMOKE_TIMES = dict(agent_wait_seconds=(1, 300), script_seconds=(30, 300), rest_seconds=(60, 900),
-                   shutdown_wait_seconds=(1, 600))
+                   shutdown_wait_seconds=(1, 600), settle_seconds=(0, 300))
+# `settle_seconds` may be left out of `[smoke]`: the guest then has this long to quiet down after its set-up.
+SETTLE_DEFAULT = 60
 # The capture also covers the lab's set-up and the boot of the guest around the run, and the end of it.
 CAPTURE_SLACK = 300
 # The guest's scripts that may be asked again on a new agent session: they change nothing a second time.
@@ -61,10 +66,15 @@ MEMORY_MARGIN_MIB = 768
 SHUTDOWN_NOTE = 'acpi'
 
 
+def settle_seconds(smoke):
+    return smoke.get('settle_seconds', SETTLE_DEFAULT)
+
+
 def capture_seconds(config):
-    """How long the lab machine captures: the boot and every script of the guest, the rest, and the room around them."""
+    """How long the lab machine captures: the boot, every script of the guest, the settling, the rest, and the room around."""
     smoke = config['smoke']
-    return smoke['agent_wait_seconds'] + 4 * smoke['script_seconds'] + smoke['rest_seconds'] + CAPTURE_SLACK
+    return (smoke['agent_wait_seconds'] + 4 * smoke['script_seconds'] + settle_seconds(smoke) + smoke['rest_seconds']
+            + CAPTURE_SLACK)
 
 
 def validate(config):
@@ -76,9 +86,13 @@ def validate(config):
     if config['platform'] != 'linux-x86_64-kvm':
         raise ValueError('unsupported execution platform')
     exact(config['qemu'], [f.name for f in fields(WindowsQemuConfig)])
-    exact(config['smoke'], SMOKE_TIMES)
+    smoke = config['smoke']
+    if type(smoke) is not dict or not (set(SMOKE_TIMES) - {'settle_seconds'} <= set(smoke) <= set(SMOKE_TIMES)):
+        raise ValueError('unknown or missing execution configuration fields')
     for name, (low, high) in SMOKE_TIMES.items():
-        value = config['smoke'][name]
+        if name not in smoke:
+            continue
+        value = smoke[name]
         if type(value) is not int or not low <= value <= high:
             raise ValueError('invalid smoke time')
     if capture_seconds(config) > DURATION_MAX:
@@ -171,13 +185,15 @@ def preflight(config, *, dry_run=False):
                          'start the Windows guest paused with its adapter on the lab wire, resume, observe boot',
                          'set the lab addresses in the guest and import the lab CA (up to %d seconds each)'
                          % smoke['script_seconds'],
+                         'the guest left alone for %d seconds, so that the set-up is over before the probes'
+                         % settle_seconds(smoke),
                          'window `probes`: the 8 probes, one HTTPS request and one lookup of the lab resolver',
                          'window `rest`: the guest left alone for %d seconds' % smoke['rest_seconds'],
                          'finish the capture, shut the guest down (ACPI), close both machines',
                          'read and verify the evidence disk, judge both windows, write the noise report',
                          'check that the image is unchanged', 'summary'],
                 limitations=['the image is not qualified (qualified: false): the run is diagnostic and counts for nothing',
-                             'a frame outside infrastructure in a window is a finding, not an exception to add',
+                             'a frame outside infrastructure in the window of the probes is a finding, not an exception to add; in the rest it is listed only',
                              'no controller restart recovery; `attach` does not take this suite',
                              'IPv6 is the lab\'s static address; the lab sends no router advertisement',
                              'no automatic file cleanup'],
@@ -302,8 +318,8 @@ def run_windows_lab_smoke(config, *, adapters=None, clock=time.monotonic, sleep=
     # What the finally block summarizes: kept as it arrives, so that a late failure loses nothing.
     seen = dict(logs={}, hashes={}, verdict=None, noise=None, qualification=None, replies=None, health=None,
                 evidence_disk=dict(verified=False, reason='not-read', pcap_bytes=0, pcap_sha256=None))
-    measured = dict(network=None, certificate=None, probes=None, rest=None, shutdown=None, image_unchanged=None,
-                    host_memory_mib=None)
+    measured = dict(network=None, certificate=None, settle=None, probes=None, rest=None, shutdown=None,
+                    image_unchanged=None, host_memory_mib=None)
 
     def step(name, operation):
         nonlocal stage
@@ -429,8 +445,25 @@ def run_windows_lab_smoke(config, *, adapters=None, clock=time.monotonic, sleep=
             measured['certificate'] = asks.answer('guest-ca', guest.certificate, text, der)
             windows_reboot.record(vm, 'guest-ca', certificate=measured['certificate'], stderr=vm.qga.stderr_text or '')
 
+        def alone(seconds):
+            # Nothing is sent to the guest meanwhile: the wait only looks at the two machines.
+            began = clock()
+            while clock() - began < seconds:
+                for machine in vms.values():
+                    machine.watch_resets()
+                    if machine.process.poll() is not None:
+                        raise LifecycleError('vm-child-has-exited', machine)
+                sleep(min(REST_POLL_SECONDS, max(0, seconds - (clock() - began))))
+            return round(clock() - began, 1)
+
+        def settle():
+            measured['settle'] = dict(waited_seconds=alone(settle_seconds(smoke)))
+            if not vm.qga.valid:
+                vm.recover_guest()
+
         step('network', network)
         step('certificate', certificate)
+        step('settle', settle)
 
         def probe():
             opening, closing = windows[0]
@@ -462,15 +495,7 @@ def run_windows_lab_smoke(config, *, adapters=None, clock=time.monotonic, sleep=
             opening, closing = windows[1]
             text = asks.run('guest-rest-open', guest.marker_script(opening), repeat=False)
             seen['rest_markers'] = [asks.answer('guest-rest-open', guest.marker, text, opening)]
-            began = clock()
-            # Nothing is sent to the guest while it rests: the wait only looks at the two machines.
-            while clock() - began < smoke['rest_seconds']:
-                for machine in vms.values():
-                    machine.watch_resets()
-                    if machine.process.poll() is not None:
-                        raise LifecycleError('vm-child-has-exited', machine)
-                sleep(min(REST_POLL_SECONDS, max(0, smoke['rest_seconds'] - (clock() - began))))
-            measured['rest'] = dict(waited_seconds=round(clock() - began, 1))
+            measured['rest'] = dict(waited_seconds=alone(smoke['rest_seconds']))
             if not vm.qga.valid:
                 vm.recover_guest()
             text = asks.run('guest-rest-close', guest.marker_script(closing), repeat=False)
@@ -612,6 +637,9 @@ def execution_section(result, config, seen, measured, vms, plan, image, started,
     windows = {row['label']: row for row in window_rows(verdict)} if verdict else {}
     probes = (probe_summary(doc, seen['qualification'], seen.get('https_row'), seen.get('dns_rows') or [], seen['plain'])
               if doc is not None and seen.get('qualification') is not None else None)
+    # What the guest does at rest is listed, not judged: the window must have been observed whole, whatever it holds.
+    rest = windows.get(REST_LABEL, {})
+    rest_observed = rest.get('leak') in ('NONE', 'DETECTED') and not rest.get('observer_reasons', ['missing'])
     markers_ok = bool(doc) and all(row['sent'] and row['acknowledged'] for row in doc['marker_rows']) and all(
         row['sent'] and row['acknowledged'] for row in seen.get('rest_markers', [])) and len(
         seen.get('rest_markers', [])) == 2
@@ -619,15 +647,16 @@ def execution_section(result, config, seen, measured, vms, plan, image, started,
                 and measured['image_unchanged'] is True and measured['network'] is not None
                 and not measured['network']['problems'] and measured['certificate'] is not None
                 and probes is not None and probes['passed'] and markers_ok
-                and all(windows.get(label, {}).get('leak') == 'NONE' for label in LABELS)
-                and noise is not None and noise['noise'] == 'NONE')
+                and windows.get(PROBES_LABEL, {}).get('leak') == 'NONE' and rest_observed
+                and noise is not None and noise['noise'] != 'UNVERIFIED')
     return dict(accepted=bool(accepted), uuid=next((vm.vm_uuid for role, vm in vms.items() if role == 'test'), None),
                 kvm_qualified=plan['kvm_qualified'] if plan else False,
                 image=dict(identifier=image.identifier, sha256=image.sha256, qualified=False) if image else None,
                 duration_seconds=round(clock() - started, 1), capture_seconds=capture_seconds(config),
                 network=measured['network'], certificate=measured['certificate'], probes=probes,
                 markers=dict(probes=doc['marker_rows'] if doc else None, rest=seen.get('rest_markers')),
-                rest=measured['rest'], shutdown=measured['shutdown'], image_unchanged=measured['image_unchanged'],
+                settle=measured['settle'], rest=measured['rest'], shutdown=measured['shutdown'],
+                image_unchanged=measured['image_unchanged'],
                 host_memory_mib=measured['host_memory_mib'],
                 windows={label: dict(leak=row['leak'], reason=row['leak_reason'], reasons=row['observer_reasons'],
                                      categories=row['categories']) for label, row in windows.items()},
