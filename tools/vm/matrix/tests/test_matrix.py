@@ -47,15 +47,20 @@ def summarize(report):
 
 class CatalogTests(unittest.TestCase):
     def test_all_existing_catalogs_keep_their_fields(self):
-        expected_counts = {"linux-l2": 34, "linux-l3": 60, "linux-l4": 27,
+        expected_counts = {"linux-l2": 34, "linux-l3": 61, "linux-l4": 27,
                            "linux-l5": 17, "linux-proxy": 47, "linux-reboot-smoke": 3}
         for suite, filename in SUITES.items():
             with self.subTest(suite=suite):
                 rows = read_catalog(LINUX_ROOT / filename)
                 self.assertEqual(len(rows), expected_counts[suite])
-                self.assertEqual(rows[0]["id"], "preflight.identity")
-                self.assertTrue(rows[0]["required"])
-                self.assertEqual(rows[0]["evidence"], "infrastructure")
+                # `dev` lists `route.bypass-warning` first in the L3 catalog; the preflight row follows it.
+                preflight = rows[1] if suite == "linux-l3" else rows[0]
+                if suite == "linux-l3":
+                    self.assertEqual(rows[0]["id"], "route.bypass-warning")
+                    self.assertTrue(rows[0]["required"])
+                self.assertEqual(preflight["id"], "preflight.identity")
+                self.assertTrue(preflight["required"])
+                self.assertEqual(preflight["evidence"], "infrastructure")
 
     def test_catalog_structure_and_duplicate_ids_are_rejected(self):
         header = "id\trequired\tevidence\tgroup\tdetail\ttitle\n"

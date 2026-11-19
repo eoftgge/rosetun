@@ -4005,6 +4005,22 @@ and the retained artifacts.
 
 The checks of stage W are not repeated.
 
+### The scenario `route.bypass-warning` (61 rows, group of 41)
+
+`dev` added `route.bypass-warning` (required) as the first row of `scenarios-l3.tsv`; `run-l3.sh` runs it after
+`scenario_lan_on` and before `scenario_dns_lock`. The catalog now has 61 rows (39 required) and the group 41
+scenarios; the product, the script and the order of the catalog are the owner's and did not change.
+
+- Window `bypass_warning` 0 (`WINDOW_OF`, one window per run in `WINDOWS_PER_LABEL`), after `lan_follows_change` and
+  before `neighbor` in the group. The session is `connect_with` a DNS lock; the scenario adds `1.1.1.1/32 dev <physical>
+  proto 186` only for the helper to look it up, sends no packet to it, reads `cli status` and removes the route. It
+  does not call `disconnect`: the `connect_with` of `dns_lock` ends the session (its `disconnect` and closing marker
+  come before any probe), so nothing of `dns_lock` falls into this window.
+- No entry in `EXPECTED_FLOWS`: the window is expected to show no frame to the target or the resolver (`NONE`), and
+  anything else there is a leak.
+- The summary and the cross-check read windows by label and number, not by the order of the catalog, so the first
+  row of the TSV and its execution after `lan` need no change.
+
 ## Stage 8a: Linux Proxy in the lab
 
 `run linux-proxy` delivers the Proxy package (system proxy without TUN, the strict kill switch of the first phase,

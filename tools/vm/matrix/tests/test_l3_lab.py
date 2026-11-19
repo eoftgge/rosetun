@@ -310,10 +310,11 @@ class DiagnosticJointStartTests(JointStartTests):
 
 
 # The windows of the two qualification runs of stage 7b2b, in order: `inbound` stopped before its connect there
-# (no sshd), so `forwarded` opened the session of the peer scenarios.
+# (no sshd), so `forwarded` opened the session of the peer scenarios. `bypass_warning` is the window of
+# `route.bypass-warning`, which the script runs after the Local network sessions and before `dns_lock`.
 WINDOWS_7B2B = ('reported', 'identity', 'connect_ks', 'capabilities', 'capabilities', 'through_vpn_by_program',
                 'restart_guarded', 'lan_on', 'lan_private_closed', 'lan_private_open', 'lan_follows_change',
-                'dns_lock', 'dns_lock_unavailable', 'missing_through_restart', 'forwarded', 'killed',
+                'bypass_warning', 'dns_lock','dns_lock_unavailable', 'missing_through_restart', 'forwarded', 'killed',
                 'dns_lock_killed', 'five_kills', 'upgraded', 'stopped')
 # The same run with sshd in the image: `inbound` opens the session and `forwarded` runs in it.
 WINDOWS_7C2 = tuple('inbound' if label == 'forwarded' else label for label in WINDOWS_7B2B)

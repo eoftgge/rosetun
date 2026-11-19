@@ -35,11 +35,12 @@ ADDED_7C3 = (('rules.direct-other-account', ('capabilities', 1)),
 # The scenarios stage 7e adds: the Local network sessions and the IPv6 neighbor, each in a window of its own.
 LAN_7E = (('lan.on', ('lan_on', 0)), ('lan.private-closed', ('lan_private_closed', 0)),
           ('lan.private-open', ('lan_private_open', 0)), ('lan.follows-change', ('lan_follows_change', 0)))
+BYPASS_WARNING = (('route.bypass-warning', ('bypass_warning', 0)),)
 ADDED_7E = LAN_7E + (('ipv6.neighbor', ('neighbor', 0)),)
 LABELS = ('reported', 'identity', 'connect_ks', 'capabilities', 'restart_guarded', 'inbound', 'killed', 'five_kills',
           'upgraded', 'stopped', 'through_vpn_by_program', 'dns_lock', 'dns_lock_unavailable',
           'missing_through_restart', 'dns_lock_killed', 'specific_bypass', 'lan_on', 'lan_private_closed',
-          'lan_private_open', 'lan_follows_change', 'neighbor')
+          'lan_private_open', 'lan_follows_change', 'bypass_warning', 'neighbor')
 # Since stage 7e no scenario that opens a session stays outside the group.
 OUTSIDE = ()
 
@@ -78,11 +79,12 @@ class RunTests(Flow):
         agreements = self.agreements(result)
         self.assertEqual({'NOT_APPLICABLE'}, {agreements[i] for i in summary.GROUP if summary.WINDOW_OF[i] is None})
         self.assertEqual({'AGREE'}, {agreements[i] for i in summary.GROUP if summary.WINDOW_OF[i] is not None})
-        self.assertEqual(40, len(result['crosscheck']))
+        self.assertEqual(41, len(result['crosscheck']))
         self.assertEqual({True}, {row['as_expected'] for row in result['lab']['window_counts']})
         verdicts = {row['id']: row['window_verdict'] for row in result['crosscheck']}
         self.assertEqual({'EXPECTED'}, {verdicts[i] for i, _ in ADDED_7C3})
         self.assertEqual(['EXPECTED', 'NONE', 'EXPECTED', 'NONE', 'NONE'], [verdicts[i] for i, _ in ADDED_7E])
+        self.assertEqual(['NONE'], [verdicts[i] for i, _ in BYPASS_WARNING])
         self.assertTrue(result['group']['passed'])
         self.assertEqual(([], []), (result['group']['findings'], result['group']['unproven']))
         self.assertFalse(result['release_gate'])
@@ -407,8 +409,10 @@ class GroupOf7c2Tests(unittest.TestCase):
         self.assertEqual(list(ADDED_7C3), [(i, summary.WINDOW_OF[i]) for i in summary.GROUP[27:34]])
         self.assertEqual(['route.specific-bypass'], list(summary.GROUP[34:35]))
         self.assertEqual(('specific_bypass', 0), summary.WINDOW_OF['route.specific-bypass'])
-        self.assertEqual(list(ADDED_7E), [(i, summary.WINDOW_OF[i]) for i in summary.GROUP[35:]])
-        self.assertEqual(40, len(summary.GROUP))
+        self.assertEqual(list(LAN_7E), [(i, summary.WINDOW_OF[i]) for i in summary.GROUP[35:39]])
+        self.assertEqual(list(BYPASS_WARNING), [(i, summary.WINDOW_OF[i]) for i in summary.GROUP[39:40]])
+        self.assertEqual([('ipv6.neighbor', ('neighbor', 0))], [(i, summary.WINDOW_OF[i]) for i in summary.GROUP[40:]])
+        self.assertEqual(41, len(summary.GROUP))
         self.assertEqual(LABELS, summary.GROUP_LABELS)
         self.assertEqual({'forward.blocked': ('forwarded', 0),
                           'rules.direct-other-account': ('direct_for_other_account', 0)},
@@ -430,18 +434,18 @@ class GroupOf7c2Tests(unittest.TestCase):
         # As in the 7b2b and 7c1 runs: the windows where a program, UDP 53 or the own network goes direct by design
         # saw just that (synthetic).
         result, table = self.decide()
-        self.assertEqual(23, len(result['lab']['windows']))
-        self.assertEqual(40, len(table))
+        self.assertEqual(24, len(result['lab']['windows']))
+        self.assertEqual(41, len(table))
         self.assertEqual([], result['group']['outside_leaks'])
         self.assertEqual({'AGREE', 'NOT_APPLICABLE'}, {row['agreement'] for row in table.values()})
         self.assertEqual({None}, {table[i]['window'] for i in summary.GROUP if table[i]['agreement'] != 'AGREE'})
         self.assertEqual((0, 'group-clean'), (result['exit_code'], result['outcome']))
-        self.assertEqual(('inbound', [17]), (table['forward.blocked']['window'], table['forward.blocked']['windows']))
+        self.assertEqual(('inbound', [18]), (table['forward.blocked']['window'], table['forward.blocked']['windows']))
         self.assertEqual({True}, {row['as_expected'] for row in result['lab']['window_counts']})
 
     def test_the_windows_of_the_7b2b_runs_judge_forward_blocked_in_the_session_forwarded_opened(self):
         result, table = self.decide(with_neighbor(with_specific_route(WINDOWS_7B2B)), None, **{'inbound.reply': 'FAIL'})
-        self.assertEqual(('forwarded', [17], 'AGREE'), (table['forward.blocked']['window'],
+        self.assertEqual(('forwarded', [18], 'AGREE'), (table['forward.blocked']['window'],
                                                          table['forward.blocked']['windows'],
                                                          table['forward.blocked']['agreement']))
         self.assertEqual(('inbound', [], 'NOT_APPLICABLE'), (table['inbound.reply']['window'],
@@ -531,8 +535,8 @@ class GroupOf7c2Tests(unittest.TestCase):
 
     def test_a_leak_in_a_second_window_of_a_label_that_may_have_one_is_a_finding(self):
         labels = list(WINDOWS_7E) + ['forwarded', 'forwarded']
-        result, table = self.decide(labels, {24: 'DETECTED'})
-        self.assertEqual((23, 'AGREE'), (table['forward.blocked']['windows'][0], table['forward.blocked']['agreement']))
+        result, table = self.decide(labels, {25: 'DETECTED'})
+        self.assertEqual((24, 'AGREE'), (table['forward.blocked']['windows'][0], table['forward.blocked']['agreement']))
         self.assertEqual((1, ['leak-in-group-window'], []), (result['exit_code'], result['group']['findings'],
                                                              result['group']['outside_leaks']))
 
@@ -626,9 +630,9 @@ class GroupOf7c3Tests(unittest.TestCase):
 
     def test_a_dns_lock_session_opened_again_is_beyond_the_count_and_has_no_expectation(self):
         labels = list(WINDOWS_7E)
-        labels.insert(14, 'dns_lock')
-        result, table = self.decide(labels, direct={14: direct_of('target')})
-        extra = result['lab']['windows'][14]
+        labels.insert(15, 'dns_lock')
+        result, table = self.decide(labels, direct={15: direct_of('target')})
+        extra = result['lab']['windows'][15]
         self.assertEqual(('dns_lock', 1, True, [], 'DETECTED'), (extra['label'], extra['number'], extra['beyond'],
                                                                 extra['expected_flows'], extra['verdict']))
         self.assertEqual(1, result['exit_code'])
@@ -765,7 +769,7 @@ class EveryWindowTests(unittest.TestCase):
     def test_a_run_with_every_window_as_expected_is_zero_and_one_window_stays_outside(self):
         result = self.decide()
         verdicts = [w['verdict'] for w in result['lab']['windows']]
-        self.assertEqual((23, 9, {'NONE', 'EXPECTED'}), (len(verdicts), verdicts.count('EXPECTED'), set(verdicts)))
+        self.assertEqual((24, 9, {'NONE', 'EXPECTED'}), (len(verdicts), verdicts.count('EXPECTED'), set(verdicts)))
         self.assertEqual([dict(label='specific_bypass_dns_lock', number=0, verdict='EXPECTED')],
                          result['group']['outside_windows'])
         self.assertEqual((0, [], [], []), (result['exit_code'], result['group']['outside_leaks'],
@@ -1001,7 +1005,7 @@ class TableTests(unittest.TestCase):
 
     def test_the_group_is_in_the_catalog_and_every_scenario_has_its_window_entry(self):
         ids = scenario_ids()
-        self.assertEqual(60, len(ids))
+        self.assertEqual(61, len(ids))
         self.assertTrue(set(summary.GROUP) <= set(ids))
         # The group has windows; the two-hop scenarios, which have no check yet, have none and are outside it.
         self.assertEqual(set(summary.GROUP) | set(summary.TWO_HOP), set(summary.WINDOW_OF))

@@ -274,7 +274,7 @@ class L3PackageTests(unittest.TestCase):
     def test_complete_package_is_accepted_with_the_l3_catalog_and_env(self):
         package = self.validate()
         self.assertEqual('l3', package['profile'])
-        self.assertEqual((60, 38), (len(package['catalog']), sum(r['required'] for r in package['catalog'])))
+        self.assertEqual((61, 39), (len(package['catalog']), sum(r['required'] for r in package['catalog'])))
         self.assertEqual({'not-run': 20}, {k: sum(r['evidence'] == k for r in package['catalog'])
                                            for k in ('not-run',)})
         self.assertEqual(['two-hop'] * 20, [r['group'] for r in package['catalog'] if r['evidence'] == 'not-run'])
@@ -877,7 +877,7 @@ class L3ImportTests(unittest.TestCase):
         self.assertEqual('l3', job.profile.name)
         self.assertEqual('linux-l3', job.identity['job_id'])
         self.assertEqual('linux-l3', job.plan['suite'])
-        self.assertEqual(60, len(job.plan['catalog']))
+        self.assertEqual(61, len(job.plan['catalog']))
         job.submit()
         plan, report, status = synthetic_inputs('linux-l3')
         report['run_id'] = GUEST
@@ -893,7 +893,7 @@ class L3ImportTests(unittest.TestCase):
                                    'status.json': json.dumps(status).encode()})
         result = job.collect()
         counts = result['assessment']['execution']['counts']
-        self.assertEqual((4, 1, 35, 20), (counts['PASS'], counts['FAIL'], counts['ERROR'], counts['SKIP']))
+        self.assertEqual((4, 1, 36, 20), (counts['PASS'], counts['FAIL'], counts['ERROR'], counts['SKIP']))
         self.assertFalse(result['accepted'])
         self.assertFalse(result['assessment']['acceptance']['accepted'])
         self.assertEqual('FAIL', result['assessment']['execution']['status'])

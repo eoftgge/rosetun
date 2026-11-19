@@ -81,7 +81,7 @@ class TableTests(unittest.TestCase):
         for name in summary.TABLES:
             self.assertIs(getattr(summary, name), getattr(l3, name), name)
         self.assertEqual(summary.CONTROL_EXPECTATIONS, l3.CONTROL_EXPECTATIONS)
-        self.assertEqual(40, len(l3.GROUP))
+        self.assertEqual(41, len(l3.GROUP))
         with self.assertRaises(ValueError):
             summary.tables_for('linux-l6')
 

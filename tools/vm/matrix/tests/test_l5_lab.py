@@ -80,7 +80,7 @@ class TableTests(unittest.TestCase):
         l3 = summary.tables_for('linux-l3')
         for name in summary.TABLES:
             self.assertIs(getattr(summary, name), getattr(l3, name), name)
-        self.assertEqual(40, len(l3.GROUP))
+        self.assertEqual(41, len(l3.GROUP))
         self.assertEqual(27, len(summary.tables_for('linux-proxy').GROUP))
         self.assertEqual((None, None), (l3.COUNTER, summary.tables_for('linux-proxy').COUNTER))
         self.assertEqual(('linux-l3', 'linux-proxy', 'linux-l5', 'linux-l4'), summary.LAB_SUITES)
