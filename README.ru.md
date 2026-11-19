@@ -21,9 +21,7 @@
 Rosetun: VPN-клиент для Windows и Linux на sing-box и Xray.
 Системная служба защищает от утечек независимо от ядра.
 
-**Стабильный выпуск: 0.5.1 · Windows и Linux.**
-
-**Молодой проект:** один разработчик с помощью ИИ-агентов, пока мало пользователей. О проблемах пишите в [Issues](https://github.com/eoftgge/rosetun/issues).
+Rosetun ведёт один разработчик с помощью агентов для кода. О проблемах пишите в [Issues](https://github.com/eoftgge/rosetun/issues).
 
 ## Главное
 
@@ -31,39 +29,34 @@ Rosetun: VPN-клиент для Windows и Linux на sing-box и Xray.
 - Экспериментальный Lockdown: защита и без подключения.
 - TUN и системный прокси.
 - Правила по программам, сайтам, IP и спискам; отдельные выходы.
-- Подключение через два направления: прокси-направление, которое подключается через другое (экспериментально).
 - Подписки провайдеров, QR-коды и ссылки `rosetun://`.
 - Локальная сеть и переподключение при обрыве.
 - Трей, уведомления, командная строка; русский и английский интерфейсы.
 
+## Новое в 0.6
+
+- Обменивайтесь правилами через JSON-файл или буфер обмена. Импорт можно просмотреть заранее, а для адреса или программы можно проверить, какое правило сработает. [Правила](https://eoftgge.github.io/rosetun/docs/rules/)
+- Отправляйте выбранный трафик через два прокси-направления подряд (экспериментально). [Двухзвенные направления](https://eoftgge.github.io/rosetun/docs/rules/#two-hop)
+- При подключении подписки по умолчанию обновляются через основной VPN-сервер. В режиме TUN с выключенным kill switch приложение предупреждает об устойчивом маршруте в обход туннеля. [Подписки](https://eoftgge.github.io/rosetun/docs/subscriptions/#updates) · [Защита](https://eoftgge.github.io/rosetun/docs/protection/#bypass-warning)
+- Измеряйте задержку с новым соединением или по уже открытому. [Повседневное использование](https://eoftgge.github.io/rosetun/docs/everyday/)
+- На Linux **Локальная сеть** ограничена напрямую подключёнными сетями. Сбор отчёта, проверка системы и восстановление окна доступны на обеих системах. [Поддержка Linux](https://eoftgge.github.io/rosetun/docs/linux/)
+
 ## Установка
 
-Выберите файл на странице выпуска по кнопке выше:
+- **Windows 11 x64.** Скачайте установщик `-setup.exe` со страницы выпуска по кнопке выше. [Установка на Windows](https://eoftgge.github.io/rosetun/docs/install/#windows)
+- **Debian 13 amd64.** Установите пакет `.deb`, добавьте свою учётную запись в группу `rosetun` и перезагрузите компьютер. Требования для Ubuntu и Linux Mint перечислены в руководстве. [Установка на Debian](https://eoftgge.github.io/rosetun/docs/install/#debian-13)
+- **Arch Linux.** Соберите `rosetun-bin` по рецепту в этом репозитории. [Установка на Arch](https://eoftgge.github.io/rosetun/docs/install/#arch-linux)
 
-- **Windows 11 x64:** запустите `rosetun-0.5.1-setup.exe`.
-- **Debian / Ubuntu / Linux Mint, amd64:** установите `rosetun_0.5.1_amd64.deb`, добавьте себя в группу службы и перезагрузите компьютер:
-
-```sh
-sudo apt install ./rosetun_0.5.1_amd64.deb
-sudo usermod -aG rosetun "$USER"
-sudo reboot
-```
-
-Debian 13 проверен. Ubuntu 24.04+, Linux Mint 22+ и совместимые производные должны работать; см. [поддержку Linux и требования](https://eoftgge.github.io/rosetun/docs/linux/).
-
-**Arch Linux:** соберите бинарный пакет по рецепту из этого репозитория; публикация в AUR и проверка работы пока не выполнены. [Установка и безопасное обновление](https://eoftgge.github.io/rosetun/docs/install/#arch-linux).
-
-[Проверка загрузки, обновление, удаление и выход из Lockdown](https://eoftgge.github.io/rosetun/docs/install/).
+**Переходите с 0.5?** Сначала сделайте копию настроек. При первом сохранении 0.6 переводит их в формат 9. Для возврата к 0.5.1 сохраните `config.v8.json`. [Проверка загрузки, обновление и восстановление настроек](https://eoftgge.github.io/rosetun/docs/install/)
 
 ## Документация
 
-[Руководство](https://eoftgge.github.io/rosetun/docs/) · [Помощь](https://eoftgge.github.io/rosetun/help/) · [Для провайдеров](https://eoftgge.github.io/rosetun/providers/).
-
-[Сборка из исходников](https://eoftgge.github.io/rosetun/docs/build/) · [Безопасность](SECURITY.md) · [модель безопасности](https://eoftgge.github.io/rosetun/docs/security/).
-
-## Устранение неполадок
-
-[Инструкции для Windows и Linux, выход из Lockdown и журналы](https://eoftgge.github.io/rosetun/docs/troubleshooting/).
+- [Руководство](https://eoftgge.github.io/rosetun/docs/)
+- [Помощь и устранение неполадок](https://eoftgge.github.io/rosetun/help/)
+- [Для провайдеров](https://eoftgge.github.io/rosetun/providers/)
+- [Сборка из исходников](https://eoftgge.github.io/rosetun/docs/build/)
+- [Политика безопасности и приватные сообщения](SECURITY.md)
+- [Модель безопасности](https://eoftgge.github.io/rosetun/docs/security/)
 
 ## Лицензии
 

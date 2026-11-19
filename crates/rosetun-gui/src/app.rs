@@ -372,9 +372,6 @@ impl App {
         self.cloak_before_leaving();
     }
 
-    #[cfg(target_os = "linux")]
-    fn closing_for_good(&self) {}
-
     /// For a window that is closing without a command of ours: eframe closes it once the
     /// close request goes unanswered.
     #[cfg(windows)]
@@ -950,6 +947,18 @@ impl App {
                 tray.notify(notice);
             }
             let interface = &self.state.config.interface;
+            let bypass_notice = self.notices.observe_bypass(
+                self.state
+                    .visible_status()
+                    .is_some_and(|status| status.bypass_detected),
+                window_shown && focused,
+            );
+            if let Some(notice) = bypass_notice
+                && interface.notifications
+                && let Some(tray) = &self.tray
+            {
+                tray.notify(notice);
+            }
             let announce = self.notices.observe_update(
                 self.state
                     .available_update()
@@ -1007,8 +1016,10 @@ impl App {
                         QuitDecision::Leave => self.workers.restore_system_proxy(),
                     }
                 }
-                #[cfg(any(windows, target_os = "linux"))]
+                #[cfg(windows)]
                 self.closing_for_good();
+                #[cfg(target_os = "linux")]
+                self.remember_shape(ctx);
             }
         }
     }

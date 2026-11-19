@@ -1,11 +1,11 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use rosetun_config::{
     FragmentPackets, LogLevel, Node, NodeId, Outbound, RealityParams, StreamSettings, TlsFragment,
     TlsMode, TlsParams, Transport, VlessParams, XhttpExtra, XhttpMode, XhttpRange, XhttpXmux,
 };
-use rosetun_engine_xray::{SUPPORTED_XRAY_VERSION, SocksEndpoint, render};
+use rosetun_engine_xray::{SUPPORTED_XRAY_VERSION, SocksEndpoint, render, render_probe};
 
 fn xhttp_node(tls: TlsMode) -> Node {
     let range = |from, to| Some(XhttpRange { from, to });
@@ -49,17 +49,24 @@ fn xhttp_node(tls: TlsMode) -> Node {
 
 #[test]
 #[ignore = "requires the pinned Xray binary"]
-fn xray_test_accepts_rendered_xhttp_configs() {
-    let binary = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../target/installer/xray")
-        .join(if cfg!(windows) { "xray.exe" } else { "xray" });
-    if !binary.exists() {
-        eprintln!("pinned Xray binary is absent; syntax check skipped");
-        return;
-    }
+fn xray_test_accepts_rendered_session_and_probe_configs() {
+    let binary = std::env::var_os("ROSETUN_TEST_XRAY").map_or_else(
+        || {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../target/installer/xray")
+                .join(if cfg!(windows) { "xray.exe" } else { "xray" })
+        },
+        PathBuf::from,
+    );
     let version = Command::new(&binary).arg("version").output().unwrap();
     assert!(version.status.success());
-    assert!(String::from_utf8_lossy(&version.stdout).contains(SUPPORTED_XRAY_VERSION));
+    assert_eq!(
+        String::from_utf8_lossy(&version.stdout)
+            .split_whitespace()
+            .take(2)
+            .collect::<Vec<_>>(),
+        ["Xray", SUPPORTED_XRAY_VERSION]
+    );
 
     let directory = std::env::temp_dir().join(format!("rosetun-xray-check-{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
@@ -95,12 +102,16 @@ fn xray_test_accepts_rendered_xhttp_configs() {
         ),
     ];
     for (name, tls) in [
-        ("reality", reality),
-        ("tls", tls),
+        ("reality", reality.clone()),
+        ("tls", tls.clone()),
         ("plain", TlsMode::Plain),
     ] {
         for (mode, fragment) in &fragments {
-            let node = xhttp_node(tls.clone());
+            let mut node = xhttp_node(tls.clone());
+            // Plain VLESS is restricted to private, loopback or link-local servers.
+            if matches!(tls, TlsMode::Plain) {
+                node.server = "127.0.0.1".into();
+            }
             let socks = SocksEndpoint::local().unwrap();
             let config = render(
                 &[("proxy", &node, &socks)],
@@ -110,19 +121,69 @@ fn xray_test_accepts_rendered_xhttp_configs() {
                 LogLevel::Info,
             )
             .unwrap();
-            let path = directory.join(format!("xhttp-{name}-{mode}.json"));
-            std::fs::write(&path, config.body).unwrap();
-            let output = Command::new(&binary)
-                .args(["run", "-test", "-c"])
-                .arg(&path)
-                .output()
-                .unwrap();
-            assert!(
-                output.status.success(),
-                "xray -test failed for {name} ({mode}): {}",
-                String::from_utf8_lossy(&output.stdout)
-            );
+            check_config(&binary, &directory, &format!("xhttp-{name}-{mode}"), config);
         }
     }
+    for (name, tls) in [("reality-vision", reality.clone()), ("tls-vision", tls)] {
+        let mut node = xhttp_node(tls);
+        node.stream.transport = Transport::Tcp;
+        for (mode, fragment) in &fragments {
+            let socks = SocksEndpoint::local().unwrap();
+            let config = render(
+                &[("proxy", &node, &socks)],
+                "Ethernet",
+                fragment,
+                false,
+                LogLevel::Info,
+            )
+            .unwrap();
+            check_config(&binary, &directory, &format!("tcp-{name}-{mode}"), config);
+        }
+    }
+    let mut a = xhttp_node(reality.clone());
+    a.stream.transport = Transport::Tcp;
+    let exit = xhttp_node(reality);
+    let a_socks = SocksEndpoint::local().unwrap();
+    let exit_socks = SocksEndpoint::local().unwrap();
+    let config = render(
+        &[("proxy", &exit, &exit_socks), ("extra-A", &a, &a_socks)],
+        "Ethernet",
+        &TlsFragment::default(),
+        false,
+        LogLevel::Info,
+    )
+    .unwrap();
+    check_config(&binary, &directory, "multiple-with-two-hop-a", config);
+    let config = render_probe(
+        &[
+            ("probe-0".into(), a, a_socks),
+            ("probe-1".into(), exit, exit_socks),
+        ],
+        "Ethernet",
+        &fragments[1].1,
+    )
+    .unwrap();
+    check_config(&binary, &directory, "probes", config);
     std::fs::remove_dir_all(&directory).unwrap();
+}
+
+fn check_config(
+    binary: &Path,
+    directory: &Path,
+    name: &str,
+    config: rosetun_engine::RenderedConfig,
+) {
+    let path = directory.join(format!("{name}.json"));
+    std::fs::write(&path, config.body).unwrap();
+    let output = Command::new(binary)
+        .args(["run", "-test", "-c"])
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "xray -test failed for {name}: {}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }

@@ -22,6 +22,16 @@ const V7: &[u8] = include_bytes!("fixtures/v7.json");
 const V9: &[u8] = include_bytes!("fixtures/v9.json");
 const V8: &[u8] = include_bytes!("fixtures/v8.json");
 
+#[test]
+fn subscription_vpn_updates_are_enabled_when_migrating_released_settings() {
+    let loaded = from_json(V8).unwrap();
+    assert!(loaded.0.interface.subscriptions_via_vpn);
+    let mut value: Value = serde_json::from_slice(V9).unwrap();
+    value["interface"]["subscriptions_via_vpn"] = json!(false);
+    let loaded = from_json(&serde_json::to_vec(&value).unwrap()).unwrap();
+    assert!(!loaded.0.interface.subscriptions_via_vpn);
+}
+
 fn current_config() -> AppConfig {
     let mut config = support::legacy_config();
     config.version = CONFIG_VERSION;
@@ -307,6 +317,7 @@ fn current_configuration_fixture_guards_the_serialized_format() {
 /// The format 8 and 9 fields an older file gets when it is loaded.
 fn with_default_fragmentation(mut config: Value) -> Value {
     config["interface"]["delay_mode"] = json!("repeated");
+    config["interface"]["subscriptions_via_vpn"] = json!(true);
     config["settings"]["tls_fragment"] = serde_json::to_value(TlsFragment::default()).unwrap();
     config["settings"]["private_networks"] = json!(false);
     config["settings"]["connection_mode"] = json!("tun");

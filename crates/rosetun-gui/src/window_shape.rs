@@ -111,9 +111,30 @@ pub(crate) fn save(file: &Path, shape: &WindowShape) {
     }
 }
 
-/// The shape after the window was looked at. A maximized window keeps the size and place
-/// it had before, which is what comes back when it is restored. Wayland has no place.
-pub(crate) fn observed(
+/// Reads geometry from the current frame. The local viewport has a size even
+/// when winit cannot report a global position, as on Wayland.
+pub(crate) fn capture(previous: WindowShape, ctx: &egui::Context, wayland: bool) -> WindowShape {
+    // The context's points include the interface scale, a new window's do not.
+    let zoom = ctx.zoom_factor();
+    ctx.input(|input| {
+        let viewport = input.viewport();
+        if viewport.minimized == Some(true) {
+            return previous;
+        }
+        let rect = input.raw.screen_rect.or(viewport.inner_rect);
+        observed(
+            previous,
+            rect.map(|rect| rect.size() * zoom),
+            viewport.outer_rect.map(|rect| rect.min * zoom),
+            viewport.maximized.unwrap_or(previous.maximized),
+            viewport.native_pixels_per_point.unwrap_or(previous.scale),
+            wayland,
+        )
+    })
+}
+
+/// A maximized window keeps the size and place it will need when restored.
+fn observed(
     previous: WindowShape,
     size: Option<egui::Vec2>,
     position: Option<egui::Pos2>,
@@ -121,18 +142,17 @@ pub(crate) fn observed(
     scale: f32,
     wayland: bool,
 ) -> WindowShape {
-    let position = if wayland { None } else { position };
-    if maximized && previous.size.is_some() {
+    if previous.size.is_some() && (maximized || size.is_none()) {
         return WindowShape {
             maximized,
-            scale: previous.scale,
+            position: if wayland { None } else { previous.position },
             ..previous
         };
     }
     WindowShape {
         size,
         maximized,
-        position,
+        position: if wayland { None } else { position },
         scale,
     }
 }
@@ -314,6 +334,29 @@ mod tests {
             false,
         );
         assert_eq!(first.size, Some(egui::vec2(1920.0, 1080.0)));
+    }
+
+    #[test]
+    fn wayland_records_the_local_size_without_window_coordinates() {
+        let ctx = egui::Context::default();
+        let mut viewport = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(960.0, 640.0),
+            )),
+            ..Default::default()
+        };
+        viewport
+            .viewports
+            .get_mut(&egui::ViewportId::ROOT)
+            .unwrap()
+            .native_pixels_per_point = Some(1.5);
+        let mut output = ctx.run_ui(viewport, |_| {});
+        output.textures_delta.clear();
+        let seen = capture(shape(), &ctx, true);
+        assert_eq!(seen.size, Some(egui::vec2(960.0, 640.0)));
+        assert_eq!(seen.position, None);
+        assert_eq!(seen.scale, 1.5);
     }
 
     #[test]

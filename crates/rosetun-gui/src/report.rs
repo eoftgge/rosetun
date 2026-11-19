@@ -27,6 +27,7 @@ pub(crate) struct ReportSnapshot {
     failure: Option<FailureKind>,
     engine: EngineKind,
     xray: bool,
+    tunnel_dns_unregistered: bool,
     pub(crate) checks: Option<Vec<(CheckKind, CheckStatus)>>,
     /// The verdict of the last DNS check that ran; the report never runs it.
     last_dns: CheckStatus,
@@ -110,6 +111,7 @@ impl ReportSnapshot {
             failure,
             engine: status.engine.unwrap_or(config.settings.engine),
             xray: helper_available && status.xray,
+            tunnel_dns_unregistered: helper_available && status.tunnel_dns_unregistered,
             checks: checks.map(check_statuses),
             last_dns: CheckStatus::Skipped,
             helper_version: helper_version.map(str::to_owned),
@@ -324,6 +326,9 @@ impl ReportSnapshot {
             report_label!("report-fragmented"),
             switch(self.fragmented)
         );
+        if self.tunnel_dns_unregistered {
+            let _ = writeln!(text, "{}", report_label!("tunnel-dns-warning"));
+        }
 
         let _ = writeln!(text, "\n[{}]", report_label!("system-check-title"));
         if let Some(checks) = &self.checks {

@@ -117,11 +117,12 @@ class ReleaseData(unittest.TestCase):
             self.assertEqual(data['installer'], 'rosetun-2.7.19-setup.exe')
 
     def test_the_banner_names_the_stable_version_and_its_platforms(self):
-        self.assertEqual(banner('0.5.0', True), {'ru': 'Стабильный выпуск: 0.5.0 · Windows и Linux.',
-                                                 'en': 'Stable release: 0.5.0 · Windows and Linux.'})
-        self.assertEqual(banner('0.5.0', False)['en'], 'Stable release: 0.5.0 · Windows.')
-        self.assertEqual(banner('0.4.0', True)['en'], 'Stable release: 0.4.0 · Windows. Documentation: 0.5.')
-        self.assertEqual(banner('0.4.0', False)['ru'], 'Стабильный выпуск: 0.4.0 · Windows. Документация: 0.5.')
+        self.assertEqual(banner('0.6.0', True), {'ru': 'Стабильный выпуск: 0.6.0 · Windows и Linux.',
+                                                 'en': 'Stable release: 0.6.0 · Windows and Linux.'})
+        self.assertEqual(banner('0.6.0', False)['en'], 'Stable release: 0.6.0 · Windows.')
+        self.assertEqual(banner('0.5.1', True)['en'],
+                         'Stable release: 0.5.1 · Windows and Linux. Documentation: 0.6.')
+        self.assertEqual(banner('0.4.0', False)['ru'], 'Стабильный выпуск: 0.4.0 · Windows. Документация: 0.6.')
 
 
 @unittest.skipUnless(zola(), 'Zola is not installed; run tools/site/install_zola.py')
@@ -172,7 +173,9 @@ class SiteBuild(unittest.TestCase):
                         text = page.read_text(encoding='utf-8')
                         if page.parent.name != 'providers':
                             self.assertIn(f'{version} · Windows', text)
-                        self.assertNotIn('0.5.1', text)
+                        self.assertNotIn('0.5.1 · Windows', text)
+                        self.assertNotIn('rosetun-0.5.1-setup.exe', text)
+                        self.assertNotIn('rosetun_0.5.1_amd64.deb', text)
                         self.assertNotIn('data-release-', text)
                         self.assertNotIn('@@', text)
                     install = read(output, f'{prefix}docs/install/index.html')
@@ -267,7 +270,7 @@ class SiteBuild(unittest.TestCase):
             page.write_text(original, encoding='utf-8')
 
     def test_documentation_banner_tracks_the_stable_version_and_keeps_the_baseline(self):
-        for version, preview in (('0.4.0', True), ('0.5.0', False)):
+        for version in ('0.4.0', '0.5.1', '0.6.0'):
             release = copy.deepcopy(self.release)
             release['tag_name'] = 'v' + version
             for asset in release['assets']:
@@ -275,13 +278,14 @@ class SiteBuild(unittest.TestCase):
                 asset['browser_download_url'] = asset['browser_download_url'].replace('1.2.3', version)
             with tempfile.TemporaryDirectory() as directory:
                 output = build(directory, replacements(release, self.sums.replace('1.2.3', version)))
-                for lang, warning, prefix in (('en', '0.5 is not stable yet', 'en/'),
-                                              ('ru', 'стабильная 0.5 ещё не вышла', '')):
+                for lang, prefix in (('en', 'en/'), ('ru', '')):
                     page = read(output, f'{prefix}docs/index.html')
-                    self.assertNotIn(warning, page)
                     self.assertIn(f'{version} · Windows', page)
-                    if preview:
-                        self.assertIn('Documentation: 0.5' if lang == 'en' else 'Документация: 0.5', page)
+                    baseline = 'Documentation: 0.6' if lang == 'en' else 'Документация: 0.6'
+                    if version == '0.6.0':
+                        self.assertNotIn(baseline, page)
+                    else:
+                        self.assertIn(baseline, page)
                     self.assertNotIn('docs-version', page)
                     self.assertIn(f'blob/v0.4.0/README{".ru" if lang == "ru" else ""}.md', page)
 
@@ -301,15 +305,15 @@ class SiteBuild(unittest.TestCase):
                 with self.assertRaises(AssertionError):
                     check(output, rendered=True)
 
-    def test_stable_05_preview_switches_every_documentation_banner_and_linux_copy(self):
-        output = build(self.directory.name, preview_values('0.5.0', True))
+    def test_stable_06_preview_switches_every_documentation_banner_and_linux_copy(self):
+        output = build(self.directory.name, preview_values('0.6.0', True))
         quiet_check(output, rendered=True)
         for prefix in ('en/', ''):
             for page in (output / prefix / 'docs').rglob('index.html'):
                 text = page.read_text(encoding='utf-8')
-                self.assertIn('0.5.0 · Windows', text)
-                self.assertNotIn('0.5 is not stable yet', text)
-                self.assertNotIn('стабильная 0.5 ещё не вышла', text)
+                self.assertIn('0.6.0 · Windows', text)
+                self.assertNotIn('Documentation: 0.6', text)
+                self.assertNotIn('Документация: 0.6', text)
                 self.assertNotIn('<!-- linux-', text)
                 if page.parent != output / prefix / 'docs':
                     self.assertNotIn('blob/v0.4.0/', text)

@@ -4,6 +4,7 @@ use rosetun_config::{
 };
 
 use super::{Action, Job, State};
+use crate::worker::{RulesExportOutcome, RulesTransferError};
 
 #[derive(Default)]
 pub(crate) struct ExchangeState {
@@ -175,14 +176,19 @@ impl State {
         }
         None
     }
-    pub(crate) fn reduce_rules_read(&mut self, result: Result<Option<String>, String>) {
+    pub(crate) fn reduce_rules_read(&mut self, result: Result<Option<String>, RulesTransferError>) {
         self.rules.exchange.busy = false;
         self.rules.exchange.import = None;
         let text = match result {
             Ok(Some(text)) => text,
             Ok(None) => return,
-            Err(_) => {
-                self.rules.exchange.error = Some(tr!("rules-transfer-read-error"));
+            Err(error) => {
+                self.rules.exchange.error = Some(match error {
+                    RulesTransferError::FileDialogUnavailable => {
+                        tr!("rules-transfer-import-dialog-unavailable")
+                    }
+                    RulesTransferError::Io => tr!("rules-transfer-read-error"),
+                });
                 return;
             }
         };
@@ -210,9 +216,8 @@ impl State {
     }
     pub(crate) fn reduce_rules_written(
         &mut self,
-        result: Result<crate::worker::RulesExportOutcome, String>,
+        result: Result<RulesExportOutcome, RulesTransferError>,
     ) {
-        use crate::worker::RulesExportOutcome;
         self.rules.exchange.busy = false;
         self.rules.exchange.error = None;
         self.rules.exchange.notice = None;
@@ -220,13 +225,18 @@ impl State {
             Ok(RulesExportOutcome::Copied) => {
                 self.rules.exchange.notice = Some(tr!("rules-transfer-copied"));
             }
-            #[cfg(windows)]
             Ok(RulesExportOutcome::Saved) => {
                 self.rules.exchange.notice = Some(tr!("rules-transfer-saved"));
             }
-            #[cfg(windows)]
             Ok(RulesExportOutcome::Cancelled) => {}
-            Err(_) => self.rules.exchange.error = Some(tr!("rules-transfer-write-error")),
+            Err(error) => {
+                self.rules.exchange.error = Some(match error {
+                    RulesTransferError::FileDialogUnavailable => {
+                        tr!("rules-transfer-export-dialog-unavailable")
+                    }
+                    RulesTransferError::Io => tr!("rules-transfer-write-error"),
+                });
+            }
         }
     }
     pub(crate) fn finish_import_rules(&mut self, result: Result<(), rosetun_core::RuleSetError>) {

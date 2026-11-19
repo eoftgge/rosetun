@@ -78,7 +78,7 @@ runs, the job goes on in the guest; reconnect with
   `pwsh` in that window and `cd` to the repository. An elevated 5.1 window passes
   its rights to the `pwsh` started in it.
 - The **Windows OpenSSH client** (`ssh`, `scp`, `ssh-keygen`), part of Windows.
-- **WSL with Debian** as an ordinary default user, with git, a C linker and
+- **WSL with Debian** as an ordinary default user, with git, Python 3, a C linker and
   Rust 1.99.1 (the project toolchain):
 
   ```powershell
@@ -390,6 +390,16 @@ A run id is used once; start a new run instead of repeating an old one.
 
 ## Tests of the stand (no VM, no privileges)
 
+The L2 builder uses Python 3 to read Cargo JSON and requires exactly one matching
+`profile.test == true` executable for each unit-test target. Before staging it,
+the builder runs `--list --format terse` and checks every test name referenced
+by the L2 scenario catalog. A regular helper binary, missing test or ambiguous
+artifact stops the build before a payload is created.
+
+```sh
+python3 -m unittest discover -s tools/vm/linux/tests -p 'test_l2_test_artifacts.py'
+```
+
 ```powershell
 pwsh -NoProfile -File tools/vm/linux/tests/Test-LinuxHarness.ps1
 ```
@@ -431,14 +441,14 @@ checking, restore `l2-clean` again.
 
 3. **Engines**, in the guest as `l2admin`. The versions must be the pinned
    ones (`SUPPORTED_SING_BOX_VERSION` and `SUPPORTED_XRAY_VERSION` in the engine
-   crates; 1.14.3 and 26.10.21 at the time of writing). Compare each archive with
+   crates; 1.14.3 and 26.11.9 at the time of writing). Compare each archive with
    the checksum its release page publishes before you install it:
 
    ```sh
    cd ~/rosetun-manual
    sudo apt-get install --no-install-recommends curl unzip nftables
    curl -fLO https://github.com/SagerNet/sing-box/releases/download/v1.14.3/sing-box-1.14.3-linux-amd64.tar.gz
-   curl -fLO https://github.com/XTLS/Xray-core/releases/download/v26.10.21/Xray-linux-64.zip
+   curl -fLO https://github.com/XTLS/Xray-core/releases/download/v26.11.9/Xray-linux-64.zip
    sha256sum sing-box-1.14.3-linux-amd64.tar.gz Xray-linux-64.zip
    tar -xzf sing-box-1.14.3-linux-amd64.tar.gz --strip-components=1 sing-box-1.14.3-linux-amd64/sing-box
    unzip -o Xray-linux-64.zip xray

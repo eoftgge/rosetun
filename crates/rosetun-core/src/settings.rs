@@ -66,6 +66,7 @@ pub enum SettingChange {
     /// "Private networks behind the router"; counts only with `AllowLan`.
     PrivateNetworks(bool),
     AutoUpdateSubscriptions(bool),
+    SubscriptionsViaVpn(bool),
     CheckUpdates(bool),
     QuitAction(QuitAction),
     DelayMode(DelayMode),
@@ -90,6 +91,9 @@ pub fn change_setting(store: &Store, change: SettingChange) -> Result<(), Settin
             SettingChange::PrivateNetworks(enabled) => config.settings.private_networks = enabled,
             SettingChange::AutoUpdateSubscriptions(enabled) => {
                 config.interface.auto_update_subscriptions = enabled;
+            }
+            SettingChange::SubscriptionsViaVpn(enabled) => {
+                config.interface.subscriptions_via_vpn = enabled;
             }
             SettingChange::CheckUpdates(enabled) => config.interface.check_updates = enabled,
             SettingChange::QuitAction(action) => config.interface.quit_action = action,

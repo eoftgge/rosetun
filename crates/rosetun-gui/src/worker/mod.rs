@@ -106,10 +106,14 @@ pub(crate) struct FailureInterference {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RulesExportOutcome {
     Copied,
-    #[cfg(windows)]
     Saved,
-    #[cfg(windows)]
     Cancelled,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RulesTransferError {
+    FileDialogUnavailable,
+    Io,
 }
 
 pub(crate) enum WorkerEvent {
@@ -195,8 +199,8 @@ pub(crate) enum WorkerEvent {
     },
     #[cfg(windows)]
     BrowsedExecutable(Option<PathBuf>),
-    RulesRead(Result<Option<String>, String>),
-    RulesWritten(Result<RulesExportOutcome, String>),
+    RulesRead(Result<Option<String>, RulesTransferError>),
+    RulesWritten(Result<RulesExportOutcome, RulesTransferError>),
     ImportRules(Result<(), RuleSetError>),
     AddRule(Result<Rule, RuleSetError>),
     AddRules(Result<AddedRules, RuleSetError>),

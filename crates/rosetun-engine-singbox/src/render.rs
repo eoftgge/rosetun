@@ -185,8 +185,11 @@ pub fn render(request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError
 /// comes in (UDP, an account of no outbound) is refused. An account whose
 /// outbound this config does not define is left out.
 fn delay_entry(delay: &DelayInbound, extra: &[ExtraOutbound<'_>]) -> Option<(Value, Vec<Value>)> {
-    let defined =
-        |tag: &str| tag == TAG_PROXY || extra.iter().any(|node| exit_tag(node.index) == tag);
+    let defined = |tag: &str| {
+        tag == TAG_PROXY
+            || tag == rosetun_engine::SUBSCRIPTION_PROXY_USER
+            || extra.iter().any(|node| exit_tag(node.index) == tag)
+    };
     let accounts: Vec<_> = delay
         .accounts
         .iter()
@@ -213,7 +216,11 @@ fn delay_entry(delay: &DelayInbound, extra: &[ExtraOutbound<'_>]) -> Option<(Val
                 "auth_user": [account.tag],
                 "network": "tcp",
                 "action": "route",
-                "outbound": account.tag,
+                "outbound": if account.tag == rosetun_engine::SUBSCRIPTION_PROXY_USER {
+                    TAG_PROXY
+                } else {
+                    &account.tag
+                },
             })
         })
         .collect();
@@ -2217,6 +2224,18 @@ mod tests {
             entries[0]["users"],
             json!([{ "username": "proxy", "password": "fixture-password-0" }])
         );
+    }
+
+    #[test]
+    fn subscription_requests_reach_the_main_outbound_before_user_rules() {
+        let control = delay_control(&["proxy", rosetun_engine::SUBSCRIPTION_PROXY_USER]);
+        let value = delay_body(&control, None, &[], None);
+        let rules = rules_of(&value);
+        assert_eq!(rules[1]["auth_user"], json!(["subscription"]));
+        assert_eq!(rules[1]["outbound"], "proxy");
+        assert_eq!(rules[1]["network"], "tcp");
+        assert_eq!(rules[2]["action"], "reject");
+        assert_eq!(rules[2]["inbound"], json!([TAG_DELAY_INBOUND]));
     }
 
     #[test]

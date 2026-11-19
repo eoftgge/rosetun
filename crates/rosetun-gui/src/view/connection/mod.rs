@@ -53,6 +53,42 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
         protection_strip(ui, tr!("protection-unverified"));
         ui.add_space(theme::SECTION_GAP);
     }
+    if state.visible_status().is_some_and(|status| {
+        status.state == ConnectionState::Connected && status.tunnel_dns_unregistered
+    }) {
+        widgets::card_frame().show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.colored_label(theme::WARNING, tr!("tunnel-dns-warning"));
+        });
+        ui.add_space(theme::SECTION_GAP);
+    }
+    if state
+        .visible_status()
+        .is_some_and(|status| status.bypass_detected)
+    {
+        widgets::card_frame().show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.horizontal_wrapped(|ui| {
+                ui.colored_label(theme::WARNING, tr!("vpn-bypass-warning"));
+                if state.config.settings.kill_switch {
+                    ui.colored_label(theme::palette().text_dim, tr!("next-connect-note"));
+                } else if widgets::outline_button(
+                    ui,
+                    tr!("enable-kill-switch"),
+                    !state.operations.kill_switch
+                        && !state.operations.helper
+                        && !state.kill_switch_unavailable(),
+                )
+                .on_hover_text(tr!("next-connect-note"))
+                .on_disabled_hover_text(tr!("kill-switch-unavailable"))
+                .clicked()
+                {
+                    actions.push(Action::SetKillSwitch(true));
+                }
+            });
+        });
+        ui.add_space(theme::SECTION_GAP);
+    }
     if state.available_update().is_some() {
         update_strip(ui, state, actions);
         ui.add_space(theme::SECTION_GAP);
@@ -536,6 +572,46 @@ fn lockdown_text(text: LockdownText) -> String {
 #[cfg(test)]
 mod conflict_names_tests {
     use super::*;
+
+    #[test]
+    fn a_bypass_warning_does_not_claim_a_saved_kill_switch_is_already_installed() {
+        for language in [
+            crate::i18n::Language::English,
+            crate::i18n::Language::Russian,
+        ] {
+            crate::i18n::in_language(language, || {
+                let mut state = State::default();
+                state.config_ready = true;
+                state.helper_available = true;
+                state.protection = Some(crate::worker::FULL_PROTECTION);
+                state.status.state = ConnectionState::Connected;
+                state.status.bypass_detected = true;
+                for saved in [false, true] {
+                    state.config.settings.kill_switch = saved;
+                    let mut screen = crate::test_ui::TestScreen::new(egui::vec2(960.0, 640.0));
+                    let texts = screen.settle(|ui| show(ui, &state, &mut Vec::new()));
+                    assert!(
+                        texts
+                            .iter()
+                            .any(|(text, _)| *text == tr!("vpn-bypass-warning"))
+                    );
+                    assert_eq!(
+                        texts
+                            .iter()
+                            .any(|(text, _)| *text == tr!("enable-kill-switch")),
+                        !saved
+                    );
+                    if saved {
+                        assert!(
+                            texts
+                                .iter()
+                                .any(|(text, _)| text.contains(&tr!("next-connect-note")))
+                        );
+                    }
+                }
+            });
+        }
+    }
 
     #[test]
     fn limits_conflict_names_and_individual_name_lengths() {

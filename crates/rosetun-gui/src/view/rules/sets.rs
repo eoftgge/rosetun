@@ -38,7 +38,7 @@ pub(super) fn set_controls(ui: &mut egui::Ui, state: &State, actions: &mut Vec<A
                     Action::ReadRulesImport(false),
                     state.can_edit_rules(),
                 ),
-                #[cfg(windows)]
+                #[cfg(any(windows, target_os = "linux"))]
                 (
                     format!(
                         "{}: {}",
@@ -122,9 +122,6 @@ pub(super) fn set_controls(ui: &mut egui::Ui, state: &State, actions: &mut Vec<A
                     ui.close();
                 }
             }
-            #[cfg(target_os = "linux")]
-            ui.label(tr!("rules-transfer-linux"));
-
             ui.separator();
             if widgets::menu_item(
                 ui,

@@ -7,7 +7,7 @@ group = "Setup"
 overview = "Subscriptions and servers"
 +++
 
-- Provider subscriptions in plain or base64-encoded link lists, Xray JSON and sing-box JSON. Add one from its link, from a QR code (an image file, the clipboard or a part of the screen on Windows, the clipboard on Linux) or from a provider's `rosetun://` link.
+- Provider subscriptions in plain or base64-encoded link lists, Xray JSON and sing-box JSON. Add one by URL, from a QR code in a file or on the clipboard, or through a provider's `rosetun://` link. Windows can also read a QR code from a selected region of the screen. On Linux, opening an image file uses the [desktop portal](../linux/).
 - HTTP, HTTPS and SOCKS5 proxies of your own, on the **Proxy** tab of the add dialog.
 - **Send device ID** (HWID) is on by default: panels that limit devices answer "subscription not found" without it. Turn it off for a subscription in the add dialog (`--no-hwid` in the CLI). See [Privacy and network access](../privacy/).
 - VLESS, VMess, Trojan, Shadowsocks and Hysteria2 nodes (Salamander obfuscation and port hopping); TCP, WebSocket, gRPC and HTTPUpgrade transports for TCP-based nodes, and XHTTP (SplitHTTP) through Xray; plain, TLS and Reality security modes. Hysteria2 uses QUIC over UDP. Not supported yet, so such servers are skipped: XHTTP with a separate download server, mKCP, QUIC and HTTP/2 transports, VLESS encryption, Shadowsocks plugins and other protocols.
@@ -15,3 +15,17 @@ overview = "Subscriptions and servers"
 - **TLS fragmentation** (Settings → Advanced): splits the first packets to the server, which helps when a provider cuts the connection by its first packet. Servers that Xray carries go through Xray while it is on; the connection screen says whether it applies to the current server.
 - **DNS through the tunnel** via a configurable DNS-over-HTTPS resolver.
 - **Server checks:** a TCP ping and a URL test that sends a request through each server, even while connected, through the same chain as the connection.
+
+## Updates through VPN {#updates}
+
+**Settings → Connection → Update subscriptions through VPN** is on by default.
+While connected, subscription downloads and updates use the main VPN server,
+even when a rule sends the provider's site directly. This works in TUN and
+system proxy mode, in the app and in `rosetun sub update`.
+
+A failed VPN request shows an error and is never retried directly. Without a
+connection, or with the setting off, the ordinary path is used; in TUN it
+follows your rules. If the service is unavailable and the connection state is
+unknown, the enabled setting stops the update with an error. Turn it off only
+when you want to use the ordinary path. Lists and app update checks are not
+changed by this setting.

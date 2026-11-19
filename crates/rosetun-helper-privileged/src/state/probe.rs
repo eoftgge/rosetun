@@ -18,7 +18,7 @@ use rosetun_ipc::{
 };
 use rosetun_routing::RoutingGuard;
 
-use super::repeated::repeated_delay;
+use super::repeated::repeated_delay_any;
 use super::{
     Acquired, Caller, Helper, NameLookup, SESSION_WAIT, SessionHolder, lockdown,
     node_with_endpoint, resolve_quiet, select_endpoint, validate_tun_name, wait_for_engine_ready,
@@ -122,6 +122,56 @@ impl Drop for ProbeProcess {
 }
 
 impl Helper {
+    pub(crate) fn subscription_proxy_as(
+        &self,
+        caller: &Caller,
+    ) -> Result<Option<rosetun_ipc::SubscriptionProxy>, HelperError> {
+        let session = self.session_for(SessionHolder::Probe)?;
+        let state = self.with_status(|status| status.state.clone());
+        if matches!(
+            state,
+            ConnectionState::Disconnected | ConnectionState::Failed { .. }
+        ) {
+            return Ok(None);
+        }
+        let owner = self.owner.lock().map_err(|_| {
+            HelperError::new(ErrorCode::AccessDenied, "session ownership is unavailable")
+        })?;
+        if owner.as_ref() != Some(&caller.account) {
+            return Err(HelperError::new(
+                ErrorCode::AccessDenied,
+                "only the session owner may read the subscription proxy",
+            ));
+        }
+        if state != ConnectionState::Connected {
+            return Err(HelperError::new(
+                ErrorCode::InvalidState,
+                "the subscription proxy is not connected",
+            ));
+        }
+        let entry = session
+            .control
+            .as_ref()
+            .and_then(|control| control.delay.as_ref());
+        let proxy = entry.and_then(|entry| {
+            entry
+                .accounts
+                .iter()
+                .find(|account| account.tag == rosetun_engine::SUBSCRIPTION_PROXY_USER)
+                .map(|account| rosetun_ipc::SubscriptionProxy {
+                    port: entry.address.port(),
+                    username: account.tag.clone(),
+                    password: account.password.clone(),
+                })
+        });
+        proxy.map(Some).ok_or_else(|| {
+            HelperError::new(
+                ErrorCode::EngineFailed,
+                "the subscription proxy is unavailable",
+            )
+        })
+    }
+
     pub fn probe_nodes(&self, request: &ProbeRequest) -> Result<Vec<ProbeResult>, HelperError> {
         let _guard = match self.probe.try_lock() {
             Ok(guard) => guard,
@@ -581,7 +631,7 @@ fn repeated_outcome(entry: Option<&DelayInbound>, target: UrlTestTarget<'_>) -> 
         tracing::debug!("repeated delay: no entry for the target");
         return ProbeOutcome::Fails;
     };
-    match repeated_delay(entry.address, account, PROBE_URLS[0], PROBE_TIMEOUT) {
+    match repeated_delay_any(entry.address, account, &PROBE_URLS, PROBE_TIMEOUT) {
         Ok(delay) => probe_outcome::<()>(Ok(delay)),
         Err(reason) => {
             tracing::debug!(%reason, "repeated delay gave no answer");

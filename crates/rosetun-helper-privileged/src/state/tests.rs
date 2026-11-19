@@ -124,6 +124,71 @@ fn a_cold_start_gets_the_slow_start_deadline() {
 }
 
 #[test]
+fn only_windows_tun_post_start_progress_extends_a_warm_start() {
+    let hints = rosetun_engine::StartupHints {
+        tunnel_created: true,
+        ..Default::default()
+    };
+    assert_eq!(
+        startup_timeout(hints, false),
+        Duration::from_secs(if cfg!(windows) { 45 } else { 15 })
+    );
+    assert_eq!(
+        startup_timeout(rosetun_engine::StartupHints::default(), false),
+        Duration::from_secs(15)
+    );
+}
+
+#[test]
+fn tunnel_creation_alone_never_completes_readiness_and_can_be_cancelled() {
+    #[derive(Debug)]
+    struct PostStartProcess;
+
+    impl EngineProcess for PostStartProcess {
+        fn is_running(&mut self) -> Result<bool, EngineError> {
+            Ok(true)
+        }
+
+        fn is_ready(&mut self) -> Result<bool, EngineError> {
+            Ok(false)
+        }
+
+        fn startup_hints(&self) -> rosetun_engine::StartupHints {
+            rosetun_engine::StartupHints {
+                tunnel_created: true,
+                ..Default::default()
+            }
+        }
+
+        fn stop(&mut self) -> Result<(), EngineError> {
+            Ok(())
+        }
+    }
+
+    let error = wait_for_engine_ready_from(
+        &mut PostStartProcess,
+        Instant::now() - Duration::from_secs(46),
+        false,
+        &AtomicBool::new(false),
+    )
+    .unwrap_err();
+    assert_eq!(error.code, ErrorCode::EngineNotReady);
+    assert!(
+        error
+            .message
+            .contains(if cfg!(windows) { "45" } else { "15" })
+    );
+    let error = wait_for_engine_ready_from(
+        &mut PostStartProcess,
+        Instant::now(),
+        false,
+        &AtomicBool::new(true),
+    )
+    .unwrap_err();
+    assert_eq!(error.code, ErrorCode::Cancelled);
+}
+
+#[test]
 fn the_first_engine_start_is_cold_and_clears_it_on_success() {
     let mut engines = EngineRegistry::new();
     engines.register(Box::new(StubEngine));
@@ -6477,7 +6542,7 @@ fn a_session_gets_an_entry_with_an_account_for_the_main_node_and_each_exit() {
         .iter()
         .map(|account| account.tag.as_str())
         .collect();
-    assert_eq!(tags, ["proxy", "exit-0"]);
+    assert_eq!(tags, ["proxy", "exit-0", "subscription"]);
     assert_ne!(entry.accounts[0].password, entry.accounts[1].password);
     finish_probe_fixture(&helper, dir);
 }
@@ -6542,6 +6607,93 @@ fn a_full_delay_leaves_the_entry_alone() {
     helper.tunnel_delay(DelayMode::Full).unwrap();
     assert_eq!(fake.connections.load(Ordering::Acquire), 0);
     assert_eq!(fake.refused.load(Ordering::Acquire), 0);
+    finish_probe_fixture(&helper, dir);
+}
+
+#[test]
+fn subscription_credentials_belong_only_to_the_session_owner_and_expire_on_disconnect() {
+    let (helper, dir, entry) = session_with_one_exit(Arc::new(AtomicUsize::new(0)));
+    let proxy = helper
+        .subscription_proxy_as(&test_caller())
+        .unwrap()
+        .unwrap();
+    assert_eq!(proxy.username, rosetun_engine::SUBSCRIPTION_PROXY_USER);
+    assert_eq!(proxy.port, entry.address.port());
+    assert_ne!(proxy.password, entry.accounts[0].password);
+    assert_ne!(proxy.password, entry.accounts[1].password);
+    assert!(
+        !format!(
+            "{:?}",
+            rosetun_ipc::Response::SubscriptionProxy(Some(proxy.clone()))
+        )
+        .contains(&proxy.password)
+    );
+    let mut other = test_caller();
+    #[cfg(windows)]
+    {
+        other.account = AccountIdentity::WindowsSid(vec![99]);
+    }
+    #[cfg(target_os = "linux")]
+    {
+        other.account = AccountIdentity::LinuxUid(99999);
+    }
+    other.administrator = true;
+    assert_eq!(
+        helper.subscription_proxy_as(&other).unwrap_err().code,
+        ErrorCode::AccessDenied
+    );
+    helper.with_status(|status| status.state = ConnectionState::Reconnecting);
+    assert!(helper.subscription_proxy_as(&test_caller()).is_err());
+    finish_probe_fixture(&helper, dir);
+    assert!(
+        helper
+            .subscription_proxy_as(&test_caller())
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn bypass_checks_require_a_connected_tun_without_full_protection() {
+    let (helper, _, dir) =
+        probe_fixture_with_counter(true, None, false, false, Arc::new(AtomicUsize::new(0)));
+    let mut request = connect_request();
+    request.settings.kill_switch = false;
+    helper.connect(&request).unwrap();
+    let now = Instant::now();
+    {
+        let mut session = helper.session.lock().unwrap();
+        session.bypass.lookup = |_| Ok("physical-test-interface".into());
+        for seconds in [0, 2] {
+            session.observe_bypass(now + Duration::from_secs(seconds));
+            assert!(!helper.status().bypass_detected);
+        }
+        session.observe_bypass(now + Duration::from_secs(4));
+        assert!(helper.status().bypass_detected);
+        session.bypass.lookup = |_| Ok("rosetun0".into());
+        session.observe_bypass(now + Duration::from_secs(6));
+        assert!(!helper.status().bypass_detected);
+        session.bypass.lookup = |_| panic!("protected or proxy sessions must not query routes");
+        session.request.as_mut().unwrap().settings.kill_switch = true;
+        session.observe_bypass(now + Duration::from_secs(8));
+        session.request.as_mut().unwrap().settings.kill_switch = false;
+        session.request.as_mut().unwrap().settings.connection_mode = ConnectionMode::SystemProxy;
+        session.observe_bypass(now + Duration::from_secs(10));
+        session.request.as_mut().unwrap().settings.connection_mode = ConnectionMode::Tun;
+        session.lockdown.lock().unwrap().enabled = true;
+        session.observe_bypass(now + Duration::from_secs(12));
+        session.lockdown.lock().unwrap().enabled = false;
+        session.last_endpoint.as_mut().unwrap().address = "1.1.1.1".parse().unwrap();
+        session.bypass.lookup = |address| {
+            assert_ne!(address, "1.1.1.1".parse::<IpAddr>().unwrap());
+            assert!(
+                address.is_ipv4(),
+                "an IPv4-only TUN must not report strict_route's IPv6 block as a bypass"
+            );
+            Ok("rosetun0".into())
+        };
+        session.observe_bypass(now + Duration::from_secs(14));
+    }
     finish_probe_fixture(&helper, dir);
 }
 

@@ -165,6 +165,9 @@ pub struct InterfaceSettings {
     /// Subscriptions are refreshed in the background when they get old.
     #[serde(default = "default_true")]
     pub auto_update_subscriptions: bool,
+    /// Format 9: connected subscription requests use the main VPN outbound.
+    #[serde(default = "default_true")]
+    pub subscriptions_via_vpn: bool,
     #[serde(default = "default_true")]
     pub check_updates: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -241,6 +244,7 @@ impl Default for InterfaceSettings {
             close_to_tray: default_close_to_tray(),
             connect_on_start: false,
             auto_update_subscriptions: true,
+            subscriptions_via_vpn: true,
             check_updates: true,
             skipped_version: None,
             last_update_check: None,

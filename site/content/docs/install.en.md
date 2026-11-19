@@ -12,7 +12,7 @@ toc_labels = { "debian-13" = "Debian 13" }
 
 **Windows:** Windows 11, x64. Windows 10 runs on one tester's computer; the failure tests have not run on it.
 
-**Linux:** Debian 13, amd64, with systemd and nftables (the package depends on them) and cgroup v2. polkit (`pkexec`, `polkitd`) is recommended: without it, the window cannot change Lockdown, and you run `sudo rosetun lockdown on` or `off` in a terminal. Linux is supported since 0.5.
+**Linux:** amd64 with systemd, nftables and cgroup v2. Debian 13 is the reference distribution. With polkit (`pkexec`, `polkitd`) you can change Lockdown in the app. You can also run `sudo rosetun lockdown on` or `sudo rosetun lockdown off` in a terminal.
 
 ## Windows {#windows}
 
@@ -21,19 +21,6 @@ Download `{{ r?.installer or "rosetun-<version>-setup.exe" }}` from [Releases]({
 You can choose an installation folder, but not inside a user profile or where standard users can change it; the SYSTEM service requires a protected folder. Uninstalling keeps your configuration in `%APPDATA%\Rosetun` by default, or you can choose to delete your settings, subscriptions and rules.
 
 **Update:** run the new installer over the old version. With the kill switch on, the network stays closed through the update, and the app starts and connects again. If it cannot connect, the connection screen offers **Connect** and **Open network**; `rosetun open-network` does the same. Lockdown stays on.
-
-**Settings:** when the configuration format changes, Rosetun keeps a copy of the previous file beside it at the first save (such as `config.v7.json`); the copy contains the same subscription URLs. An older version refuses a newer file and does not overwrite it.
-
-**Going back to 0.4** (not tested):
-
-1. In 0.5, disconnect, so your own proxy settings come back. 0.4 knows nothing of them.
-2. Uninstall 0.5 and keep your settings. This removes Lockdown, an update's hold and the sign-in task, which 0.4 does not know how to remove.
-3. Install 0.4.
-4. Close Rosetun and restore the settings in PowerShell. Without `config.v7.json`, the file is still format 7, so skip this step. Changes made in 0.5 are lost.
-   ```
-   Move-Item -Force "$env:APPDATA\Rosetun\config.v7.json" "$env:APPDATA\Rosetun\config.json"
-   ```
-5. Turn on **Start with Windows** and Lockdown again if you use them.
 
 {% if not r?.deb_url %}
 
@@ -44,8 +31,6 @@ No Debian package is available in this release. See GitHub Releases.
 ## Debian / Ubuntu / Linux Mint {#debian-13}
 
 **Distributions (amd64, glibc 2.36 or newer):** Debian 13 is verified by the system test matrices. Ubuntu 24.04+, Linux Mint 22+ and other Debian/Ubuntu derivatives with this glibc or newer, systemd, nftables and polkit are expected to work with the same `.deb`; manual Ubuntu verification is pending.
-
-The Arch Linux binary recipe `rosetun-bin` is available in the repository; AUR publication and runtime verification are pending. See [installation and updates](../install/#arch-linux).
 
 Systems without systemd and Flatpak, Snap and AppImage packages are unsupported: Rosetun needs a privileged system service and access to the host firewall and TUN device.
 
@@ -70,7 +55,7 @@ Then **restart the computer**. Logging out is not enough: your systemd user mana
 
 ## Arch Linux {#arch-linux}
 
-The `rosetun-bin` recipe is in the Rosetun repository. AUR publication is pending. Review the recipe for the release and build the package on Arch:
+The Rosetun repository carries the `rosetun-bin` recipe. Review the recipe for the release before building on Arch.
 
 ```
 git clone --branch v{{ r?.version or "VERSION" }} https://github.com/eoftgge/rosetun.git
@@ -83,13 +68,44 @@ sudo usermod -aG rosetun "$USER"
 sudo reboot
 ```
 
-The package installs the release binaries with their pinned sing-box and Xray. The Arch engine packages are not required. Once the recipe is published in AUR, `yay -S rosetun-bin` or `git clone https://aur.archlinux.org/rosetun-bin.git` followed by `makepkg -si` will provide the same package.
+The package installs the release binaries with their matching sing-box and Xray builds.
+
+### System DNS in TUN mode {#arch-dns}
+
+Enable `systemd-resolved` so sing-box can register the tunnel's DNS server with the system.
+
+```sh
+sudo systemctl enable --now systemd-resolved.service
+```
+
+If Rosetun is already connected, disconnect and connect again. Then check the DNS servers on the tunnel interface and try a system lookup.
+
+```sh
+resolvectl status rosetun0
+timeout 5s getent ahosts example.org
+```
+
+The tunnel's DNS should appear under **DNS Servers**. If it appears but the lookup still fails, check that the system resolver uses `systemd-resolved`. The recommended `/etc/resolv.conf` setup for its local DNS stub is a symlink to `/run/systemd/resolve/stub-resolv.conf`. [systemd-resolved manual](https://man.archlinux.org/man/systemd-resolved.service.8.en)
 
 **Update:** update the package, then run `sudo rosetun-helper-privileged --restart-for-upgrade`. A normal `systemctl restart` opens the network with the kill switch on. The upgrade command preserves the hold until you reconnect or run `rosetun open-network`. Services are enabled by you, never by the package.
 
 **Remove:** `sudo pacman -R rosetun-bin`. A transaction hook resets Lockdown before deleting files and refuses removal if that fails. To recover first: `sudo rosetun reset-firewall`. User settings and the group stay.
 
-**Validation status:** Arch requires manual verification without a VM matrix; automated system checks run only on Debian 13. Arch runtime verification is pending.
+**Validation status.** The GUI has had a manual check on Arch. The automated Linux system matrices cover Debian 13.
+
+## Updating from 0.5 {#update}
+
+Before updating, copy your settings folder. The default path is `%APPDATA%\Rosetun` on Windows and `~/.config/rosetun` on Linux. The backup contains your subscription URLs. Keep it private.
+
+Use the update procedure for your platform above to carry over settings and Lockdown. The first settings save in 0.6 converts format 8 to **format 9** and leaves the previous file beside it as `config.v8.json`. The 0.6 beta already uses format 9. Rosetun 0.5 refuses to open a format 9 file and leaves it intact.
+
+## Going back to 0.5.1 {#rollback}
+
+1. Disconnect in 0.6 so your own proxy settings come back.
+2. Uninstall 0.6 and keep your settings. On Debian, use `apt remove` to retain data that `apt purge` would remove.
+3. Install 0.5.1 and close Rosetun.
+4. If your configuration was saved in format 9, restore a copy of your pre-update `config.json`. You can also copy `config.v8.json` to `config.json` in the settings folder if that backup exists. Keep a separate copy of the format 9 file if you want to retain your 0.6 changes.
+5. Re-enable autostart and Lockdown if you used them.
 
 ## Verify the download {#verify-the-download}
 

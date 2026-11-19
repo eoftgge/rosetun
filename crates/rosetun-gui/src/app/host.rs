@@ -147,6 +147,7 @@ impl eframe::App for Hosted {
 
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         if let Some(app) = &mut self.app {
+            app.observe_shape(ctx);
             eframe::App::logic(app, ctx, frame);
         }
     }
@@ -304,29 +305,19 @@ impl App {
         }
     }
 
+    fn observe_shape(&mut self, ctx: &egui::Context) {
+        self.life.shape = crate::window_shape::capture(
+            self.life.shape,
+            ctx,
+            std::env::var_os("WAYLAND_DISPLAY").is_some(),
+        );
+    }
+
     pub(super) fn remember_shape(&mut self, ctx: &egui::Context) {
         if !self.life.has_window {
             return;
         }
-        let (inner, outer, maximized, scale) = ctx.input(|input| {
-            let viewport = input.viewport();
-            (
-                viewport.inner_rect,
-                viewport.outer_rect,
-                viewport.maximized.unwrap_or(false),
-                viewport.native_pixels_per_point.unwrap_or(1.0),
-            )
-        });
-        // The context's points include the interface scale, a new window's do not.
-        let zoom = ctx.zoom_factor();
-        self.life.shape = crate::window_shape::observed(
-            self.life.shape,
-            inner.map(|rect| rect.size() * zoom),
-            outer.map(|rect| rect.min * zoom),
-            maximized,
-            scale,
-            std::env::var_os("WAYLAND_DISPLAY").is_some(),
-        );
+        self.observe_shape(ctx);
         if let Some(file) = &self.window_file {
             crate::window_shape::save(file, &self.life.shape);
         }

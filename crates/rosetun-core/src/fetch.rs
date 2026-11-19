@@ -33,6 +33,8 @@ pub enum FetchError {
     InvalidUserAgent,
     InvalidDeviceId,
     RequestFailed,
+    VpnUnavailable,
+    VpnRequestFailed,
     Timeout,
     HostNotFound,
     ConnectionFailed,
@@ -56,6 +58,8 @@ impl fmt::Display for FetchError {
             }
             Self::InvalidDeviceId => f.write_str("device ID has an invalid format"),
             Self::RequestFailed => f.write_str("subscription request failed"),
+            Self::VpnUnavailable => f.write_str("the subscription VPN path is unavailable; disable subscription updates through VPN to use the ordinary path"),
+            Self::VpnRequestFailed => f.write_str("subscription update through VPN failed; no direct request was made"),
             Self::Timeout => f.write_str("subscription server did not respond in time"),
             Self::HostNotFound => f.write_str("subscription server name could not be resolved"),
             Self::ConnectionFailed => f.write_str("could not connect to the subscription server"),
@@ -165,6 +169,61 @@ pub fn fetch(subscription: &Subscription, timeouts: Timeouts) -> Result<Parsed, 
     fetch_with_device(subscription, timeouts, device.as_ref())
 }
 
+pub(crate) fn fetch_via_vpn(
+    subscription: &Subscription,
+    timeouts: Timeouts,
+    enabled: bool,
+) -> Result<Parsed, FetchError> {
+    fetch_via_vpn_with(subscription, timeouts, enabled, || {
+        let mut helper = rosetun_ipc::HelperClient::connect(
+            &rosetun_ipc::default_endpoint(),
+            "rosetun-subscription",
+        )
+        .map_err(|_| FetchError::VpnUnavailable)?;
+        helper
+            .subscription_proxy()
+            .map_err(|_| FetchError::VpnUnavailable)
+    })
+}
+
+fn fetch_via_vpn_with(
+    subscription: &Subscription,
+    timeouts: Timeouts,
+    enabled: bool,
+    endpoint: impl FnOnce() -> Result<Option<rosetun_ipc::SubscriptionProxy>, FetchError>,
+) -> Result<Parsed, FetchError> {
+    if !enabled {
+        return fetch(subscription, timeouts);
+    }
+    let Some(endpoint) = endpoint()? else {
+        return fetch(subscription, timeouts);
+    };
+    let proxy = subscription_proxy(&endpoint)?;
+    let url = parse_url(&subscription.url)?;
+    let agent = agent_for_proxy(&url, timeouts, Some(proxy));
+    let device = request_device(subscription, rosetun_hwid::device_info);
+    fetch_with_agent(subscription, device.as_ref(), agent).map_err(|error| match error {
+        FetchError::RequestFailed
+        | FetchError::Timeout
+        | FetchError::HostNotFound
+        | FetchError::ConnectionFailed
+        | FetchError::BodyReadFailed => FetchError::VpnRequestFailed,
+        other => other,
+    })
+}
+
+fn subscription_proxy(
+    endpoint: &rosetun_ipc::SubscriptionProxy,
+) -> Result<ureq::Proxy, FetchError> {
+    ureq::Proxy::builder(ureq::ProxyProtocol::Socks5h)
+        .host("127.0.0.1")
+        .port(endpoint.port)
+        .username(&endpoint.username)
+        .password(&endpoint.password)
+        .build()
+        .map_err(|_| FetchError::VpnUnavailable)
+}
+
 pub(crate) fn request_device(
     subscription: &Subscription,
     device_info: impl FnOnce(HwidFor<'_>) -> Result<DeviceInfo, HwidError>,
@@ -207,6 +266,10 @@ fn parse_url(url: &str) -> Result<Url, FetchError> {
 }
 
 fn agent_for(url: &Url, timeouts: Timeouts) -> ureq::Agent {
+    agent_for_proxy(url, timeouts, crate::resolve::agent_proxy())
+}
+
+fn agent_for_proxy(url: &Url, timeouts: Timeouts, proxy: Option<ureq::Proxy>) -> ureq::Agent {
     // Platform trust includes antivirus HTTPS-inspection and corporate proxy roots;
     // a fixed webpki root set would reject certificates trusted by Windows.
     let tls = TlsConfig::builder()
@@ -215,7 +278,7 @@ fn agent_for(url: &Url, timeouts: Timeouts) -> ureq::Agent {
 
     crate::resolve::agent(
         ureq::Agent::config_builder()
-            .proxy(crate::resolve::agent_proxy())
+            .proxy(proxy)
             .tls_config(tls)
             .timeout_connect(Some(timeouts.connect))
             .timeout_global(Some(timeouts.global))
@@ -280,6 +343,15 @@ fn fetch_with_device(
     device: Option<&DeviceInfo>,
 ) -> Result<Parsed, FetchError> {
     let url = parse_url(&subscription.url)?;
+    fetch_with_agent(subscription, device, agent_for(&url, timeouts))
+}
+
+fn fetch_with_agent(
+    subscription: &Subscription,
+    device: Option<&DeviceInfo>,
+    agent: ureq::Agent,
+) -> Result<Parsed, FetchError> {
+    let url = parse_url(&subscription.url)?;
 
     let user_agent = subscription
         .user_agent
@@ -289,8 +361,6 @@ fn fetch_with_device(
     if user_agent.is_empty() || !user_agent.bytes().all(|byte| (0x20..=0x7e).contains(&byte)) {
         return Err(FetchError::InvalidUserAgent);
     }
-
-    let agent = agent_for(&url, timeouts);
 
     let device = device.filter(|_| subscription.send_hwid);
     let mut request = agent
@@ -358,6 +428,125 @@ mod tests {
     const MACHINE_ID: &str = "00000000-0000-4000-8000-000000000001";
     const NODE: &str = "trojan://secret@node.example.com:443#Example";
     const SECRET_SUFFIX: &str = "/private-token?key=query-secret";
+
+    #[test]
+    fn subscription_names_are_resolved_by_the_authenticated_vpn_entry() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let proxy = rosetun_ipc::SubscriptionProxy {
+            port,
+            username: "subscription".into(),
+            password: "fixture-password".into(),
+        };
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let mut hello = [0; 2];
+            stream.read_exact(&mut hello).unwrap();
+            assert_eq!(hello[0], 5);
+            let mut methods = vec![0; hello[1] as usize];
+            stream.read_exact(&mut methods).unwrap();
+            assert!(methods.contains(&2));
+            stream.write_all(&[5, 2]).unwrap();
+            let mut version = [0];
+            stream.read_exact(&mut version).unwrap();
+            assert_eq!(version, [1]);
+            let field = |stream: &mut std::net::TcpStream| {
+                let mut size = [0];
+                stream.read_exact(&mut size).unwrap();
+                let mut value = vec![0; size[0] as usize];
+                stream.read_exact(&mut value).unwrap();
+                value
+            };
+            assert_eq!(field(&mut stream), b"subscription");
+            assert_eq!(field(&mut stream), b"fixture-password");
+            stream.write_all(&[1, 0]).unwrap();
+            let mut connect = [0; 4];
+            stream.read_exact(&mut connect).unwrap();
+            assert_eq!(connect, [5, 1, 0, 3]);
+            assert_eq!(field(&mut stream), b"provider.example.com");
+            let mut destination_port = [0; 2];
+            stream.read_exact(&mut destination_port).unwrap();
+            assert_eq!(destination_port, 80u16.to_be_bytes());
+            stream.write_all(&[5, 0, 0, 1, 127, 0, 0, 1, 0, 0]).unwrap();
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") {
+                let mut byte = [0];
+                stream.read_exact(&mut byte).unwrap();
+                request.push(byte[0]);
+            }
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{NODE}",
+                NODE.len()
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+        });
+        let parsed = fetch_via_vpn_with(
+            &subscription("http://provider.example.com/private"),
+            timeouts(),
+            true,
+            || Ok(Some(proxy)),
+        )
+        .unwrap();
+        assert_eq!(parsed.nodes.len(), 1);
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn an_unavailable_vpn_path_never_makes_a_direct_subscription_request() {
+        let server = Server::start(vec![Reply::ok(NODE.as_bytes().to_vec())]);
+        let error = fetch_via_vpn_with(&subscription(&server.url), timeouts(), true, || {
+            Err(FetchError::VpnUnavailable)
+        })
+        .unwrap_err();
+        assert!(matches!(error, FetchError::VpnUnavailable));
+        assert!(server.requests.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_refused_vpn_proxy_never_retries_the_subscription_directly() {
+        let direct = Server::start(vec![Reply::ok(NODE.as_bytes().to_vec())]);
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let proxy = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let mut hello = [0; 2];
+            stream.read_exact(&mut hello).unwrap();
+            let mut methods = vec![0; hello[1] as usize];
+            stream.read_exact(&mut methods).unwrap();
+            stream.write_all(&[5, 0xff]).unwrap();
+        });
+        let result = fetch_via_vpn_with(&subscription(&direct.url), timeouts(), true, || {
+            Ok(Some(rosetun_ipc::SubscriptionProxy {
+                port,
+                username: "subscription".into(),
+                password: "fixture-password".into(),
+            }))
+        });
+        assert!(matches!(result, Err(FetchError::VpnRequestFailed)));
+        assert!(direct.requests.lock().unwrap().is_empty());
+        proxy.join().unwrap();
+    }
+
+    #[test]
+    fn disconnected_or_disabled_subscription_updates_use_the_ordinary_path() {
+        for enabled in [false, true] {
+            let server = Server::start(vec![Reply::ok(NODE.as_bytes().to_vec())]);
+            let parsed =
+                fetch_via_vpn_with(&subscription(&server.url), timeouts(), enabled, || {
+                    assert!(enabled);
+                    Ok(None)
+                })
+                .unwrap();
+            assert_eq!(parsed.nodes.len(), 1);
+            assert_eq!(server.requests.lock().unwrap().len(), 1);
+        }
+    }
 
     #[derive(Debug)]
     struct CapturedRequest {

@@ -14,6 +14,8 @@ What Rosetun protects, what counts as a vulnerability and what does not. To repo
 
 - **Traffic outside the tunnel:** a way around the kill switch, the DNS lock or Lockdown, including from another account on the same computer while connected. Name the moment and the mode, as in the table of [Protection guarantees](../guarantees/), where that cell says the network is closed.
 - **Leaks:** subscription links, credentials, server addresses or visited sites in logs, in **Collect report**, in notifications or in the interface where they should be hidden.
+- **Rule exchange:** an import that changes a rule set before confirmation, or an export that includes list URLs without consent.
+- **Subscription updates:** a direct request after a VPN request fails while **Update subscriptions through VPN** is enabled. Include the connection mode and whether Rosetun showed an active connection. [Subscription updates](../subscriptions/#updates)
 - **Input from outside:** a `rosetun://` link that adds or downloads anything before you confirm it; a subscription or list that makes Rosetun write outside its folders or run anything; an update offer that points anywhere but this repository's releases; a program icon read from a network path.
 
 **On Windows:**
@@ -33,13 +35,13 @@ What Rosetun protects, what counts as a vulnerability and what does not. To repo
 - **The `.deb` package:** a maintainer script that opens the network during an upgrade, removes the way out before Lockdown is gone, or leaves a file others can write; an upgrade marker in `/run/rosetun` that an ordinary account can set.
 - **`rosetun://` links through the socket** in `$XDG_RUNTIME_DIR`: another account delivering a link to your Rosetun, or the `.desktop` handler running anything but `rosetun-gui --open-url`.
 
-A report should not contain subscription links, server links, credentials or unredacted logs: such links can contain passwords. **Collect report** (Settings → Service and log) removes them and is safe to attach.
+Include the Rosetun version, system, connection mode, protection settings and steps to reproduce. **Collect report** (Settings → Service and log) prepares a redacted report. Review it before attaching it and leave out subscription links, server links, credentials and raw logs.
 
 ## Out of scope {#out-of-scope}
 
 - Malware already running under your account or as administrator. Lockdown stops accidental leaks, not a program you run yourself (see [How it works](../how-it-works/)).
 - An administrator or root changing Rosetun, its service or its firewall rules.
-- What your VPN server or subscription provider can see by design: the traffic the server carries, and your real IP address when Rosetun updates a subscription without a connection.
+- What your VPN server or subscription provider can see by design: the traffic the server carries, and your real IP address when Rosetun updates a subscription without a connection or uses an ordinary direct path with VPN updates switched off. See [Updates through VPN](../subscriptions/#updates).
 - Bugs in sing-box, Xray or Wintun themselves: please report them to those projects. Do report to us when the way Rosetun runs them opens a hole. In 0.4 one such case was fixed: while connected, sing-box's own firewall permit let any account on the computer start Rosetun's `sing-box.exe` and get around the tunnel.
 
 ## A folder that was ever writable {#writable-folder}

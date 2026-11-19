@@ -103,8 +103,8 @@ function Install-RosetunSingBox {
 }
 
 function Install-RosetunXray {
-    $version = '26.10.21'
-    $expectedHash = 'FC58C39EE2F2717B4C54D28D374362389E5319B20AE44AEA76EA45A5243EC827'
+    $version = '26.11.9'
+    $expectedHash = '1262522266337B824F07BEB8E1375786B437683B3890105469088F8E17E0A69D'
     $installer = Get-Content -LiteralPath (Join-Path $script:RepoRoot 'installer\build.ps1') -Raw
     if ($installer -notmatch ('(?m)^\$xrayVersion = ''{0}''\r?$' -f $version) -or
         $installer -notmatch ('(?m)^\$xrayArchiveHash = ''{0}''\r?$' -f $expectedHash)) {
@@ -219,8 +219,11 @@ function Start-RosetunXrayTestNode {
             $server.outbounds[0].streamSettings = @{ sockopt = @{ interface = $BindInterface } }
         }
         [IO.File]::WriteAllText($configPath, ($server | ConvertTo-Json -Depth 12))
+        $logName = 'test-node-xray-' + [guid]::NewGuid().ToString('N')
+        $stdoutLog = Join-Path $script:LogRoot ($logName + '.stdout.log')
+        $stderrLog = Join-Path $script:LogRoot ($logName + '.stderr.log')
         $node = Start-Process -FilePath $installation.Binary -ArgumentList 'run', '-config', $configPath `
-            -WindowStyle Hidden -PassThru
+            -WindowStyle Hidden -PassThru -RedirectStandardOutput $stdoutLog -RedirectStandardError $stderrLog
         $deadline = (Get-Date).AddSeconds(15)
         do {
             $ready = @($port, $xhttpPort | Where-Object {
@@ -235,6 +238,7 @@ function Start-RosetunXrayTestNode {
         } while ($true)
         Remove-Item -LiteralPath $configPath -Force
         Write-Host "REALITY test node listening on TCP $port, XHTTP + REALITY on TCP $xhttpPort"
+        Write-Host "Xray test node logs: $stdoutLog; $stderrLog"
         return [pscustomobject]@{
             Process = $node
             Binary = $installation.Binary
@@ -1662,31 +1666,70 @@ function Stop-RosetunLanListener {
 }
 
 function Test-RosetunUdpInternet {
-    # True when an NTP reply comes back to the guest. A public server is used on
-    # purpose: the host's LAN address is on-link for the guest, so datagrams to it
-    # bypass the TUN and say nothing about the tunnel. NTP is not hijacked by the
-    # engine and port 123 is not filtered by VLESS Vision.
-    param([string]$Server = '162.159.200.1')
-    Invoke-RosetunGuest -ScriptBlock {
-        param($server)
+    param(
+        [string]$Server = '162.159.200.1',
+        [int]$Port = 123,
+        [int]$TimeoutMilliseconds = 3000,
+        [int]$Attempts = 3,
+        [switch]$Detailed
+    )
+    $result = Invoke-RosetunGuest -ScriptBlock {
+        param($server, $port, $timeoutMilliseconds, $attempts)
         $client = [Net.Sockets.UdpClient]::new()
+        $observations = [Collections.Generic.List[object]]::new()
+        $total = [Diagnostics.Stopwatch]::StartNew()
+        $ok = $false
         try {
-            $client.Client.ReceiveTimeout = 3000
+            $client.Client.ReceiveTimeout = $timeoutMilliseconds
             $request = [byte[]]::new(48)
             $request[0] = 0x1B
             $remote = [Net.IPEndPoint]::new([Net.IPAddress]::Any, 0)
-            for ($attempt = 0; $attempt -lt 3; $attempt++) {
-                [void]$client.Send($request, $request.Length, $server, 123)
-                try {
-                    $reply = $client.Receive([ref]$remote)
-                    if ($reply.Length -ge 48) { return $true }
+            for ($attempt = 1; $attempt -le $attempts; $attempt++) {
+                $timer = [Diagnostics.Stopwatch]::StartNew()
+                $phase = 'send'
+                $observation = [ordered]@{
+                    Attempt = $attempt; SentBytes = 0; ReplyBytes = 0
+                    ReplyAddress = $null; ReplyPort = $null; SourceMatches = $null
+                    NtpMode = $null; Stratum = $null; Phase = $phase
+                    SocketError = $null; NativeError = $null; ErrorType = $null; ElapsedMs = 0
                 }
-                catch [Net.Sockets.SocketException] { }
+                try {
+                    $observation.SentBytes = $client.Send($request, $request.Length, $server, $port)
+                    $phase = 'receive'
+                    $reply = $client.Receive([ref]$remote)
+                    $observation.ReplyBytes = $reply.Length
+                    $observation.ReplyAddress = $remote.Address.ToString()
+                    $observation.ReplyPort = $remote.Port
+                    $observation.SourceMatches = $remote.Address.ToString() -eq $server -and $remote.Port -eq $port
+                    if ($reply.Length -ge 2) {
+                        $observation.NtpMode = $reply[0] -band 7
+                        $observation.Stratum = $reply[1]
+                    }
+                    $ok = $reply.Length -ge 48
+                }
+                catch {
+                    $exception = $_.Exception.GetBaseException()
+                    $observation.ErrorType = $exception.GetType().FullName
+                    if ($exception -is [Net.Sockets.SocketException]) {
+                        $observation.SocketError = $exception.SocketErrorCode.ToString()
+                        $observation.NativeError = $exception.NativeErrorCode
+                    }
+                }
+                $observation.Phase = $phase
+                $observation.ElapsedMs = $timer.ElapsedMilliseconds
+                $observations.Add([pscustomobject]$observation)
+                if ($ok) { break }
             }
-            return $false
+            [pscustomobject]@{
+                Ok = $ok; Server = $server; Port = $port
+                TimeoutMilliseconds = $timeoutMilliseconds
+                ElapsedMs = $total.ElapsedMilliseconds; Attempts = @($observations.ToArray())
+            }
         }
         finally { $client.Dispose() }
-    } -ArgumentList $Server
+    } -ArgumentList $Server, $Port, $TimeoutMilliseconds, $Attempts
+    if ($Detailed) { return $result }
+    return [bool]$result.Ok
 }
 
 function Test-RosetunLanListener {
@@ -3382,6 +3425,15 @@ function Start-RosetunNameZone {
                             $read += $count
                         } while ($count -gt 0 -and $read -lt $buffer.Length -and
                             -not [Text.Encoding]::ASCII.GetString($buffer, 0, $read).Contains("`r`n`r`n"))
+                        $requestText = [Text.Encoding]::ASCII.GetString($buffer, 0, $read)
+                        if ($requestText -match '(?im)^User-Agent: (Rosetun-matrix-sub-[a-z0-9-]+)\r?$') {
+                            # Only a synthetic test token, never a subscription URL or credential.
+                            [pscustomobject]@{
+                                Kind = 'subscription-proof'
+                                Token = $Matches[1]
+                                Source = $client.Client.RemoteEndPoint.Address.IPAddressToString
+                            }
+                        }
                         $head = [Text.Encoding]::ASCII.GetBytes(
                             "HTTP/1.1 200 OK`r`nContent-Type: text/plain`r`nContent-Length: $($content.Length)`r`nConnection: close`r`n`r`n")
                         $stream.Write($head, 0, $head.Length)

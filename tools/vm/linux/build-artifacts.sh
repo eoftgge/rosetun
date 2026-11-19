@@ -129,20 +129,13 @@ else
     cargo +1.99.1 build -q --locked -p rosetun-ipc --example l2_transport_fixture
     cargo +1.99.1 test -q --locked --no-run --message-format=json -p rosetun-ipc -p rosetun-helper-privileged >"$json"
 
-    # Executables of the three targets, taken from cargo's own report.
-    find_exe() {
-        # find_exe KIND NAME [TEST]: the one executable cargo reports for that target, built as a test or not.
-        # The flag is the one of the build profile: the target's own "test" field is true for every binary
-        # target, so it cannot tell the test harness from the program. Anything but one executable is none.
-        local found
-        found=$(grep '"reason":"compiler-artifact"' "$json" | grep -F "\"kind\":[\"$1\"]" | grep -F "\"name\":\"$2\"" |
-            grep '"executable":"' | grep -E '"profile":\{[^}]*"test":'"${3-false}"'\}' |
-            sed -n 's/.*"executable":"\([^"]*\)".*/\1/p' | sort -u)
-        if [ "$(printf '%s' "$found" | grep -c .)" -eq 1 ]; then printf '%s\n' "$found"; fi
-    }
+    # target.test also appears on ordinary binaries; only profile.test selects
+    # the test harness. Verify its scenario names before creating the payload.
     fixture=$target_dir/debug/examples/l2_transport_fixture
-    ipc_tests=$(find_exe lib rosetun_ipc true)
-    helper_tests=$(find_exe bin rosetun-helper-privileged true)
+    ipc_tests=$(python3 tools/vm/linux/l2_test_artifacts.py "$json" lib rosetun_ipc \
+        tools/vm/linux/scenarios.tsv unit_ipc)
+    helper_tests=$(python3 tools/vm/linux/l2_test_artifacts.py "$json" bin rosetun-helper-privileged \
+        tools/vm/linux/scenarios.tsv unit_helper)
     for file in "$fixture" "$ipc_tests" "$helper_tests"; do
         if [ -z "$file" ] || [ ! -f "$file" ]; then
             echo "build-artifacts.sh: a build product was not found" >&2

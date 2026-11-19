@@ -117,7 +117,32 @@ pub(super) fn is_slow_tunnel_message(line: &str) -> bool {
         && words
             .next()
             .is_some_and(|word| word.starts_with("inbound/tun[") && word.ends_with("]:"))
-        && words.collect::<Vec<_>>().join(" ") == "open interface take too much time to finish!"
+        && matches!(
+            words.collect::<Vec<_>>().join(" ").as_str(),
+            "open interface take too much time to finish!"
+                | "starting tun stack take too much time to finish!"
+                | "starting tun interface take too much time to finish!"
+        )
+}
+
+/// In 1.14.3 this precedes the TUN stack/interface post-start stage, not readiness.
+pub(super) fn is_tunnel_created_message(line: &str) -> bool {
+    if super::output::line_level(line) != Some(super::output::LineLevel::Info) {
+        return false;
+    }
+    let plain = strip_ansi_csi(line);
+    let mut words = plain.split_whitespace();
+    words
+        .by_ref()
+        .take(4)
+        .any(|word| word == "INFO" || word.starts_with("INFO["))
+        && words
+            .next()
+            .is_some_and(|word| word.starts_with("inbound/tun[") && word.ends_with("]:"))
+        && words.next() == Some("started")
+        && words.next() == Some("at")
+        && words.next().is_some()
+        && words.next().is_none()
 }
 
 #[cfg(test)]
@@ -143,6 +168,33 @@ mod tests {
             "WARN inbound/tun[tun-in]: open interface take too much time to finish! extra",
         ] {
             assert!(!is_slow_tunnel_message(line), "{line}");
+        }
+    }
+
+    #[test]
+    fn post_start_tunnel_warnings_are_slow_start_hints_too() {
+        for stage in ["starting tun stack", "starting tun interface"] {
+            assert!(is_slow_tunnel_message(&format!(
+                "WARN[0010] inbound/tun[tun-in]: {stage} take too much time to finish!"
+            )));
+        }
+        assert!(!is_slow_tunnel_message(
+            "WARN[0010] outbound/direct[proxy]: starting tun stack take too much time to finish!"
+        ));
+    }
+
+    #[test]
+    fn tunnel_creation_does_not_claim_final_startup_readiness() {
+        let line = "INFO[0000] inbound/tun[tun-in]: started at rosetun0";
+        assert!(is_tunnel_created_message(line));
+        assert!(!is_startup_message(line));
+        for line in [
+            "INFO[0000] outbound/direct[proxy]: started at rosetun0",
+            "ERROR[0000] inbound/tun[tun-in]: started at rosetun0",
+            "INFO[0000] inbound/tun[tun-in]: started at rosetun0 trailing",
+            "INFO[0000] sing-box started (0.43s)",
+        ] {
+            assert!(!is_tunnel_created_message(line));
         }
     }
 

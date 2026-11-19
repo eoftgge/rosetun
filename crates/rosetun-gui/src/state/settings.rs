@@ -134,6 +134,7 @@ fn waits_for_save(action: &Action) -> bool {
         | Action::SetTlsFragment(_)
         | Action::SaveTlsFragment
         | Action::EnableXrayAutoAndConnect
+        | Action::SetSubscriptionsViaVpn(_)
         | Action::SetAutoUpdateSubscriptions(_)
         | Action::SetCheckUpdates(_)
         | Action::SaveDns
@@ -708,6 +709,14 @@ impl State {
                     return self.start_settings(Job::Setting(
                         SettingChange::AutoUpdateSubscriptions(enabled),
                     ));
+                }
+            }
+            Action::SetSubscriptionsViaVpn(enabled) => {
+                if self.can_edit_settings()
+                    && self.config.interface.subscriptions_via_vpn != enabled
+                {
+                    return self
+                        .start_settings(Job::Setting(SettingChange::SubscriptionsViaVpn(enabled)));
                 }
             }
             Action::SetCheckUpdates(enabled) => {

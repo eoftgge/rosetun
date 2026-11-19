@@ -389,6 +389,12 @@ pub(crate) fn fetch(language: Language, error: &FetchError) -> String {
         }
         FetchError::InvalidDeviceId => tr_in(language, "error-fetch-device-id", &FluentArgs::new()),
         FetchError::RequestFailed => tr_in(language, "error-fetch-failed", &FluentArgs::new()),
+        FetchError::VpnUnavailable => {
+            tr_in(language, "error-fetch-vpn-unavailable", &FluentArgs::new())
+        }
+        FetchError::VpnRequestFailed => {
+            tr_in(language, "error-fetch-vpn-failed", &FluentArgs::new())
+        }
         FetchError::Timeout => tr_in(language, "error-fetch-timeout", &FluentArgs::new()),
         FetchError::HostNotFound => {
             tr_in(language, "error-fetch-host-not-found", &FluentArgs::new())

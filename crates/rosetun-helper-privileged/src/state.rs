@@ -1,4 +1,5 @@
 mod apply;
+mod bypass;
 mod connections;
 mod dns;
 mod dns_cache;
@@ -11,6 +12,8 @@ mod probe;
 mod protection;
 mod repeated;
 mod session_lock;
+#[cfg(target_os = "linux")]
+mod system_dns_linux;
 #[cfg(test)]
 mod tests;
 mod watchdog;
@@ -280,6 +283,7 @@ struct Session {
     owner: Arc<Mutex<Option<AccountIdentity>>>,
     reconnect: Option<Reconnect>,
     missing_route_ticks: u8,
+    bypass: bypass::BypassWatch,
     missing_route_since: Option<Instant>,
     stopping: bool,
     dns_timeout: Duration,
@@ -396,6 +400,7 @@ impl Helper {
                 owner,
                 reconnect: None,
                 missing_route_ticks: 0,
+                bypass: bypass::BypassWatch::default(),
                 missing_route_since: None,
                 stopping: false,
                 dns_timeout: TUNNEL_DNS_TIMEOUT,
@@ -785,6 +790,7 @@ impl Helper {
         if session.stopping {
             return;
         }
+        session.observe_bypass(now);
         {
             let session = &mut *session;
             session
@@ -1422,6 +1428,10 @@ impl Helper {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let previous_state = status.state.clone();
         let result = apply(&mut status);
+        if status.state != ConnectionState::Connected {
+            status.bypass_detected = false;
+            status.tunnel_dns_unregistered = false;
+        }
         let previous = connection_state_name(&previous_state);
         let current = connection_state_name(&status.state);
         if previous != current {
@@ -2193,7 +2203,8 @@ impl Session {
             Ok(mut control) => {
                 // One account per outbound the repeated delay can time.
                 let tags = std::iter::once(PROXY_TAG.to_owned())
-                    .chain(outbounds.iter().map(|outbound| exit_tag(outbound.index)));
+                    .chain(outbounds.iter().map(|outbound| exit_tag(outbound.index)))
+                    .chain([rosetun_engine::SUBSCRIPTION_PROXY_USER.to_owned()]);
                 match DelayInbound::local(tags) {
                     Ok(delay) => control.delay = Some(delay),
                     Err(error) => tracing::warn!(%error, "repeated delay entry is unavailable"),
@@ -2715,6 +2726,18 @@ impl Session {
         let Some(server) = self.tunnel_dns else {
             return;
         };
+        #[cfg(target_os = "linux")]
+        if !cfg!(test)
+            && let Some(request) = &self.request
+            && request.settings.connection_mode == rosetun_config::ConnectionMode::Tun
+            && system_dns_linux::registered(&request.settings.tun.name, server.ip()) == Some(false)
+        {
+            tracing::warn!("systemd-resolved has not registered the tunnel DNS server");
+            self.status
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .tunnel_dns_unregistered = true;
+        }
         match DnsWatchdog::start(
             Arc::clone(&self.status),
             server,
@@ -2849,6 +2872,11 @@ impl Session {
     }
 
     fn stop_engine(&mut self) -> Result<(), HelperError> {
+        self.bypass.reset();
+        self.status
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .bypass_detected = false;
         self.gate.close();
         self.tunnel_dns = None;
         if let Some(watchdog) = self.watchdog.take() {
@@ -3142,7 +3170,9 @@ fn server_check_grace_deadline(
 }
 
 fn startup_timeout(hints: rosetun_engine::StartupHints, cold_start: bool) -> Duration {
-    if hints.slow_tunnel_creation || cold_start {
+    // Windows can stall in post-start after creating the TUN without emitting
+    // the open-interface warning. Only observed progress gets that extra time.
+    if hints.slow_tunnel_creation || cold_start || (cfg!(windows) && hints.tunnel_created) {
         SLOW_START_READY_TIMEOUT
     } else {
         TUNNEL_READY_TIMEOUT
@@ -3159,6 +3189,7 @@ fn wait_for_engine_ready_from(
     cold_start: bool,
     cancelled: &AtomicBool,
 ) -> Result<(), HelperError> {
+    let mut progress_grace_logged = false;
     loop {
         check_cancelled(cancelled)?;
         let running = process
@@ -3185,8 +3216,31 @@ fn wait_for_engine_ready_from(
             }
             return Ok(());
         }
-        let timeout = startup_timeout(process.startup_hints(), cold_start);
+        let hints = process.startup_hints();
+        let timeout = startup_timeout(hints, cold_start);
+        if !progress_grace_logged
+            && !cold_start
+            && hints.tunnel_created
+            && spawned_at.elapsed() >= TUNNEL_READY_TIMEOUT
+            && timeout > TUNNEL_READY_TIMEOUT
+        {
+            progress_grace_logged = true;
+            tracing::warn!(
+                elapsed_ms = spawned_at.elapsed().as_millis(),
+                timeout_seconds = timeout.as_secs(),
+                "TUN created; still waiting for final engine readiness"
+            );
+        }
         if Instant::now() >= spawned_at + timeout {
+            tracing::warn!(
+                elapsed_ms = spawned_at.elapsed().as_millis(),
+                timeout_seconds = timeout.as_secs(),
+                cold_start,
+                tunnel_created = hints.tunnel_created,
+                slow_tunnel_creation = hints.slow_tunnel_creation,
+                adapter_still_removing = hints.adapter_still_removing,
+                "engine startup readiness timed out"
+            );
             return Err(HelperError::new(
                 ErrorCode::EngineNotReady,
                 format!(

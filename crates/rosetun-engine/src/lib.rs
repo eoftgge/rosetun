@@ -42,6 +42,8 @@ pub const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Outbound tag of the session's main node.
 pub const PROXY_TAG: &str = "proxy";
+/// A separate credential for client subscription requests through the main node.
+pub const SUBSCRIPTION_PROXY_USER: &str = "subscription";
 
 /// A local-only control API that the engine serves for one session.
 #[derive(Clone, PartialEq, Eq)]
@@ -604,6 +606,8 @@ impl RenderedConfig {
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct StartupHints {
     pub slow_tunnel_creation: bool,
+    /// The TUN was created; its stack and interface still need post-start work.
+    pub tunnel_created: bool,
     /// The engine failed because the previous tunnel adapter was still being
     /// removed by the system; a later start is expected to succeed.
     pub adapter_still_removing: bool,

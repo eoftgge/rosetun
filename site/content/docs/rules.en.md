@@ -55,7 +55,7 @@ Limits:
 
 ## Export and import {#exchange}
 
-In Rules, select the desired set in the picker (Main), then open the three-dot menu beside it. Export all or selected rules of that set, or import rules. The selected set does not need to be active. Copy the document to the clipboard or save a JSON file on Windows. Linux currently supports the clipboard only. Import from the same menu. In the preview, choose an existing destination set and Add or Replace, or choose New set, enter its name and click Import. The new set is created only on confirmation and is not activated automatically. Duplicates are skipped. The whole import, including the default rule and list references, can be undone with Ctrl+Z.
+In Rules, select the desired set in the picker (Main), then open the three-dot menu beside it. Export all or selected rules of that set, or import rules. The selected set does not need to be active. Export the document to the clipboard or save it as a JSON file. Use the same menu to import from a file or the clipboard. On Linux, file dialogs use XDG Desktop Portal. If the dialog is unavailable, use the clipboard. In the preview, choose an existing destination set and Add or Replace, or choose New set, enter its name and click Import. The new set is created only on confirmation and is not activated automatically. Duplicates are skipped. The whole import, including the default rule and list references, can be undone with Ctrl+Z.
 
 Import always shows a preview: destinations, duplicates, invalid rules, disabled rules and unavailable servers. The default rule stays unchanged unless you select its separate checkbox. Broad Direct rules carry a warning. A rules document cannot be imported through a `rosetun://` link.
 

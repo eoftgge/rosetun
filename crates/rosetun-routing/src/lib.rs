@@ -5,6 +5,7 @@ pub mod lan;
 #[cfg(target_os = "linux")]
 mod nftables;
 pub mod platform;
+mod route;
 pub mod upgrade_hold;
 
 pub use errors::RoutingError;
@@ -13,6 +14,7 @@ pub use platform::backend;
 pub use platform::backend_with_cgroups;
 pub use platform::{TunnelAdapterState, tunnel_adapter_present, tunnel_adapter_state};
 pub use rosetun_config::ProtectionCapabilities;
+pub use route::route_interface;
 
 /// Lockdown: persistent WFP objects that keep the machine blocked outside the
 /// tunnel while disconnected, after a service crash and across reboots. The

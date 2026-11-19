@@ -4,30 +4,30 @@
 
 | Version | Security fixes |
 | --- | --- |
-| 0.5.x (latest: 0.5.1) | Yes |
-| Pre-releases of the next version | For testing; reports are welcome, fixes go into the next one |
-| 0.4 and older | No |
+| 0.6.x | Yes. Use the latest stable release. |
+| Pre-releases | For testing. Reports are welcome. |
+| 0.5.x and older | No. Upgrade to 0.6. |
 
 ## Report a vulnerability privately
 
-Use [Security → Report a vulnerability](https://github.com/eoftgge/rosetun/security/advisories/new). **Do not open a public Issue** for a vulnerability, and do not include subscription links, server links, credentials or unredacted logs in a report: such links can contain passwords. **Collect report** (Settings → Service and log) removes them and is safe to attach.
+Submit the report privately through GitHub. Include your Rosetun version, operating system, connection mode, protection settings and steps to reproduce. **Collect report** (Settings → Service and log) prepares a redacted report. Review it before attaching it, and leave out subscription links, server links, credentials and raw logs. [Report a vulnerability](https://github.com/eoftgge/rosetun/security/advisories/new)
 
 ## What is in scope
 
-Traffic outside the tunnel despite the kill switch, the DNS lock or Lockdown; leaks of subscription links, credentials, server addresses or visited sites; input from outside that is acted on before you confirm it; and, on Windows and Linux, the privileges of the service, its pipe or socket, its files and its installation. Out of scope: malware already running under your account or as administrator, an administrator or root changing Rosetun, what your VPN server or provider sees by design, and bugs in sing-box, Xray or Wintun themselves.
+Report traffic outside the tunnel when the kill switch, DNS lock or Lockdown should have blocked it. Also report exposed credentials or private traffic data, actions on external input before confirmation, and unauthorized access to the service, its pipe or socket, or its files. This includes rule imports that take effect before confirmation and subscription updates that retry directly after a failed VPN request while **Update subscriptions through VPN** is enabled.
 
-The full list for each system is on the [security model page](https://eoftgge.github.io/rosetun/en/docs/security/).
+The security model describes the scope on Windows and Linux, including what the VPN provider can see and where to report bugs in bundled components. [Security model](https://eoftgge.github.io/rosetun/en/docs/security/)
 
 ## How reports are handled
 
-A report is acknowledged, fixed in the next release or beta, and published as a GitHub security advisory once a fixed version is out, with credit if you want it. Rosetun is a young project maintained by one developer and has not had an external security review. A response is intended, but no response or fix deadline is guaranteed.
+The maintainer reviews reports privately and publishes an advisory for confirmed vulnerabilities after a fix is available, with credit if you want it. Rosetun has one maintainer, no external security review and no guaranteed response or fix deadline.
 
 ## По-русски
 
-**Поддерживаемые версии.** Исправления безопасности получает 0.5.x (последний выпуск 0.5.1). Предварительные выпуски следующей версии предназначены для проверки: сообщения о них приветствуются, исправления идут в следующий выпуск. 0.4 и старше не поддерживаются.
+**Поддерживаемые версии.** Исправления безопасности выходят в ветке 0.6.x. Используйте её последний стабильный выпуск. О проблемах в предварительных версиях тоже можно сообщать. Если вы на 0.5.x или более ранней версии, обновитесь до 0.6.
 
-**Как сообщить.** Приватно, через [Security → Report a vulnerability](https://github.com/eoftgge/rosetun/security/advisories/new), не через публичный Issue. Не прикладывайте ссылки подписок и серверов, пароли и непроверенные журналы: в ссылках бывают пароли. **Собрать отчёт** (Настройки → Служба и журнал) их вычищает, его прикладывать можно.
+**Как сообщить.** Отправьте приватный отчёт через GitHub. Укажите версию Rosetun, систему, режим подключения, настройки защиты и шаги воспроизведения. **Собрать отчёт** (Настройки → Служба и журнал) готовит отчёт со скрытыми чувствительными данными. Просмотрите его перед отправкой. Исключите ссылки подписок и серверов, пароли и исходные журналы. [Сообщить об уязвимости](https://github.com/eoftgge/rosetun/security/advisories/new)
 
-**Что входит.** Трафик мимо туннеля при включённых kill switch, замке DNS или Lockdown; утечки ссылок подписок, паролей, адресов серверов и посещённых сайтов; данные извне, к которым Rosetun применяет действие до вашего подтверждения; права службы, её канала или сокета, файлов и установки на Windows и Linux. Не входит: вредоносная программа под вашей учётной записью или от имени администратора, администратор или root, меняющий Rosetun, то, что видят VPN-сервер или провайдер по своей природе, и ошибки самих sing-box, Xray и Wintun. Полный список по системам: [модель безопасности](https://eoftgge.github.io/rosetun/docs/security/).
+**Что входит.** Сообщайте о трафике мимо туннеля, когда его должен блокировать kill switch, замок DNS или Lockdown, об утечках паролей и данных о трафике, о действиях с внешними данными до подтверждения и о доступе к службе, её каналу, сокету или файлам без нужных прав. Сюда относятся импорт правил до подтверждения и прямой повтор запроса после сбоя при включённом **Обновлении подписок через VPN**. Границы защиты на Windows и Linux, видимость данных для провайдера и порядок сообщений об ошибках компонентов описаны в [модели безопасности](https://eoftgge.github.io/rosetun/docs/security/).
 
-**Как обрабатываются сообщения.** Сообщение подтверждается, исправление выходит в следующем выпуске или бете, после выхода исправленной версии публикуется GitHub security advisory, с упоминанием автора сообщения, если вы этого хотите. Проект молодой, его ведёт один разработчик, внешней проверки безопасности не было; срок ответа и исправления не гарантирован.
+**Как обрабатываются сообщения.** Разработчик рассматривает отчёты приватно. Для подтверждённой уязвимости он публикует уведомление после выхода исправления и указывает автора отчёта по его желанию. Rosetun ведёт один разработчик. Внешнего аудита безопасности не было, сроки ответа и исправления не гарантируются.

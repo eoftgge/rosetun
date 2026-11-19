@@ -56,6 +56,22 @@ The installer includes `licenses/wintun.txt` and the unchanged `licenses/wintun-
 
 When updating sing-box, also review its embedded Wintun version. Download the matching official `wintun-<version>.zip` from `https://www.wintun.net/builds/`, verify the byte length and SHA-256 of `bin/amd64/wintun.dll`, and compare the archive's license with the unchanged license from that upstream tag. Stop on any mismatch; do not bypass the guard. Update `$wintunVersion`, `$wintunDllLength` and `$wintunDllHash` beside the sing-box pin in `build.ps1`, the vendored license if it changed, and the version/hash documentation here. Review the public license notices and release-note template as well. Verify that the official sing-box executable passes the embedded-DLL guard before releasing.
 
+## Xray configuration checks
+
+After updating Xray, check the actual rendered configurations with the verified
+binary before packaging. Set `ROSETUN_TEST_XRAY` to its absolute path, or place it
+in `target/installer/xray/`, then run:
+
+```sh
+cargo test -q -p rosetun-engine-xray --locked --test xray_check -- --ignored
+```
+
+This runs `xray run -test` for session and probe configurations, including
+REALITY/Vision, TLS, XHTTP, fragmentation and multiple outbounds. It checks the
+exact pinned version and configuration syntax without starting listeners or
+connecting to servers. A missing binary fails this explicit check. The owner
+still runs the Windows and Linux VM matrices before release.
+
 ## Debian package
 
 `installer/linux/build-deb.sh` builds `rosetun_<version>_amd64.deb` on Debian 12 as an ordinary user, with Rust 1.99.1 from rustup. The release workflow pins the Debian image by digest and installs the C linker, `binutils`, Python 3, `dpkg-dev`, `curl`, `unzip` and the Wayland, xkbcommon, X11 and GL/EGL development libraries. Debian 12 has glibc 2.36 and LTS through June 2028. `--release` installs pinned `cargo-about` 0.9.2. The package and Arch archive share the exact same payload; no second compilation or Debian 13 packaging job is needed. Keep `CARGO_TARGET_DIR` on a Linux filesystem: a Windows drive under WSL keeps no file modes, and the script refuses it. The result is `<target>/deb/rosetun_<version>_amd64.deb`; the script prints its SHA-256.
@@ -70,9 +86,9 @@ The file lists in `packaging/linux` go into the package as they are. `packaging/
 
 ## Releases
 
-All development takes place on `dev`; `master` contains only released commits and remains the default branch. There are no pull requests between these branches. CI runs on pushes to both branches. A signed `v<version>` tag matching the version in `Cargo.toml` builds and publishes a GitHub Release with the installer, the Debian package, `SHA256SUMS.txt`, the engines' sources and a build provenance attestation of the installer and the package. The tag goes on `master`, or on `dev` for an alpha or beta of a version above the one on `master`; the workflow refuses any other. Versions with `-alpha.N` or another prerelease suffix are marked as prereleases. Existing releases are never overwritten. A `~` in the package's version becomes `-` in the asset's name, because GitHub would change it anyway.
+Development takes place on `dev`. The default branch, `master`, tracks stable releases. CI runs on both branches. A signed `v<version>` tag matching `Cargo.toml` starts the release workflow. Tag a stable release on `master` or a prerelease of a newer version on `dev`. The workflow publishes the Windows installer, Debian package, Linux archive, engine sources, checksums and bilingual release notes. It attests build provenance for the installer, package and archive. Debian prerelease filenames use `-` where the package's internal version uses `~`.
 
-First use **Actions → Release → Run workflow** on `dev` for a test build: it uploads the installer, the Debian package, checksums and release notes as an artifact without publishing a release. Then fast-forward `master` and tag the released commit:
+First use **Actions → Release → Run workflow** on `dev` for a trial build. It uploads release assets for review. Check the rendered notes and checksums, then fast-forward `master` and tag the released commit.
 
 ```sh
 # Trial: Actions → Release → Run workflow on dev
@@ -82,4 +98,4 @@ git tag -s vX.Y.Z -m "Rosetun X.Y.Z"
 git push origin master vX.Y.Z
 ```
 
-Run `./installer/build.ps1 -Release` to build the same assets locally, including the sing-box source archive, `SHA256SUMS.txt` and bilingual release notes. The sing-box and Xray source archives must match SHA-256 hashes pinned in `build.ps1`; update them together with the engine versions. To fix an already released version, commit the fix on `master`, tag and push the corrected release, then bring that commit back to `dev` with `git switch dev && git merge -S master` and push `dev`.
+Run `./installer/build.ps1 -Release` to build the Windows installer, verify the engine source archives and render the Windows and engine fields in [release-notes.md](release-notes.md). The release workflow fills in the Debian package and Linux archive fields after both assets are built. The SHA-256 pins for engine sources in `build.ps1` need to match their versions. To ship a fix after release, use a new version and tag.

@@ -721,19 +721,38 @@ fn undoing_an_import_preserves_lists_added_after_it() {
     assert!(state.config.lists.contains(&unrelated));
 }
 
-#[cfg(windows)]
 #[test]
 fn export_reports_saving_and_failure_but_not_a_cancelled_save_dialog() {
-    use crate::worker::RulesExportOutcome;
+    use crate::worker::{RulesExportOutcome, RulesTransferError};
     let mut state = rules_state();
     state.reduce(WorkerEvent::RulesWritten(Ok(RulesExportOutcome::Saved)));
     assert!(state.rules.exchange.notice.is_some());
     state.reduce(WorkerEvent::RulesWritten(Ok(RulesExportOutcome::Cancelled)));
     assert!(state.rules.exchange.notice.is_none());
     assert!(state.rules.exchange.error.is_none());
-    state.reduce(WorkerEvent::RulesWritten(Err("write".into())));
+    state.reduce(WorkerEvent::RulesWritten(Err(RulesTransferError::Io)));
     assert!(state.rules.exchange.error.is_some());
     assert!(state.rules.exchange.notice.is_none());
+}
+
+#[test]
+fn missing_rules_file_dialog_offers_the_clipboard() {
+    use crate::worker::RulesTransferError;
+    let mut state = rules_state();
+    state.reduce(WorkerEvent::RulesRead(Err(
+        RulesTransferError::FileDialogUnavailable,
+    )));
+    assert_eq!(
+        state.rules.exchange.error,
+        Some(tr!("rules-transfer-import-dialog-unavailable"))
+    );
+    state.reduce(WorkerEvent::RulesWritten(Err(
+        RulesTransferError::FileDialogUnavailable,
+    )));
+    assert_eq!(
+        state.rules.exchange.error,
+        Some(tr!("rules-transfer-export-dialog-unavailable"))
+    );
 }
 
 #[test]

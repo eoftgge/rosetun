@@ -325,6 +325,7 @@ pub(crate) enum Action {
     SaveTlsFragment,
     EnableXrayAutoAndConnect,
     SetAutoUpdateSubscriptions(bool),
+    SetSubscriptionsViaVpn(bool),
     SetCheckUpdates(bool),
     CheckUpdatesNow,
     SkipVersion,
@@ -871,6 +872,7 @@ impl State {
             | Action::SetTlsFragment(_)
             | Action::SaveTlsFragment
             | Action::EnableXrayAutoAndConnect
+            | Action::SetSubscriptionsViaVpn(_)
             | Action::SetAutoUpdateSubscriptions(_)
             | Action::SetCheckUpdates(_)
             | Action::SaveDns

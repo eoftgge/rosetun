@@ -98,16 +98,16 @@ A preview uses synthetic checksums; do not publish its output. Delete
 
 What depends on the release:
 
-- the banner under the title of every documentation page and on the home page: from
-  0.5 it names the stable version and its platforms; for an older stable release it
-  also names the 0.5 documentation baseline;
+- the banner under the title of every documentation page and on the home page
+  names the stable version and its platforms. When the release predates 0.6,
+  it also identifies 0.6 as the version described by the documentation.
 - installation and download commands, links and checksum lines (`r?.installer`,
   `r?.download_url`, ...), each with a neutral fallback after `or`;
 - the Linux text: `{% if r?.deb_url %}` shows the package instructions, `{% else %}` the
   note that the release has none. Source pages never promise an unpublished file.
 
-The 0.4 reference lives in the documentation index history. The current documentation
-describes 0.5 directly, without per-page "since 0.5" notices.
+The documentation describes 0.6. The index links to the 0.5.1 release notes
+and the 0.4 reference.
 
 ## Editing
 

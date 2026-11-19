@@ -242,6 +242,13 @@ impl ProtectionState {
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct Status {
     pub state: ConnectionState,
+    /// A persistent OS route bypasses an unprotected TUN (protocol 24).
+    /// A routing signal, not a measurement of every program's traffic.
+    #[serde(default)]
+    pub bypass_detected: bool,
+    /// On Linux, systemd-resolved has not registered this TUN's DNS server.
+    #[serde(default)]
+    pub tunnel_dns_unregistered: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reconnect_failure_kind: Option<FailureKind>,
     #[serde(
