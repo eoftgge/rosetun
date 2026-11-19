@@ -7,7 +7,7 @@ from .catalog import LINUX_ROOT, SUITES, digest, read_catalog, validate_snapshot
 
 PLAN_SCHEMA = "rosetun.matrix.plan.v1"
 # The guest resets a suite plans: any other reset of its run is an error.
-PLANNED_REBOOTS = {"linux-l4": 2, "linux-reboot-smoke": 1}
+PLANNED_REBOOTS = {"linux-l4": 2, "linux-reboot-smoke": 1, "windows-reboot-smoke": 1}
 # The suites whose job runs in phases of the job timeout each, one more than its reboots (see `job_span`).
 PHASES = {"linux-l4": 3}
 

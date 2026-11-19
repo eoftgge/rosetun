@@ -34,7 +34,7 @@ from .qemu import CommandResult, _launch_plan, execute, qemu_config_of, OUTPUT_L
 from .report import _unique_object, _invalid_constant
 from .evidence import append_row
 from .resources import resource_path, execution_resources, lock_run, unlock_run, RUN_LOCK
-from . import run_state, windows_run
+from . import run_state, windows_guest, windows_run
 
 
 JOURNAL_LIMIT = 128
@@ -411,7 +411,7 @@ class Vm:
         self.launch_sockets.remove(stream)
 
     def _qga_options(self):
-        return {}
+        return dict(guest_os='windows') if self.windows else {}
 
     @_guest_serialized
     def observe_guest(self):
@@ -436,9 +436,14 @@ class Vm:
             raise LifecycleError('qga-attach-failed', self) from None
         return self._observe_guest()
 
-    def wait_initial_guest(self, *, timeout, clock=time.monotonic, sleep=time.sleep):
-        """Bound first-agent startup separately from post-operation recovery."""
-        if self.last_boot_id is not None or not 0 < timeout <= 300:
+    def wait_initial_guest(self, *, timeout, clock=time.monotonic, sleep=time.sleep, try_seconds=10):
+        """Bound first-agent startup separately from post-operation recovery.
+
+        `try_seconds` is how long one try may take: the synchronization with an agent that has not started waits its
+        whole time, and a Windows guest needs up to a minute to start it, then a moment for the program that reads its
+        boot ID.
+        """
+        if self.last_boot_id is not None or not 0 < timeout <= 300 or not 0 < try_seconds <= 60:
             raise LifecycleError('initial-guest-wait-requires-unobserved-boot', self)
         deadline, previous = clock() + timeout, self.timeout
         try:
@@ -446,7 +451,7 @@ class Vm:
                 remaining = deadline - clock()
                 if remaining <= 0:
                     break
-                self.timeout = min(10, remaining)
+                self.timeout = min(try_seconds, remaining)
                 try:
                     return self.observe_guest()
                 except LifecycleError:
@@ -591,6 +596,66 @@ class Vm:
         self._check()
         self._sync_resets()
 
+    def wait_guest_reset(self, *, timeout, clock=time.monotonic, sleep=time.sleep, every=2):
+        """After the guest was asked to restart: read QMP until its RESET is registered, within `timeout` seconds.
+
+        QMP events are read only while the controller looks, so it looks every `every` seconds. Whatever a reset of
+        the wrong kind or a second one before the boot is taken ends this with its own error, as in any look.
+        """
+        deadline = clock() + timeout
+        while True:
+            self.watch_resets()
+            if self.reset_pending and self.reset_kind == 'guest':
+                return
+            if self.process.poll() is not None:
+                raise LifecycleError('vm-child-has-exited', self)
+            remaining = deadline - clock()
+            if remaining <= 0:
+                raise LifecycleError('guest-reset-deadline', self)
+            sleep(min(every, remaining))
+
+    def _windows_session(self):
+        """The agent session a Windows guest's program may use: observed on a confirmed boot, none reset since."""
+        self._check()
+        if not self.windows:
+            raise LifecycleError('guest-is-not-windows', self)
+        if self.qga is None or self.qga.closed or not self.qga.valid or self.qga.info is None:
+            raise LifecycleError('qga-session-unusable', self)
+        if self.reset_pending or self.last_boot_id is None:
+            raise LifecycleError('guest-boot-not-confirmed', self)
+
+    @_guest_serialized
+    def guest_powershell(self, script, *, seconds=60):
+        """One PowerShell script on the current session of a Windows guest: the text it returned, as UTF-8."""
+        self._windows_session()
+        self.qga.deadline = time.monotonic() + seconds + 5
+        try:
+            return self.qga.powershell(script, self.timeout, seconds=seconds)
+        except (QgaError, windows_guest.GuestAnswerError) as error:
+            raise LifecycleError(str(error), self) from None
+
+    @_guest_serialized
+    def request_guest_reboot(self):
+        """Ask a Windows guest to restart itself, as the plan says it will: `shutdown /r /t 0` through the agent.
+
+        The program is started and not waited for: the agent goes down with the guest, so the session is of no more
+        use after the request, and the guest's RESET is what tells the restart happened (`wait_guest_reset`). The
+        agent's own `guest-shutdown` is not used: it does not answer on this guest.
+        """
+        self._windows_session()
+        if self.guest_resets >= self._planned_reboots:
+            raise LifecycleError('guest-reboot-not-planned', self)
+        self._reserve(2)
+        self._event('guest-reboot', 'intent')
+        self.qga.deadline = time.monotonic() + self.timeout
+        try:
+            self.qga.start_program(windows_guest.SHUTDOWN, list(windows_guest.REBOOT_ARGUMENTS), self.timeout)
+        except QgaError as error:
+            self._event('guest-reboot', 'error ' + str(error))
+            raise LifecycleError(str(error), self) from None
+        self.qga.invalidate()
+        self._event('guest-reboot', 'requested')
+
     def _sync_resets(self):
         if self.unplanned_reset is not None:
             raise LifecycleError(self.unplanned_reset, self)
@@ -721,22 +786,27 @@ class Vm:
         self.boot_chain.append(boot_id)
         self._event('boot-chain-extended', str(len(self.boot_chain)))
 
-    def await_rebooted_guest(self, *, timeout, clock=time.monotonic, sleep=time.sleep):
+    def await_rebooted_guest(self, *, timeout, clock=time.monotonic, sleep=time.sleep, attempts=RESET_ATTEMPTS,
+                             try_seconds=10, retry_seconds=RESET_RETRY_SECONDS):
         """After a planned guest reset: the one recovery it earns, then bounded tries until the new boot answers.
 
         The first try is `recover_guest` and spends the recovery. The guest needs a while to boot, so a try that
         fails is followed by new sessions that, like those of the first boot, spend no recovery but each one an
-        observation. Every outcome that refuses a boot ends the run at once.
+        observation. Every outcome that refuses a boot ends the run at once. A Windows guest takes longer to answer
+        than a Linux one: its caller says how many tries there are, how long each one may take and how far apart they
+        are.
         """
         if not self.reset_pending or self.reset_kind != 'guest':
             raise LifecycleError('no-guest-reset-pending', self)
+        if type(attempts) is not int or not 0 < attempts <= 32 or not 0 < try_seconds <= 60 or retry_seconds < 0:
+            raise LifecycleError('invalid-reboot-wait', self)
         deadline, previous = clock() + timeout, self.timeout
         try:
-            for attempt in range(RESET_ATTEMPTS):
+            for attempt in range(attempts):
                 remaining = deadline - clock()
                 if remaining <= 0:
                     break
-                self.timeout = min(10, remaining)
+                self.timeout = min(try_seconds, remaining)
                 try:
                     if attempt:
                         return self.observe_guest()
@@ -752,7 +822,7 @@ class Vm:
                             raise LifecycleError('rebooted-qga-close-unconfirmed', self)
                     self._sync_seed = (self._sync_seed + 1) % 2**63
                     self._new_qga()
-                    sleep(min(RESET_RETRY_SECONDS, max(0, deadline - clock())))
+                    sleep(min(retry_seconds, max(0, deadline - clock())))
             raise LifecycleError('rebooted-guest-deadline', self)
         finally:
             self.timeout = previous

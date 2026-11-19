@@ -22,7 +22,7 @@ runner is already longer than that. A test that goes through the real
 `tests/posix_only.py` giving the reason, instead of weakening the path check.
 The Windows helpers (`windows_*`, the PowerShell producers) are not skipped.
 
-Windows skips 289 of 1652 tests, a Linux host with `qemu.qmp` 18 (the Windows
+Windows skips 327 of 1722 tests, a Linux host with `qemu.qmp` 18 (the Windows
 pieces it cannot run without PowerShell). On Windows, besides those that need
 Linux `/proc`, bash, POSIX-only fixtures or `qemu.qmp`, the skipped ones are the
 controller groups:
@@ -32,7 +32,8 @@ controller groups:
   `test_linux_l2`, `test_l2_media` (import), `test_lab_controls`, the joint
   start of two machines in `test_l3_lab`, `test_lab` and `test_lab_evidence`
   (disk pairs), the delivery groups of `test_stage_profiles`, the start, attach and
-  smoke groups of `test_windows_run` (stand-in QEMU and swtpm processes);
+  smoke groups of `test_windows_run`, `test_windows_reboot` and `test_image_digest_cache` (stand-in QEMU and swtpm
+  processes, `st_ctime`);
 - tests that take those fixtures to look at evidence bytes: `test_evidence`
   (journals, owner token), `test_orchestrator` (reservation);
 - the relay budget over an AF_UNIX socket pair in `test_run_state`;
@@ -4839,15 +4840,17 @@ block is read strictly (unknown or missing fields, a PCI slot twice, a CPU strin
 switches, a TPM file name with a path, are refused). The controller hashes what it will use: the disk like a
 Linux disk, the firmware code, the variable store and every TPM state file the descriptor lists. The disk is
 tens of gigabytes and the stand needs minutes for a pass, so a pass counts for the later checks of the same
-controller process as long as the file's identity (device, inode, size, change times) is the one it saw; the
-check after the run asks for a fresh pass.
+controller process as long as the file's identity (device, inode, size, change times) is the one it saw; since
+stage 9c the memory of a pass also outlives the process, and the check after the run follows the same rule (see
+"The digest of the disk between processes" in Stage 9c).
 
 `activated` must be false and `qualified` must be false, and no other value is accepted: the controller has no
 qualification of a Windows image, so it never reads `qualified` as a permission. A run of such an image is
 **diagnostic**: its summary says `qualified: false` and `diagnostic: true`, it counts for no parity table and
 the release gate stays false. The image becomes qualified by the owner's decision after stage 9d, with a
 controller that has a rule for it; until then `true` is refused, not trusted. Only the suite
-`windows-boot-smoke` takes a Windows image; the Linux suites refuse it (`guest_os` is not `linux`).
+`windows-boot-smoke` and, since stage 9c, `windows-reboot-smoke` take a Windows image; the Linux suites refuse it
+(`guest_os` is not `linux`).
 
 ### The command line
 
@@ -4965,7 +4968,218 @@ on stand-in processes), or anything about the observer.
 - Whether the guest answers the power button at the logon screen is what the smoke shows; the guest never logs
   on by itself in this image.
 - The variable store of the guest is writable by it (the firmware has no SMM), as the descriptor says.
-- A run needs the whole disk hashed twice (about two and a half minutes a pass on the stand).
+- A run needs the whole disk hashed twice (about two and a half minutes a pass on the stand). Stage 9c remembers a
+  pass between runs: the first run of an image on a stand hashes it once, the later ones none.
+
+## Stage 9c: the guest agent of a Windows guest and one planned restart
+
+Status: **offline tests, and the developer's runs on the stand written below, which qualify nothing.** The controller
+works with a Windows guest of the 9a image through the guest agent as it does with a Linux guest since stage 8c, and
+carries it through one restart that it asks for. No lab (9d), no Rosetun in the guest and no script of the controller in
+it: the image is only read. The release gate is false and the security invariants are UNVERIFIED. Linux suites, their
+configurations and their budgets are unchanged.
+
+### The digest of the disk between processes
+
+A run of 9b hashed the 12.4 GB disk twice (about two and a half minutes a pass on the stand). The controller now keeps
+the memory of a pass in the state directory of the stand, `image-digests/`, one small file for each disk: its path, the
+digest the pass found (and that the descriptor says), and the file's identity as the pass read it, which is the key:
+
+| `device` | `inode` | `size` | `mtime_ns` | `ctime_ns` |
+|---|---|---|---|---|
+
+- The record is used only when **every part** of the key is the one it names, and the digest it names is the
+  descriptor's. Anything else is a full pass: a changed size, inode or device, a changed modification time, **a changed
+  change time**. The change time is the part that matters: a file's owner can set its modification time back after
+  changing it, but not its change time, so a disk replaced by another of the same size and given the old
+  modification time still has a new key. A change of the change time with no change of the bytes (a `chmod`, a copy
+  over the same path) costs one pass and no more.
+- A record that is not there, cannot be read, is a link, is larger than 4 KiB, is not JSON, has other fields than
+  these eight, has a number that is not an integer, or names another path, digest or schema, is no record: the disk is
+  hashed in full and a good record is written over it. The directory of the records is created `0700`, the records
+  `0600`, and neither the directory nor a record is followed when it is a link.
+- A record is written only after a full pass that **matched** the descriptor, atomically (a temporary file in the same
+  directory, `fsync`, `rename`, `fsync` of the directory), and a pass that fails writes nothing. A cache that cannot be
+  written is no error: the next process hashes again.
+- The check after a run, `image-unchanged`, follows the same rule as the one before it: a full pass if the key
+  changed, none if it did not. The disk is the read-only backing file of the run's overlay, so a guest cannot change it,
+  and a controller that did would have changed its change time. A forced pass is still there (`fresh`), and the
+  process's own memory of passes stays in front of the file.
+- The run directory tells where the records are (`STATE/runs/ID`, its grandparent is the state directory); a run
+  directory anywhere else keeps only the memory of the process. The records belong to the state directory and are trusted
+  as much as its run manifests are: whoever can write them can write those. The Linux disks (small) are hashed every time,
+  as before.
+
+On the stand the first run of the image in a state directory hashed the disk once (about 150 seconds) and the later runs
+none: preparation took seconds.
+
+### The guest agent of a Windows guest
+
+`qga.Qga(guest_os='windows')` (the Vm passes it for a Windows run) changes four things and nothing else:
+
+- **The boot identity.** Linux reads `boot_id` from procfs. A Windows guest has no such file, and the image may not be
+  changed to write one at start (a task `ONSTART` would be that). Two readings were tried on the stand. The time of the last
+  boot (`Win32_OperatingSystem.LastBootUpTime`) and the count of boots that the system keeps in
+  `HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management\PrefetchParameters`, value `BootId`, raised by one at every
+  start of the kernel. Both need a PowerShell, and the first PowerShell of a fresh boot of the image took more than a
+  minute on the stand (two tries of 30 seconds timed out, the third answered), so reading the identity by it made an
+  observation fail with the guest well. The count is therefore read by `reg.exe query ... /v BootId`, which answers at
+  once and prints ASCII whatever the guest's language (`REG_DWORD` is not translated), and the boot identity is
+  `win-COUNT`, a name the run state takes (the first boot of a copy of the image was `win-4`, the next `win-5`). The
+  count of the guest and the time of its last boot are read again by the evidence's PowerShell, and the run is
+  accepted only if they agree with the chain: the name must be `win-` and the count PowerShell reads, and after the
+  restart both the count and the kernel's start time must be new. A guest whose count did not change would end the
+  run as `guest-reset-boot-id-unchanged`, loudly, and not as a boot nobody noticed.
+- **Programs.** `guest-exec` is CreateProcess with no shell, so a program is a full path and its words
+  (`Qga.run_program`, `Qga.start_program`). The two streams come apart (`capture-output: separated`; `merged` does not
+  exist on Windows); each is cut off at 64 KiB and a truncated or not base64 stream, a missing exit code, a `signal` (an
+  unhandled exception is told that way) and a pid that is not a plain integer are refusals that end the session. The
+  status is asked for 0.25, 0.5, 1 and then every 2 seconds, each ask one of the session's 128 calls, and a program that
+  outlives its time ends the session (it may still run: nothing here kills it). A program that takes the guest down is
+  started and not waited for.
+- **PowerShell 5.1 and UTF-8.** A command runs as `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass
+  -EncodedCommand` (a UTF-16LE script in base64, so there is nothing to quote) and writes its answer to the **raw**
+  standard output stream as UTF-8 bytes without a byte order mark, and an error (type and message) to the raw standard
+  error stream with exit code 1. The console's code page, the profile and the culture are never consulted, so the same
+  answer arrives on an English and on a Russian guest. The evidence carries a text that only UTF-8 crosses (e acute and an
+  ideograph, written as character codes): the run is not accepted if it does not come back unchanged. The guest's error
+  text is kept in the evidence rows and never becomes the name of an error.
+- **Paths** are Windows paths with a drive: `C:\Windows\System32\...` for `powershell.exe`, `reg.exe` and
+  `shutdown.exe`.
+
+`Qga.probe` of a Windows session also requires `guest-exec` and `guest-exec-status` in the agent's list, like a Linux job.
+
+### `run windows-reboot-smoke`
+
+    python3 -B -m tools.vm.matrix run windows-reboot-smoke --config CONFIG [--dry-run]
+
+The configuration is that of `windows-boot-smoke` (`execution-windows-reboot-smoke.example.toml`, the same schema and
+the same `[qemu]`) with `suite = "windows-reboot-smoke"` and a `[smoke]` of four times: `agent_wait_seconds` (1 to 300,
+the longest the first boot may take to answer), `reset_wait_seconds` (1 to 600, from the request to the RESET),
+`reboot_wait_seconds` (1 to 900, from the RESET to the agent of the new boot) and `shutdown_wait_seconds`. `--lab`,
+`--control` and `--diagnostic` are refused.
+
+The steps are those of the boot smoke up to `resume`, then `boot`, `evidence`, `reboot`, `reset`, `new-boot`,
+`evidence-after`, `shutdown`, `close` and `image-unchanged`:
+
+1. `boot`: new agent sessions until one answers, with `win-COUNT` taken as the first boot of the chain (a try is 30
+   seconds, 15 seconds apart; no recovery is spent).
+2. `evidence`: one PowerShell says what the guest is (caption, version, build, architecture, culture), whether Secure
+   Boot is on (`Confirm-SecureBootUEFI`), whether the TPM is there and ready (`Get-Tpm`), the count of boots, the time of
+   the last boot, the uptime and the UTF-8 text. It is written as a row of `job-evidence.jsonl`
+   (`rosetun.windows-evidence.v1`, `when: before`). A reading that failed is `null` and does not stop the run, but the run
+   is accepted only with Secure Boot true, a TPM present and ready, and the text intact.
+3. `reboot`: `shutdown.exe /r /t 0` through the agent (`Vm.request_guest_reboot`), started and not waited for: the agent
+   goes down with the guest. It is the way the guest's own scripts would restart it, needs no task in the image and is not
+   `guest-shutdown`, which this guest does not answer. The journal gets `guest-reboot intent` and `requested`
+   (or `error`), and the session is closed to use.
+4. `reset`: QMP is read every two seconds (`Vm.wait_guest_reset`, the loop of stage 8c) until the guest's RESET is
+   registered: the journal row `guest-reset-observed` (`1-of-1`), the step `guest-reset-1` at intent, the session
+   invalidated, the chain waiting for its boot. A RESET of the host, a second RESET after the merge window and any other
+   case of stage 8c end the run as there (`unplanned-guest-reset`, `guest-reboot-unobserved`, ...). The merge of RESETs
+   within one second of the first, up to four more, is the Linux mechanism and is unchanged; Windows gave one RESET on
+   the stand.
+5. `new-boot`: `await_rebooted_guest` with the limits of a Windows guest: the first try is the recovery the reset earns,
+   then new sessions with no recovery, each 30 seconds at the most and 5 seconds apart, for 300 seconds at the most (12 tries
+   at the most). The new identity is taken only if it differs from the chain's last (the Linux refusals stay:
+   `guest-reset-boot-id-unchanged`, `boot-id-repeated`, `boot-id-changed-without-reset`).
+6. `evidence-after`: the same reading on the new boot (`when: after`).
+7. `shutdown`: the ACPI power button as in 9b.
+
+**Limits.** In stages 9a and 9b the agent answered 28 to 78 seconds after QEMU started; on the first run of this stage
+about 50 seconds after the resume and about 40 seconds after the RESET of the restart, which came 24 seconds after the
+request. So: 300 seconds for the first boot (four times the slowest start seen; the first `wait_initial_guest` allows
+no more than 300), 180 seconds for the RESET (Windows stops its services first), 300 for the new boot, 180 for the
+evidence's PowerShell, which is slow on a fresh boot of the image. The Linux limits (10 seconds a try and 180 in all)
+would have ended a Windows reboot as `rebooted-guest-deadline`.
+
+**Budgets.** `planned_reboots` is 1 (`config.PLANNED_REBOOTS`), so `qga_recoveries` may be 4 + 1: a run takes exactly one
+(the recovery of the reset); `qga_observations` (32): about 7 at the most for the first boot and 12 for the new one,
+the stand used 6; the journal of the lifecycle has 106 ordinary rows and a reboot takes 4 (2 for the request, 2 for the
+reset and the chain) and 1 more for each merged RESET. Reading QMP every two seconds writes nothing unless it finds a RESET.
+
+**Where the guest scripts are.** There are none. The run needs no program in the guest that survives the restart, and
+a status file, a task `ONSTART` and the atomic write that Linux has for them would change the image or reach into it
+for nothing; the programs are the system's own (`reg.exe`, PowerShell, `shutdown.exe`). `tools/vm/windows/`, the
+owner's Hyper-V tools, is untouched, and no `guest/windows` directory exists; a later suite that needs a runner in the
+guest (10a) will bring it with the status file it needs.
+
+**The summary** (`execution`): `accepted`, `boot_chain` (two `win-COUNT`), `guest_resets` (1), `resets_merged`,
+`planned_reboots`, `qga_recoveries`, `qga_observations`, `agent_ready_seconds`, `reset_seconds` (from the request to the
+RESET), `reboot_seconds` (from the request to the new boot), `guest` and `guest_after` (what the guest said before and
+after: system, Secure Boot, TPM, UTF-8, the count and the time of the boot), `shutdown`, `image_unchanged`, the image's
+identifier and digest with `qualified: false`. Exit 0 only with no error, a verified completion, an ACPI shutdown, the
+image unchanged, a chain of two different boots after one restart, and both readings standing; 1 for a run that
+finished with a reading that does not (Secure Boot off, no TPM, text mangled); 2 for any error; 130 interrupted.
+
+### A controller killed while it waits for the restart
+
+`attach --state-directory S --run-id R` takes a `windows-reboot-smoke` over from the step `reboot` on (`reboot`, `reset`,
+`new-boot`, `evidence-after`; before it nothing in the guest can be carried on and the answer is
+`attach-phase-not-resumable`: `recover --run-id R --close`). It sets the plan's one reset, takes the evidence the dead
+controller wrote for the first boot from `job-evidence.jsonl`, and then, by what the run state says:
+
+- **The RESET was read and the new boot is not taken** (`guest-reset-1` at intent): it waits for the boot as the first
+  controller would (the first try opens the session and is the recovery the reset earns).
+- **The new boot is taken**: it opens a session on it, records the evidence once more and shuts down.
+- **The RESET was not read.** QMP events that nobody read are gone. A guest that answers with a boot identity other than
+  the chain's last is **`boot-id-changed-without-reset`**, the honest end of the run (as for Linux: no hole is put
+  into the chain and no boot is invented). A guest that is still on the old boot, or whose agent says nothing yet, is
+  waited for until its RESET (`reset_wait_seconds`, counted from the attach), and the run goes on.
+
+The budgets continue from the run state (`qga_recoveries` is not set back to 0), the summary says `attached: true`, and
+`recover --close` closes any such run, the TPM with it, as in 9b.
+
+### Checked on the stand (2026-11-19, a developer's runs, not a qualification)
+
+Debian 13 on WSL2, QEMU 10.0.13, swtpm 0.7.1, the image of 9a (`windows-11-26h2-pro-v1`, Windows 11 Pro 10.0.26300),
+a state directory of its own, one guest at a time, the checkout of this stage (not clean). Three runs of
+`windows-reboot-smoke` and nothing else that counts:
+
+- **The first one** (the first run of the image in the state directory) hashed the disk once, 150 seconds, and wrote the
+  record. It read the boot identity by PowerShell, the first version of this stage: the first try found no agent, the
+  next two timed out at 30 seconds with the agent up (it answered `guest-info` and `guest-ping`), and the fourth got the
+  answer 140 seconds after the resume. That is why the identity is read by `reg.exe` now. The run ended well all the same:
+  exit 0, 405 s, one RESET 23.6 s after the request, the new boot taken 64 s after it.
+- **The second one** (`2e463076f8c5...`, the code of this stage): exit 0, `completion_verified` true, **170.5 s** in
+  all, preparation without a pass over the disk (the record was found) and the check after the run without one.
+  `boot_chain` `["win-4", "win-5"]`; the agent answered 48.9 s after the resume; the evidence took 9 s; **one RESET**,
+  `guest-reset-observed 1-of-1 reason=guest-reset`, 21.4 s after the request (no merged RESET); the agent of the new boot
+  answered, and `boot-chain-extended 2` was written, 58.5 s after the request (the first try, the recovery, found the agent
+  not yet up after 30 seconds; the second took the boot at once); `qga_recoveries` **1** (the limit is 4 + 1),
+  `qga_observations` 4; the ACPI power button shut the guest down in 14 s. Evidence before and after: Windows 11 Pro
+  10.0.26300 64-bit, Secure Boot `true`, TPM present and ready, the UTF-8 text intact, count of boots 4 then 5, time of the
+  last boot 08:42:01.5 then 08:43:14.5 (UTC); `guest-info` of the agent says 110.2.3 with `guest-exec`, `guest-exec-status` and
+  the file commands enabled. The image's disk, firmware variables and TPM files are unchanged (`image-unchanged`).
+- **The third one** (`87125d9dcf39...`): the controller was killed with `SIGKILL` at the step `reset` (the request had
+  been made, the RESET not yet read) and `attach` took the run over: exit 0, `attached: true`, `attachments` 1, `boot_chain`
+  `["win-4", "win-5"]`, **`qga_recoveries` 2** (the attach and the reset's own: not set back to 0, within 4 + 1),
+  `qga_observations` 4. The attach found no answering agent (the guest was going down) and went on to read QMP,
+  registered the RESET 33 s after the attach began, and took the new boot 10 s later; the evidence of the first boot was
+  taken from the dead controller's row, and the evidence of the new boot with the shutdown that followed ended the run.
+  The image check after it was done without a pass.
+
+What this does not show: a restart of a guest with more than one RESET, a RESET that came while nobody was connected (that
+is the offline test of the stand-in guest), the limits under a slower host, and the first PowerShell of a fresh boot being
+quick (it was not on the first run).
+
+
+### Not done here, UNRUN
+
+- No lab (9d) and no sleep, power cut or fast startup; the restart is the guest's own, not a power cut.
+- The first PowerShell of a boot can take more than a minute: the evidence has 180 seconds, and the run has not been
+  seen to need more. Whether that is the image (its first boot after a build) or any fresh boot is not known.
+- A restart that gives more than one RESET on Windows was not seen; the merge is the Linux mechanism and is covered by the
+  stand-in guest only.
+- An `attach` whose RESET came while nobody was connected was run offline only.
+- Windows restarts by Windows Update, a crash with automatic restart or `Disable-RosetunBootRecovery` are an
+  `unplanned-guest-reset`, as intended; the image has no Update.
+- No qualification: the image is `qualified: false`, the run is diagnostic.
+
+### What to reinstall
+
+Nothing in the image. The controller needs only the files of the checkout and the stand's state directory, which fills
+its `image-digests/` itself.
 
 ## Stage 12: release evidence pack
 

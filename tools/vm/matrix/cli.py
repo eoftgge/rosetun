@@ -46,7 +46,7 @@ def main(argv=None):
                      help='keep the capture on a separate disk of the lab machine and read it after it stops')
     run = commands.add_parser('run', help='execute exploratory Linux L2 or L3 on an explicitly selected stand')
     run.add_argument('suite', choices=['linux-l2', 'linux-l3', 'linux-proxy', 'linux-l5', 'linux-l4',
-                                       'linux-reboot-smoke', 'windows-boot-smoke'])
+                                       'linux-reboot-smoke', 'windows-boot-smoke', 'windows-reboot-smoke'])
     run.add_argument('--config', required=True)
     run.add_argument('--dry-run', action='store_true')
     run.add_argument('--lab', action='store_true',
@@ -98,16 +98,20 @@ def main(argv=None):
                        **({'control': args.control} if args.control else {})}
             result = plan_lab(config, **options) if args.dry_run else lab_smoke(config, canary=args.canary, **options)
             code = 0 if args.dry_run else result['exit_code']
-        elif args.command == 'run' and args.suite == 'windows-boot-smoke':
+        elif args.command == 'run' and args.suite in ('windows-boot-smoke', 'windows-reboot-smoke'):
             # The Windows profile has its own configuration: no L2 content, accounts or lab.
             from . import windows_smoke
             if args.lab or args.control or args.diagnostic:
-                raise ValueError('--lab, --control and --diagnostic are not for windows-boot-smoke')
+                raise ValueError('--lab, --control and --diagnostic are not for the Windows suites')
             config = windows_smoke.load(args.config)
+            if config['suite'] != args.suite:
+                raise ValueError('configuration is for another suite')
             if args.dry_run:
                 result, code = windows_smoke.preflight(config, dry_run=True), 0
             else:
-                result = windows_smoke.run_windows_boot_smoke(config)
+                run = {'windows-boot-smoke': windows_smoke.run_windows_boot_smoke,
+                       'windows-reboot-smoke': windows_smoke.run_windows_reboot_smoke}[args.suite]
+                result = run(config)
                 code = result['exit_code']
         elif args.command == 'run':
             from .execution import lab_of, load_execution, preflight, suite_of

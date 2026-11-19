@@ -13,13 +13,21 @@ appends to the variables file, as a guest writes its firmware store; and `screen
 FAKE_QEMU_IGNORE_POWERDOWN in the environment `system_powerdown` is answered and nothing more, like a guest that
 does not react to its power button.
 
+A Windows guest also answers the programs the controller starts through `guest-exec` (stage 9c): a PowerShell
+command is read back from its encoded script and answered with the boot readings or the evidence, as JSON in UTF-8
+bytes on the output stream, and `shutdown.exe /r /t 0` restarts the guest: the agent goes away, the monitor reports
+`FAKE_QEMU_RESETS` RESET events (default 1, 67 ms apart), and after `FAKE_QEMU_BOOT_SECONDS` (default 0.3) the agent
+answers again with the next boot count and time. `FAKE_QEMU_SECURE_BOOT=0`, `FAKE_QEMU_LATIN1=1` and
+`FAKE_QEMU_PS_FAIL=1` make the guest say Secure Boot is off, answer in a code page that is not UTF-8, or fail.
+
 A test steers the guest through the control socket named by the environment
 variable FAKE_QEMU_CONTROL, one line per command: `guest-reset [BOOT_ID]`
 (the agent session ends, the boot ID changes if one is given, and the monitor
 reports a RESET event of the guest), `host-reset` (a RESET that is not the
 guest's), `reset-event guest|host REASON SECONDS MICROSECONDS` (one more RESET at the time named, nothing
 else changes), `boot BOOT_ID` (a boot ID changes with no event), `agent-down` and
-`agent-up` (the agent socket stops answering, or answers again).
+`agent-up` (the agent socket stops answering, or answers again), and for a Windows guest `restart` (the restart
+that `shutdown.exe` starts, with no request).
 """
 
 import base64
@@ -100,6 +108,72 @@ def monitor(server, uuid, state):
                     os._exit(0)
 
 
+def windows_boot(state):
+    """The two readings a Windows guest gives of its boot: the count of boots and the time of the last one."""
+    guest = state['windows']
+    return {'last_boot': '2026-11-19T07:%02d:50.5000000Z' % (10 + guest['boots']), 'counter': 100 + guest['boots']}
+
+
+def windows_exec(state, arguments):
+    """`guest-exec` of a Windows guest: `reg.exe` and PowerShell are answered, `shutdown.exe` restarts the guest."""
+    guest = state['windows']
+    guest['pid'] += 1
+    pid = guest['pid']
+    path, words = arguments['path'], arguments.get('arg') or []
+    answer = {'exited': True, 'exitcode': 0}
+
+    def say(data, code=0, err=b''):
+        return {'exited': True, 'exitcode': code, 'out-data': base64.b64encode(data).decode(),
+                'err-data': base64.b64encode(err).decode()}
+    if path.lower().endswith('shutdown.exe') and words == ['/r', '/t', '0']:
+        if not os.environ.get('FAKE_QEMU_NO_RESTART'):
+            threading.Thread(target=windows_restart, args=(state,), daemon=True).start()
+    elif path.lower().endswith('reg.exe') and words[:1] == ['query'] and words[-2:] == ['/v', 'BootId']:
+        if os.environ.get('FAKE_QEMU_REG_FAIL'):
+            answer = say(b'', 1, b'ERROR: The system was unable to find the specified registry key or value.')
+        else:
+            text = '\r\n%s\r\n    BootId    REG_DWORD    0x%x\r\n\r\n' % (words[1], windows_boot(state)['counter'])
+            answer = say(text.encode('ascii'))
+    elif path.lower().endswith('powershell.exe') and words[-2:-1] == ['-EncodedCommand']:
+        script = base64.b64decode(words[-1]).decode('utf-16-le')
+        if os.environ.get('FAKE_QEMU_PS_FAIL'):
+            answer = say(b'', 1, b'System.Exception: failed')
+        elif 'Confirm-SecureBootUEFI' in script:
+            reading = windows_boot(state)
+            evidence = dict(caption='Microsoft Windows 11 Pro', version='10.0.26200', build='26200',
+                            architecture='64-bit', culture='en-US',
+                            secure_boot=os.environ.get('FAKE_QEMU_SECURE_BOOT') != '0', secure_boot_error=None,
+                            tpm={'present': True, 'ready': True}, last_boot=reading['last_boot'],
+                            boot_counter=reading['counter'], uptime_ms=61000,
+                            utf8_probe=(chr(0xc3) + chr(0xa9) + '?') if os.environ.get('FAKE_QEMU_LATIN1')
+                            else chr(0xe9) + chr(0x4e16))
+            if os.environ.get('FAKE_QEMU_COUNTER_LIE'):
+                evidence['boot_counter'] += 1
+            answer = say(json.dumps(evidence, ensure_ascii=False).encode('utf-8'))
+    guest['execs'][pid] = answer
+    return {'pid': pid}
+
+
+def windows_restart(state):
+    """What a restart of a Windows guest looks like from outside: the agent goes, RESETs, the agent comes back new."""
+    import time
+    time.sleep(float(os.environ.get('FAKE_QEMU_RESTART_DELAY', '0.2')))
+    state['agent_up'] = False
+    try:
+        state['agent'].shutdown(socket.SHUT_RDWR)
+    except (OSError, AttributeError):
+        pass
+    # With no controller connected the monitor's events go nowhere, as QEMU's do.
+    for index in range(int(os.environ.get('FAKE_QEMU_RESETS', '1'))):
+        try:
+            event(state, True, 'guest-reset', (1, int(os.environ.get('FAKE_QEMU_RESET_GAP_US', '67000')) * index))
+        except (KeyError, OSError):
+            pass
+    time.sleep(float(os.environ.get('FAKE_QEMU_BOOT_SECONDS', '0.3')))
+    state['windows']['boots'] += 1
+    state['agent_up'] = True
+
+
 def agent(server, files, state):
     handles = {}
     while True:
@@ -134,6 +208,10 @@ def agent(server, files, state):
                 elif name == 'guest-file-close':
                     handles.pop(arguments['handle'], None)
                     value = {}
+                elif name == 'guest-exec' and state.get('windows') is not None:
+                    value = windows_exec(state, arguments)
+                elif name == 'guest-exec-status' and state.get('windows') is not None:
+                    value = state['windows']['execs'].pop(arguments['pid'], {'exited': True, 'exitcode': 0})
                 elif name == 'guest-exec':
                     value = {'pid': 4242}
                 elif name == 'guest-exec-status':
@@ -150,8 +228,12 @@ def steer(server, files, state):
         with stream:
             for line in lines(stream):
                 words = line.decode().split()
-                if words[0] == 'guest-reset':
-                    if len(words) > 1:
+                if words[0] == 'restart' and state.get('windows') is not None:
+                    threading.Thread(target=windows_restart, args=(state,), daemon=True).start()
+                elif words[0] == 'guest-reset':
+                    if state.get('windows') is not None:
+                        state['windows']['boots'] += 1
+                    elif len(words) > 1:
                         files['/proc/sys/kernel/random/boot_id'] = (words[1] + '\n').encode()
                     # The agent of the old guest is gone before the machine says it was reset.
                     try:
@@ -187,6 +269,8 @@ def main(argv):
         connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         connection.connect(paths['chrtpm'])
     state = {'status': 'prelaunch', 'agent_up': True, 'lock': threading.Lock()}
+    if 'chrtpm' in paths:
+        state['windows'] = {'boots': 0, 'pid': 100, 'execs': {}}
     files = {'/proc/sys/kernel/random/boot_id': (BOOT + '\n').encode()}
     servers = [listen(paths['control'])]
     threads = [threading.Thread(target=monitor, args=(servers[0], uuid, state), daemon=True)]

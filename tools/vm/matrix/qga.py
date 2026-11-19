@@ -1,7 +1,12 @@
-"""Bounded, serialized Linux QGA client session.
+"""Bounded, serialized QGA client session of a Linux or a Windows guest.
 
 Only the initial delimited sync is framed here. All subsequent RPC framing and
 IDs belong to public qemu.qmp. Any uncertain exchange poisons this session.
+
+A Windows guest (stage 9c) differs in three things: its boot identity is read by a PowerShell command, as it has no
+`boot_id` file; the agent's `guest-exec` starts a program without a shell and the console's code page is not UTF-8, so
+a command writes its answer to the raw standard streams as UTF-8 bytes; and a program is waited for by polling its
+status, with the output of each stream bounded.
 """
 
 import asyncio
@@ -13,6 +18,7 @@ import time
 import uuid
 from importlib.metadata import version
 
+from . import windows_guest
 from .qmp_adapter import ByteRelay
 from .report import _unique_object, _invalid_constant
 
@@ -30,8 +36,23 @@ DIAGNOSTIC_LINE_LIMIT = 24 * 1024 * 1024
 DIAGNOSTIC_RELAY_LIMIT = 2 * DIAGNOSTIC_LINE_LIMIT
 
 
+# What one program started through `guest-exec` may say on each of its two streams, and how often its status is asked
+# for: the first look comes soon (a small program is done within a second), the later ones are spaced out because each
+# one spends one of the session's 128 calls.
+EXEC_OUTPUT_LIMIT = 64 * 1024
+EXEC_POLL_SECONDS = (0.25, 0.5, 1.0, 2.0)
+GUEST_SYSTEMS = ('linux', 'windows')
+
+
 class QgaError(ValueError):
     pass
+
+
+class ExecResult:
+    """What a program run through the agent returned: its exit code and the bytes of its two streams."""
+
+    def __init__(self, exitcode, stdout, stderr):
+        self.exitcode, self.stdout, self.stderr = exitcode, stdout, stderr
 
 
 def _timeout(value):
@@ -42,9 +63,13 @@ def _timeout(value):
 
 class Qga:
     def __init__(self, stream, *, client_factory=None, relay_factory=ByteRelay, sync_id=None, line_limit=LINE_LIMIT,
-                 on_call=None):
+                 on_call=None, guest_os='linux'):
         if line_limit not in (LINE_LIMIT, DIAGNOSTIC_LINE_LIMIT):
             raise QgaError('invalid-qga-line-limit')
+        if guest_os not in GUEST_SYSTEMS:
+            raise QgaError('invalid-qga-guest-os')
+        self.guest_os = guest_os
+        self.sleep = time.sleep
         self.line_limit = line_limit
         self.stream = stream
         self.client_factory = client_factory
@@ -53,6 +78,7 @@ class Qga:
         self.client = self.relay = self.loop = None
         self.attempted = self.closed = self.valid = False
         self.info = None
+        self.stderr_text = None
         self.calls = 0
         self.rpc_error = ()
         self.sync_id = sync_id
@@ -178,10 +204,11 @@ class Qga:
                     or type(entry.get('success-response')) is not bool):
                 raise QgaError('invalid-qga-capability')
             commands[entry['name']] = entry
-        required = REQUIRED + (('guest-exec', 'guest-exec-status') if self.jobs_enabled else ())
+        # A Windows guest has no boot ID file: its identity and its evidence come from programs the agent runs.
+        required = REQUIRED + (('guest-exec', 'guest-exec-status') if self.jobs_enabled or self.windows else ())
         if self.staging_enabled:
             required += ('guest-file-write',)
-            if not self.jobs_enabled:
+            if not (self.jobs_enabled or self.windows):
                 required += ('guest-exec', 'guest-exec-status')
         if any(name not in commands or not commands[name]['enabled']
                or not commands[name]['success-response'] for name in required):
@@ -191,9 +218,106 @@ class Qga:
         self.info = {'version': info['version'], 'required_commands': list(required)}
         return dict(self.info)
 
+    @property
+    def windows(self):
+        return self.guest_os == 'windows'
+
+    def start_program(self, path, arguments, timeout, *, capture=False):
+        """Start one program in the guest and return its process id, without waiting for it.
+
+        `guest-exec` is CreateProcess without a shell, so `path` is a full path and `arguments` are the words of the
+        command line. A program that takes the guest down (a restart) must be started this way: the agent goes with
+        the guest, and its status would never be answered.
+        """
+        if self.info is None:
+            raise QgaError('qga-probe-required')
+        if (type(path) is not str or not path or type(arguments) is not list
+                or any(type(item) is not str for item in arguments)):
+            raise QgaError('invalid-qga-exec-request')
+        started = self._rpc('guest-exec', timeout,
+                            {'path': path, 'arg': arguments, 'capture-output': 'separated' if capture else False})
+        if (type(started) is not dict or set(started) != {'pid'} or type(started['pid']) is not int
+                or not 0 < started['pid'] < 2**31):
+            self.invalidate()
+            raise QgaError('invalid-qga-exec-pid')
+        return started['pid']
+
+    def run_program(self, path, arguments, timeout, *, seconds=60, output_limit=EXEC_OUTPUT_LIMIT):
+        """Start one program in the guest and wait for it: its exit code and both streams, each within `output_limit`.
+
+        `timeout` is for each exchange and `seconds` for the whole program, which the session's own deadline shortens.
+        The streams come back apart (`separated`; the agent has no merged mode on Windows). A program that outlives
+        the time leaves the session unusable: it may be running, and nothing here kills it.
+        """
+        pid = self.start_program(path, arguments, timeout, capture=True)
+        end = time.monotonic() + seconds
+        if self.deadline is not None:
+            end = min(end, self.deadline)
+        for poll in range(1000):
+            self.sleep(max(0, min(EXEC_POLL_SECONDS[min(poll, len(EXEC_POLL_SECONDS) - 1)], end - time.monotonic())))
+            status = self._rpc('guest-exec-status', timeout, {'pid': pid})
+            if type(status) is not dict or type(status.get('exited')) is not bool:
+                self.invalidate()
+                raise QgaError('invalid-qga-exec-status')
+            if status['exited']:
+                return self._exec_result(status, output_limit)
+            if time.monotonic() >= end:
+                self.invalidate()
+                raise QgaError('qga-exec-timeout')
+        self.invalidate()
+        raise QgaError('qga-exec-poll-limit')
+
+    @staticmethod
+    def _exec_result(status, output_limit):
+        exitcode = status.get('exitcode')
+        # On Windows an unhandled exception is told as `signal`, not as an exit code.
+        if type(exitcode) is not int or 'signal' in status:
+            raise QgaError('qga-exec-no-exit-code')
+        streams = []
+        for name in ('out', 'err'):
+            encoded = status.get(name + '-data', '')
+            if (type(encoded) is not str or len(encoded) > 4 * output_limit // 3 + 4
+                    or status.get(name + '-truncated', False) is not False):
+                raise QgaError('qga-exec-output-limit')
+            try:
+                data = base64.b64decode(encoded, validate=True)
+            except (ValueError, UnicodeError):
+                raise QgaError('invalid-qga-exec-output') from None
+            if base64.b64encode(data).decode() != encoded or len(data) > output_limit:
+                raise QgaError('invalid-qga-exec-output')
+            streams.append(data)
+        return ExecResult(exitcode, *streams)
+
+    def powershell(self, script, timeout, *, seconds=60):
+        """Run a PowerShell 5.1 script in a Windows guest: the text it returned, decoded as UTF-8.
+
+        A non-zero exit code or an answer that is not UTF-8 is an error that names no guest text; what the script
+        wrote on its error stream stays in `stderr_text` for the evidence.
+        """
+        if not self.windows:
+            raise QgaError('qga-powershell-needs-windows')
+        result = self.run_program(windows_guest.POWERSHELL, windows_guest.arguments(script), timeout,
+                                  seconds=seconds)
+        try:
+            text, self.stderr_text = result.stdout.decode('utf-8'), result.stderr.decode('utf-8')
+        except UnicodeError:
+            raise QgaError('invalid-qga-powershell-output') from None
+        if result.exitcode != 0:
+            raise QgaError('qga-powershell-failed')
+        return text
+
     def read_boot_id(self, timeout):
         if self.info is None:
             raise QgaError('qga-probe-required')
+        if self.windows:
+            # `reg.exe` answers at once; a PowerShell would take a minute on the first boot of the image.
+            result = self.run_program(windows_guest.REG, list(windows_guest.BOOT_ARGUMENTS), timeout, seconds=30)
+            if result.exitcode != 0:
+                raise QgaError('qga-boot-id-failed')
+            try:
+                return windows_guest.boot_id(result.stdout)
+            except windows_guest.GuestAnswerError:
+                raise QgaError('invalid-windows-boot-id') from None
         handle = self._rpc('guest-file-open', timeout,
                            {'path': '/proc/sys/kernel/random/boot_id', 'mode': 'r'})
         if type(handle) is not int or not 0 <= handle < 2**63:

@@ -172,6 +172,18 @@ class AttachRefused(ValueError):
 RESUMABLE = ('submit', 'submit-recovery', 'wait', 'collect', 'collect-recovery', 'collect-final', 'close')
 
 
+def _resumable(run):
+    """The steps an attach may carry on from for the suite the run's saved summary names (the Linux ones if unreadable)."""
+    try:
+        summary, _ = read_json(resource_path(run.directory, 'execution-summary.json'))
+        if summary['configuration']['suite'] == 'windows-reboot-smoke':
+            from .windows_reboot import RESUMABLE as WINDOWS_RESUMABLE
+            return WINDOWS_RESUMABLE
+    except (OSError, ValueError, KeyError, TypeError, RecursionError):
+        pass
+    return RESUMABLE
+
+
 def _current_commit():
     try:
         from .linux_l2 import source_identity
@@ -245,7 +257,7 @@ def attach_run(state_directory, run_id, *, timeout=5, sleep=time.sleep, now=time
             return 'attach-lab-run-not-resumable'
         if state.phase in FINAL:
             return 'run-already-finished'
-        if not steps & set(RESUMABLE):
+        if not steps & set(_resumable(run)):
             # Before the job left the controller nothing in the guest can be carried on: `recover --close`.
             return 'attach-phase-not-resumable'
         try:
@@ -266,6 +278,13 @@ def attach_run(state_directory, run_id, *, timeout=5, sleep=time.sleep, now=time
     config = result['configuration']
     vm.planned_reboots = planned_reboots_of(config.get('suite', 'linux-l2'))
     result.update(attached=True, attachments=attachments)
+    if config.get('suite') == 'windows-reboot-smoke':
+        from .windows_smoke import attach_reboot
+        result, interrupted = attach_reboot(run, state, vm, result, clock=clock, sleep=sleep, progress=progress)
+        finish_state(state, result['completion'], result)
+        result = seal(run, result, interrupted)
+        _release(lease, result, interrupted)
+        return result
     job = None
     stage = 'attach'
     interrupted = False

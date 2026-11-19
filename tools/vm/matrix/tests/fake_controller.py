@@ -142,13 +142,22 @@ def main(state, phase, reboot=False):
     lease.release()
 
 
-def main_windows(state, phase):
-    """A Windows run as `run windows-boot-smoke` walks it, up to PHASE: `preparing`, `start`, `watch` or `end`."""
+def main_windows(state, phase, reboot=False):
+    """A Windows run as `run windows-boot-smoke` walks it, up to PHASE: `preparing`, `start`, `watch` or `end`.
+
+    With `reboot` it walks `run windows-reboot-smoke` instead (`boot`, `evidence`, `reboot`, `reset`, `new-boot`,
+    `evidence-after`, `shutdown`): the agent's programs are real, the guest is the fake's.
+    """
+    from tools.vm.matrix import windows_reboot
     from tools.vm.matrix.tests import windows_fixture
     fixture = windows_fixture.WindowsFixture(state)
     fixture.build(Path(state).parent)
     lease = StandLease(state, 'stand').acquire()
-    config = dict(suite='windows-boot-smoke', synthetic=True)
+    config = dict(suite='windows-reboot-smoke' if reboot else 'windows-boot-smoke', synthetic=True)
+    if reboot:
+        config['smoke'] = dict(agent_wait_seconds=60, reset_wait_seconds=30, reboot_wait_seconds=60,
+                               shutdown_wait_seconds=30)
+        config['image_descriptor'] = str(fixture.descriptor_file)
     run = create_run(lease)
     fixture.run = run
     for identifier, name in EXECUTION_FILES.items():
@@ -184,7 +193,17 @@ def main_windows(state, phase):
 
     vm = step('start', lambda: lifecycle.start(run, timeout=5, executor=info))
     step('resume', vm.resume)
-    step('watch')
+    if reboot:
+        vm.planned_reboots = windows_reboot.PLANNED_REBOOTS
+        step('boot', lambda: vm.wait_initial_guest(timeout=60, try_seconds=2, sleep=lambda seconds: None))
+        state_record.update('identities', boot_id=vm.last_boot_id, vm_uuid=vm.vm_uuid)
+        step('evidence', lambda: windows_reboot.guest_evidence(vm, 'before'))
+        step('reboot', vm.request_guest_reboot)
+        step('reset', lambda: vm.wait_guest_reset(timeout=30))
+        step('new-boot', lambda: vm.await_rebooted_guest(timeout=60, try_seconds=2, retry_seconds=0.2))
+        step('evidence-after', lambda: windows_reboot.guest_evidence(vm, 'after'))
+    else:
+        step('watch')
     step('shutdown', lambda: vm.request_shutdown(wait=30))
     step('close', vm.close)
     print('CLOSED', run._identity[0], flush=True)
@@ -192,7 +211,7 @@ def main_windows(state, phase):
 
 
 if __name__ == '__main__':
-    if sys.argv[3:] == ['windows']:
-        main_windows(sys.argv[1], sys.argv[2])
+    if sys.argv[3:] in (['windows'], ['windows', 'reboot']):
+        main_windows(sys.argv[1], sys.argv[2], sys.argv[4:] == ['reboot'])
     else:
         main(sys.argv[1], sys.argv[2], sys.argv[3:] == ['reboot'])

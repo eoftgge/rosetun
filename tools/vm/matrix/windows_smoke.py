@@ -1,10 +1,12 @@
-"""`run windows-boot-smoke`: start a Windows guest of the 9a image, let it run, take a screenshot, shut it down.
+"""`run windows-boot-smoke` and `run windows-reboot-smoke`: a Windows guest of the 9a image, started and shut down.
 
-There is no guest agent job in this run (that is stage 9c) and no lab (9d): the controller starts the
-machine with its TPM, watches it through QMP, takes one `screendump`, asks for an ACPI shutdown and closes.
-The image is not qualified (`qualified` is false in its descriptor and the controller accepts nothing else),
-so the run is diagnostic whatever it reports: the summary says `qualified: false`, and an exit code of 0 means
-only that the machine started, ran, was photographed and shut down by its own power button.
+The boot smoke (stage 9b) has no guest agent job and no lab: the controller starts the machine with its TPM,
+watches it through QMP, takes one `screendump`, asks for an ACPI shutdown and closes. The reboot smoke (stage 9c,
+`windows_reboot`) works with the guest through its agent and carries it through one restart of its own. Both share
+the run's frame: the lease, the run, the preparation, the start with its two processes, the close and the check
+that the image is unchanged. The image is not qualified (`qualified` is false in its descriptor and the controller
+accepts nothing else), so a run is diagnostic whatever it reports: the summary says `qualified: false`, and an
+exit code of 0 means only what the suite says.
 """
 
 from dataclasses import fields
@@ -17,7 +19,7 @@ import time
 import tomllib
 import uuid
 
-from . import windows_run
+from . import windows_reboot, windows_run
 from .images import load_windows_descriptor
 from .orchestrator import (SUMMARY_SCHEMA, begin_state, failure, finish_state, mark_step, save, seal,
                            _RETAINED_LEASES)
@@ -26,6 +28,10 @@ from .resources import EXECUTION_FILES, StandLease, _identifier, _state_path, co
 
 SCHEMA = 'rosetun.matrix.execution.windows.v1'
 SUITE = 'windows-boot-smoke'
+REBOOT_SUITE = windows_reboot.SUITE
+# The times of each suite's `[smoke]` table, in seconds: the lowest and the highest the configuration may say.
+SMOKE_TIMES = {SUITE: dict(boot_wait_seconds=(1, 600), shutdown_wait_seconds=(1, 600)),
+               REBOOT_SUITE: windows_reboot.SMOKE_SECONDS}
 FIELDS = {'schema', 'suite', 'mode', 'platform', 'state_directory', 'stand_id', 'image_descriptor', 'qemu',
           'smoke', 'deadlines'}
 # How often the run asks QEMU for the machine's state during the wait.
@@ -38,7 +44,7 @@ def _exact(value, names):
 
 
 def validate(config):
-    if type(config) is not dict or config.get('schema') != SCHEMA or config.get('suite') != SUITE:
+    if type(config) is not dict or config.get('schema') != SCHEMA or config.get('suite') not in SMOKE_TIMES:
         raise ValueError('unsupported execution schema')
     _exact(config, FIELDS)
     if config['mode'] != 'exploratory':
@@ -46,8 +52,9 @@ def validate(config):
     if config['platform'] != 'linux-x86_64-kvm':
         raise ValueError('unsupported execution platform')
     _exact(config['qemu'], [f.name for f in fields(WindowsQemuConfig)])
-    _exact(config['smoke'], ('boot_wait_seconds', 'shutdown_wait_seconds'))
-    for name, (low, high) in (('boot_wait_seconds', (1, 600)), ('shutdown_wait_seconds', (1, 600))):
+    times = SMOKE_TIMES[config['suite']]
+    _exact(config['smoke'], times)
+    for name, (low, high) in times.items():
         value = config['smoke'][name]
         if type(value) is not int or not low <= value <= high:
             raise ValueError('invalid smoke time')
@@ -88,7 +95,25 @@ def preflight(config, *, dry_run=False):
             raise ValueError('qemu.qmp 0.0.6 required')
         from .linux_l2 import source_identity
         controller_source = source_identity(controller)
-    return dict(schema='rosetun.matrix.execution-plan.v1', dry_run=dry_run, suite=SUITE,
+    boot = config['suite'] == SUITE
+    smoke = config['smoke']
+    if boot:
+        middle = ['watch the machine through QMP for %d seconds' % smoke['boot_wait_seconds'],
+                  'screendump into the run']
+        limits = ['no guest agent job and no network: the machine is only started, watched, '
+                  'photographed and shut down']
+    else:
+        middle = ['wait up to %d seconds for the guest agent and read the guest boot identity'
+                  % smoke['agent_wait_seconds'],
+                  'record the guest system, Secure Boot, TPM and a UTF-8 text through the agent',
+                  'ask the guest to restart itself (shutdown /r /t 0 through the agent)',
+                  'read the RESET from QMP (up to %d seconds), then wait up to %d seconds for the agent of the new '
+                  'boot and take its boot identity, which must differ' % (smoke['reset_wait_seconds'],
+                                                                       smoke['reboot_wait_seconds']),
+                  'record the guest again']
+        limits = ['one planned restart and no other; any other reset of the guest ends the run',
+                  'the guest has no Rosetun, no scripts of the controller and no network: only the agent']
+    return dict(schema='rosetun.matrix.execution-plan.v1', dry_run=dry_run, suite=config['suite'],
                 configuration=config, image=dict(identifier=image.identifier, sha256=image.sha256,
                                                 size_bytes=image.size_bytes, profile=image.profile,
                                                 qualified=False, activated=False),
@@ -96,13 +121,12 @@ def preflight(config, *, dry_run=False):
                 host_platform=sys.platform, backend_qualified=False,
                 actions=['lease', 'create run and identities',
                          'overlay, and copies of the firmware variables and of the TPM state of the image',
-                         'start swtpm, then QEMU paused', 'resume',
-                         'watch the machine through QMP for %d seconds' % config['smoke']['boot_wait_seconds'],
-                         'screendump into the run', 'ACPI power-down, at most %d seconds, then close as for Linux'
-                         % config['smoke']['shutdown_wait_seconds'], 'close both processes',
-                         'check that the image is unchanged', 'summary'],
-                limitations=['no guest agent job and no network: the machine is only started, watched, '
-                             'photographed and shut down',
+                         'start swtpm, then QEMU paused', 'resume', *middle,
+                         'ACPI power-down, at most %d seconds, then close as for Linux'
+                         % smoke['shutdown_wait_seconds'], 'close both processes',
+                         'check that the image is unchanged (hashed again only if the disk changed)',
+                         'summary'],
+                limitations=[*limits,
                              'the image is not qualified (qualified: false): the run is diagnostic and counts '
                              'for nothing',
                              'the firmware variable store is not protected from the guest (no SMM)',
@@ -137,9 +161,24 @@ def _watch(vm, seconds, clock, sleep):
         sleep(min(POLL_SECONDS, remaining))
 
 
-def run_windows_boot_smoke(config, *, adapters=None, clock=time.monotonic, sleep=time.sleep, progress=None):
+def run_windows_boot_smoke(config, **options):
+    if config.get('suite') != SUITE:
+        raise ValueError('configuration is for another suite')
+    return run_windows(config, **options)
+
+
+def run_windows_reboot_smoke(config, **options):
+    if config.get('suite') != REBOOT_SUITE:
+        raise ValueError('configuration is for another suite')
+    return run_windows(config, **options)
+
+
+def run_windows(config, *, adapters=None, clock=time.monotonic, sleep=time.sleep, progress=None):
+    """One path for both suites: the frame of the run, and between the resume and the close the suite's own steps."""
     progress = progress or (lambda stage: print(stage, file=sys.stderr, flush=True))
-    result = dict(schema=SUMMARY_SCHEMA, suite=SUITE, identities={}, configuration=config, stages=[],
+    suite = config.get('suite')
+    boot = suite == SUITE
+    result = dict(schema=SUMMARY_SCHEMA, suite=suite, identities={}, configuration=config, stages=[],
                   evidence=[], assessment=None, delivery=None, execution=None,
                   completion=False, manual_recovery_required=False, errors=[],
                   attached=False, attachments=0, qualified=False, diagnostic=True,
@@ -147,8 +186,13 @@ def run_windows_boot_smoke(config, *, adapters=None, clock=time.monotonic, sleep
     lease = run = vm = state = image = plan = None
     stage = 'preflight'
     interrupted = False
-    measured = dict(boot_wait_seconds=config.get('smoke', {}).get('boot_wait_seconds'), samples=0,
-                    guest_status=None, screenshot=None, shutdown=None, image_unchanged=None)
+    smoke = config.get('smoke', {})
+    if boot:
+        measured = dict(boot_wait_seconds=smoke.get('boot_wait_seconds'), samples=0,
+                        guest_status=None, screenshot=None, shutdown=None, image_unchanged=None)
+    else:
+        measured = dict(smoke, agent_ready_seconds=None, guest=None, guest_after=None, reset_seconds=None,
+                        reboot_seconds=None, shutdown=None, image_unchanged=None)
 
     def step(name, operation):
         nonlocal stage
@@ -219,10 +263,15 @@ def run_windows_boot_smoke(config, *, adapters=None, clock=time.monotonic, sleep
         vm = step('start', lambda: adapters.start(run, timeout=10))
         state.update('identities', vm_uuid=vm.vm_uuid)
         step('resume', vm.resume)
-        measured['samples'] = step('watch', lambda: _watch(vm, config['smoke']['boot_wait_seconds'], clock, sleep))
-        measured['guest_status'] = 'running'
-        step('screendump', screenshot)
-        step('shutdown', shutdown)
+        if boot:
+            measured['samples'] = step('watch', lambda: _watch(vm, smoke['boot_wait_seconds'], clock, sleep))
+            measured['guest_status'] = 'running'
+            step('screendump', screenshot)
+            step('shutdown', shutdown)
+        else:
+            windows_reboot.drive(windows_reboot.context(step=step, vm=vm, state=state, config=config,
+                                                        measured=measured, clock=clock, sleep=sleep,
+                                                        shutdown=shutdown))
     except BaseException as error:
         interrupted = isinstance(error, KeyboardInterrupt)
         result['errors'].append(failure(stage, error))
@@ -259,7 +308,13 @@ def run_windows_boot_smoke(config, *, adapters=None, clock=time.monotonic, sleep
                 result['errors'].append(failure('image-unchanged', error))
         result['manual_recovery_required'] = run is not None and not result['completion']
         accepted = (not result['errors'] and result['completion'] and measured['shutdown'] == 'acpi'
-                    and measured['screenshot'] is not None and measured['image_unchanged'] is True)
+                    and measured['image_unchanged'] is True)
+        if boot:
+            accepted = accepted and measured['screenshot'] is not None
+        else:
+            if vm is not None:
+                measured.update(windows_reboot.facts(vm))
+            accepted = accepted and windows_reboot.verdict(measured)
         result['execution'] = dict(measured, accepted=bool(accepted), uuid=vm.vm_uuid if vm is not None else None,
                                    kvm_qualified=plan['kvm_qualified'] if plan else False,
                                    image=dict(identifier=image.identifier, sha256=image.sha256,
@@ -278,3 +333,79 @@ def run_windows_boot_smoke(config, *, adapters=None, clock=time.monotonic, sleep
                     result['errors'].append(failure('lease-release', error))
                     result['exit_code'] = 130 if interrupted else 2
     return result
+
+
+def attach_reboot(run, state, vm, result, *, clock=time.monotonic, sleep=time.sleep, progress=None):
+    """Finish a `windows-reboot-smoke` whose controller died after it asked the guest to restart (`attach`).
+
+    `result` is the summary the dead controller saved first, already marked attached; it comes back with its errors,
+    its execution and its completion, ready to be sealed. The lease belongs to the caller.
+    """
+    progress = progress or (lambda stage: print(stage, file=sys.stderr, flush=True))
+    config = result['configuration']
+    image = None
+    interrupted = False
+    stage = 'attach'
+    measured = dict(config['smoke'], agent_ready_seconds=None, guest=None, guest_after=None, reset_seconds=None,
+                    reboot_seconds=None, shutdown=None, image_unchanged=None)
+    started = clock()
+
+    def step(name, operation):
+        nonlocal stage
+        stage = name
+        progress(name)
+        row = dict(stage=name, state='started', attached=True)
+        result['stages'].append(row)
+        mark_step([state], name, 'intent')
+        try:
+            value = operation()
+        except BaseException:
+            row['state'] = 'error'
+            mark_step([state], name, 'error')
+            raise
+        row['state'] = 'completed'
+        mark_step([state], name, 'done')
+        return value
+
+    def shutdown():
+        vm.request_shutdown(wait=config['smoke']['shutdown_wait_seconds'])
+        measured['shutdown'] = 'acpi'
+
+    try:
+        windows_reboot.attach(windows_reboot.context(step=step, vm=vm, state=state, config=config,
+                                                     measured=measured, clock=clock, sleep=sleep,
+                                                     shutdown=shutdown))
+    except BaseException as error:
+        interrupted = isinstance(error, KeyboardInterrupt)
+        result['errors'].append(failure(stage, error))
+    finally:
+        try:
+            step('close', lambda: vm.close(hard=bool(result['errors'])))
+            if measured['shutdown'] is None:
+                measured['shutdown'] = 'forced'
+        except BaseException as error:
+            interrupted |= isinstance(error, KeyboardInterrupt)
+            result['errors'].append(failure('close', error))
+        try:
+            result['completion'] = vm.completed and completion_verified(run.directory, run._read())
+        except (OSError, ValueError):
+            result['completion'] = False
+        if result['completion']:
+            try:
+                image = load_windows_descriptor(config['image_descriptor'])
+                step('image-unchanged', lambda: image.validate(run.directory))
+                measured['image_unchanged'] = True
+            except BaseException as error:
+                interrupted |= isinstance(error, KeyboardInterrupt)
+                measured['image_unchanged'] = False
+                result['errors'].append(failure('image-unchanged', error))
+        result['manual_recovery_required'] = not result['completion']
+        measured.update(windows_reboot.facts(vm))
+        accepted = (not result['errors'] and result['completion'] and measured['shutdown'] == 'acpi'
+                    and measured['image_unchanged'] is True and windows_reboot.verdict(measured))
+        result['execution'] = dict(measured, accepted=bool(accepted), uuid=vm.vm_uuid, attached=True,
+                                   kvm_qualified=False,
+                                   image=dict(identifier=image.identifier, sha256=image.sha256,
+                                              qualified=False) if image is not None else None,
+                                   duration_seconds=round(clock() - started, 1))
+    return result, interrupted

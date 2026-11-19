@@ -636,9 +636,9 @@ class WaitTests(RebootCase):
 
 
 class ProfileTests(unittest.TestCase):
-    def test_the_smoke_suite_plans_one_reset_and_the_others_none_but_l4(self):
+    def test_the_smoke_suites_plan_one_reset_and_the_others_none_but_l4(self):
         from tools.vm.matrix import config
-        self.assertEqual({'linux-l4': 2, 'linux-reboot-smoke': 1}, config.PLANNED_REBOOTS)
+        self.assertEqual({'linux-l4': 2, 'linux-reboot-smoke': 1, 'windows-reboot-smoke': 1}, config.PLANNED_REBOOTS)
         for suite in ('linux-l2', 'linux-l3', 'linux-proxy', 'linux-l5'):
             self.assertEqual(0, config.planned_reboots_of(suite))
         plan = config.make_plan('linux-reboot-smoke', 'x', dict(mode='exploratory'))
