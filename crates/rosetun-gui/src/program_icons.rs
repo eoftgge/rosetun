@@ -14,6 +14,8 @@ use eframe::egui::emath::GuiRounding as _;
 
 /// Icons kept at once; the least recently shown goes first.
 const MAX_ICONS: usize = 256;
+/// Incremental uploads keep a burst of ready icons from taking over a frame.
+const UPLOADS_PER_PASS: usize = 4;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct IconKey {
@@ -158,6 +160,7 @@ impl Loader {
 struct ProgramIcons {
     cache: IconCache<egui::TextureHandle>,
     loader: Option<Loader>,
+    received_at: Option<u64>,
     /// The thread could not start; every program keeps its tile.
     failed: bool,
 }
@@ -167,11 +170,20 @@ impl ProgramIcons {
         let Some(loader) = &self.loader else {
             return;
         };
-        while let Ok((key, image)) = loader.results.try_recv() {
+        let pass = ctx.cumulative_pass_nr();
+        if self.received_at == Some(pass) {
+            return;
+        }
+        self.received_at = Some(pass);
+        for _ in 0..UPLOADS_PER_PASS {
+            let Ok((key, image)) = loader.results.try_recv() else {
+                return;
+            };
             let texture = image
                 .map(|image| ctx.load_texture("program-icon", image, egui::TextureOptions::LINEAR));
             self.cache.finish(&key, texture);
         }
+        ctx.request_repaint();
     }
 
     fn request(&mut self, ctx: &egui::Context, key: IconKey, path: &Path) {

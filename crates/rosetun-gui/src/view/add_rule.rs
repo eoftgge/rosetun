@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::Path;
 
 use eframe::egui::{self, Color32, RichText, Stroke};
@@ -912,12 +913,18 @@ fn process_list(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Vec
         .processes
         .iter()
         .enumerate()
-        .filter(|(_, group)| process_matches_filter(group, &filter))
+        .filter(|(_, group)| filter.is_empty() || process_matches_filter(group, &filter))
         .map(|(index, _)| index)
         .collect();
     let (running, other): (Vec<usize>, Vec<usize>) = shown
         .iter()
         .partition(|index| dialog.processes[**index].windowed);
+    let mut name_counts = HashMap::new();
+    for group in &dialog.processes {
+        *name_counts
+            .entry(group.name.to_ascii_lowercase())
+            .or_insert(0_usize) += 1;
+    }
     let typed_key = match rosetun_core::parse_process_input(&filter) {
         Ok(ProcessMatch::Name(name)) if !filter.is_empty() => Some(ProgramKey::of_name(&name)),
         Ok(ProcessMatch::Path(path)) if !filter.is_empty() => Some(ProgramKey::of_path(&path)),
@@ -1002,7 +1009,8 @@ fn process_list(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Vec
                 );
                 for &index in indices {
                     let group = &dialog.processes[index];
-                    if group_row(ui, dialog, group).changed() && !dialog.busy {
+                    let same_name = name_counts[&group.name.to_ascii_lowercase()] > 1;
+                    if group_row(ui, dialog, group, same_name).changed() && !dialog.busy {
                         listed = Some(index);
                     }
                 }
@@ -1088,17 +1096,16 @@ fn extra_row(ui: &mut egui::Ui, program: &ChosenProgram, enabled: bool) -> egui:
 
 /// One listed program: its name with the number of copies, and its path on hover. The path
 /// is a second line only when another listed program has the same name.
-fn group_row(ui: &mut egui::Ui, dialog: &AddRuleDialog, group: &ProcessGroup) -> egui::Response {
+fn group_row(
+    ui: &mut egui::Ui,
+    dialog: &AddRuleDialog,
+    group: &ProcessGroup,
+    same_name: bool,
+) -> egui::Response {
     let path = group.path.as_ref().map_or_else(
         || tr!("path-unavailable"),
         |path| display::safe_text(&path.to_string_lossy()),
     );
-    let same_name = dialog
-        .processes
-        .iter()
-        .filter(|other| other.name.eq_ignore_ascii_case(&group.name))
-        .count()
-        > 1;
     let name = if group.count > 1 {
         i18n::process_copies(&display::safe_text(&group.name), group.count)
     } else {

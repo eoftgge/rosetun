@@ -43,7 +43,10 @@ impl WorkerDispatcher {
             emit(
                 &publisher.tx,
                 &publisher.repaint,
-                WorkerEvent::Processes { request, result },
+                WorkerEvent::Processes {
+                    request,
+                    result: result.map(crate::rules::group_processes),
+                },
             );
         });
     }

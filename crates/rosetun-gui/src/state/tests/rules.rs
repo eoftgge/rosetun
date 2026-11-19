@@ -1,4 +1,5 @@
 use super::*;
+use crate::rules::group_processes;
 
 #[test]
 fn rule_selection_click_toggle_and_visible_range() {
@@ -388,12 +389,12 @@ fn process_results_fill_only_the_current_dialog_and_are_dropped_on_close() {
     assert!(state.act(Action::RefreshProcesses).is_none());
     state.reduce(WorkerEvent::Processes {
         request: first,
-        result: Ok(vec![RunningProcess {
+        result: Ok(group_processes(vec![RunningProcess {
             pid: 100,
             name: "Telegram.exe".into(),
             path: Some(r"C:\Apps\Telegram.exe".into()),
             has_window: true,
-        }]),
+        }])),
     });
     let dialog = state.rules.screen.add.as_ref().unwrap();
     assert!(dialog.processes_loaded);
@@ -408,12 +409,12 @@ fn process_results_fill_only_the_current_dialog_and_are_dropped_on_close() {
     assert_ne!(first, second);
     state.reduce(WorkerEvent::Processes {
         request: first,
-        result: Ok(vec![RunningProcess {
+        result: Ok(group_processes(vec![RunningProcess {
             pid: 101,
             name: "Old.exe".into(),
             path: None,
             has_window: false,
-        }]),
+        }])),
     });
     assert!(
         state
@@ -1072,7 +1073,7 @@ fn program_dialog(processes: Vec<RunningProcess>) -> State {
     };
     state.reduce(WorkerEvent::Processes {
         request,
-        result: Ok(processes),
+        result: Ok(group_processes(processes)),
     });
     state
 }
@@ -1107,10 +1108,10 @@ fn a_program_given_by_name_or_path_is_found_in_the_list_once_it_loads() {
         };
         state.reduce(WorkerEvent::Processes {
             request,
-            result: Ok(vec![
+            result: Ok(group_processes(vec![
                 running("Tool.exe", path, true),
                 running("Tool.exe", other, false),
-            ]),
+            ])),
         });
         let dialog = state.rules.screen.add.as_ref().unwrap();
         assert_eq!(dialog.chosen.len(), 1, "{matcher:?}");
@@ -1307,11 +1308,11 @@ fn reading_the_process_list_again_keeps_the_ticks() {
     // The list changed meanwhile: one program closed, another started.
     state.reduce(WorkerEvent::Processes {
         request,
-        result: Ok(vec![
+        result: Ok(group_processes(vec![
             running("Other.exe", other, true),
             running("Curl.exe", third, true),
             running("Tool.exe", path, true),
-        ]),
+        ])),
     });
     let dialog = state.rules.screen.add.as_ref().unwrap();
     let after: Vec<_> = dialog.chosen.iter().map(|item| item.key.clone()).collect();
@@ -1329,7 +1330,7 @@ fn reading_the_process_list_again_keeps_the_ticks() {
     };
     state.reduce(WorkerEvent::Processes {
         request,
-        result: Ok(vec![running("Curl.exe", third, true)]),
+        result: Ok(group_processes(vec![running("Curl.exe", third, true)])),
     });
     let dialog = state.rules.screen.add.as_ref().unwrap();
     assert_eq!(dialog.chosen.len(), 2, "a program that closed stays ticked");
@@ -1548,7 +1549,11 @@ fn a_program_given_by_name_is_found_in_its_own_letter_case_only() {
         };
         state.reduce(WorkerEvent::Processes {
             request,
-            result: Ok(vec![running("Tool", "/opt/apps/Tool", true)]),
+            result: Ok(group_processes(vec![running(
+                "Tool",
+                "/opt/apps/Tool",
+                true,
+            )])),
         });
         let dialog = state.rules.screen.add.as_ref().unwrap();
         assert_eq!(dialog.chosen[0].path.is_some(), found, "{name}");

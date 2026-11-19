@@ -35,6 +35,7 @@ use rosetun_processes::{ProcessListError, RunningProcess, running_processes};
 
 use crate::qr::QrError;
 use crate::repaint::Repaint;
+use crate::rules::ProcessGroup;
 use crate::state::{ExitRoute, RequestInputs};
 
 const CLIENT_NAME: &str = concat!("rosetun-gui/", env!("CARGO_PKG_VERSION"));
@@ -195,7 +196,7 @@ pub(crate) enum WorkerEvent {
     SetDefaultTarget(Result<(), RuleSetError>),
     Processes {
         request: u64,
-        result: Result<Vec<RunningProcess>, ProcessListError>,
+        result: Result<Vec<ProcessGroup>, ProcessListError>,
     },
     #[cfg(windows)]
     BrowsedExecutable(Option<PathBuf>),

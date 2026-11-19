@@ -9,9 +9,7 @@ use super::address::{
     split_addresses,
 };
 use crate::errors;
-use crate::rules::{
-    ProcessGroup, ProcessMatchMode, ProgramKey, group_processes, same_program_name,
-};
+use crate::rules::{ProcessGroup, ProcessMatchMode, ProgramKey, same_program_name};
 use crate::worker::WorkerEvent;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -630,7 +628,7 @@ impl State {
                     dialog.load_request = None;
                     match result {
                         Ok(processes) => {
-                            dialog.processes = group_processes(processes);
+                            dialog.processes = processes;
                             dialog.processes_loaded = true;
                             dialog.processes_loaded_ms = Some(now);
                             dialog.processes_error = None;
