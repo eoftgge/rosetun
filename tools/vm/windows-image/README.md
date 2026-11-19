@@ -24,18 +24,30 @@ installed the packages listed below.
   The local account comes from the documented `UserAccounts` and `OOBE` settings of the answer file.
 - The guest is quiet because the operating system is configured to be quiet. Windows Firewall and
   the filtering platform are not touched, and the observer is not made more tolerant.
-- Machine `q35`, `-cpu host,-vmx,-svm`. Hardware virtualization is hidden from the guest so Windows
-  cannot start Hyper-V or virtualization-based security: that would stack a second hypervisor on
-  WSL2's nested KVM, which is slow and changes timing, and the matrix gains nothing from it. Both
-  flags are given because the one that matters depends on the host CPU (Intel VMX, AMD SVM); QEMU
-  accepts a minus on a flag the host lacks and it does nothing.
+- Machine `q35`, `-cpu host,-vmx,-svm,hv-relaxed,hv-vapic,hv-spinlocks=0x1fff,hv-time,hv-vpindex,hv-synic,hv-stimer`
+  (`image_plan.CPU`). Hardware virtualization is hidden from the guest so Windows cannot start
+  Hyper-V or virtualization-based security: that would stack a second hypervisor on WSL2's nested
+  KVM, which is slow and changes timing, and the matrix gains nothing from it. Both flags are given
+  because the one that matters depends on the host CPU (Intel VMX, AMD SVM); QEMU accepts a minus on
+  a flag the host lacks and it does nothing. The `hv-` flags are the Hyper-V enlightenments QEMU
+  offers to Windows guests (paravirtual clock, timer and interrupt interfaces). They are not
+  hardware virtualization and hide nothing from the guest. They are there because without the last
+  three (`hv-vpindex`, `hv-synic`, `hv-stimer`) an idle guest on the stand spent 11 to 13 % of its time
+  in interrupts and never came to rest (table under "Measured on the stand"). `hv-stimer` needs
+  `hv-synic` and `hv-vpindex`; nothing else (`hv-frequencies`, `hv-runtime`) was needed and nothing
+  else is given. The string is accepted by QEMU 10.0.13 of the stand without a warning. The CPU
+  string is recorded in the descriptor (`devices.cpu`) and is the same in the build, in the
+  calming boot and in the measurement.
 - Devices are the ones the Linux guests already use: virtio-blk (disk), virtio-net (test MAC
   `00:00:5e:00:53:61`), virtio-serial with the `org.qemu.guest_agent.0` port, plus the chipset's
   AHCI controller for the three discs of the build. The same devices, at the same PCI slots, are
   used by the measurement boot, and are meant for the runs: Windows ties its network settings to
   the adapter, so another device list or MAC would create a second adapter and drop the first
   one's settings. The profile name for the descriptor is `windows-uefi-q35-v1`; the controller does
-  not know it yet.
+  not know it yet. It stays `v1` although the CPU string changed: the name stands for the device
+  list and the PCI slots Windows binds its settings to, which did not change, and no run has used
+  the profile yet. An image built with the old CPU string boots with the new one (copies of one
+  were booted that way).
 - The build network is QEMU's user-mode stack with `restrict=on`: the guest gets an address and has
   no way out, neither to the lab nor to the Internet. The image is built from the disc alone, so
   nothing is downloaded and no update can land in it. If Setup insists on a network during OOBE,
@@ -350,13 +362,24 @@ All four are addressed by the changes described above, and all of that is UNRUN 
   minutes, and again after the commands above, `\Processor(_Total)\% Processor Time` was 11 to 18 %,
   of which `% Interrupt Time` was 11 to 13 % at 1 600 to 3 000 interrupts per second, and every
   process together was under 3 % (`System`, `MsMpEng`, `svchost`, `qemu-ga`). The 0.8 % of the earlier
-  diagnostic boot did not reproduce. With the CPU of the image (`host,-vmx,-svm`) a calming boot
-  would therefore probably end in the refusal of the limit above, whatever the system finishes.
-  The same copy booted with Hyper-V enlightenments: `hv_relaxed,hv_vapic,hv_spinlocks=0x1fff,hv_time`
-  only: 6 to 13 %; with `hv_vpindex,hv_synic,hv_stimer` added: 1.3 to 2 % in steady state (7.5 % in
-  the first window after the agent), interrupts still 2 000 to 2 400 per second but at under 1 %
-  of the time. One boot each, nothing else changed. `image_plan.CPU` was not changed: the profile is
-  the owner's decision (see the last item of the known risks).
+  diagnostic boot did not reproduce. With `-cpu host,-vmx,-svm` alone a calming boot would
+  therefore have ended in the refusal of the limit above, whatever the system finishes. The same
+  copy booted with different CPU strings (one boot each, nothing else changed):
+
+  | CPU string | CPU at rest | Interrupt time |
+  |---|---|---|
+  | `host,-vmx,-svm` | 11 to 13 % | 11 to 13 % |
+  | `+hv_relaxed,hv_vapic,hv_spinlocks=0x1fff,hv_time` | 6 to 13 % | about 6 % |
+  | `+hv_vpindex,hv_synic,hv_stimer` as well | 1.3 to 2 % (7.5 % in the first window) | under 1 % |
+
+  The last string is `image_plan.CPU` now (hyphenated spelling). One more boot of a copy with
+  exactly that string, through `qemu_argv` of the repository: agent ready after 78 s, then seven
+  windows of 60 one-second `typeperf` samples after 5 minutes of rest: 1.7, 1.8, 3.2, 5.6, 3.4, 3.3
+  and 1.5 % (mean 3.0 %). The 5.6 % window is `CompatTelRunner` (the appraiser, 1.1 %) with
+  `System` and `svchost`; the interrupt time over the next 10 seconds was 0 to 2.3 % at about
+  2 000 interrupts per second. Secure Boot `True`, TPM present and ready, QEMU printed nothing and
+  exited with code 0 after the agent's `guest-shutdown`. The copies were booted from the image
+  built with the old CPU string.
 
 - Without a key element Setup of the 26H2 disc stops on the product key page. With
   `empty_product_key_element = true` (an empty element, never a key) it goes on, copies the files and
@@ -394,10 +417,11 @@ All four are addressed by the changes described above, and all of that is UNRUN 
   wrote and the TPM's persistent state. A run must start from a copy of both, taken with the disk.
 - Discard is on for the disk and the script retrims the volume; whether the driver passes it
   through decides how small the file is.
-- `-cpu host,-vmx,-svm` alone is not fast enough on the stand: the idle guest spends 11 to 13 % of its
-  time in interrupts (see "Measured on the stand"), and the Hyper-V enlightenments that cut it to about 2 %
-  change the profile of every run. Adding them is the owner's decision and not made here; until then the
-  CPU limit of the measurement and the calming boot are not expected to pass.
+- `-cpu host,-vmx,-svm` alone was not fast enough on the stand: the idle guest spent 11 to 13 % of its
+  time in interrupts. The Hyper-V enlightenments of `image_plan.CPU` bring it to about 2 to 3 %
+  (see "Measured on the stand"). Decided (coordinator, within the owner's decisions: they are the
+  standard QEMU enlightenments for Windows guests, not a workaround of an installer or a security
+  check). Whether the run profile of stage 9b needs more is for that stage to measure.
 
 ## Not done here
 

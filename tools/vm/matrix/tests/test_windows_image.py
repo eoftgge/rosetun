@@ -319,9 +319,18 @@ class QemuPlanTests(unittest.TestCase):
         self.assertIn(f'type=unixio,path={socket_path}', swtpm)
         self.assertIn('dir=/srv/image/tpm', swtpm)
 
-    def test_hardware_virtualization_of_both_vendors_is_hidden_from_the_guest(self):
+    def test_hardware_virtualization_of_both_vendors_is_hidden_and_the_hyper_v_enlightenments_are_given(self):
+        expected = 'host,-vmx,-svm,hv-relaxed,hv-vapic,hv-spinlocks=0x1fff,hv-time,hv-vpindex,hv-synic,hv-stimer'
+        self.assertEqual(expected, image_plan.CPU)
         for argv in (self.install, self.measure):
-            self.assertEqual('host,-vmx,-svm', argv[argv.index('-cpu') + 1])
+            self.assertEqual(expected, argv[argv.index('-cpu') + 1])
+        flags = image_plan.CPU.split(',')
+        self.assertEqual(['host', '-vmx', '-svm'], flags[:3])
+        # The timer path needs all three: the stimer builds on the synthetic interrupt controller.
+        for flag in ('hv-vpindex', 'hv-synic', 'hv-stimer', 'hv-time'):
+            self.assertIn(flag, flags)
+        # Hiding hardware virtualization is not undone by an enlightenment.
+        self.assertFalse([flag for flag in flags if flag in ('vmx', '+vmx', 'svm', '+svm', 'hv-evmcs', 'hv-nested')])
 
     def test_vnc_is_on_loopback_only_and_nothing_else_listens(self):
         displays = [self.install[i + 1] for i, item in enumerate(self.install) if item == '-display']
@@ -371,7 +380,7 @@ class QemuPlanTests(unittest.TestCase):
         self.assertEqual((False, False), (record['windows']['activated'], record['windows']['qualified']))
         self.assertTrue(record['windows']['uefi']['secure_boot'])
         self.assertEqual('2.0', record['windows']['tpm']['version'])
-        self.assertEqual('host,-vmx,-svm', record['windows']['devices']['cpu'])
+        self.assertEqual(image_plan.CPU, record['windows']['devices']['cpu'])
 
     def descriptor(self, loaded):
         return image_plan.descriptor(loaded, self.layout, uuid='u', windows_iso_sha256='0' * 64,

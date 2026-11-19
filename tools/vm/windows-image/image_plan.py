@@ -22,7 +22,13 @@ PCI_SLOTS = {'vga': '0x1', 'disk': '0x3', 'net': '0x4', 'serial': '0x5'}
 PRESS_KEY = 'spc'
 # Both virtualization flags are hidden, VMX (Intel) and SVM (AMD): the flag that matters depends on
 # the host, and a minus on a flag the host lacks is accepted and does nothing.
-CPU = 'host,-vmx,-svm'
+# The Hyper-V enlightenments are the paravirtual clock, timer and interrupt interfaces QEMU offers to
+# Windows guests. Without the last three (`hv-vpindex`, `hv-synic`, `hv-stimer`) an idle guest on the
+# stand spent 11 to 13 % of its time in interrupts; with them it is at about 2 %. `hv-stimer` needs
+# `hv-synic` and `hv-vpindex`, and nothing else was needed.
+HV_ENLIGHTENMENTS = ('hv-relaxed', 'hv-vapic', 'hv-spinlocks=0x1fff', 'hv-time', 'hv-vpindex', 'hv-synic',
+                     'hv-stimer')
+CPU = ','.join(('host', '-vmx', '-svm') + HV_ENLIGHTENMENTS)
 FLAVOUR_NO_SMM = 'secboot-nosmm'
 FLAVOUR_SMM = 'secboot-smm'
 VARSTORE_NOTE = 'varstore not SMM-protected'
@@ -81,10 +87,11 @@ def qemu_argv(config, layout, uuid, *, install, disk=None, vars_file=None, tpm_s
       (the firmware of `build-ovmf.sh`) the machine has no SMM and the store is an ordinary flash
       device, writable by the guest operating system: Secure Boot is enforced, the store is not
       protected from the guest.
-    - `-cpu host,-vmx,-svm`: hides hardware virtualization from the guest, so Windows cannot start
-      Hyper-V or virtualization-based security. They would put a second hypervisor under the first
-      inside WSL2's nested KVM, which is slow and changes timing, and the matrix gains nothing from
-      them.
+    - `-cpu host,-vmx,-svm,hv-...`: hides hardware virtualization from the guest, so Windows cannot
+      start Hyper-V or virtualization-based security. They would put a second hypervisor under the
+      first inside WSL2's nested KVM, which is slow and changes timing, and the matrix gains nothing
+      from them. The `hv-` flags are the enlightenments of `HV_ENLIGHTENMENTS`: they let the guest
+      use the paravirtual timer and interrupt interfaces, which is not hardware virtualization.
     - virtio-blk, virtio-net and virtio-serial, the same as the Linux guests: the driver set to qualify
       is the one the matrix controller already knows. No USB, no sound, no balloon.
     - the network is a user-mode stack with `restrict=on`: the guest gets an address and nothing
