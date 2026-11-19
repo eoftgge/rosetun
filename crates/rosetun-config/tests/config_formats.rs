@@ -19,8 +19,9 @@ const V4: &[u8] = include_bytes!("fixtures/v4.json");
 const V5: &[u8] = include_bytes!("fixtures/v5.json");
 const V6: &[u8] = include_bytes!("fixtures/v6.json");
 const V7: &[u8] = include_bytes!("fixtures/v7.json");
-const V9: &[u8] = include_bytes!("fixtures/v9.json");
 const V8: &[u8] = include_bytes!("fixtures/v8.json");
+const V9: &[u8] = include_bytes!("fixtures/v9.json");
+const V10: &[u8] = include_bytes!("fixtures/v10.json");
 
 #[test]
 fn subscription_vpn_updates_are_enabled_when_migrating_released_settings() {
@@ -214,8 +215,8 @@ fn value(bytes: &[u8]) -> Value {
 #[test]
 fn released_configurations_migrate_to_the_expected_configuration() {
     assert_eq!(
-        CONFIG_VERSION, 9,
-        "released fixtures require format version seven"
+        CONFIG_VERSION, 10,
+        "update the current fixture when bumping the settings format"
     );
     let expected = expected_migrated_legacy_config();
 
@@ -277,7 +278,8 @@ fn current_configuration_fixture_guards_the_serialized_format() {
         share_on_lan: true,
     };
     expected.interface.delay_mode = DelayMode::Full;
-    let (loaded, migrated_from) = from_json(V9).expect("current fixture should load");
+    expected.interface.show_country_flags = false;
+    let (loaded, migrated_from) = from_json(V10).expect("current fixture should load");
 
     assert_eq!(migrated_from, None);
     assert_eq!(loaded, expected);
@@ -302,15 +304,26 @@ fn current_configuration_fixture_guards_the_serialized_format() {
     let (round_trip, migrated_from) = from_json(&encoded).expect("current fixture round trip");
     assert_eq!(migrated_from, None);
     assert_eq!(round_trip.exits, loaded.exits);
+    assert!(!round_trip.interface.show_country_flags);
     assert_eq!(
         round_trip.rule_sets[0].rules[0],
         loaded.rule_sets[0].rules[0]
     );
     assert_eq!(
         serde_json::to_value(&expected).expect("serialize expected configuration"),
-        value(V9),
-        "the serialized configuration shape changed; bump CONFIG_VERSION, add a migration, and add a new fixture instead of changing v9.json"
+        value(V10),
+        "the serialized configuration shape changed; keep the current fixture in sync"
     );
+}
+
+#[test]
+fn migration_from_nine_enables_flags_and_preserves_saved_settings() {
+    let (config, migrated_from) = from_json(V9).unwrap();
+    assert_eq!(migrated_from, Some(9));
+    let mut expected = value(V9);
+    expected["version"] = json!(CONFIG_VERSION);
+    expected["interface"]["show_country_flags"] = json!(true);
+    assert_eq!(serde_json::to_value(config).unwrap(), expected);
 }
 
 /// Settings saved by an older release have no fragmentation; loading adds it switched off.
@@ -318,6 +331,7 @@ fn current_configuration_fixture_guards_the_serialized_format() {
 fn with_default_fragmentation(mut config: Value) -> Value {
     config["interface"]["delay_mode"] = json!("repeated");
     config["interface"]["subscriptions_via_vpn"] = json!(true);
+    config["interface"]["show_country_flags"] = json!(true);
     config["settings"]["tls_fragment"] = serde_json::to_value(TlsFragment::default()).unwrap();
     config["settings"]["private_networks"] = json!(false);
     config["settings"]["connection_mode"] = json!("tun");

@@ -27,24 +27,36 @@ pub(crate) fn exit_title(exit: &Exit) -> String {
 }
 
 /// The second line of a row and whether it is a warning.
-fn exit_detail(config: &AppConfig, exit: &Exit, resolved: Option<&Selection>) -> (String, bool) {
+fn exit_detail(
+    state: &State,
+    exit: &Exit,
+    resolved: Option<&Selection>,
+) -> (String, bool, Option<String>) {
     let kind = match exit.target {
         ExitTarget::Country(_) => tr!("exit-kind-country"),
         ExitTarget::Node { .. } => tr!("exit-kind-node"),
     };
-    let (now, warning) = match destinations::exit_now(config, exit, resolved) {
-        ExitNow::Node(name) => (tr!("exit-now", node = display::safe_text(name)), false),
+    let (now, warning, country) = match destinations::exit_now(&state.config, exit, resolved) {
+        ExitNow::Node(name) => {
+            let (flag, label) = display::leading_flag(name);
+            let country = flag.or_else(|| {
+                rosetun_config::node_country(name).map(|code| code.as_str().to_owned())
+            });
+            (tr!("exit-now", node = state.text(label)), false, country)
+        }
         ExitNow::Fallback(code) => (
             tr!("exit-now-fallback", country = i18n::country_name(code)),
             false,
+            Some(code.as_str().to_owned()),
         ),
-        ExitNow::NodeGone => (tr!("exit-now-gone"), true),
+        ExitNow::NodeGone => (tr!("exit-now-gone"), true, None),
         ExitNow::NoCountryNodes(code) => (
             tr!("exit-now-no-nodes", country = i18n::country_name(code)),
             true,
+            Some(code.as_str().to_owned()),
         ),
     };
-    (format!("{kind} · {now}"), warning)
+    (format!("{kind} · {now}"), warning, country)
 }
 
 fn header_has_add_button(state: &State) -> bool {
@@ -130,7 +142,7 @@ fn exit_row(
     actions: &mut Vec<Action>,
 ) -> egui::Response {
     let title = destinations::exit_path_label(&state.config, exit);
-    let (detail, warning) = exit_detail(&state.config, exit, resolved);
+    let (detail, warning, country) = exit_detail(state, exit, resolved);
     let rules = state.exit_rules(&exit.id);
     let can_edit = state.can_edit_rules();
     widgets::card_frame()
@@ -153,7 +165,26 @@ fn exit_row(
                 |ui| {
                     ui.set_min_height(CARD_CONTENT_HEIGHT);
                     ui.spacing_mut().item_spacing.x = theme::space::S;
-                    icons::icon_badge_colored(ui, Icon::Globe, 32.0, theme::EXIT);
+                    if let Some(code) = &country {
+                        let (slot, response) = ui.allocate_exact_size(
+                            egui::Vec2::splat(theme::space::XXL),
+                            egui::Sense::hover(),
+                        );
+                        let badge = egui::Rect::from_center_size(
+                            slot.center(),
+                            theme::country_badge::ROW_SIZE.into(),
+                        );
+                        widgets::country_badge(
+                            ui,
+                            badge,
+                            code,
+                            state.config.interface.show_country_flags,
+                            false,
+                        );
+                        response.on_hover_text(code);
+                    } else {
+                        icons::icon_badge_colored(ui, Icon::Globe, theme::space::XXL, theme::EXIT);
+                    }
                     let width = (ui.available_width() - RIGHT_WIDTH).max(100.0);
                     ui.allocate_ui_with_layout(
                         egui::vec2(width, 40.0),
@@ -625,7 +656,7 @@ mod tests {
 
     fn state() -> State {
         let mut config = config(
-            &[("nl", "NL One"), ("plain", "Plain")],
+            &[("nl", "🇳🇱 One"), ("plain", "Plain")],
             vec![
                 exit("1", ExitTarget::Country(country("NL"))),
                 node_exit("2", "nl", Some(country("NL"))),
@@ -707,11 +738,11 @@ mod tests {
         let netherlands = i18n::country_name(&country("NL"));
         for (expected, color) in [
             (
-                format!("{country_kind} · {}", tr!("exit-now", node = "NL One")),
+                format!("{country_kind} · {}", tr!("exit-now", node = "One")),
                 theme::palette().text_muted,
             ),
             (
-                format!("{node_kind} · {}", tr!("exit-now", node = "NL One")),
+                format!("{node_kind} · {}", tr!("exit-now", node = "One")),
                 theme::palette().text_muted,
             ),
             (
@@ -737,6 +768,30 @@ mod tests {
                     .any(|(text, found)| text == &expected && *found == color),
                 "{expected} in {texts:?}"
             );
+        }
+    }
+
+    #[test]
+    fn resolved_countries_use_the_shared_badge_in_both_modes() {
+        let mut state = state();
+        for flags in [true, false] {
+            state.config.interface.show_country_flags = flags;
+            let ctx = egui::Context::default();
+            theme::apply(&ctx);
+            let mut output = ctx.run_ui(input(960.0, 640.0), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| show(ui, &state, &mut Vec::new()));
+            });
+            output.textures_delta.clear();
+            let badges = output.shapes.iter().filter(|shape| {
+                matches!(&shape.shape, egui::Shape::Rect(badge)
+                    if badge.rect.size() == theme::country_badge::ROW_SIZE.into()
+                        && badge.stroke.color == theme::palette().border_strong
+                        && badge.brush.is_some() == flags)
+            });
+            assert_eq!(badges.count(), 3);
+            assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape,
+                egui::Shape::Text(text) if text.galley.text().contains("[NL]")
+            )));
         }
     }
 

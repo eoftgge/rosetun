@@ -293,6 +293,7 @@ pub(crate) enum Action {
     SetLanguage(LanguageSetting),
     SetAccent(AccentPreset),
     SetReduceMotion(bool),
+    SetShowCountryFlags(bool),
     /// How the main screen measures the delay.
     SetDelayMode(DelayMode),
     #[cfg(any(windows, target_os = "linux"))]
@@ -860,6 +861,7 @@ impl State {
             | Action::SetLanguage(_)
             | Action::SetAccent(_)
             | Action::SetReduceMotion(_)
+            | Action::SetShowCountryFlags(_)
             | Action::SetDelayMode(_)
             | Action::SetConnectOnStart(_)
             | Action::SetAutoReconnect(_)

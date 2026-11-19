@@ -9,6 +9,12 @@ pub(crate) const BRAND_FONT: &str = "brand";
 pub(crate) const UI_SEMIBOLD: &str = "ui-semibold";
 const EMOJI_FONT: &str = "noto-color-emoji";
 
+pub(crate) mod country_badge {
+    /// Common footprint for a flag and its country code.
+    pub(crate) const ROW_SIZE: [f32; 2] = [28.0, 20.0];
+    pub(crate) const SERVER_SIZE: [f32; 2] = [36.0, 26.0];
+}
+
 fn fonts() -> egui::FontDefinitions {
     let mut fonts = egui::FontDefinitions::default();
     fonts.font_data.insert(
@@ -669,6 +675,10 @@ mod tests {
             for surface in [palette.card, palette.panel] {
                 let dim = contrast(palette.text_dim, surface);
                 assert!(dim >= 4.5, "dim text {dim:.2} in {palette:?}");
+            }
+            for text in [palette.text_muted, palette.accent_light] {
+                let badge = contrast(text, palette.border);
+                assert!(badge >= 4.5, "country badge text {badge:.2} in {palette:?}");
             }
         }
     }

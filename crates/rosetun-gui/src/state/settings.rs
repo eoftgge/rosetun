@@ -122,6 +122,7 @@ fn waits_for_save(action: &Action) -> bool {
         | Action::SetLanguage(_)
         | Action::SetAccent(_)
         | Action::SetReduceMotion(_)
+        | Action::SetShowCountryFlags(_)
         | Action::SetDelayMode(_)
         | Action::SetConnectOnStart(_)
         | Action::SetAutoReconnect(_)
@@ -559,6 +560,12 @@ impl State {
             Action::SetReduceMotion(enabled) => {
                 if self.can_edit_settings() && self.config.interface.reduce_motion != enabled {
                     return self.start_settings(Job::Setting(SettingChange::ReduceMotion(enabled)));
+                }
+            }
+            Action::SetShowCountryFlags(enabled) => {
+                if self.can_edit_settings() && self.config.interface.show_country_flags != enabled {
+                    return self
+                        .start_settings(Job::Setting(SettingChange::ShowCountryFlags(enabled)));
                 }
             }
             Action::SetDelayMode(mode) => {

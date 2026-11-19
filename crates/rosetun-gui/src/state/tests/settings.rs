@@ -379,6 +379,29 @@ fn reduce_motion_setting_uses_a_settings_job_and_saved_value() {
 }
 
 #[test]
+fn country_flag_setting_saves_the_choice_through_the_settings_job() {
+    let mut state = State::default();
+    assert!(state.act(Action::SetShowCountryFlags(false)).is_none());
+    state.config_ready = true;
+    assert!(state.act(Action::SetShowCountryFlags(true)).is_none());
+    assert!(matches!(
+        state.act(Action::SetShowCountryFlags(false)),
+        Some(Job::Setting(SettingChange::ShowCountryFlags(false)))
+    ));
+    state.reduce(WorkerEvent::Setting(
+        SettingChange::ShowCountryFlags(false),
+        Ok(()),
+    ));
+    let mut config = state.config.clone();
+    config.interface.show_country_flags = false;
+    state.reduce(WorkerEvent::Config {
+        generation: 1,
+        config,
+    });
+    assert!(state.act(Action::SetShowCountryFlags(false)).is_none());
+}
+
+#[test]
 fn connection_settings_jobs_respect_busy_state_and_saved_values() {
     let mut state = State {
         config_ready: true,

@@ -28,12 +28,13 @@ Comment:
 
 Files: usr/lib/rosetun/rosetun-gui
 Copyright: Rosetun contributors
-License: GPL-3+ and OFL-1.1
+License: GPL-3+ and OFL-1.1 and MIT
 Comment:
  The GUI embeds Manrope, Cormorant Garamond and Noto Color Emoji under OFL-1.1.
  See licenses/OFL-Manrope.txt, licenses/OFL-CormorantGaramond.txt and
- licenses/OFL-NotoColorEmoji.txt. Like the helper and the CLI, it is built
- with Rust crates under the licences in licenses/third-party.html.
+ licenses/OFL-NotoColorEmoji.txt. The flag artwork is from flag-icons by
+ Panayiotis Lipiridis under the MIT License. Like the helper and the CLI,
+ the GUI is built with Rust crates under the licences in licenses/third-party.html.
 
 License: GPL-3+
  This program is free software: you can redistribute it and/or modify it under
@@ -52,3 +53,7 @@ License: OFL-1.1
  The complete text of the SIL Open Font License 1.1 is in
  /usr/share/doc/rosetun/licenses/OFL-Manrope.txt, OFL-CormorantGaramond.txt
  and OFL-NotoColorEmoji.txt.
+
+License: MIT
+ The flag artwork's MIT license is in
+ /usr/share/doc/rosetun/licenses/MIT-flag-icons.txt.

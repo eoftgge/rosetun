@@ -327,22 +327,17 @@ pub(super) fn server_row(
     let mut name_left = rect.left() + ROW_PADDING;
     if columns.flags {
         if let Some(code) = code {
+            let size = egui::Vec2::from(theme::country_badge::ROW_SIZE);
             let badge = egui::Rect::from_min_size(
-                egui::pos2(name_left, rect.center().y - 10.0),
-                egui::vec2(28.0, 20.0),
+                egui::pos2(name_left, rect.center().y - size.y / 2.0),
+                size,
             );
-            painter.rect_stroke(
+            widgets::country_badge(
+                ui,
                 badge,
-                theme::RADIUS_INNER,
-                Stroke::new(theme::stroke::HAIRLINE, theme::palette().border_strong),
-                egui::StrokeKind::Inside,
-            );
-            painter.text(
-                badge.center(),
-                egui::Align2::CENTER_CENTER,
-                code,
-                theme::font::mono_small(),
-                theme::palette().text_muted,
+                &code,
+                state.config.interface.show_country_flags,
+                false,
             );
         }
         name_left += FLAG_WIDTH;

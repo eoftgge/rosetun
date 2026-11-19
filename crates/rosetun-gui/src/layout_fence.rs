@@ -63,7 +63,7 @@ struct Allowed {
     reason: &'static str,
 }
 
-const ALLOWED: [Allowed; 7] = [
+const ALLOWED: [Allowed; 8] = [
     Allowed {
         file: "view/settings.rs",
         call: "set_min_width(",
@@ -112,6 +112,13 @@ const ALLOWED: [Allowed; 7] = [
         function: None,
         arguments: Some("232.0"),
         reason: "the width of a tile of the traffic summary, not a dialog",
+    },
+    Allowed {
+        file: "widgets/country_badge.rs",
+        call: NAMED_GAP,
+        function: None,
+        arguments: Some("FLAG_PADDING=3"),
+        reason: "repeated edge pixels in the bundled texture, independent of widget layout",
     },
 ];
 

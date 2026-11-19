@@ -53,7 +53,7 @@ use serde_json::{Map, Value};
 
 /// Bump for every serialized format change, including defaulted fields older releases drop on save.
 /// Add a Value migration and a new fixture; never edit fixtures of released formats.
-pub const CONFIG_VERSION: u32 = 9;
+pub const CONFIG_VERSION: u32 = 10;
 
 pub const EXIT_TRACE_IP: &str = "1.1.1.1";
 pub const EXIT_TRACE_PORT: u16 = 443;
@@ -182,6 +182,8 @@ pub struct InterfaceSettings {
     pub language: LanguageSetting,
     #[serde(default)]
     pub reduce_motion: bool,
+    #[serde(default = "default_true")]
+    pub show_country_flags: bool,
     /// Format 7 field; a preset this release does not know reads as rose.
     #[serde(default, deserialize_with = "known_accent")]
     pub accent: AccentPreset,
@@ -251,6 +253,7 @@ impl Default for InterfaceSettings {
             newest_release: None,
             language: LanguageSetting::System,
             reduce_motion: false,
+            show_country_flags: true,
             accent: AccentPreset::Rose,
             recent_servers: Vec::new(),
             notifications: true,
@@ -403,6 +406,7 @@ pub fn from_json(bytes: &[u8]) -> Result<(AppConfig, Option<u32>), FormatError> 
             6 => migrate_6_to_7(config),
             7 => migrate_7_to_8(config),
             8 => migrate_8_to_9(config),
+            9 => migrate_9_to_10(config),
             _ => return Err(FormatError::UnexpectedValue),
         }
         version += 1;
@@ -416,6 +420,10 @@ pub fn from_json(bytes: &[u8]) -> Result<(AppConfig, Option<u32>), FormatError> 
         config,
         (original_version < CONFIG_VERSION).then_some(original_version),
     ))
+}
+
+fn migrate_9_to_10(_config: &mut Map<String, Value>) {
+    // The new country flag preference is supplied by the serde default.
 }
 
 fn migrate_8_to_9(_config: &mut Map<String, Value>) {

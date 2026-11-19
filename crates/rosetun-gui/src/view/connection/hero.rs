@@ -1094,7 +1094,8 @@ fn server_button(ui: &mut egui::Ui, state: &State) -> bool {
         .show(ui, |ui| {
             ui.set_min_width(width - 2.0 * theme::space::M);
             ui.horizontal(|ui| {
-                let badge_height = 26.0;
+                let badge_size = egui::Vec2::from(theme::country_badge::SERVER_SIZE);
+                let badge_height = badge_size.y;
                 let name_font = theme::font::title();
                 let badge = country
                     .map(|code| (code, true))
@@ -1102,33 +1103,17 @@ fn server_button(ui: &mut egui::Ui, state: &State) -> bool {
                 let block_height =
                     badge_height + 2.0 + ui.text_style_height(&egui::TextStyle::Small);
                 if let Some((code, verified)) = badge {
-                    let (area, _) = ui
-                        .allocate_exact_size(egui::vec2(36.0, block_height), egui::Sense::hover());
-                    let rect =
-                        egui::Rect::from_center_size(area.center(), egui::vec2(36.0, badge_height));
-                    ui.painter().rect_stroke(
-                        rect,
-                        theme::RADIUS_INNER,
-                        egui::Stroke::new(
-                            theme::stroke::HAIRLINE,
-                            if verified {
-                                theme::palette().accent_dark
-                            } else {
-                                theme::palette().border_strong
-                            },
-                        ),
-                        egui::StrokeKind::Inside,
+                    let (area, badge_response) = ui.allocate_exact_size(
+                        egui::vec2(badge_size.x, block_height),
+                        egui::Sense::hover(),
                     );
-                    ui.painter().text(
-                        rect.center(),
-                        egui::Align2::CENTER_CENTER,
+                    badge_response.on_hover_text(code);
+                    widgets::country_badge(
+                        ui,
+                        egui::Rect::from_center_size(area.center(), badge_size),
                         code,
-                        theme::font::mono_small(),
-                        if verified {
-                            theme::palette().accent_light
-                        } else {
-                            theme::palette().text_muted
-                        },
+                        state.config.interface.show_country_flags,
+                        verified,
                     );
                 }
                 let text_width = (ui.available_width() - 100.0).max(0.0);

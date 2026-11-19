@@ -114,6 +114,18 @@ fn general(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                 );
             });
         });
+        card.row(tr!("country-markers"), None, |ui| {
+            if let Some(show) = widgets::segmented(
+                ui,
+                "country_markers",
+                state.config.interface.show_country_flags,
+                &[(true, tr!("country-flags")), (false, tr!("country-codes"))],
+                false,
+                state.can_edit_settings(),
+            ) {
+                actions.push(Action::SetShowCountryFlags(show));
+            }
+        });
         let mut reduce_motion = state.config.interface.reduce_motion;
         if card
             .toggle(
@@ -2263,6 +2275,30 @@ mod pending_notice_tests {
                         - top_of(&shown, &tr!("allow-lan"))
                         + theme::space::L;
                     assert!(lan <= limit, "{language:?} {size:?}: {lan} > {limit}");
+                }
+            });
+        }
+    }
+
+    #[test]
+    fn country_display_options_fit_in_both_interface_languages() {
+        for language in LANGUAGES {
+            i18n::in_language(language, || {
+                for (size, _) in WINDOWS {
+                    let state = connected(ConnectionState::Disconnected);
+                    let mut screen = TestScreen::new(size);
+                    let shown = screen.settle(|ui| general(ui, &state, &mut Vec::new()));
+                    for label in [
+                        tr!("country-markers"),
+                        tr!("country-flags"),
+                        tr!("country-codes"),
+                    ] {
+                        let (_, rect) = shown.iter().find(|(text, _)| *text == label).unwrap();
+                        assert!(
+                            rect.left() >= 0.0 && rect.right() <= size.x,
+                            "{label}: {rect:?}"
+                        );
+                    }
                 }
             });
         }
