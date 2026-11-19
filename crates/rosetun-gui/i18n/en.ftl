@@ -1378,5 +1378,6 @@ error-exit-limit = too many exits for one connection
 
 exit-via = Connect through
 exit-via-direct = Directly
+exit-via-tls-fragmentation = To connect through another exit, turn off TLS fragmentation.
 exit-path-unsupported = This connection path is unavailable. Choose another exit or server.
 exit-used-by = Used by: { $names }. Change their connection path first.

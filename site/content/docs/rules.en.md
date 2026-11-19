@@ -51,7 +51,7 @@ Limits:
 - A missing exit, an unreachable proxy, wrong credentials or a failed HTTPS handshake never switches to a shorter path. After a changed subscription, a country fallback or a different mode, the service checks the path again.
 - B's delay measures the whole path A → B. The exit IP on the connection screen describes the main route, not B's public address.
 
-**Connect through** can be empty. The editor then says "Only HTTP and SOCKS5 proxies connect through another exit". That happens when the exit being edited is not an HTTP, HTTPS or SOCKS5 proxy, when no exit is chosen yet, when there is no other exit, when TLS fragmentation is on, or when every other exit would make a path that is not supported, such as a third hop or a cycle. Choose another exit or server if the editor says that the path is unavailable.
+**Connect through** appears when at least one other exit can be used. If TLS fragmentation is the only obstacle, the editor prompts you to turn it off. If an existing path becomes unavailable, you can choose **Directly**.
 
 ## Export and import {#exchange}
 

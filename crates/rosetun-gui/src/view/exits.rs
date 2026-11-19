@@ -427,13 +427,26 @@ fn node_picker(ui: &mut egui::Ui, dialog: &mut ExitDialog, config: &AppConfig, b
 fn via_picker(ui: &mut egui::Ui, dialog: &mut ExitDialog, config: &AppConfig, busy: bool) {
     let candidates = dialog.via_candidates(config).to_vec();
     if candidates.is_empty() {
-        if dialog.via.is_some() {
+        let fragment_blocked = dialog.via_blocked_by_tls_fragmentation();
+        if fragment_blocked || dialog.via.is_some() {
             ui.add_space(theme::space::M);
-            note(ui, tr!("exit-path-unsupported"), theme::WARNING);
-            if widgets::outline_button_compact(ui, &tr!("exit-via-direct"), !busy).clicked() {
-                dialog.via = None;
-                dialog.error = None;
-            }
+            let hint = if fragment_blocked {
+                tr!("exit-via-tls-fragmentation")
+            } else {
+                tr!("exit-path-unsupported")
+            };
+            let color = if dialog.via.is_some() {
+                theme::WARNING
+            } else {
+                theme::palette().text_dim
+            };
+            note(ui, hint, color);
+        }
+        if dialog.via.is_some()
+            && widgets::outline_button_compact(ui, &tr!("exit-via-direct"), !busy).clicked()
+        {
+            dialog.via = None;
+            dialog.error = None;
         }
         return;
     }
@@ -765,13 +778,17 @@ mod tests {
     fn via_picker_requires_a_supported_server_and_parent() {
         use crate::test_ui::TestScreen;
 
-        for (proxy, address, parent, expected) in [
+        for ((proxy, address, parent, expected), fragmented) in [
             (false, "192.0.2.10", true, false),
             (true, "proxy.example.com", true, false),
             (true, "192.0.2.10", false, false),
             (true, "192.0.2.10", true, true),
-        ] {
+        ]
+        .into_iter()
+        .flat_map(|case| [(case, false), (case, true)])
+        {
             let mut state = state();
+            state.config.settings.tls_fragment.enabled = fragmented;
             state.config.exits.truncate(usize::from(parent));
             let first = &mut state.config.subscriptions[0].nodes[0];
             first.outbound = rosetun_config::Outbound::Socks5(Default::default());
@@ -789,8 +806,15 @@ mod tests {
             let texts = screen.settle(|ui| via_picker(ui, dialog, &state.config, false));
             assert_eq!(
                 texts.iter().any(|(text, _)| text == &tr!("exit-via")),
-                expected,
-                "{proxy} {address} {parent}",
+                expected && !fragmented,
+                "{proxy} {address} {parent} {fragmented}",
+            );
+            assert_eq!(
+                texts
+                    .iter()
+                    .any(|(text, _)| text == &tr!("exit-via-tls-fragmentation")),
+                expected && fragmented,
+                "{proxy} {address} {parent} {fragmented}",
             );
         }
     }

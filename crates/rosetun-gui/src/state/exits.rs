@@ -38,6 +38,7 @@ struct ViaCandidates {
     target: ExitTarget,
     editing: Option<ExitId>,
     exits: Vec<ExitId>,
+    blocked_by_tls_fragmentation: bool,
 }
 
 impl ExitDialog {
@@ -106,6 +107,7 @@ impl ExitDialog {
     /// empty until a target is chosen.
     pub(crate) fn via_candidates(&mut self, config: &AppConfig) -> &[ExitId] {
         let Some(target) = self.target() else {
+            self.via_candidates = None;
             return &[];
         };
         let fresh = self
@@ -113,28 +115,45 @@ impl ExitDialog {
             .as_ref()
             .is_some_and(|cached| cached.target == target && cached.editing == self.editing);
         if !fresh {
-            let exits = config
+            let supports_path = |config: &AppConfig, parent: &Exit| {
+                crate::destinations::exit_path_supported(
+                    config,
+                    self.editing.as_ref(),
+                    &target,
+                    Some(&parent.id),
+                )
+            };
+            let exits: Vec<_> = config
                 .exits
                 .iter()
-                .filter(|parent| {
-                    crate::destinations::exit_path_supported(
-                        config,
-                        self.editing.as_ref(),
-                        &target,
-                        Some(&parent.id),
-                    )
-                })
+                .filter(|parent| supports_path(config, parent))
                 .map(|parent| parent.id.clone())
                 .collect();
+            let blocked_by_tls_fragmentation =
+                exits.is_empty() && config.settings.tls_fragment.enabled && {
+                    let mut probe = config.clone();
+                    probe.settings.tls_fragment.enabled = false;
+                    probe
+                        .exits
+                        .iter()
+                        .any(|parent| supports_path(&probe, parent))
+                };
             self.via_candidates = Some(ViaCandidates {
                 target,
                 editing: self.editing.clone(),
                 exits,
+                blocked_by_tls_fragmentation,
             });
         }
         self.via_candidates
             .as_ref()
             .map_or(&[], |cached| cached.exits.as_slice())
+    }
+
+    pub(crate) fn via_blocked_by_tls_fragmentation(&self) -> bool {
+        self.via_candidates
+            .as_ref()
+            .is_some_and(|cached| cached.blocked_by_tls_fragmentation)
     }
 
     /// Whether Save is allowed; `full` is `destinations::exits_full`.
