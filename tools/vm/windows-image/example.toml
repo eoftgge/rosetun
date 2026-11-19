@@ -55,3 +55,10 @@ output_directory = "/srv/rosetun-images/windows-11-26h2-pro-v1"
 network = "restricted"
 press_any_key_seconds = 60
 timeout_minutes = 180
+# After the first logon the build boots the disk a second time and waits until the guest is at rest:
+# the mean CPU of each one-minute window stays below calm_cpu_percent for calm_quiet_minutes windows in a
+# row. The runs start from copies of the image, so work the system defers to its next boot has to be
+# finished inside the image. Past calm_limit_minutes the build is refused with the busiest processes.
+calm_cpu_percent = 5.0
+calm_quiet_minutes = 3
+calm_limit_minutes = 45

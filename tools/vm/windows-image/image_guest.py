@@ -5,13 +5,16 @@ these do only what the build needs: press a key, ping the agent, run one program
 """
 
 import base64
+import csv
 import json
+import re
 import time
 
 QGA_DELIMITER = b'\xff'
 # `guest-exec` is CreateProcess without a shell. Output is read as bytes and decoded as the console
 # code page of an en-US guest, which agrees with ASCII for what typeperf prints.
 TYPEPERF = 'C:\\Windows\\System32\\typeperf.exe'
+TOP_PROCESSES = 8
 
 
 class GuestError(RuntimeError):
@@ -136,10 +139,13 @@ class Qga:
         self.sync()
         self.call('guest-ping')
 
-    def run(self, path, arguments, *, timeout=300, poll=1.0, clock=time.monotonic, sleep=time.sleep):
-        """Run one program and return (exit code, stdout bytes)."""
-        pid = self.call('guest-exec', {'path': path, 'arg': list(arguments),
-                                       'capture-output': True})['pid']
+    def start(self, path, arguments):
+        """Start one program without waiting for it; returns its process id for `wait`."""
+        return self.call('guest-exec', {'path': path, 'arg': list(arguments),
+                                        'capture-output': True})['pid']
+
+    def wait(self, pid, *, timeout=300, poll=1.0, clock=time.monotonic, sleep=time.sleep):
+        """Wait for a program started with `start`; returns (exit code, stdout bytes)."""
         deadline = clock() + timeout
         while clock() < deadline:
             status = self.call('guest-exec-status', {'pid': pid})
@@ -148,6 +154,21 @@ class Qga:
                 return status.get('exitcode', -1), out
             sleep(poll)
         raise GuestError('guest program did not finish in time')
+
+    def run(self, path, arguments, *, timeout=300, poll=1.0, clock=time.monotonic, sleep=time.sleep):
+        """Run one program and return (exit code, stdout bytes)."""
+        return self.wait(self.start(path, arguments), timeout=timeout, poll=poll, clock=clock, sleep=sleep)
+
+    def fire(self, command, arguments=None):
+        """Send a command and do not wait for an answer.
+
+        `guest-shutdown` has no reply by design: the agent goes down with the guest, and the channel
+        closes. Waiting for an answer would turn the expected end of the connection into an error.
+        """
+        request = {'execute': command}
+        if arguments is not None:
+            request['arguments'] = arguments
+        self._out.sendall(json.dumps(request).encode('ascii') + b'\n')
 
     def read_file(self, path, limit=1024 * 1024):
         handle = self.call('guest-file-open', {'path': path, 'mode': 'r'})
@@ -203,6 +224,57 @@ def average_cpu_percent(output):
     if not values:
         raise GuestError('no typeperf samples')
     return sum(values) / len(values)
+
+
+def process_counter_arguments(samples):
+    return ['\\Process(*)\\% Processor Time', '-sc', str(samples), '-si', '1']
+
+
+def top_processes_from_csv(output, cpus, count=TOP_PROCESSES):
+    r"""The busiest processes in the CSV of `typeperf \Process(*)\% Processor Time`, as {'name', 'percent'}.
+
+    The process counter counts each logical processor as 100 %, so the mean of a column is divided by
+    the number of processors to read on the same scale as `\Processor(_Total)`. Instances of one
+    program (`svchost`, `svchost#1`) are added up; `_Total` and `Idle` are left out. The first sample
+    of a rate counter is empty or zero and is a sample like the others. Counter names are English: the
+    guest is en-US. Raises if the output has no samples.
+    """
+    rows = [row for row in csv.reader(output.decode('ascii', 'replace').splitlines()) if len(row) > 1]
+    if len(rows) < 2:
+        raise GuestError('no process counter samples')
+    header = rows[0]
+    # typeperf ends with a line of its own that contains a comma; a sample has one cell per counter.
+    samples = [row for row in rows[1:] if len(row) == len(header)]
+    if not samples:
+        raise GuestError('no process counter samples')
+    sums = {}
+    for column in range(1, len(header)):
+        found = re.search(r'\\Process\((.+)\)\\', header[column])
+        if found is None:
+            continue
+        name = re.sub(r'#\d+$', '', found.group(1))
+        if name.lower() in ('_total', 'idle'):
+            continue
+        values = []
+        for row in samples:
+            try:
+                values.append(float(row[column]))
+            except (IndexError, ValueError):
+                continue
+        if values:
+            sums[name] = sums.get(name, 0.0) + sum(values) / len(samples)
+    ranked = sorted(sums.items(), key=lambda item: item[1], reverse=True)[:count]
+    return [{'name': name, 'percent': round(total / cpus, 1)} for name, total in ranked]
+
+
+def top_processes(agent, samples, cpus, count=TOP_PROCESSES):
+    """Run the process counter for `samples` seconds and return the busiest processes."""
+    code, out = agent.run(TYPEPERF, process_counter_arguments(samples), timeout=samples + 60)
+    return top_processes_from_csv(out, cpus, count)
+
+
+def format_top_processes(processes):
+    return ', '.join(f"{entry['name']} {entry['percent']}%" for entry in processes) or 'none'
 
 
 def failed_steps(log_text):

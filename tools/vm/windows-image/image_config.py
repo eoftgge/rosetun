@@ -17,7 +17,8 @@ SECTIONS = {
     'vm': {'memory_mib', 'vcpus', 'disk_gib', 'mac', 'vnc_display'},
     'guest': {'identifier', 'hostname', 'username', 'language', 'edition_name', 'image_index',
               'empty_product_key_element'},
-    'build': {'output_directory', 'network', 'press_any_key_seconds', 'timeout_minutes'},
+    'build': {'output_directory', 'network', 'press_any_key_seconds', 'timeout_minutes',
+              'calm_cpu_percent', 'calm_quiet_minutes', 'calm_limit_minutes'},
 }
 REQUIRED = {
     'inputs': {'windows_iso', 'virtio_win_iso', 'virtio_win_version', 'virtio_win_sha256'},
@@ -31,7 +32,8 @@ DEFAULTS = {
     'vm': {'memory_mib': 4096, 'vcpus': 4, 'disk_gib': 64, 'mac': TEST_MAC, 'vnc_display': 0},
     'guest': {'hostname': 'ROSETUN-WIN', 'username': 'rosetun', 'language': 'en-US',
               'edition_name': '', 'image_index': 0, 'empty_product_key_element': False},
-    'build': {'network': 'restricted', 'press_any_key_seconds': 60, 'timeout_minutes': 180},
+    'build': {'network': 'restricted', 'press_any_key_seconds': 60, 'timeout_minutes': 180,
+              'calm_cpu_percent': 5.0, 'calm_quiet_minutes': 3, 'calm_limit_minutes': 45},
     'inputs': {'windows_iso_sha256': ''},
     # The Secure Boot firmware of the Linux distributions needs system management mode; the
     # firmware built by `build-ovmf.sh` does not.
@@ -90,6 +92,9 @@ class ImageConfig:
     network: str
     press_any_key_seconds: int
     timeout_minutes: int
+    calm_cpu_percent: float
+    calm_quiet_minutes: int
+    calm_limit_minutes: int
 
 
 def parse(data):
@@ -136,6 +141,15 @@ def parse(data):
     for name, (low, high) in ints.items():
         if type(values[name]) is not int or not low <= values[name] <= high:
             raise ConfigError(f'{name}: an integer from {low} to {high}')
+    calm = values['calm_cpu_percent']
+    if type(calm) not in (int, float) or not 0.5 <= calm <= 10:
+        raise ConfigError('calm_cpu_percent: a number from 0.5 to 10')
+    values['calm_cpu_percent'] = float(calm)
+    for name, (low, high) in {'calm_quiet_minutes': (1, 30), 'calm_limit_minutes': (5, 240)}.items():
+        if type(values[name]) is not int or not low <= values[name] <= high:
+            raise ConfigError(f'{name}: an integer from {low} to {high}')
+    if values['calm_limit_minutes'] <= values['calm_quiet_minutes']:
+        raise ConfigError('calm_limit_minutes: must be longer than calm_quiet_minutes')
     if values['network'] not in ('restricted', 'nat'):
         raise ConfigError("network: 'restricted' or 'nat'")
     if type(values['smm']) is not bool:

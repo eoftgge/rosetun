@@ -13,6 +13,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from unittest import mock
 import xml.etree.ElementTree as ET
 
 from .posix_only import controller_only
@@ -850,6 +851,420 @@ class BuildHelperTests(unittest.TestCase):
             data['inputs']['virtio_win_sha256'] = '0' * 64
             with self.assertRaisesRegex(build_image.BuildError, 'virtio-win'):
                 build_image.check_inputs(image_config.parse(data))
+
+
+class FirstLogonFixTests(unittest.TestCase):
+    CODE = '\n'.join(line for line in SCRIPT.splitlines() if not line.lstrip().startswith('#'))
+
+    def step(self, name):
+        found = re.search(rf"^Invoke-RosetunStep '{name}' '[^']+' \{{\n(.*?)^\}}", SCRIPT, re.M | re.S)
+        self.assertIsNotNone(found, name)
+        return found.group(1)
+
+    def test_a_package_that_is_already_installed_is_not_an_error_and_every_driver_has_its_own_line(self):
+        self.assertNotRegex(self.CODE, r'LASTEXITCODE -ne 0\) \{\s*throw "pnputil')
+        self.assertIn('/enum-drivers', self.CODE)
+        self.assertIn('Original Name:', self.CODE)
+        self.assertIn('0, 3010', self.CODE)
+        step = self.step('virtio-drivers')
+        for driver in ('viostor', 'NetKVM', 'vioserial'):
+            self.assertIn(f"'{driver}'", step)
+        self.assertIn('Install-RosetunDriverPackage', step)
+        # One driver never ends the loop: the failures are collected and reported once, after it.
+        loop = step[step.index('foreach'):step.index('if ($missing.Count')]
+        self.assertNotIn('throw', loop)
+        self.assertIn('not installed and not in the driver store', step)
+
+    def test_a_key_is_created_only_when_it_is_missing_and_a_value_is_read_back(self):
+        self.assertIsNone(re.search(r'New-Item\s[^\n]*-Force', self.CODE))
+        self.assertRegex(self.CODE, r'if \(Test-Path -LiteralPath \$Path\) \{\s*return')
+        self.assertIn('Get-ItemPropertyValue -Path $Path -Name $Name', self.CODE)
+        self.assertIn('reads back as', self.CODE)
+
+    def test_a_refused_scheduled_task_is_never_swallowed(self):
+        calls = [line for line in self.CODE.splitlines() if re.match(r'\s*(\$null = )?Disable-ScheduledTask', line)]
+        self.assertTrue(calls)
+        for line in calls:
+            self.assertIn('-ErrorAction Stop', line)
+        self.assertRegex(self.CODE, r'try \{\s*\$null = Disable-ScheduledTask ')
+        self.assertIn('/DISABLE', self.CODE)
+        for name in ('update-tasks-off', 'telemetry-tasks'):
+            step = self.step(name)
+            self.assertIn('throw', step)
+            self.assertIn('still enabled', step)
+
+    def test_a_protected_service_is_disabled_by_a_system_task_and_the_result_is_read_back(self):
+        step = self.step('delivery-optimization-off')
+        self.assertIn("Disable-RosetunService 'DoSvc' -ViaSystemTask", step)
+        self.assertIn("Set-RosetunServiceStartAsSystem 'WaaSMedicSvc'", self.step('windows-update-medic'))
+        self.assertIn('REG_DWORD /d 4', self.CODE)
+        self.assertIn('Confirm-RosetunServiceDisabled', self.CODE)
+        self.assertIn('is protected in this build', self.CODE)
+        for word in ('takeown', 'icacls', 'SetOwner', 'Set-Acl', 'SetAccessControl', 'SeTakeOwnership'):
+            self.assertNotIn(word.lower(), self.CODE.lower(), word)
+
+    def test_deferred_work_is_finished_with_documented_commands_that_spare_defender(self):
+        step = self.step('deferred-work-complete')
+        self.assertIn('/Cleanup-Image /StartComponentCleanup', step)
+        self.assertIn('executeQueuedItems', step)
+        for word in ('DisableRealtimeMonitoring', 'DisableAntiSpyware', 'Add-MpPreference', 'ExclusionPath',
+                     'WinDefend', 'Update-MpSignature'):
+            self.assertNotIn(word.lower(), self.CODE.lower(), word)
+        self.assertLess(SCRIPT.index("'deferred-work-complete'"), SCRIPT.index("Invoke-RosetunStep 'retrim'"))
+
+
+class CpuProcessTests(unittest.TestCase):
+    OUTPUT = (b'"(PDH-CSV 4.0)","\\\\H\\Process(Idle)\\% Processor Time","\\\\H\\Process(_Total)\\% Processor Time",'
+              b'"\\\\H\\Process(MsMpEng)\\% Processor Time","\\\\H\\Process(svchost)\\% Processor Time",'
+              b'"\\\\H\\Process(svchost#1)\\% Processor Time","\\\\H\\Process(System)\\% Processor Time"\r\n'
+              b'"11/18/2026 10:00:00.1","0","0","0","0","0","0"\r\n'
+              b'"11/18/2026 10:00:01.1","300","100","40","8","4","4"\r\n'
+              b'"11/18/2026 10:00:02.1","300","100","40","8","4"," "\r\n'
+              b'\r\nExiting, please wait...  The command completed successfully.\r\n')
+
+    def test_processes_are_added_by_program_scaled_to_the_whole_machine_and_ranked(self):
+        top = image_guest.top_processes_from_csv(self.OUTPUT, 4)
+        self.assertEqual(['MsMpEng', 'svchost', 'System'], [entry['name'] for entry in top])
+        # Three samples; MsMpEng 80/3 over four processors, svchost and svchost#1 together 24/3.
+        self.assertEqual([6.7, 2.0, 0.3], [entry['percent'] for entry in top])
+        self.assertEqual('MsMpEng 6.7%, svchost 2.0%, System 0.3%', image_guest.format_top_processes(top))
+        self.assertEqual(['MsMpEng'], [entry['name'] for entry in image_guest.top_processes_from_csv(
+            self.OUTPUT, 4, count=1)])
+
+    def test_output_without_samples_is_an_error(self):
+        with self.assertRaises(image_guest.GuestError):
+            image_guest.top_processes_from_csv(b'nothing here', 4)
+
+    def test_the_process_counter_is_asked_by_its_english_name(self):
+        self.assertEqual('\\Process(*)\\% Processor Time', image_guest.process_counter_arguments(60)[0])
+
+
+class NoReplyShutdownTests(SocketServing, unittest.TestCase):
+    def test_a_command_can_be_sent_without_waiting_for_an_answer(self):
+        host, guest = socket.socketpair()
+        self.addCleanup(host.close)
+        self.addCleanup(guest.close)
+        agent = image_guest.Qga(host, timeout=1)
+        agent.fire('guest-shutdown', {'mode': 'powerdown'})
+        self.assertEqual({'execute': 'guest-shutdown', 'arguments': {'mode': 'powerdown'}},
+                         json.loads(guest.recv(4096)))
+
+    def test_a_program_is_started_and_waited_for_in_two_steps(self):
+        answers = iter([{'return': {'pid': 7}}, {'return': {'exited': False}},
+                        {'return': {'exited': True, 'exitcode': 0,
+                                    'out-data': base64.b64encode(b'done').decode()}}])
+        sent = []
+
+        def handler(stream):
+            for line in self.lines(stream):
+                sent.append(json.loads(line)['execute'])
+                stream.sendall(json.dumps(next(answers)).encode() + b'\n')
+        agent = image_guest.Qga(self.serve(handler), timeout=5)
+        pid = agent.start('prog', ['a'])
+        self.assertEqual(7, pid)
+        self.assertEqual((0, b'done'), agent.wait(pid, poll=0))
+        self.assertEqual(['guest-exec', 'guest-exec-status', 'guest-exec-status'], sent)
+
+
+class CalmConfigTests(unittest.TestCase):
+    def test_the_calming_boot_has_defaults_and_the_example_states_them(self):
+        loaded = image_config.load(EXAMPLE)
+        self.assertEqual((5.0, 3, 45), (loaded.calm_cpu_percent, loaded.calm_quiet_minutes,
+                                         loaded.calm_limit_minutes))
+        data = image_config_data()
+        for key in ('calm_cpu_percent', 'calm_quiet_minutes', 'calm_limit_minutes'):
+            del data['build'][key]
+        parsed = image_config.parse(data)
+        self.assertEqual((5.0, 3, 45), (parsed.calm_cpu_percent, parsed.calm_quiet_minutes,
+                                         parsed.calm_limit_minutes))
+
+    def test_the_thresholds_are_checked(self):
+        for changes in ({'calm_cpu_percent': 0.1}, {'calm_cpu_percent': 12}, {'calm_cpu_percent': True},
+                        {'calm_quiet_minutes': 0}, {'calm_quiet_minutes': 2.5},
+                        {'calm_limit_minutes': 3}, {'calm_quiet_minutes': 10, 'calm_limit_minutes': 10}):
+            with self.assertRaises(image_config.ConfigError, msg=str(changes)):
+                config(**changes)
+        self.assertEqual(7.0, config(calm_cpu_percent=7).calm_cpu_percent)
+
+
+class FakeCalmWatch:
+    """What `wait_for_calm` needs of the watch: a check, and a failure that closes QEMU."""
+
+    def __init__(self):
+        self.checks = 0
+        self.failures = []
+
+    def check(self):
+        self.checks += 1
+
+    def failure(self, reason):
+        self.failures.append(reason)
+        return build_image.BuildError(reason)
+
+
+class CalmPhaseTests(unittest.TestCase):
+    def run_calm(self, means, **options):
+        """Feed `means` to `wait_for_calm`; an exception in the list is raised by the sample."""
+        now = [0.0]
+        queue = list(means)
+        events = []
+
+        def sample():
+            now[0] += 60
+            value = queue.pop(0) if len(queue) > 1 else queue[0]
+            if isinstance(value, Exception):
+                raise value
+            return value
+        watch = FakeCalmWatch()
+        arguments = dict(threshold=5.0, windows=3, limit_seconds=45 * 60, clock=lambda: now[0],
+                         sleep=lambda seconds: now.__setitem__(0, now[0] + seconds),
+                         record=lambda **fields: events.append(fields))
+        arguments.update(options)
+        return watch, events, lambda: build_image.wait_for_calm(sample, watch, **arguments)
+
+    def test_rest_is_reached_after_the_required_quiet_windows_in_a_row(self):
+        watch, events, run = self.run_calm([30.0, 12.0, 4.0, 4.5, 3.2])
+        record = run()
+        self.assertEqual({'windows_taken': 5, 'quiet_windows': 3, 'last_mean_percent': 3.2,
+                          'seconds_to_rest': 300.0}, record)
+        self.assertEqual([0, 0, 1, 2, 3], [event['quiet_windows'] for event in events])
+        self.assertEqual([], watch.failures)
+        self.assertGreaterEqual(watch.checks, 5)
+
+    def test_one_busy_window_starts_the_count_again(self):
+        _, _, run = self.run_calm([4.0, 4.0, 9.0, 4.0, 4.0, 4.0])
+        self.assertEqual(6, run()['windows_taken'])
+
+    def test_a_window_exactly_at_the_threshold_is_not_quiet(self):
+        _, _, run = self.run_calm([5.0, 5.0, 5.0, 4.9, 4.9, 4.9])
+        self.assertEqual(6, run()['windows_taken'])
+
+    def test_a_window_that_could_not_be_taken_resets_the_count_and_the_wait_goes_on(self):
+        _, events, run = self.run_calm([4.0, 4.0, image_guest.GuestError('connection closed'), 4.0, 4.0, 4.0])
+        self.assertEqual(5, run()['windows_taken'])
+        self.assertEqual(['calm-sample', 'calm-sample', 'calm-sample-failed'],
+                         [event['stage'] for event in events[:3]])
+
+    def test_a_guest_that_never_rests_is_refused_with_the_last_mean_and_the_busiest_processes(self):
+        watch, _, run = self.run_calm([20.0], limit_seconds=600,
+                                      describe_top=lambda: 'TrustedInstaller 14.0%, msmpeng 3.1%')
+        with self.assertRaises(build_image.BuildError) as raised:
+            run()
+        message = str(raised.exception)
+        self.assertEqual([message], watch.failures)
+        self.assertIn('did not come to rest within 10 minutes', message)
+        self.assertIn('last mean 20.0 %', message)
+        self.assertIn('0 of 3 quiet windows below 5.0 %', message)
+        self.assertIn('TrustedInstaller 14.0%', message)
+
+    def test_a_guest_that_cannot_be_sampled_at_all_is_refused_too(self):
+        watch, _, run = self.run_calm([image_guest.GuestError('connection closed')], limit_seconds=120)
+        with self.assertRaisesRegex(build_image.BuildError, 'last mean none'):
+            run()
+        self.assertEqual(1, len(watch.failures))
+
+    def test_a_machine_that_has_failed_ends_the_wait_at_once(self):
+        watch = FakeCalmWatch()
+
+        def check():
+            raise build_image.BuildError('the guest is in state internal-error')
+        watch.check = check
+        with self.assertRaisesRegex(build_image.BuildError, 'internal-error'):
+            build_image.wait_for_calm(lambda: 1.0, watch, threshold=5.0, windows=1, limit_seconds=60)
+
+    def test_the_calming_screen_never_stalls_by_itself(self):
+        qemu = FakeQemu()
+        watch = build_image.GuestWatch(qemu, lambda: None, '.', 'no-such-log', screen_interval=120,
+                                       stall_seconds=None)
+        self.assertIsNone(watch.stall_seconds)
+
+    def test_the_descriptor_carries_the_calming_record(self):
+        record = {'last_mean_percent': 1.2, 'duration_seconds': 700.0}
+        with tempfile.TemporaryDirectory() as directory:
+            layout = image_plan.Layout(directory)
+            args = dict(uuid='u', windows_iso_sha256='a' * 64, disk_sha256='b' * 64, disk_size=1,
+                        vars_sha256='c' * 64, code_sha256='d' * 64, template_sha256='e' * 64,
+                        tpm_files={}, built_at='2026-11-19T00:00:00+00:00')
+            self.assertNotIn('calm', image_plan.descriptor(config(), layout, **args)['windows'])
+            self.assertEqual(record, image_plan.descriptor(config(), layout, calm=record, **args)['windows']['calm'])
+
+
+FIRST_LOGON_LOG = (b'2026-11-19T10:00:00Z start\r\n2026-11-19T10:00:01Z OK   a: why\r\n'
+                   b'2026-11-19T10:00:02Z done, failed steps: 0\r\n')
+TYPEPERF_CPU = b'"(PDH-CSV 4.0)","\\\\H\\Processor(_Total)\\% Processor Time"\r\n"t","1.0"\r\n"t","3.0"\r\n'
+TYPEPERF_PROCESSES = (b'"(PDH-CSV 4.0)","\\\\H\\Process(Idle)\\% Processor Time","\\\\H\\Process(msmpeng)\\% Processor Time"\r\n'
+                      b'"t","0","0"\r\n"t","390","8"\r\n')
+
+
+class FakeMeasureAgent:
+    def __init__(self, shutdown_error=None):
+        self.shutdown_error = shutdown_error
+        self.sent = []
+        self.programs = {}
+
+    def sync(self):
+        pass
+
+    def start(self, path, arguments):
+        pid = len(self.programs) + 1
+        self.programs[pid] = TYPEPERF_PROCESSES if '\\Process(*)' in arguments[0] else TYPEPERF_CPU
+        return pid
+
+    def wait(self, pid, *, timeout=300, **_):
+        return 0, self.programs[pid]
+
+    def run(self, path, arguments, *, timeout=300):
+        code, out = {'Confirm-SecureBootUEFI': (0, b'True'),
+                     'Get-Tpm': (0, b'{"TpmPresent":true,"TpmReady":true}')}[arguments[-1].split()[0]]
+        return code, out
+
+    def read_file(self, path, limit=0):
+        return FIRST_LOGON_LOG
+
+    def fire(self, command, arguments=None):
+        self.sent.append(command)
+        if self.shutdown_error is not None:
+            raise self.shutdown_error
+
+
+class MeasureVerdictTests(unittest.TestCase):
+    def measure(self, agent, *, exits=True):
+        """Run `build_image.measure` over a built image in a temporary directory, with the processes faked."""
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        root = Path(directory.name)
+        data, _ = stand(directory.name)
+        data['build']['output_directory'] = str(root / 'image')
+        loaded = image_config.parse(data)
+        source = image_plan.Layout(loaded.output_directory)
+        Path(loaded.output_directory).mkdir()
+        Path(source.disk).write_bytes(b'disk')
+        Path(source.vars).write_bytes(b'vars')
+        Path(source.tpm_state).mkdir()
+        Path(source.tpm_state, image_plan.TPM_STATE_FILE).write_bytes(b'tpm')
+        Path(source.descriptor).write_text(json.dumps({
+            'identifier': 'windows-test', 'size_bytes': 4, 'sha256': image_plan.sha256_file(source.disk)[0],
+            'windows': {'devices': {'uuid_at_build': 'u'}}}), encoding='utf-8')
+        qemu = FakeQemu()
+        agent_fire = agent.fire
+
+        def fire(command, arguments=None):
+            # A powered-down guest takes QEMU with it, whether or not the channel answered.
+            qemu.exited = exits
+            return agent_fire(command, arguments)
+        agent.fire = fire
+        patches = [
+            mock.patch.object(build_image, 'run_checked'),
+            mock.patch.object(build_image, 'start', return_value=qemu),
+            mock.patch.object(build_image, 'wait_for_path'),
+            mock.patch.object(build_image, 'stop'),
+            mock.patch.object(build_image, 'unix_connection', return_value=lambda: io.BytesIO()),
+            mock.patch.object(build_image, 'GuestWatch', return_value=mock.Mock(check=lambda: None)),
+            mock.patch.object(build_image, 'open_agent', side_effect=lambda connect, timeout=30: (
+                mock.Mock(close=lambda: None), agent)),
+            mock.patch.object(image_guest, 'wait_for_agent', return_value=20.0),
+            mock.patch.object(build_image, 'MEASURE_SHUTDOWN_SECONDS', 0),
+        ]
+        for patch in patches:
+            patch.start()
+            self.addCleanup(patch.stop)
+        self.output_directory = loaded.output_directory
+        result = build_image.measure(loaded, settle=0, sleep=lambda seconds: None)
+        work = next(Path(loaded.output_directory).glob('measure-*'))
+        return result, json.loads((work / 'measure.json').read_text(encoding='utf-8')), work
+
+    def test_a_shutdown_that_is_never_answered_does_not_take_the_verdict_away(self):
+        agent = FakeMeasureAgent(shutdown_error=image_guest.GuestError('connection closed'))
+        result, stored, work = self.measure(agent)
+        self.assertEqual(['guest-shutdown'], agent.sent)
+        self.assertEqual('within the limits (UNQUALIFIED)', stored['verdict'])
+        self.assertEqual(result, stored)
+        self.assertIn('connection closed', stored['shutdown_error'])
+        self.assertTrue(stored['shutdown_clean'])
+        self.assertEqual(2.0, stored['cpu_percent'])
+        self.assertEqual([{'name': 'msmpeng', 'percent': 1.0}], stored['top_processes'])
+        self.assertEqual(FIRST_LOGON_LOG, (work / 'first-logon.log').read_bytes())
+
+    def test_a_channel_that_closes_while_the_command_is_sent_is_the_same_case(self):
+        _, stored, _ = self.measure(FakeMeasureAgent(shutdown_error=BrokenPipeError('closed')))
+        self.assertTrue(stored['verdict'].startswith('within the limits'))
+
+    def test_a_guest_that_does_not_go_down_is_a_stop_with_the_measurements_kept(self):
+        _, stored, _ = self.measure(FakeMeasureAgent(), exits=False)
+        self.assertFalse(stored['shutdown_clean'])
+        self.assertEqual('STOP: the guest did not shut down after the request', stored['verdict'])
+        self.assertEqual(2.0, stored['cpu_percent'])
+
+    def test_a_cpu_figure_over_the_limit_is_explained_by_the_process_list_in_the_same_file(self):
+        agent = FakeMeasureAgent()
+        original = agent.start
+
+        def start(path, arguments):
+            pid = original(path, arguments)
+            if '\\Processor(_Total)' in arguments[0]:
+                agent.programs[pid] = TYPEPERF_CPU.replace(b'"1.0"', b'"15.0"').replace(b'"3.0"', b'"17.0"')
+            return pid
+        agent.start = start
+        _, stored, _ = self.measure(agent)
+        self.assertEqual('STOP: CPU load at rest is at or above the limit', stored['verdict'])
+        self.assertEqual('msmpeng', stored['top_processes'][0]['name'])
+
+    def test_an_error_before_the_measurements_still_leaves_a_verdict(self):
+        agent = FakeMeasureAgent()
+        agent.read_file = lambda path, limit=0: (_ for _ in ()).throw(image_guest.GuestError('no log'))
+        with self.assertRaises(build_image.BuildError):
+            self.measure(agent)
+        stored = json.loads(next(Path(self.output_directory).glob('measure-*/measure.json')).read_text(encoding='utf-8'))
+        self.assertTrue(stored['verdict'].startswith('STOP: '))
+
+
+class CalmBootTests(unittest.TestCase):
+    def test_the_second_boot_waits_for_rest_saves_the_log_and_shuts_down_through_the_agent(self):
+        agent = FakeMeasureAgent()
+        qemu = FakeQemu()
+        qemu.returncode = 0
+        started = []
+        agent_fire = agent.fire
+
+        def fire(command, arguments=None):
+            qemu.exited = True
+            return agent_fire(command, arguments)
+        agent.fire = fire
+        agent.run = lambda path, arguments, *, timeout=300: (0, TYPEPERF_CPU)
+        with tempfile.TemporaryDirectory() as directory:
+            data, _ = stand(directory)
+            loaded = image_config.parse(data)
+            output = Path(directory) / 'image'
+            output.mkdir()
+            layout = image_plan.Layout(output)
+            Path(layout.qmp).write_bytes(b'stale')
+            patches = [
+                mock.patch.object(build_image, 'start', side_effect=lambda argv, log: started.append(argv) or qemu),
+                mock.patch.object(build_image, 'wait_for_path'),
+                mock.patch.object(build_image, 'stop'),
+                mock.patch.object(build_image, 'unix_connection', return_value=lambda: io.BytesIO()),
+                mock.patch.object(build_image, 'GuestWatch', return_value=mock.Mock(check=lambda: None)),
+                mock.patch.object(build_image, 'open_agent', side_effect=lambda connect, timeout=30: (
+                    mock.Mock(close=lambda: None), agent)),
+                mock.patch.object(image_guest, 'wait_for_agent', return_value=20.0),
+            ]
+            for patch in patches:
+                patch.start()
+                self.addCleanup(patch.stop)
+            record = build_image.calm(loaded, layout, output, 'u')
+            self.assertFalse(Path(layout.qmp).exists())
+            self.assertEqual(FIRST_LOGON_LOG, (output / 'first-logon.log').read_bytes())
+            events = [json.loads(line)['stage'] for line in Path(layout.events).read_text().splitlines()]
+        self.assertEqual(['calm-started', 'calm-agent-ready', 'calm-sample', 'calm-sample', 'calm-sample',
+                          'first-logon-log', 'calm-reached', 'calm-shut-down'], events)
+        self.assertEqual(['guest-shutdown'], agent.sent)
+        self.assertEqual((2.0, 3, 20.0), (record['last_mean_percent'], record['windows_taken'],
+                                          record['agent_ready_seconds']))
+        self.assertEqual((5.0, 3, 45), (record['cpu_limit_percent'], record['quiet_windows_required'],
+                                         record['limit_minutes']))
+        # The same machine as the install and the measurement, without the installation media.
+        self.assertEqual(2, len(started))
+        self.assertNotIn('answers', ' '.join(started[1]))
 
 
 if __name__ == '__main__':

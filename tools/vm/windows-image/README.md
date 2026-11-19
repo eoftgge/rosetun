@@ -1,10 +1,11 @@
 # Windows 11 guest image for the QEMU matrix
 
-Status: **UNRUN.** The generators, the command lines and the failure handling were written and
-checked offline (unit tests). The firmware (see "Firmware: Secure Boot without SMM") was built on the
-stand and started once to the Windows Setup screen, which is all that has been run. No image has
-been built and no Windows guest has been installed or measured with these files. The QEMU matrix
-stays exploratory: release gate false, security invariants UNVERIFIED.
+Status: **partly run, the newest changes UNRUN.** The generators, the command lines and the failure
+handling were written and checked offline (unit tests). The firmware (see "Firmware: Secure Boot
+without SMM") was built on the stand. One image was built and measured with an earlier state of these
+files (see "Measured on the stand"): it stopped at the measurement, and the calming boot, the
+first-logon fixes and the measurement changes written after that are UNRUN until the next build. The
+QEMU matrix stays exploratory: release gate false, security invariants UNVERIFIED.
 
 This directory prepares the guest image that the Windows matrices on QEMU will boot. It is not part
 of the controller in `../matrix/` and it does not run in a matrix run. It is the offline half of the
@@ -167,7 +168,8 @@ The tests are `../matrix/tests/test_windows_image.py`.
    answer media, creates the qcow2 disk, copies the firmware variables, starts `swtpm` and QEMU,
    presses a key through QMP while the Windows disc asks for one (the answer file cannot answer
    that), and then waits for the guest to shut itself down at the end of the first-logon script.
-   It then hashes the results and writes `image.json`. VNC is on `127.0.0.1:5900` plus
+   It then boots the same disk a second time and waits for the guest to come to rest (see "The
+   calming boot"), and only then hashes the results and writes `image.json`. VNC is on `127.0.0.1:5900` plus
    `vnc_display`, for diagnostics only. The build is an unattended install of about 30 to 90
    minutes; the first sign of trouble is a screen that does not change for ten minutes.
    The command takes a screenshot every two minutes into `screens/` of the build directory (the last
@@ -183,6 +185,36 @@ The tests are `../matrix/tests/test_windows_image.py`.
 4. `python3 build_image.py measure CONFIG` boots a copy of the image (an overlay, a copy of the
    firmware variables, a copy of the TPM state) and prints and stores `measure.json`.
 
+## The calming boot
+
+After the first-logon script has shut the guest down, the build starts the same disk again, with the
+same devices, firmware variables and TPM state and without the installation media, and waits for
+the guest agent. Then it polls the CPU the way `measure` does (`typeperf` on
+`\Processor(_Total)\% Processor Time`, 60 one-second samples, one window of about a minute) until the
+mean of `calm_quiet_minutes` windows in a row (default 3) is below `calm_cpu_percent` (default 5 %). A
+window at or above the threshold, or one that could not be taken (the guest restarts, the agent is
+silent for a moment), starts the count again. When it is reached the host copies the first-logon log
+out, asks the guest to power down through the agent and waits for QEMU to exit. The result is in
+`windows.calm` of `image.json`: the thresholds, the seconds the agent needed, the windows taken, the
+last mean and the length of the whole phase. Each window and each screenshot is a line of
+`build.jsonl`; the screenshots are in `calm/screens/` and are not checked for a stall (a guest that
+waits at the lock screen shows the same frame for as long as it takes; the limit below is the stop).
+
+**Why.** A matrix run always starts from a copy of the image, never from the disk the build left, so
+whatever the operating system defers to its next boot is done again by every run. On the stand the
+first boot after the build measured 11.2 % CPU at rest where a second boot of a copy measured about
+0.8 %, and the shutdown after the first logon had shown "Updates are underway" for about 35 minutes.
+The work has to end inside the image, once; the second boot is where it ends. The first-logon script
+also runs the documented servicing and .NET commands (`DISM /Online /Cleanup-Image
+/StartComponentCleanup`, `ngen executeQueuedItems`) to start it earlier; their exit codes are
+logged and are not failures, because the calming boot is what guarantees the result. Neither
+command touches Defender or the filtering platform, and nothing is downloaded.
+
+**The limit.** `calm_limit_minutes` (default 45) bounds the wait. Past it the build is refused with
+the last mean, the number of quiet windows reached and the busiest processes of a ten-second
+sample, a screenshot and the end of the QEMU log, and QEMU is told to quit; no `image.json` is
+written. The refusal is a finding about the guest, not a reason to raise the threshold.
+
 ## What is measured
 
 - Boot to the guest agent: the seconds from QEMU start until the agent answers `guest-ping`. The
@@ -190,13 +222,25 @@ The tests are `../matrix/tests/test_windows_image.py`.
   after the build.
 - CPU load at rest: the mean of `\Processor(_Total)\% Processor Time` over 60 one-second samples,
   starting 300 seconds after the agent became ready, taken with `typeperf` through `guest-exec`.
+  Over the same 60 seconds a second `typeperf` reads `\Process(*)\% Processor Time`, and the ten
+  busiest programs (instances of one program added up, `Idle` and `_Total` left out, scaled to the
+  whole machine like the first counter) go to `measure.json` as `top_processes`, so a figure over
+  the limit comes with its explanation. Both counters are asked by their English names: the guest
+  is en-US.
 - Secure Boot and the TPM as the guest reports them, through the agent: `Confirm-SecureBootUEFI`
   must say `True`, and `Get-Tpm` must show `TpmPresent` and `TpmReady` true. Both go to
   `measure.json`. The boot of the measurement is watched in the same way as the build.
 - Size of the image file and its SHA-256.
 - The first-logon log (`C:\ProgramData\rosetun-image\first-logon.log`) read back through the agent:
   every step is `OK` or `FAIL`, and the log ends with a `done` line. A missing `done` line or any
-  `FAIL` stops the stage.
+  `FAIL` stops the stage. The whole text is saved as `first-logon.log` in the measurement directory,
+  and, after the calming boot, in the build directory.
+- The shutdown. The measurements come first; then `guest-shutdown` is sent through the agent without
+  waiting for an answer (the agent goes down with the guest, so the channel closes and there is no
+  reply to wait for), and the command waits for QEMU to exit. An error at this point is written to
+  `measure.json` (`shutdown_error`) and does not remove the verdict; a guest that is still running
+  five minutes after the request is a stop (`shutdown_clean` is false). `measure.json` always
+  holds a `verdict`, also when the measurement itself ended with an error.
 - Not measured by this tool: the traffic of a resting guest on the lab wire. It needs the lab
   machine on the same wire as the test machine and a capture on the lab side for ten minutes of
   rest; the list of frames is the result. Nothing in this directory attaches a guest to the lab.
@@ -227,9 +271,11 @@ says on this build of Windows is what the resting capture decides.
 | `power-button-shutdown`, `no-idle-sleep` | power button action 3 (shut down); no idle standby, display or disk timeout | Microsoft Learn, powercfg command-line options |
 | `boot-recovery-off` | `bcdedit`: `recoveryenabled No`, `bootstatuspolicy ignoreallfailures` | Microsoft Learn, BCDEdit command-line options |
 | `automatic-maintenance-off` | `MaintenanceDisabled=1` | Microsoft Learn, Automatic Maintenance |
+| `virtio-drivers` | `pnputil /add-driver ... /install` for every `.inf` of `viostor`, `NetKVM` and `vioserial`, one log line each. PnPUtil returns Win32 error codes and its syntax page lists none: 0 and 3010 (`ERROR_SUCCESS_REBOOT_REQUIRED`, Win32 system error codes) are success, and for any other code (Setup has installed the package already: "Already exists in the system", "Added driver packages: 0") the answer is the driver store itself, `pnputil /enum-drivers` and its `Original Name`. The step fails only for a package that was neither added nor found, after every driver was tried | Microsoft Learn, PnPUtil command syntax and examples; System error codes (0-499 and 1700-3999) |
 | `device-encryption-off` | `PreventDeviceEncryption`; the setting is also in the answer file. A volume sealed to the TPM could not start from a copy of the image | Microsoft Learn, SecureStartup-FilterDriver `PreventDeviceEncryption` |
-| `windows-update-policy`, `-services`, `-medic`, `update-tasks-off` | `NoAutoUpdate=1`, `SetDisableUXWUAccess=1`, services `wuauserv` and `UsoSvc` disabled, `WaaSMedicSvc` disabled by a one-shot SYSTEM task, update scheduled tasks disabled | Microsoft Learn, Manage additional Windows Update settings |
-| `delivery-optimization-off` | `DODownloadMode=0`, `DoSvc` disabled | Microsoft Learn, Delivery Optimization reference |
+| `windows-update-policy`, `-services`, `-medic`, `update-tasks-off` | `NoAutoUpdate=1`, `SetDisableUXWUAccess=1`, services `wuauserv` and `UsoSvc` disabled, `WaaSMedicSvc` disabled by a one-shot SYSTEM task, update scheduled tasks disabled. A task the administrator may not disable is disabled by a one-shot SYSTEM task (`schtasks /Change /DISABLE`); a task still enabled after that fails the step, with the list. Nothing is swallowed | Microsoft Learn, Manage additional Windows Update settings |
+| `delivery-optimization-off` | `DODownloadMode=0`, `DoSvc` disabled. The service refuses `Set-Service` in build 26300 ("Access is denied"), so, as for `WaaSMedicSvc`, a one-shot task of the system account writes `Start=4` and the value is read back; if that is refused too the step fails with the reason, and the owner and ACL of the service key are not touched | Microsoft Learn, Delivery Optimization reference |
+| `deferred-work-complete` | `DISM /Online /Cleanup-Image /StartComponentCleanup` and `ngen executeQueuedItems` (64-bit and 32-bit), offline; exit codes logged, not a failure | Microsoft Learn, DISM image management and Ngen.exe |
 | `store-auto-update-off`, `edge-update-off` | Store `AutoDownload=2`; Edge updater services and policy, Edge background mode off | Microsoft Learn, Windows Store policies; Microsoft Edge update policies |
 | `telemetry-policy`, `-services`, `-tasks`, `error-reporting-off` | `AllowTelemetry=0`; `DiagTrack` and `dmwappushservice` disabled; appraiser and CEIP tasks off; error reporting off. On Pro, the value 0 is documented only for Enterprise, Education and Server, so the services are what actually stops the upload | Microsoft Learn, Configure Windows diagnostic data in your organization |
 | `defender-cloud-off` | Defender stays on; cloud protection and sample submission off by policy | Microsoft Learn, Microsoft Defender Antivirus cloud protection policies |
@@ -249,10 +295,68 @@ resting guest joins is a finding.
 
 The Microsoft pages were read for the settings of the answer file (image selection, driver paths,
 product key behaviour, `AutoLogon`, `HideOnlineAccountScreens`, `PreventDeviceEncryption`) and for
-the connectivity indicator and diagnostic data behaviour. The rest of the table is from knowledge
+the connectivity indicator and diagnostic data behaviour, and for the driver step the PnPUtil
+command syntax and examples pages (they list no return codes) and the Win32 system error codes pages
+(0 `ERROR_SUCCESS`, 3010 `ERROR_SUCCESS_REBOOT_REQUIRED`). The rest of the table is from knowledge
 of Windows and has not been checked line by line against the documentation of this release.
 
+Registry values are written by creating a key only when it is missing (no `New-Item -Force` on an
+existing key: that failed on `...\Control\BitLocker` with "Cannot delete a subkey tree because the
+subkey does not exist") and are read back; a value that does not read back is a failed step.
+
 ## Measured on the stand
+
+**Attempt 4 (the build of the earlier state of these files; 2026-11-19).** The build took about 100
+minutes in one attempt and the out-of-box experience stopped nowhere. The image boots with Secure
+Boot and the TPM, and the agent was ready after 62.7 s. The measurement was a stop:
+
+- CPU at rest 11.2 % (limit 10 %). A separate boot of a copy of the same image showed about 0.8 %
+  (`MsMpEng` 0.8, `System` 0.8). The shutdown after the first logon had shown "Updates are
+  underway" for about 35 minutes. Conclusion: the first boot after the build finishes work the
+  system deferred, and every run starts from a copy and would meet it again. That is what the
+  calming boot is for.
+- Three steps of `first-logon.log` failed: `virtio-drivers` (`pnputil` returned a non-zero code for a
+  package Setup had installed, the step threw and `NetKVM` and `vioserial` were not looked at),
+  `device-encryption-off` (the registry helper, above) and `delivery-optimization-off` (`Set-Service
+  DoSvc`: "Access is denied").
+- `Disable-ScheduledTask` was refused with PermissionDenied on the screen while `update-tasks-off`
+  and `telemetry-tasks` were logged `OK`: the refusal was swallowed.
+- `measure` asked the agent for `guest-shutdown` and waited for an answer that never comes; the
+  channel closed, the error was not caught and `measure.json` had no `verdict`, with all the
+  measurements in it.
+
+All four are addressed by the changes described above, and all of that is UNRUN until the next build.
+
+**Checked on a copy of that image (an overlay, the virtio-win disc attached; nothing was built).**
+
+- The new `first-logon.ps1` was run in the guest as the system account (the agent's account; not
+  the account Setup uses, and over steps that had already been applied once), without its last
+  line and without the new `deferred-work-complete` step. `virtio-drivers`: `pnputil` returned 259
+  for each of the three packages ("Driver package added successfully. (Already exists in the
+  system)", "Added driver packages: 0"), the store listing found each by its `Original Name`, and the
+  step was `OK` with one line per driver. `device-encryption-off`: `OK`, the value read back. The
+  `DoSvc` case reproduced even for the system account (`Set-Service`: "Access is denied"); the
+  one-shot task wrote `Start=4`, which read back, and the step was `OK`. `Disable-ScheduledTask`
+  answered "Element not found" for two tasks the folder listing had returned; the one-shot task
+  disabled them and they read back as `Disabled`. Two steps failed on the second run and were not
+  touched: `ipv6-transition-off` (`netsh 6to4`, exit code 1) and `retrim` (return code 40004), both
+  most likely because the settings were already applied or the volume was already trimmed; they
+  passed in the build. The run as an administrator of a temporary account (a scheduled task with its
+  password) was tried first and logged nothing in 45 minutes: that is a problem of the harness, not
+  a result.
+- `DISM /Online /Cleanup-Image /StartComponentCleanup` took 3 min 35 s and `ngen executeQueuedItems` 1 min 18 s
+  (64-bit) and 37 s (32-bit); all three exit code 0.
+- **The CPU at rest of a copy is not deferred work.** After the guest had been up for several
+  minutes, and again after the commands above, `\Processor(_Total)\% Processor Time` was 11 to 18 %,
+  of which `% Interrupt Time` was 11 to 13 % at 1 600 to 3 000 interrupts per second, and every
+  process together was under 3 % (`System`, `MsMpEng`, `svchost`, `qemu-ga`). The 0.8 % of the earlier
+  diagnostic boot did not reproduce. With the CPU of the image (`host,-vmx,-svm`) a calming boot
+  would therefore probably end in the refusal of the limit above, whatever the system finishes.
+  The same copy booted with Hyper-V enlightenments: `hv_relaxed,hv_vapic,hv_spinlocks=0x1fff,hv_time`
+  only: 6 to 13 %; with `hv_vpindex,hv_synic,hv_stimer` added: 1.3 to 2 % in steady state (7.5 % in
+  the first window after the agent), interrupts still 2 000 to 2 400 per second but at under 1 %
+  of the time. One boot each, nothing else changed. `image_plan.CPU` was not changed: the profile is
+  the owner's decision (see the last item of the known risks).
 
 - Without a key element Setup of the 26H2 disc stops on the product key page. With
   `empty_product_key_element = true` (an empty element, never a key) it goes on, copies the files and
@@ -290,8 +394,10 @@ of Windows and has not been checked line by line against the documentation of th
   wrote and the TPM's persistent state. A run must start from a copy of both, taken with the disk.
 - Discard is on for the disk and the script retrims the volume; whether the driver passes it
   through decides how small the file is.
-- Whether `-cpu host,-vmx,-svm` alone is fast enough, or the Hyper-V enlightenments of the run profile are
-  needed, is a measurement for the next stage, not decided here.
+- `-cpu host,-vmx,-svm` alone is not fast enough on the stand: the idle guest spends 11 to 13 % of its
+  time in interrupts (see "Measured on the stand"), and the Hyper-V enlightenments that cut it to about 2 %
+  change the profile of every run. Adding them is the owner's decision and not made here; until then the
+  CPU limit of the measurement and the calming boot are not expected to pass.
 
 ## Not done here
 

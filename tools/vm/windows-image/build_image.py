@@ -34,6 +34,13 @@ CPU_LIMIT_PERCENT = 10.0
 SETTLE_SECONDS = 300
 CPU_SAMPLES = 60
 AGENT_WAIT_SECONDS = 900
+# The first-logon log inside the guest; the host copies it out after the build and after a measurement.
+FIRST_LOGON_LOG = 'C:\\ProgramData\\rosetun-image\\first-logon.log'
+# A powered-down guest leaves QEMU after a few seconds; this is generous for one that is still finishing
+# its shutdown work.
+CALM_SHUTDOWN_SECONDS = 600
+MEASURE_SHUTDOWN_SECONDS = 300
+CALM_RETRY_SECONDS = 10
 # Run states that end a build at once: the machine will not shut down or answer by itself.
 FATAL_STATES = frozenset({'internal-error', 'guest-panicked', 'io-error', 'paused', 'watchdog'})
 LOG_TAIL_LINES = 20
@@ -96,7 +103,8 @@ class GuestWatch:
     QMP serves one client, so this is the only one that can take a screenshot while the build waits.
     With `screen_interval` it takes one at that interval into `screens/` of the directory (the last
     `keep` stay), reports each through `record(**fields)`, and fails with `screen-stalled` when the
-    frame has not changed for `stall_seconds`.
+    frame has not changed for `stall_seconds` (never, with `None`: a guest that waits for the end of the
+    calming phase shows the same lock screen for as long as it takes).
     """
 
     def __init__(self, qemu, connect, directory, log_path, *, screen_interval=None,
@@ -164,7 +172,7 @@ class GuestWatch:
             self.record(stage='screen', file=shot.name, sha256=digest)
         for old in sorted(screens.glob('screen-*.ppm'))[:-self.keep]:
             old.unlink(missing_ok=True)
-        if now - self.last_change >= self.stall_seconds:
+        if self.stall_seconds is not None and now - self.last_change >= self.stall_seconds:
             raise self.failure(f'screen-stalled: the screen did not change for '
                                f'{round(self.stall_seconds / 60)} minutes', qmp)
 
@@ -217,6 +225,165 @@ def sleep_watching(watch, seconds, *, interval=5, clock=time.monotonic, sleep=ti
     while clock() < deadline:
         watch.check()
         sleep(min(interval, max(0.0, deadline - clock())))
+
+
+def open_agent(connect, timeout=30):
+    """A synchronized agent client over a new connection; the caller closes the returned stream."""
+    stream = connect()
+    try:
+        agent = image_guest.Qga(stream, timeout=timeout)
+        agent.sync()
+    except BaseException:
+        stream.close()
+        raise
+    return stream, agent
+
+
+def shut_down_guest(connect):
+    """Ask the guest to power down through the agent, without waiting for an answer.
+
+    The agent goes down with the guest and the channel closes, so a closed channel is the expected
+    end of this one command and never an error of the caller's measurements.
+    """
+    stream, agent = open_agent(connect)
+    try:
+        agent.fire('guest-shutdown', {'mode': 'powerdown'})
+    finally:
+        stream.close()
+
+
+def save_first_logon_log(agent, directory, record=None):
+    """Copy the first-logon log out of the guest as it is; returns (failed steps, complete) or None."""
+    try:
+        data = agent.read_file(FIRST_LOGON_LOG)
+    except (OSError, image_guest.GuestError, ValueError) as error:
+        if record is not None:
+            record(stage='first-logon-log-unavailable', error=str(error))
+        return None
+    Path(directory, 'first-logon.log').write_bytes(data)
+    failed, complete = image_guest.failed_steps(data.decode('utf-8', 'replace'))
+    if record is not None:
+        record(stage='first-logon-log', complete=complete, failed=len(failed))
+    return failed, complete
+
+
+def wait_for_calm(sample, watch, *, threshold, windows, limit_seconds, describe_top=None, record=None,
+                  clock=time.monotonic, sleep=time.sleep, retry=CALM_RETRY_SECONDS):
+    """Poll the CPU of the guest until `windows` windows in a row are below `threshold` percent.
+
+    `sample()` returns the mean CPU percent of one window (a minute). A window at or above the
+    threshold, or one that could not be taken (the guest restarts, the agent is gone for a moment),
+    starts the count again. Past `limit_seconds` the guest is refused: the error names the last mean and,
+    through `describe_top()`, the busiest processes, and QEMU is closed by `watch.failure`.
+    Returns the record that goes to the descriptor.
+    """
+    started = clock()
+    quiet = taken = 0
+    last = None
+    while True:
+        watch.check()
+        elapsed = clock() - started
+        if elapsed > limit_seconds:
+            top = describe_top() if describe_top is not None else 'not collected'
+            last_text = 'none' if last is None else f'{last:.1f} %'
+            raise watch.failure(
+                f'the guest did not come to rest within {round(limit_seconds / 60)} minutes: '
+                f'{quiet} of {windows} quiet windows below {threshold} %, last mean {last_text}; '
+                f'busiest processes: {top}')
+        try:
+            mean = sample()
+        except (OSError, image_guest.GuestError, ValueError) as error:
+            quiet = 0
+            if record is not None:
+                record(stage='calm-sample-failed', error=str(error))
+            sleep(retry)
+            continue
+        taken += 1
+        last = mean
+        quiet = quiet + 1 if mean < threshold else 0
+        if record is not None:
+            record(stage='calm-sample', window=taken, cpu_percent=round(mean, 1), quiet_windows=quiet)
+        if quiet >= windows:
+            return {'windows_taken': taken, 'quiet_windows': quiet, 'last_mean_percent': round(mean, 1),
+                    'seconds_to_rest': round(clock() - started, 1)}
+
+
+def calm(config, layout, output, machine_uuid):
+    """Boot the finished disk once more and wait until the guest is at rest; then shut it down.
+
+    Runs start from copies of the image, so whatever the operating system defers to its next boot
+    (component servicing, queued native image generation, the first scans) would be done again by
+    every run. Doing it here, once, leaves the copies quiet. The same devices, firmware variables and
+    TPM state are used, without the installation media, and the screen is watched as in the build.
+    """
+    directory = Path(output) / 'calm'
+    directory.mkdir()
+    # The sockets of the first boot may still be on disk, and swtpm's would pass the wait for its own.
+    for stale in (layout.qmp, layout.qga, layout.tpm_socket):
+        Path(stale).unlink(missing_ok=True)
+    started = time.monotonic()
+    swtpm = qemu = None
+    try:
+        swtpm = start(image_plan.swtpm_argv(config, layout), directory / 'swtpm.out')
+        wait_for_path(layout.tpm_socket, 10, swtpm)
+        qemu = start(image_plan.qemu_argv(config, layout, machine_uuid, install=False),
+                     directory / 'qemu.log')
+        event(layout, stage='calm-started')
+
+        def record(**fields):
+            event(layout, **fields)
+
+        watch = GuestWatch(qemu, unix_connection(layout.qmp), directory, directory / 'qemu.log',
+                           screen_interval=SCREEN_INTERVAL_SECONDS, stall_seconds=None, record=record)
+        connect = unix_connection(layout.qga)
+        ready = image_guest.wait_for_agent(connect, AGENT_WAIT_SECONDS, check=watch.check)
+        if ready is None:
+            raise watch.failure('the guest agent never answered after the first logon')
+        event(layout, stage='calm-agent-ready', seconds=round(ready, 1))
+
+        def sample():
+            stream, agent = open_agent(connect)
+            try:
+                _, out = agent.run(image_guest.TYPEPERF, image_guest.typeperf_arguments(CPU_SAMPLES),
+                                   timeout=CPU_SAMPLES + 60)
+                return image_guest.average_cpu_percent(out)
+            finally:
+                stream.close()
+
+        def describe_top():
+            try:
+                stream, agent = open_agent(connect)
+                try:
+                    return image_guest.format_top_processes(
+                        image_guest.top_processes(agent, 10, config.vcpus))
+                finally:
+                    stream.close()
+            except (OSError, image_guest.GuestError, ValueError) as error:
+                return f'unavailable ({error})'
+
+        rest = wait_for_calm(sample, watch, threshold=config.calm_cpu_percent,
+                             windows=config.calm_quiet_minutes,
+                             limit_seconds=config.calm_limit_minutes * 60,
+                             describe_top=describe_top, record=record)
+        stream, agent = open_agent(connect)
+        try:
+            save_first_logon_log(agent, output, record)
+        finally:
+            stream.close()
+        event(layout, stage='calm-reached', **rest)
+        shut_down_guest(connect)
+        wait_for_shutdown(qemu, watch, CALM_SHUTDOWN_SECONDS)
+        if qemu.returncode != 0:
+            raise BuildError(f'QEMU exited with code {qemu.returncode} after the calming boot')
+        event(layout, stage='calm-shut-down')
+    finally:
+        stop(qemu)
+        stop(swtpm)
+    return {'cpu_limit_percent': config.calm_cpu_percent, 'quiet_windows_required': config.calm_quiet_minutes,
+            'limit_minutes': config.calm_limit_minutes, 'agent_ready_seconds': round(ready, 1),
+            'last_mean_percent': rest['last_mean_percent'], 'windows_taken': rest['windows_taken'],
+            'seconds_to_rest': rest['seconds_to_rest'],
+            'duration_seconds': round(time.monotonic() - started, 1)}
 
 
 def check_inputs(config):
@@ -328,6 +495,7 @@ def build(config):
     finally:
         stop(qemu)
         stop(swtpm)
+    calm_record = calm(config, layout, output, machine_uuid)
     disk_sha, disk_size = image_plan.sha256_file(layout.disk)
     vars_sha = sha256_stream(layout.vars)
     tpm_files = {entry.name: sha256_stream(entry) for entry in sorted(Path(layout.tpm_state).iterdir())
@@ -338,7 +506,8 @@ def build(config):
         config, layout, uuid=machine_uuid, windows_iso_sha256=windows_sha, disk_sha256=disk_sha,
         disk_size=disk_size, vars_sha256=vars_sha, code_sha256=code_sha, template_sha256=template_sha,
         tpm_files=tpm_files,
-        built_at=datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='seconds'))
+        built_at=datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='seconds'),
+        calm=calm_record)
     Path(layout.descriptor).write_text(json.dumps(record, indent=2, sort_keys=True) + '\n',
                                        encoding='utf-8', newline='\n')
     # The answer file carries the account password in its obfuscated form; it is not needed again.
@@ -363,7 +532,47 @@ def record_platform(agent, result):
         result['tpm_error'] = str(error)
 
 
-def measure(config, *, settle=SETTLE_SECONDS):
+def measure_window(agent, cpus, samples=CPU_SAMPLES):
+    """The CPU mean of one window and, over the same seconds, the busiest processes.
+
+    Both are `typeperf` runs started together, so the second one adds only the little a counter query
+    costs. A failure of the process list is returned as text and does not cost the CPU figure.
+    """
+    cpu_pid = agent.start(image_guest.TYPEPERF, image_guest.typeperf_arguments(samples))
+    process_pid = agent.start(image_guest.TYPEPERF, image_guest.process_counter_arguments(samples))
+    _, out = agent.wait(cpu_pid, timeout=samples + 60)
+    cpu = image_guest.average_cpu_percent(out)
+    try:
+        _, out = agent.wait(process_pid, timeout=samples + 60)
+        return cpu, image_guest.top_processes_from_csv(out, cpus), None
+    except image_guest.GuestError as error:
+        return cpu, None, str(error)
+
+
+def collect_measurements(agent, result, cpus, work):
+    """Everything taken from the running guest, written into `result`; returns (failed steps, complete)."""
+    cpu, top, top_error = measure_window(agent, cpus)
+    result['cpu_percent'] = round(cpu, 1)
+    result['top_processes'] = top
+    if top_error is not None:
+        result['top_processes_error'] = top_error
+    record_platform(agent, result)
+    log = save_first_logon_log(agent, work)
+    if log is None:
+        raise BuildError('the first-logon log could not be read from the guest')
+    failed, complete = log
+    result['first_logon_complete'] = complete
+    result['first_logon_failed'] = failed
+    return failed, complete
+
+
+def measure(config, *, settle=SETTLE_SECONDS, clock=time.monotonic, sleep=time.sleep):
+    """Boot a copy of the image and measure it. `measure.json` always holds a `verdict`.
+
+    The measurements are taken first and the guest is asked to shut down afterwards, without waiting for
+    an answer. Whatever happens at the shutdown is recorded next to the measurements and never removes
+    the verdict they gave.
+    """
     source = image_plan.Layout(config.output_directory)
     descriptor = json.loads(Path(source.descriptor).read_text(encoding='utf-8'))
     if sha256_stream(source.disk) != descriptor['sha256']:
@@ -393,19 +602,9 @@ def measure(config, *, settle=SETTLE_SECONDS):
             result['verdict'] = 'STOP: the guest agent never answered'
             return result
         sleep_watching(watch, settle)
-        stream = connect()
+        stream, agent = open_agent(connect)
         try:
-            agent = image_guest.Qga(stream, timeout=30)
-            agent.sync()
-            code, out = agent.run(image_guest.TYPEPERF, image_guest.typeperf_arguments(CPU_SAMPLES),
-                                  timeout=CPU_SAMPLES + 60)
-            result['cpu_percent'] = round(image_guest.average_cpu_percent(out), 1)
-            record_platform(agent, result)
-            log = agent.read_file('C:\\ProgramData\\rosetun-image\\first-logon.log').decode('utf-8', 'replace')
-            failed, complete = image_guest.failed_steps(log)
-            result['first_logon_complete'] = complete
-            result['first_logon_failed'] = failed
-            agent.call('guest-shutdown', {'mode': 'powerdown'})
+            failed, complete = collect_measurements(agent, result, config.vcpus, work)
         finally:
             stream.close()
         problems = []
@@ -419,16 +618,25 @@ def measure(config, *, settle=SETTLE_SECONDS):
             problems.append('Secure Boot is not confirmed enabled in the guest')
         if not (result['tpm'] and result['tpm']['present'] and result['tpm']['ready']):
             problems.append('the TPM is not present and ready in the guest')
+        # The measurements are in. Nothing below can take the verdict away.
+        try:
+            shut_down_guest(connect)
+        except (OSError, image_guest.GuestError, ValueError) as error:
+            result['shutdown_error'] = str(error)
+        deadline = clock() + MEASURE_SHUTDOWN_SECONDS
+        while qemu.poll() is None and clock() < deadline:
+            sleep(2)
+        result['shutdown_clean'] = qemu.poll() is not None
+        if not result['shutdown_clean']:
+            problems.append('the guest did not shut down after the request')
         result['verdict'] = 'STOP: ' + '; '.join(problems) if problems else 'within the limits (UNQUALIFIED)'
-        deadline = time.monotonic() + 120
-        while qemu.poll() is None and time.monotonic() < deadline:
-            time.sleep(2)
-    except BuildError as error:
+    except (BuildError, image_guest.GuestError, OSError) as error:
         result['verdict'] = f'STOP: {error}'
         raise
     finally:
         stop(qemu)
         stop(swtpm)
+        result.setdefault('verdict', 'STOP: the measurement did not finish')
         (work / 'measure.json').write_text(json.dumps(result, indent=2, sort_keys=True) + '\n',
                                            encoding='utf-8', newline='\n')
     return result
