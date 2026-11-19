@@ -29,7 +29,7 @@ pub(crate) use chips_field::chips_input_id;
 pub(crate) use chips_field::{Chip, ChipsEvent, ChipsField};
 pub(crate) use choice_card::{choice_card, radio_card};
 pub(crate) use combo::{drop_down, filter_combo};
-pub(crate) use country_badge::country_badge;
+pub(crate) use country_badge::{country_badge, country_label};
 pub(crate) use dialogs::{
     ConfirmModal, Dialog, DialogFooter, DialogWidth, FooterChoice, ModalChoice, NameModal,
     confirm_modal, dialog_done, dialog_footer, name_modal,
@@ -42,7 +42,7 @@ pub(crate) use frames::{
 };
 pub(crate) use menu::{
     MenuItem, MenuWidth, context_menu_popup, menu_choice_width, menu_content_width, menu_item,
-    menu_popup, menu_width,
+    menu_item_with_country, menu_popup, menu_width,
 };
 pub(crate) use search::{
     CHECK_FIELD_WIDTH, MIN_SEARCH_WIDTH, SEARCH_WIDTH, search_field, search_field_with_suffix,

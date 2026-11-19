@@ -1302,7 +1302,26 @@ fn tile_color(name: &str) -> Color32 {
 /// "Send to": one field whose list opens over the dialog.
 fn destination_picker(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, config: &AppConfig) {
     let enabled = !dialog.busy && ui.is_enabled();
-    let label = destination_label(&dialog.target, &config.exits);
+    let (label, country) = match &dialog.target {
+        RuleDestination::NewExit(NewExit::Node { name, .. }) => {
+            let (country, name) = display::leading_flag(name);
+            (tr!("target-exit", name = display::safe_text(name)), country)
+        }
+        target => {
+            let country = match target {
+                RuleDestination::Exit(id) => config
+                    .exits
+                    .iter()
+                    .find(|exit| &exit.id == id)
+                    .and_then(|exit| destinations::exit_display_country(config, exit)),
+                RuleDestination::NewExit(NewExit::Country { code, .. }) => {
+                    Some(code.as_str().to_owned())
+                }
+                _ => None,
+            };
+            (destination_label(target, &config.exits), country)
+        }
+    };
     let color = if enabled {
         destination_color(&dialog.target)
     } else {
@@ -1337,15 +1356,29 @@ fn destination_picker(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, config: &Ap
             ),
             egui::StrokeKind::Inside,
         );
-        painter.circle_filled(egui::pos2(rect.left() + 14.0, rect.center().y), 3.5, color);
+        let left = if let Some(code) = country.as_deref() {
+            let size = egui::Vec2::from(theme::country_badge::ROW_SIZE);
+            let badge = egui::Rect::from_min_size(
+                egui::pos2(
+                    rect.left() + theme::space::M,
+                    rect.center().y - size.y / 2.0,
+                ),
+                size,
+            );
+            widgets::country_badge(ui, badge, code, config.interface.show_country_flags, false);
+            badge.right() + theme::space::S
+        } else {
+            painter.circle_filled(egui::pos2(rect.left() + 14.0, rect.center().y), 3.5, color);
+            rect.left() + 26.0
+        };
         let galley = egui::WidgetText::from(RichText::new(&label).color(color)).into_galley(
             ui,
             Some(egui::TextWrapMode::Truncate),
-            (rect.width() - 62.0).max(40.0),
+            (rect.right() - left - theme::space::XL - theme::space::M).max(0.0),
             egui::TextStyle::Body,
         );
         painter.galley(
-            egui::pos2(rect.left() + 26.0, rect.center().y - galley.size().y / 2.0),
+            egui::pos2(left, rect.center().y - galley.size().y / 2.0),
             galley,
             color,
         );
@@ -1404,6 +1437,7 @@ fn destination_item(
     enabled: bool,
     selected: bool,
     hint: Option<&str>,
+    country: Option<(&str, bool)>,
 ) -> bool {
     // `menu_item` takes the width its ui already spans, and a scope starts empty.
     let width = ui.min_rect().width().max(ui.available_width());
@@ -1412,7 +1446,7 @@ fn destination_item(
             ui.set_min_width(width);
             ui.spacing_mut().button_padding.x = 26.0;
             ui.visuals_mut().override_text_color = Some(color);
-            widgets::menu_item(
+            widgets::menu_item_with_country(
                 ui,
                 widgets::MenuItem {
                     label,
@@ -1421,10 +1455,11 @@ fn destination_item(
                     danger: false,
                     note: None,
                 },
+                country,
             )
         })
         .inner;
-    if ui.is_rect_visible(item.rect) {
+    if country.is_none() && ui.is_rect_visible(item.rect) {
         ui.painter().circle_filled(
             egui::pos2(item.rect.left() + 14.0, item.rect.center().y),
             3.5,
@@ -1479,6 +1514,7 @@ fn destination_menu(
     config: &AppConfig,
 ) -> Option<RuleDestination> {
     let mut chosen = None;
+    let flags = config.interface.show_country_flags;
     for target in [RuleTarget::Proxy, RuleTarget::Direct, RuleTarget::Block] {
         let destination = RuleDestination::from(target);
         let selected = dialog.target == destination;
@@ -1490,6 +1526,7 @@ fn destination_menu(
             true,
             selected,
             hint.as_deref(),
+            None,
         ) {
             chosen = Some(destination);
         }
@@ -1498,13 +1535,18 @@ fn destination_menu(
         destination_section(ui, tr!("where-section-exits"));
         for exit in &config.exits {
             let name = display::safe_text(&exit.name);
-            let label = match destinations::exit_country(exit) {
-                Some(code) => format!("{name} · {}", code.as_str()),
-                None => name,
-            };
+            let country = destinations::exit_display_country(config, exit);
             let destination = RuleDestination::Exit(exit.id.clone());
             let selected = dialog.target == destination;
-            if destination_item(ui, &label, theme::EXIT, true, selected, None) {
+            if destination_item(
+                ui,
+                &name,
+                theme::EXIT,
+                true,
+                selected,
+                None,
+                country.as_deref().map(|code| (code, flags)),
+            ) {
                 chosen = Some(destination);
             }
         }
@@ -1529,8 +1571,15 @@ fn destination_menu(
                 &dialog.target,
                 RuleDestination::NewExit(NewExit::Country { code: picked, .. }) if picked == &code
             );
-            let label = format!("{name} · {}", code.as_str());
-            if destination_item(ui, &label, theme::EXIT, !full, selected, None) {
+            if destination_item(
+                ui,
+                &name,
+                theme::EXIT,
+                !full,
+                selected,
+                None,
+                Some((code.as_str(), flags)),
+            ) {
                 chosen = Some(RuleDestination::NewExit(NewExit::Country { code, name }));
             }
         }
@@ -1566,8 +1615,17 @@ fn destination_menu(
                 _ => false,
             };
             let enabled = !full || node.exit.is_some();
-            let label = display::safe_text(node.name);
-            if destination_item(ui, &label, theme::EXIT, enabled, selected, None) {
+            let (country, name) = display::leading_flag(node.name);
+            let label = display::safe_text(name);
+            if destination_item(
+                ui,
+                &label,
+                theme::EXIT,
+                enabled,
+                selected,
+                None,
+                country.as_deref().map(|code| (code, flags)),
+            ) {
                 chosen = Some(match node.exit {
                     Some(exit) => RuleDestination::Exit(exit.clone()),
                     None => RuleDestination::NewExit(NewExit::Node {
@@ -2169,11 +2227,8 @@ mod tests {
             target_label(RuleTarget::Proxy),
             target_label(RuleTarget::Direct),
             target_label(RuleTarget::Block),
-            "Example exit · NL".to_owned(),
-            format!(
-                "{} · DE",
-                i18n::country_name(&CountryCode::parse("DE").unwrap())
-            ),
+            "Example exit".to_owned(),
+            i18n::country_name(&CountryCode::parse("DE").unwrap()),
             "NL One".to_owned(),
         ] {
             assert!(texts.contains(&label), "{label} in {texts:?}");

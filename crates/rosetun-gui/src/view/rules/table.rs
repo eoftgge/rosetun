@@ -88,6 +88,7 @@ pub(super) struct TargetChoice {
     /// What the closed button shows. An exit drops "Through VPN": its colour already says it.
     pub(super) button: String,
     pub(super) color: Color32,
+    pub(super) country: Option<(String, bool)>,
     /// A section title drawn above this entry.
     pub(super) section: Option<String>,
 }
@@ -100,6 +101,7 @@ impl TargetChoice {
             button: label.clone(),
             label,
             color: target_color(target),
+            country: None,
             section: None,
         }
     }
@@ -117,6 +119,7 @@ impl TargetChoice {
             button: button.unwrap_or_else(|| label.clone()),
             label,
             color: destination_color(&destination),
+            country: None,
             destination,
             section: None,
         }
@@ -124,18 +127,17 @@ impl TargetChoice {
 }
 
 /// A rule row's choices: the plain targets, then "Your exits". New exits are made in the dialog.
-pub(super) fn rule_target_choices(exits: &[Exit]) -> Vec<TargetChoice> {
+pub(super) fn rule_target_choices(config: &rosetun_config::AppConfig) -> Vec<TargetChoice> {
+    let exits = &config.exits;
     let mut choices: Vec<_> = [RuleTarget::Proxy, RuleTarget::Direct, RuleTarget::Block]
         .into_iter()
         .map(TargetChoice::plain)
         .collect();
     for (index, exit) in exits.iter().enumerate() {
         let mut choice = TargetChoice::of(RuleDestination::Exit(exit.id.clone()), exits);
-        let name = crate::display::safe_text(&exit.name);
-        choice.label = match crate::destinations::exit_country(exit) {
-            Some(code) => format!("{name} · {}", code.as_str()),
-            None => name,
-        };
+        choice.label = crate::display::safe_text(&exit.name);
+        choice.country = crate::destinations::exit_display_country(config, exit)
+            .map(|code| (code, config.interface.show_country_flags));
         if index == 0 {
             choice.section = Some(tr!("where-section-exits"));
         }
@@ -237,7 +239,7 @@ pub(super) fn target_button(
                         ui.set_min_width(width);
                         ui.spacing_mut().button_padding.x = TARGET_TEXT_X;
                         ui.visuals_mut().override_text_color = Some(choice.color);
-                        widgets::menu_item(
+                        widgets::menu_item_with_country(
                             ui,
                             widgets::MenuItem {
                                 label: &choice.label,
@@ -246,10 +248,14 @@ pub(super) fn target_button(
                                 danger: false,
                                 note: None,
                             },
+                            choice
+                                .country
+                                .as_ref()
+                                .map(|(code, flags)| (code.as_str(), *flags)),
                         )
                     })
                     .inner;
-                if ui.is_rect_visible(item.rect) {
+                if choice.country.is_none() && ui.is_rect_visible(item.rect) {
                     ui.painter().circle_filled(
                         egui::pos2(item.rect.left() + TARGET_DOT_X, item.rect.center().y),
                         3.5,
@@ -321,6 +327,7 @@ fn rule_icon(matcher: &RuleMatcher) -> Icon {
 /// What every row of one table shares, computed once per frame.
 pub(super) struct RowContext<'a> {
     pub(super) set: &'a RuleSet,
+    pub(super) target_choices: Vec<TargetChoice>,
     /// `destinations::unresolved_exits`, which resolves every exit.
     pub(super) unresolved: &'a BTreeSet<ExitId>,
     /// `running_programs`, for the icons of rules by file name.
@@ -458,7 +465,7 @@ pub(super) fn rule_row(
                         ui,
                         "target",
                         &TargetChoice::of(RuleDestination::of(rule), exits),
-                        &rule_target_choices(exits),
+                        &rows.target_choices,
                         !temporary && state.can_edit_rules(),
                     ) {
                         actions.push(Action::SetRuleTarget(rule.id.clone(), target));

@@ -101,6 +101,28 @@ pub(crate) fn country_badge(
     );
 }
 
+/// Text with room for a country marker in a button, list row or drop-down.
+pub(crate) fn country_label<'a>(
+    label: impl Into<egui::WidgetText>,
+    code: Option<&'a str>,
+    show_flag: bool,
+    align_with_badges: bool,
+) -> egui::Atoms<'a> {
+    let mut label = egui::Atoms::new(label.into());
+    let size = theme::country_badge::ROW_SIZE;
+    if let Some(code) = code {
+        label.push_left(egui::Atom::paint(size, move |ui, args| {
+            country_badge(ui, args.rect, code, show_flag, false);
+        }));
+    } else if align_with_badges {
+        label.push_left(egui::Atom {
+            size: Some(size.into()),
+            ..Default::default()
+        });
+    }
+    label
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

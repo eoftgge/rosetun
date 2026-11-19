@@ -269,6 +269,7 @@ fn tab_body(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
     let unresolved = crate::destinations::unresolved_exits(&state.config);
     let rows = RowContext {
         set,
+        target_choices: table::rule_target_choices(&state.config),
         unresolved: &unresolved,
         running: running_programs(state),
     };

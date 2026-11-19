@@ -1,5 +1,6 @@
 use eframe::egui;
 
+use super::country_badge;
 use crate::icons::{self, Icon};
 use crate::theme;
 
@@ -17,6 +18,14 @@ pub(crate) struct MenuItem<'a> {
 }
 
 pub(crate) fn menu_item(ui: &mut egui::Ui, item: MenuItem<'_>) -> egui::Response {
+    menu_item_with_country(ui, item, None)
+}
+
+pub(crate) fn menu_item_with_country(
+    ui: &mut egui::Ui,
+    item: MenuItem<'_>,
+    country: Option<(&str, bool)>,
+) -> egui::Response {
     let enabled = item.enabled && ui.is_enabled();
     let sense = if enabled {
         egui::Sense::click()
@@ -85,7 +94,19 @@ pub(crate) fn menu_item(ui: &mut egui::Ui, item: MenuItem<'_>) -> egui::Response
             );
             right -= width + 10.0;
         }
-        let left = rect.left() + ui.spacing().button_padding.x.max(ITEM_SIDE_PADDING);
+        let mut left = rect.left() + ui.spacing().button_padding.x.max(ITEM_SIDE_PADDING);
+        if let Some((code, show_flag)) = country {
+            let size = egui::Vec2::from(theme::country_badge::ROW_SIZE);
+            let badge = egui::Rect::from_min_size(
+                egui::pos2(
+                    rect.left() + ITEM_SIDE_PADDING,
+                    rect.center().y - size.y / 2.0,
+                ),
+                size,
+            );
+            country_badge(ui, badge, code, show_flag, false);
+            left = left.max(badge.right() + theme::space::S);
+        }
         let galley = egui::WidgetText::from(egui::RichText::new(item.label).color(color))
             .into_galley(
                 ui,

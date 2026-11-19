@@ -36,11 +36,9 @@ fn exit_row(ui: &mut egui::Ui, state: &State, row: &SessionExitRow<'_>, country_
         .and_then(exit_country)
         .map(rosetun_config::CountryCode::as_str)
         .or(node_country.as_deref());
-    let node = if node_country.as_deref() == country {
-        node_name
-    } else {
-        row.node
-    };
+    let actual_country = node_country
+        .as_deref()
+        .filter(|&code| Some(code) != country);
     egui::Sides::new().shrink_left().spacing(16.0).show(
         ui,
         |ui| {
@@ -57,19 +55,33 @@ fn exit_row(ui: &mut egui::Ui, state: &State, row: &SessionExitRow<'_>, country_
                         egui::Label::new(RichText::new(title).color(theme::palette().text))
                             .truncate(),
                     );
-                    let node = state.text(node);
-                    let detail = match row.via_node {
-                        Some(parent) => format!("{} → {node}", state.text(parent)),
-                        None => node,
-                    };
-                    ui.add(
-                        egui::Label::new(
-                            RichText::new(detail)
-                                .small()
-                                .color(theme::palette().text_dim),
-                        )
-                        .truncate(),
+                    let flags = state.config.interface.show_country_flags;
+                    let detail_text =
+                        |name| RichText::new(name).small().color(theme::palette().text_dim);
+                    let node = widgets::country_label(
+                        detail_text(state.text(node_name)),
+                        actual_country,
+                        flags,
+                        false,
                     );
+                    let (parent_country, parent_name) =
+                        row.via_node.map_or((None, None), |parent| {
+                            let (code, name) = display::leading_flag(parent);
+                            (code, Some(name))
+                        });
+                    let detail = if let Some(parent) = parent_name {
+                        let mut path = widgets::country_label(
+                            detail_text(format!("{} →", state.text(parent))),
+                            parent_country.as_deref(),
+                            flags,
+                            false,
+                        );
+                        path.extend_right(node);
+                        path
+                    } else {
+                        node
+                    };
+                    ui.add(egui::WidgetAtom::new(detail).wrap_mode(egui::TextWrapMode::Truncate));
                 });
                 if let (Some((id, slot)), Some(code)) = (slot, country) {
                     let badge = egui::Rect::from_center_size(

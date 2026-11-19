@@ -7,11 +7,11 @@ use super::text_field::{field_height, style_field};
 
 /// A drop-down as high as a field, in the field's fill, border and corners, with the chevron at
 /// the right inside. `width` is its width, the whole row when `None`; `menu` adds the choices.
-pub(crate) fn drop_down(
+pub(crate) fn drop_down<'a>(
     ui: &mut egui::Ui,
     id_salt: impl std::hash::Hash + std::fmt::Debug,
     width: Option<f32>,
-    selected_text: impl Into<egui::WidgetText>,
+    selected_text: impl egui::IntoAtoms<'a>,
     menu: impl FnOnce(&mut egui::Ui),
 ) -> egui::Response {
     let width = width.unwrap_or_else(|| ui.available_width());

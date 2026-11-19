@@ -166,6 +166,7 @@ fn row_input_actions(
                         state,
                         &RowContext {
                             set,
+                            target_choices: table::rule_target_choices(&state.config),
                             unresolved: &crate::destinations::unresolved_exits(&state.config),
                             running: HashMap::new(),
                         },
@@ -792,12 +793,13 @@ fn exit_rules_read_through_their_exit_in_their_own_colour() {
         destination_color(&destination),
         target_color(RuleTarget::Block)
     );
-    let choices = table::rule_target_choices(std::slice::from_ref(&exit));
+    let config = crate::destinations::tests::config(&[("a", "🇩🇪 Example")], vec![exit.clone()]);
+    let choices = table::rule_target_choices(&config);
     assert_eq!(choices.len(), 4);
-    assert_eq!(choices[3].label, "Example exit · NL");
+    assert_eq!(choices[3].label, "Example exit");
+    assert_eq!(choices[3].country, Some(("NL".to_owned(), true)));
     assert!(choices[3].section.is_some());
 
-    let config = crate::destinations::tests::config(&[("a", "🇩🇪 Example")], vec![exit.clone()]);
     assert!(crate::destinations::unresolved_exits(&config).contains(&exit.id));
 }
 

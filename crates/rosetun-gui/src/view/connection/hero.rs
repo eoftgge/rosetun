@@ -610,29 +610,37 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                         if selection_changed.is_some() {
                             let applying = server_pending && state.operations.helper;
                             let can_apply = server_pending && state.can_apply();
-                            let message = state.config.active_node().map_or_else(
-                                || tr!("selection-cleared").to_owned(),
+                            let (message, country) = state.config.active_node().map_or_else(
+                                || (tr!("selection-cleared"), None),
                                 |(_, node)| {
+                                    let (country, name) = display::leading_flag(&node.name);
                                     let name = display::drop_missing_glyphs(
                                         ui.ctx(),
                                         &egui::TextStyle::Body.resolve(ui.style()),
-                                        &state.text(&node.name),
+                                        &state.text(name),
                                     );
-                                    if applying {
+                                    let message = if applying {
                                         crate::i18n::switching_to(&name)
                                     } else if can_apply {
                                         crate::i18n::selected_not_applied(&name)
                                     } else {
                                         crate::i18n::selected_pending(&name)
-                                    }
+                                    };
+                                    (message, country)
                                 },
                             );
                             ui.horizontal_wrapped(|ui| {
                                 ui.spacing_mut().item_spacing.x = 0.0;
-                                ui.label(
-                                    RichText::new(message)
-                                        .small()
-                                        .color(theme::palette().accent_light),
+                                ui.add(
+                                    egui::WidgetAtom::new(widgets::country_label(
+                                        RichText::new(message)
+                                            .small()
+                                            .color(theme::palette().accent_light),
+                                        country.as_deref(),
+                                        state.config.interface.show_country_flags,
+                                        false,
+                                    ))
+                                    .wrap_mode(egui::TextWrapMode::Wrap),
                                 );
                                 if can_apply {
                                     ui.label(
