@@ -25,6 +25,8 @@ pub(crate) enum Icon {
     Chat,
     Play,
     Download,
+    Plus,
+    Filter,
 }
 
 /// The side of a standard icon button.
@@ -299,6 +301,35 @@ pub(crate) fn paint(painter: &egui::Painter, center: egui::Pos2, icon: Icon, col
                 ],
                 stroke,
             );
+        }
+        Icon::Plus => {
+            painter.line_segment(
+                [
+                    center + egui::vec2(-5.5, 0.0),
+                    center + egui::vec2(5.5, 0.0),
+                ],
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    center + egui::vec2(0.0, -5.5),
+                    center + egui::vec2(0.0, 5.5),
+                ],
+                stroke,
+            );
+        }
+        Icon::Filter => {
+            painter.add(egui::Shape::closed_line(
+                vec![
+                    center + egui::vec2(-6.0, -5.0),
+                    center + egui::vec2(6.0, -5.0),
+                    center + egui::vec2(1.5, 0.5),
+                    center + egui::vec2(1.5, 4.5),
+                    center + egui::vec2(-1.5, 6.0),
+                    center + egui::vec2(-1.5, 0.5),
+                ],
+                stroke,
+            ));
         }
     }
 }

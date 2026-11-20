@@ -30,6 +30,40 @@ pub(crate) fn button_fill(
     .inner
 }
 
+/// A square primary filled button carrying only `icon`, as high as a field.
+/// `label` is spoken to assistive tools and shown on hover.
+pub(crate) fn button_fill_icon(
+    ui: &mut egui::Ui,
+    icon: Icon,
+    label: &str,
+    enabled: bool,
+) -> egui::Response {
+    let side = super::text_field::field_height(ui);
+    let enabled = enabled && ui.is_enabled();
+    let response = ui
+        .scope(|ui| {
+            ui.spacing_mut().button_padding = egui::Vec2::ZERO;
+            ui.spacing_mut().interact_size = egui::vec2(side, side);
+            ui.add_enabled(
+                enabled,
+                egui::Button::new("")
+                    .min_size(egui::vec2(side, side))
+                    .fill(primary_fill(enabled)),
+            )
+        })
+        .inner;
+    if ui.is_rect_visible(response.rect) {
+        let color = if enabled {
+            theme::palette().text
+        } else {
+            theme::palette().text_muted
+        };
+        icons::paint(ui.painter(), response.rect.center(), icon, color);
+    }
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, label));
+    response.on_hover_text(label).on_disabled_hover_text(label)
+}
+
 pub(crate) fn outline_button(
     ui: &mut egui::Ui,
     text: impl Into<egui::WidgetText>,
@@ -238,6 +272,24 @@ mod tests {
                 assert_eq!(disabled.rect.size(), menu.rect.size());
                 assert!(menu.rect.width() > plain.rect.width());
                 assert!(menu.sense.senses_click() && !disabled.enabled());
+            });
+        });
+        output.textures_delta.clear();
+    }
+
+    #[test]
+    fn an_icon_fill_button_is_square_as_high_as_a_field_and_keeps_its_size_when_disabled() {
+        let ctx = egui::Context::default();
+        theme::apply(&ctx);
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let height = super::super::text_field::field_height(ui);
+                let enabled = button_fill_icon(ui, Icon::Plus, "Add rule", true);
+                let disabled = button_fill_icon(ui, Icon::Plus, "Add rule", false);
+                assert_eq!(enabled.rect.height(), height);
+                assert_eq!(enabled.rect.width(), height);
+                assert_eq!(disabled.rect.size(), enabled.rect.size());
+                assert!(!disabled.enabled());
             });
         });
         output.textures_delta.clear();

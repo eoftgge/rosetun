@@ -362,11 +362,13 @@ struct ToolbarRects {
     view: egui::Rect,
     tabs: egui::Rect,
     route: egui::Rect,
+    compact_route: bool,
     two_rows: bool,
 }
 
-/// Search first, as on the Rules tab; a narrow window moves the tabs and the
-/// route filter to a second row.
+/// Search first, as on the Rules tab. When full controls do not fit on one row,
+/// the route drop-down shrinks to a square icon button; only if one row still
+/// does not fit do the tabs and route filter move to a second row.
 fn toolbar(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) -> ToolbarRects {
     let list = &state.traffic.connections;
     let views = [
@@ -391,13 +393,15 @@ fn toolbar(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) -> Toolb
         view: egui::Rect::NOTHING,
         tabs: egui::Rect::NOTHING,
         route: egui::Rect::NOTHING,
+        compact_route: false,
         two_rows: false,
     };
     ui.scope(|ui| {
         ui.spacing_mut().item_spacing = egui::vec2(theme::space::S, theme::space::S);
+        let available = ui.available_width();
         let view_width = widgets::segmented_width(ui, &views);
         // Measured with the largest counts the service sends, so a changing
-        // count never moves the break between one and two rows.
+        // count never moves the break between layouts.
         let tabs_width = widgets::segmented_width(
             ui,
             &tab_labels(
@@ -405,12 +409,13 @@ fn toolbar(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) -> Toolb
                 rosetun_ipc::MAX_CLOSED_CONNECTIONS,
             ),
         );
-        rects.two_rows = widgets::SEARCH_WIDTH
-            + view_width
-            + tabs_width
-            + ROUTE_FILTER_WIDTH
-            + 3.0 * theme::space::S
-            > ui.available_width();
+        let side = widgets::field_height(ui);
+        let gaps = 3.0 * theme::space::S;
+        rects.compact_route =
+            widgets::SEARCH_WIDTH + view_width + tabs_width + ROUTE_FILTER_WIDTH + gaps > available;
+        let compact_beside = view_width + tabs_width + side + gaps;
+        rects.two_rows =
+            rects.compact_route && widgets::MIN_SEARCH_WIDTH + compact_beside > available;
         let primary = |ui: &mut egui::Ui,
                        search_width: f32,
                        rects: &mut ToolbarRects,
@@ -427,7 +432,10 @@ fn toolbar(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) -> Toolb
                 .response
                 .rect;
         };
-        let secondary = |ui: &mut egui::Ui, rects: &mut ToolbarRects, actions: &mut Vec<Action>| {
+        let secondary = |ui: &mut egui::Ui,
+                         compact_route: bool,
+                         rects: &mut ToolbarRects,
+                         actions: &mut Vec<Action>| {
             rects.tabs = ui
                 .scope(|ui| {
                     if let Some(tab) = widgets::segmented(
@@ -443,16 +451,21 @@ fn toolbar(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) -> Toolb
                 })
                 .response
                 .rect;
-            rects.route = route_filter(ui, state, actions);
+            rects.route = route_filter(ui, state, compact_route, actions);
         };
         if rects.two_rows {
             let search_width = widgets::search_width_beside(ui, view_width);
             ui.horizontal(|ui| primary(ui, search_width, &mut rects, actions));
-            ui.horizontal(|ui| secondary(ui, &mut rects, actions));
+            ui.horizontal(|ui| secondary(ui, rects.compact_route, &mut rects, actions));
         } else {
+            let search_width = if rects.compact_route {
+                (available - compact_beside).clamp(widgets::MIN_SEARCH_WIDTH, widgets::SEARCH_WIDTH)
+            } else {
+                widgets::SEARCH_WIDTH
+            };
             ui.horizontal(|ui| {
-                primary(ui, widgets::SEARCH_WIDTH, &mut rects, actions);
-                secondary(ui, &mut rects, actions);
+                primary(ui, search_width, &mut rects, actions);
+                secondary(ui, rects.compact_route, &mut rects, actions);
             });
         }
     });
@@ -469,7 +482,12 @@ fn search(ui: &mut egui::Ui, state: &State, width: f32, actions: &mut Vec<Action
     rect
 }
 
-fn route_filter(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) -> egui::Rect {
+fn route_filter(
+    ui: &mut egui::Ui,
+    state: &State,
+    compact: bool,
+    actions: &mut Vec<Action>,
+) -> egui::Rect {
     let selected = &state.traffic.connections.route;
     let label = |filter: &RouteFilter| match filter {
         RouteFilter::Any => tr!("connections-route-any"),
@@ -477,43 +495,60 @@ fn route_filter(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) -> 
         RouteFilter::Direct => tr!("direct"),
         RouteFilter::Exit(id) => state.connection_route_label(&ConnectionRoute::Exit(id.clone())),
     };
+    let active_color = |filter: &RouteFilter| match filter {
+        RouteFilter::Any => None,
+        RouteFilter::Proxy => Some(route_color(&ConnectionRoute::Proxy)),
+        RouteFilter::Direct => Some(route_color(&ConnectionRoute::Direct)),
+        RouteFilter::Exit(id) => Some(route_color(&ConnectionRoute::Exit(id.clone()))),
+    };
     let text = |filter: &RouteFilter| {
         let text = RichText::new(label(filter));
-        match filter {
-            RouteFilter::Any => text,
-            RouteFilter::Proxy => text.color(route_color(&ConnectionRoute::Proxy)),
-            RouteFilter::Direct => text.color(route_color(&ConnectionRoute::Direct)),
-            RouteFilter::Exit(id) => text.color(route_color(&ConnectionRoute::Exit(id.clone()))),
+        match active_color(filter) {
+            Some(color) => text.color(color),
+            None => text,
         }
     };
     let mut choice = None;
-    let rect = widgets::filter_combo(
-        ui,
-        "connections_route_filter",
-        ROUTE_FILTER_WIDTH,
-        text(selected),
-        label(selected),
-        |ui| {
-            let options = [RouteFilter::Any, RouteFilter::Proxy, RouteFilter::Direct]
-                .into_iter()
-                .chain(
-                    state
-                        .config
-                        .exits
-                        .iter()
-                        .map(|exit| RouteFilter::Exit(exit.id.clone())),
-                );
-            for option in options {
-                if ui
-                    .selectable_label(&option == selected, text(&option))
-                    .clicked()
-                {
-                    choice = Some(option);
-                }
+    let mut menu = |ui: &mut egui::Ui| {
+        let options = [RouteFilter::Any, RouteFilter::Proxy, RouteFilter::Direct]
+            .into_iter()
+            .chain(
+                state
+                    .config
+                    .exits
+                    .iter()
+                    .map(|exit| RouteFilter::Exit(exit.id.clone())),
+            );
+        for option in options {
+            if ui
+                .selectable_label(&option == selected, text(&option))
+                .clicked()
+            {
+                choice = Some(option);
             }
-        },
-    )
-    .rect;
+        }
+    };
+    let rect = if compact {
+        widgets::filter_combo_icon(
+            ui,
+            "connections_route_filter",
+            ROUTE_FILTER_WIDTH,
+            active_color(selected),
+            label(selected),
+            &mut menu,
+        )
+        .rect
+    } else {
+        widgets::filter_combo(
+            ui,
+            "connections_route_filter",
+            ROUTE_FILTER_WIDTH,
+            text(selected),
+            label(selected),
+            &mut menu,
+        )
+        .rect
+    };
     if let Some(choice) = choice
         && &choice != selected
     {
@@ -1137,26 +1172,39 @@ mod toolbar_tests {
         }
     }
 
-    fn layout(state: &State, width: f32, scale: f32) -> ToolbarRects {
-        let ctx = egui::Context::default();
-        theme::apply(&ctx);
-        let mut rects = None;
-        let mut output = ctx.run_ui(
-            egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(
-                    egui::Pos2::ZERO,
-                    egui::vec2(width / scale, 640.0 / scale),
-                )),
-                ..Default::default()
-            },
-            |ctx| {
-                egui::CentralPanel::default()
-                    .frame(egui::Frame::new().inner_margin(theme::margin::same(theme::space::XXL)))
-                    .show(ctx, |ui| rects = Some(toolbar(ui, state, &mut Vec::new())));
-            },
-        );
-        output.textures_delta.clear();
-        rects.unwrap()
+    fn layout(
+        state: &State,
+        width: f32,
+        scale: f32,
+        language: crate::i18n::Language,
+    ) -> (ToolbarRects, f32) {
+        crate::i18n::in_language(language, || {
+            let ctx = egui::Context::default();
+            theme::apply(&ctx);
+            let mut rects = None;
+            let mut field_height = 0.0;
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(width / scale, 640.0 / scale),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default()
+                        .frame(
+                            egui::Frame::new().inner_margin(theme::margin::same(theme::space::XXL)),
+                        )
+                        .show(ctx, |ui| {
+                            field_height = widgets::field_height(ui);
+                            rects = Some(toolbar(ui, state, &mut Vec::new()));
+                        });
+                },
+            );
+            output.textures_delta.clear();
+            (rects.unwrap(), field_height)
+        })
     }
 
     #[test]
@@ -1169,28 +1217,74 @@ mod toolbar_tests {
         many.traffic.connections.closed = (0..rosetun_ipc::MAX_CLOSED_CONNECTIONS)
             .map(connection)
             .collect();
-        for (width, scale) in [(960.0, 1.0), (960.0, 1.25), (960.0, 1.5), (1920.0, 1.0)] {
-            let rects = layout(&few, width, scale);
-            let moved = layout(&many, width, scale);
-            let right = width / scale - theme::space::XXL;
-            for rects in [&rects, &moved] {
-                assert!(rects.search.right() <= rects.view.left(), "{width} {scale}");
-                assert!(rects.tabs.right() <= rects.route.left(), "{width} {scale}");
-                assert!(rects.view.right() <= right, "{width} {scale}");
-                assert!(rects.route.right() <= right, "{width} {scale}");
-                if rects.two_rows {
-                    assert!(rects.search.bottom() <= rects.tabs.top(), "{width} {scale}");
-                    assert!(rects.view.bottom() <= rects.route.top(), "{width} {scale}");
-                } else {
-                    assert!(rects.view.right() <= rects.tabs.left(), "{width} {scale}");
+        for language in [
+            crate::i18n::Language::English,
+            crate::i18n::Language::Russian,
+        ] {
+            for (width, scale) in [(960.0, 1.0), (960.0, 1.25), (960.0, 1.5), (1920.0, 1.0)] {
+                let (rects, field_height) = layout(&few, width, scale, language);
+                let (moved, _) = layout(&many, width, scale, language);
+                let right = width / scale - theme::space::XXL;
+                for rects in [&rects, &moved] {
+                    assert!(
+                        rects.search.right() <= rects.view.left(),
+                        "{language:?} {width} {scale}"
+                    );
+                    assert!(
+                        rects.tabs.right() <= rects.route.left(),
+                        "{language:?} {width} {scale}"
+                    );
+                    assert!(rects.view.right() <= right, "{language:?} {width} {scale}");
+                    assert!(rects.route.right() <= right, "{language:?} {width} {scale}");
+                    if rects.compact_route {
+                        assert_eq!(
+                            rects.route.size(),
+                            egui::vec2(field_height, field_height),
+                            "{language:?} {width} {scale}"
+                        );
+                    } else {
+                        assert!(
+                            rects.route.width() >= ROUTE_FILTER_WIDTH,
+                            "{language:?} {width} {scale}"
+                        );
+                    }
+                    if rects.two_rows {
+                        assert!(
+                            rects.search.bottom() <= rects.tabs.top(),
+                            "{language:?} {width} {scale}"
+                        );
+                        assert!(
+                            rects.view.bottom() <= rects.route.top(),
+                            "{language:?} {width} {scale}"
+                        );
+                    } else {
+                        assert!(
+                            rects.view.right() <= rects.tabs.left(),
+                            "{language:?} {width} {scale}"
+                        );
+                    }
                 }
+                assert_eq!(
+                    rects.compact_route, moved.compact_route,
+                    "{language:?} {width} {scale}"
+                );
+                assert_eq!(
+                    rects.two_rows, moved.two_rows,
+                    "{language:?} {width} {scale}"
+                );
+                assert_eq!(rects.search, moved.search, "{language:?} {width} {scale}");
+                assert_eq!(rects.view, moved.view, "{language:?} {width} {scale}");
+                assert_eq!(
+                    rects.tabs.left(),
+                    moved.tabs.left(),
+                    "{language:?} {width} {scale}"
+                );
             }
-            assert_eq!(rects.two_rows, moved.two_rows, "{width} {scale}");
-            assert_eq!(rects.search, moved.search, "{width} {scale}");
-            assert_eq!(rects.view, moved.view, "{width} {scale}");
-            assert_eq!(rects.tabs.left(), moved.tabs.left(), "{width} {scale}");
+            let (wide, _) = layout(&few, 1920.0, 1.0, language);
+            assert!(!wide.compact_route && !wide.two_rows, "{language:?}");
+            let (narrow, _) = layout(&few, 960.0, 1.25, language);
+            assert!(narrow.compact_route, "{language:?}");
         }
-        assert!(!layout(&few, 1920.0, 1.0).two_rows);
     }
 
     #[test]

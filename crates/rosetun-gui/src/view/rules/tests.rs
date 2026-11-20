@@ -47,20 +47,23 @@ fn a_program_rule_shows_the_icon_of_its_path_or_of_a_running_program_by_name() {
     assert_eq!(program_icon_path(&site, &running), None);
 }
 
-#[test]
-fn toolbar_controls_do_not_overlap_at_minimum_window_scales() {
-    let set = drag_set();
-    for scale in [1.0, 1.25, 1.5] {
-        let width = 960.0 / scale;
+fn render_toolbar(
+    set: &RuleSet,
+    width: f32,
+    scale: f32,
+    language: crate::i18n::Language,
+) -> (ToolbarRects, f32) {
+    crate::i18n::in_language(language, || {
         let ctx = egui::Context::default();
         theme::apply(&ctx);
         let mut filter = RuleFilter::default();
         let mut rects = None;
+        let mut field_height = 0.0;
         let mut output = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
-                    egui::vec2(width, 640.0 / scale),
+                    egui::vec2(width / scale, 640.0 / scale),
                 )),
                 ..Default::default()
             },
@@ -68,11 +71,12 @@ fn toolbar_controls_do_not_overlap_at_minimum_window_scales() {
                 egui::CentralPanel::default()
                     .frame(egui::Frame::new().inner_margin(theme::margin::same(theme::space::XXL)))
                     .show(ctx, |ui| {
+                        field_height = widgets::field_height(ui);
                         rects = Some(filter_controls(
                             ui,
                             &mut filter,
                             &[],
-                            &set,
+                            set,
                             &[],
                             true,
                             &mut Vec::new(),
@@ -81,17 +85,81 @@ fn toolbar_controls_do_not_overlap_at_minimum_window_scales() {
             },
         );
         output.textures_delta.clear();
-        let rects = rects.unwrap();
-        assert!(rects.search.right() <= rects.tabs.left(), "{scale}");
-        assert!(rects.filter.right() <= rects.add.left(), "{scale}");
-        assert!(rects.filter.width() >= TARGET_FILTER_WIDTH, "{scale}");
-        assert!(rects.add.right() <= width - theme::space::XXL, "{scale}");
-        if rects.two_rows {
-            assert!(rects.tabs.bottom() <= rects.filter.top(), "{scale}");
-            assert!(rects.tabs.bottom() <= rects.add.top(), "{scale}");
-        } else {
-            assert!(rects.tabs.right() <= rects.filter.left(), "{scale}");
+        (rects.unwrap(), field_height)
+    })
+}
+
+#[test]
+fn toolbar_controls_do_not_overlap_at_minimum_window_scales() {
+    let mut set = drag_set();
+    set.rules.push(Rule {
+        id: RuleId::new("other"),
+        enabled: true,
+        matcher: RuleMatcher::IpCidr("192.0.2.0/24".to_owned()),
+        target: RuleTarget::Direct,
+        exit: None,
+    });
+    for language in [
+        crate::i18n::Language::English,
+        crate::i18n::Language::Russian,
+    ] {
+        for (width, scale) in [(960.0, 1.0), (960.0, 1.25), (960.0, 1.5), (1920.0, 1.0)] {
+            let (rects, field_height) = render_toolbar(&set, width, scale, language);
+            let right = width / scale - theme::space::XXL;
+            assert!(
+                rects.search.right() <= rects.tabs.left(),
+                "{language:?} {width} {scale}"
+            );
+            assert!(
+                rects.filter.right() <= rects.add.left(),
+                "{language:?} {width} {scale}"
+            );
+            assert!(
+                rects.add.right() <= right,
+                "{language:?} {width} {scale}: {:?} vs {right}",
+                rects.add
+            );
+            if rects.compact_controls {
+                assert_eq!(
+                    rects.filter.size(),
+                    egui::vec2(field_height, field_height),
+                    "{language:?} {width} {scale}"
+                );
+                assert_eq!(
+                    rects.add.size(),
+                    egui::vec2(field_height, field_height),
+                    "{language:?} {width} {scale}"
+                );
+            } else {
+                assert!(
+                    rects.filter.width() >= TARGET_FILTER_WIDTH,
+                    "{language:?} {width} {scale}"
+                );
+                assert!(
+                    rects.add.width() > field_height,
+                    "{language:?} {width} {scale}"
+                );
+            }
+            if rects.two_rows {
+                assert!(
+                    rects.tabs.bottom() <= rects.filter.top(),
+                    "{language:?} {width} {scale}"
+                );
+                assert!(
+                    rects.tabs.bottom() <= rects.add.top(),
+                    "{language:?} {width} {scale}"
+                );
+            } else {
+                assert!(
+                    rects.tabs.right() <= rects.filter.left(),
+                    "{language:?} {width} {scale}"
+                );
+            }
         }
+        let (wide, _) = render_toolbar(&set, 1920.0, 1.0, language);
+        assert!(!wide.compact_controls && !wide.two_rows, "{language:?}");
+        let (narrow, _) = render_toolbar(&set, 960.0, 1.25, language);
+        assert!(narrow.compact_controls, "{language:?}");
     }
 }
 
@@ -608,11 +676,14 @@ fn action_filter_button_matches_the_search_field_height() {
     theme::apply(&ctx);
     let mut output = ctx.run_ui(egui::RawInput::default(), |ctx| {
         egui::CentralPanel::default().show(ctx, |ui| {
-            let response = target_filter(ui, &RuleFilter::default(), &[], &mut Vec::new());
+            let full = target_filter(ui, &RuleFilter::default(), &[], false, &mut Vec::new());
+            let compact = target_filter(ui, &RuleFilter::default(), &[], true, &mut Vec::new());
             let mut query = String::new();
             let search = widgets::search_field(ui, &mut query, "", widgets::SEARCH_WIDTH);
-            assert_eq!(response.rect.height(), search.rect.height());
-            assert_eq!(response.rect.height(), widgets::field_height(ui));
+            let height = widgets::field_height(ui);
+            assert_eq!(full.rect.height(), search.rect.height());
+            assert_eq!(full.rect.height(), height);
+            assert_eq!(compact.rect.size(), egui::vec2(height, height));
         });
     });
     output.textures_delta.clear();
