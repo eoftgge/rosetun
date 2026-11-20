@@ -5480,6 +5480,177 @@ That changes the lab, not the image, and with it what "rest" means; it is not do
 Nothing in the images: the lab machine's `lab-entry.py` and its pinned fixtures are those of stage 8, and `lab_protocol.py`
 gains only `classified_frames`, which runs on the controller.
 
+## Stage 10a: the List matrix of a Windows guest in the lab, `windows-list`
+
+Status: **offline tests, and the developer's runs on the stand written below, which qualify nothing.** The Windows guest of
+the 9a image is on the wire of the lab, as in stage 9d, but now with Rosetun in it: the eleven checks of the Hyper-V List
+matrix (`tools/vm/windows/Invoke-ListMatrix.ps1`, `list-checks.json`, the same ids) run in the guest against the lab's
+targets, Rosetun connects to the lab's VPN node, and the observer judges the wire. The release gate is false, the security
+invariants are UNVERIFIED, the image stays `qualified: false` and the run is diagnostic whatever it reports. The image is
+not changed (the network and the CA still come through the agent, as in 9d); Linux suites, configurations and budgets are
+unchanged.
+
+### Decisions
+
+- **Delivery without a network: a read-only disc.** The guest has the lab's wire and nothing else, and what crosses that wire
+  is the observer's. The agent's file calls are no way for 80 MB (a session has 128 calls and a megabyte of room in each
+  direction). So the run makes an ISO (`windows_media`, `xorriso`, label `ROSETUNLIST`, ISO 9660 level 3 with long Joliet
+  names) of the three binaries, the runner and its plan, and QEMU gives it to the guest as a DVD drive on the machine's own
+  SATA controller (`-device ide-cd,drive=winmedia,bus=ide.2`, `lab.LabPair(media=True)`, a read-only raw block device). The
+  drive is a launch option, not a change of the image: the image file is byte for byte what it was, and the run still checks
+  that (`image-unchanged`). The controller hashes each file against a pin (the build of the checkout by the configuration,
+  sing-box by the matrix), writes the record `windows-media.json`, and hashes the disc again right before the guest starts;
+  the starter script carries the hash of each runner file and the plan names the hash and size of each binary, which the
+  runner checks after it copied them (a mismatch ends the run). Not chosen: the agent's file calls (too small), a file server
+  on the lab machine (the lab image is frozen, and the transfer would be frames of the observer's capture).
+- **The build.** The Windows binaries are those of the checkout, built on the Windows host with a target directory off the
+  system drive: `cargo build --release -p rosetun -p rosetun-helper-privileged --target-dir E:\rosetun-target-win` (the GUI is
+  not needed). `sing-box.exe` is the pinned 1.14.3 of `Install-RosetunSingBox` (`5c19bb3f...faf`); the validator refuses any
+  other hash, so the Windows and Hyper-V matrices run the same engine.
+- **How Rosetun runs in the guest.** As in the Hyper-V List: the console helper `rosetun-helper-privileged.exe` as a
+  scheduled task `RosetunHelper` (SYSTEM, log to a file), the CLI `rosetun.exe connect` and `apply` with `ROSETUN_CONFIG` on
+  an isolated configuration (version 3 of the format, as the Hyper-V script writes it, so the same migration reads it). No
+  installer and no service: the stage is the List, not the installation. **The runner is autonomous**: the controller
+  starts it once (a PowerShell that finds the disc, copies and hashes five small files, makes the task `RosetunListRunner`
+  and starts it), and from then on only reads `C:\rosetun-list\status.json` with `cmd /c type` (two calls) every
+  `poll_seconds`; the runner rewrites that file whole after every step (a temporary file and a replace), so a lost agent
+  session costs a new session (counted in `qga_recoveries`) and not the run. The controller sends nothing else meanwhile.
+  The runner keeps the artifacts of the Hyper-V matrix as well (`RosetunListResults.psm1`: `plan.json`, `events.jsonl`,
+  `report.json`, `status.json`), which the controller copies out and assesses with the existing `windows_list` adapter, the
+  identity being the VM's UUID and the guest's own count of boots.
+- **Cleanup**, as in the Hyper-V matrix and more: `rosetun disconnect`, the closing marker only when `rosetun status` says
+  `Disconnected` and `protection: none`, the list directory removed, the helper stopped hard, `rosetun-helper-privileged
+  --reset-firewall` (exit 0), the task unregistered, the tunnel adapter gone, the binaries removed. The runner says PASS,
+  ERROR or UNVERIFIED for it, and then the controller reads the guest again with a script of its own (the helper task and
+  process, the engine process, the adapter, the binaries, the list directory, and the runner's own task and directory,
+  which it removes): a leftover is a finding. The guest is shut down by its power button and the overlay is thrown away, but
+  the cleanup is done and read all the same.
+
+### The checks and the lab
+
+| id | Hyper-V | lab |
+| --- | --- | --- |
+| `baseline.egress` | `curl --interface <physical>` to `https://1.1.1.1` | the same curl to `https://203.0.113.2/` (the lab's HTTPS target, certificate checked against the lab CA) |
+| `baseline.dns` | a UDP question for `example.com` to `1.1.1.1:53` from the physical address | a UDP question for a name of the run to the lab's resolver `203.0.113.53:53`, from `192.0.2.2` |
+| `text.connect` | `connect` with a text list holding `example.com` | the same, the list holds `listed.lab.test`, the node is the lab's `192.0.2.1:8388` |
+| `text.tunnel` | `https://example.org` through the tunnel (curl's local address is the tunnel's) | `https://unlisted.lab.test/` (DNS through the tunnel to the lab's DoH, local address the tunnel's, remote address the target's, HTTP 200) |
+| `text.block` | `https://example.com` is blocked | `https://listed.lab.test/` is blocked |
+| `text.physical` | direct curl to `1.1.1.1` fails | direct curl to the target from the physical address fails |
+| `binary.compile` | `sing-box rule-set compile` of `domain_suffix example.com` | the same for `listed.lab.test` |
+| `binary.apply` | `apply` of the compiled list, state `Connected` | the same |
+| `binary.direct` | `example.com` opens with the Direct rule | `listed.lab.test` opens with the Direct rule: the engine connects to the target itself |
+| `binary.default` | `example.org` follows the Block default | `unlisted.lab.test` follows the Block default |
+| `binary.physical` | direct curl fails | the same as `text.physical` |
+
+The lab's resolver and its DoH target answer any name of the lab with the target's address, so a name stands for a domain with
+the same meaning: listed, or not, and then the rule decides. What is not the same: the target's certificate has an IP address
+and no name, so the requests by name use `--insecure` (the routing is what is checked, not the certificate; the answer must
+still come from the target's address with HTTP 200); and the lab has no real Internet, so the Hyper-V matrix's "reachable from
+the node's exit" is "reachable from the lab's router".
+
+### The windows and what they are judged by
+
+The runner marks two windows with the markers of the lab (UDP to the marker service, sent by the guest, acknowledged by the
+lab, never sent twice):
+
+| Label | From | To | What is judged |
+| --- | --- | --- | --- |
+| `baseline` | the marker, before the connect | the marker, after `baseline.dns` | **listed, not judged** (`baseline_noise`, `baseline_table`): what a Windows guest says before a tunnel stands is its own, as in the rest of 9d. That the direct probes work is what the guest's checks say and the lab confirms: the window must show the connection to the target (`disagree:baseline.egress` otherwise) and the lab's resolver must have logged the name (`disagree:baseline.dns`). |
+| `session` | just before `rosetun connect` | `protection: none` after `disconnect` (a closing marker that cannot go out because the protection is still there is an unclosed window: unverified) | **judged, with no tolerance by name.** Expected flows (`SESSION_EXPECTED`): the node's connections (category `tunnel`) and exactly one direct TCP connection to the target (`binary.direct`, the Direct rule: the engine's own connection past the tunnel, by design). Anything else outside `infrastructure` is `DETECTED`: Windows' own names (Microsoft endpoints) have to go into the tunnel, or not leave at all while the kill switch is up, and a direct frame under the kill switch is a leak. Fewer flows than expected is `MISMATCH`, which contradicts `binary.direct`. |
+
+### Command, configuration, summary
+
+    python3 -B -m tools.vm.matrix run windows-list --config CONFIG [--dry-run]
+
+The configuration is `execution-windows-list.example.toml`, schema `rosetun.matrix.execution.windows.v3`: the fields of the
+other Windows suites with a `[list]` of the times (`agent_wait_seconds`, `script_seconds`, `settle_seconds`, `runner_seconds`,
+`poll_seconds`, `shutdown_wait_seconds`), the `xorriso` of the host, the paths and SHA-256 of `rosetun.exe` and
+`rosetun-helper-privileged.exe`, and the sing-box with the pinned hash, and the `[lab]` block of 9d. The lab capture lasts
+`agent_wait + 3 * script + 120 + settle + runner + 300` seconds and may not pass the observer's 2700. `--lab`, `--control` and
+`--diagnostic` are refused; `attach` does not take this suite. The host must have 4 GiB, the lab's 2 GiB and 768 MiB free
+(`host-memory-too-small`), as in 9d.
+
+The steps are those of 9d up to `evidence-disk`, then `media`, the lab's start, `media-unchanged`, `start-test`, `boot-test`,
+`wire-close`, `network`, `certificate`, `settle`, `start-runner`, `runner` (the polls), `collect`, `assess`, `after`,
+`lab-finish`, `lab-read-*`, `shutdown-test`, `close-*`, `evidence-read`, `windows`, `image-unchanged`. The first exchange after
+each wait (the settling) is guarded by the ping of 9d, and a poll that fails is tried again on a new session up to three
+times; a session close to its 128 calls is replaced before the poll that would pass them.
+
+The summary (`rosetun.matrix.windows-list-summary.v1`, in both runs) has `execution` with the network, the certificate, the
+disc (`media`: the hash of every file and of the ISO), the runner (state, step, notes, the seconds, the polls), `checks` (the
+eleven), `assessment` (the Hyper-V adapter's verdict on the artifacts), `markers`, `cleanup` (the runner's and what the
+controller found left), `identity`, `windows` (leak, verdict, flows and expectation of each), `fixtures`, `baseline_*`,
+`findings` and `unverified`. The artifacts of the Hyper-V matrix are in the test run's `windows-list/`.
+
+Exit code, by the convention of the matrix: **0** when all eleven checks pass, the window `session` is `EXPECTED`, the wire
+agrees with the guest, the four fixtures of the lab answered, the artifacts are assessed accepted and the cleanup is `PASS` and
+nothing is left; **1** for a finding (`findings`): a check that failed, a window `session` that is `DETECTED` or `MISMATCH`, a
+pass the wire contradicts, a cleanup that failed or left something (a finding stands whatever else went wrong); **2** when
+the run cannot vouch for itself (`unverified`): an error, a runner that did not end in `runner_seconds`, a check that did not
+run, artifacts the assessment refuses, a window or a marker that was not observed whole, a fixture that did not answer, a
+cleanup nobody could read, a guest that is not the machine the controller started; **130** for an interruption.
+
+### Offline tests
+
+`tests/test_windows_list_lab.py`: the disc (names, pins, a file that changes while it is copied, the size limit, a tool that
+fails, the disc changed before the start), the plan and the start script, the status file (shape, every refusal, the markers),
+the drive and the resources, the configuration (every field strict, the example), and the whole run on fakes: the order, what
+is sent to the guest between the start and the end of the runner (only reads of the status), every verdict and exit code above,
+a poll that fails, a session near its calls, a runner that never ends. The runner itself is a PowerShell script checked on the
+stand; `tools/vm/windows/tests/Test-RosetunScriptArguments.ps1` parses it.
+
+### Checked on the stand (2026-11-20, a developer's runs, not a qualification)
+
+Debian 13 on WSL2 (7.9 GB), QEMU 10.0.13, the image of 9a (`windows-11-26h2-pro-v1`), the lab image `lab-v5m`, a state
+directory of its own (`state-10a-dev`), the Windows build of the checkout (`rosetun.exe`, `rosetun-helper-privileged.exe`) and
+the pinned sing-box 1.14.3. The checkout was not clean (this stage's files). Five runs; the first three are told as they were:
+
+1. **Exit 1.** The runner failed before its first check: its task passed the drive of the disc as `F:\` inside quotes, and a
+   trailing backslash ends the quote on a command line. Its cleanup then failed on a task that was already gone (`.State` of
+   nothing under strict mode) and overwrote the first error in the status. Fixed: the runner takes the drive letter, treats an
+   absent task as absent, and keeps the first error (a later one is appended to its text). The controller read all of it
+   honestly: `cleanup-error`, `cleanup-left:binaries`, unverified windows.
+2. **Exit 0** (all eleven PASS, window `session` `EXPECTED`).
+3. **Exit 1, `window-detected:session`.** The window `session` held two frames of the probe's connection of the window
+   `baseline` (the lab's FIN and the guest's ACK, 0.09 s after the closing marker of the baseline and 0.06 s after the opening
+   marker of the session): the target closes a connection a moment after the guest, and the runner opened the next window 26 ms
+   after it closed the previous one. This is not noise to allow but an edge of the runner's own: it now waits three seconds
+   before the closing marker of the baseline, so that the close lands in its own window. No tolerance was added, nor any
+   exception in the observer.
+4. and 5. **Exit 0 twice in a row**, the runs below, with the code that is committed.
+
+| run | exit | duration | checks | `baseline` (listed) | `session` | cleanup |
+| --- | --- | --- | --- | --- | --- | --- |
+| `780f7cd0...` | 0 | 189.2 s | 11 PASS | probe 2, unexpected 15 (one HTTPS connection to the target: 9 frames out, 6 back) | `EXPECTED`: tunnel 168, infrastructure 2, unexpected 17 (the one direct connection to the target) | runner `PASS`, nothing left, assessment `PASS` |
+| `c3f109a5...` | 0 | 189.1 s | 11 PASS | probe 2, unexpected 15 (the same) | `EXPECTED`: tunnel 169, unexpected 18 (the same one connection) | runner `PASS`, nothing left, assessment `PASS` |
+
+Both: `completed`, both machines `completion_verified`, the guest shut down by its power button, the image unchanged, the four
+fixtures of the lab answered (the node alive, the target answering the guest directly and the node's exit, the resolver and
+the DoH target), the four markers sent once and acknowledged, no QGA recovery. The runner took 20 s of the 189 (the first launch
+of sing-box took 1 to 2 s, Defender did not delay it; the ping before the runner was answered at the first try), and one read of its status found it finished.
+
+What the wire said of Windows: before the session the guest said nothing of its own in the window `baseline` of these two runs
+(after the 60 s of settling). In the failed third run it had made two connections to the target's port 80 (a name of its own
+that the lab's resolver answers with the target: the chain check of the certificate, as `ctldl.windowsupdate.com` in 9d), which
+the runner's windows listed and did not judge. Inside the session no frame of Windows' own went outside the tunnel in any run;
+a longer observation (the 600 s of the rest of 9d with a tunnel up) is not part of this stage, so what Windows says over a
+longer session is not known.
+
+
+
+### Not done here, UNRUN
+
+- Nothing qualifies: the image is `qualified: false`, the run is diagnostic, and no parity table or gate is touched.
+- The Hyper-V List and this run were not compared on the same day or the same build; the table above is a correspondence of
+  meaning, not a result.
+- IPv6 is the lab's static address; the checks use IPv4 only, as the Hyper-V ones.
+- No run with the kill switch of other suites (Failure, Lockdown, Proxy, LAN, Upgrade): stages 10b to 10e.
+- A controller killed in the middle of the run is not attached (`recover --close` and a new run).
+
+### What to reinstall or build
+
+Nothing in the images. The Windows binaries (build above), the configuration with their hashes, and `xorriso` on the host.
+
 ## Stage 12: release evidence pack
 
 `evidence` copies the records of chosen finished runs into one new directory and

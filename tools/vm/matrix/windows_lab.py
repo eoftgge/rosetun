@@ -562,8 +562,12 @@ def run_windows_lab_smoke(config, *, adapters=None, clock=time.monotonic, sleep=
 
 
 def finish(result, config, lease, pair, runs, vms, closed, seen, measured, interrupted, states, started, clock, *,
-           plan, image, lab_id):
-    """Close what is still open, then write the summary into both runs; never raises."""
+           plan, image, lab_id, section=None, exit_of=None):
+    """Close what is still open, then write the summary into both runs; never raises.
+
+    `section` makes the `execution` part of the summary and `exit_of` the code, for the suites (the List suite of
+    stage 10a) that judge something else with the same frame of two machines, a lease and a capture.
+    """
     for role in ROLES:
         if role in vms and role not in closed:
             closed.add(role)
@@ -594,10 +598,11 @@ def finish(result, config, lease, pair, runs, vms, closed, seen, measured, inter
     result['manual_recovery_required'] = bool(runs) and not result['completed']
     try:
         result['lab'] = lab_section(lab_id, seen)
-        result['execution'] = execution_section(result, config, seen, measured, vms, plan, image, started, clock)
+        result['execution'] = (section or execution_section)(result, config, seen, measured, vms, plan, image, started,
+                                                             clock)
     except BaseException as error:
         result['errors'].append(failure('summary', error))
-    result['exit_code'] = exit_code(result, interrupted)
+    result['exit_code'] = (exit_of or exit_code)(result, interrupted)
     payload = json.dumps(result)
     for run in runs.values():
         if run._identity[2] in payload:

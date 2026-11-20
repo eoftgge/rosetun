@@ -47,7 +47,7 @@ def main(argv=None):
     run = commands.add_parser('run', help='execute exploratory Linux L2 or L3 on an explicitly selected stand')
     run.add_argument('suite', choices=['linux-l2', 'linux-l3', 'linux-proxy', 'linux-l5', 'linux-l4',
                                        'linux-reboot-smoke', 'windows-boot-smoke', 'windows-reboot-smoke',
-                                       'windows-lab-smoke'])
+                                       'windows-lab-smoke', 'windows-list'])
     run.add_argument('--config', required=True)
     run.add_argument('--dry-run', action='store_true')
     run.add_argument('--lab', action='store_true',
@@ -99,10 +99,12 @@ def main(argv=None):
                        **({'control': args.control} if args.control else {})}
             result = plan_lab(config, **options) if args.dry_run else lab_smoke(config, canary=args.canary, **options)
             code = 0 if args.dry_run else result['exit_code']
-        elif args.command == 'run' and args.suite in ('windows-boot-smoke', 'windows-reboot-smoke', 'windows-lab-smoke'):
-            # The Windows profile has its own configuration: no L2 content or accounts. `windows-lab-smoke` is a run in
-            # the lab by its configuration (a version 2 file with the lab block), so `--lab` is refused for it too.
-            from . import windows_lab, windows_smoke
+        elif args.command == 'run' and args.suite in ('windows-boot-smoke', 'windows-reboot-smoke', 'windows-lab-smoke',
+                                                      'windows-list'):
+            # The Windows profile has its own configuration: no L2 content or accounts. `windows-lab-smoke` and
+            # `windows-list` are runs in the lab by their configuration (a version 2 or 3 file with the lab block), so
+            # `--lab` is refused for them too.
+            from . import windows_lab, windows_list_lab, windows_smoke
             if args.lab or args.control or args.diagnostic:
                 raise ValueError('--lab, --control and --diagnostic are not for the Windows suites')
             config = windows_smoke.load(args.config)
@@ -113,7 +115,8 @@ def main(argv=None):
             else:
                 run = {'windows-boot-smoke': windows_smoke.run_windows_boot_smoke,
                        'windows-reboot-smoke': windows_smoke.run_windows_reboot_smoke,
-                       'windows-lab-smoke': windows_lab.run_windows_lab_smoke}[args.suite]
+                       'windows-lab-smoke': windows_lab.run_windows_lab_smoke,
+                       'windows-list': windows_list_lab.run_windows_list}[args.suite]
                 result = run(config)
                 code = result['exit_code']
         elif args.command == 'run':

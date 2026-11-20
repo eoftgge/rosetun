@@ -639,6 +639,20 @@ class Vm:
             raise LifecycleError(str(error), self, getattr(error, 'cause', None)) from None
 
     @_guest_serialized
+    def guest_program(self, path, arguments, *, seconds=30):
+        """One program on the current session of a Windows guest, without a shell: its exit code and both streams.
+
+        For what must come back at once and cost the least: reading a small file with `cmd /c type`, which starts
+        in a moment where a PowerShell may take a minute. A program that runs past `seconds` ends the session.
+        """
+        self._windows_session()
+        self.qga.deadline = time.monotonic() + seconds + 5
+        try:
+            return self.qga.run_program(path, list(arguments), self.timeout, seconds=seconds)
+        except QgaError as error:
+            raise LifecycleError(str(error), self, error.cause) from None
+
+    @_guest_serialized
     def _ping_guest(self, timeout):
         """One `guest-ping`, asked again once when no reply comes: (pings asked, what ended it or None)."""
         self._check()
