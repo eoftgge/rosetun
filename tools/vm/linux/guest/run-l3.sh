@@ -1292,6 +1292,7 @@ write_status running preflight
 while IFS=$'\t' read -r id _; do
     case "$id" in
         two-hop.*) record "$id" SKIP "UNRUN: isolated A/B/target observers and physical B/DNS capture are not provisioned" "$(l2_now_ms)" ;;
+        protocol.tuic|protocol.anytls) record "$id" SKIP "UNRUN: Linux L3 stand provisions Shadowsocks only; TUIC and AnyTLS host inbounds are not configured here" "$(l2_now_ms)" ;;
     esac
 done <"$SCENARIOS"
 

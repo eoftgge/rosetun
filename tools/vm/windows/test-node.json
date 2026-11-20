@@ -26,6 +26,28 @@
       "listen_port": 8443,
       "users": [{ "password": "rosetun-test" }],
       "tls": { "enabled": true }
+    },
+    {
+      "type": "tuic",
+      "tag": "tuic-in",
+      "listen": "::",
+      "listen_port": 8444,
+      "users": [
+        {
+          "uuid": "00000000-0000-4000-8000-000000000001",
+          "password": "rosetun-test"
+        }
+      ],
+      "congestion_control": "bbr",
+      "tls": { "enabled": true }
+    },
+    {
+      "type": "anytls",
+      "tag": "anytls-in",
+      "listen": "::",
+      "listen_port": 8445,
+      "users": [{ "password": "rosetun-test" }],
+      "tls": { "enabled": true }
     }
   ],
   "outbounds": [

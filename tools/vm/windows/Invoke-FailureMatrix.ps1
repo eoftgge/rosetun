@@ -2509,6 +2509,66 @@ Test-Step 'hysteria2' 'state is Disconnected' { Wait-RosetunState 'Disconnected'
 Test-Step 'hysteria2' 'direct egress works again' { Test-RosetunDirectEgress }
 Test-Step 'hysteria2' 'IPv6 works again' { Test-RosetunIpv6Egress }
 
+foreach ($protocolScenario in @(
+    @{ Name = 'tuic'; Label = 'TUIC v5'; Request = 'request-tuic.json' }
+    @{ Name = 'anytls'; Label = 'AnyTLS'; Request = 'request-anytls.json' }
+)) {
+    $scenarioName = $protocolScenario.Name
+    $requestName = $protocolScenario.Request
+    Write-Host "$($protocolScenario.Label) through the kill switch..."
+    $connect = Connect-RosetunTunnel -RequestName $requestName -Quiet
+    Test-Step $scenarioName 'connect succeeds' -Note "exit $($connect.ExitCode)" {
+        $connect.ExitCode -eq 0
+    }
+    Test-Step $scenarioName 'state is Connected' { Wait-RosetunState 'Connected' }
+    $egress = Wait-RosetunTunnelEgress
+    Test-Step $scenarioName 'tunnel carries traffic' -Note (Format-Egress $egress) { $egress.Ok }
+    Test-Step $scenarioName 'UDP DNS resolves inside the tunnel' { Test-RealityTunnelDns }
+    Test-Step $scenarioName 'direct egress is blocked' { -not (Test-RosetunDirectEgress) }
+    Test-Step $scenarioName 'direct UDP DNS is blocked' { -not (Test-RosetunDirectDns) }
+    Test-Step $scenarioName 'IPv6 outside the tunnel is blocked' { -not (Test-RosetunIpv6Egress) }
+    $probe = Invoke-RosetunProbe $requestName
+    $probeLines = @(($probe.Output -replace "\x1b\[[0-9;?]*[A-Za-z]", '') -split '\r?\n' |
+        Where-Object { $_.Trim() } | Select-Object -Last 3)
+    Test-Step $scenarioName 'server check works under protection' `
+        -Note ("exit {0}: {1}" -f $probe.ExitCode, ($probeLines -join ' | ')) {
+        $probe.ExitCode -eq 0 -and $probe.Output -match '(?m)^works \d+ ms$'
+    }
+    $delay = Invoke-RosetunCli -Quiet 'delay'
+    Test-Step $scenarioName 'tunnel delay works' -Note "exit $($delay.ExitCode)" {
+        $delay.ExitCode -eq 0 -and $delay.Output -match '(?m)^works \d+ ms$'
+    }
+    if ($UseHostNode) {
+        try {
+            Stop-RosetunTestNode
+            Test-Step $scenarioName 'tunnel fails when the node dies' {
+                -not (Test-RosetunTunnelEgress)
+            }
+            Test-Step $scenarioName 'direct egress stays blocked when the node dies' {
+                -not (Test-RosetunDirectEgress)
+            }
+            Test-Step $scenarioName 'direct UDP DNS stays blocked when the node dies' {
+                -not (Test-RosetunDirectDns)
+            }
+            Test-Step $scenarioName 'IPv6 stays blocked when the node dies' {
+                -not (Test-RosetunIpv6Egress)
+            }
+        }
+        finally {
+            if ($NodeBindInterface) {
+                $null = Start-RosetunTestNode -SingBoxPath $SingBoxPath -BindInterface $NodeBindInterface
+            }
+            else {
+                $null = Start-RosetunTestNode -SingBoxPath $SingBoxPath
+            }
+        }
+    }
+    Disconnect-RosetunTunnel | Out-Null
+    Test-Step $scenarioName 'state is Disconnected' { Wait-RosetunState 'Disconnected' }
+    Test-Step $scenarioName 'direct egress works again' { Test-RosetunDirectEgress }
+    Test-Step $scenarioName 'IPv6 works again' { Test-RosetunIpv6Egress }
+}
+
 $namedIn = @(Find-RosetunLogText $connectionsHost -SinceUtcTicks $runStartedUtcTicks)
 Test-Step 'connections' "no service log names $connectionsHost" -Note ($namedIn -join ', ') {
     $namedIn.Count -eq 0
