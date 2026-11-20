@@ -33,21 +33,11 @@ One developer maintains Rosetun with help from coding agents. Report problems in
 - Local network access and automatic reconnect.
 - Tray, notifications and CLI; English and Russian interfaces.
 
-## New in 0.6
-
-- Share rules as a JSON file or through the clipboard. Preview imports and check where a rule sends an address or program. [Rules](https://eoftgge.github.io/rosetun/en/docs/rules/)
-- Send selected traffic through two proxy exits in sequence (experimental). [Two-hop exits](https://eoftgge.github.io/rosetun/en/docs/rules/#two-hop)
-- Update subscriptions through the main VPN server by default while connected. In TUN mode, a warning can flag a persistent route past the tunnel when the kill switch is off. [Subscriptions](https://eoftgge.github.io/rosetun/en/docs/subscriptions/#updates) · [Protection](https://eoftgge.github.io/rosetun/en/docs/protection/#bypass-warning)
-- Choose whether the delay test opens a new connection or reuses one. [Everyday use](https://eoftgge.github.io/rosetun/en/docs/everyday/)
-- On Linux, Local network is limited to directly attached networks. Reports, system checks and window restore are available on both systems. [Linux support](https://eoftgge.github.io/rosetun/en/docs/linux/)
-
 ## Install
 
 - **Windows 11 x64.** Download the `-setup.exe` installer from the release linked above. [Windows installation](https://eoftgge.github.io/rosetun/en/docs/install/#windows)
 - **Debian 13 amd64.** Install the `.deb` package, add your account to the `rosetun` group and restart the computer. The guide lists requirements for Ubuntu and Linux Mint. [Debian installation](https://eoftgge.github.io/rosetun/en/docs/install/#debian-13)
 - **Arch Linux.** Build `rosetun-bin` with the recipe in this repository. [Arch installation](https://eoftgge.github.io/rosetun/en/docs/install/#arch-linux)
-
-**Updating from 0.5?** Back up your settings first. The first save in 0.6 moves them to format 9. Keep `config.v8.json` if you need to return to 0.5.1. [Verify downloads, update and restore settings](https://eoftgge.github.io/rosetun/en/docs/install/)
 
 ## Documentation
 
