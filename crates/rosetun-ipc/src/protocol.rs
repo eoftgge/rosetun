@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt::Formatter;
 use std::time::Duration;
 
-pub const PROTOCOL_VERSION: u32 = 24;
+pub const PROTOCOL_VERSION: u32 = 25;
 const LOCAL_PROXY_PORT_BUSY: &str = "another program holds the local proxy port ";
 const TUNNEL_ADDRESS_IN_USE: &str = "the tunnel address is still held by the previous session";
 
@@ -838,7 +838,7 @@ mod tests {
             serde_json::to_string(&super::ErrorCode::AccessDenied).unwrap(),
             "\"access_denied\""
         );
-        assert_eq!(super::PROTOCOL_VERSION, 24);
+        assert_eq!(super::PROTOCOL_VERSION, 25);
         assert_eq!(
             serde_json::to_string(&super::Request::OpenNetwork).unwrap(),
             "\"open_network\""
@@ -1679,6 +1679,99 @@ mod tests {
             "0d5c1f2e",
         ] {
             assert!(!debug.contains(secret), "{secret} in {debug}");
+        }
+    }
+
+    #[test]
+    fn tuic_and_anytls_are_allowed_as_two_hop_parent_and_refused_as_exit_b() {
+        use super::{ConnectRequestError, ExtraNode};
+        use rosetun_config::{
+            AnyTlsParams, ExitId, ProxyCredentials, TlsMode, TlsParams, Transport, TuicParams,
+        };
+
+        let config = selected_config();
+        let base_request = super::ConnectRequest::from_config(&config).unwrap();
+        let selection = config.active.clone().unwrap();
+
+        let make_node = |id: &str, outbound: Outbound, tls: TlsMode| Node {
+            id: NodeId::new(id),
+            name: id.to_owned(),
+            server: "192.0.2.50".into(),
+            port: 443,
+            outbound,
+            stream: StreamSettings {
+                transport: Transport::Tcp,
+                tls,
+            },
+            raw: None,
+        };
+
+        let socks = make_node(
+            "socks",
+            Outbound::Socks5(ProxyCredentials::default()),
+            TlsMode::Plain,
+        );
+        let tuic = make_node(
+            "tuic",
+            Outbound::Tuic(TuicParams {
+                uuid: "00000000-0000-4000-8000-000000000001".into(),
+                password: "test-password".into(),
+                congestion_control: None,
+                udp_relay_mode: None,
+                zero_rtt_handshake: false,
+                heartbeat: None,
+                disable_sni: false,
+            }),
+            TlsMode::Tls(TlsParams::default()),
+        );
+        let anytls = make_node(
+            "anytls",
+            Outbound::AnyTls(AnyTlsParams {
+                password: "test-password".into(),
+                idle_session_check_interval: None,
+                idle_session_timeout: None,
+                min_idle_session: None,
+            }),
+            TlsMode::Tls(TlsParams::default()),
+        );
+
+        for parent in [&tuic, &anytls] {
+            let mut request = base_request.clone();
+            request.extra_nodes = vec![
+                ExtraNode {
+                    via: None,
+                    exit: ExitId::new("a"),
+                    selection: selection.clone(),
+                    node: parent.clone(),
+                },
+                ExtraNode {
+                    via: Some(ExitId::new("a")),
+                    exit: ExitId::new("b"),
+                    selection: selection.clone(),
+                    node: socks.clone(),
+                },
+            ];
+            assert!(request.validate_exit_chains().is_ok());
+
+            let mut reversed = base_request.clone();
+            reversed.extra_nodes = vec![
+                ExtraNode {
+                    via: None,
+                    exit: ExitId::new("a"),
+                    selection: selection.clone(),
+                    node: socks.clone(),
+                },
+                ExtraNode {
+                    via: Some(ExitId::new("a")),
+                    exit: ExitId::new("b"),
+                    selection: selection.clone(),
+                    node: parent.clone(),
+                },
+            ];
+            assert!(matches!(
+                reversed.validate_exit_chains(),
+                Err(ConnectRequestError::UnsupportedExitChain)
+            ));
         }
     }
 }

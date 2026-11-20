@@ -1,11 +1,12 @@
 mod support;
 
 use rosetun_config::{
-    AccentPreset, AppConfig, CONFIG_VERSION, ConfigError, ConnectionMode, CountryCode, DelayMode,
-    EngineKind, Exit, ExitId, ExitTarget, FormatError, HwidScope, Hysteria2Params, List,
-    ListFormat, ListId, ListSource, LocalProxySettings, Node, NodeId, Outbound, QuitAction,
-    RealityParams, Rule, RuleId, RuleMatcher, RuleTarget, Selection, StreamSettings,
-    SubscriptionId, TlsFragment, TlsMode, TlsParams, Transport, VlessParams, XhttpExtra, XhttpMode,
+    AccentPreset, AnyTlsParams, AppConfig, CONFIG_VERSION, ConfigError, ConnectionMode,
+    CountryCode, DelayMode, EngineKind, Exit, ExitId, ExitTarget, FormatError, HwidScope,
+    Hysteria2Params, List, ListFormat, ListId, ListSource, LocalProxySettings, Node, NodeId,
+    Outbound, QuitAction, RealityParams, Rule, RuleId, RuleMatcher, RuleTarget, Selection,
+    StreamSettings, SubscriptionId, TlsFragment, TlsMode, TlsParams, Transport,
+    TuicCongestionControl, TuicParams, TuicUdpRelayMode, VlessParams, XhttpExtra, XhttpMode,
     XhttpRange, XhttpXmux, from_json,
 };
 use serde_json::{Value, json};
@@ -266,6 +267,53 @@ fn current_configuration_fixture_guards_the_serialized_format() {
             raw: None,
         });
     }
+    expected.subscriptions[1].nodes.push(Node {
+        id: NodeId::new("tuic"),
+        name: "TUIC".into(),
+        server: "192.0.2.40".into(),
+        port: 8444,
+        outbound: Outbound::Tuic(TuicParams {
+            uuid: "00000000-0000-4000-8000-000000000040".into(),
+            password: "test-secret".into(),
+            congestion_control: Some(TuicCongestionControl::Bbr),
+            udp_relay_mode: Some(TuicUdpRelayMode::Native),
+            zero_rtt_handshake: true,
+            heartbeat: Some("10s".into()),
+            disable_sni: false,
+        }),
+        stream: StreamSettings {
+            transport: Transport::Tcp,
+            tls: TlsMode::Tls(TlsParams {
+                sni: Some("tuic.example.com".into()),
+                alpn: vec!["h3".into()],
+                allow_insecure: false,
+                fingerprint: None,
+            }),
+        },
+        raw: None,
+    });
+    expected.subscriptions[1].nodes.push(Node {
+        id: NodeId::new("anytls"),
+        name: "AnyTLS".into(),
+        server: "192.0.2.41".into(),
+        port: 8445,
+        outbound: Outbound::AnyTls(AnyTlsParams {
+            password: "test-secret".into(),
+            idle_session_check_interval: Some("30s".into()),
+            idle_session_timeout: Some("1m".into()),
+            min_idle_session: Some(2),
+        }),
+        stream: StreamSettings {
+            transport: Transport::Tcp,
+            tls: TlsMode::Tls(TlsParams {
+                sni: Some("anytls.example.com".into()),
+                alpn: vec!["h2".into(), "http/1.1".into()],
+                allow_insecure: false,
+                fingerprint: Some("chrome".into()),
+            }),
+        },
+        raw: None,
+    });
     expected.settings.tls_fragment = TlsFragment {
         enabled: true,
         packets: "1-3".parse().unwrap(),

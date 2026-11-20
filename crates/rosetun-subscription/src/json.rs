@@ -1,9 +1,17 @@
 use serde_json::Value;
 
 use crate::common::{Fields, build, clean, hysteria_ports, is_service_address};
-use crate::{Entry, Format, ParseError, Record, SkipReason};
+use crate::{Entry, Format, ParseError, Record, SkipReason, UnsupportedTransport};
 
-const PROTOCOLS: &[&str] = &["vless", "vmess", "trojan", "shadowsocks", "hysteria2"];
+const PROTOCOLS: &[&str] = &[
+    "vless",
+    "vmess",
+    "trojan",
+    "shadowsocks",
+    "hysteria2",
+    "tuic",
+    "anytls",
+];
 const XRAY_PROTOCOLS: &[&str] = &["vless", "vmess", "trojan", "shadowsocks"];
 
 pub(crate) fn format(value: &Value) -> Result<Format, ParseError> {
@@ -299,25 +307,137 @@ fn sing_box(outbound: &Value) -> Record {
         let obfs = &outbound["obfs"];
         put(&mut fields, "obfs", obfs.get("type"));
         put(&mut fields, "obfs_password", obfs.get("password"));
+    } else if protocol == "tuic" {
+        if outbound.get("udp_over_stream").and_then(Value::as_bool) == Some(true)
+            || outbound
+                .get("network")
+                .is_some_and(|value| !value.is_null() && value.as_str() != Some(""))
+        {
+            return (
+                Some(scheme.to_owned()),
+                Entry::Skip(SkipReason::UnsupportedOption),
+            );
+        }
+        if outbound.get("transport").is_some_and(|value| !value.is_null()) {
+            return (
+                Some(scheme.to_owned()),
+                Entry::Skip(SkipReason::UnsupportedTransport(
+                    UnsupportedTransport::Other,
+                )),
+            );
+        }
+        for key in ["congestion_control", "udp_relay_mode", "heartbeat"] {
+            if let Some(value) = outbound.get(key).filter(|value| !value.is_null()) {
+                let Some(text) = value.as_str() else {
+                    return (
+                        Some(scheme.to_owned()),
+                        Entry::Skip(SkipReason::InvalidRecord),
+                    );
+                };
+                fields.insert(key.to_owned(), text.to_owned());
+            }
+        }
+        if let Some(value) = outbound
+            .get("zero_rtt_handshake")
+            .filter(|value| !value.is_null())
+        {
+            let Some(flag) = value.as_bool() else {
+                return (
+                    Some(scheme.to_owned()),
+                    Entry::Skip(SkipReason::InvalidRecord),
+                );
+            };
+            fields.insert("zero_rtt_handshake".to_owned(), flag.to_string());
+        }
+    } else if protocol == "anytls" {
+        if outbound
+            .get("client_metadata")
+            .is_some_and(|value| !value.is_null() && value.as_str() != Some(""))
+            || outbound.get("tcp_fast_open").and_then(Value::as_bool) == Some(true)
+        {
+            return (
+                Some(scheme.to_owned()),
+                Entry::Skip(SkipReason::UnsupportedOption),
+            );
+        }
+        if outbound.get("transport").is_some_and(|value| !value.is_null()) {
+            return (
+                Some(scheme.to_owned()),
+                Entry::Skip(SkipReason::UnsupportedTransport(
+                    UnsupportedTransport::Other,
+                )),
+            );
+        }
+        for key in ["idle_session_check_interval", "idle_session_timeout"] {
+            if let Some(value) = outbound.get(key).filter(|value| !value.is_null()) {
+                let Some(text) = value.as_str() else {
+                    return (
+                        Some(scheme.to_owned()),
+                        Entry::Skip(SkipReason::InvalidRecord),
+                    );
+                };
+                fields.insert(key.to_owned(), text.to_owned());
+            }
+        }
+        if let Some(value) = outbound
+            .get("min_idle_session")
+            .filter(|value| !value.is_null())
+        {
+            let Some(count) = value.as_u64() else {
+                return (
+                    Some(scheme.to_owned()),
+                    Entry::Skip(SkipReason::InvalidRecord),
+                );
+            };
+            fields.insert("min_idle_session".to_owned(), count.to_string());
+        }
     }
 
     fields.insert("security".to_owned(), "none".to_owned());
     let tls = &outbound["tls"];
-    if protocol == "hysteria2" {
+    if matches!(protocol, "hysteria2" | "tuic" | "anytls") {
         if !tls.is_object() || tls.get("enabled").and_then(Value::as_bool) == Some(false) {
             return (
                 Some(scheme.to_owned()),
                 Entry::Skip(SkipReason::UnsupportedSecurity),
             );
         }
-        if tls.get("certificate_public_key_sha256").is_some() {
+        if tls
+            .get("certificate_public_key_sha256")
+            .is_some_and(|value| !value.is_null())
+        {
             return (
                 Some(scheme.to_owned()),
                 Entry::Skip(SkipReason::UnsupportedPin),
             );
         }
+        if protocol == "tuic" {
+            if tls.pointer("/reality/enabled").and_then(Value::as_bool) == Some(true) {
+                return (
+                    Some(scheme.to_owned()),
+                    Entry::Skip(SkipReason::UnsupportedSecurity),
+                );
+            }
+            if let Some(value) = tls.get("disable_sni").filter(|value| !value.is_null()) {
+                let Some(flag) = value.as_bool() else {
+                    return (
+                        Some(scheme.to_owned()),
+                        Entry::Skip(SkipReason::InvalidRecord),
+                    );
+                };
+                fields.insert("disable_sni".to_owned(), flag.to_string());
+            }
+        }
+        if protocol == "anytls" && tls.get("disable_sni").and_then(Value::as_bool) == Some(true) {
+            return (
+                Some(scheme.to_owned()),
+                Entry::Skip(SkipReason::UnsupportedOption),
+            );
+        }
     }
-    if protocol == "hysteria2" || tls.get("enabled").and_then(Value::as_bool) == Some(true) {
+    if matches!(protocol, "hysteria2" | "tuic" | "anytls")
+        || tls.get("enabled").and_then(Value::as_bool) == Some(true)
+    {
         fields.insert("security".to_owned(), "tls".to_owned());
         for (source, target) in [
             ("server_name", "sni"),

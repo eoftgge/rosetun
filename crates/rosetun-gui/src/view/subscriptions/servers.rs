@@ -100,7 +100,7 @@ fn ping_quality(result: PingResult) -> u8 {
 
 pub(super) fn ping_label(
     result: PingResult,
-    is_hysteria2: bool,
+    is_udp: bool,
 ) -> (String, Color32, Option<String>) {
     match result {
         PingResult::Answered(elapsed) => (
@@ -127,7 +127,7 @@ pub(super) fn ping_label(
         PingResult::Unsupported => (
             tr!("ping-unsupported"),
             theme::palette().text_dim,
-            is_hysteria2.then(|| tr!("ping-udp-hint")),
+            is_udp.then(|| tr!("ping-udp-hint")),
         ),
         PingResult::Pending => (tr!("ping-pending"), theme::palette().text_dim, None),
     }
@@ -137,7 +137,7 @@ fn hover_ping_hint(
     result: Option<PingResult>,
     pointer: Option<egui::Pos2>,
     region: Option<egui::Rect>,
-    is_hysteria2: bool,
+    is_udp: bool,
 ) -> Option<String> {
     if !pointer
         .zip(region)
@@ -145,7 +145,7 @@ fn hover_ping_hint(
     {
         return None;
     }
-    ping_label(result?, is_hysteria2).2
+    ping_label(result?, is_udp).2
 }
 
 pub(super) fn check_menu_items(
@@ -262,7 +262,7 @@ pub(super) fn server_row(
         ping_result,
         ui.ctx().pointer_hover_pos(),
         ping_region,
-        matches!(&node.outbound, Outbound::Hysteria2(_)),
+        matches!(&node.outbound, Outbound::Hysteria2(_) | Outbound::Tuic(_)),
     ) {
         response.on_hover_text(hint)
     } else {
@@ -365,8 +365,10 @@ pub(super) fn server_row(
                 );
             }
         }
-        let (ping_text, color, _) =
-            ping_label(result, matches!(&node.outbound, Outbound::Hysteria2(_)));
+        let (ping_text, color, _) = ping_label(
+            result,
+            matches!(&node.outbound, Outbound::Hysteria2(_) | Outbound::Tuic(_)),
+        );
         painter.text(
             egui::pos2(right, rect.center().y),
             egui::Align2::RIGHT_CENTER,

@@ -115,6 +115,7 @@ pub enum SkipReason {
     UnsupportedShadowsocksMethod,
     UnsupportedObfs,
     UnsupportedPin,
+    UnsupportedOption,
     ServiceRecord,
 }
 
@@ -153,7 +154,8 @@ impl fmt::Display for SkipReason {
                 f.write_str("Shadowsocks method is not supported")
             }
             Self::UnsupportedObfs => f.write_str("Hysteria2 obfuscation type is not supported"),
-            Self::UnsupportedPin => f.write_str("Hysteria2 certificate pin is not supported"),
+            Self::UnsupportedPin => f.write_str("certificate pin is not supported"),
+            Self::UnsupportedOption => f.write_str("protocol option is not supported"),
             Self::ServiceRecord => f.write_str("record contains a provider notice"),
         }
     }

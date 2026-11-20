@@ -190,12 +190,14 @@ pub fn node_protocol(node: &Node) -> &'static str {
         Outbound::Trojan(_) => "trojan",
         Outbound::Shadowsocks(_) => "shadowsocks",
         Outbound::Hysteria2(_) => "hysteria2",
+        Outbound::Tuic(_) => "tuic",
+        Outbound::AnyTls(_) => "anytls",
         Outbound::Unknown { .. } => "unknown",
     }
 }
 
 pub fn node_transport(node: &Node) -> &'static str {
-    if matches!(node.outbound, Outbound::Hysteria2(_)) {
+    if matches!(node.outbound, Outbound::Hysteria2(_) | Outbound::Tuic(_)) {
         return "quic";
     }
     match &node.stream.transport {
@@ -208,7 +210,7 @@ pub fn node_transport(node: &Node) -> &'static str {
 }
 
 pub fn node_tls(node: &Node) -> &'static str {
-    if matches!(node.outbound, Outbound::Hysteria2(_)) {
+    if matches!(node.outbound, Outbound::Hysteria2(_) | Outbound::Tuic(_)) {
         return "tls";
     }
     match &node.stream.tls {
@@ -233,7 +235,7 @@ mod tests {
 
     #[test]
     fn hysteria2_details_show_quic_and_tls() {
-        let node = Node {
+        let mut node = Node {
             id: rosetun_config::NodeId::new("test"),
             name: "Test".into(),
             server: "example.com".into(),
@@ -253,6 +255,29 @@ mod tests {
         };
         assert_eq!(node_protocol(&node), "hysteria2");
         assert_eq!(node_transport(&node), "quic");
+        assert_eq!(node_tls(&node), "tls");
+
+        node.outbound = Outbound::Tuic(rosetun_config::TuicParams {
+            uuid: "00000000-0000-4000-8000-000000000001".into(),
+            password: String::new(),
+            congestion_control: None,
+            udp_relay_mode: None,
+            zero_rtt_handshake: false,
+            heartbeat: None,
+            disable_sni: false,
+        });
+        assert_eq!(node_protocol(&node), "tuic");
+        assert_eq!(node_transport(&node), "quic");
+        assert_eq!(node_tls(&node), "tls");
+
+        node.outbound = Outbound::AnyTls(rosetun_config::AnyTlsParams {
+            password: "test-secret".into(),
+            idle_session_check_interval: None,
+            idle_session_timeout: None,
+            min_idle_session: None,
+        });
+        assert_eq!(node_protocol(&node), "anytls");
+        assert_eq!(node_transport(&node), "tcp");
         assert_eq!(node_tls(&node), "tls");
         assert_eq!(node_address(&node), "example.com:443");
     }

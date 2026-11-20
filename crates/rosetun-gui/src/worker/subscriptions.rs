@@ -196,10 +196,12 @@ fn check_nodes<'a>(subscription: &'a Subscription, selected: Option<&NodeId>) ->
 }
 
 fn ping_targets<'a>(nodes: &[&'a Node]) -> (Vec<&'a Node>, Vec<&'a Node>) {
-    nodes
-        .iter()
-        .copied()
-        .partition(|node| !matches!(&node.outbound, rosetun_config::Outbound::Hysteria2(_)))
+    nodes.iter().copied().partition(|node| {
+        !matches!(
+            &node.outbound,
+            rosetun_config::Outbound::Hysteria2(_) | rosetun_config::Outbound::Tuic(_)
+        )
+    })
 }
 
 fn log_subscription_error(operation: &str, error: &impl std::fmt::Display) {
@@ -288,11 +290,32 @@ mod tests {
             up_mbps: None,
             down_mbps: None,
         });
-        let (targets, unsupported) = ping_targets(&[&udp, &tcp]);
-        assert_eq!(targets.len(), 1);
+        let mut tuic = tcp.clone();
+        tuic.id = NodeId::new("tuic");
+        tuic.outbound = rosetun_config::Outbound::Tuic(rosetun_config::TuicParams {
+            uuid: "11111111-1111-4111-8111-111111111111".into(),
+            password: "test-secret".into(),
+            congestion_control: None,
+            udp_relay_mode: None,
+            zero_rtt_handshake: false,
+            heartbeat: None,
+            disable_sni: false,
+        });
+        let mut anytls = tcp.clone();
+        anytls.id = NodeId::new("anytls");
+        anytls.outbound = rosetun_config::Outbound::AnyTls(rosetun_config::AnyTlsParams {
+            password: "test-secret".into(),
+            idle_session_check_interval: None,
+            idle_session_timeout: None,
+            min_idle_session: None,
+        });
+        let (targets, unsupported) = ping_targets(&[&udp, &tuic, &tcp, &anytls]);
+        assert_eq!(targets.len(), 2);
         assert_eq!(targets[0].id, tcp.id);
-        assert_eq!(unsupported.len(), 1);
+        assert_eq!(targets[1].id, anytls.id);
+        assert_eq!(unsupported.len(), 2);
         assert_eq!(unsupported[0].id, udp.id);
+        assert_eq!(unsupported[1].id, tuic.id);
     }
 
     #[test]

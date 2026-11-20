@@ -616,6 +616,11 @@ pub(crate) fn skip_reason(language: Language, reason: &SkipReason) -> String {
         SkipReason::UnsupportedPin => {
             tr_in(language, "error-skip-unsupported-pin", &FluentArgs::new())
         }
+        SkipReason::UnsupportedOption => tr_in(
+            language,
+            "error-skip-unsupported-option",
+            &FluentArgs::new(),
+        ),
         SkipReason::ServiceRecord => {
             tr_in(language, "error-skip-service-record", &FluentArgs::new())
         }
@@ -977,6 +982,7 @@ mod tests {
             SkipReason::UnsupportedShadowsocksMethod,
             SkipReason::UnsupportedObfs,
             SkipReason::UnsupportedPin,
+            SkipReason::UnsupportedOption,
             SkipReason::ServiceRecord,
         ] {
             assert_eq!(skip_reason(Language::English, &reason), reason.to_string());

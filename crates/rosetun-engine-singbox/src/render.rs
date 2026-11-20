@@ -489,6 +489,11 @@ fn proxy_outbound(node: &Node, tag: &str) -> Result<Value, EngineError> {
                 outbound.insert("down_mbps".into(), down.into());
             }
         }
+        Outbound::Tuic(_) | Outbound::AnyTls(_) => {
+            return Err(EngineError::Unsupported(
+                "protocol not yet rendered by the sing-box backend".into(),
+            ));
+        }
         Outbound::Unknown { scheme, .. } => {
             return Err(EngineError::Unsupported(format!(
                 "protocol {scheme} not supported by the sing box backend"

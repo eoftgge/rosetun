@@ -2,9 +2,10 @@ use serde_json::Value;
 use url::{Host, Url};
 
 use crate::common::{
-    Fields, build, clean, decode_base64, hysteria_ports, is_service_address, percent_decode, truth,
+    Fields, build, clean, decode_base64, hysteria_ports, is_service_address, parse_bool,
+    percent_decode, truth,
 };
-use crate::{Entry, Record, SkipReason};
+use crate::{Entry, Record, SkipReason, UnsupportedTransport};
 
 pub(crate) fn parse(line: &str) -> Record {
     let Some((scheme, rest)) = line.split_once("://") else {
@@ -19,6 +20,8 @@ pub(crate) fn parse(line: &str) -> Record {
         "http" | "https" | "socks5" => crate::parse_proxy_uri(line),
         "vless" | "trojan" => ordinary(line, &scheme),
         "hysteria2" | "hy2" => hysteria2(rest),
+        "tuic" => tuic(line),
+        "anytls" => anytls(line),
         "vmess" => vmess(rest),
         "ss" => shadowsocks(rest),
         "happ" | "incy" | "v2raytun" | "hiddify" | "streisand" | "sing-box" | "clash"
@@ -86,19 +89,23 @@ fn ordinary(line: &str, protocol: &str) -> Result<rosetun_config::Node, SkipReas
     build(protocol, &fields)
 }
 
-fn endpoint_fields(url: &Url) -> Result<Fields, SkipReason> {
-    let server = match url.host().ok_or(SkipReason::MissingField)? {
+fn endpoint_host(url: &Url) -> Result<String, SkipReason> {
+    match url.host().ok_or(SkipReason::MissingField)? {
         Host::Domain(value) => {
             let decoded = percent_decode(value);
             match Host::parse(&decoded).map_err(|_| SkipReason::InvalidRecord)? {
-                Host::Domain(value) => value,
-                Host::Ipv4(value) => value.to_string(),
-                Host::Ipv6(value) => value.to_string(),
+                Host::Domain(value) => Ok(value),
+                Host::Ipv4(value) => Ok(value.to_string()),
+                Host::Ipv6(value) => Ok(value.to_string()),
             }
         }
-        Host::Ipv4(value) => value.to_string(),
-        Host::Ipv6(value) => value.to_string(),
-    };
+        Host::Ipv4(value) => Ok(value.to_string()),
+        Host::Ipv6(value) => Ok(value.to_string()),
+    }
+}
+
+fn endpoint_fields(url: &Url) -> Result<Fields, SkipReason> {
+    let server = endpoint_host(url)?;
     let port = url.port().ok_or(SkipReason::InvalidPort)?;
     Ok(Fields::from([
         ("server".to_owned(), server),
@@ -108,6 +115,195 @@ fn endpoint_fields(url: &Url) -> Result<Fields, SkipReason> {
             percent_decode(url.fragment().unwrap_or("")),
         ),
     ]))
+}
+
+fn tuic(line: &str) -> Result<rosetun_config::Node, SkipReason> {
+    let url = Url::parse(line).map_err(|_| SkipReason::InvalidRecord)?;
+    let mut fields = endpoint_fields(&url)?;
+    fields.insert("uuid".to_owned(), percent_decode(url.username()));
+    if let Some(password) = url.password() {
+        fields.insert("password".to_owned(), percent_decode(password));
+    }
+
+    for (key, value) in url.query_pairs() {
+        match key.as_ref() {
+            "congestion_control" | "congestion-control" => {
+                fields.insert("congestion_control".to_owned(), value.into_owned());
+            }
+            "udp_relay_mode" | "udp-relay-mode" => {
+                fields.insert("udp_relay_mode".to_owned(), value.into_owned());
+            }
+            "zero_rtt_handshake" | "zero-rtt-handshake" | "reduce_rtt" | "reduce-rtt" => {
+                fields.insert("zero_rtt_handshake".to_owned(), value.into_owned());
+            }
+            "heartbeat" => {
+                fields.insert("heartbeat".to_owned(), value.into_owned());
+            }
+            "sni" | "peer" => {
+                fields.insert("sni".to_owned(), value.into_owned());
+            }
+            "alpn" => {
+                fields.insert("alpn".to_owned(), value.into_owned());
+            }
+            "allow_insecure" | "allowInsecure" | "insecure" => {
+                fields.insert("insecure".to_owned(), value.into_owned());
+            }
+            "disable_sni" | "disable-sni" => {
+                fields.insert("disable_sni".to_owned(), value.into_owned());
+            }
+            "fp" | "fingerprint" => {
+                fields.insert("fingerprint".to_owned(), value.into_owned());
+            }
+            "security" => {
+                if !value.is_empty() {
+                    fields.insert("security".to_owned(), value.into_owned());
+                }
+            }
+            "version" => {
+                if !value.is_empty() && value.as_ref() != "5" {
+                    return Err(SkipReason::UnsupportedOption);
+                }
+            }
+            "pinSHA256" | "hpkp" | "pcs" => {
+                if !value.is_empty() {
+                    return Err(SkipReason::UnsupportedPin);
+                }
+            }
+            "pbk" | "sid" => {
+                if !value.is_empty() {
+                    return Err(SkipReason::UnsupportedSecurity);
+                }
+            }
+            "udp_over_stream" | "udp-over-stream" | "tfo" | "fastopen" | "tcp_fast_open" => {
+                if parse_bool(&value)? {
+                    return Err(SkipReason::UnsupportedOption);
+                }
+            }
+            "token" | "network" => {
+                if !value.is_empty() {
+                    return Err(SkipReason::UnsupportedOption);
+                }
+            }
+            "type" | "transport" | "net" => {
+                if !value.is_empty()
+                    && !value.eq_ignore_ascii_case("quic")
+                    && !value.eq_ignore_ascii_case("udp")
+                {
+                    return Err(SkipReason::UnsupportedTransport(
+                        UnsupportedTransport::Other,
+                    ));
+                }
+            }
+            _ => {
+                if !value.is_empty() {
+                    return Err(SkipReason::UnsupportedOption);
+                }
+            }
+        }
+    }
+    build("tuic", &fields)
+}
+
+fn anytls(line: &str) -> Result<rosetun_config::Node, SkipReason> {
+    let url = Url::parse(line).map_err(|_| SkipReason::InvalidRecord)?;
+    let server = endpoint_host(&url)?;
+    let port = match url.port() {
+        Some(0) => return Err(SkipReason::InvalidPort),
+        Some(port) => port,
+        // Per the AnyTLS URI specification, port defaults to 443 when omitted.
+        None => 443,
+    };
+    let mut fields = Fields::from([
+        ("server".to_owned(), server),
+        ("port".to_owned(), port.to_string()),
+        (
+            "name".to_owned(),
+            percent_decode(url.fragment().unwrap_or("")),
+        ),
+    ]);
+    let credential = match url.password() {
+        Some(password) => format!("{}:{password}", url.username()),
+        None => url.username().to_owned(),
+    };
+    fields.insert("password".to_owned(), percent_decode(&credential));
+
+    for (key, value) in url.query_pairs() {
+        match key.as_ref() {
+            "sni" | "peer" => {
+                fields.insert("sni".to_owned(), value.into_owned());
+            }
+            "alpn" => {
+                fields.insert("alpn".to_owned(), value.into_owned());
+            }
+            "allow_insecure" | "allowInsecure" | "insecure" => {
+                fields.insert("insecure".to_owned(), value.into_owned());
+            }
+            "fp" | "fingerprint" => {
+                fields.insert("fingerprint".to_owned(), value.into_owned());
+            }
+            "security" => {
+                if !value.is_empty() {
+                    fields.insert("security".to_owned(), value.into_owned());
+                }
+            }
+            "pbk" => {
+                fields.insert("public_key".to_owned(), value.into_owned());
+            }
+            "sid" => {
+                fields.insert("short_id".to_owned(), value.into_owned());
+            }
+            "idle_session_check_interval" | "idle-session-check-interval" => {
+                fields.insert(
+                    "idle_session_check_interval".to_owned(),
+                    value.into_owned(),
+                );
+            }
+            "idle_session_timeout" | "idle-session-timeout" => {
+                fields.insert("idle_session_timeout".to_owned(), value.into_owned());
+            }
+            "min_idle_session" | "min-idle-session" => {
+                fields.insert("min_idle_session".to_owned(), value.into_owned());
+            }
+            "udp" => {
+                if !value.is_empty() && !parse_bool(&value)? {
+                    return Err(SkipReason::UnsupportedOption);
+                }
+            }
+            "pinSHA256" | "hpkp" | "pcs" => {
+                if !value.is_empty() {
+                    return Err(SkipReason::UnsupportedPin);
+                }
+            }
+            "tfo" | "fastopen" | "tcp_fast_open" => {
+                if parse_bool(&value)? {
+                    return Err(SkipReason::UnsupportedOption);
+                }
+            }
+            "type" | "transport" | "net" => {
+                if !value.is_empty() && !value.eq_ignore_ascii_case("tcp") {
+                    return Err(SkipReason::UnsupportedTransport(
+                        UnsupportedTransport::Other,
+                    ));
+                }
+            }
+            "client_metadata" | "client-metadata" | "padding_scheme" | "padding-scheme" => {
+                if !value.is_empty() {
+                    return Err(SkipReason::UnsupportedOption);
+                }
+            }
+            _ => {
+                if !value.is_empty() {
+                    return Err(SkipReason::UnsupportedOption);
+                }
+            }
+        }
+    }
+    if fields.get("public_key").is_some_and(|v| !v.is_empty())
+        && fields.get("security").map(String::as_str) != Some("reality")
+    {
+        return Err(SkipReason::UnsupportedSecurity);
+    }
+    build("anytls", &fields)
 }
 
 fn hysteria2(rest: &str) -> Result<rosetun_config::Node, SkipReason> {

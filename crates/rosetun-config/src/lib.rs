@@ -27,9 +27,11 @@ pub use list_validation::{
     validate_srs,
 };
 pub use node::{
-    Hysteria2Params, Node, Outbound, ProxyCredentials, RealityParams, ShadowsocksParams,
-    StreamSettings, TlsMode, TlsParams, Transport, TrojanParams, VlessParams, VmessParams,
-    XhttpExtra, XhttpMode, XhttpRange, XhttpXmux, fragments_tls, node_country, uses_xray,
+    AnyTlsParams, Hysteria2Params, Node, Outbound, ProxyCredentials, RealityParams,
+    ShadowsocksParams, StreamSettings, TlsMode, TlsParams, Transport, TrojanParams,
+    TuicCongestionControl, TuicParams, TuicUdpRelayMode, VlessParams, VmessParams, XhttpExtra,
+    XhttpMode, XhttpRange, XhttpXmux, fragments_tls, is_valid_duration, is_valid_uuid,
+    node_country, uses_xray,
 };
 pub use prefix::{IpPrefix, LINK_LOCAL_V4, LINK_LOCAL_V6, is_private_address};
 pub use report::{
@@ -423,7 +425,8 @@ pub fn from_json(bytes: &[u8]) -> Result<(AppConfig, Option<u32>), FormatError> 
 }
 
 fn migrate_9_to_10(_config: &mut Map<String, Value>) {
-    // The new country flag preference is supplied by the serde default.
+    // Format 10 adds the country flag preference (serde default) and TUIC / AnyTLS outbounds;
+    // older writers must refuse this file.
 }
 
 fn migrate_8_to_9(_config: &mut Map<String, Value>) {

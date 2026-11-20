@@ -93,7 +93,8 @@ error-skip-reality-key = Reality public key is missing
 error-skip-shadowsocks-plugin = Shadowsocks plugins are not supported
 error-skip-shadowsocks-method = Shadowsocks method is not supported
 error-skip-unsupported-obfs = Hysteria2 obfuscation type is not supported
-error-skip-unsupported-pin = Hysteria2 certificate pin is not supported
+error-skip-unsupported-pin = certificate pin is not supported
+error-skip-unsupported-option = protocol option is not supported
 error-skip-service-record = record contains a provider notice
 error-process-list = could not list running processes: { $detail }
 error-helper-transport = unable to contact the Rosetun service: { $detail }
@@ -222,7 +223,7 @@ xray-auto-detail = Xray for REALITY and XHTTP, sing-box for the rest.
 xray-off = Without Xray
 xray-off-detail = REALITY and XHTTP servers may fail to connect.
 xray-always = Xray for all servers
-xray-always-detail = Except Hysteria2. For servers that only work with Xray.
+xray-always-detail = Except Hysteria2, TUIC and AnyTLS. For servers that only work with Xray.
 xray-off-warning = Subscriptions include { $count ->
     [one] { $n } REALITY server.
    *[other] { $n } REALITY servers.
@@ -797,7 +798,7 @@ ping-fails-hint = The request through the server failed
 ping-unresolved = address not found
 ping-unresolved-hint = While the network is blocked, only servers given by IP can be checked
 ping-unsupported = not supported
-ping-udp-hint = For Hysteria2, use the URL test.
+ping-udp-hint = For Hysteria2 and TUIC, use the URL test.
 full-check-busy = A server check is already running
 support = Support
 website = Website

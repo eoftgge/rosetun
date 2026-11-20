@@ -342,6 +342,62 @@
             "transport": "tcp",
             "tls": "plain"
           }
+        },
+        {
+          "id": "tuic",
+          "name": "TUIC",
+          "server": "192.0.2.40",
+          "port": 8444,
+          "outbound": {
+            "tuic": {
+              "uuid": "00000000-0000-4000-8000-000000000040",
+              "password": "test-secret",
+              "congestion_control": "bbr",
+              "udp_relay_mode": "native",
+              "zero_rtt_handshake": true,
+              "heartbeat": "10s"
+            }
+          },
+          "stream": {
+            "transport": "tcp",
+            "tls": {
+              "tls": {
+                "sni": "tuic.example.com",
+                "alpn": [
+                  "h3"
+                ],
+                "allow_insecure": false
+              }
+            }
+          }
+        },
+        {
+          "id": "anytls",
+          "name": "AnyTLS",
+          "server": "192.0.2.41",
+          "port": 8445,
+          "outbound": {
+            "anytls": {
+              "password": "test-secret",
+              "idle_session_check_interval": "30s",
+              "idle_session_timeout": "1m",
+              "min_idle_session": 2
+            }
+          },
+          "stream": {
+            "transport": "tcp",
+            "tls": {
+              "tls": {
+                "sni": "anytls.example.com",
+                "alpn": [
+                  "h2",
+                  "http/1.1"
+                ],
+                "allow_insecure": false,
+                "fingerprint": "chrome"
+              }
+            }
+          }
         }
       ],
       "auto_update": false,

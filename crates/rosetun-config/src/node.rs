@@ -41,6 +41,8 @@ pub(crate) fn xray_supports(outbound: &Outbound) -> bool {
         Outbound::Http(_)
         | Outbound::Socks5(_)
         | Outbound::Hysteria2(_)
+        | Outbound::Tuic(_)
+        | Outbound::AnyTls(_)
         | Outbound::Unknown { .. } => false,
     }
 }
@@ -113,6 +115,9 @@ pub enum Outbound {
     Trojan(TrojanParams),
     Shadowsocks(ShadowsocksParams),
     Hysteria2(Hysteria2Params),
+    Tuic(TuicParams),
+    #[serde(rename = "anytls")]
+    AnyTls(AnyTlsParams),
     Unknown {
         scheme: String,
         params: BTreeMap<String, String>,
@@ -129,6 +134,8 @@ impl fmt::Debug for Outbound {
             Self::Trojan(params) => f.debug_tuple("Trojan").field(params).finish(),
             Self::Shadowsocks(params) => f.debug_tuple("Shadowsocks").field(params).finish(),
             Self::Hysteria2(params) => f.debug_tuple("Hysteria2").field(params).finish(),
+            Self::Tuic(params) => f.debug_tuple("Tuic").field(params).finish(),
+            Self::AnyTls(params) => f.debug_tuple("AnyTls").field(params).finish(),
             Self::Unknown { scheme, params } => f
                 .debug_struct("Unknown")
                 .field("scheme", scheme)
@@ -150,61 +157,184 @@ impl fmt::Debug for ProxyCredentials {
     }
 }
 
+/// Checks a standard 36-character hyphenated or 32-character hex UUID.
+pub fn is_valid_uuid(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    match bytes.len() {
+        32 => bytes.iter().all(u8::is_ascii_hexdigit),
+        36 => bytes.iter().enumerate().all(|(index, byte)| {
+            if matches!(index, 8 | 13 | 18 | 23) {
+                *byte == b'-'
+            } else {
+                byte.is_ascii_hexdigit()
+            }
+        }),
+        _ => false,
+    }
+}
+
+/// Checks a positive Go-style duration string (for example `10s`, `500ms`, `1m30s`).
+pub fn is_valid_duration(value: &str) -> bool {
+    if value.is_empty() || value.len() > 32 {
+        return false;
+    }
+    let mut rest = value;
+    let mut non_zero = false;
+    while !rest.is_empty() {
+        let digits_end = rest
+            .find(|ch: char| !ch.is_ascii_digit())
+            .unwrap_or(rest.len());
+        if digits_end == 0 {
+            return false;
+        }
+        if rest[..digits_end].bytes().any(|byte| byte != b'0') {
+            non_zero = true;
+        }
+        rest = &rest[digits_end..];
+        if let Some(after_dot) = rest.strip_prefix('.') {
+            let frac_end = after_dot
+                .find(|ch: char| !ch.is_ascii_digit())
+                .unwrap_or(after_dot.len());
+            if frac_end == 0 {
+                return false;
+            }
+            if after_dot[..frac_end].bytes().any(|byte| byte != b'0') {
+                non_zero = true;
+            }
+            rest = &after_dot[frac_end..];
+        }
+        let unit_len =
+            if rest.starts_with("ns") || rest.starts_with("us") || rest.starts_with("ms") {
+                2
+            } else if rest.starts_with(['s', 'm', 'h']) {
+                1
+            } else {
+                return false;
+            };
+        rest = &rest[unit_len..];
+    }
+    non_zero
+}
+
+fn is_valid_host(server: &str) -> bool {
+    let host = server.strip_suffix('.').unwrap_or(server);
+    server.parse::<std::net::IpAddr>().is_ok()
+        || (!host.is_empty()
+            && host.len() <= 253
+            && host.split('.').all(|label| {
+                !label.is_empty()
+                    && label.len() <= 63
+                    && !label.starts_with('-')
+                    && !label.ends_with('-')
+                    && label
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+            }))
+}
+
 impl Node {
-    /// Validates external proxies at both the storage and engine boundaries.
+    /// Validates external proxies and strict native protocols at both storage and engine boundaries.
     pub fn validate_proxy(&self) -> Result<(), &'static str> {
-        let (Outbound::Http(credentials) | Outbound::Socks5(credentials)) = &self.outbound else {
-            return Ok(());
-        };
-        let valid_host = |server: &str| {
-            let host = server.strip_suffix('.').unwrap_or(server);
-            server.parse::<std::net::IpAddr>().is_ok()
-                || (!host.is_empty()
-                    && host.len() <= 253
-                    && host.split('.').all(|label| {
-                        !label.is_empty()
-                            && label.len() <= 63
-                            && !label.starts_with('-')
-                            && !label.ends_with('-')
-                            && label
-                                .bytes()
-                                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
-                    }))
-        };
-        if !valid_host(&self.server) || self.port == 0 {
-            return Err(
-                "proxy requires a valid DNS name or IP address and a port between 1 and 65535",
-            );
-        }
-        if self.stream.transport != Transport::Tcp {
-            return Err("proxy requires TCP transport");
-        }
-        match (&self.outbound, &self.stream.tls) {
-            (Outbound::Http(_), TlsMode::Tls(tls)) => {
-                if tls.allow_insecure || tls.sni.as_ref().is_some_and(|name| !valid_host(name)) {
+        match &self.outbound {
+            Outbound::Http(credentials) | Outbound::Socks5(credentials) => {
+                if !is_valid_host(&self.server) || self.port == 0 {
                     return Err(
-                        "HTTPS proxy requires certificate verification and a valid TLS server name",
+                        "proxy requires a valid DNS name or IP address and a port between 1 and 65535",
                     );
                 }
+                if self.stream.transport != Transport::Tcp {
+                    return Err("proxy requires TCP transport");
+                }
+                match (&self.outbound, &self.stream.tls) {
+                    (Outbound::Http(_), TlsMode::Tls(tls)) => {
+                        if tls.allow_insecure
+                            || tls.sni.as_ref().is_some_and(|name| !is_valid_host(name))
+                        {
+                            return Err(
+                                "HTTPS proxy requires certificate verification and a valid TLS server name",
+                            );
+                        }
+                    }
+                    (_, TlsMode::Plain) => {}
+                    _ => return Err("proxy TLS mode is not supported"),
+                }
+                if credentials
+                    .username
+                    .chars()
+                    .chain(credentials.password.chars())
+                    .any(char::is_control)
+                    || (credentials.username.is_empty() && !credentials.password.is_empty())
+                    || (matches!(self.outbound, Outbound::Http(_))
+                        && credentials.username.contains(':'))
+                    || (matches!(self.outbound, Outbound::Socks5(_))
+                        && (credentials.username.len() > 255
+                            || credentials.password.len() > 255
+                            || (!credentials.username.is_empty()
+                                && credentials.password.is_empty())))
+                {
+                    return Err("proxy credentials are invalid for the selected protocol");
+                }
+                Ok(())
             }
-            (_, TlsMode::Plain) => {}
-            _ => return Err("proxy TLS mode is not supported"),
+            Outbound::Tuic(params) => {
+                if !is_valid_host(&self.server) || self.port == 0 {
+                    return Err(
+                        "TUIC requires a valid DNS name or IP address and a port between 1 and 65535",
+                    );
+                }
+                if self.stream.transport != Transport::Tcp {
+                    return Err("TUIC uses its built-in QUIC transport");
+                }
+                if !matches!(self.stream.tls, TlsMode::Tls(_)) {
+                    return Err("TUIC requires TLS");
+                }
+                if !is_valid_uuid(&params.uuid) || params.password.chars().any(char::is_control) {
+                    return Err("TUIC requires a valid UUID and valid password");
+                }
+                if params
+                    .heartbeat
+                    .as_deref()
+                    .is_some_and(|value| !is_valid_duration(value))
+                {
+                    return Err("TUIC heartbeat must be a positive duration");
+                }
+                Ok(())
+            }
+            Outbound::AnyTls(params) => {
+                if !is_valid_host(&self.server) || self.port == 0 {
+                    return Err(
+                        "AnyTLS requires a valid DNS name or IP address and a port between 1 and 65535",
+                    );
+                }
+                if self.stream.transport != Transport::Tcp {
+                    return Err("AnyTLS requires TCP transport");
+                }
+                match &self.stream.tls {
+                    TlsMode::Tls(_) => {}
+                    TlsMode::Reality(reality) if !reality.public_key.is_empty() => {}
+                    _ => return Err("AnyTLS requires TLS or REALITY"),
+                }
+                if params.password.is_empty() || params.password.chars().any(char::is_control) {
+                    return Err("AnyTLS requires a non-empty password");
+                }
+                if params
+                    .idle_session_check_interval
+                    .as_deref()
+                    .is_some_and(|value| !is_valid_duration(value))
+                    || params
+                        .idle_session_timeout
+                        .as_deref()
+                        .is_some_and(|value| !is_valid_duration(value))
+                    || params
+                        .min_idle_session
+                        .is_some_and(|value| i32::try_from(value).is_err())
+                {
+                    return Err("AnyTLS idle session settings are invalid");
+                }
+                Ok(())
+            }
+            _ => Ok(()),
         }
-        if credentials
-            .username
-            .chars()
-            .chain(credentials.password.chars())
-            .any(char::is_control)
-            || (credentials.username.is_empty() && !credentials.password.is_empty())
-            || (matches!(self.outbound, Outbound::Http(_)) && credentials.username.contains(':'))
-            || (matches!(self.outbound, Outbound::Socks5(_))
-                && (credentials.username.len() > 255
-                    || credentials.password.len() > 255
-                    || (!credentials.username.is_empty() && credentials.password.is_empty())))
-        {
-            return Err("proxy credentials are invalid for the selected protocol");
-        }
-        Ok(())
     }
 }
 
@@ -295,6 +425,118 @@ impl fmt::Debug for Hysteria2Params {
             .field("port_ranges", &self.port_ranges)
             .field("up_mbps", &self.up_mbps)
             .field("down_mbps", &self.down_mbps)
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TuicCongestionControl {
+    #[default]
+    Cubic,
+    NewReno,
+    Bbr,
+}
+
+impl TuicCongestionControl {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "cubic" => Some(Self::Cubic),
+            "new_reno" => Some(Self::NewReno),
+            "bbr" => Some(Self::Bbr),
+            _ => None,
+        }
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Cubic => "cubic",
+            Self::NewReno => "new_reno",
+            Self::Bbr => "bbr",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TuicUdpRelayMode {
+    #[default]
+    Native,
+    Quic,
+}
+
+impl TuicUdpRelayMode {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "native" => Some(Self::Native),
+            "quic" => Some(Self::Quic),
+            _ => None,
+        }
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Native => "native",
+            Self::Quic => "quic",
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TuicParams {
+    pub uuid: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub password: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub congestion_control: Option<TuicCongestionControl>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub udp_relay_mode: Option<TuicUdpRelayMode>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub zero_rtt_handshake: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub heartbeat: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub disable_sni: bool,
+}
+
+impl fmt::Debug for TuicParams {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TuicParams")
+            .field("uuid", &"[redacted]")
+            .field(
+                "password",
+                &(!self.password.is_empty()).then_some("[redacted]"),
+            )
+            .field("congestion_control", &self.congestion_control)
+            .field("udp_relay_mode", &self.udp_relay_mode)
+            .field("zero_rtt_handshake", &self.zero_rtt_handshake)
+            .field("heartbeat", &self.heartbeat)
+            .field("disable_sni", &self.disable_sni)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AnyTlsParams {
+    pub password: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idle_session_check_interval: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idle_session_timeout: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_idle_session: Option<u32>,
+}
+
+impl fmt::Debug for AnyTlsParams {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AnyTlsParams")
+            .field("password", &"[redacted]")
+            .field(
+                "idle_session_check_interval",
+                &self.idle_session_check_interval,
+            )
+            .field("idle_session_timeout", &self.idle_session_timeout)
+            .field("min_idle_session", &self.min_idle_session)
             .finish()
     }
 }
@@ -654,6 +896,27 @@ mod tests {
                 false,
             ),
             (
+                Outbound::Tuic(TuicParams {
+                    uuid: "00000000-0000-4000-8000-000000000001".into(),
+                    password: "test".into(),
+                    congestion_control: None,
+                    udp_relay_mode: None,
+                    zero_rtt_handshake: false,
+                    heartbeat: None,
+                    disable_sni: false,
+                }),
+                false,
+            ),
+            (
+                Outbound::AnyTls(AnyTlsParams {
+                    password: "test".into(),
+                    idle_session_check_interval: None,
+                    idle_session_timeout: None,
+                    min_idle_session: None,
+                }),
+                false,
+            ),
+            (
                 Outbound::Unknown {
                     scheme: "example".into(),
                     params: BTreeMap::new(),
@@ -749,6 +1012,27 @@ mod tests {
                     port_ranges: Vec::new(),
                     up_mbps: None,
                     down_mbps: None,
+                }),
+                false,
+            ),
+            (
+                Outbound::Tuic(TuicParams {
+                    uuid: "00000000-0000-4000-8000-000000000001".into(),
+                    password: "test".into(),
+                    congestion_control: None,
+                    udp_relay_mode: None,
+                    zero_rtt_handshake: false,
+                    heartbeat: None,
+                    disable_sni: false,
+                }),
+                false,
+            ),
+            (
+                Outbound::AnyTls(AnyTlsParams {
+                    password: "test".into(),
+                    idle_session_check_interval: None,
+                    idle_session_timeout: None,
+                    min_idle_session: None,
                 }),
                 false,
             ),
@@ -906,5 +1190,178 @@ mod tests {
         });
         assert!(!uses_xray(&node, &with_xray(XrayUse::Auto)));
         assert!(!uses_xray(&node, &with_xray(XrayUse::Always)));
+    }
+
+    #[test]
+    fn tuic_and_anytls_debug_redact_credentials_and_serde_omits_defaults() {
+        let tuic = Node {
+            id: NodeId::new("tuic"),
+            name: "TUIC".into(),
+            server: "example.com".into(),
+            port: 443,
+            outbound: Outbound::Tuic(TuicParams {
+                uuid: "00000000-0000-4000-8000-000000000042".into(),
+                password: "test-secret-tuic".into(),
+                congestion_control: None,
+                udp_relay_mode: None,
+                zero_rtt_handshake: false,
+                heartbeat: None,
+                disable_sni: false,
+            }),
+            stream: StreamSettings {
+                transport: Transport::Tcp,
+                tls: TlsMode::Tls(TlsParams::default()),
+            },
+            raw: Some("tuic://00000000-0000-4000-8000-000000000042:test-secret-tuic@example.com:443".into()),
+        };
+        let debug = format!("{tuic:?}");
+        assert!(!debug.contains("00000000-0000-4000-8000-000000000042"));
+        assert!(!debug.contains("test-secret-tuic"));
+        let json = serde_json::to_value(&tuic).unwrap();
+        assert_eq!(
+            json["outbound"]["tuic"]["uuid"],
+            "00000000-0000-4000-8000-000000000042"
+        );
+        assert_eq!(json["outbound"]["tuic"]["password"], "test-secret-tuic");
+        assert!(json["outbound"]["tuic"].get("congestion_control").is_none());
+        assert!(json["outbound"]["tuic"].get("udp_relay_mode").is_none());
+        assert!(json["outbound"]["tuic"].get("zero_rtt_handshake").is_none());
+        assert!(json["outbound"]["tuic"].get("heartbeat").is_none());
+        assert!(json["outbound"]["tuic"].get("disable_sni").is_none());
+
+        let anytls = Node {
+            id: NodeId::new("anytls"),
+            name: "AnyTLS".into(),
+            server: "example.com".into(),
+            port: 443,
+            outbound: Outbound::AnyTls(AnyTlsParams {
+                password: "test-secret-anytls".into(),
+                idle_session_check_interval: None,
+                idle_session_timeout: None,
+                min_idle_session: None,
+            }),
+            stream: StreamSettings {
+                transport: Transport::Tcp,
+                tls: TlsMode::Tls(TlsParams::default()),
+            },
+            raw: Some("anytls://test-secret-anytls@example.com:443".into()),
+        };
+        let debug = format!("{anytls:?}");
+        assert!(!debug.contains("test-secret-anytls"));
+        let json = serde_json::to_value(&anytls).unwrap();
+        assert_eq!(json["outbound"]["anytls"]["password"], "test-secret-anytls");
+        assert!(
+            json["outbound"]["anytls"]
+                .get("idle_session_check_interval")
+                .is_none()
+        );
+        assert!(
+            json["outbound"]["anytls"]
+                .get("idle_session_timeout")
+                .is_none()
+        );
+        assert!(json["outbound"]["anytls"].get("min_idle_session").is_none());
+    }
+
+    #[test]
+    fn tuic_and_anytls_validate_required_fields_and_durations() {
+        let mut tuic = example_node(
+            Outbound::Tuic(TuicParams {
+                uuid: "00000000-0000-4000-8000-000000000001".into(),
+                password: String::new(),
+                congestion_control: Some(TuicCongestionControl::Bbr),
+                udp_relay_mode: Some(TuicUdpRelayMode::Native),
+                zero_rtt_handshake: true,
+                heartbeat: Some("10s".into()),
+                disable_sni: false,
+            }),
+            TlsMode::Tls(TlsParams::default()),
+        );
+        assert!(tuic.validate_proxy().is_ok());
+
+        let mut bad = tuic.clone();
+        bad.stream.tls = TlsMode::Plain;
+        assert!(bad.validate_proxy().is_err());
+
+        let mut bad = tuic.clone();
+        bad.stream.tls = TlsMode::Reality(RealityParams {
+            sni: Some("example.com".into()),
+            public_key: "test-public-key".into(),
+            short_id: None,
+            fingerprint: None,
+        });
+        assert!(bad.validate_proxy().is_err());
+
+        let mut bad = tuic.clone();
+        bad.outbound = Outbound::Tuic(TuicParams {
+            uuid: "not-a-uuid".into(),
+            password: "test".into(),
+            congestion_control: None,
+            udp_relay_mode: None,
+            zero_rtt_handshake: false,
+            heartbeat: None,
+            disable_sni: false,
+        });
+        assert!(bad.validate_proxy().is_err());
+
+        tuic.outbound = Outbound::Tuic(TuicParams {
+            uuid: "00000000-0000-4000-8000-000000000001".into(),
+            password: "test".into(),
+            congestion_control: None,
+            udp_relay_mode: None,
+            zero_rtt_handshake: false,
+            heartbeat: Some("0s".into()),
+            disable_sni: false,
+        });
+        assert!(tuic.validate_proxy().is_err());
+
+        let anytls = example_node(
+            Outbound::AnyTls(AnyTlsParams {
+                password: "test-password".into(),
+                idle_session_check_interval: Some("30s".into()),
+                idle_session_timeout: Some("1m30s".into()),
+                min_idle_session: Some(2),
+            }),
+            TlsMode::Reality(RealityParams {
+                sni: Some("example.com".into()),
+                public_key: "test-public-key".into(),
+                short_id: Some("0123".into()),
+                fingerprint: Some("chrome".into()),
+            }),
+        );
+        assert!(anytls.validate_proxy().is_ok());
+
+        let mut bad = anytls.clone();
+        bad.stream.tls = TlsMode::Plain;
+        assert!(bad.validate_proxy().is_err());
+
+        let mut bad = anytls.clone();
+        bad.outbound = Outbound::AnyTls(AnyTlsParams {
+            password: String::new(),
+            idle_session_check_interval: None,
+            idle_session_timeout: None,
+            min_idle_session: None,
+        });
+        assert!(bad.validate_proxy().is_err());
+
+        let mut bad = anytls;
+        bad.outbound = Outbound::AnyTls(AnyTlsParams {
+            password: "test-password".into(),
+            idle_session_check_interval: Some("-5s".into()),
+            idle_session_timeout: None,
+            min_idle_session: None,
+        });
+        assert!(bad.validate_proxy().is_err());
+
+        assert!(is_valid_uuid("00000000-0000-4000-8000-000000000001"));
+        assert!(is_valid_uuid("00000000000040008000000000000001"));
+        assert!(!is_valid_uuid("00000000-0000-4000-8000-00000000000g"));
+        assert!(is_valid_duration("10s"));
+        assert!(is_valid_duration("500ms"));
+        assert!(is_valid_duration("1m30s"));
+        assert!(is_valid_duration("0.5s"));
+        assert!(!is_valid_duration("0s"));
+        assert!(!is_valid_duration("-10s"));
+        assert!(!is_valid_duration("10"));
     }
 }

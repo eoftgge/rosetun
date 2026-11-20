@@ -93,7 +93,8 @@ error-skip-reality-key = нет открытого ключа Reality
 error-skip-shadowsocks-plugin = плагины Shadowsocks не поддерживаются
 error-skip-shadowsocks-method = такой метод Shadowsocks не поддерживается
 error-skip-unsupported-obfs = такой тип обфускации Hysteria2 не поддерживается
-error-skip-unsupported-pin = закрепление сертификата Hysteria2 не поддерживается
+error-skip-unsupported-pin = закрепление сертификата не поддерживается
+error-skip-unsupported-option = параметр протокола не поддерживается
 error-skip-service-record = запись содержит уведомление провайдера
 error-process-list = не удалось получить список процессов: { $detail }
 error-helper-transport = нет связи со службой: { $detail }
@@ -230,7 +231,7 @@ xray-auto-detail = Xray для REALITY и XHTTP, sing-box для остальн�
 xray-off = Без Xray
 xray-off-detail = Серверы REALITY и XHTTP могут не подключиться.
 xray-always = Xray для всех серверов
-xray-always-detail = Кроме Hysteria2. Для серверов, которые работают только с Xray.
+xray-always-detail = Кроме Hysteria2, TUIC и AnyTLS. Для серверов, которые работают только с Xray.
 xray-off-warning = В подписках { $count ->
     [one] { $n } сервер REALITY.
     [few] { $n } сервера REALITY.
@@ -812,7 +813,7 @@ ping-fails-hint = Запрос через сервер не прошёл
 ping-unresolved = адрес не найден
 ping-unresolved-hint = Пока сеть заблокирована, проверяются только серверы с IP-адресом
 ping-unsupported = не поддерживается
-ping-udp-hint = Для Hysteria2 используйте проверку URL.
+ping-udp-hint = Для Hysteria2 и TUIC используйте проверку URL.
 full-check-busy = Проверка уже идёт
 support = Поддержка
 website = Сайт

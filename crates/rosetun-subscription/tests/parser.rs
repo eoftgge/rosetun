@@ -271,7 +271,7 @@ fn unsupported_options_have_typed_reasons() {
         SkipReason::UnsupportedShadowsocksMethod,
     );
     assert_eq!(
-        only_skip("tuic://test-password@example.com:443"),
+        only_skip("wireguard://test-password@example.com:51820"),
         SkipReason::UnsupportedProtocol,
     );
     assert_eq!(only_skip("happ://routing/test"), SkipReason::ClientSettings,);
@@ -1085,4 +1085,290 @@ fn skipped_unsupported_protocols_record_known_schemes_and_wrapper_links_are_clie
     assert_eq!(xr.nodes.len(), 1);
     assert_eq!(xr.skipped[0].scheme.as_deref(), Some("wireguard"));
     assert_eq!(xr.skipped[0].reason, SkipReason::UnsupportedProtocol);
+}
+
+#[test]
+fn tuic_links_and_sing_box_json_parse_supported_fields_and_skip_unsupported_options() {
+    use rosetun_config::{TuicCongestionControl, TuicUdpRelayMode};
+
+    let link = format!(
+        "tuic://{UUID}:p%3Ass@example.com:8444?congestion_control=bbr&udp_relay_mode=quic&reduce_rtt=1&heartbeat=15&sni=tuic.example.com&alpn=h3,h3-29&allow_insecure=1&disable_sni=1&fp=chrome#TUIC%20Node"
+    );
+    let result = parsed(&link);
+    assert_eq!(result.nodes.len(), 1);
+    let node = &result.nodes[0];
+    assert_eq!(node.name, "TUIC Node");
+    assert_eq!(node.server, "example.com");
+    assert_eq!(node.port, 8444);
+    assert_eq!(node.stream.transport, Transport::Tcp);
+    let Outbound::Tuic(params) = &node.outbound else {
+        panic!("expected TUIC");
+    };
+    assert_eq!(params.uuid, UUID);
+    assert_eq!(params.password, "p:ss");
+    assert_eq!(params.congestion_control, Some(TuicCongestionControl::Bbr));
+    assert_eq!(params.udp_relay_mode, Some(TuicUdpRelayMode::Quic));
+    assert!(params.zero_rtt_handshake);
+    assert_eq!(params.heartbeat.as_deref(), Some("15s"));
+    assert!(params.disable_sni);
+    let TlsMode::Tls(tls) = &node.stream.tls else {
+        panic!("expected TLS");
+    };
+    assert_eq!(tls.sni.as_deref(), Some("tuic.example.com"));
+    assert_eq!(tls.alpn, ["h3", "h3-29"]);
+    assert!(tls.allow_insecure);
+    assert_eq!(tls.fingerprint.as_deref(), Some("chrome"));
+
+    // Password is optional in TUIC v5.
+    let minimal = parsed(&format!("tuic://{UUID}@192.0.2.40:443?version=5"));
+    let Outbound::Tuic(params) = &minimal.nodes[0].outbound else {
+        panic!("expected TUIC");
+    };
+    assert_eq!(params.password, "");
+    assert!(!params.zero_rtt_handshake);
+
+    // Zero UUID becomes a service notice.
+    let notice_body = format!(
+        "tuic://00000000-0000-0000-0000-000000000000@example.com:443#Expired\n{link}"
+    );
+    let notice = parsed(&notice_body);
+    assert_eq!(notice.nodes.len(), 1);
+    assert_eq!(notice.meta.notices, ["Expired"]);
+    assert_eq!(notice.skipped[0].reason, SkipReason::ServiceRecord);
+
+    for (bad, expected) in [
+        (
+            format!("tuic://not-a-uuid:pw@example.com:443"),
+            SkipReason::InvalidRecord,
+        ),
+        (
+            format!("tuic://{UUID}:pw@example.com:443?version=4"),
+            SkipReason::UnsupportedOption,
+        ),
+        (
+            format!("tuic://{UUID}:pw@example.com:443?udp_over_stream=1"),
+            SkipReason::UnsupportedOption,
+        ),
+        (
+            format!("tuic://{UUID}:pw@example.com:443?congestion_control=reno"),
+            SkipReason::UnsupportedOption,
+        ),
+        (
+            format!("tuic://{UUID}:pw@example.com:443?udp_relay_mode=stream"),
+            SkipReason::UnsupportedOption,
+        ),
+        (
+            format!("tuic://{UUID}:pw@example.com:443?unknown_required=1"),
+            SkipReason::UnsupportedOption,
+        ),
+        (
+            format!("tuic://{UUID}:pw@example.com:443?pinSHA256=abc"),
+            SkipReason::UnsupportedPin,
+        ),
+        (
+            format!("tuic://{UUID}:pw@example.com:443?security=reality&pbk=key"),
+            SkipReason::UnsupportedSecurity,
+        ),
+        (
+            format!("tuic://{UUID}:pw@example.com:443?security=none"),
+            SkipReason::UnsupportedSecurity,
+        ),
+        (
+            format!("tuic://{UUID}:pw@example.com:443?heartbeat=0s"),
+            SkipReason::InvalidRecord,
+        ),
+    ] {
+        assert_eq!(only_skip(&bad), expected, "{bad}");
+    }
+
+    let json = format!(
+        r#"{{
+            "outbounds": [
+                {{
+                    "type": "tuic",
+                    "tag": "TUIC JSON",
+                    "server": "192.0.2.40",
+                    "server_port": 8444,
+                    "uuid": "{UUID}",
+                    "password": "secret",
+                    "congestion_control": "new_reno",
+                    "udp_relay_mode": "native",
+                    "zero_rtt_handshake": true,
+                    "heartbeat": "10s",
+                    "tls": {{
+                        "enabled": true,
+                        "server_name": "tuic.example.com",
+                        "alpn": ["h3"],
+                        "insecure": true,
+                        "disable_sni": true
+                    }}
+                }},
+                {{
+                    "type": "tuic",
+                    "tag": "TUIC UOS",
+                    "server": "192.0.2.40",
+                    "server_port": 8444,
+                    "uuid": "{UUID}",
+                    "udp_over_stream": true,
+                    "tls": {{ "enabled": true }}
+                }},
+                {{
+                    "type": "tuic",
+                    "tag": "TUIC No TLS",
+                    "server": "192.0.2.40",
+                    "server_port": 8444,
+                    "uuid": "{UUID}",
+                    "tls": {{ "enabled": false }}
+                }}
+            ]
+        }}"#
+    );
+    let parsed_json = parsed(&json);
+    assert_eq!(parsed_json.nodes.len(), 1);
+    let Outbound::Tuic(params) = &parsed_json.nodes[0].outbound else {
+        panic!("expected TUIC");
+    };
+    assert_eq!(
+        params.congestion_control,
+        Some(TuicCongestionControl::NewReno)
+    );
+    assert_eq!(params.udp_relay_mode, Some(TuicUdpRelayMode::Native));
+    assert!(params.zero_rtt_handshake);
+    assert_eq!(params.heartbeat.as_deref(), Some("10s"));
+    assert!(params.disable_sni);
+    assert_eq!(parsed_json.skipped.len(), 2);
+    assert_eq!(parsed_json.skipped[0].reason, SkipReason::UnsupportedOption);
+    assert_eq!(
+        parsed_json.skipped[1].reason,
+        SkipReason::UnsupportedSecurity
+    );
+}
+
+#[test]
+fn anytls_links_and_sing_box_json_parse_supported_fields_and_skip_unsupported_options() {
+    let tls_link = "anytls://user:p%40ss@example.com?sni=anytls.example.com&alpn=h2,http/1.1&insecure=1&fp=chrome&idle_session_check_interval=30s&idle_session_timeout=60&min_idle_session=2&udp=1#AnyTLS%20TLS";
+    let result = parsed(tls_link);
+    assert_eq!(result.nodes.len(), 1);
+    let node = &result.nodes[0];
+    assert_eq!(node.name, "AnyTLS TLS");
+    assert_eq!(node.server, "example.com");
+    assert_eq!(node.port, 443);
+    let Outbound::AnyTls(params) = &node.outbound else {
+        panic!("expected AnyTLS");
+    };
+    assert_eq!(params.password, "user:p@ss");
+    assert_eq!(params.idle_session_check_interval.as_deref(), Some("30s"));
+    assert_eq!(params.idle_session_timeout.as_deref(), Some("60s"));
+    assert_eq!(params.min_idle_session, Some(2));
+    let TlsMode::Tls(tls) = &node.stream.tls else {
+        panic!("expected TLS");
+    };
+    assert_eq!(tls.sni.as_deref(), Some("anytls.example.com"));
+    assert_eq!(tls.alpn, ["h2", "http/1.1"]);
+    assert!(tls.allow_insecure);
+    assert_eq!(tls.fingerprint.as_deref(), Some("chrome"));
+
+    let reality_link = "anytls://secret@192.0.2.41:8445?security=reality&sni=example.com&pbk=test-public-key&sid=01ab&fp=firefox#AnyTLS%20Reality";
+    let reality = parsed(reality_link);
+    assert_eq!(reality.nodes[0].port, 8445);
+    let TlsMode::Reality(r) = &reality.nodes[0].stream.tls else {
+        panic!("expected REALITY");
+    };
+    assert_eq!(r.public_key, "test-public-key");
+    assert_eq!(r.short_id.as_deref(), Some("01ab"));
+    assert_eq!(r.fingerprint.as_deref(), Some("firefox"));
+
+    for (bad, expected) in [
+        ("anytls://@example.com:443", SkipReason::MissingField),
+        ("anytls://secret@example.com:0", SkipReason::InvalidPort),
+        (
+            "anytls://secret@example.com:443?udp=0",
+            SkipReason::UnsupportedOption,
+        ),
+        (
+            "anytls://secret@example.com:443?tfo=1",
+            SkipReason::UnsupportedOption,
+        ),
+        (
+            "anytls://secret@example.com:443?hpkp=sha256",
+            SkipReason::UnsupportedPin,
+        ),
+        (
+            "anytls://secret@example.com:443?client_metadata=foo",
+            SkipReason::UnsupportedOption,
+        ),
+        (
+            "anytls://secret@example.com:443?unknown_param=1",
+            SkipReason::UnsupportedOption,
+        ),
+        (
+            "anytls://secret@example.com:443?security=none",
+            SkipReason::UnsupportedSecurity,
+        ),
+        (
+            "anytls://secret@example.com:443?pbk=test-key",
+            SkipReason::UnsupportedSecurity,
+        ),
+        (
+            "anytls://secret@example.com:443?idle_session_timeout=0s",
+            SkipReason::InvalidRecord,
+        ),
+    ] {
+        assert_eq!(only_skip(bad), expected, "{bad}");
+    }
+
+    let json = r#"{
+        "outbounds": [
+            {
+                "type": "anytls",
+                "tag": "AnyTLS JSON",
+                "server": "192.0.2.41",
+                "server_port": 8445,
+                "password": "secret",
+                "idle_session_check_interval": "30s",
+                "idle_session_timeout": "1m",
+                "min_idle_session": 3,
+                "tls": {
+                    "enabled": true,
+                    "server_name": "anytls.example.com",
+                    "utls": { "enabled": true, "fingerprint": "chrome" },
+                    "reality": {
+                        "enabled": true,
+                        "public_key": "test-public-key",
+                        "short_id": "abcd"
+                    }
+                }
+            },
+            {
+                "type": "anytls",
+                "tag": "AnyTLS Metadata",
+                "server": "192.0.2.41",
+                "server_port": 8445,
+                "password": "secret",
+                "client_metadata": "custom",
+                "tls": { "enabled": true }
+            },
+            {
+                "type": "anytls",
+                "tag": "AnyTLS Pin",
+                "server": "192.0.2.41",
+                "server_port": 8445,
+                "password": "secret",
+                "tls": { "enabled": true, "certificate_public_key_sha256": ["abc"] }
+            }
+        ]
+    }"#;
+    let parsed_json = parsed(json);
+    assert_eq!(parsed_json.nodes.len(), 1);
+    let Outbound::AnyTls(params) = &parsed_json.nodes[0].outbound else {
+        panic!("expected AnyTLS");
+    };
+    assert_eq!(params.password, "secret");
+    assert_eq!(params.idle_session_check_interval.as_deref(), Some("30s"));
+    assert_eq!(params.idle_session_timeout.as_deref(), Some("1m"));
+    assert_eq!(params.min_idle_session, Some(3));
+    assert!(matches!(parsed_json.nodes[0].stream.tls, TlsMode::Reality(_)));
+    assert_eq!(parsed_json.skipped.len(), 2);
+    assert_eq!(parsed_json.skipped[0].reason, SkipReason::UnsupportedOption);
+    assert_eq!(parsed_json.skipped[1].reason, SkipReason::UnsupportedPin);
 }
