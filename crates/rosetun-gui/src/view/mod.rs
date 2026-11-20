@@ -10,6 +10,7 @@ pub(crate) mod rules;
 pub(crate) mod settings;
 pub(crate) mod subscriptions;
 pub(crate) mod traffic;
+pub(crate) mod update_offer;
 mod window_frame;
 
 #[cfg(test)]
@@ -167,6 +168,9 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
     }
     if state.subscriptions.rename.is_some() {
         subscriptions::rename_dialog(ctx, state, &mut actions);
+    }
+    if state.updates.confirm_install {
+        update_offer::install_dialog(ctx, &mut actions);
     }
     if state.proxy_kill_switch_confirmation {
         connection::proxy_kill_switch_dialog(ctx, state, &mut actions);

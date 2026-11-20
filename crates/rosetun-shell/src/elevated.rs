@@ -6,12 +6,21 @@ use windows_sys::Win32::System::Threading::{GetExitCodeProcess, INFINITE, WaitFo
 use windows_sys::Win32::UI::Shell::{
     SEE_MASK_FLAG_NO_UI, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW, ShellExecuteExW,
 };
-use windows_sys::Win32::UI::WindowsAndMessaging::SW_HIDE;
+use windows_sys::Win32::UI::WindowsAndMessaging::{SW_HIDE, SW_SHOWNORMAL};
 
 /// Runs `program` with `parameters` elevated through UAC, hidden, and waits
 /// for it. `Ok(None)` when the user declined the UAC prompt; otherwise the
 /// program's exit code.
 pub fn run_elevated(program: &Path, parameters: &str) -> io::Result<Option<u32>> {
+    run_elevated_with(program, parameters, SW_HIDE)
+}
+
+/// As `run_elevated`, with the program's windows shown: an installer's progress.
+pub fn run_elevated_shown(program: &Path, parameters: &str) -> io::Result<Option<u32>> {
+    run_elevated_with(program, parameters, SW_SHOWNORMAL)
+}
+
+fn run_elevated_with(program: &Path, parameters: &str, show: i32) -> io::Result<Option<u32>> {
     let verb = wide("runas");
     let file = wide(&program.to_string_lossy());
     let parameters = wide(parameters);
@@ -21,7 +30,7 @@ pub fn run_elevated(program: &Path, parameters: &str) -> io::Result<Option<u32>>
         lpVerb: verb.as_ptr(),
         lpFile: file.as_ptr(),
         lpParameters: parameters.as_ptr(),
-        nShow: SW_HIDE,
+        nShow: show,
         ..Default::default()
     };
     // SAFETY: `info` is sized for this ABI and its strings are NUL-terminated

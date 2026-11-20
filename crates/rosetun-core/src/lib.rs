@@ -21,6 +21,7 @@ mod subscriptions;
 mod system_checks;
 mod text;
 mod update;
+mod update_download;
 mod updates;
 
 pub use check::{Answer, InputError, Subject, Unknown, check};
@@ -89,6 +90,7 @@ pub use text::{
     provider_link, provider_text, terminal_text, traffic_text, updated_text,
 };
 pub use update::{UpdateReport, group_skipped};
+pub use update_download::{DownloadedUpdate, UpdateDownloadError, download_update, installer_name};
 pub use updates::{Release, UpdateCheckError, is_newer, latest_release, remembered_release};
 
 pub use rosetun_config::{fragments_tls, is_sensitive_log_target, uses_xray};

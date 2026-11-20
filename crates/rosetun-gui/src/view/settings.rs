@@ -8,7 +8,6 @@ use rosetun_config::{
 use rosetun_core::{CheckKind, CheckStatus, DnsPreset};
 
 use crate::brand;
-use crate::display;
 use crate::errors;
 use crate::icons::{self, Icon};
 use crate::state::{AboutFolder, Action, SessionPart, SettingsSection, State, now_unix};
@@ -1381,7 +1380,11 @@ fn about(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                                     } else {
                                         String::new()
                                     },
-                                    tr!("update-installer-detail"),
+                                    if State::can_install_updates() {
+                                        tr!("update-installer-checked")
+                                    } else {
+                                        tr!("update-installer-detail")
+                                    },
                                 );
                                 ui.add(
                                     egui::Label::new(
@@ -1391,21 +1394,29 @@ fn about(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                                     )
                                     .wrap(),
                                 );
+                                if let Some((status, color)) =
+                                    super::update_offer::offer_status(state)
+                                {
+                                    ui.add(
+                                        egui::Label::new(
+                                            RichText::new(status).small().color(color),
+                                        )
+                                        .wrap(),
+                                    );
+                                }
                                 ui.add_space(theme::space::S);
                                 ui.horizontal_wrapped(|ui| {
-                                    if widgets::button_fill(ui, tr!("update-open-page"), true)
-                                        .clicked()
-                                    {
-                                        display::open_web_link(ui.ctx(), &release.url);
-                                    }
-                                    if widgets::outline_button(
-                                        ui,
-                                        tr!("update-skip"),
-                                        state.can_edit_settings(),
-                                    )
-                                    .clicked()
-                                    {
-                                        actions.push(Action::SkipVersion);
+                                    let buttons = super::update_offer::offer_buttons(state);
+                                    for (index, button) in buttons.iter().enumerate() {
+                                        super::update_offer::offer_button(
+                                            ui,
+                                            state,
+                                            release,
+                                            *button,
+                                            index == 0,
+                                            false,
+                                            actions,
+                                        );
                                     }
                                 });
                             });

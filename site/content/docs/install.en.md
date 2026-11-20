@@ -22,6 +22,8 @@ You can choose an installation folder, but not inside a user profile or where st
 
 **Update:** run the new installer over the old version. With the kill switch on, the network stays closed through the update, and the app starts and connects again. If it cannot connect, the connection screen offers **Connect** and **Open network**; `rosetun open-network` does the same. Lockdown stays on.
 
+From 0.7 on Windows, the new-version notice offers **Download**: the app downloads the installer and checks it, then the button becomes **Install and restart**. The install asks for administrator rights. **Open on GitHub** and **Skip this version** are there too. On Linux, updating stays manual.
+
 {% if not r?.deb_url %}
 
 No Debian package is available in this release. See GitHub Releases.
@@ -110,6 +112,14 @@ Use the update procedure for your platform above to carry over settings and Lock
 ## Verify the download {#verify-the-download}
 
 `SHA256SUMS.txt` in each release lists the installer and the package. For a release built from a tag, GitHub also holds a build provenance attestation for both. An attestation says which workflow built the file; it is not a code signature.
+
+From 0.7, `SHA256SUMS.txt` is signed with the release key. Download `SHA256SUMS.txt` and `SHA256SUMS.txt.minisig` from the release page and check the signature with [minisign](https://jedisct1.github.io/minisign/):
+
+```
+minisign -Vm SHA256SUMS.txt -P RWSDO2nJ1GqGnPiNy6v88Pz2L8A8Ru/1XSux4rHWdO9FIcLudiCYltbQ
+```
+
+The same public key is in the repository: [`minisign.pub`](https://github.com/eoftgge/rosetun/blob/master/crates/rosetun-core/keys/minisign.pub). Releases before 0.7 are not signed.
 
 Windows:
 

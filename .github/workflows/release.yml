@@ -149,11 +149,10 @@ jobs:
           if (-not ($onMaster -or ($onDev -and $nextMinor))) {
             throw "Tag $env:TAG must point to a commit on master, or on dev for an alpha or beta of the next version."
           }
-          gh release view $env:TAG --json id 2>$null | Out-Null
-          $exists = $LASTEXITCODE -eq 0
-          # GitHub fails a pwsh step whose last native command exited non-zero.
-          $global:LASTEXITCODE = 0
-          if ($exists) { throw "Release $env:TAG already exists." }
+          # A draft has no tag lookup, so `gh release view` would not see a leftover one.
+          $tags = @(gh release list --limit 1000 --json tagName --jq '.[].tagName')
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to list releases.' }
+          if ($tags -contains $env:TAG) { throw "Release $env:TAG already exists." }
       - name: Install Rust
         shell: pwsh
         run: |
@@ -244,7 +243,7 @@ jobs:
             target/installer/release-notes.md
           if-no-files-found: error
           retention-days: 7
-      - name: Publish release
+      - name: Create the draft release
         if: github.event_name == 'push'
         shell: pwsh
         env:
@@ -273,7 +272,9 @@ jobs:
             '--notes-file'
             'target/installer/release-notes.md'
             '--verify-tag'
+            # The owner signs SHA256SUMS.txt locally, then publishes the draft.
+            '--draft'
           )
           if ($env:PRERELEASE -eq 'true') { $releaseArgs += '--prerelease' }
           gh release create @releaseArgs
-          if ($LASTEXITCODE -ne 0) { throw 'Failed to publish the release.' }
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to create the draft release.' }

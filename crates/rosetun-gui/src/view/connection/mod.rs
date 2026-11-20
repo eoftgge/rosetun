@@ -339,21 +339,30 @@ fn update_strip(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                                 )
                                 .wrap(),
                             );
+                            if let Some((status, color)) = super::update_offer::offer_status(state)
+                            {
+                                ui.label(
+                                    RichText::new(tr!("apply-separator"))
+                                        .color(theme::palette().text_dim),
+                                );
+                                ui.add(egui::Label::new(RichText::new(status).color(color)).wrap());
+                            }
                         },
                     );
                 },
                 |ui| {
-                    if widgets::outline_button(
-                        ui,
-                        tr!("update-offer-skip"),
-                        state.can_edit_settings(),
-                    )
-                    .clicked()
-                    {
-                        actions.push(Action::SkipVersion);
-                    }
-                    if widgets::button_fill(ui, tr!("update-download"), true).clicked() {
-                        display::open_web_link(ui.ctx(), &release.url);
+                    // The right side is laid out from the right edge.
+                    let buttons = super::update_offer::offer_buttons(state);
+                    for (index, button) in buttons.iter().enumerate().rev() {
+                        super::update_offer::offer_button(
+                            ui,
+                            state,
+                            release,
+                            *button,
+                            index == 0,
+                            true,
+                            actions,
+                        );
                     }
                 },
             );
@@ -631,5 +640,234 @@ mod conflict_names_tests {
         let clipped = conflict_names(&state, &[long]);
         assert_eq!(clipped.chars().count(), 49);
         assert!(clipped.ends_with('…'));
+    }
+}
+
+#[cfg(test)]
+mod update_strip_tests {
+    use super::*;
+    use crate::state::UpdateDownload;
+    use crate::view::update_offer::{OfferButton, offer_buttons};
+
+    fn offering(download: UpdateDownload) -> State {
+        let mut state = State::default();
+        state.config_ready = true;
+        state.updates.newest_release = Some(rosetun_core::Release {
+            version: "999.0.0-beta.10".into(),
+            url: "https://example.com/release".into(),
+            prerelease: true,
+        });
+        state.updates.download = download;
+        state
+    }
+
+    fn ready() -> UpdateDownload {
+        UpdateDownload::Ready(rosetun_core::DownloadedUpdate::for_tests(
+            "999.0.0-beta.10",
+            std::path::PathBuf::from("rosetun-setup.exe"),
+        ))
+    }
+
+    #[test]
+    fn the_offer_puts_the_next_step_first_and_github_always_in_reach() {
+        let downloading = UpdateDownload::Downloading {
+            version: "999.0.0-beta.10".into(),
+            received: 1,
+            total: None,
+        };
+        let windows = State::can_install_updates();
+        for (download, expected) in [
+            (
+                UpdateDownload::Idle,
+                if windows {
+                    vec![
+                        OfferButton::Download,
+                        OfferButton::OpenGithub,
+                        OfferButton::Skip,
+                    ]
+                } else {
+                    vec![OfferButton::OpenGithub, OfferButton::Skip]
+                },
+            ),
+            (
+                downloading,
+                if windows {
+                    vec![OfferButton::Cancel, OfferButton::OpenGithub]
+                } else {
+                    vec![OfferButton::OpenGithub]
+                },
+            ),
+            (
+                ready(),
+                if windows {
+                    vec![
+                        OfferButton::Install,
+                        OfferButton::OpenGithub,
+                        OfferButton::Skip,
+                    ]
+                } else {
+                    vec![OfferButton::OpenGithub, OfferButton::Skip]
+                },
+            ),
+        ] {
+            assert_eq!(
+                offer_buttons(&offering(download.clone())),
+                expected,
+                "{download:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_longest_offer_fits_the_smallest_window_in_both_languages() {
+        for language in [
+            crate::i18n::Language::English,
+            crate::i18n::Language::Russian,
+        ] {
+            crate::i18n::in_language(language, || {
+                let state = offering(ready());
+                let mut screen = crate::test_ui::TestScreen::new(egui::vec2(960.0, 640.0));
+                let texts = screen.settle(|ui| update_strip(ui, &state, &mut Vec::new()));
+                let mut labels = vec![tr!("update-open-github"), tr!("update-offer-skip")];
+                if State::can_install_updates() {
+                    labels.push(tr!("update-install"));
+                    labels.push(tr!("update-ready"));
+                }
+                for label in labels {
+                    let (_, rect) = texts
+                        .iter()
+                        .find(|(text, _)| *text == label)
+                        .unwrap_or_else(|| panic!("{label:?} not drawn in {language:?}"));
+                    assert!(
+                        rect.left() >= 0.0 && rect.right() <= 960.0,
+                        "{label:?} {rect:?} {language:?}"
+                    );
+                }
+            });
+        }
+    }
+
+    #[test]
+    fn all_offer_notification_states_fit_the_window_in_both_languages() {
+        let downloading = UpdateDownload::Downloading {
+            version: "999.0.0-beta.10".into(),
+            received: 45,
+            total: Some(100),
+        };
+        let failed = UpdateDownload::Failed {
+            version: "999.0.0-beta.10".into(),
+            failure: crate::state::UpdateFailure::Download(
+                rosetun_core::UpdateDownloadError::Mismatch,
+            ),
+        };
+        for language in [
+            crate::i18n::Language::English,
+            crate::i18n::Language::Russian,
+        ] {
+            crate::i18n::in_language(language, || {
+                for (download, required_labels) in [
+                    (
+                        UpdateDownload::Idle,
+                        if State::can_install_updates() {
+                            vec![
+                                tr!("update-download"),
+                                tr!("update-open-github"),
+                                tr!("update-offer-skip"),
+                            ]
+                        } else {
+                            vec![tr!("update-open-github"), tr!("update-offer-skip")]
+                        },
+                    ),
+                    (
+                        downloading.clone(),
+                        if State::can_install_updates() {
+                            vec![
+                                tr!("update-downloading-percent", percent = "45".to_string()),
+                                tr!("cancel"),
+                                tr!("update-open-github"),
+                            ]
+                        } else {
+                            vec![tr!("update-open-github")]
+                        },
+                    ),
+                    (
+                        ready(),
+                        if State::can_install_updates() {
+                            vec![
+                                tr!("update-ready"),
+                                tr!("update-install"),
+                                tr!("update-open-github"),
+                                tr!("update-offer-skip"),
+                            ]
+                        } else {
+                            vec![tr!("update-open-github"), tr!("update-offer-skip")]
+                        },
+                    ),
+                    (
+                        failed.clone(),
+                        if State::can_install_updates() {
+                            vec![
+                                tr!("update-error-check"),
+                                tr!("update-download"),
+                                tr!("update-open-github"),
+                                tr!("update-offer-skip"),
+                            ]
+                        } else {
+                            vec![tr!("update-open-github"), tr!("update-offer-skip")]
+                        },
+                    ),
+                ] {
+                    for reduce_motion in [false, true] {
+                        let mut state = offering(download.clone());
+                        state.config.interface.reduce_motion = reduce_motion;
+                        let mut screen = crate::test_ui::TestScreen::new(egui::vec2(960.0, 640.0));
+                        let texts = screen.settle(|ui| update_strip(ui, &state, &mut Vec::new()));
+                        for label in &required_labels {
+                            let (_, rect) = texts
+                                .iter()
+                                .find(|(text, _)| *text == *label)
+                                .unwrap_or_else(|| {
+                                    panic!("{label:?} not drawn in {language:?} for {download:?}")
+                                });
+                            assert!(
+                                rect.left() >= 0.0 && rect.right() <= 960.0,
+                                "{label:?} {rect:?} {language:?}"
+                            );
+                        }
+                    }
+                }
+            });
+        }
+    }
+
+    #[test]
+    fn install_confirmation_dialog_fits_both_languages() {
+        for language in [
+            crate::i18n::Language::English,
+            crate::i18n::Language::Russian,
+        ] {
+            crate::i18n::in_language(language, || {
+                let mut actions = Vec::new();
+                let mut screen = crate::test_ui::TestScreen::new(egui::vec2(960.0, 640.0));
+                let texts = screen.settle(|ui| {
+                    crate::view::update_offer::install_dialog(ui.ctx(), &mut actions);
+                });
+                for label in [
+                    tr!("update-install-confirm-title"),
+                    tr!("update-install-confirm-body"),
+                    tr!("cancel"),
+                    tr!("update-install"),
+                ] {
+                    let (_, rect) = texts
+                        .iter()
+                        .find(|(text, _)| *text == label)
+                        .unwrap_or_else(|| panic!("{label:?} not found in {language:?}"));
+                    assert!(
+                        rect.left() >= 0.0 && rect.right() <= 960.0,
+                        "{label:?} {rect:?} {language:?}"
+                    );
+                }
+            });
+        }
     }
 }

@@ -183,6 +183,17 @@ pub(crate) enum WorkerEvent {
         checked_at: u64,
         result: Result<Option<Release>, UpdateCheckError>,
     },
+    UpdateProgress {
+        version: String,
+        received: u64,
+        total: Option<u64>,
+    },
+    UpdateDownloaded {
+        version: String,
+        result: Result<rosetun_core::DownloadedUpdate, rosetun_core::UpdateDownloadError>,
+    },
+    /// Setup answered: `None` when it installed without closing this window.
+    UpdateInstall(Option<crate::state::UpdateFailure>),
     SetDns(Result<(), SettingsError>),
     ResetSettings(Result<(), SettingsError>),
     SetVerboseLog(Result<(), SettingsError>),

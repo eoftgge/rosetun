@@ -212,6 +212,19 @@ fn fetch_via_vpn_with(
     })
 }
 
+/// The service's proxy through the connected main server, or `None` without a
+/// connection. A service that cannot answer is an error, never a direct path.
+pub(crate) fn helper_vpn_proxy() -> Result<Option<ureq::Proxy>, FetchError> {
+    let mut helper =
+        rosetun_ipc::HelperClient::connect(&rosetun_ipc::default_endpoint(), "rosetun-update")
+            .map_err(|_| FetchError::VpnUnavailable)?;
+    helper
+        .subscription_proxy()
+        .map_err(|_| FetchError::VpnUnavailable)?
+        .map(|endpoint| subscription_proxy(&endpoint))
+        .transpose()
+}
+
 fn subscription_proxy(
     endpoint: &rosetun_ipc::SubscriptionProxy,
 ) -> Result<ureq::Proxy, FetchError> {

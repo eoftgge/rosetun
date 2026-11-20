@@ -1,7 +1,13 @@
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use rosetun_config::ConnectionState;
-use rosetun_core::{Release, UpdateCheckError, is_newer, remembered_release};
+use rosetun_core::{
+    DownloadedUpdate, Release, UpdateCheckError, UpdateDownloadError, is_newer, remembered_release,
+};
 
 use super::{Action, Job, State};
+use crate::worker::WorkerEvent;
 
 const UPDATE_CHECK_DEFER: u64 = 60;
 pub(super) const UPDATE_CHECK_INTERVAL: u64 = 24 * 60 * 60;
@@ -13,6 +19,53 @@ pub(crate) struct UpdatesState {
     pub(crate) update_check_pending: bool,
     pub(crate) update_check_failed: bool,
     pub(crate) newest_release: Option<Release>,
+    pub(crate) download: UpdateDownload,
+    /// Set by Cancel; the download thread checks it between reads.
+    pub(super) cancel: Arc<AtomicBool>,
+    /// "Install and restart" waits for this confirmation while a session is up.
+    pub(crate) confirm_install: bool,
+}
+
+/// The offered version's installer, from the first click to the installer starting.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) enum UpdateDownload {
+    #[default]
+    Idle,
+    Downloading {
+        version: String,
+        received: u64,
+        total: Option<u64>,
+    },
+    /// Downloaded and checked; nothing runs until the user asks.
+    Ready(DownloadedUpdate),
+    /// The installer was started and has not answered yet.
+    Installing(DownloadedUpdate),
+    Failed {
+        version: String,
+        failure: UpdateFailure,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum UpdateFailure {
+    Download(UpdateDownloadError),
+    /// The user declined the administrator prompt.
+    Declined,
+    /// Setup ended with this exit code without installing.
+    Installer(u32),
+    /// The installer could not be started.
+    Start,
+}
+
+impl UpdateDownload {
+    /// The version this state belongs to, if any.
+    pub(crate) fn version(&self) -> Option<&str> {
+        match self {
+            Self::Idle => None,
+            Self::Downloading { version, .. } | Self::Failed { version, .. } => Some(version),
+            Self::Ready(update) | Self::Installing(update) => Some(&update.version),
+        }
+    }
 }
 
 impl State {
@@ -31,6 +84,81 @@ impl State {
         self.config_ready
             && !self.updates.update_check_pending
             && !self.update_check_blocked_by_connection()
+    }
+
+    /// The download state of the offered version; another version's state reads as idle.
+    pub(crate) fn offer_download(&self) -> &UpdateDownload {
+        const IDLE: &UpdateDownload = &UpdateDownload::Idle;
+        match self.available_update() {
+            Some(release) if self.updates.download.version() == Some(release.version.as_str()) => {
+                &self.updates.download
+            }
+            _ => IDLE,
+        }
+    }
+
+    /// Whether this build downloads and runs an installer itself.
+    pub(crate) fn can_install_updates() -> bool {
+        cfg!(windows)
+    }
+
+    pub(super) fn reduce_update_download(&mut self, event: WorkerEvent) {
+        match event {
+            WorkerEvent::UpdateProgress {
+                version,
+                received,
+                total,
+            } => {
+                if let UpdateDownload::Downloading {
+                    version: current,
+                    received: shown,
+                    total: size,
+                } = &mut self.updates.download
+                    && *current == version
+                {
+                    *shown = received;
+                    *size = total;
+                }
+            }
+            WorkerEvent::UpdateDownloaded { version, result } => {
+                if !matches!(&self.updates.download, UpdateDownload::Downloading { version: current, .. } if *current == version)
+                {
+                    return;
+                }
+                self.updates.download = match result {
+                    Ok(update) => UpdateDownload::Ready(update),
+                    Err(UpdateDownloadError::Cancelled) => UpdateDownload::Idle,
+                    Err(error) => UpdateDownload::Failed {
+                        version,
+                        failure: UpdateFailure::Download(error),
+                    },
+                };
+            }
+            WorkerEvent::UpdateInstall(failure) => {
+                let UpdateDownload::Installing(update) = &self.updates.download else {
+                    return;
+                };
+                self.updates.download = match failure {
+                    None => UpdateDownload::Idle,
+                    // Declining the prompt changes nothing; the file stays checked.
+                    Some(UpdateFailure::Declined) => UpdateDownload::Ready(update.clone()),
+                    Some(failure) => UpdateDownload::Failed {
+                        version: update.version.clone(),
+                        failure,
+                    },
+                };
+            }
+            _ => unreachable!("only update download events are reduced here"),
+        }
+    }
+
+    fn start_install(&mut self) -> Option<Job> {
+        let UpdateDownload::Ready(update) = self.offer_download() else {
+            return None;
+        };
+        let update = update.clone();
+        self.updates.download = UpdateDownload::Installing(update.clone());
+        Some(Job::InstallUpdate(update))
     }
 
     pub(crate) fn available_update(&self) -> Option<&Release> {
@@ -120,6 +248,53 @@ impl State {
                 if self.can_check_updates() {
                     self.updates.update_check_pending = true;
                     return Some(Job::CheckUpdates);
+                }
+            }
+            Action::DownloadUpdate => {
+                let busy = matches!(
+                    self.offer_download(),
+                    UpdateDownload::Downloading { .. } | UpdateDownload::Installing(_)
+                );
+                if Self::can_install_updates()
+                    && self.config_ready
+                    && !busy
+                    && let Some(release) = self.available_update()
+                {
+                    let version = release.version.clone();
+                    self.updates.cancel = Arc::new(AtomicBool::new(false));
+                    self.updates.download = UpdateDownload::Downloading {
+                        version: version.clone(),
+                        received: 0,
+                        total: None,
+                    };
+                    return Some(Job::DownloadUpdate {
+                        version,
+                        via_vpn: self.config.interface.subscriptions_via_vpn,
+                        cancel: Arc::clone(&self.updates.cancel),
+                    });
+                }
+            }
+            Action::CancelUpdateDownload => {
+                if matches!(self.updates.download, UpdateDownload::Downloading { .. }) {
+                    self.updates.cancel.store(true, Ordering::Relaxed);
+                }
+            }
+            Action::InstallUpdate => {
+                if matches!(self.offer_download(), UpdateDownload::Ready(_)) {
+                    if self.session_up() {
+                        self.updates.confirm_install = true;
+                    } else {
+                        return self.start_install();
+                    }
+                }
+            }
+            Action::ConfirmInstallUpdate(confirmed) => {
+                if !self.updates.confirm_install {
+                    return None;
+                }
+                self.updates.confirm_install = false;
+                if confirmed {
+                    return self.start_install();
                 }
             }
             Action::SkipVersion => {

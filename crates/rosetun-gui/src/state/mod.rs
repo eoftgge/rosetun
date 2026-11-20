@@ -73,6 +73,7 @@ pub(crate) use traffic::{
     TrafficRange, program_rule, site_rule,
 };
 use updates::UpdatesState;
+pub(crate) use updates::{UpdateDownload, UpdateFailure};
 
 pub(crate) fn now_unix() -> u64 {
     SystemTime::now()
@@ -330,6 +331,12 @@ pub(crate) enum Action {
     SetCheckUpdates(bool),
     CheckUpdatesNow,
     SkipVersion,
+    /// Download and check the installer of the offered version.
+    DownloadUpdate,
+    CancelUpdateDownload,
+    /// Run the checked installer; asks first while a session is up.
+    InstallUpdate,
+    ConfirmInstallUpdate(bool),
     /// The tray announced this version; saved so it is announced once.
     #[cfg(any(windows, target_os = "linux", test))]
     AnnounceUpdate(String),
@@ -528,6 +535,12 @@ pub(crate) enum Job {
     #[cfg(any(windows, target_os = "linux", test))]
     AnnounceUpdate(String),
     CheckUpdates,
+    DownloadUpdate {
+        version: String,
+        via_vpn: bool,
+        cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    },
+    InstallUpdate(rosetun_core::DownloadedUpdate),
     SetDns(DnsSettings),
     ResetSettings,
     SetVerboseLog(bool),
@@ -777,6 +790,9 @@ impl State {
             WorkerEvent::UpdateCheck { checked_at, result } => {
                 self.reduce_updates(result, checked_at);
             }
+            event @ (WorkerEvent::UpdateProgress { .. }
+            | WorkerEvent::UpdateDownloaded { .. }
+            | WorkerEvent::UpdateInstall(_)) => self.reduce_update_download(event),
             event @ (WorkerEvent::Qr { .. } | WorkerEvent::QrScreenClip { .. }) => {
                 self.reduce_qr(event);
             }
@@ -897,7 +913,12 @@ impl State {
             }
             #[cfg(any(windows, target_os = "linux", test))]
             action @ Action::AnnounceUpdate(_) => return self.act_updates(action),
-            action @ (Action::CheckUpdatesNow | Action::SkipVersion) => {
+            action @ (Action::CheckUpdatesNow
+            | Action::SkipVersion
+            | Action::DownloadUpdate
+            | Action::CancelUpdateDownload
+            | Action::InstallUpdate
+            | Action::ConfirmInstallUpdate(_)) => {
                 return self.act_updates(action);
             }
             action @ (Action::ShowLists

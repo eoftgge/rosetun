@@ -135,7 +135,7 @@ pub use autostart_linux::{Autostart, autostart_enabled, disable_autostart, enabl
 pub use desktop_linux::{tray_notice, user_language};
 pub use desktop_proxy::{DesktopProxy, ProxyRestore, ProxySet};
 #[cfg(windows)]
-pub use elevated::run_elevated;
+pub use elevated::{run_elevated, run_elevated_shown};
 #[cfg(target_os = "linux")]
 pub use file_dialog_linux::{FileDialogError, FileFilter, pick_file, save_file};
 #[cfg(target_os = "linux")]

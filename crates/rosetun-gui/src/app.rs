@@ -499,6 +499,12 @@ impl App {
             #[cfg(any(windows, target_os = "linux", test))]
             Job::AnnounceUpdate(version) => self.workers.announce_update(version),
             Job::CheckUpdates => self.workers.check_updates(),
+            Job::DownloadUpdate {
+                version,
+                via_vpn,
+                cancel,
+            } => self.workers.download_update(version, via_vpn, cancel),
+            Job::InstallUpdate(update) => self.workers.install_update(update),
             Job::SetDns(dns) => self.workers.set_dns(dns),
             Job::ResetSettings => self.workers.reset_settings(),
             Job::SetVerboseLog(on) => self.workers.set_verbose_log(on),
