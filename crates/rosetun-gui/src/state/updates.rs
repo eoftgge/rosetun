@@ -50,8 +50,10 @@ pub(crate) enum UpdateDownload {
 pub(crate) enum UpdateFailure {
     Download(UpdateDownloadError),
     /// The user declined the administrator prompt.
+    #[cfg_attr(not(any(windows, test)), expect(dead_code, reason = "Windows only"))]
     Declined,
     /// Setup ended with this exit code without installing.
+    #[cfg_attr(not(any(windows, test)), expect(dead_code, reason = "Windows only"))]
     Installer(u32),
     /// The installer could not be started.
     Start,
