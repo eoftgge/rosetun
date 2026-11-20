@@ -798,19 +798,15 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                             detail_row(ui, tr!("engine"), |ui| {
                                 if visible_status.is_some_and(|status| status.xray) {
                                     ui.vertical(|ui| {
-                                        if visible_status.is_some_and(|status| status.fragmented) {
-                                            ui.label(tr!("fragment-engine-active"));
+                                        let label = if visible_status
+                                            .is_some_and(|status| status.fragmented)
+                                        {
+                                            tr!("fragment-engine-active")
                                         } else {
-                                            ui.label(tr!("xray-engine"));
-                                        }
-                                        ui.add(
-                                            egui::Label::new(
-                                                RichText::new(tr!("xray-engine-detail"))
-                                                    .small()
-                                                    .color(theme::palette().text_dim),
-                                            )
-                                            .wrap(),
-                                        );
+                                            tr!("xray-engine")
+                                        };
+                                        ui.add(egui::Label::new(label).truncate())
+                                            .on_hover_text(tr!("xray-engine-detail"));
                                         if let Some(status) = visible_status {
                                             unfragmented_note(ui, status);
                                         }
