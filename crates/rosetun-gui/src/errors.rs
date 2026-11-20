@@ -1,10 +1,13 @@
+use std::collections::BTreeMap;
+
 use rosetun_config::{ConfigError, ListCategoryError};
 use rosetun_core::{
     AddFromUrlError, AddSubscriptionError, DnsInputError, ExitError, FetchError,
     FragmentInputError, ListError, ListParseError, ListPreparationError, MoveSubscriptionError,
     ParseError, RemoveSubscriptionError, RenameSubscriptionError, RuleInputError, RuleSetError,
     SelectNodeError, SelectRuleSetError, SettingsError, SkipReason, StoreError,
-    SubscriptionUrlError, TextErrorKind, UnsupportedTransport, UpdateSubscriptionError,
+    SubscriptionUrlError, TextErrorKind, UnsupportedProtocolCounts, UnsupportedTransport,
+    UpdateSubscriptionError,
 };
 use rosetun_ipc::{ClientError, ConnectRequestError, ErrorCode};
 use rosetun_processes::ProcessListError;
@@ -489,17 +492,51 @@ fn parse(language: Language, error: &ParseError) -> String {
                     &arguments(&[("text", text)]),
                 ));
             }
-            for (reason, count) in rosetun_core::group_skipped(skipped) {
+            let grouped = rosetun_core::group_skipped(skipped);
+            let unsupported = rosetun_core::group_unsupported_protocols(skipped);
+            for line in skipped_lines(language, &grouped, &unsupported) {
                 output.push('\n');
-                output.push_str(&tr_in(
-                    language,
-                    "skipped-summary",
-                    &skipped_arguments(count, &skip_reason(language, &reason)),
-                ));
+                output.push_str(&line);
             }
             output
         }
     }
+}
+
+pub(crate) fn skipped_lines(
+    language: Language,
+    skipped: &BTreeMap<SkipReason, usize>,
+    unsupported: &UnsupportedProtocolCounts,
+) -> Vec<String> {
+    let mut lines = Vec::new();
+    for (reason, count) in skipped {
+        if *reason == SkipReason::UnsupportedProtocol && !unsupported.protocols.is_empty() {
+            let mut parts: Vec<String> = unsupported
+                .protocols
+                .iter()
+                .map(|(name, n)| format!("{name} {n}"))
+                .collect();
+            if unsupported.other > 0 {
+                parts.push(tr_in(
+                    language,
+                    "skipped-unsupported-other",
+                    &arguments(&[("count", &unsupported.other.to_string())]),
+                ));
+            }
+            lines.push(tr_in(
+                language,
+                "skipped-unsupported-protocols",
+                &arguments(&[("protocols", &parts.join(", "))]),
+            ));
+        } else {
+            lines.push(tr_in(
+                language,
+                "skipped-summary",
+                &skipped_arguments(*count, &skip_reason(language, reason)),
+            ));
+        }
+    }
+    lines
 }
 
 pub(crate) fn skip_reason(language: Language, reason: &SkipReason) -> String {
@@ -1337,6 +1374,76 @@ mod tests {
         assert_eq!(
             connect_request(Language::English, &ConnectRequestError::RuleSetNotFound),
             "the selected rule set does not exist"
+        );
+    }
+
+    #[test]
+    fn unsupported_protocol_counts_are_named_in_both_languages() {
+        let skipped = vec![
+            rosetun_core::Skipped {
+                index: 1,
+                scheme: Some("tuic".to_owned()),
+                reason: SkipReason::UnsupportedProtocol,
+            },
+            rosetun_core::Skipped {
+                index: 2,
+                scheme: Some("tuic".to_owned()),
+                reason: SkipReason::UnsupportedProtocol,
+            },
+            rosetun_core::Skipped {
+                index: 3,
+                scheme: Some("wireguard".to_owned()),
+                reason: SkipReason::UnsupportedProtocol,
+            },
+        ];
+        let grouped = rosetun_core::group_skipped(&skipped);
+        let unsupported = rosetun_core::group_unsupported_protocols(&skipped);
+        assert_eq!(
+            skipped_lines(Language::Russian, &grouped, &unsupported),
+            vec!["Не поддерживаются: TUIC 2, WireGuard 1"]
+        );
+        assert_eq!(
+            skipped_lines(Language::English, &grouped, &unsupported),
+            vec!["Unsupported: TUIC 2, WireGuard 1"]
+        );
+
+        let mixed = vec![
+            rosetun_core::Skipped {
+                index: 1,
+                scheme: Some("wireguard".to_owned()),
+                reason: SkipReason::UnsupportedProtocol,
+            },
+            rosetun_core::Skipped {
+                index: 2,
+                scheme: None,
+                reason: SkipReason::UnsupportedProtocol,
+            },
+        ];
+        let mixed_grouped = rosetun_core::group_skipped(&mixed);
+        let mixed_unsupported = rosetun_core::group_unsupported_protocols(&mixed);
+        assert_eq!(
+            skipped_lines(Language::Russian, &mixed_grouped, &mixed_unsupported),
+            vec!["Не поддерживаются: WireGuard 1, другие 1"]
+        );
+        assert_eq!(
+            skipped_lines(Language::English, &mixed_grouped, &mixed_unsupported),
+            vec!["Unsupported: WireGuard 1, other 1"]
+        );
+
+        let unknown_only = vec![rosetun_core::Skipped {
+            index: 1,
+            scheme: None,
+            reason: SkipReason::UnsupportedProtocol,
+        }];
+        let unknown_grouped = rosetun_core::group_skipped(&unknown_only);
+        let unknown_unsupported = rosetun_core::group_unsupported_protocols(&unknown_only);
+        assert_eq!(
+            skipped_lines(Language::Russian, &unknown_grouped, &unknown_unsupported),
+            vec!["Пропущено 1: протокол пока не поддерживается"]
+        );
+        assert_eq!(
+            skipped_lines(Language::English, &unknown_grouped, &unknown_unsupported),
+            vec!["Skipped 1: protocol is not supported yet"]
         );
     }
 }

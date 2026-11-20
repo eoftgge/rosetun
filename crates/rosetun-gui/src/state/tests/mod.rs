@@ -32,6 +32,7 @@ fn report() -> UpdateReport {
         retained: 3,
         selection_cleared: true,
         skipped: BTreeMap::new(),
+        unsupported_protocols: Default::default(),
         notices: vec![],
     }
 }

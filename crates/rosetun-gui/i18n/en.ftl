@@ -1044,6 +1044,8 @@ apply-failed = Changes were not applied: { $reason }
 selected-pending = Selected { $name } · reconnect to apply
 updated-summary = Updated · { $added } added, { $removed } removed, { $retained } retained
 skipped-summary = Skipped { $count }: { $reason }
+skipped-unsupported-protocols = Unsupported: { $protocols }
+skipped-unsupported-other = other { $count }
 helper-version = Helper { $version }
 verbose-hours = { $count ->
     [one] { $n } { verbose-log-hour-one }

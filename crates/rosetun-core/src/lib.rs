@@ -87,9 +87,11 @@ pub use subscriptions::{
 pub use system_checks::{CheckDetail, CheckKind, CheckResult, CheckStatus, check_system};
 pub use text::{
     expiry_text, fetch_error_message, node_address, node_protocol, node_tls, node_transport,
-    provider_link, provider_text, terminal_text, traffic_text, updated_text,
+    provider_link, provider_text, skipped_lines, terminal_text, traffic_text, updated_text,
 };
-pub use update::{UpdateReport, group_skipped};
+pub use update::{
+    UnsupportedProtocolCounts, UpdateReport, group_skipped, group_unsupported_protocols,
+};
 pub use update_download::{DownloadedUpdate, UpdateDownloadError, download_update, installer_name};
 pub use updates::{Release, UpdateCheckError, is_newer, latest_release, remembered_release};
 

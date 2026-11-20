@@ -1064,6 +1064,8 @@ apply-failed = Изменения не применены: { $reason }
 selected-pending = Выбран { $name } · переподключитесь, чтобы применить
 updated-summary = Обновлено · добавлено { $added }, удалено { $removed }, оставлено { $retained }
 skipped-summary = Пропущено { $count }: { $reason }
+skipped-unsupported-protocols = Не поддерживаются: { $protocols }
+skipped-unsupported-other = другие { $count }
 helper-version = Служба { $version }
 verbose-hours = { $count ->
     [one] { $n } { verbose-log-hour-one }

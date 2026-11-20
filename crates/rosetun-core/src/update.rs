@@ -1,7 +1,22 @@
+use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet};
 
 use rosetun_config::{AppConfig, SubscriptionId};
-use rosetun_subscription::{Parsed, SkipReason, Skipped};
+use rosetun_subscription::{Parsed, SkipReason, Skipped, protocol_display_name};
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct UnsupportedProtocolCounts {
+    /// Known unsupported protocols sorted by count descending, then name ascending.
+    pub protocols: Vec<(String, usize)>,
+    /// Unsupported protocol entries whose scheme was absent or unrecognised.
+    pub other: usize,
+}
+
+impl UnsupportedProtocolCounts {
+    pub fn is_empty(&self) -> bool {
+        self.protocols.is_empty() && self.other == 0
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UpdateReport {
@@ -10,6 +25,7 @@ pub struct UpdateReport {
     pub retained: usize,
     pub selection_cleared: bool,
     pub skipped: BTreeMap<SkipReason, usize>,
+    pub unsupported_protocols: UnsupportedProtocolCounts,
     pub notices: Vec<String>,
 }
 
@@ -19,6 +35,30 @@ pub fn group_skipped(skipped: &[Skipped]) -> BTreeMap<SkipReason, usize> {
         *grouped.entry(entry.reason.clone()).or_default() += 1;
     }
     grouped
+}
+
+pub fn group_unsupported_protocols(skipped: &[Skipped]) -> UnsupportedProtocolCounts {
+    let mut named: BTreeMap<&'static str, usize> = BTreeMap::new();
+    let mut other = 0;
+    for entry in skipped {
+        if entry.reason != SkipReason::UnsupportedProtocol {
+            continue;
+        }
+        match entry.scheme.as_deref().and_then(protocol_display_name) {
+            Some(name) => *named.entry(name).or_default() += 1,
+            None => other += 1,
+        }
+    }
+    let mut protocols: Vec<(String, usize)> = named
+        .into_iter()
+        .map(|(name, count)| (name.to_owned(), count))
+        .collect();
+    protocols.sort_by(|left, right| {
+        Reverse(left.1)
+            .cmp(&Reverse(right.1))
+            .then(left.0.cmp(&right.0))
+    });
+    UnsupportedProtocolCounts { protocols, other }
 }
 
 pub(crate) fn apply_update(
@@ -54,6 +94,7 @@ pub(crate) fn apply_update(
         retained,
         selection_cleared,
         skipped: group_skipped(&parsed.skipped),
+        unsupported_protocols: group_unsupported_protocols(&parsed.skipped),
         notices: parsed.meta.notices.clone(),
     };
 
@@ -521,5 +562,42 @@ mod tests {
         assert_eq!(config.active, selection);
         assert!(!report.selection_cleared);
         config.validate().unwrap();
+    }
+
+    #[test]
+    fn group_unsupported_protocols_counts_known_schemes_and_other() {
+        let skipped = vec![
+            Skipped {
+                index: 1,
+                scheme: Some("wireguard".to_owned()),
+                reason: SkipReason::UnsupportedProtocol,
+            },
+            Skipped {
+                index: 2,
+                scheme: Some("tuic".to_owned()),
+                reason: SkipReason::UnsupportedProtocol,
+            },
+            Skipped {
+                index: 3,
+                scheme: Some("tuic".to_owned()),
+                reason: SkipReason::UnsupportedProtocol,
+            },
+            Skipped {
+                index: 4,
+                scheme: None,
+                reason: SkipReason::UnsupportedProtocol,
+            },
+            Skipped {
+                index: 5,
+                scheme: Some("happ".to_owned()),
+                reason: SkipReason::ClientSettings,
+            },
+        ];
+        let counts = group_unsupported_protocols(&skipped);
+        assert_eq!(
+            counts.protocols,
+            vec![("TUIC".to_owned(), 2), ("WireGuard".to_owned(), 1)]
+        );
+        assert_eq!(counts.other, 1);
     }
 }

@@ -11,7 +11,7 @@ pub(crate) fn parse(line: &str) -> Record {
         return (None, Entry::Skip(SkipReason::InvalidRecord));
     };
     let scheme = scheme.to_ascii_lowercase();
-    let safe_scheme = known_scheme(&scheme).map(str::to_owned);
+    let safe_scheme = crate::known_scheme(&scheme).map(str::to_owned);
     if let Some(notice) = service_notice(line) {
         return (safe_scheme, Entry::Notice(notice));
     }
@@ -21,9 +21,8 @@ pub(crate) fn parse(line: &str) -> Record {
         "hysteria2" | "hy2" => hysteria2(rest),
         "vmess" => vmess(rest),
         "ss" => shadowsocks(rest),
-        "happ" | "incy" | "v2raytun" | "hiddify" | "streisand" | "sing-box" => {
-            Err(SkipReason::ClientSettings)
-        }
+        "happ" | "incy" | "v2raytun" | "hiddify" | "streisand" | "sing-box" | "clash"
+        | "clashmeta" => Err(SkipReason::ClientSettings),
         _ => Err(SkipReason::UnsupportedProtocol),
     };
     (safe_scheme, result.into())
@@ -33,32 +32,6 @@ fn service_notice(line: &str) -> Option<String> {
     let url = Url::parse(line).ok()?;
     is_service_address(url.host_str()?)
         .then(|| clean(&percent_decode(url.fragment().unwrap_or("")), 128))
-}
-
-fn known_scheme(scheme: &str) -> Option<&'static str> {
-    Some(match scheme {
-        "vless" => "vless",
-        "vmess" => "vmess",
-        "trojan" => "trojan",
-        "ss" => "ss",
-        "hysteria2" => "hysteria2",
-        "hy2" => "hy2",
-        "tuic" => "tuic",
-        "wireguard" => "wireguard",
-        "anytls" => "anytls",
-        "socks" => "socks",
-        "socks5" => "socks5",
-        "http" => "http",
-        "https" => "https",
-        "ssr" => "ssr",
-        "happ" => "happ",
-        "incy" => "incy",
-        "v2raytun" => "v2raytun",
-        "hiddify" => "hiddify",
-        "streisand" => "streisand",
-        "sing-box" => "sing-box",
-        _ => return None,
-    })
 }
 
 fn ordinary(line: &str, protocol: &str) -> Result<rosetun_config::Node, SkipReason> {

@@ -1035,3 +1035,54 @@ fn xhttp_debug_and_errors_hide_path_host_and_headers() {
         assert!(!debug.contains(secret), "{secret} leaked: {debug}");
     }
 }
+
+#[test]
+fn skipped_unsupported_protocols_record_known_schemes_and_wrapper_links_are_client_settings() {
+    let body = [
+        "wireguard://secret@192.0.2.1:51820#WG",
+        "hysteria://192.0.2.2:443?auth=secret#Hy1",
+        "clash://install-config?url=https://example.com/sub",
+        "customproto://secret@192.0.2.3:443#Unknown",
+        "trojan://secret@192.0.2.4:443#Good",
+    ]
+    .join("\n");
+    let result = parsed(&body);
+    assert_eq!(result.nodes.len(), 1);
+    let summary: Vec<_> = result
+        .skipped
+        .iter()
+        .map(|entry| (entry.scheme.as_deref(), &entry.reason))
+        .collect();
+    assert_eq!(
+        summary,
+        vec![
+            (Some("wireguard"), &SkipReason::UnsupportedProtocol),
+            (Some("hysteria"), &SkipReason::UnsupportedProtocol),
+            (Some("clash"), &SkipReason::ClientSettings),
+            (None, &SkipReason::UnsupportedProtocol),
+        ]
+    );
+
+    let sing_box = r#"{
+        "outbounds": [
+            {"type": "wireguard", "tag": "WG"},
+            {"type": "unknownproto", "tag": "Unknown"},
+            {"type": "trojan", "tag": "Good", "server": "192.0.2.5", "server_port": 443, "password": "pw"}
+        ]
+    }"#;
+    let sb = parsed(sing_box);
+    assert_eq!(sb.nodes.len(), 1);
+    assert_eq!(sb.skipped[0].scheme.as_deref(), Some("wireguard"));
+    assert_eq!(sb.skipped[0].reason, SkipReason::UnsupportedProtocol);
+    assert_eq!(sb.skipped[1].scheme, None);
+    assert_eq!(sb.skipped[1].reason, SkipReason::UnsupportedProtocol);
+
+    let xray = r#"[
+        {"remarks": "WG", "outbounds": [{"protocol": "wireguard", "tag": "proxy"}]},
+        {"remarks": "Good", "outbounds": [{"protocol": "trojan", "tag": "proxy", "settings": {"servers": [{"address": "192.0.2.6", "port": 443, "password": "pw"}]}}]}
+    ]"#;
+    let xr = parsed(xray);
+    assert_eq!(xr.nodes.len(), 1);
+    assert_eq!(xr.skipped[0].scheme.as_deref(), Some("wireguard"));
+    assert_eq!(xr.skipped[0].reason, SkipReason::UnsupportedProtocol);
+}

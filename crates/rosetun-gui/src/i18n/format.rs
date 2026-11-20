@@ -205,14 +205,6 @@ pub(crate) fn updated(added: usize, removed: usize, retained: usize) -> String {
     )
 }
 
-pub(crate) fn skipped(count: usize, reason: &str) -> String {
-    tr!(
-        "skipped-summary",
-        count = count.to_string(),
-        reason = reason
-    )
-}
-
 pub(crate) fn helper_version(version: &str) -> String {
     tr!("helper-version", version = version)
 }

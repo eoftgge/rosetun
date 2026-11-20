@@ -422,14 +422,12 @@ fn details(
                     .wrap(),
             );
         }
-        for (reason, count) in &report.skipped {
-            ui.add(
-                egui::Label::new(state.text(&crate::i18n::skipped(
-                    *count,
-                    &errors::skip_reason(crate::i18n::language(), reason),
-                )))
-                .wrap(),
-            );
+        for line in errors::skipped_lines(
+            crate::i18n::language(),
+            &report.skipped,
+            &report.unsupported_protocols,
+        ) {
+            ui.add(egui::Label::new(state.text(&line)).wrap());
         }
     }
     egui::Sides::new().shrink_left().show(

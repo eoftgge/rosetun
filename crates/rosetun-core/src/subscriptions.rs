@@ -466,6 +466,7 @@ pub fn save_proxy(
             retained: usize::from(id.is_some()),
             selection_cleared: false,
             skipped: Default::default(),
+            unsupported_protocols: Default::default(),
             notices: Vec::new(),
         };
         if let Some(id) = id {

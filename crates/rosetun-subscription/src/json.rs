@@ -70,9 +70,24 @@ fn xray(config: &Value) -> Record {
         .or_else(|| outbounds.iter().find(supported));
 
     let Some(outbound) = outbound else {
-        let entry = service_notice(config, outbounds)
-            .unwrap_or(Entry::Skip(SkipReason::UnsupportedProtocol));
-        return (None, entry);
+        if let Some(entry) = service_notice(config, outbounds) {
+            return (None, entry);
+        }
+        let scheme = outbounds
+            .iter()
+            .find(|outbound| outbound.get("tag").and_then(Value::as_str) == Some("proxy"))
+            .or_else(|| {
+                outbounds.iter().find(|outbound| {
+                    !matches!(
+                        outbound.get("protocol").and_then(Value::as_str),
+                        Some("freedom" | "blackhole" | "dns") | None
+                    )
+                })
+            })
+            .and_then(|outbound| outbound.get("protocol").and_then(Value::as_str))
+            .and_then(|protocol| crate::known_scheme(&protocol.to_ascii_lowercase()))
+            .map(str::to_owned);
+        return (scheme, Entry::Skip(SkipReason::UnsupportedProtocol));
     };
     let protocol = outbound
         .get("protocol")
@@ -225,7 +240,8 @@ fn sing_box(outbound: &Value) -> Record {
         return (None, Entry::Skip(SkipReason::InvalidRecord));
     };
     if !PROTOCOLS.contains(&protocol) {
-        return (None, Entry::Skip(SkipReason::UnsupportedProtocol));
+        let scheme = crate::known_scheme(&protocol.to_ascii_lowercase()).map(str::to_owned);
+        return (scheme, Entry::Skip(SkipReason::UnsupportedProtocol));
     }
     let scheme = normalize_protocol(protocol);
     let mut fields = Fields::new();

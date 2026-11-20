@@ -1,6 +1,9 @@
-use crate::FetchError;
+use std::collections::BTreeMap;
+
 use rosetun_config::{Node, Outbound, SubscriptionInfo, TlsMode, Transport};
-use rosetun_subscription::ParseError;
+use rosetun_subscription::{ParseError, SkipReason};
+
+use crate::{FetchError, UnsupportedProtocolCounts};
 
 pub fn terminal_text(input: &str) -> String {
     input
@@ -75,6 +78,32 @@ fn url_path_and_query(link: &str) -> Option<String> {
     Some(path_and_query)
 }
 
+pub fn skipped_lines(
+    skipped: &BTreeMap<SkipReason, usize>,
+    unsupported: &UnsupportedProtocolCounts,
+) -> Vec<String> {
+    let mut lines = Vec::new();
+    for (reason, count) in skipped {
+        if *reason == SkipReason::UnsupportedProtocol && !unsupported.protocols.is_empty() {
+            let mut parts: Vec<String> = unsupported
+                .protocols
+                .iter()
+                .map(|(name, n)| format!("{name} {n}"))
+                .collect();
+            if unsupported.other > 0 {
+                parts.push(format!("other {}", unsupported.other));
+            }
+            lines.push(format!("unsupported: {}", parts.join(", ")));
+        } else {
+            lines.push(format!(
+                "skipped {count}: {}",
+                terminal_text(&reason.to_string())
+            ));
+        }
+    }
+    lines
+}
+
 pub fn fetch_error_message(error: &FetchError, subscription_url: &str) -> String {
     match error {
         FetchError::Parse(ParseError::DeviceLimit {
@@ -103,11 +132,11 @@ pub fn fetch_error_message(error: &FetchError, subscription_url: &str) -> String
                 output.push_str("\n  notice: ");
                 output.push_str(&provider_text(notice, subscription_url));
             }
-            for (reason, count) in crate::group_skipped(skipped) {
-                output.push_str(&format!(
-                    "\n  skipped {count}: {}",
-                    terminal_text(&reason.to_string())
-                ));
+            let grouped = crate::group_skipped(skipped);
+            let unsupported = crate::group_unsupported_protocols(skipped);
+            for line in skipped_lines(&grouped, &unsupported) {
+                output.push_str("\n  ");
+                output.push_str(&line);
             }
             output
         }
@@ -353,5 +382,43 @@ mod tests {
         assert_eq!(node_address(&node), "[2001:db8::1]:443");
         node.server = "192.0.2.1".to_owned();
         assert_eq!(node_address(&node), "192.0.2.1:443");
+    }
+
+    #[test]
+    fn no_usable_nodes_names_unsupported_protocols_when_known() {
+        let error = FetchError::Parse(ParseError::NoUsableNodes {
+            skipped: vec![
+                Skipped {
+                    index: 1,
+                    scheme: Some("tuic".to_owned()),
+                    reason: SkipReason::UnsupportedProtocol,
+                },
+                Skipped {
+                    index: 2,
+                    scheme: Some("tuic".to_owned()),
+                    reason: SkipReason::UnsupportedProtocol,
+                },
+                Skipped {
+                    index: 3,
+                    scheme: Some("wireguard".to_owned()),
+                    reason: SkipReason::UnsupportedProtocol,
+                },
+                Skipped {
+                    index: 4,
+                    scheme: Some("happ".to_owned()),
+                    reason: SkipReason::ClientSettings,
+                },
+            ],
+            notices: Vec::new(),
+        });
+        let message = fetch_error_message(&error, "https://sub.example.com/private");
+        assert!(
+            message.contains("unsupported: TUIC 2, WireGuard 1"),
+            "{message}"
+        );
+        assert!(
+            message.contains("skipped 1: client settings are not node records"),
+            "{message}"
+        );
     }
 }
