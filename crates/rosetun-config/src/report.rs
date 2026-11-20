@@ -593,4 +593,36 @@ mod tests {
             2026-10-26T10:00:00.123Z  INFO rosetun_helper::state: connected elapsed_ms=532 thread_id=4 stage=CheckingEngine\n";
         assert_eq!(redact_report_text(input), input);
     }
+
+    #[test]
+    fn tuic_and_anytls_links_and_credentials_are_redacted() {
+        let text = concat!(
+            "tuic://123e4567-e89b-12d3-a456-426614174000:tuic-secret@203.0.113.10:8444?sni=tuic.example.com ",
+            "anytls://anytls-secret@203.0.113.11:8445?sni=anytls.example.com ",
+            "{\"type\":\"tuic\",\"uuid\":\"123e4567-e89b-12d3-a456-426614174000\",\"password\":\"tuic-secret\"} ",
+            "{\"type\":\"anytls\",\"password\":\"anytls-secret\",\"public_key\":\"reality-pubkey\"}"
+        );
+        let report = redact_report_text(text);
+        for secret in [
+            "123e4567-e89b-12d3-a456-426614174000",
+            "tuic-secret",
+            "anytls-secret",
+            "reality-pubkey",
+            "203.0.113.10",
+            "203.0.113.11",
+            "tuic.example.com",
+            "anytls.example.com",
+        ] {
+            assert!(!report.contains(secret), "report leaked {secret}: {report}");
+        }
+        let log = super::redact_log_credentials(text);
+        for secret in [
+            "123e4567-e89b-12d3-a456-426614174000",
+            "tuic-secret",
+            "anytls-secret",
+            "reality-pubkey",
+        ] {
+            assert!(!log.contains(secret), "log leaked {secret}: {log}");
+        }
+    }
 }

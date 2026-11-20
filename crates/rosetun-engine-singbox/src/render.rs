@@ -489,10 +489,54 @@ fn proxy_outbound(node: &Node, tag: &str) -> Result<Value, EngineError> {
                 outbound.insert("down_mbps".into(), down.into());
             }
         }
-        Outbound::Tuic(_) | Outbound::AnyTls(_) => {
-            return Err(EngineError::Unsupported(
-                "protocol not yet rendered by the sing-box backend".into(),
-            ));
+        Outbound::Tuic(params) => {
+            if !matches!(node.stream.tls, TlsMode::Tls(_))
+                || node.stream.transport != Transport::Tcp
+            {
+                return Err(EngineError::Unsupported(
+                    "TUIC requires TLS and its built-in QUIC transport".into(),
+                ));
+            }
+            outbound.insert("type".into(), "tuic".into());
+            outbound.insert("uuid".into(), params.uuid.clone().into());
+            if !params.password.is_empty() {
+                outbound.insert("password".into(), params.password.clone().into());
+            }
+            if let Some(congestion_control) = params.congestion_control {
+                outbound.insert(
+                    "congestion_control".into(),
+                    congestion_control.as_str().into(),
+                );
+            }
+            if let Some(udp_relay_mode) = params.udp_relay_mode {
+                outbound.insert("udp_relay_mode".into(), udp_relay_mode.as_str().into());
+            }
+            if params.zero_rtt_handshake {
+                outbound.insert("zero_rtt_handshake".into(), true.into());
+            }
+            if let Some(heartbeat) = &params.heartbeat {
+                outbound.insert("heartbeat".into(), heartbeat.clone().into());
+            }
+        }
+        Outbound::AnyTls(params) => {
+            if matches!(node.stream.tls, TlsMode::Plain)
+                || node.stream.transport != Transport::Tcp
+            {
+                return Err(EngineError::Unsupported(
+                    "AnyTLS requires TLS or REALITY over TCP".into(),
+                ));
+            }
+            outbound.insert("type".into(), "anytls".into());
+            outbound.insert("password".into(), params.password.clone().into());
+            if let Some(interval) = &params.idle_session_check_interval {
+                outbound.insert("idle_session_check_interval".into(), interval.clone().into());
+            }
+            if let Some(timeout) = &params.idle_session_timeout {
+                outbound.insert("idle_session_timeout".into(), timeout.clone().into());
+            }
+            if let Some(min_idle) = params.min_idle_session {
+                outbound.insert("min_idle_session".into(), min_idle.into());
+            }
         }
         Outbound::Unknown { scheme, .. } => {
             return Err(EngineError::Unsupported(format!(
@@ -501,10 +545,18 @@ fn proxy_outbound(node: &Node, tag: &str) -> Result<Value, EngineError> {
         }
     }
 
-    if let Some(tls) = tls_section(
+    if let Some(mut tls) = tls_section(
         &node.stream.tls,
-        !matches!(&node.outbound, Outbound::Hysteria2(_) | Outbound::Http(_)),
+        !matches!(
+            &node.outbound,
+            Outbound::Hysteria2(_) | Outbound::Tuic(_) | Outbound::Http(_)
+        ),
     ) {
+        if matches!(&node.outbound, Outbound::Tuic(params) if params.disable_sni)
+            && let Some(object) = tls.as_object_mut()
+        {
+            object.insert("disable_sni".into(), true.into());
+        }
         outbound.insert("tls".into(), tls);
     }
     if let Some(transport) = transport_section(&node.stream.transport)? {
@@ -889,8 +941,9 @@ fn exit_outbound(exit: &ExitId, extra: &[ExtraOutbound<'_>]) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use rosetun_config::{
-        ExitId, Hysteria2Params, ListId, NodeId, Rule, RuleSetId, RuleTemplate, StreamSettings,
-        TlsParams,
+        AnyTlsParams, ExitId, Hysteria2Params, ListId, NodeId, RealityParams, Rule, RuleSetId,
+        RuleTemplate, StreamSettings, TlsParams, TuicCongestionControl, TuicParams,
+        TuicUdpRelayMode,
     };
 
     #[test]
@@ -1981,6 +2034,266 @@ mod tests {
             proxy_outbound(&node, "proxy"),
             Err(EngineError::Unsupported(_))
         ));
+    }
+
+    #[test]
+    fn tuic_outbound_matches_golden_and_handles_optional_fields() {
+        let mut node = Node {
+            id: NodeId::new("tuic-node"),
+            name: "TUIC".into(),
+            server: "192.0.2.1".into(),
+            port: 8444,
+            outbound: Outbound::Tuic(TuicParams {
+                uuid: "00000000-0000-4000-8000-000000000001".into(),
+                password: "test-secret".into(),
+                congestion_control: Some(TuicCongestionControl::Bbr),
+                udp_relay_mode: Some(TuicUdpRelayMode::Quic),
+                zero_rtt_handshake: true,
+                heartbeat: Some("10s".into()),
+                disable_sni: true,
+            }),
+            stream: StreamSettings {
+                tls: TlsMode::Tls(TlsParams {
+                    sni: Some("tuic.example.com".into()),
+                    alpn: vec!["h3".into()],
+                    fingerprint: Some("firefox".into()),
+                    allow_insecure: true,
+                }),
+                ..Default::default()
+            },
+            raw: None,
+        };
+        let outbound = proxy_outbound(&node, "proxy").unwrap();
+        let golden: Value =
+            serde_json::from_str(include_str!("../tests/fixtures/tuic-outbound.json")).unwrap();
+        assert_eq!(outbound, golden);
+        assert!(outbound["tls"].get("utls").is_none());
+
+        let rendered = RenderedConfig {
+            file_name: "config.json".into(),
+            body: serde_json::to_vec(&outbound).unwrap(),
+            unsupported: Vec::new(),
+            unsupported_probes: Vec::new(),
+        };
+        let shown = format!("{rendered:?}");
+        assert!(!shown.contains("test-secret"));
+        assert!(!shown.contains("00000000-0000-4000-8000-000000000001"));
+
+        node.outbound = Outbound::Tuic(TuicParams {
+            uuid: "00000000-0000-4000-8000-000000000001".into(),
+            password: String::new(),
+            congestion_control: None,
+            udp_relay_mode: None,
+            zero_rtt_handshake: false,
+            heartbeat: None,
+            disable_sni: false,
+        });
+        node.stream.tls = TlsMode::Tls(TlsParams::default());
+        let minimal = proxy_outbound(&node, "proxy").unwrap();
+        assert_eq!(
+            minimal,
+            json!({
+                "tag": "proxy",
+                "type": "tuic",
+                "server": "192.0.2.1",
+                "server_port": 8444,
+                "uuid": "00000000-0000-4000-8000-000000000001",
+                "tls": { "enabled": true },
+            })
+        );
+
+        node.stream.tls = TlsMode::Reality(RealityParams {
+            sni: Some("tuic.example.com".into()),
+            public_key: "test-key".into(),
+            short_id: None,
+            fingerprint: None,
+        });
+        assert!(matches!(
+            proxy_outbound(&node, "proxy"),
+            Err(EngineError::Unsupported(_))
+        ));
+
+        node.stream.tls = TlsMode::Plain;
+        assert!(matches!(
+            proxy_outbound(&node, "proxy"),
+            Err(EngineError::Unsupported(_))
+        ));
+    }
+
+    #[test]
+    fn anytls_outbound_matches_golden_and_supports_reality() {
+        let mut node = Node {
+            id: NodeId::new("anytls-node"),
+            name: "AnyTLS".into(),
+            server: "192.0.2.2".into(),
+            port: 8445,
+            outbound: Outbound::AnyTls(AnyTlsParams {
+                password: "test-secret".into(),
+                idle_session_check_interval: Some("30s".into()),
+                idle_session_timeout: Some("60s".into()),
+                min_idle_session: Some(2),
+            }),
+            stream: StreamSettings {
+                tls: TlsMode::Tls(TlsParams {
+                    sni: Some("anytls.example.com".into()),
+                    alpn: vec!["h2".into(), "http/1.1".into()],
+                    fingerprint: Some("firefox".into()),
+                    allow_insecure: false,
+                }),
+                ..Default::default()
+            },
+            raw: None,
+        };
+        let outbound = proxy_outbound(&node, "proxy").unwrap();
+        let golden: Value =
+            serde_json::from_str(include_str!("../tests/fixtures/anytls-outbound.json")).unwrap();
+        assert_eq!(outbound, golden);
+
+        node.outbound = Outbound::AnyTls(AnyTlsParams {
+            password: "test-secret".into(),
+            idle_session_check_interval: None,
+            idle_session_timeout: None,
+            min_idle_session: None,
+        });
+        node.stream.tls = TlsMode::Reality(RealityParams {
+            sni: Some("anytls.example.com".into()),
+            public_key: "test-pubkey".into(),
+            short_id: Some("abcd".into()),
+            fingerprint: Some("chrome".into()),
+        });
+        let reality = proxy_outbound(&node, "proxy").unwrap();
+        assert_eq!(reality["type"], "anytls");
+        assert_eq!(reality["tls"]["reality"]["enabled"], true);
+        assert_eq!(reality["tls"]["reality"]["public_key"], "test-pubkey");
+        assert_eq!(reality["tls"]["reality"]["short_id"], "abcd");
+        assert_eq!(reality["tls"]["utls"]["fingerprint"], "chrome");
+        assert!(reality.get("idle_session_check_interval").is_none());
+        assert!(reality.get("idle_session_timeout").is_none());
+        assert!(reality.get("min_idle_session").is_none());
+
+        node.stream.tls = TlsMode::Plain;
+        assert!(matches!(
+            proxy_outbound(&node, "proxy"),
+            Err(EngineError::Unsupported(_))
+        ));
+    }
+
+    #[test]
+    fn tuic_and_anytls_render_in_probes_and_as_first_hop_in_a_two_hop_chain() {
+        let tuic = Node {
+            id: NodeId::new("tuic-probe"),
+            name: "TUIC".into(),
+            server: "192.0.2.1".into(),
+            port: 8444,
+            outbound: Outbound::Tuic(TuicParams {
+                uuid: "00000000-0000-4000-8000-000000000001".into(),
+                password: "test-secret".into(),
+                congestion_control: Some(TuicCongestionControl::Bbr),
+                udp_relay_mode: None,
+                zero_rtt_handshake: false,
+                heartbeat: None,
+                disable_sni: false,
+            }),
+            stream: StreamSettings {
+                tls: TlsMode::Tls(TlsParams {
+                    sni: Some("tuic.example.com".into()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            raw: None,
+        };
+        let anytls = Node {
+            id: NodeId::new("anytls-probe"),
+            name: "AnyTLS".into(),
+            server: "192.0.2.2".into(),
+            port: 8445,
+            outbound: Outbound::AnyTls(AnyTlsParams {
+                password: "test-secret".into(),
+                idle_session_check_interval: None,
+                idle_session_timeout: None,
+                min_idle_session: None,
+            }),
+            stream: StreamSettings {
+                tls: TlsMode::Tls(TlsParams {
+                    sni: Some("anytls.example.com".into()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            raw: None,
+        };
+        let control = rosetun_engine::ControlEndpoint {
+            address: "127.0.0.1:9090".parse().unwrap(),
+            secret: "fixture-secret".into(),
+            delay: None,
+        };
+        let nodes = vec![
+            ("probe-tuic".to_owned(), tuic.clone()),
+            ("probe-anytls".to_owned(), anytls.clone()),
+        ];
+        let probe = render_probe(&ProbeRenderRequest {
+            nodes: &nodes,
+            socks: &[],
+            interface: None,
+            control: &control,
+        })
+        .unwrap();
+        assert!(probe.unsupported_probes.is_empty());
+        let probe_json: Value = serde_json::from_slice(&probe.body).unwrap();
+        assert_eq!(probe_json["outbounds"][0]["type"], "tuic");
+        assert_eq!(probe_json["outbounds"][1]["type"], "anytls");
+
+        let main = shadowsocks_node("main", "203.0.113.1");
+        let mut exit_b = shadowsocks_node("exit-b", "198.51.100.2");
+        exit_b.outbound = Outbound::Socks5(Default::default());
+        let (a, b) = (ExitId::new("a"), ExitId::new("b"));
+        let rules = RuleSet::new(RuleSetId::new("test"), "Test", RuleTarget::Proxy);
+        let settings = Settings::default();
+        for (parent, expected_type) in [(&tuic, "tuic"), (&anytls, "anytls")] {
+            let extra = [
+                ExtraOutbound {
+                    index: 0,
+                    via: None,
+                    exit: &a,
+                    node: parent,
+                    socks: None,
+                },
+                ExtraOutbound {
+                    index: 1,
+                    via: Some(&a),
+                    exit: &b,
+                    node: &exit_b,
+                    socks: None,
+                },
+            ];
+            let rendered = render(&RenderRequest {
+                node: &main,
+                socks: None,
+                extra: &extra,
+                rules: &rules,
+                lists: &[],
+                settings: &settings,
+                lan_segment: &[],
+                lan_servers: &[],
+                control: None,
+                verbose_log: false,
+                local_proxy: None,
+            })
+            .unwrap();
+            let value: Value = serde_json::from_slice(&rendered.body).unwrap();
+            let outbounds = value["outbounds"].as_array().unwrap();
+            let hop = outbounds
+                .iter()
+                .find(|outbound| outbound["tag"] == "hop-exit-0")
+                .unwrap();
+            let second = outbounds
+                .iter()
+                .find(|outbound| outbound["tag"] == "exit-1")
+                .unwrap();
+            assert_eq!(hop["type"], expected_type);
+            assert_eq!(second["detour"], "hop-exit-0");
+        }
     }
 
     #[test]

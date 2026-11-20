@@ -274,6 +274,79 @@ fn sing_box_check_validates_local_rule_set_config() {
             "proxy configuration rejected: {protocol}"
         );
     }
+    let mut tuic = node.clone();
+    tuic.port = 8444;
+    tuic.outbound = Outbound::Tuic(rosetun_config::TuicParams {
+        uuid: "00000000-0000-4000-8000-000000000001".into(),
+        password: "fixture-password".into(),
+        congestion_control: Some(rosetun_config::TuicCongestionControl::Bbr),
+        udp_relay_mode: Some(rosetun_config::TuicUdpRelayMode::Quic),
+        zero_rtt_handshake: true,
+        heartbeat: Some("10s".into()),
+        disable_sni: true,
+    });
+    tuic.stream.tls = rosetun_config::TlsMode::Tls(rosetun_config::TlsParams {
+        sni: Some("tuic.example.com".into()),
+        alpn: vec!["h3".into()],
+        allow_insecure: true,
+        fingerprint: None,
+    });
+    let mut anytls = node.clone();
+    anytls.port = 8445;
+    anytls.outbound = Outbound::AnyTls(rosetun_config::AnyTlsParams {
+        password: "fixture-password".into(),
+        idle_session_check_interval: Some("30s".into()),
+        idle_session_timeout: Some("60s".into()),
+        min_idle_session: Some(2),
+    });
+    anytls.stream.tls = rosetun_config::TlsMode::Tls(rosetun_config::TlsParams {
+        sni: Some("anytls.example.com".into()),
+        alpn: vec!["h2".into()],
+        allow_insecure: false,
+        fingerprint: Some("firefox".into()),
+    });
+    let mut anytls_reality = anytls.clone();
+    anytls_reality.stream.tls = rosetun_config::TlsMode::Reality(rosetun_config::RealityParams {
+        sni: Some("anytls.example.com".into()),
+        public_key: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".into(),
+        short_id: Some("01234567".into()),
+        fingerprint: Some("chrome".into()),
+    });
+    for (name, protocol_node) in [
+        ("tuic", &tuic),
+        ("anytls", &anytls),
+        ("anytls-reality", &anytls_reality),
+    ] {
+        let rendered = SingBoxBackend::new(&directory.0)
+            .render(&RenderRequest {
+                node: protocol_node,
+                socks: None,
+                extra: &[],
+                rules: &rules,
+                lists: &lists,
+                settings: &settings,
+                lan_segment: &[],
+                lan_servers: &[],
+                control: None,
+                verbose_log: false,
+                local_proxy: None,
+            })
+            .unwrap();
+        let path = directory.0.join(format!("{name}.json"));
+        std::fs::write(&path, rendered.body).unwrap();
+        let output = Command::new(&binary)
+            .arg("check")
+            .arg("-c")
+            .arg(&path)
+            .current_dir(&directory.0)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "sing-box check rejected {name}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
     for address in ["127.0.0.1:10808", "[::]:10808"] {
         let config = SingBoxBackend::new(&directory.0)
             .render(&RenderRequest {

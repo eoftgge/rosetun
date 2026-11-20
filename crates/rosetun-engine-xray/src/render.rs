@@ -738,4 +738,31 @@ mod tests {
             "Ethernet"
         );
     }
+
+    #[test]
+    fn tuic_and_anytls_are_refused_as_unsupported_by_xray() {
+        let mut tuic = reality_node();
+        tuic.outbound = Outbound::Tuic(rosetun_config::TuicParams {
+            uuid: "00000000-0000-4000-8000-000000000001".into(),
+            password: "test-secret".into(),
+            congestion_control: None,
+            udp_relay_mode: None,
+            zero_rtt_handshake: false,
+            heartbeat: None,
+            disable_sni: false,
+        });
+        let mut anytls = reality_node();
+        anytls.outbound = Outbound::AnyTls(rosetun_config::AnyTlsParams {
+            password: "test-secret".into(),
+            idle_session_check_interval: None,
+            idle_session_timeout: None,
+            min_idle_session: None,
+        });
+        for node in [&tuic, &anytls] {
+            assert!(matches!(
+                proxy_outbound(node, "proxy", "Ethernet", &TlsFragment::default()),
+                Err(EngineError::Unsupported(_))
+            ));
+        }
+    }
 }
