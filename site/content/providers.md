@@ -29,7 +29,7 @@ lead = "Обычная подписка. Одна кнопка для добав
 
 Список URI по одному на строку, обычный или base64. Xray JSON: объект конфигурации или массив конфигураций; из каждой берётся поддерживаемый outbound с тегом proxy, иначе первый поддерживаемый. sing-box JSON: объект с outbounds; служебные selector, urltest, direct, block и dns пропускаются. Это импорт серверов, а не всей конфигурации маршрутизации.
 
-VLESS, VMess, Trojan, Shadowsocks, Hysteria2. TCP, WebSocket, gRPC, HTTPUpgrade; XHTTP (SplitHTTP) через Xray. Без шифрования транспорта, TLS и REALITY. Для Hysteria2: QUIC поверх UDP, Salamander и смена портов.
+VLESS, VMess, Trojan, Shadowsocks, Hysteria2. TCP, WebSocket, gRPC, HTTPUpgrade; XHTTP (SplitHTTP) через Xray. Режимы безопасности: без шифрования, TLS и REALITY. Для Hysteria2: QUIC поверх UDP, Salamander и смена портов.
 
 Не поддерживаются: Clash YAML, зашифрованные ссылки Happ, XHTTP с отдельным сервером загрузки, mKCP, QUIC-транспорт для TCP-протоколов, HTTP/2, шифрование VLESS и плагины Shadowsocks. Неподдерживаемые узлы пропускаются; причины доступны в отчёте импорта в карточке. Если подходящих узлов нет, добавление завершается ошибкой. Ответ подписки ограничен 5 МиБ после распаковки.
 {% </prose_section> %}

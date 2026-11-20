@@ -13,7 +13,7 @@ overview = "Local network"
 
 **On Linux** it does the same, with the interfaces the system calls physical: a network card, or a bridge that carries the default route. The firewall (nftables) opens each connected network only on its own interface and link-local addresses on the physical ones; docker0, virbr0, tunnels and other software interfaces are not part of it. **Private networks behind the router** opens the private ranges on any interface, as on Windows. After a restart with Lockdown on, the computer's own network opens a few seconds after the service starts, when it has read it; private networks behind the router are open from the start.
 
-On both systems a connected network wider than /16 is not opened, and the addresses of your VPN servers stay out of what is opened: a server in your own network is reached through the tunnel only. On Linux nothing has measured yet where a multicast datagram from a program that picks no interface goes; programs that send on each interface (mDNS, SSDP, most discovery libraries) are expected to work, as on Windows.
+On both systems a connected network wider than /16 is not opened, and the addresses of your VPN servers stay out of what is opened: a server in your own network is reached through the tunnel only. On Linux it has not yet been measured where a multicast datagram from a program that picks no interface goes; programs that send on each interface (mDNS, SSDP, most discovery libraries) are expected to work, as on Windows.
 
 Notes:
 
