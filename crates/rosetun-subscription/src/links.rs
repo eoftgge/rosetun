@@ -253,10 +253,7 @@ fn anytls(line: &str) -> Result<rosetun_config::Node, SkipReason> {
                 fields.insert("short_id".to_owned(), value.into_owned());
             }
             "idle_session_check_interval" | "idle-session-check-interval" => {
-                fields.insert(
-                    "idle_session_check_interval".to_owned(),
-                    value.into_owned(),
-                );
+                fields.insert("idle_session_check_interval".to_owned(), value.into_owned());
             }
             "idle_session_timeout" | "idle-session-timeout" => {
                 fields.insert("idle_session_timeout".to_owned(), value.into_owned());

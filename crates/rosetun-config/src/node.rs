@@ -203,14 +203,14 @@ pub fn is_valid_duration(value: &str) -> bool {
             }
             rest = &after_dot[frac_end..];
         }
-        let unit_len =
-            if rest.starts_with("ns") || rest.starts_with("us") || rest.starts_with("ms") {
-                2
-            } else if rest.starts_with(['s', 'm', 'h']) {
-                1
-            } else {
-                return false;
-            };
+        let unit_len = if rest.starts_with("ns") || rest.starts_with("us") || rest.starts_with("ms")
+        {
+            2
+        } else if rest.starts_with(['s', 'm', 'h']) {
+            1
+        } else {
+            return false;
+        };
         rest = &rest[unit_len..];
     }
     non_zero
@@ -1212,7 +1212,10 @@ mod tests {
                 transport: Transport::Tcp,
                 tls: TlsMode::Tls(TlsParams::default()),
             },
-            raw: Some("tuic://00000000-0000-4000-8000-000000000042:test-secret-tuic@example.com:443".into()),
+            raw: Some(
+                "tuic://00000000-0000-4000-8000-000000000042:test-secret-tuic@example.com:443"
+                    .into(),
+            ),
         };
         let debug = format!("{tuic:?}");
         assert!(!debug.contains("00000000-0000-4000-8000-000000000042"));

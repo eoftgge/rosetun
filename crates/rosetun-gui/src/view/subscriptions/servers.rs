@@ -98,10 +98,7 @@ fn ping_quality(result: PingResult) -> u8 {
     }
 }
 
-pub(super) fn ping_label(
-    result: PingResult,
-    is_udp: bool,
-) -> (String, Color32, Option<String>) {
+pub(super) fn ping_label(result: PingResult, is_udp: bool) -> (String, Color32, Option<String>) {
     match result {
         PingResult::Answered(elapsed) => (
             tr!("ping-ms", ms = ping_millis(elapsed).to_string()),

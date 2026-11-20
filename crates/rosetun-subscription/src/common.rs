@@ -299,7 +299,8 @@ pub(crate) fn build(protocol: &str, fields: &Fields) -> Result<Node, SkipReason>
         raw: None,
     };
     if matches!(node.outbound, Outbound::Tuic(_) | Outbound::AnyTls(_)) {
-        node.validate_proxy().map_err(|_| SkipReason::InvalidRecord)?;
+        node.validate_proxy()
+            .map_err(|_| SkipReason::InvalidRecord)?;
     }
     Ok(node)
 }

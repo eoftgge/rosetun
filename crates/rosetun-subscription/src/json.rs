@@ -318,7 +318,10 @@ fn sing_box(outbound: &Value) -> Record {
                 Entry::Skip(SkipReason::UnsupportedOption),
             );
         }
-        if outbound.get("transport").is_some_and(|value| !value.is_null()) {
+        if outbound
+            .get("transport")
+            .is_some_and(|value| !value.is_null())
+        {
             return (
                 Some(scheme.to_owned()),
                 Entry::Skip(SkipReason::UnsupportedTransport(
@@ -360,7 +363,10 @@ fn sing_box(outbound: &Value) -> Record {
                 Entry::Skip(SkipReason::UnsupportedOption),
             );
         }
-        if outbound.get("transport").is_some_and(|value| !value.is_null()) {
+        if outbound
+            .get("transport")
+            .is_some_and(|value| !value.is_null())
+        {
             return (
                 Some(scheme.to_owned()),
                 Entry::Skip(SkipReason::UnsupportedTransport(

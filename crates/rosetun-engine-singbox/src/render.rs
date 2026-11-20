@@ -519,8 +519,7 @@ fn proxy_outbound(node: &Node, tag: &str) -> Result<Value, EngineError> {
             }
         }
         Outbound::AnyTls(params) => {
-            if matches!(node.stream.tls, TlsMode::Plain)
-                || node.stream.transport != Transport::Tcp
+            if matches!(node.stream.tls, TlsMode::Plain) || node.stream.transport != Transport::Tcp
             {
                 return Err(EngineError::Unsupported(
                     "AnyTLS requires TLS or REALITY over TCP".into(),
@@ -529,7 +528,10 @@ fn proxy_outbound(node: &Node, tag: &str) -> Result<Value, EngineError> {
             outbound.insert("type".into(), "anytls".into());
             outbound.insert("password".into(), params.password.clone().into());
             if let Some(interval) = &params.idle_session_check_interval {
-                outbound.insert("idle_session_check_interval".into(), interval.clone().into());
+                outbound.insert(
+                    "idle_session_check_interval".into(),
+                    interval.clone().into(),
+                );
             }
             if let Some(timeout) = &params.idle_session_timeout {
                 outbound.insert("idle_session_timeout".into(), timeout.clone().into());

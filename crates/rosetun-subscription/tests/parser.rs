@@ -1128,9 +1128,8 @@ fn tuic_links_and_sing_box_json_parse_supported_fields_and_skip_unsupported_opti
     assert!(!params.zero_rtt_handshake);
 
     // Zero UUID becomes a service notice.
-    let notice_body = format!(
-        "tuic://00000000-0000-0000-0000-000000000000@example.com:443#Expired\n{link}"
-    );
+    let notice_body =
+        format!("tuic://00000000-0000-0000-0000-000000000000@example.com:443#Expired\n{link}");
     let notice = parsed(&notice_body);
     assert_eq!(notice.nodes.len(), 1);
     assert_eq!(notice.meta.notices, ["Expired"]);
@@ -1367,7 +1366,10 @@ fn anytls_links_and_sing_box_json_parse_supported_fields_and_skip_unsupported_op
     assert_eq!(params.idle_session_check_interval.as_deref(), Some("30s"));
     assert_eq!(params.idle_session_timeout.as_deref(), Some("1m"));
     assert_eq!(params.min_idle_session, Some(3));
-    assert!(matches!(parsed_json.nodes[0].stream.tls, TlsMode::Reality(_)));
+    assert!(matches!(
+        parsed_json.nodes[0].stream.tls,
+        TlsMode::Reality(_)
+    ));
     assert_eq!(parsed_json.skipped.len(), 2);
     assert_eq!(parsed_json.skipped[0].reason, SkipReason::UnsupportedOption);
     assert_eq!(parsed_json.skipped[1].reason, SkipReason::UnsupportedPin);
