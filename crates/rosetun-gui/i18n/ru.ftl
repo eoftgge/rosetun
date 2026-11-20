@@ -539,7 +539,6 @@ connection-unavailable = Подключение недоступно
 disconnected = Отключено
 connecting = Подключение…
 connected = Подключено
-connected-in-template = Подключено · { $code }
 reconnecting = Переподключение…
 failed = Не удалось подключиться
 failed-protected = Не удалось подключиться · трафик заблокирован

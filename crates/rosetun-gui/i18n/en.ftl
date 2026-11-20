@@ -526,7 +526,6 @@ connection-unavailable = Connection unavailable
 disconnected = Disconnected
 connecting = Connecting…
 connected = Connected
-connected-in-template = Connected · { $code }
 reconnecting = Reconnecting…
 failed = Connection failed
 failed-protected = Connection failed · traffic blocked

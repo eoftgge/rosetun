@@ -116,10 +116,6 @@ pub(crate) fn template_description(template: RuleTemplate) -> String {
     }
 }
 
-pub(crate) fn connected_in(code: &str) -> String {
-    tr!("connected-in-template", code = code)
-}
-
 pub(crate) fn item_error(item: &str, error: &str) -> String {
     format!("{item}: {error}")
 }

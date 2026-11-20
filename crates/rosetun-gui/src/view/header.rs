@@ -7,7 +7,7 @@ use eframe::egui::{
 use rosetun_config::ConnectionState;
 
 use crate::brand;
-use crate::state::{Action, ExitLookup, ExitRoute, Screen, State};
+use crate::state::{Action, Screen, State};
 use crate::{constants, motion, theme, widgets};
 
 /// The window draws its own title bar on Windows; elsewhere the system frame stays.
@@ -220,11 +220,7 @@ fn show_with_rects(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
     let brand_gap = if compact_brand { 12.0 } else { 44.0 };
     let status_label =
         if left_margin + brand_width + brand_gap + icon_tabs_width + right_width + 8.0 > width {
-            if connected {
-                header_country(state).unwrap_or("…")
-            } else {
-                "…"
-            }
+            "…"
         } else {
             &status_text
         };
@@ -340,24 +336,12 @@ fn header_status(state: &State) -> (String, Color32) {
     header_status_for(
         state.helper_available,
         state.visible_status().map(|status| &status.state),
-        header_country(state),
     )
-}
-
-fn header_country(state: &State) -> Option<&str> {
-    match &state.exit {
-        ExitLookup::Known {
-            route: ExitRoute::Tunnel,
-            info,
-        } => info.country.as_deref(),
-        _ => None,
-    }
 }
 
 fn header_status_for(
     helper_available: bool,
     connection: Option<&ConnectionState>,
-    country: Option<&str>,
 ) -> (String, Color32) {
     if !helper_available {
         return (tr!("helper-unavailable").to_owned(), theme::ERROR);
@@ -370,12 +354,7 @@ fn header_status_for(
         Some(ConnectionState::Reconnecting) => {
             (tr!("reconnecting-action"), theme::palette().accent_bright)
         }
-        Some(ConnectionState::Connected) => {
-            return (
-                country.map_or_else(|| tr!("connected"), crate::i18n::connected_in),
-                theme::connected(),
-            );
-        }
+        Some(ConnectionState::Connected) => (tr!("connected"), theme::connected()),
         Some(ConnectionState::Failed { .. }) => (tr!("failed"), theme::ERROR),
         Some(ConnectionState::FailedProtected { .. }) => (tr!("traffic-blocked"), theme::ERROR),
     };
@@ -707,41 +686,25 @@ mod tests {
         ];
         for (state, expected) in &states {
             assert_eq!(
-                header_status_for(true, Some(state), None),
+                header_status_for(true, Some(state)),
                 (expected.0.to_owned(), expected.1),
             );
             assert_eq!(
-                header_status_for(false, Some(state), Some("NL")),
+                header_status_for(false, Some(state)),
                 (tr!("helper-unavailable").to_owned(), theme::ERROR),
             );
-            if !matches!(state, ConnectionState::Connected) {
-                assert_eq!(
-                    header_status_for(true, Some(state), Some("NL")),
-                    (expected.0.to_owned(), expected.1),
-                );
-            }
         }
         assert_eq!(
-            header_status_for(true, Some(&ConnectionState::Connected), Some("NL")),
-            ("Connected · NL".to_owned(), theme::connected()),
+            header_status_for(true, Some(&ConnectionState::Connected)),
+            (tr!("connected").to_owned(), theme::connected()),
         );
         assert_eq!(
-            header_status_for(true, None, Some("NL")),
+            header_status_for(true, None),
             (tr!("disconnected").to_owned(), theme::DISCONNECTED)
         );
         assert_eq!(
-            header_status_for(false, None, Some("NL")),
+            header_status_for(false, None),
             (tr!("helper-unavailable").to_owned(), theme::ERROR),
-        );
-        let mut args = fluent_bundle::FluentArgs::new();
-        args.set("code", "NL");
-        assert_eq!(
-            crate::i18n::tr_in(
-                crate::i18n::Language::Russian,
-                "connected-in-template",
-                &args
-            ),
-            "Подключено · NL"
         );
     }
 
