@@ -682,31 +682,32 @@ mod tests {
             }
         }
     }
-}
-#[test]
-fn dice_renders_in_color_with_the_bundled_font() {
-    for font in [
-        FontId::proportional(font::BODY),
-        font::semibold(font::BODY),
-        font::mono_small(),
-    ] {
-        let ctx = egui::Context::default();
-        apply(&ctx);
-        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
-            let text = crate::display::drop_missing_glyphs(ui.ctx(), &font, "🎲");
-            assert_eq!(text, "🎲");
-            ui.label(egui::RichText::new(text).font(font.clone()));
-        });
-        let has_color = output.textures_delta.set.iter().any(|(_, deltas)| {
-            deltas.iter().any(|delta| {
-                let egui::ImageData::Color(image) = &delta.image;
-                image
-                    .pixels
-                    .iter()
-                    .any(|color| color.r() != color.g() || color.g() != color.b())
-            })
-        });
-        output.textures_delta.clear();
-        assert!(has_color, "{font:?}");
+
+    #[test]
+    fn dice_renders_in_color_with_the_bundled_font() {
+        for font in [
+            FontId::proportional(font::BODY),
+            font::semibold(font::BODY),
+            font::mono_small(),
+        ] {
+            let ctx = egui::Context::default();
+            apply(&ctx);
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                let text = crate::display::drop_missing_glyphs(ui.ctx(), &font, "🎲");
+                assert_eq!(text, "🎲");
+                ui.label(egui::RichText::new(text).font(font.clone()));
+            });
+            let has_color = output.textures_delta.set.iter().any(|(_, deltas)| {
+                deltas.iter().any(|delta| {
+                    let egui::ImageData::Color(image) = &delta.image;
+                    image
+                        .pixels
+                        .iter()
+                        .any(|color| color.r() != color.g() || color.g() != color.b())
+                })
+            });
+            output.textures_delta.clear();
+            assert!(has_color, "{font:?}");
+        }
     }
 }
