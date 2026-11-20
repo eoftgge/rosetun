@@ -319,6 +319,27 @@ mod tests {
             });
         }
     }
+
+    #[test]
+    fn server_button_without_selected_server_vertically_centers_placeholder() {
+        for language in [i18n::Language::English, i18n::Language::Russian] {
+            i18n::in_language(language, || {
+                let state = State::default();
+                let mut screen = crate::test_ui::TestScreen::new(egui::vec2(960.0, 640.0));
+                let texts = screen.settle(|ui| {
+                    server_button(ui, &state);
+                });
+                let select_rect = text_rect(&texts, &tr!("select-server"));
+                let change_rect = text_rect(&texts, &tr!("server-change"));
+                assert!(
+                    (select_rect.center().y - change_rect.center().y).abs() <= 2.0,
+                    "placeholder y: {}, change y: {}",
+                    select_rect.center().y,
+                    change_rect.center().y,
+                );
+            });
+        }
+    }
 }
 
 /// Without a status the service either has not answered yet (start-up) or
@@ -1121,46 +1142,44 @@ fn server_button(ui: &mut egui::Ui, state: &State) -> bool {
                     );
                 }
                 let text_width = (ui.available_width() - 100.0).max(0.0);
-                ui.allocate_ui_with_layout(
-                    egui::vec2(text_width, block_height),
-                    egui::Layout::top_down(egui::Align::Min),
-                    |ui| {
-                        ui.set_width(text_width);
-                        ui.spacing_mut().item_spacing.y = 0.0;
-                        ui.allocate_ui_with_layout(
-                            egui::vec2(text_width, badge_height),
-                            egui::Layout::left_to_right(egui::Align::Center),
-                            |ui| {
-                                ui.set_width(text_width);
-                                ui.set_min_height(badge_height);
-                                let name = state.config.active_node().map_or_else(
-                                    || tr!("select-server").to_owned(),
-                                    |(_, node)| {
-                                        display::drop_missing_glyphs(
-                                            ui.ctx(),
-                                            &name_font,
-                                            &state.text(display::leading_flag(&node.name).1),
+                if let Some((subscription, node)) = state.config.active_node() {
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(text_width, block_height),
+                        egui::Layout::top_down(egui::Align::Min),
+                        |ui| {
+                            ui.set_width(text_width);
+                            ui.spacing_mut().item_spacing.y = 0.0;
+                            ui.allocate_ui_with_layout(
+                                egui::vec2(text_width, badge_height),
+                                egui::Layout::left_to_right(egui::Align::Center),
+                                |ui| {
+                                    ui.set_width(text_width);
+                                    ui.set_min_height(badge_height);
+                                    let name = display::drop_missing_glyphs(
+                                        ui.ctx(),
+                                        &name_font,
+                                        &state.text(display::leading_flag(&node.name).1),
+                                    );
+                                    ui.add(
+                                        egui::Label::new(
+                                            RichText::new(name)
+                                                .font(name_font.clone())
+                                                .color(theme::palette().text),
                                         )
-                                    },
-                                );
-                                ui.add(
-                                    egui::Label::new(
-                                        RichText::new(name)
-                                            .font(name_font.clone())
-                                            .color(theme::palette().text),
-                                    )
-                                    .truncate(),
-                                );
-                            },
-                        );
-                        ui.add_space(theme::space::XXS);
-                        ui.allocate_ui_with_layout(
-                            egui::vec2(text_width, ui.text_style_height(&egui::TextStyle::Small)),
-                            egui::Layout::left_to_right(egui::Align::Center),
-                            |ui| {
-                                ui.set_width(text_width);
-                                // No node address here: this screen ends up in screenshots.
-                                if let Some((subscription, _)) = state.config.active_node() {
+                                        .truncate(),
+                                    );
+                                },
+                            );
+                            ui.add_space(theme::space::XXS);
+                            ui.allocate_ui_with_layout(
+                                egui::vec2(
+                                    text_width,
+                                    ui.text_style_height(&egui::TextStyle::Small),
+                                ),
+                                egui::Layout::left_to_right(egui::Align::Center),
+                                |ui| {
+                                    ui.set_width(text_width);
+                                    // No node address here: this screen ends up in screenshots.
                                     let detail = state.text(&subscription.name);
                                     ui.add(
                                         egui::Label::new(
@@ -1170,11 +1189,28 @@ fn server_button(ui: &mut egui::Ui, state: &State) -> bool {
                                         )
                                         .truncate(),
                                     );
-                                }
-                            },
-                        );
-                    },
-                );
+                                },
+                            );
+                        },
+                    );
+                } else {
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(text_width, block_height),
+                        egui::Layout::left_to_right(egui::Align::Center),
+                        |ui| {
+                            ui.set_width(text_width);
+                            ui.set_min_height(block_height);
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(tr!("select-server"))
+                                        .font(name_font)
+                                        .color(theme::palette().text),
+                                )
+                                .truncate(),
+                            );
+                        },
+                    );
+                }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(
                         RichText::new(tr!("server-change")).color(theme::palette().accent_light),
