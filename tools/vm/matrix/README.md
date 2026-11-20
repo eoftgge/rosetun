@@ -5229,7 +5229,7 @@ The first run on the stand (below) showed what a resting Windows says, and the o
 - **The rest only lists.** The window `rest` and the `windows-noise-report` stay as they were (every group, `unexpected`,
   the names of the DNS questions and TLS hellos), but the report is information: `noise: FOUND` or `NONE` changes neither
   the exit code nor the verdict of the run. The run is decided by the network, the CA, the probes, the window of the
-  probes, the `qualify` of the lab and the observer (a rest that was not observed, `UNVERIFIED`, is still an error). The
+  probes, the `qualify` of the lab and the observer (a rest that was not observed, `UNVERIFIED`, cannot be vouched for: exit 2). The
   classifier and the observer are not weakened, no tolerance by name is added and the lab's resolver is unchanged. The
   telemetry of Windows stays as natural traffic on purpose: the stages with a tunnel (10) are where it has to go into the
   tunnel, or not leave at all while the tunnel is blocked.
@@ -5297,6 +5297,21 @@ the guest sends and the lab acknowledges, as the Linux script's functions do), r
 The ten exchanges are judged by the window: a frame in it outside the probes, the markers and `infrastructure` is
 `unexpected`, and the window is `DETECTED`.
 
+### The first exchange after a long wait
+
+A session of the agent that has sat idle for minutes may be dead without anyone having said so, and the first real
+exchange on it (a window marker, which is never repeated blind: a second UDP marker is `window-markers-missing-or-repeated`)
+would be the one to find out. In the run that happened once: after the ten minutes of rest the closing marker found the
+session gone (`qga-exchange-failed` at `guest-rest-close`). So the first exchange after every wait of the controller (the
+settling, the rest, and the pauses of later stages) is preceded by `Vm.ready_guest`: a `guest-ping`, asked again once on
+the same session when no reply comes (the library matches replies by their id, so a late one is dropped), and when that
+does not answer either, `recover_guest()`: a new session, one of the run's QGA recoveries, before anything is sent. Each
+check is a row of the job evidence (`guest-settle-session`, `guest-rest-session`: `pings`, `recovered`, `ended`). The error
+of a failed exchange keeps what ended it: `cause` (in the error of the summary, in the observation row and in `LifecycleError`)
+is the class of the exception and, for the system's own (`OSError`: the number and `strerror`, `EOFError`, a timeout), its
+words, in the alphabet `[a-z0-9:._-]`; the text of any other class (the agent library quotes what the guest sent) is
+left out, and a file name never is in it.
+
 ### Settling (before the window `probes`)
 
 After the network and the CA, and before the opening marker of the probes, the controller sends nothing to the guest for
@@ -5336,12 +5351,17 @@ The steps are `preflight`, `lease`, `create-run-lab`, `create-run-test`, `prepar
 `certificate`, `settle`, `probes`, `rest`, `lab-finish`, `lab-read-*`, `shutdown-test` (the ACPI power button), `close-test`,
 `close-lab`, `evidence-read`, `windows`, `image-unchanged`.
 
-Exit code: **0** when nothing failed, both machines completed, the guest shut down by its own power button, the image is
-unchanged, the network stood, every probe passed (and was seen by the lab machine and the capture), the window `probes` is
-`NONE` and the window `rest` was observed (whatever it holds: `noise` is information); **1** when the run completed but
-found something: a probe that failed, a window `probes` that is not `NONE`, a rest that was not observed; **2** for any error (a network that is not the lab's, a guest that cannot run its script, a machine that
-left, an unverified completion) and **130** for an interruption. A failed probe script does not end the run (the capture
-still holds what the guest did, and the rest is the point), but it is an error. The summary
+Exit code, by the convention of the matrix (see "Exit codes" of stage 7c2): **0** when nothing failed, both machines
+completed, the guest shut down by its own power button, the image is unchanged, the network stood, every probe passed (and
+was seen by the lab machine and the capture), the window `probes` is `NONE` and the window `rest` was observed (whatever
+it holds: `noise` is information); **1** for a finding: a probe that did not get the lab's answer, a window `probes` that is
+`DETECTED` (`execution.findings`); a finding stands whatever else went wrong; **2** when the run cannot vouch for itself and
+found nothing: any error (a network that is not the lab's, a guest that cannot run its script, a machine that left, an
+unverified completion), a window that is `UNVERIFIED` or has reasons of the observer, the lab's own `qualify` that failed, a
+probe the lab did not log, markers that were not acknowledged, a rest that was not observed (`execution.unverified` names
+each); **130** for an interruption. A failed probe script does not end the run (the capture still holds what the guest did,
+and the rest is the point), but it is an error, and a window `probes` that is `DETECTED` beside it is not attributed to the
+guest (the script that would name its own exchanges did not answer): 2. The summary
 (`rosetun.matrix.windows-lab-summary.v1`, in both runs) has `execution` with the network, the certificate, `probes`,
 `windows` (leak, reason and counts of each), `noise`, `noise_report` and `noise_table`, and `lab` with the observer's
 windows and the digests of what the lab machine kept.

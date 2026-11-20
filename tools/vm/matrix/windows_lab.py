@@ -239,6 +239,16 @@ class GuestAsks:
                 vm.recover_guest()
         return text
 
+    def ready(self, operation):
+        """The first exchange after a long wait is protected: ping the agent, replace the session when it is silent.
+
+        What was done is a row of the run's job evidence, so that a replacement that was needed is never silent.
+        """
+        vm = self.vm
+        done = vm.ready_guest()
+        windows_reboot.record(vm, operation + '-session', **done)
+        return done
+
     def answer(self, operation, parse, *arguments):
         try:
             return parse(*arguments)
@@ -256,9 +266,16 @@ def probe_summary(doc, qualification, https_row, dns_rows, plain):
     resolver = dict(doc['resolver'], logged=resolver_logged, rows=len(resolver_rows))
     rows = [dict(family=p['family'], service=p['service'], answered=p['answered'], error=p['error'])
             for p in doc['probes']]
-    passed = (all(row['answered'] for row in rows) and len(rows) == 8 and qualification.get('qualified') is True
-              and https['answered'] and https['logged'] and resolver['answered'] and resolver['logged'])
-    return dict(passed=passed, probes=rows, lab_qualification=qualification, https=https, resolver=resolver)
+    # A probe that got no right answer is a finding. That the lab cannot confirm what the guest says (it did not log
+    # the request, its own qualification failed) is not a finding but a run that cannot vouch for itself.
+    findings = ['probe-failed:%s:%s' % (row['family'], row['service']) for row in rows if not row['answered']]
+    findings += ['probe-failed:https'] * (not https['answered']) + ['probe-failed:resolver'] * (not resolver['answered'])
+    unverified = ['lab-qualify-failed'] * (qualification.get('qualified') is not True)
+    unverified += ['probe-not-logged-by-the-lab:https'] * (not https['logged'])
+    unverified += ['probe-not-logged-by-the-lab:resolver'] * (not resolver['logged'])
+    unverified += ['probes-not-eight'] * (len(rows) != 8)
+    return dict(passed=not findings and not unverified, findings=findings, unverified=unverified, probes=rows,
+                lab_qualification=qualification, https=https, resolver=resolver)
 
 
 def https_log_row(log, exchange, port):
@@ -458,8 +475,8 @@ def run_windows_lab_smoke(config, *, adapters=None, clock=time.monotonic, sleep=
 
         def settle():
             measured['settle'] = dict(waited_seconds=alone(settle_seconds(smoke)))
-            if not vm.qga.valid:
-                vm.recover_guest()
+            # The first exchange after the wait is the probes' opening marker, which must not be sent twice.
+            asks.ready('guest-settle')
 
         step('network', network)
         step('certificate', certificate)
@@ -496,8 +513,8 @@ def run_windows_lab_smoke(config, *, adapters=None, clock=time.monotonic, sleep=
             text = asks.run('guest-rest-open', guest.marker_script(opening), repeat=False)
             seen['rest_markers'] = [asks.answer('guest-rest-open', guest.marker, text, opening)]
             measured['rest'] = dict(waited_seconds=alone(smoke['rest_seconds']))
-            if not vm.qga.valid:
-                vm.recover_guest()
+            # After ten minutes of silence the agent may have gone away: say so before the closing marker, not by it.
+            asks.ready('guest-rest')
             text = asks.run('guest-rest-close', guest.marker_script(closing), repeat=False)
             seen['rest_markers'].append(asks.answer('guest-rest-close', guest.marker, text, closing))
 
@@ -580,9 +597,7 @@ def finish(result, config, lease, pair, runs, vms, closed, seen, measured, inter
         result['execution'] = execution_section(result, config, seen, measured, vms, plan, image, started, clock)
     except BaseException as error:
         result['errors'].append(failure('summary', error))
-    code = 130 if interrupted else 2 if result['errors'] or not result['completed'] else (
-        0 if (result['execution'] or {}).get('accepted') else 1)
-    result['exit_code'] = code
+    result['exit_code'] = exit_code(result, interrupted)
     payload = json.dumps(result)
     for run in runs.values():
         if run._identity[2] in payload:
@@ -621,6 +636,20 @@ def finish(result, config, lease, pair, runs, vms, closed, seen, measured, inter
             result['exit_code'] = 130 if interrupted else 2
 
 
+def exit_code(result, interrupted):
+    """The code of the matrix: 130 when interrupted; 1 for a finding, which stands whatever else went wrong; 2 when
+    the run cannot vouch for itself (an error, a machine that did not finish, a window or the lab's own account that
+    is unverified); 0 when it can and nothing was found."""
+    section = result['execution']
+    if interrupted:
+        return 130
+    if type(section) is dict and section.get('findings'):
+        return 1
+    if result['errors'] or not result['completed'] or type(section) is not dict or not section.get('accepted'):
+        return 2
+    return 0
+
+
 def lab_section(lab_id, seen):
     """The observer's side: the evidence disk, each window as judged, and the hashes of what the lab machine kept."""
     verdict = seen['verdict']
@@ -629,6 +658,41 @@ def lab_section(lab_id, seen):
         windows=window_rows(verdict) if verdict else [], outside_window=verdict['outside_window'] if verdict else None,
         missing_labels=verdict.get('missing_labels') if verdict else None,
         extra_windows=verdict['extra_windows'] if verdict else None, artifacts_sha256=seen['hashes'])
+
+
+def judgement(result, measured, probes, windows, rest_observed, markers_ok, noise):
+    """What the run found (exit 1) and what it cannot vouch for (exit 2), as two lists of codes.
+
+    A finding is something the guest did or failed to do on the wire: a probe that did not get the lab's answer, a
+    foreign frame in the window of the probes. Everything that leaves the run unable to say so is unverified: an error,
+    a machine that did not finish, a window that was not observed whole (`UNVERIFIED` or reasons of the observer),
+    the lab's own `qualify` that failed, a probe the lab did not log, a rest that was not observed. The window of the
+    rest is only listed: what it holds is no finding, but it must have been observed.
+    """
+    findings = list(probes['findings']) if probes is not None else []
+    unverified = ['error:' + row['stage'] for row in result['errors']]
+    unverified += ['not-completed'] * (not result['completed'])
+    unverified += ['shutdown-not-by-the-power-button'] * (measured['shutdown'] != SHUTDOWN_NOTE)
+    unverified += ['image-not-confirmed-unchanged'] * (measured['image_unchanged'] is not True)
+    unverified += ['network-not-the-labs'] * (measured['network'] is None or bool(measured['network']['problems']))
+    unverified += ['certificate-not-confirmed'] * (measured['certificate'] is None)
+    if probes is None:
+        unverified.append('probes-not-answered')
+    else:
+        unverified += probes['unverified']
+    unverified += ['markers-not-acknowledged'] * (not markers_ok)
+    first = windows.get(PROBES_LABEL)
+    if first is None:
+        unverified.append('window-missing:' + PROBES_LABEL)
+    elif first['leak'] == 'DETECTED' and probes is not None:
+        findings.append('window-detected:' + PROBES_LABEL)
+    for label in LABELS:
+        row = windows.get(label)
+        if row is not None and (row['leak'] == 'UNVERIFIED' or row['observer_reasons']):
+            unverified.append('window-unverified:' + label)
+    unverified += ['window-not-observed:' + REST_LABEL] * (not rest_observed)
+    unverified += ['noise-unverified'] * (noise is None or noise['noise'] == 'UNVERIFIED')
+    return findings, list(dict.fromkeys(unverified))
 
 
 def execution_section(result, config, seen, measured, vms, plan, image, started, clock):
@@ -643,13 +707,8 @@ def execution_section(result, config, seen, measured, vms, plan, image, started,
     markers_ok = bool(doc) and all(row['sent'] and row['acknowledged'] for row in doc['marker_rows']) and all(
         row['sent'] and row['acknowledged'] for row in seen.get('rest_markers', [])) and len(
         seen.get('rest_markers', [])) == 2
-    accepted = (not result['errors'] and result['completed'] and measured['shutdown'] == SHUTDOWN_NOTE
-                and measured['image_unchanged'] is True and measured['network'] is not None
-                and not measured['network']['problems'] and measured['certificate'] is not None
-                and probes is not None and probes['passed'] and markers_ok
-                and windows.get(PROBES_LABEL, {}).get('leak') == 'NONE' and rest_observed
-                and noise is not None and noise['noise'] != 'UNVERIFIED')
-    return dict(accepted=bool(accepted), uuid=next((vm.vm_uuid for role, vm in vms.items() if role == 'test'), None),
+    findings, unverified = judgement(result, measured, probes, windows, rest_observed, markers_ok, noise)
+    return dict(accepted=not findings and not unverified, findings=findings, unverified=unverified, uuid=next((vm.vm_uuid for role, vm in vms.items() if role == 'test'), None),
                 kvm_qualified=plan['kvm_qualified'] if plan else False,
                 image=dict(identifier=image.identifier, sha256=image.sha256, qualified=False) if image else None,
                 duration_seconds=round(clock() - started, 1), capture_seconds=capture_seconds(config),

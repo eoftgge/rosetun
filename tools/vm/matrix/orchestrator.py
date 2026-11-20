@@ -60,6 +60,10 @@ def failure(stage, error):
     helper = getattr(error, 'helper_reason', None)
     if ours and type(helper) is str and HELPER_REASON.fullmatch(helper):
         row['helper_reason'] = helper
+    # What ended an exchange with the guest's agent: the class of the exception and, for the system's own, its words.
+    cause = getattr(error, 'cause', None)
+    if ours and type(cause) is str and HELPER_REASON.fullmatch(cause):
+        row['cause'] = cause
     return row
 
 

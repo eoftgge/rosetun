@@ -81,9 +81,12 @@ BOOT_REFUSALS = ('unplanned-guest-reset', 'host-reset-outside-reset', 'guest-res
 
 
 class LifecycleError(ValueError):
-    def __init__(self, reason, vm=None):
+    """`cause` is what ended an exchange of the agent (`qga.cause_of`): a code of the fixed alphabet, or None."""
+
+    def __init__(self, reason, vm=None, cause=None):
         super().__init__(reason)
         self.vm = vm
+        self.cause = cause
 
 
 class _BootRefused(Exception):
@@ -573,8 +576,9 @@ class Vm:
             raise LifecycleError(str(error), self) from None
         except QgaError as error:
             row['result'] = str(error)
+            row['cause'] = error.cause
             self.qga_reason = str(error)
-            raise LifecycleError(str(error), self) from None
+            raise LifecycleError(str(error), self, error.cause) from None
         except (OSError, ValueError):
             self.qga_reason = row['result'] = 'guest-observation-failed'
             raise LifecycleError('guest-observation-failed', self) from None
@@ -632,7 +636,34 @@ class Vm:
         try:
             return self.qga.powershell(script, self.timeout, seconds=seconds, limit=limit)
         except (QgaError, windows_guest.GuestAnswerError) as error:
-            raise LifecycleError(str(error), self) from None
+            raise LifecycleError(str(error), self, getattr(error, 'cause', None)) from None
+
+    @_guest_serialized
+    def _ping_guest(self, timeout):
+        """One `guest-ping`, asked again once when no reply comes: (pings asked, what ended it or None)."""
+        self._check()
+        if self.qga is None or self.qga.closed or not self.qga.valid or self.qga.info is None:
+            return 0, 'qga-session-unusable'
+        self.qga.deadline = time.monotonic() + 2 * timeout + 5
+        try:
+            return self.qga.ping(timeout), None
+        except QgaError as error:
+            return 2, str(error) + (':' + error.cause if error.cause else '')
+
+    def ready_guest(self, *, timeout=10):
+        """Make the session fit for the first exchange after a long wait: a cheap ping, and a new session when it fails.
+
+        A session that has sat idle for minutes may be dead without anyone having said so, and the first real exchange
+        on it (a window marker, which must not be sent twice) would be the one to find out. So the agent is pinged
+        first, the ping is asked again once, and when that does not answer either the session is replaced
+        (`recover_guest`, one of the run's QGA recoveries) before anything is sent. Returns what was done, for the
+        run's evidence: `pings` asked, whether the session was `recovered`, and what ended the check.
+        """
+        pings, ended = self._ping_guest(timeout)
+        if ended is None:
+            return dict(pings=pings, recovered=False, ended=None)
+        self.recover_guest()
+        return dict(pings=pings, recovered=True, ended=ended)
 
     @_guest_serialized
     def request_guest_reboot(self):
@@ -652,7 +683,7 @@ class Vm:
             self.qga.start_program(windows_guest.SHUTDOWN, list(windows_guest.REBOOT_ARGUMENTS), self.timeout)
         except QgaError as error:
             self._event('guest-reboot', 'error ' + str(error))
-            raise LifecycleError(str(error), self) from None
+            raise LifecycleError(str(error), self, error.cause) from None
         self.qga.invalidate()
         self._event('guest-reboot', 'requested')
 

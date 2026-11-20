@@ -9,7 +9,8 @@ from importlib.metadata import version, PackageNotFoundError
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from tools.vm.matrix.qga import Qga, QgaError, REQUIRED, LINE_LIMIT, DIAGNOSTIC_LINE_LIMIT, DIAGNOSTIC_RELAY_LIMIT
+from tools.vm.matrix.qga import (Qga, QgaError, REQUIRED, LINE_LIMIT, DIAGNOSTIC_LINE_LIMIT, DIAGNOSTIC_RELAY_LIMIT,
+                                 cause_of)
 
 BOOT = '12345678-1234-4234-8234-123456789abc'
 
@@ -461,3 +462,85 @@ class InstalledLongReplyTests(unittest.TestCase):
     def test_a_session_with_the_longer_limit_reads_a_reply_of_a_megabyte_and_more(self):
         self.assertEqual(1400000, len(self.ask(1400000, line_limit=DIAGNOSTIC_LINE_LIMIT)['out-data']))
         self.assertEqual(9000000, len(self.ask(9000000, line_limit=DIAGNOSTIC_LINE_LIMIT)['out-data']))
+
+
+class CauseTests(unittest.TestCase):
+    """What ended an exchange stays in the error, as words of the fixed alphabet and never as the guest's own text."""
+
+    def adapter(self):
+        stream = Stream(b'\xff{"return":123}\n')
+        adapter = Qga(stream, client_factory=Client, relay_factory=Relay)
+        self.addCleanup(adapter.close)
+        with patch('secrets.randbits', return_value=123):
+            adapter.connect(1)
+        adapter.probe(1)
+        return adapter
+
+    def test_the_class_of_the_exception_that_ended_an_exchange_is_kept_where_it_was_dropped(self):
+        adapter = self.adapter()
+        adapter.client.responses['guest-ping'] = EOFError()
+        with self.assertRaisesRegex(QgaError, '^qga-exchange-failed$') as caught:
+            adapter._rpc('guest-ping', 1)
+        self.assertEqual('eoferror', caught.exception.cause)
+        self.assertFalse(adapter.valid)
+
+    def test_an_oserror_keeps_its_number_and_words_and_never_a_file_name(self):
+        error = ConnectionResetError(104, 'Connection reset by peer', '/run/secret path')
+        self.assertEqual('connectionreseterror:104:connection-reset-by-peer', cause_of(error))
+        self.assertNotIn('secret', cause_of(error))
+
+    def test_the_text_of_a_class_that_quotes_the_guest_is_left_out(self):
+        class Quoting(Exception):
+            pass
+        code = cause_of(Quoting('the guest said: hunter2'))
+        self.assertTrue(code.endswith('.quoting'), code)
+        self.assertNotIn('hunter2', code)
+        self.assertRegex(cause_of(ValueError('x' * 500)), '^[a-z0-9:._-]{1,96}$')
+
+    def test_a_timeout_is_a_cause_too(self):
+        adapter = self.adapter()
+        adapter.client.responses['guest-ping'] = TimeoutError()
+        with self.assertRaises(QgaError) as caught:
+            adapter._rpc('guest-ping', 1)
+        self.assertEqual('timeouterror', caught.exception.cause)
+
+    def test_a_ping_that_got_no_reply_is_asked_once_more_on_the_same_session(self):
+        adapter = self.adapter()
+        replies = iter([TimeoutError(), {}])
+
+        def answer():
+            reply = next(replies)
+            if isinstance(reply, Exception):
+                raise reply
+            return reply
+        adapter.client.responses['guest-ping'] = answer
+        self.assertEqual(2, adapter.ping(1))
+        self.assertTrue(adapter.valid)
+
+    def test_a_ping_that_is_never_answered_ends_the_session_after_the_repeat(self):
+        adapter = self.adapter()
+        adapter.client.responses['guest-ping'] = TimeoutError()
+        before = adapter.calls
+        with self.assertRaisesRegex(QgaError, '^qga-exchange-failed$') as caught:
+            adapter.ping(1)
+        self.assertEqual(before + 2, adapter.calls)
+        self.assertEqual('timeouterror', caught.exception.cause)
+        self.assertFalse(adapter.valid)
+
+    def test_a_ping_answered_with_something_else_ends_the_session_without_a_repeat(self):
+        adapter = self.adapter()
+        adapter.client.responses['guest-ping'] = {'x': 1}
+        before = adapter.calls
+        with self.assertRaisesRegex(QgaError, 'invalid-qga-ping'):
+            adapter.ping(1)
+        self.assertEqual(before + 1, adapter.calls)
+        self.assertFalse(adapter.valid)
+
+    def test_a_ping_that_fails_other_than_by_timeout_does_not_get_a_repeat(self):
+        adapter = self.adapter()
+        adapter.client.responses['guest-ping'] = EOFError()
+        before = adapter.calls
+        with self.assertRaisesRegex(QgaError, '^qga-exchange-failed$'):
+            adapter.ping(1)
+        self.assertEqual(before + 1, adapter.calls)
+        self.assertFalse(adapter.valid)

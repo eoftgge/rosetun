@@ -314,3 +314,73 @@ class InstalledSequentialSessionTests(unittest.TestCase):
         self.assertEqual(2, len(set(syncs)))
         self.assertEqual(2, len(set(sessions)))
         self.assertTrue(all(s.fileno() == -1 for s in copies))
+
+
+@controller_only
+class ReadyTests(unittest.TestCase):
+    """The first exchange after a long wait: a ping, a repeat, and a new session before the real exchange."""
+
+    setUp = RecoveryTests.setUp
+
+    def silent(self, session):
+        session.client.responses['guest-ping'] = TimeoutError()
+
+    def test_a_session_that_answers_the_ping_is_kept_and_no_recovery_is_spent(self):
+        self.vm.observe_guest()
+        old = self.vm.qga
+        result = self.vm.ready_guest()
+        self.assertEqual(dict(pings=1, recovered=False, ended=None), result)
+        self.assertIs(old, self.vm.qga)
+        self.assertEqual(0, self.vm.qga_recoveries)
+
+    def test_a_ping_that_is_answered_the_second_time_keeps_the_session_too(self):
+        self.vm.observe_guest()
+        replies = iter([TimeoutError(), {}])
+
+        def answer():
+            reply = next(replies)
+            if isinstance(reply, Exception):
+                raise reply
+            return reply
+        self.vm.qga.client.responses['guest-ping'] = answer
+        result = self.vm.ready_guest()
+        self.assertEqual((2, False), (result['pings'], result['recovered']))
+        self.assertEqual(0, self.vm.qga_recoveries)
+
+    def test_a_silent_agent_gets_a_new_session_before_anything_is_sent_and_the_recovery_is_counted(self):
+        self.vm.observe_guest()
+        old = self.vm.qga
+        self.silent(old)
+        result = self.vm.ready_guest()
+        self.assertTrue(result['recovered'])
+        self.assertEqual(2, result['pings'])
+        self.assertTrue(result['ended'].startswith('qga-exchange-failed:'), result['ended'])
+        self.assertIsNot(old, self.vm.qga)
+        self.assertTrue(old.closed)
+        self.assertTrue(self.vm.qga.valid)
+        self.assertEqual(1, self.vm.qga_recoveries)
+        self.assertEqual('same', self.vm.guest_observation['boot_comparison'])
+
+    def test_a_session_that_is_already_spent_is_replaced_without_a_ping(self):
+        self.vm.observe_guest()
+        self.vm.qga.invalidate()
+        result = self.vm.ready_guest()
+        self.assertEqual(dict(pings=0, recovered=True, ended='qga-session-unusable'), result)
+        self.assertEqual(1, self.vm.qga_recoveries)
+
+    def test_the_replacement_is_bounded_by_the_recoveries_of_the_run(self):
+        self.vm.observe_guest()
+        for _ in range(4):
+            self.vm.recover_guest()
+        self.silent(self.vm.qga)
+        with self.assertRaisesRegex(lifecycle.LifecycleError, 'recovery-limit'):
+            self.vm.ready_guest()
+
+    def test_the_cause_of_a_failed_exchange_reaches_the_observation_row_and_the_error(self):
+        self.vm.observe_guest()
+        self.vm.qga.client.responses['guest-file-open'] = EOFError()
+        with self.assertRaises(lifecycle.LifecycleError) as caught:
+            self.vm.observe_guest()
+        self.assertEqual('eoferror', caught.exception.cause)
+        row = json.loads((self.vm.run.directory / 'qga-observations.jsonl').read_text().splitlines()[-1])
+        self.assertEqual(('qga-exchange-failed', 'eoferror'), (row['result'], row['cause']))

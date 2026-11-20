@@ -556,6 +556,13 @@ class Machines:
             def recover_guest(self):
                 machines.note('recovery-' + self.role)
 
+            def ready_guest(self, **kwargs):
+                machines.events.append(('ready', self.role))
+                if machines.fault == 'silent-agent':
+                    machines.note('recovery-' + self.role)
+                    return dict(pings=2, recovered=True, ended='qga-exchange-failed:timeouterror')
+                return dict(pings=1, recovered=False, ended=None)
+
             def watch_resets(self):
                 machines.events.append(('watch', self.role))
 
@@ -768,7 +775,8 @@ class RunTests(Flow):
         kinds = ['network' if 'Get-NetAdapter' in s else 'ca' if 'FromBase64' in s else 'probes' if '$d.probes' in s
                  else 'marker' for s in machines.scripts]
         self.assertEqual(['network', 'ca', 'probes', 'marker', 'marker'], kinds)
-        self.assertEqual(['guest-network', 'guest-ca', 'guest-probes'], [op for op, _ in machines.recorded][:3])
+        self.assertEqual(['guest-network', 'guest-ca', 'guest-settle-session', 'guest-probes'],
+                         [op for op, _ in machines.recorded][:4])
 
     def test_noise_in_the_rest_window_is_listed_and_the_run_is_judged_without_it(self):
         machines = Machines(self, rest_body=[request_arp(), poll_arp(), llmnr(50000), llmnr(50000)])
@@ -800,8 +808,79 @@ class RunTests(Flow):
         unobserved = dict(windows_noise.report(b'', 'a' * 32), noise='UNVERIFIED', reason='window-missing')
         with patch.object(windows_lab.windows_noise, 'report', return_value=unobserved):
             result = self.go(machines)
-        self.assertEqual(1, result['exit_code'])
+        # A run that cannot say what the guest did is not one that found something: 2, not 1.
+        self.assertEqual(2, result['exit_code'])
         self.assertEqual(('UNVERIFIED', False), (result['execution']['noise'], result['execution']['accepted']))
+        self.assertIn('noise-unverified', result['execution']['unverified'])
+        self.assertEqual([], result['execution']['findings'])
+
+    def test_a_window_of_the_rest_with_reasons_of_the_observer_is_unverified_and_ends_with_2(self):
+        machines = Machines(self)
+        verdict = windows_lab.classify_windows
+
+        def unclean(*args, **kwargs):
+            value = verdict(*args, **kwargs)
+            for row in value['windows']:
+                if row['label'] == 'rest':
+                    row['observer_reasons'] = ['capture-gap']
+            return value
+        with patch.object(windows_lab, 'classify_windows', side_effect=unclean):
+            result = self.go(machines)
+        self.assertEqual(2, result['exit_code'])
+        self.assertIn('window-unverified:rest', result['execution']['unverified'])
+        self.assertIn('window-not-observed:rest', result['execution']['unverified'])
+
+    def test_the_lab_qualification_that_failed_is_unverified_and_ends_with_2_not_with_a_finding(self):
+        machines = Machines(self)
+        failed = dict(ipv4='UNVERIFIED', ipv6='UNVERIFIED', services='UNVERIFIED', observer='UNVERIFIED',
+                      evidence='UNVERIFIED', qualified=False, reason='qualify-failed:x')
+        with patch.object(windows_lab, 'qualification_of', return_value=failed):
+            result = self.go(machines)
+        self.assertEqual(2, result['exit_code'])
+        self.assertEqual(['lab-qualify-failed'], result['execution']['unverified'])
+        self.assertEqual([], result['execution']['findings'])
+
+    def test_a_probe_that_failed_is_a_finding_even_when_something_else_cannot_be_vouched_for(self):
+        machines = Machines(self)
+        original = machines.powershell
+
+        def failing(script):
+            text = original(script)
+            if '$d.probes' not in script:
+                return text
+            value = json.loads(text)
+            value['probes'][0].update(response=None, error='SocketException:TimedOut:x')
+            value['https'] = dict(value['https'], response=None, error='AuthenticationException::certificate')
+            return json.dumps(value)
+        machines.powershell = failing
+        with patch.object(windows_lab, 'qualification_of', return_value=dict(qualified=False)):
+            result = self.go(machines)
+        self.assertEqual(1, result['exit_code'], (result['errors'], result['execution']))
+        self.assertEqual(['probe-failed:4:http', 'probe-failed:https'], result['execution']['findings'][:2])
+        self.assertIn('lab-qualify-failed', result['execution']['unverified'])
+
+    def test_a_frame_in_the_window_of_the_probes_stands_as_a_finding_next_to_an_unverified_rest(self):
+        machines = Machines(self, probes_body=[llmnr()], rest_body=[llmnr()])
+        unobserved = dict(windows_noise.report(b'', 'a' * 32), noise='UNVERIFIED', reason='window-missing')
+        with patch.object(windows_lab.windows_noise, 'report', return_value=unobserved):
+            result = self.go(machines)
+        self.assertEqual(1, result['exit_code'])
+        self.assertEqual(['window-detected:probes'], result['execution']['findings'])
+        self.assertIn('noise-unverified', result['execution']['unverified'])
+
+    def test_the_first_exchange_after_each_long_wait_is_guarded_and_a_silent_agent_is_recorded(self):
+        machines = Machines(self, fault='silent-agent')
+        result = self.go(machines)
+        guarded = [(op, fields) for op, fields in machines.recorded if op.endswith('-session')]
+        self.assertEqual(['guest-settle-session', 'guest-rest-session'], [op for op, _ in guarded])
+        self.assertEqual([True, True], [fields['recovered'] for _, fields in guarded])
+        self.assertEqual('qga-exchange-failed:timeouterror', guarded[0][1]['ended'])
+        names = [e for e in machines.events if e in ('guest-probes', 'guest-marker', 'recovery-test') or
+                 e == ('ready', 'test')]
+        # The agent is asked before the probes and before the closing marker, and each ask comes before its exchange.
+        self.assertEqual([('ready', 'test'), 'recovery-test', 'guest-probes', 'guest-marker',
+                          ('ready', 'test'), 'recovery-test', 'guest-marker'], names)
+        self.assertEqual(0, result['exit_code'])
 
     def test_the_frames_around_the_windows_are_in_the_report_and_every_frame_is_in_one_section(self):
         machines = Machines(self, rest_body=[llmnr()], between_body=[llmnr(50001), request_arp()],

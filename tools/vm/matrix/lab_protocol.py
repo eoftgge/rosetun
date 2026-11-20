@@ -322,8 +322,8 @@ def dns_question(packet):
 def dns_reply(packet):
     """(reply or None, (name, type) or None) for one query; the lab answers and recurses to nothing.
 
-    A question of class IN gets the one fixed address, any other question an empty
-    NOERROR. A message that cannot be read is answered with an error code only when its
+    A question for the type A of class IN gets the one fixed address, any other question (AAAA, another
+    class) an empty NOERROR. A message that cannot be read is answered with an error code only when its
     identifier can be echoed; a response is never answered.
     """
     try:

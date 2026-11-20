@@ -13,6 +13,7 @@ import asyncio
 import base64
 import json
 import math
+import re
 import secrets
 import time
 import uuid
@@ -45,7 +46,40 @@ GUEST_SYSTEMS = ('linux', 'windows')
 
 
 class QgaError(ValueError):
-    pass
+    """An error of the session. `cause` is the class and the plain text of the exception that ended an exchange,
+    in the fixed alphabet of the summaries (see `cause_of`), or None."""
+
+    def __init__(self, reason, cause=None):
+        super().__init__(reason)
+        self.cause = cause
+
+
+# What an exception may say about itself in a record: the lowercase words of a text of ours or of the system.
+_CAUSE_ALPHABET = re.compile(r'[^a-z0-9:._-]+')
+CAUSE_LIMIT = 96
+# The classes whose text is the system's own words, with no payload of the guest in it. The text of any other class
+# (the agent library's errors quote what the guest sent) is left out and only the class is named.
+_PLAIN_TEXT = (OSError, EOFError, asyncio.TimeoutError, asyncio.CancelledError, asyncio.IncompleteReadError,
+               asyncio.LimitOverrunError)
+
+
+def cause_of(error):
+    """The class and, where it is the system's own, the text of an exception, as one fixed-alphabet code.
+
+    The record of a failed exchange keeps what ended it (a timeout, a closed stream, a refusal of the library),
+    without any text a guest could have sent: only the classes listed above lend their message, and an `OSError`
+    only its error number and `strerror`, never a file name.
+    """
+    module = type(error).__module__
+    name = type(error).__name__ if module == 'builtins' else module.rsplit('.', 1)[-1] + '.' + type(error).__name__
+    if isinstance(error, OSError):
+        text = ':'.join(str(part) for part in (error.errno, error.strerror) if part is not None)
+    elif isinstance(error, _PLAIN_TEXT):
+        text = str(error)
+    else:
+        text = ''
+    code = _CAUSE_ALPHABET.sub('-', (name + ':' + text if text else name).lower()).strip('-')[:CAUSE_LIMIT]
+    return code or 'unknown'
 
 
 class ExecResult:
@@ -154,20 +188,24 @@ class Qga:
             self.valid = False
             if not isinstance(error, Exception):
                 raise
-            raise QgaError('qga-connect-failed') from None
+            raise QgaError('qga-connect-failed', cause_of(error)) from None
 
-    def _run(self, coroutine, timeout):
+    def _run(self, coroutine, timeout, *, keep=False):
+        """Run one exchange. Any failure ends the session, except the one of a `keep` exchange that only ran out of
+        time: the reply of a call carries its id, so a late one is dropped and the session may ask again."""
         try:
             return self.loop.run_until_complete(asyncio.wait_for(coroutine, timeout))
         except BaseException as error:
             if isinstance(error, self.rpc_error):
-                raise QgaError('qga-rpc-rejected') from None
+                raise QgaError('qga-rpc-rejected', cause_of(error)) from None
+            if keep and isinstance(error, asyncio.TimeoutError):
+                raise QgaError('qga-exchange-failed', cause_of(error)) from None
             self.valid = False
             if not isinstance(error, Exception):
                 raise
-            raise QgaError('qga-exchange-failed') from None
+            raise QgaError('qga-exchange-failed', cause_of(error)) from None
 
-    def _rpc(self, name, timeout, arguments=None):
+    def _rpc(self, name, timeout, arguments=None, *, keep=False):
         timeout = _timeout(timeout)
         if not self.valid or self.closed:
             raise QgaError('qga-unavailable-explicit-recovery-required')
@@ -187,7 +225,31 @@ class Qga:
             except (OSError, ValueError):
                 raise QgaError('qga-budget-record-failed') from None
         self.calls += 1
-        return self._run(self.client.execute(name, arguments), timeout)
+        return self._run(self.client.execute(name, arguments), timeout, keep=keep)
+
+    def ping(self, timeout, *, repeats=1):
+        """The cheap check of a session that has been idle: `guest-ping`, asked again `repeats` times when no reply came.
+
+        Returns how many pings were asked. A ping that never gets its reply leaves the session as it was and is
+        asked once more; when the last one also fails the session is spent (`valid` is false) and the caller replaces
+        it. A reply that is not an empty object ends the session at once.
+        """
+        if self.info is None:
+            raise QgaError('qga-probe-required')
+        for asked in range(1, repeats + 2):
+            try:
+                reply = self._rpc('guest-ping', timeout, keep=True)
+            except QgaError as error:
+                if str(error) != 'qga-exchange-failed' or not self.valid:
+                    raise
+                if asked > repeats:
+                    self.invalidate()
+                    raise
+                continue
+            if reply != {}:
+                self.invalidate()
+                raise QgaError('invalid-qga-ping')
+            return asked
 
     def probe(self, timeout):
         self.info = None
