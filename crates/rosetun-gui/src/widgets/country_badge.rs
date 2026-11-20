@@ -26,17 +26,20 @@ fn flag_index(code: &str) -> Option<usize> {
 
 fn flag_atlas(ctx: &egui::Context) -> Option<egui::TextureHandle> {
     let id = egui::Id::unique("country_flag_atlas");
-    if let Some(atlas) = ctx.data(|data| data.get_temp::<egui::TextureHandle>(id)) {
-        return Some(atlas);
+    // A failed decode is remembered too, so it is not retried on every frame.
+    if let Some(atlas) = ctx.data(|data| data.get_temp::<Option<egui::TextureHandle>>(id)) {
+        return atlas;
     }
-    let image = image::load_from_memory_with_format(FLAGS, image::ImageFormat::Png)
-        .ok()?
-        .into_rgba8();
-    let size = [image.width() as usize, image.height() as usize];
-    let image = egui::ColorImage::from_rgba_unmultiplied(size, image.as_raw());
-    let atlas = ctx.load_texture("country-flags", image, egui::TextureOptions::LINEAR);
+    let atlas = image::load_from_memory_with_format(FLAGS, image::ImageFormat::Png)
+        .ok()
+        .map(|image| {
+            let image = image.into_rgba8();
+            let size = [image.width() as usize, image.height() as usize];
+            let image = egui::ColorImage::from_rgba_unmultiplied(size, image.as_raw());
+            ctx.load_texture("country-flags", image, egui::TextureOptions::LINEAR)
+        });
     ctx.data_mut(|data| data.insert_temp(id, atlas.clone()));
-    Some(atlas)
+    atlas
 }
 
 fn flag_uv(index: usize, atlas: egui::Vec2, badge: egui::Vec2) -> egui::Rect {
@@ -121,6 +124,18 @@ pub(crate) fn country_label<'a>(
         });
     }
     label
+}
+
+/// What a screen reader hears for an entry whose country only its badge shows.
+pub(crate) fn spoken_with_country(label: &str, code: Option<&str>) -> String {
+    let Some(code) = code else {
+        return label.to_owned();
+    };
+    let country = rosetun_config::CountryCode::parse(code).map_or_else(
+        || code.to_ascii_uppercase(),
+        |code| crate::i18n::country_name(&code),
+    );
+    format!("{label}, {country}")
 }
 
 #[cfg(test)]
@@ -217,5 +232,20 @@ mod tests {
                 flags[1].brush.as_ref().unwrap().fill_texture_id,
             );
         }
+    }
+
+    #[test]
+    fn screen_readers_hear_the_country_that_only_the_badge_shows() {
+        crate::i18n::in_language(crate::i18n::Language::English, || {
+            assert_eq!(
+                spoken_with_country("Example exit", Some("NL")),
+                "Example exit, Netherlands"
+            );
+            assert_eq!(
+                spoken_with_country("Example exit", Some("zz")),
+                "Example exit, ZZ"
+            );
+            assert_eq!(spoken_with_country("Example exit", None), "Example exit");
+        });
     }
 }

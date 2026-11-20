@@ -29,7 +29,7 @@ pub(crate) use chips_field::chips_input_id;
 pub(crate) use chips_field::{Chip, ChipsEvent, ChipsField};
 pub(crate) use choice_card::{choice_card, radio_card};
 pub(crate) use combo::{drop_down, filter_combo};
-pub(crate) use country_badge::{country_badge, country_label};
+pub(crate) use country_badge::{country_badge, country_label, spoken_with_country};
 pub(crate) use dialogs::{
     ConfirmModal, Dialog, DialogFooter, DialogWidth, FooterChoice, ModalChoice, NameModal,
     confirm_modal, dialog_done, dialog_footer, name_modal,

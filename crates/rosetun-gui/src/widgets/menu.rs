@@ -104,7 +104,13 @@ pub(crate) fn menu_item_with_country(
                 ),
                 size,
             );
-            country_badge(ui, badge, code, show_flag, false);
+            if enabled {
+                country_badge(ui, badge, code, show_flag, false);
+            } else {
+                let mut faded = ui.new_child(egui::UiBuilder::new().max_rect(badge));
+                faded.multiply_opacity(theme::alpha::DISABLED);
+                country_badge(&faded, badge, code, show_flag, false);
+            }
             left = left.max(badge.right() + theme::space::S);
         }
         let galley = egui::WidgetText::from(egui::RichText::new(item.label).color(color))
@@ -120,8 +126,9 @@ pub(crate) fn menu_item_with_country(
             color,
         );
     }
+    let spoken = country_badge::spoken_with_country(item.label, country.map(|(code, _)| code));
     response.widget_info(|| {
-        egui::WidgetInfo::selected(egui::Role::Button, enabled, item.selected, item.label)
+        egui::WidgetInfo::selected(egui::Role::Button, enabled, item.selected, &spoken)
     });
     if enabled {
         response.on_hover_cursor(egui::CursorIcon::PointingHand)

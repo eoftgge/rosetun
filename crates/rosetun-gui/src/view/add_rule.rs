@@ -1336,7 +1336,8 @@ fn destination_picker(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, config: &Ap
             egui::Sense::hover()
         },
     );
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, enabled, &label));
+    let spoken = widgets::spoken_with_country(&label, country.as_deref());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, enabled, &spoken));
     let open = egui::Popup::is_id_open(ui.ctx(), destination_popup_id());
     if ui.is_rect_visible(rect) {
         let painter = ui.painter();

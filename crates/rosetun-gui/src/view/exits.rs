@@ -356,12 +356,15 @@ fn node_picker(ui: &mut egui::Ui, dialog: &mut ExitDialog, config: &AppConfig, b
                     .and_then(|id| config.exits.iter().find(|exit| &exit.id == id));
                 let selected = dialog.node.as_ref() == Some(&node.selection);
                 let (country, label) = display::leading_flag(node.name);
+                let label = display::safe_text(label);
+                let spoken = widgets::spoken_with_country(&label, country.as_deref());
+                let enabled = !busy && taken.is_none();
                 let response = ui.add_enabled(
-                    !busy && taken.is_none(),
+                    enabled,
                     egui::Button::selectable(
                         selected,
                         widgets::country_label(
-                            display::safe_text(label),
+                            label,
                             country.as_deref(),
                             config.interface.show_country_flags,
                             country_column,
@@ -369,6 +372,9 @@ fn node_picker(ui: &mut egui::Ui, dialog: &mut ExitDialog, config: &AppConfig, b
                     )
                     .min_size(egui::vec2(ui.available_width(), 0.0)),
                 );
+                response.widget_info(|| {
+                    egui::WidgetInfo::selected(egui::Role::Button, enabled, selected, &spoken)
+                });
                 if let Some(exit) = taken {
                     response.on_disabled_hover_text(tr!(
                         "exit-node-taken",
@@ -461,6 +467,7 @@ fn via_picker(ui: &mut egui::Ui, dialog: &mut ExitDialog, config: &AppConfig, bu
         None if dialog.via.is_some() => tr!("connection-exit-removed"),
         None => tr!("exit-via-direct"),
     };
+    let spoken = widgets::spoken_with_country(&selected, country.as_deref());
     ui.add_space(theme::space::M);
     ui.label(tr!("exit-via"));
     ui.add_enabled_ui(!busy, |ui| {
@@ -482,21 +489,22 @@ fn via_picker(ui: &mut egui::Ui, dialog: &mut ExitDialog, config: &AppConfig, bu
                     .filter(|exit| candidates.contains(&exit.id))
                 {
                     let country = destinations::exit_display_country(config, parent);
-                    let label = widgets::country_label(
-                        display::safe_text(&parent.name),
-                        country.as_deref(),
-                        flags,
-                        false,
-                    );
-                    if ui
-                        .selectable_value(&mut dialog.via, Some(parent.id.clone()), label)
-                        .changed()
-                    {
+                    let name = display::safe_text(&parent.name);
+                    let spoken = widgets::spoken_with_country(&name, country.as_deref());
+                    let label = widgets::country_label(name, country.as_deref(), flags, false);
+                    let picked = dialog.via.as_ref() == Some(&parent.id);
+                    let response =
+                        ui.selectable_value(&mut dialog.via, Some(parent.id.clone()), label);
+                    response.widget_info(|| {
+                        egui::WidgetInfo::selected(egui::Role::Button, true, picked, &spoken)
+                    });
+                    if response.changed() {
                         dialog.error = None;
                     }
                 }
             },
-        );
+        )
+        .widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, !busy, &spoken));
     });
     if let Some(via) = &dialog.via {
         let parent = config.exits.iter().find(|exit| &exit.id == via);
