@@ -1137,7 +1137,7 @@ fn tuic_links_and_sing_box_json_parse_supported_fields_and_skip_unsupported_opti
 
     for (bad, expected) in [
         (
-            format!("tuic://not-a-uuid:pw@example.com:443"),
+            String::from("tuic://not-a-uuid:pw@example.com:443"),
             SkipReason::InvalidRecord,
         ),
         (
