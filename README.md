@@ -61,6 +61,6 @@ One developer maintains Rosetun with help from coding agents. Report problems in
 ## Licenses
 
 Rosetun: **GPL-3.0-or-later**, © 2026 Sandaar. [LICENSE](LICENSE).
-sing-box: GPL-3.0-or-later; Xray-core: MPL-2.0; Wintun: [Prebuilt Binaries License](installer/third-party/wintun-prebuilt-binaries-license.txt); fonts: OFL-1.1.
+sing-box: GPL-3.0-or-later; Xray-core: MPL-2.0; Wintun: [Prebuilt Binaries License](installer/third-party/wintun-prebuilt-binaries-license.txt); fonts: OFL-1.1; country flags: MIT.
 [Full notices, component sources and installed licenses](https://eoftgge.github.io/rosetun/en/docs/licenses/).
 Rosetun is not affiliated with sing-box, SagerNet or Project X.

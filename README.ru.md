@@ -61,6 +61,6 @@ Rosetun ведёт один разработчик с помощью агент�
 ## Лицензии
 
 Rosetun: **GPL-3.0-or-later**, © 2026 Sandaar. [LICENSE](LICENSE).
-sing-box: GPL-3.0-or-later; Xray-core: MPL-2.0; Wintun: [Prebuilt Binaries License](installer/third-party/wintun-prebuilt-binaries-license.txt); шрифты: OFL-1.1.
+sing-box: GPL-3.0-or-later; Xray-core: MPL-2.0; Wintun: [Prebuilt Binaries License](installer/third-party/wintun-prebuilt-binaries-license.txt); шрифты: OFL-1.1; флаги стран: MIT.
 [Полные уведомления, исходники компонентов и установленные лицензии](https://eoftgge.github.io/rosetun/docs/licenses/).
 Rosetun не связан с sing-box, SagerNet или Project X.
