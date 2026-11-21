@@ -1,6 +1,6 @@
 //! Transport-only fixture. Never starts engines or a privileged helper.
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     use std::io::{BufRead, BufReader, Write};
     use std::os::unix::net::UnixStream;
@@ -18,8 +18,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             for _ in 0..count {
                 let mut connection = listener.accept()?;
                 let identity = connection.identify_peer()?;
-                let AccountIdentity::LinuxUid(uid) = identity.account() else {
-                    return Err("expected Linux credentials".into());
+                let (AccountIdentity::LinuxUid(uid) | AccountIdentity::MacOsUid(uid)) =
+                    identity.account()
+                else {
+                    return Err("expected Unix credentials".into());
                 };
                 let Some(Frame::Request { id, body: Request::Hello { .. } }) = connection.read()? else {
                     return Err("expected hello".into());
@@ -86,8 +88,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn main() {
-    eprintln!("this transport fixture requires Linux");
+    eprintln!("this transport fixture requires Linux or macOS");
     std::process::exit(1);
 }
