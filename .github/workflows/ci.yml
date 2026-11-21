@@ -67,6 +67,8 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Run tests
         run: cargo test --workspace --locked
+      - name: Run release script tests
+        run: python3 -m unittest discover -s tools/release -p "test_*.py"
 
   macos:
     runs-on: macos-15
