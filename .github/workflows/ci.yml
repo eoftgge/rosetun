@@ -102,7 +102,7 @@ jobs:
       - name: Build binaries
         run: cargo build --locked --target aarch64-apple-darwin -p rosetun -p rosetun-gui -p rosetun-helper-privileged
       - name: Run macOS tests
-        run: cargo test --locked --target aarch64-apple-darwin -p rosetun-config -p rosetun-subscription -p rosetun-ipc -p rosetun-helper-privileged
+        run: cargo test --locked --target aarch64-apple-darwin -p rosetun-config -p rosetun-subscription -p rosetun-ipc -p rosetun-routing -p rosetun-engine -p rosetun-engine-singbox -p rosetun-dns -p rosetun-adapters -p rosetun-helper-privileged
 
   deny:
     runs-on: ubuntu-24.04

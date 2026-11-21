@@ -319,6 +319,21 @@ fn log_section(request: &RenderRequest<'_>) -> Value {
     json!({ "level": level, "timestamp": true })
 }
 
+fn darwin_tun_name_valid(name: &str) -> bool {
+    let Some(rest) = name.strip_prefix("utun") else {
+        return false;
+    };
+    !rest.is_empty() && rest.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+fn tun_interface_name(configured: &str, darwin: bool) -> Option<&str> {
+    if darwin && !darwin_tun_name_valid(configured) {
+        None
+    } else {
+        Some(configured)
+    }
+}
+
 /// `lan` is the connected networks when "Local network" is on.
 fn tun_inbound(settings: &Settings, lan: Option<&[IpPrefix]>) -> Value {
     let tun = &settings.tun;
@@ -329,7 +344,6 @@ fn tun_inbound(settings: &Settings, lan: Option<&[IpPrefix]>) -> Value {
     let mut inbound = json!({
         "type": "tun",
         "tag": "tun-in",
-        "interface_name": tun.name,
         "address": address,
         "mtu": tun.mtu,
         // The system stack hands TUN connections back to sing-box through
@@ -339,6 +353,12 @@ fn tun_inbound(settings: &Settings, lan: Option<&[IpPrefix]>) -> Value {
         "auto_route": tun.auto_route,
         "strict_route": tun.auto_route,
     });
+    // Darwin utun interfaces must be named `utun[0-9]+`. Omitting
+    // `interface_name` lets sing-tun pick the next free kernel `utunN`
+    // without colliding with macOS system tunnels (`utun0..`).
+    if let Some(name) = tun_interface_name(&tun.name, cfg!(target_os = "macos")) {
+        inbound["interface_name"] = Value::String(name.to_owned());
+    }
     // sing-tun takes these out of the tunnel's routes, so Windows sends them
     // by its own routes, on the adapter. IPv6 only when the tunnel has it:
     // without an IPv6 address sing-tun installs no IPv6 routes at all.
@@ -1469,7 +1489,7 @@ mod tests {
         };
         let rendered = render(&request).unwrap();
         assert!(rendered.unsupported.is_empty());
-        assert_eq!(rendered.body, GOLDEN_FULL);
+        assert_golden_tun(&rendered.body, GOLDEN_FULL);
 
         let chained = render(&RenderRequest {
             extra: &[],
@@ -1482,7 +1502,50 @@ mod tests {
         })
         .unwrap();
         assert!(chained.unsupported.is_empty());
-        assert_eq!(chained.body, GOLDEN_XRAY_CHAIN);
+        assert_golden_tun(&chained.body, GOLDEN_XRAY_CHAIN);
+    }
+
+    fn assert_golden_tun(actual: &[u8], expected: &[u8]) {
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(actual, expected);
+
+        #[cfg(target_os = "macos")]
+        {
+            let expected = std::str::from_utf8(expected).unwrap();
+            let adjusted = expected.replace("      \"interface_name\": \"rosetun0\",\n", "");
+            assert_eq!(std::str::from_utf8(actual).unwrap(), adjusted);
+        }
+    }
+
+    #[test]
+    fn darwin_tun_interface_name_keeps_explicit_utun_and_omits_non_utun() {
+        assert_eq!(tun_interface_name("rosetun0", false), Some("rosetun0"));
+        assert_eq!(tun_interface_name("rosetun0", true), None);
+        assert_eq!(tun_interface_name("utun", true), None);
+        assert_eq!(tun_interface_name("utun6a", true), None);
+        assert_eq!(tun_interface_name("utun0", true), Some("utun0"));
+        assert_eq!(tun_interface_name("utun12", true), Some("utun12"));
+    }
+
+    #[test]
+    fn tun_inbound_renders_ipv4_and_ipv6_addresses_with_lan_exclusions() {
+        let mut settings = Settings::default();
+        settings.tun.name = "utun7".to_owned();
+        settings.tun.ipv6 = Some("fdfe:dcba:9876::1/126".to_owned());
+        let lan = [
+            IpPrefix::new("192.168.1.0".parse().unwrap(), 24).unwrap(),
+            IpPrefix::new("fd00::".parse().unwrap(), 64).unwrap(),
+        ];
+        let inbound = tun_inbound(&settings, Some(&lan));
+        assert_eq!(inbound["interface_name"], "utun7");
+        assert_eq!(
+            inbound["address"],
+            json!(["172.19.0.1/30", "fdfe:dcba:9876::1/126"])
+        );
+        assert_eq!(
+            inbound["route_exclude_address"],
+            json!(["192.168.1.0/24", "fd00::/64", "169.254.0.0/16", "fe80::/10"])
+        );
     }
 
     fn shadowsocks_node(id: &str, server: &str) -> Node {
@@ -1626,7 +1689,7 @@ mod tests {
         })
         .unwrap();
         assert!(rendered.unsupported.is_empty());
-        assert_eq!(rendered.body, GOLDEN_EXTRA_EXITS);
+        assert_golden_tun(&rendered.body, GOLDEN_EXTRA_EXITS);
 
         let value: Value = serde_json::from_slice(&rendered.body).unwrap();
         let tags = value["outbounds"]

@@ -9709,3 +9709,110 @@ fn domain_b_is_never_looked_up_by_endpoint_preparation() {
         );
     }
 }
+
+#[test]
+fn actual_tunnel_interface_drives_bypass_and_physical_exclusion() {
+    #[derive(Debug)]
+    struct UtunProcess;
+
+    impl EngineProcess for UtunProcess {
+        fn is_running(&mut self) -> Result<bool, EngineError> {
+            Ok(true)
+        }
+
+        fn tunnel_interface(&self) -> Option<String> {
+            Some("utun6".to_owned())
+        }
+
+        fn stop(&mut self) -> Result<(), EngineError> {
+            Ok(())
+        }
+    }
+
+    #[derive(Debug)]
+    struct UtunEngine;
+
+    impl EngineBackend for UtunEngine {
+        fn kind(&self) -> EngineKind {
+            EngineKind::SingBox
+        }
+
+        fn integration(&self) -> EngineIntegration {
+            EngineIntegration::EngineManagedTun
+        }
+
+        fn capabilities(&self) -> EngineCapabilities {
+            StubEngine.capabilities()
+        }
+
+        fn locate_binary(&self) -> Result<PathBuf, EngineError> {
+            StubEngine.locate_binary()
+        }
+
+        fn tunnel_dns_server(
+            &self,
+            _tun: &rosetun_config::TunSettings,
+        ) -> Option<std::net::SocketAddr> {
+            None
+        }
+
+        fn render(&self, request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError> {
+            StubEngine.render(request)
+        }
+
+        fn spawn(
+            &self,
+            _binary: &Path,
+            _config: &RenderedConfig,
+        ) -> Result<Box<dyn EngineProcess>, EngineError> {
+            Ok(Box::new(UtunProcess))
+        }
+    }
+
+    static EXCLUDED_TUN: Mutex<Option<String>> = Mutex::new(None);
+    fn record_excluded(alias: &str) -> Option<String> {
+        *EXCLUDED_TUN.lock().unwrap() = Some(alias.to_owned());
+        Some("en0".to_owned())
+    }
+
+    let _guard = ROUTE_TEST_LOCK.lock().unwrap();
+    *EXCLUDED_TUN.lock().unwrap() = None;
+
+    let mut engines = EngineRegistry::new();
+    engines.register(Box::new(UtunEngine));
+    let helper = Helper::new(engines, Box::new(UnusedRouting), VerboseGate::default());
+    helper.session.lock().unwrap().physical_interface = record_excluded;
+
+    let mut request = connect_request();
+    request.settings.kill_switch = false;
+    request.settings.tun.name = "rosetun0".into();
+    helper.connect(&request).unwrap();
+
+    let now = Instant::now();
+    {
+        let mut session = helper.session.lock().unwrap();
+        assert_eq!(session.effective_tun_name(&request.settings.tun), "utun6");
+        session.bypass.lookup = |_| Ok("utun6".into());
+        for seconds in [0, 2, 4, 6] {
+            session.observe_bypass(now + Duration::from_secs(seconds));
+            assert!(!helper.status().bypass_detected);
+        }
+        session.bypass.lookup = |_| Ok("en0".into());
+        for seconds in [8, 10] {
+            session.observe_bypass(now + Duration::from_secs(seconds));
+            assert!(!helper.status().bypass_detected);
+        }
+        session.observe_bypass(now + Duration::from_secs(12));
+        assert!(helper.status().bypass_detected);
+    }
+
+    helper.supervise(now + Duration::from_secs(14));
+    assert_eq!(EXCLUDED_TUN.lock().unwrap().as_deref(), Some("utun6"));
+
+    helper.disconnect().unwrap();
+    let session = helper.session.lock().unwrap();
+    assert_eq!(
+        session.effective_tun_name(&request.settings.tun),
+        "rosetun0"
+    );
+}

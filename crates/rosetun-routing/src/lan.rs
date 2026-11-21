@@ -242,7 +242,7 @@ pub struct SegmentQuery<'a> {
 }
 
 /// An adapter as the platform reports it.
-#[cfg(any(windows, target_os = "linux", test))]
+#[cfg(any(windows, target_os = "linux", target_os = "macos", test))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Adapter {
     pub(crate) interface: InterfaceId,
@@ -260,12 +260,12 @@ pub(crate) struct Adapter {
     pub(crate) addresses: Vec<(IpAddr, u8)>,
 }
 
-#[cfg(any(windows, target_os = "linux", test))]
+#[cfg(any(windows, target_os = "linux", target_os = "macos", test))]
 pub(crate) const ETHERNET: u32 = 6;
-#[cfg(any(windows, target_os = "linux", test))]
+#[cfg(any(windows, target_os = "linux", target_os = "macos", test))]
 pub(crate) const WIFI: u32 = 71;
 /// Software adapters of other VPNs that present themselves as Ethernet.
-#[cfg(any(windows, target_os = "linux", test))]
+#[cfg(any(windows, target_os = "linux", target_os = "macos", test))]
 const TUNNEL_MARKERS: [&str; 6] = ["tap", "vpn", "wintun", "wireguard", "tunnel", "openvpn"];
 
 /// Whether the adapter leads to a real network next to the computer.
@@ -277,7 +277,7 @@ const TUNNEL_MARKERS: [&str; 6] = ["tap", "vpn", "wintun", "wireguard", "tunnel"
 /// Switch and WSL's vEthernet have no gateway, so they stay out; so do
 /// host-only VM adapters. Tunnels (53, 131) and loopback (24) are not
 /// Ethernet or Wi-Fi at all.
-#[cfg(any(windows, target_os = "linux", test))]
+#[cfg(any(windows, target_os = "linux", target_os = "macos", test))]
 pub(crate) fn is_physical(adapter: &Adapter, tunnel_alias: &str) -> bool {
     if !adapter.up
         || adapter.alias.eq_ignore_ascii_case(tunnel_alias)
@@ -293,7 +293,7 @@ pub(crate) fn is_physical(adapter: &Adapter, tunnel_alias: &str) -> bool {
 }
 
 /// The segment of these adapters.
-#[cfg(any(windows, target_os = "linux", test))]
+#[cfg(any(windows, target_os = "linux", target_os = "macos", test))]
 pub(crate) fn select(adapters: &[Adapter], query: &SegmentQuery<'_>) -> SegmentScan {
     let mut scan = SegmentScan::default();
     let mut interfaces = Vec::new();
@@ -376,7 +376,7 @@ pub(crate) fn select(adapters: &[Adapter], query: &SegmentQuery<'_>) -> SegmentS
 /// Host routes and link-local addresses add nothing: a /32 has no
 /// neighbours, and link-local networks are opened on every physical adapter
 /// anyway.
-#[cfg(any(windows, target_os = "linux", test))]
+#[cfg(any(windows, target_os = "linux", target_os = "macos", test))]
 fn counts(address: IpAddr, length: u8) -> bool {
     match address {
         IpAddr::V4(address) => length < 32 && !address.is_link_local() && !address.is_loopback(),

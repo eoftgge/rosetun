@@ -14,6 +14,8 @@ mod repeated;
 mod session_lock;
 #[cfg(target_os = "linux")]
 mod system_dns_linux;
+#[cfg(target_os = "macos")]
+mod system_dns_macos;
 #[cfg(test)]
 mod tests;
 mod watchdog;
@@ -270,6 +272,11 @@ struct Session {
     connections: Arc<Mutex<ConnectionBook>>,
     watchdog: Option<DnsWatchdog>,
     tunnel_dns: Option<SocketAddr>,
+    /// Actual kernel tunnel interface name reported by the engine (for example
+    /// `utun6` on macOS when the configured name is `rosetun0`).
+    active_tun_name: Option<String>,
+    #[cfg(target_os = "macos")]
+    macos_dns: Option<system_dns_macos::MacosSystemDns>,
     path_addresses: Arc<Mutex<Vec<Ipv4Addr>>>,
     protection: protection::ProtectionRuntime,
     last_endpoint: Option<SuccessfulEndpoint>,
@@ -390,6 +397,9 @@ impl Helper {
                 connections,
                 watchdog: None,
                 tunnel_dns: None,
+                active_tun_name: None,
+                #[cfg(target_os = "macos")]
+                macos_dns: None,
                 path_addresses: Arc::new(Mutex::new(Vec::new())),
                 protection: protection::ProtectionRuntime::new(protection_report),
                 last_endpoint: None,
@@ -809,16 +819,17 @@ impl Helper {
             return;
         };
 
-        let network_available = (session.physical_interface)(
-            &session
-                .request
-                .as_ref()
-                .expect("active request")
-                .settings
-                .tun
-                .name,
-        )
-        .is_some();
+        let active_tun = session
+            .effective_tun_name(
+                &session
+                    .request
+                    .as_ref()
+                    .expect("active request")
+                    .settings
+                    .tun,
+            )
+            .to_owned();
+        let network_available = (session.physical_interface)(&active_tun).is_some();
         let loss_duration = session
             .missing_route_since
             .map(|since| now.saturating_duration_since(since));
@@ -1857,6 +1868,49 @@ fn rates(previous: (TrafficTotals, Instant), current: (TrafficTotals, Instant)) 
 }
 
 impl Session {
+    pub(super) fn effective_tun_name<'a>(
+        &'a self,
+        tun: &'a rosetun_config::TunSettings,
+    ) -> &'a str {
+        self.active_tun_name.as_deref().unwrap_or(&tun.name)
+    }
+
+    fn bind_actual_tunnel_interface(&mut self, tun: &rosetun_config::TunSettings) {
+        let actual = self
+            .process
+            .as_ref()
+            .and_then(|process| process.tunnel_interface());
+        #[cfg(target_os = "macos")]
+        let actual = actual.or_else(|| {
+            if cfg!(test) {
+                return None;
+            }
+            let ipv4 = tun
+                .ipv4
+                .split_once('/')
+                .and_then(|(address, _)| address.parse::<Ipv4Addr>().ok())?;
+            match rosetun_routing::tunnel_interface_by_ipv4(ipv4) {
+                Ok(found) => found,
+                Err(error) => {
+                    tracing::warn!(%error, "could not inspect macOS utun interfaces");
+                    None
+                }
+            }
+        });
+        if let Some(interface) = actual {
+            if interface != tun.name || cfg!(target_os = "macos") {
+                tracing::info!(
+                    interface = %interface,
+                    configured = %tun.name,
+                    "bound to actual TUN interface"
+                );
+            }
+            self.active_tun_name = Some(interface);
+        } else {
+            self.active_tun_name = None;
+        }
+    }
+
     fn wait_for_previous_adapter(&self, alias: &str) -> Result<(), HelperError> {
         self.stage(rosetun_config::ConnectStage::WaitingForAdapter)?;
         wait_for_previous_adapter_cancellable(
@@ -2474,6 +2528,9 @@ impl Session {
             self.server_check_grace,
         );
         tracing::info!("engine startup readiness confirmed");
+        if local_proxy.is_none() {
+            self.bind_actual_tunnel_interface(&settings.tun);
+        }
         self.ensure_xray_running(ErrorCode::XrayStartFailed)?;
 
         if let Some(tunnel) = tunnel.as_ref() {
@@ -2634,7 +2691,7 @@ impl Session {
                 if matches!(
                     error.code,
                     ErrorCode::ServerUnreachable | ErrorCode::DnsTimeout
-                ) && (self.physical_interface)(&settings.tun.name).is_none()
+                ) && (self.physical_interface)(self.effective_tun_name(&settings.tun)).is_none()
                 {
                     HelperError::new(ErrorCode::NoNetwork, "physical network is unavailable")
                 } else {
@@ -2643,6 +2700,18 @@ impl Session {
             })?;
             self.tunnel_dns = Some(server);
             self.refresh_path_addresses();
+            #[cfg(target_os = "macos")]
+            if !cfg!(test) && local_proxy.is_none() {
+                let servers =
+                    system_dns_macos::tunnel_dns_servers(server.ip(), settings.tun.ipv6.as_deref());
+                let dns = system_dns_macos::MacosSystemDns::install(&servers).map_err(|error| {
+                    HelperError::new(
+                        ErrorCode::RoutingFailed,
+                        format!("failed to configure macOS system DNS: {error}"),
+                    )
+                })?;
+                self.macos_dns = Some(dns);
+            }
         } else {
             tracing::info!(
                 engine = %settings.engine.as_str(),
@@ -2873,6 +2942,11 @@ impl Session {
 
     fn stop_engine(&mut self) -> Result<(), HelperError> {
         self.bypass.reset();
+        self.active_tun_name = None;
+        #[cfg(target_os = "macos")]
+        {
+            self.macos_dns.take();
+        }
         self.status
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)

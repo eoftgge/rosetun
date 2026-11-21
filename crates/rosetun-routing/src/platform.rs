@@ -1,5 +1,7 @@
 #[cfg(target_os = "linux")]
 mod linux;
+#[cfg(target_os = "macos")]
+pub(crate) mod macos;
 #[cfg(windows)]
 mod windows;
 
@@ -81,6 +83,19 @@ pub fn tunnel_adapter_state(alias: &str) -> std::io::Result<Option<TunnelAdapter
     }
 }
 
+/// Finds an active `utun*` interface carrying `ipv4` on macOS.
+pub fn tunnel_interface_by_ipv4(ipv4: std::net::Ipv4Addr) -> std::io::Result<Option<String>> {
+    #[cfg(target_os = "macos")]
+    {
+        macos::tunnel_interface_by_ipv4(ipv4)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = ipv4;
+        Ok(None)
+    }
+}
+
 pub(super) fn ruleset_json() -> Result<String, crate::RoutingError> {
     #[cfg(target_os = "linux")]
     {
@@ -106,7 +121,14 @@ pub(super) fn lan_segment(
             query,
         ))
     }
-    #[cfg(not(any(windows, target_os = "linux")))]
+    #[cfg(target_os = "macos")]
+    {
+        Ok(crate::lan::select(
+            &macos::segment::adapters(query.tunnel_alias)?,
+            query,
+        ))
+    }
+    #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
     {
         let _ = query;
         Ok(crate::lan::SegmentScan::default())
@@ -130,7 +152,11 @@ pub(super) fn shared_proxy_addresses() -> Vec<std::net::IpAddr> {
     {
         linux::connected::private_addresses()
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "macos")]
+    {
+        macos::connected::private_addresses()
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         Vec::new()
     }
@@ -145,7 +171,11 @@ pub(super) fn physical_default_interface(exclude_alias: &str) -> Option<String> 
     {
         linux::physical_default_interface(exclude_alias)
     }
-    #[cfg(not(any(windows, target_os = "linux")))]
+    #[cfg(target_os = "macos")]
+    {
+        macos::physical_default_interface(exclude_alias)
+    }
+    #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
     {
         let _ = exclude_alias;
         None

@@ -119,15 +119,16 @@ impl Session {
             .map(IpAddr::V6)
             .find(|address| !excluded(address))
         });
+        let expected_interface = self.effective_tun_name(&request.settings.tun);
         let results: Vec<_> = [ipv4, ipv6]
             .into_iter()
             .flatten()
             .map(|address| {
                 (self.bypass.lookup)(address).ok().map(|interface| {
                     if cfg!(windows) {
-                        !interface.eq_ignore_ascii_case(&request.settings.tun.name)
+                        !interface.eq_ignore_ascii_case(expected_interface)
                     } else {
-                        interface != request.settings.tun.name
+                        interface != expected_interface
                     }
                 })
             })

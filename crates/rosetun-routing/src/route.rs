@@ -15,7 +15,10 @@ mod platform;
 #[cfg(target_os = "linux")]
 #[path = "route/linux.rs"]
 mod platform;
-#[cfg(not(any(windows, target_os = "linux")))]
+#[cfg(target_os = "macos")]
+#[path = "route/macos.rs"]
+mod platform;
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
 mod platform {
     pub(super) fn route_interface(_: std::net::IpAddr) -> std::io::Result<String> {
         Err(std::io::ErrorKind::Unsupported.into())

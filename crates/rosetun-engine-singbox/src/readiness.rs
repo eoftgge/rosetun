@@ -126,23 +126,31 @@ pub(super) fn is_slow_tunnel_message(line: &str) -> bool {
 }
 
 /// In 1.14.3 this precedes the TUN stack/interface post-start stage, not readiness.
-pub(super) fn is_tunnel_created_message(line: &str) -> bool {
+pub(super) fn tunnel_created_interface(line: &str) -> Option<String> {
     if super::output::line_level(line) != Some(super::output::LineLevel::Info) {
-        return false;
+        return None;
     }
     let plain = strip_ansi_csi(line);
     let mut words = plain.split_whitespace();
-    words
+    let has_info = words
         .by_ref()
         .take(4)
-        .any(|word| word == "INFO" || word.starts_with("INFO["))
-        && words
-            .next()
-            .is_some_and(|word| word.starts_with("inbound/tun[") && word.ends_with("]:"))
-        && words.next() == Some("started")
-        && words.next() == Some("at")
-        && words.next().is_some()
-        && words.next().is_none()
+        .any(|word| word == "INFO" || word.starts_with("INFO["));
+    if !has_info {
+        return None;
+    }
+    let inbound = words.next()?;
+    if !(inbound.starts_with("inbound/tun[") && inbound.ends_with("]:")) {
+        return None;
+    }
+    if words.next() != Some("started") || words.next() != Some("at") {
+        return None;
+    }
+    let interface = words.next()?;
+    if words.next().is_some() || interface.is_empty() {
+        return None;
+    }
+    Some(interface.to_owned())
 }
 
 #[cfg(test)]
@@ -186,15 +194,22 @@ mod tests {
     #[test]
     fn tunnel_creation_does_not_claim_final_startup_readiness() {
         let line = "INFO[0000] inbound/tun[tun-in]: started at rosetun0";
-        assert!(is_tunnel_created_message(line));
+        assert_eq!(tunnel_created_interface(line).as_deref(), Some("rosetun0"));
         assert!(!is_startup_message(line));
+        assert_eq!(
+            tunnel_created_interface(
+                "+0900 2026-11-21 12:00:00 INFO inbound/tun[tun-in]: started at utun6"
+            )
+            .as_deref(),
+            Some("utun6")
+        );
         for line in [
             "INFO[0000] outbound/direct[proxy]: started at rosetun0",
             "ERROR[0000] inbound/tun[tun-in]: started at rosetun0",
             "INFO[0000] inbound/tun[tun-in]: started at rosetun0 trailing",
             "INFO[0000] sing-box started (0.43s)",
         ] {
-            assert!(!is_tunnel_created_message(line));
+            assert_eq!(tunnel_created_interface(line), None);
         }
     }
 
