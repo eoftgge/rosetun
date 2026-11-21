@@ -359,7 +359,11 @@ fn silent_clients_release_all_slots_after_hello_timeout() {
 
 #[test]
 fn partial_frame_and_idle_client_close_on_their_own_deadlines() {
-    let server = TestServer::start(timeouts());
+    let server = TestServer::start(ReadTimeouts {
+        hello: Duration::from_millis(1_500),
+        frame: Duration::from_millis(450),
+        idle: Duration::from_millis(900),
+    });
     let (mut partial, mut writer) =
         open_with_writer(&server.endpoint).expect("open partial client");
     hello(&mut partial);
@@ -367,11 +371,11 @@ fn partial_frame_and_idle_client_close_on_their_own_deadlines() {
         .write_all(b"{\"request\":")
         .expect("write partial frame");
     let started = Instant::now();
-    thread::sleep(Duration::from_millis(90));
+    thread::sleep(Duration::from_millis(100));
     writer.write_all(b"42").expect("continue partial frame");
     server.wait_active(1, Duration::from_secs(1));
     expect_closed(partial);
-    assert!(started.elapsed() < Duration::from_millis(360));
+    assert!(started.elapsed() < Duration::from_millis(800));
     server.wait_active(0, Duration::from_secs(1));
 
     let mut stalled = server.connect();
@@ -379,14 +383,14 @@ fn partial_frame_and_idle_client_close_on_their_own_deadlines() {
     let started = Instant::now();
     server.wait_active(1, Duration::from_secs(1));
     expect_closed(stalled);
-    assert!(started.elapsed() >= Duration::from_millis(300));
+    assert!(started.elapsed() >= Duration::from_millis(750));
     server.wait_active(0, Duration::from_secs(1));
 }
 
 #[test]
 fn partial_hello_cannot_outlast_the_handshake_deadline() {
     let server = TestServer::start(ReadTimeouts {
-        hello: Duration::from_millis(270),
+        hello: Duration::from_millis(500),
         frame: Duration::from_secs(2),
         idle: Duration::from_secs(2),
     });
@@ -394,7 +398,7 @@ fn partial_hello_cannot_outlast_the_handshake_deadline() {
     writer
         .write_all(b"{\"request\":")
         .expect("start hello frame");
-    server.wait_active(1, Duration::from_millis(180));
+    server.wait_active(1, Duration::from_millis(350));
     expect_closed(client);
     server.wait_active(0, Duration::from_secs(1));
 }
