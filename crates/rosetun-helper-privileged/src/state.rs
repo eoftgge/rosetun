@@ -175,6 +175,8 @@ pub struct Helper {
     engines: Arc<EngineRegistry>,
     xray: Option<Arc<dyn XrayRunner>>,
     physical_interface: fn(&str) -> Option<String>,
+    /// Mirror of `Session::active_tun_name` for concurrent server probes.
+    active_tun: Arc<Mutex<Option<String>>>,
     probe: Mutex<()>,
     lists: Option<Arc<Mutex<ListStore>>>,
     shutting_down: AtomicBool,
@@ -275,6 +277,7 @@ struct Session {
     /// Actual kernel tunnel interface name reported by the engine (for example
     /// `utun6` on macOS when the configured name is `rosetun0`).
     active_tun_name: Option<String>,
+    shared_active_tun: Arc<Mutex<Option<String>>>,
     #[cfg(target_os = "macos")]
     macos_dns: Option<system_dns_macos::MacosSystemDns>,
     path_addresses: Arc<Mutex<Vec<Ipv4Addr>>>,
@@ -286,6 +289,8 @@ struct Session {
     exit_tags: Vec<(ExitId, Option<String>)>,
     /// Whether the running session started Xray for any node.
     xray_chain: bool,
+    /// Physical interface Xray's outbound sockets are bound to for this session.
+    xray_interface: Option<String>,
     request: Option<ConnectRequest>,
     owner: Arc<Mutex<Option<AccountIdentity>>>,
     reconnect: Option<Reconnect>,
@@ -357,6 +362,7 @@ impl Helper {
         if let Some(reason) = protection_unavailable.as_deref() {
             tracing::warn!(reason, "the kill switch is not available");
         }
+        let active_tun = Arc::new(Mutex::new(None));
         Self {
             protection,
             protection_unavailable,
@@ -373,6 +379,7 @@ impl Helper {
             physical_interface: rosetun_routing::physical_default_interface,
             #[cfg(test)]
             physical_interface: test_physical_interface,
+            active_tun: Arc::clone(&active_tun),
             probe: Mutex::new(()),
             lists: None,
             shutting_down: AtomicBool::new(false),
@@ -398,6 +405,7 @@ impl Helper {
                 watchdog: None,
                 tunnel_dns: None,
                 active_tun_name: None,
+                shared_active_tun: active_tun,
                 #[cfg(target_os = "macos")]
                 macos_dns: None,
                 path_addresses: Arc::new(Mutex::new(Vec::new())),
@@ -406,6 +414,7 @@ impl Helper {
                 last_extra_endpoints: HashMap::new(),
                 exit_tags: Vec::new(),
                 xray_chain: false,
+                xray_interface: None,
                 request: None,
                 owner,
                 reconnect: None,
@@ -792,6 +801,14 @@ impl Helper {
         self.resumed.store(true, Ordering::Release);
     }
 
+    pub(super) fn effective_tun_name(&self, tun: &rosetun_config::TunSettings) -> String {
+        self.active_tun
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+            .unwrap_or_else(|| tun.name.clone())
+    }
+
     pub fn supervise(&self, now: Instant) {
         let Some(Acquired::Locked(mut session)) = self.try_session(SessionHolder::Supervisor)
         else {
@@ -829,7 +846,8 @@ impl Helper {
                     .tun,
             )
             .to_owned();
-        let network_available = (session.physical_interface)(&active_tun).is_some();
+        let current_physical = (session.physical_interface)(&active_tun);
+        let network_available = current_physical.is_some();
         let loss_duration = session
             .missing_route_since
             .map(|since| now.saturating_duration_since(since));
@@ -1040,6 +1058,29 @@ impl Helper {
                     failures: 0,
                     next_at: now,
                     cause: "dns stalled",
+                });
+            } else if session.xray_chain
+                && session.xray_interface.is_some()
+                && current_physical != session.xray_interface
+            {
+                if !auto_reconnect {
+                    tracing::warn!(
+                        previous = ?session.xray_interface,
+                        current = ?current_physical,
+                        "physical interface changed while Xray is bound to the old one; auto-reconnect is off"
+                    );
+                    return;
+                }
+                tracing::info!(
+                    previous = ?session.xray_interface,
+                    current = ?current_physical,
+                    "physical interface changed for Xray; reconnecting"
+                );
+                self.begin_attempt(ConnectionState::Reconnecting);
+                session.reconnect = Some(Reconnect {
+                    failures: 0,
+                    next_at: now,
+                    cause: "physical interface changed",
                 });
             } else if session.local_network_changed() {
                 if !auto_reconnect {
@@ -1905,8 +1946,16 @@ impl Session {
                     "bound to actual TUN interface"
                 );
             }
+            *self
+                .shared_active_tun
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(interface.clone());
             self.active_tun_name = Some(interface);
         } else {
+            *self
+                .shared_active_tun
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
             self.active_tun_name = None;
         }
     }
@@ -2409,6 +2458,7 @@ impl Session {
                 verbose_until.is_some(),
                 settings.log_level,
             )?;
+            self.xray_interface = Some(interface);
             tracing::info!(extra_nodes = extra.len(), "engine chain: sing-box + xray");
             check_cancelled(&self.cancelled)?;
             self.cold_start = false;
@@ -2943,6 +2993,11 @@ impl Session {
     fn stop_engine(&mut self) -> Result<(), HelperError> {
         self.bypass.reset();
         self.active_tun_name = None;
+        *self
+            .shared_active_tun
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+        self.xray_interface = None;
         #[cfg(target_os = "macos")]
         {
             self.macos_dns.take();

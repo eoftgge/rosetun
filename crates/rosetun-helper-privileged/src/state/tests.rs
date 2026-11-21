@@ -9815,4 +9815,89 @@ fn actual_tunnel_interface_drives_bypass_and_physical_exclusion() {
         session.effective_tun_name(&request.settings.tun),
         "rosetun0"
     );
+    assert_eq!(helper.effective_tun_name(&request.settings.tun), "rosetun0");
+}
+
+#[test]
+fn xray_chain_reconnects_when_physical_interface_changes() {
+    static CURRENT_IF: Mutex<&'static str> = Mutex::new("en0");
+    fn current_physical(_: &str) -> Option<String> {
+        Some((*CURRENT_IF.lock().unwrap()).to_owned())
+    }
+
+    let _guard = ROUTE_TEST_LOCK.lock().unwrap();
+    *CURRENT_IF.lock().unwrap() = "en0";
+
+    let (helper, _, runner, _, _, _) = xray_chain_helper();
+    let helper = helper.with_test_physical_interface(current_physical);
+    let mut request = reality_request();
+    request.settings.kill_switch = false;
+    request.settings.auto_reconnect = true;
+    request.settings.xray = rosetun_config::XrayUse::Always;
+    helper.connect(&request).unwrap();
+    assert_eq!(runner.starts.load(Ordering::Acquire), 1);
+    assert!(runner.last_config().contains("\"en0\""));
+
+    *CURRENT_IF.lock().unwrap() = "en5";
+    helper.supervise(Instant::now());
+    assert_eq!(helper.status().state, ConnectionState::Connected);
+    assert_eq!(runner.starts.load(Ordering::Acquire), 2);
+    assert!(runner.last_config().contains("\"en5\""));
+}
+
+#[test]
+fn apply_and_probe_exclude_actual_utun_interface_while_connected() {
+    static SEEN_ALIASES: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    fn record_alias(alias: &str) -> Option<String> {
+        SEEN_ALIASES.lock().unwrap().push(alias.to_owned());
+        Some("en0".to_owned())
+    }
+
+    let _guard = ROUTE_TEST_LOCK.lock().unwrap();
+    SEEN_ALIASES.lock().unwrap().clear();
+
+    let (helper, _, runner, _, _, _) = xray_chain_helper();
+    let helper = helper.with_test_physical_interface(record_alias);
+    let mut request = reality_request();
+    request.settings.kill_switch = false;
+    request.settings.tun.name = "rosetun0".into();
+    request.settings.xray = rosetun_config::XrayUse::Off;
+    helper.connect_as(&test_caller(), &request).unwrap();
+
+    {
+        let mut session = helper.session.lock().unwrap();
+        session.active_tun_name = Some("utun6".to_owned());
+        *session.shared_active_tun.lock().unwrap() = Some("utun6".to_owned());
+    }
+    assert_eq!(helper.effective_tun_name(&request.settings.tun), "utun6");
+
+    // Pre-validation inside apply_as for an Xray node must exclude the live utun6.
+    SEEN_ALIASES.lock().unwrap().clear();
+    let mut switched = request.clone();
+    switched.settings.xray = rosetun_config::XrayUse::Always;
+    helper.apply_as(&test_caller(), &switched).unwrap();
+    assert_eq!(
+        SEEN_ALIASES.lock().unwrap().first().map(String::as_str),
+        Some("utun6")
+    );
+    assert_eq!(runner.starts.load(Ordering::Acquire), 1);
+
+    // Probing while connected must also exclude the live active TUN name.
+    {
+        let mut session = helper.session.lock().unwrap();
+        session.active_tun_name = Some("utun7".to_owned());
+        *session.shared_active_tun.lock().unwrap() = Some("utun7".to_owned());
+    }
+    SEEN_ALIASES.lock().unwrap().clear();
+    let _ = helper.probe_nodes(&rosetun_ipc::ProbeRequest {
+        nodes: vec![request.node.clone()],
+        settings: request.settings.clone(),
+    });
+    assert_eq!(
+        SEEN_ALIASES.lock().unwrap().first().map(String::as_str),
+        Some("utun7")
+    );
+
+    helper.disconnect_as(&test_caller()).unwrap();
+    assert_eq!(helper.effective_tun_name(&request.settings.tun), "rosetun0");
 }

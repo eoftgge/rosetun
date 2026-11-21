@@ -270,10 +270,11 @@ impl Helper {
                 "server check control API is unavailable",
             )
         })?;
-        let interface = (self.physical_interface)(&request.settings.tun.name);
+        let active_tun = self.effective_tun_name(&request.settings.tun);
+        let interface = (self.physical_interface)(&active_tun);
         // A concurrent connect could raise its TUN after this lookup, so on Windows
-        // never fall back to auto-detect without a known physical interface.
-        if cfg!(windows) && interface.is_none() {
+        // and macOS never fall back to auto-detect without a known physical interface.
+        if cfg!(any(windows, target_os = "macos")) && interface.is_none() {
             return Err(HelperError::new(
                 ErrorCode::EngineFailed,
                 "physical interface is unavailable for server checks",

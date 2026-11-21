@@ -765,4 +765,77 @@ mod tests {
             ));
         }
     }
+
+    #[test]
+    fn bsd_interface_names_bind_proxy_and_fragment_outbounds_for_session_and_probe() {
+        let socks = SocksEndpoint::local().unwrap();
+
+        let plain: Value = serde_json::from_slice(
+            &render(
+                &[("proxy", &reality_node(), &socks)],
+                "en0",
+                &TlsFragment::default(),
+                false,
+                LogLevel::Info,
+            )
+            .unwrap()
+            .body,
+        )
+        .unwrap();
+        assert_eq!(
+            plain["outbounds"][0]["streamSettings"]["sockopt"]["interface"],
+            "en0"
+        );
+
+        let fragmented: Value = serde_json::from_slice(
+            &render(
+                &[("proxy", &reality_node(), &socks)],
+                "en5",
+                &on(),
+                false,
+                LogLevel::Info,
+            )
+            .unwrap()
+            .body,
+        )
+        .unwrap();
+        assert_eq!(
+            fragmented["outbounds"][0]["streamSettings"]["sockopt"]["dialerProxy"],
+            "proxy-fragment"
+        );
+        assert_eq!(
+            fragmented["outbounds"][0]["streamSettings"]["sockopt"]["interface"],
+            "en5"
+        );
+        assert_eq!(fragmented["outbounds"][1]["tag"], "proxy-fragment");
+        assert_eq!(
+            fragmented["outbounds"][1]["streamSettings"]["sockopt"]["interface"],
+            "en5"
+        );
+
+        let probe_nodes = [(
+            "probe-0".to_owned(),
+            reality_node(),
+            SocksEndpoint::local().unwrap(),
+        )];
+        let probe_plain: Value = serde_json::from_slice(
+            &render_probe(&probe_nodes, "en0", &TlsFragment::default())
+                .unwrap()
+                .body,
+        )
+        .unwrap();
+        assert_eq!(
+            probe_plain["outbounds"][0]["streamSettings"]["sockopt"]["interface"],
+            "en0"
+        );
+
+        let probe_fragmented: Value =
+            serde_json::from_slice(&render_probe(&probe_nodes, "en5", &on()).unwrap().body)
+                .unwrap();
+        assert_eq!(probe_fragmented["outbounds"][1]["tag"], "probe-0-fragment");
+        assert_eq!(
+            probe_fragmented["outbounds"][1]["streamSettings"]["sockopt"]["interface"],
+            "en5"
+        );
+    }
 }

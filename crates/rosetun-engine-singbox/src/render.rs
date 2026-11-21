@@ -2823,4 +2823,67 @@ mod tests {
         let rendered = render(&request).unwrap();
         assert!(!format!("{rendered:?}").contains("fixture-password"));
     }
+
+    #[test]
+    fn macos_bundle_paths_and_helper_names_render_for_process_rules() {
+        let node = shadowsocks_node("main", "203.0.113.10");
+        let mut rules = RuleSet::new(RuleSetId::new("macos"), "macOS", RuleTarget::Proxy);
+        let bundle_path = "/Applications/Visual Studio Code.app/Contents/MacOS/Electron";
+        let helper_name = "Google Chrome Helper (Renderer)";
+        rules.rules = vec![
+            Rule {
+                id: RuleId::new("bundle"),
+                enabled: true,
+                matcher: RuleMatcher::Process(ProcessMatch::Path(std::path::PathBuf::from(
+                    bundle_path,
+                ))),
+                target: RuleTarget::Direct,
+                exit: None,
+            },
+            Rule {
+                id: RuleId::new("helper"),
+                enabled: true,
+                matcher: RuleMatcher::Process(ProcessMatch::Name(helper_name.into())),
+                target: RuleTarget::Block,
+                exit: None,
+            },
+        ];
+
+        let rendered = render(&RenderRequest {
+            node: &node,
+            socks: None,
+            extra: &[],
+            rules: &rules,
+            lists: &[],
+            settings: &Settings::default(),
+            lan_segment: &[],
+            lan_servers: &[],
+            control: None,
+            verbose_log: false,
+            local_proxy: None,
+        })
+        .unwrap();
+        assert!(rendered.unsupported.is_empty());
+
+        let value: Value = serde_json::from_slice(&rendered.body).unwrap();
+        let route_rules = rules_of(&value);
+
+        let bundle_rule = route_rules
+            .iter()
+            .find(|rule| rule["process_path"] == json!([bundle_path]))
+            .expect("bundle process_path rule");
+        assert_eq!(bundle_rule["action"], "route");
+        assert_eq!(bundle_rule["outbound"], "direct");
+
+        let expected_regex = if cfg!(windows) {
+            r"(?i)(?:^|[\\/])Google Chrome Helper \(Renderer\)$"
+        } else {
+            r"(?:^|[\\/])Google Chrome Helper \(Renderer\)$"
+        };
+        let helper_rule = route_rules
+            .iter()
+            .find(|rule| rule["process_path_regex"] == json!([expected_regex]))
+            .expect("escaped helper process_path_regex rule");
+        assert_eq!(helper_rule["action"], "reject");
+    }
 }

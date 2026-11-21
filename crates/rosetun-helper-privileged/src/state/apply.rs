@@ -113,12 +113,13 @@ impl Helper {
         )?;
         if socks.any() {
             let interface =
-                (session.physical_interface)(&request.settings.tun.name).ok_or_else(|| {
-                    HelperError::new(
-                        ErrorCode::XrayStartFailed,
-                        "physical interface is unavailable for Xray",
-                    )
-                })?;
+                (session.physical_interface)(session.effective_tun_name(&current.settings.tun))
+                    .ok_or_else(|| {
+                        HelperError::new(
+                            ErrorCode::XrayStartFailed,
+                            "physical interface is unavailable for Xray",
+                        )
+                    })?;
             socks.render(
                 &prepared_node,
                 &extra,
