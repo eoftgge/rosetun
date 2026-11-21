@@ -68,6 +68,40 @@ jobs:
       - name: Run tests
         run: cargo test --workspace --locked
 
+  macos:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify Apple Silicon runner
+        run: |
+          arch=$(uname -m)
+          echo "$arch"
+          if [ "$arch" != "arm64" ]; then
+            echo "Expected arm64 runner, got $arch" >&2
+            exit 1
+          fi
+      - name: Install Rust
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+          rustup default "$RUST_TOOLCHAIN"
+          rustc -vV
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: cargo-${{ runner.os }}-${{ runner.arch }}-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('Cargo.lock') }}
+      - name: Check workspace
+        run: cargo check --workspace --all-targets --locked --target aarch64-apple-darwin
+      - name: Build binaries
+        run: cargo build --locked --target aarch64-apple-darwin -p rosetun -p rosetun-gui -p rosetun-helper-privileged
+      - name: Run portable tests
+        run: cargo test --locked --target aarch64-apple-darwin -p rosetun-config -p rosetun-subscription
+
   deny:
     runs-on: ubuntu-24.04
     steps:
