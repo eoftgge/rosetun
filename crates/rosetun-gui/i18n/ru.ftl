@@ -865,10 +865,8 @@ rules-not-restored = { $count ->
 }
 revert-rules = Вернуть
 revert-rules-hint = Вернуть правила, с которыми работает подключение.
-search-rules = Поиск правил
-rule-check-hint = Проверить адрес или программу
+search-rules = Поиск или проверка адреса
 rule-check-other-set = Чтобы проверить, откройте набор в работе.
-rule-check-invalid = Не сайт, не адрес и не программа
 rule-check-checking = Проверяем…
 rule-check-unknown = { $input } → неизвестно
 rule-check-list-unreadable = список здесь не прочитать

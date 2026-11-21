@@ -501,7 +501,7 @@ fn toolbar_and_hint_reserve_the_same_height() {
     theme::apply(&ctx);
     let mut state = State::default();
     state.config_ready = true;
-    for selected in [false, true] {
+    for (selected, line) in [(false, None), (false, Some(check_line(None))), (true, None)] {
         state.rules.screen.selected_rules.clear();
         if selected {
             state.rules.screen.selected_rules = [RuleId::new("1"), RuleId::new("2")].into();
@@ -516,7 +516,7 @@ fn toolbar_and_hint_reserve_the_same_height() {
             },
             |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    let slot = selection_slot(ui, &state, &mut Vec::new());
+                    let slot = selection_slot(ui, &state, line.clone(), &mut Vec::new());
                     assert!((slot.rect.height() - 38.0).abs() < 1.0, "{slot:?}");
                 });
             },
@@ -920,6 +920,7 @@ fn check_line(rule: Option<(String, RuleId)>) -> crate::state::CheckLine {
         ),
         rule,
         hint: None,
+        target: Some(RuleTarget::Direct),
         answer: true,
     }
 }
@@ -929,15 +930,12 @@ fn the_check_shows_its_answer_and_a_link_that_asks_for_the_rule() {
     for language in [i18n::Language::English, i18n::Language::Russian] {
         i18n::in_language(language, || {
             let mut screen = crate::test_ui::TestScreen::new(egui::vec2(960.0, 640.0));
-            let mut input = "video.example.com".to_owned();
             let label = tr!("rule-check-number", number = "13".to_owned());
             let mut actions = Vec::new();
             let mut show = |ui: &mut egui::Ui| {
-                check::address_check(
+                check::check_result(
                     ui,
-                    true,
-                    &mut input,
-                    Some(check_line(Some((label.clone(), RuleId::new("one"))))),
+                    check_line(Some((label.clone(), RuleId::new("one")))),
                     &mut actions,
                 );
             };
@@ -978,26 +976,4 @@ fn the_check_shows_its_answer_and_a_link_that_asks_for_the_rule() {
             );
         });
     }
-}
-
-#[test]
-fn an_empty_check_keeps_the_height_of_a_line() {
-    let height = |line: Option<crate::state::CheckLine>| {
-        let mut screen = crate::test_ui::TestScreen::new(egui::vec2(960.0, 640.0));
-        let mut input = String::new();
-        let mut bottom = 0.0;
-        screen.settle(|ui| {
-            check::address_check(ui, true, &mut input, line.clone(), &mut Vec::new());
-            bottom = ui.min_rect().bottom();
-        });
-        bottom
-    };
-
-    let empty = height(None);
-    let answered = height(Some(check_line(None)));
-
-    assert!(
-        (empty - answered).abs() < 1.0,
-        "empty {empty}, answered {answered}"
-    );
 }

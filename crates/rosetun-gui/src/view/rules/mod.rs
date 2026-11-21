@@ -201,8 +201,6 @@ fn tab_body(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
         return;
     }
 
-    let check_available = state.rule_check_available();
-    let check_line = state.rule_check();
     let Some(set) = state
         .config
         .rule_sets
@@ -214,14 +212,6 @@ fn tab_body(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
     };
     template_section(ui, state, set, actions);
     ui.add_space(theme::space::XL);
-    check::address_check(
-        ui,
-        check_available,
-        &mut state.rules.check.input,
-        check_line,
-        actions,
-    );
-    ui.add_space(theme::space::M);
     let temporary = if state.config.active_rule_set.as_ref() == Some(&set.id) {
         state.session.temporary_rules.as_slice()
     } else {
@@ -241,8 +231,9 @@ fn tab_body(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
     if state.rules.screen.filter.search != search_before {
         actions.push(Action::ClearRuleSelection);
     }
+    let check_line = state.rule_check();
     let mut selection_regions = Vec::new();
-    let slot = selection_slot(ui, state, actions);
+    let slot = selection_slot(ui, state, check_line, actions);
     if state.rules.screen.selected_rules.len() >= 2 {
         selection_regions.push(slot.rect);
     }

@@ -850,10 +850,8 @@ rules-not-restored = { $count ->
 }
 revert-rules = Revert
 revert-rules-hint = Back to the rules the connection uses.
-search-rules = Search rules
-rule-check-hint = Check an address or program
+search-rules = Search or check address
 rule-check-other-set = Open the set in use to check.
-rule-check-invalid = Not a site, address or program
 rule-check-checking = Checking…
 rule-check-unknown = { $input } → unknown
 rule-check-list-unreadable = a list cannot be read here

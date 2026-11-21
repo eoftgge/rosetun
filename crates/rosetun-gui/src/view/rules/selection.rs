@@ -47,14 +47,18 @@ pub(super) fn clear_selection_on_click_away(
 pub(super) fn selection_slot(
     ui: &mut egui::Ui,
     state: &State,
+    check_line: Option<crate::state::CheckLine>,
     actions: &mut Vec<Action>,
 ) -> egui::Response {
     ui.allocate_ui_with_layout(
         egui::vec2(ui.available_width(), 38.0),
         egui::Layout::left_to_right(egui::Align::Center),
         |ui| {
+            ui.set_min_height(38.0);
             if state.rules.screen.selected_rules.len() >= 2 {
                 selection_toolbar(ui, state, actions);
+            } else if let Some(line) = check_line {
+                check::check_result(ui, line, actions);
             } else {
                 ui.add(
                     egui::Label::new(

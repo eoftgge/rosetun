@@ -4,10 +4,10 @@
 //! memory only, until the lists or the list rules change. What is typed is
 //! never logged or saved.
 
-use rosetun_config::{DomainMatch, ListId, RuleId, RuleMatcher};
+use rosetun_config::{DomainMatch, ListId, RuleId, RuleMatcher, RuleTarget};
 use rosetun_core::{
-    Answer, ExplainedRoute, Explanation, InputError, Reason, RuleSource, SessionLists, StoreError,
-    Subject, Unknown, check, rule_value_text,
+    Answer, ExplainedRoute, Explanation, Reason, RuleSource, SessionLists, StoreError, Subject,
+    Unknown, check, rule_value_text,
 };
 use rosetun_ipc::ConnectRequest;
 
@@ -24,13 +24,12 @@ struct ListsKey {
 
 #[derive(Default)]
 pub(crate) struct AddressCheck {
-    pub(crate) input: String,
     read_for: Option<ListsKey>,
     read: ListsRead,
     next_request: u64,
 }
 
-/// What the line under the field shows.
+/// What the line under the search field shows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CheckLine {
     /// The answer, up to the rule's link when there is one.
@@ -39,7 +38,9 @@ pub(crate) struct CheckLine {
     pub(crate) rule: Option<(String, RuleId)>,
     /// Why the answer is not certain, or what a short answer stands on.
     pub(crate) hint: Option<String>,
-    /// An answer, as opposed to a notice (checking, not understood).
+    /// Route color when the answer resolved to a concrete target.
+    pub(crate) target: Option<RuleTarget>,
+    /// An answer, as opposed to a notice (checking, inactive set, depends).
     pub(crate) answer: bool,
 }
 
@@ -51,6 +52,19 @@ struct Why {
     rule: Option<(usize, RuleId)>,
     /// All of it, for what is no rule of the table.
     text: Option<String>,
+}
+
+/// Whether the typed text is clearly a destination (site, IP, path, or `.exe`)
+/// rather than a bare word that could just be a rule search query.
+fn is_explicit_subject(subject: &Subject) -> bool {
+    match subject {
+        Subject::Site(_) | Subject::Address(_) | Subject::ProgramPath(_) => true,
+        Subject::ProgramName(name) => {
+            name.len() > ".exe".len()
+                && name.is_char_boundary(name.len() - ".exe".len())
+                && name[name.len() - ".exe".len()..].eq_ignore_ascii_case(".exe")
+        }
+    }
 }
 
 impl State {
@@ -92,7 +106,10 @@ impl State {
         self.screen == Screen::Rules
             && self.lists.tab == RulesTab::Rules
             && self.rule_check_available()
-            && Subject::parse(&self.rules.check.input).is_ok()
+            && matches!(
+                Subject::parse(&self.rules.screen.filter.search),
+                Ok(Subject::Site(_) | Subject::Address(_))
+            )
     }
 
     /// The lists of the rules the check goes through, read when the answer
@@ -127,29 +144,45 @@ impl State {
         }
     }
 
-    /// The line under the field; `None` while the field is empty or the
-    /// rules on screen are not the ones in use.
+    /// The routing check answer for the search field; `None` while the field
+    /// holds plain search text or is empty.
     pub(crate) fn rule_check(&self) -> Option<CheckLine> {
+        let subject = Subject::parse(&self.rules.screen.filter.search).ok()?;
+        let explicit = is_explicit_subject(&subject);
         if !self.rule_check_available() {
+            return explicit.then(|| notice(tr!("rule-check-other-set")));
+        }
+        let request = self.check_request()?;
+        let empty = SessionLists::default();
+        let lists = if matches!(subject, Subject::Site(_) | Subject::Address(_)) {
+            let key = self.check_lists_key(&request);
+            let cache = &self.rules.check;
+            match (&cache.read, &cache.read_for) {
+                _ if key.rules.is_empty() => &empty,
+                (ListsRead::Read(lists), Some(read)) if *read == key => lists,
+                // An unread list leaves its rule unverifiable.
+                (ListsRead::Failed, Some(read)) if *read == key => &empty,
+                _ => return Some(notice(tr!("rule-check-checking"))),
+            }
+        } else {
+            &empty
+        };
+        let answer = check(&request, lists, &subject);
+        if !explicit
+            && !matches!(
+                answer,
+                Answer::Known(Explanation::Routed {
+                    reason: Reason::Rule { .. },
+                    ..
+                }) | Answer::Depends {
+                    on: Unknown::ProgramPath,
+                    ..
+                }
+            )
+        {
             return None;
         }
-        let subject = match Subject::parse(&self.rules.check.input) {
-            Ok(subject) => subject,
-            Err(InputError::Empty) => return None,
-            Err(InputError::Unrecognised) => return Some(notice(tr!("rule-check-invalid"))),
-        };
-        let request = self.check_request()?;
-        let key = self.check_lists_key(&request);
-        let empty = SessionLists::default();
-        let cache = &self.rules.check;
-        let lists = match (&cache.read, &cache.read_for) {
-            _ if key.rules.is_empty() => &empty,
-            (ListsRead::Read(lists), Some(read)) if *read == key => lists,
-            // An unread list leaves its rule unverifiable.
-            (ListsRead::Failed, Some(read)) if *read == key => &empty,
-            _ => return Some(notice(tr!("rule-check-checking"))),
-        };
-        Some(self.check_line(&subject, &check(&request, lists, &subject)))
+        Some(self.check_line(&subject, &answer))
     }
 
     fn check_line(&self, subject: &Subject, answer: &Answer) -> CheckLine {
@@ -162,6 +195,7 @@ impl State {
                 text: tr!("rule-check-unknown", input = input),
                 rule: None,
                 hint: Some(tr!("connections-why-unknown-list")),
+                target: None,
                 answer: false,
             },
             Answer::Depends { on, otherwise } => {
@@ -187,6 +221,7 @@ impl State {
                     text,
                     rule: None,
                     hint: Some(hint),
+                    target: None,
                     answer: false,
                 }
             }
@@ -218,10 +253,17 @@ impl State {
             }
             Why { .. } => (head, None),
         };
+        let target = match route {
+            ExplainedRoute::Proxy => RuleTarget::Proxy,
+            ExplainedRoute::Direct => RuleTarget::Direct,
+            ExplainedRoute::Block => RuleTarget::Block,
+            ExplainedRoute::Exit(_) => RuleTarget::Exit,
+        };
         CheckLine {
             text,
             rule,
             hint: None,
+            target: Some(target),
             answer: true,
         }
     }
@@ -339,6 +381,7 @@ fn notice(text: String) -> CheckLine {
         text,
         rule: None,
         hint: None,
+        target: None,
         answer: false,
     }
 }

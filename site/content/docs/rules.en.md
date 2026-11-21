@@ -15,7 +15,7 @@ group = "Setup"
 
 ## Check an address {#test}
 
-On the Rules tab, type a site, an IP address or a program into **Check an address or program**. One line says where the set in use sends it: the route, and the rule, list or default behind it. Nothing connects and nothing goes over the network. Click the rule's number to find it in the table. The temporary rules of the running connection count.
+On the Rules tab, type a site, an IP address or a program into **Search or check address**. A line below the search bar says where the set in use sends it: the route, and the rule, list or default behind it. Nothing connects and nothing goes over the network. Click the rule's number to find it in the table. The temporary rules of the running connection count.
 
 Some answers are left open, and the line says so and shows what the rules say otherwise. A private address with **Local network** on depends on your network, which only the service knows. A program's name alone cannot meet a rule on a full path, and a site's name cannot meet a rule on an IP address. A list that cannot be read here, such as an uploaded `.srs`, leaves the answer open too.
 

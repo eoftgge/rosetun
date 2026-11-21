@@ -8,9 +8,9 @@ use super::text_field::{field_frame, field_height, field_vertical_margin, style_
 /// Search fields over the rules and connections lists share these widths.
 pub(crate) const SEARCH_WIDTH: f32 = 260.0;
 pub(crate) const MIN_SEARCH_WIDTH: f32 = 120.0;
-/// The field that asks where an address would go: its hint is longer than a
-/// search's, in both languages.
-pub(crate) const CHECK_FIELD_WIDTH: f32 = 340.0;
+/// Cap search inputs so an accidental multi-megabyte clipboard paste cannot
+/// stall text layout while still fitting full domains, URL hosts, and paths.
+const SEARCH_CHAR_LIMIT: usize = 512;
 
 /// The search field's width on the first row of a two-row toolbar, next to
 /// controls `beside` wide.
@@ -73,6 +73,7 @@ fn search_field_inner(
                     .id(id)
                     .frame(field_frame(ui, id, false, margin))
                     .hint_text(hint)
+                    .char_limit(SEARCH_CHAR_LIMIT)
                     .desired_width(width)
                     .min_size(egui::vec2(width, height)),
             )
@@ -94,4 +95,37 @@ fn search_field_inner(
         );
     }
     search
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn search_field_caps_large_paste() {
+        let ctx = egui::Context::default();
+        theme::apply(&ctx);
+        let mut text = String::new();
+        let mut id = None;
+        let pasted = "a".repeat(SEARCH_CHAR_LIMIT * 4);
+        for events in [Vec::new(), vec![egui::Event::Paste(pasted)]] {
+            if let Some(field_id) = id {
+                ctx.memory_mut(|memory| memory.request_focus(field_id));
+            }
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        let response = search_field(ui, &mut text, "Search", SEARCH_WIDTH);
+                        id = Some(response.id);
+                    });
+                },
+            );
+            output.textures_delta.clear();
+        }
+        assert_eq!(text.chars().count(), SEARCH_CHAR_LIMIT);
+    }
 }
