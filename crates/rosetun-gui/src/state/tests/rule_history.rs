@@ -96,6 +96,9 @@ impl Saved {
             Job::GroupRules(set, rules, name, target) => WorkerEvent::GroupRules(
                 rosetun_core::group_rules(store, &set, &rules, &name, &target),
             ),
+            Job::AddRulesToGroup(set, rules, target_group) => WorkerEvent::AddRulesToGroup(
+                rosetun_core::add_rules_to_group(store, &set, &rules, &target_group),
+            ),
             Job::UngroupRule(set, rule) => {
                 WorkerEvent::UngroupRule(rosetun_core::ungroup_rule(store, &set, &rule))
             }
@@ -482,6 +485,58 @@ fn deleting_shows_an_undo_notice_until_it_expires() {
     assert!(matches!(
         state.rule_notice(),
         Some((UndoNotice::SetDeleted, _))
+    ));
+}
+
+#[test]
+fn add_rules_to_group_can_be_undone_and_redone() {
+    let mut state = rules_state();
+    let mut saved = Saved::new(&state);
+
+    // First create a group from rules 0 and 1.
+    select(&mut state, "0");
+    state.act(Action::SelectRule {
+        rule: RuleId::new("1"),
+        additive: true,
+        range: false,
+    });
+    state.act(Action::OpenGroupSelection);
+    state.rules.screen.group_selection.as_mut().unwrap().name = "Bundle".into();
+    saved.act(&mut state, Action::SubmitGroupSelection);
+
+    let group_id = state.config.rule_sets[1].rules[0].id.clone();
+    let third_id = state.config.rule_sets[1].rules[1].id.clone();
+    assert_eq!(state.config.rule_sets[1].rules.len(), 2);
+
+    // Move the remaining rule into the existing group.
+    state.set_frame_time(40_000);
+    saved.act(
+        &mut state,
+        Action::AddRulesToGroup(vec![third_id.clone()], group_id.clone()),
+    );
+    assert!(matches!(
+        state.rule_notice(),
+        Some((UndoNotice::RulesGrouped(1), _))
+    ));
+    assert_eq!(state.config.rule_sets[1].rules.len(), 1);
+    assert!(matches!(
+        &state.config.rule_sets[1].rules[0].matcher,
+        RuleMatcher::Group { name, items } if name == "Bundle" && items.len() == 3
+    ));
+
+    // Undo restores the separate rule and the 2-item group; Redo merges it again.
+    saved.act(&mut state, Action::UndoRules);
+    assert_eq!(state.config.rule_sets[1].rules.len(), 2);
+    assert!(matches!(
+        &state.config.rule_sets[1].rules[0].matcher,
+        RuleMatcher::Group { items, .. } if items.len() == 2
+    ));
+
+    saved.act(&mut state, Action::RedoRules);
+    assert_eq!(state.config.rule_sets[1].rules.len(), 1);
+    assert!(matches!(
+        &state.config.rule_sets[1].rules[0].matcher,
+        RuleMatcher::Group { items, .. } if items.len() == 3
     ));
 }
 

@@ -1048,3 +1048,590 @@ fn the_check_shows_its_answer_and_a_link_that_asks_for_the_rule() {
         });
     }
 }
+
+#[test]
+fn catalog_dialog_places_destination_picker_to_the_left_of_add_button() {
+    for language in [i18n::Language::English, i18n::Language::Russian] {
+        i18n::in_language(language, || {
+            let mut state = State::default();
+            state.config_ready = true;
+            state.config.rule_sets.push(drag_set());
+            state.rules.screen.selected_set = Some(rosetun_config::RuleSetId::new("set"));
+            state.act(Action::OpenTemplatesCatalog);
+
+            let ctx = egui::Context::default();
+            theme::apply(&ctx);
+            let mut texts = Vec::new();
+            for _ in 0..3 {
+                let mut actions = Vec::new();
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(1200.0, 800.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        templates::catalog_dialog(ctx, &mut state, &mut actions);
+                    },
+                );
+                output.textures_delta.clear();
+                texts = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) => Some((
+                            text.galley.text().to_owned(),
+                            egui::Rect::from_min_size(text.pos, text.galley.size()),
+                        )),
+                        _ => None,
+                    })
+                    .collect();
+            }
+
+            let add_label = tr!("template-add");
+            let direct_label = target_label(RuleTarget::Direct);
+            let proxy_label = target_label(RuleTarget::Proxy);
+            let show_label = tr!("templates-show-items");
+            let add_rects: Vec<_> = texts
+                .iter()
+                .filter(|(t, _)| t == &add_label)
+                .map(|(_, r)| *r)
+                .collect();
+            assert!(!add_rects.is_empty(), "{language:?}: expected Add buttons");
+            for add_rect in add_rects {
+                let same_row_target = texts.iter().find(|(t, r)| {
+                    (t == &direct_label || t == &proxy_label)
+                        && (r.center().y - add_rect.center().y).abs() < 6.0
+                });
+                let (_, target_rect) = same_row_target.unwrap_or_else(|| {
+                    panic!("{language:?}: missing destination picker on row of {add_rect:?}")
+                });
+                assert!(
+                    target_rect.right() < add_rect.left(),
+                    "{language:?}: target {target_rect:?} should sit left of Add {add_rect:?}"
+                );
+                let same_row_toggle = texts.iter().find(|(t, r)| {
+                    t == &show_label && (r.center().y - add_rect.center().y).abs() < 6.0
+                });
+                let (_, toggle_rect) = same_row_toggle.unwrap_or_else(|| {
+                    panic!("{language:?}: missing show-items toggle on row of {add_rect:?}")
+                });
+                assert!(
+                    toggle_rect.right() < target_rect.left(),
+                    "{language:?}: toggle {toggle_rect:?} should sit left of target {target_rect:?}"
+                );
+            }
+        });
+    }
+}
+
+#[test]
+fn group_editor_dialog_renders_all_item_kinds_in_both_languages() {
+    for language in [i18n::Language::English, i18n::Language::Russian] {
+        i18n::in_language(language, || {
+            let mut state = State::default();
+            state.config_ready = true;
+            state.config.rule_sets.push(drag_set());
+            state.config.lists.push(rosetun_config::List {
+                id: rosetun_config::ListId::new("geosite"),
+                name: "GeoSite".into(),
+                format: rosetun_config::ListFormat::GeoSite,
+                source: rosetun_config::ListSource::File {
+                    original_name: "geosite.dat".into(),
+                },
+                categories: vec!["youtube".into(), "ru".into()],
+                size: Some(100),
+                updated_at: None,
+                sha256: Some("abc".into()),
+            });
+            state.rules.screen.selected_set = Some(rosetun_config::RuleSetId::new("set"));
+            state.act(Action::OpenNewGroup);
+
+            let ctx = egui::Context::default();
+            theme::apply(&ctx);
+            for kind in [
+                crate::state::GroupItemKind::Address,
+                crate::state::GroupItemKind::Process,
+                crate::state::GroupItemKind::List,
+            ] {
+                state
+                    .rules
+                    .screen
+                    .group_editor
+                    .as_mut()
+                    .unwrap()
+                    .set_item_kind(kind);
+                let mut texts = Vec::new();
+                for _ in 0..3 {
+                    let mut actions = Vec::new();
+                    let mut output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(1200.0, 800.0),
+                            )),
+                            ..Default::default()
+                        },
+                        |ctx| {
+                            dialogs::group_editor_dialog(ctx, &mut state, &mut actions);
+                        },
+                    );
+                    output.textures_delta.clear();
+                    texts = output
+                        .shapes
+                        .iter()
+                        .filter_map(|shape| match &shape.shape {
+                            egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                            _ => None,
+                        })
+                        .collect();
+                }
+                assert!(
+                    texts.contains(&tr!("rule-kind-address")),
+                    "{language:?} {kind:?}: {texts:?}"
+                );
+                assert!(
+                    texts.contains(&tr!("rule-kind-app")),
+                    "{language:?} {kind:?}: {texts:?}"
+                );
+                assert!(
+                    texts.contains(&tr!("rule-kind-list")),
+                    "{language:?} {kind:?}: {texts:?}"
+                );
+                if kind == crate::state::GroupItemKind::Address {
+                    assert!(
+                        texts.contains(&tr!("include-subdomains")),
+                        "{language:?}: expected subdomains checkbox"
+                    );
+                }
+                if kind == crate::state::GroupItemKind::List {
+                    assert!(
+                        texts.iter().any(|t| t == "youtube"),
+                        "{language:?}: expected category suggestion chips"
+                    );
+                }
+            }
+        });
+    }
+}
+
+#[test]
+fn right_clicking_selected_rules_opens_context_menu_with_group_and_delete() {
+    for language in [i18n::Language::English, i18n::Language::Russian] {
+        i18n::in_language(language, || {
+            let set = drag_set();
+            let mut state = State::default();
+            state.config_ready = true;
+            state.config.rule_sets.push(set.clone());
+            state.rules.screen.selected_set = Some(set.id.clone());
+            state.rules.screen.selected_rules = [RuleId::new("0"), RuleId::new("1")].into();
+
+            let mut screen = crate::test_ui::TestScreen::new(egui::vec2(960.0, 480.0));
+            let render = |ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>| {
+                let unresolved = crate::destinations::unresolved_exits(&state.config);
+                let choices = table::rule_target_choices(&state.config);
+                let row_ctx = RowContext {
+                    set: &set,
+                    target_choices: choices,
+                    unresolved: &unresolved,
+                    running: HashMap::new(),
+                };
+                for idx in 0..3 {
+                    ui.push_id(&set.rules[idx].id, |ui| {
+                        rule_row(
+                            ui,
+                            state,
+                            &row_ctx,
+                            &set.rules[idx],
+                            Some(idx),
+                            (ui.available_width() - 350.0).max(0.0),
+                            actions,
+                        );
+                    });
+                }
+            };
+
+            let mut actions = Vec::new();
+            let texts = screen.settle(|ui| render(ui, &state, &mut actions));
+            let (_, row0_rect) = texts.iter().find(|(text, _)| text == "0.example").unwrap();
+            let row0_pos = row0_rect.center();
+
+            // Right-click on a selected row keeps selection and opens multi-selection menu.
+            let right_click =
+                |screen: &mut crate::test_ui::TestScreen, state: &State, pos: egui::Pos2| {
+                    let mut actions = Vec::new();
+                    let btn = |pressed| egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Secondary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    };
+                    screen.run(vec![egui::Event::PointerMoved(pos), btn(true)], |ui| {
+                        render(ui, state, &mut actions);
+                    });
+                    screen.run(vec![btn(false)], |ui| {
+                        render(ui, state, &mut actions);
+                    });
+                    let texts = screen.run(Vec::new(), |ui| {
+                        render(ui, state, &mut actions);
+                    });
+                    (texts, actions)
+                };
+
+            let (menu_texts, menu_actions) = right_click(&mut screen, &state, row0_pos);
+            assert!(
+                menu_actions.is_empty(),
+                "{language:?}: right-clicking an already selected row must not alter selection"
+            );
+            let group_label = tr!("group-selected");
+            let delete_label = crate::i18n::delete_selected_rules(2);
+            assert!(
+                menu_texts.iter().any(|(t, _)| t == &group_label),
+                "{language:?}: expected {group_label:?} in {menu_texts:?}"
+            );
+            assert!(
+                menu_texts.iter().any(|(t, _)| t == &delete_label),
+                "{language:?}: expected {delete_label:?} in {menu_texts:?}"
+            );
+
+            // Clicking "Group" in the context menu emits OpenGroupSelection.
+            let mut actions = Vec::new();
+            screen.click_text(&group_label, |ui| render(ui, &state, &mut actions));
+            assert!(
+                actions
+                    .iter()
+                    .any(|a| matches!(a, Action::OpenGroupSelection)),
+                "{language:?}: expected OpenGroupSelection (got {} actions)",
+                actions.len()
+            );
+
+            // Right-clicking again and clicking "Delete 2 rules" emits DeleteSelectedRules.
+            right_click(&mut screen, &state, row0_pos);
+            let mut actions = Vec::new();
+            screen.click_text(&delete_label, |ui| render(ui, &state, &mut actions));
+            assert!(
+                actions
+                    .iter()
+                    .any(|a| matches!(a, Action::DeleteSelectedRules)),
+                "{language:?}: expected DeleteSelectedRules (got {} actions)",
+                actions.len()
+            );
+
+            // Right-clicking an unselected row selects it cleanly.
+            let (_, row2_rect) = texts.iter().find(|(text, _)| text == "2.example").unwrap();
+            let (_, row2_actions) = right_click(&mut screen, &state, row2_rect.center());
+            assert!(
+                row2_actions.iter().any(|a| matches!(
+                    a,
+                    Action::SelectRule {
+                        rule,
+                        additive: false,
+                        range: false
+                    } if rule == &RuleId::new("2")
+                )),
+                "{language:?}: expected SelectRule for unselected row (got {} actions)",
+                row2_actions.len()
+            );
+        });
+    }
+}
+
+#[test]
+fn context_menu_add_to_group_submenu_emits_add_rules_to_group() {
+    for language in [i18n::Language::English, i18n::Language::Russian] {
+        i18n::in_language(language, || {
+            let group_id = RuleId::new("g0");
+            let mut rules = vec![
+                Rule {
+                    id: RuleId::new("0"),
+                    enabled: true,
+                    matcher: RuleMatcher::Domain(DomainMatch::Suffix("0.example".into())),
+                    target: RuleTarget::Proxy,
+                    exit: None,
+                },
+                Rule {
+                    id: RuleId::new("1"),
+                    enabled: true,
+                    matcher: RuleMatcher::Domain(DomainMatch::Suffix("1.example".into())),
+                    target: RuleTarget::Proxy,
+                    exit: None,
+                },
+                Rule {
+                    id: group_id.clone(),
+                    enabled: true,
+                    matcher: RuleMatcher::Group {
+                        name: "Games".into(),
+                        items: vec![RuleMatcher::Domain(DomainMatch::Suffix(
+                            "steam.example".into(),
+                        ))],
+                    },
+                    target: RuleTarget::Direct,
+                    exit: None,
+                },
+            ];
+            // Add enough groups (> 8) to exercise the ScrollArea submenu path too,
+            // ensuring the very first group ("Games") is never truncated to "...".
+            for extra in 1..=9 {
+                rules.push(Rule {
+                    id: RuleId::new(format!("g{extra}")),
+                    enabled: true,
+                    matcher: RuleMatcher::Group {
+                        name: format!("Group {extra}"),
+                        items: vec![RuleMatcher::Domain(DomainMatch::Suffix(format!(
+                            "group{extra}.example"
+                        )))],
+                    },
+                    target: RuleTarget::Direct,
+                    exit: None,
+                });
+            }
+            let set = RuleSet {
+                id: rosetun_config::RuleSetId::new("set"),
+                name: "Main".into(),
+                default_target: RuleTarget::Direct,
+                rules,
+            };
+            let mut state = State::default();
+            state.config_ready = true;
+            state.config.rule_sets.push(set.clone());
+            state.config.active_rule_set = Some(set.id.clone());
+            state.rules.screen.selected_set = Some(set.id.clone());
+            state.rules.screen.selected_rules.insert(RuleId::new("0"));
+            state.rules.screen.selected_rules.insert(RuleId::new("1"));
+
+            let mut screen = crate::test_ui::TestScreen::new(egui::vec2(960.0, 480.0));
+            let render = |ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>| {
+                let unresolved = crate::destinations::unresolved_exits(&state.config);
+                let choices = table::rule_target_choices(&state.config);
+                let row_ctx = RowContext {
+                    set: &set,
+                    target_choices: choices,
+                    unresolved: &unresolved,
+                    running: HashMap::new(),
+                };
+                for idx in 0..3 {
+                    ui.push_id(&set.rules[idx].id, |ui| {
+                        rule_row(
+                            ui,
+                            state,
+                            &row_ctx,
+                            &set.rules[idx],
+                            Some(idx),
+                            (ui.available_width() - 350.0).max(0.0),
+                            actions,
+                        );
+                    });
+                }
+            };
+
+            let mut actions = Vec::new();
+            let texts = screen.settle(|ui| render(ui, &state, &mut actions));
+            let (_, row0_rect) = texts.iter().find(|(text, _)| text == "0.example").unwrap();
+            let row0_pos = row0_rect.center();
+
+            // Right-click a selected row to open the context menu.
+            let btn = |pressed| egui::Event::PointerButton {
+                pos: row0_pos,
+                button: egui::PointerButton::Secondary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            };
+            screen.run(vec![egui::Event::PointerMoved(row0_pos), btn(true)], |ui| {
+                render(ui, &state, &mut actions);
+            });
+            screen.run(vec![btn(false)], |ui| {
+                render(ui, &state, &mut actions);
+            });
+            let menu_texts = screen.run(Vec::new(), |ui| {
+                render(ui, &state, &mut actions);
+            });
+            let add_to_group = tr!("group-add-to");
+            let (_, submenu_rect) = menu_texts
+                .iter()
+                .find(|(text, _)| text == &add_to_group)
+                .unwrap_or_else(|| {
+                    panic!("{language:?}: expected {add_to_group:?} in {menu_texts:?}")
+                });
+
+            // Hover the "Add to group" submenu trigger to open the target group list.
+            let submenu_pos = submenu_rect.center();
+            screen.run(vec![egui::Event::PointerMoved(submenu_pos)], |ui| {
+                render(ui, &state, &mut actions);
+            });
+            let submenu_texts = screen.run(Vec::new(), |ui| {
+                render(ui, &state, &mut actions);
+            });
+            // Find the first "Games" item painted inside the scrolled submenu (to the right of the trigger).
+            let (_, group_rect) = submenu_texts
+                .iter()
+                .find(|(text, rect)| text == "Games" && rect.left() > submenu_rect.left())
+                .unwrap_or_else(|| {
+                    panic!(
+                        "{language:?}: expected submenu item 'Games' right of {submenu_rect:?} in {submenu_texts:?}"
+                    )
+                });
+
+            // Click the target group inside the submenu.
+            let target_pos = group_rect.center();
+            let primary = |pressed| egui::Event::PointerButton {
+                pos: target_pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            };
+            let mut click_actions = Vec::new();
+            screen.run(
+                vec![egui::Event::PointerMoved(target_pos), primary(true)],
+                |ui| {
+                    render(ui, &state, &mut click_actions);
+                },
+            );
+            screen.run(vec![primary(false)], |ui| {
+                render(ui, &state, &mut click_actions);
+            });
+            assert!(
+                click_actions.iter().any(|action| matches!(
+                    action,
+                    Action::AddRulesToGroup(sources, target)
+                        if sources == &vec![RuleId::new("0"), RuleId::new("1")]
+                            && target == &group_id
+                )),
+                "{language:?}: expected AddRulesToGroup([0, 1], g0), got {} actions",
+                click_actions.len()
+            );
+        });
+    }
+}
+
+#[test]
+fn group_editor_dialog_reorders_items_and_renders_reorder_controls() {
+    for language in [i18n::Language::English, i18n::Language::Russian] {
+        i18n::in_language(language, || {
+            let mut state = State::default();
+            state.config_ready = true;
+            let set_id = rosetun_config::RuleSetId::new("set");
+            state.config.rule_sets.push(RuleSet {
+                id: set_id.clone(),
+                name: "Main".into(),
+                default_target: RuleTarget::Direct,
+                rules: Vec::new(),
+            });
+            state.rules.screen.selected_set = Some(set_id);
+            state.act(Action::OpenNewGroup);
+            let dialog = state.rules.screen.group_editor.as_mut().unwrap();
+            dialog.name = "Bundle".into();
+            dialog.items = vec![
+                RuleMatcher::Domain(DomainMatch::Suffix("first.example".into())),
+                RuleMatcher::Domain(DomainMatch::Suffix("second.example".into())),
+                RuleMatcher::Domain(DomainMatch::Suffix("third.example".into())),
+            ];
+
+            let mut screen = crate::test_ui::TestScreen::new(egui::vec2(760.0, 680.0));
+            let mut actions = Vec::new();
+            let texts = screen.settle(|ui| {
+                dialogs::group_editor_dialog(ui.ctx(), &mut state, &mut actions);
+            });
+            let first_y = texts
+                .iter()
+                .find(|(text, _)| text == "first.example")
+                .unwrap()
+                .1
+                .center()
+                .y;
+            let second_y = texts
+                .iter()
+                .find(|(text, _)| text == "second.example")
+                .unwrap()
+                .1
+                .center()
+                .y;
+            let third_y = texts
+                .iter()
+                .find(|(text, _)| text == "third.example")
+                .unwrap()
+                .1
+                .center()
+                .y;
+            assert!(first_y < second_y && second_y < third_y);
+
+            // Confirm the 6-dot grip handle on the first row is vertically centered with its text.
+            let ctx = egui::Context::default();
+            theme::apply(&ctx);
+            let mut grip_ys = Vec::new();
+            let mut label_y = None;
+            for _ in 0..3 {
+                let mut frame_actions = Vec::new();
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(760.0, 680.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        dialogs::group_editor_dialog(ctx, &mut state, &mut frame_actions);
+                    },
+                );
+                output.textures_delta.clear();
+                grip_ys.clear();
+                label_y = None;
+                for clipped in &output.shapes {
+                    match &clipped.shape {
+                        egui::Shape::Text(text) if text.galley.text() == "first.example" => {
+                            let rect = text.galley.rect.translate(text.pos.to_vec2());
+                            label_y = Some(rect.center().y);
+                        }
+                        egui::Shape::Circle(circle) if (circle.radius - 1.0).abs() < 0.05 => {
+                            grip_ys.push(circle.center.y);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            let label_y = label_y.expect("first.example label");
+            let first_row_dots: Vec<f32> = grip_ys
+                .into_iter()
+                .filter(|y| (*y - label_y).abs() < 12.0)
+                .collect();
+            assert_eq!(first_row_dots.len(), 6, "expected 6 grip dots on first row");
+            let grip_center_y = first_row_dots.iter().sum::<f32>() / first_row_dots.len() as f32;
+            assert!(
+                (grip_center_y - label_y).abs() <= 1.0,
+                "{language:?}: grip center {grip_center_y} must align with row label center {label_y}"
+            );
+
+            // Reorder via state method and confirm painted vertical order follows.
+            state
+                .rules
+                .screen
+                .group_editor
+                .as_mut()
+                .unwrap()
+                .move_item(2, 0);
+            let texts_after = screen.settle(|ui| {
+                dialogs::group_editor_dialog(ui.ctx(), &mut state, &mut actions);
+            });
+            let first_y = texts_after
+                .iter()
+                .find(|(text, _)| text == "first.example")
+                .unwrap()
+                .1
+                .center()
+                .y;
+            let third_y = texts_after
+                .iter()
+                .find(|(text, _)| text == "third.example")
+                .unwrap()
+                .1
+                .center()
+                .y;
+            assert!(
+                third_y < first_y,
+                "{language:?}: expected third.example above first.example after reorder"
+            );
+        });
+    }
+}

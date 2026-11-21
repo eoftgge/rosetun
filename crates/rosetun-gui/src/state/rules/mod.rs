@@ -22,7 +22,9 @@ pub(crate) use check::{AddressCheck, CheckLine};
 #[cfg(test)]
 pub(crate) use dialog::PROCESS_LIST_STALE_MS;
 pub(crate) use dialog::{AddRuleDialog, ChosenProgram, MAX_PROGRAMS, RuleInputKind};
-pub(crate) use group::{GroupEditorDialog, GroupSelectionDialog, TemplatesCatalogDialog};
+pub(crate) use group::{
+    GroupEditorDialog, GroupItemKind, GroupSelectionDialog, TemplatesCatalogDialog,
+};
 use history::RuleHistory;
 pub(crate) use history::UndoNotice;
 #[cfg(test)]
@@ -60,6 +62,8 @@ pub(crate) struct RuleScreen {
     select_after_delete: Option<RuleId>,
     /// The selection moved by a key; the table scrolls it into view once.
     pub(crate) reveal_selection: bool,
+    /// Rule briefly highlighted in the table after creating or adding to a group.
+    pub(crate) highlight_rule: Option<(RuleId, u64)>,
     opened: bool,
 }
 
@@ -97,7 +101,7 @@ impl State {
             .unwrap_or_default()
     }
 
-    fn selected_rule_ids(&self) -> Vec<RuleId> {
+    pub(crate) fn selected_rule_ids(&self) -> Vec<RuleId> {
         self.visible_rule_ids()
             .into_iter()
             .filter(|id| self.rules.screen.selected_rules.contains(id))
@@ -423,6 +427,7 @@ impl State {
                 self.finish_rule_edit(result);
             }
             WorkerEvent::GroupRules(result) => self.finish_group_selection(result),
+            WorkerEvent::AddRulesToGroup(result) => self.finish_add_rules_to_group(result),
             WorkerEvent::UngroupRule(result) => {
                 if result.is_ok() {
                     self.rules.screen.clear_selection();
@@ -599,6 +604,7 @@ impl State {
             | Action::OpenGroupSelection
             | Action::CancelGroupSelection
             | Action::SubmitGroupSelection
+            | Action::AddRulesToGroup(_, _)
             | Action::UngroupRule(_)
             | Action::RemoveGroupItem(_, _)
             | Action::OpenNewGroup

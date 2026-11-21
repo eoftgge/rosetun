@@ -108,7 +108,7 @@ fn step_outcome(event: &WorkerEvent) -> Option<StepOutcome> {
         WorkerEvent::ImportRules(result) => result.is_ok(),
         WorkerEvent::AddRule(result) => result.is_ok(),
         WorkerEvent::AddRules(result) => result.is_ok(),
-        WorkerEvent::GroupRules(result) => result.is_ok(),
+        WorkerEvent::GroupRules(result) | WorkerEvent::AddRulesToGroup(result) => result.is_ok(),
         WorkerEvent::UngroupRule(result) => result.is_ok(),
         WorkerEvent::RenameRuleSet(result)
         | WorkerEvent::DeleteRuleSet(result)
@@ -164,7 +164,7 @@ impl State {
             Job::MoveRules(id, rules, _) => {
                 (Some(id), false, Some(UndoNotice::RulesMoved(rules.len())))
             }
-            Job::GroupRules(id, rules, _, _) => {
+            Job::GroupRules(id, rules, _, _) | Job::AddRulesToGroup(id, rules, _) => {
                 (Some(id), false, Some(UndoNotice::RulesGrouped(rules.len())))
             }
             Job::UngroupRule(id, rule) => {

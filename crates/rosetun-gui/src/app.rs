@@ -556,6 +556,9 @@ impl App {
             Job::GroupRules(set, rules, name, target) => {
                 self.workers.group_rules(set, rules, name, target);
             }
+            Job::AddRulesToGroup(set, rules, target_group) => {
+                self.workers.add_rules_to_group(set, rules, target_group);
+            }
             Job::UngroupRule(set, rule) => self.workers.ungroup_rule(set, rule),
             Job::RemoveGroupItem(set, rule, index) => {
                 self.workers.remove_group_item(set, rule, index);

@@ -1401,3 +1401,93 @@ fn invalid_groups_are_rejected_without_writing() {
         );
     }
 }
+
+#[test]
+fn add_rules_to_group_merges_deduplicates_and_preserves_target_group() {
+    let directory = TestDirectory::new();
+    let store = Store::at(directory.config_path());
+    let set = create_rule_set(&store, "Set", RuleTarget::Proxy).unwrap();
+
+    let first = add_rule(
+        &store,
+        &set.id,
+        domain("keep.example"),
+        &RuleDestination::Proxy,
+    )
+    .unwrap();
+    let target = add_rule(
+        &store,
+        &set.id,
+        RuleMatcher::Group {
+            name: "Games".into(),
+            items: vec![domain("steam.example")],
+        },
+        &RuleDestination::Direct,
+    )
+    .unwrap();
+    set_rule_enabled(&store, &set.id, &target.id, false).unwrap();
+
+    let single = add_rule(
+        &store,
+        &set.id,
+        domain("valorant.example"),
+        &RuleDestination::Proxy,
+    )
+    .unwrap();
+    let other_group = add_rule(
+        &store,
+        &set.id,
+        RuleMatcher::Group {
+            name: "Extra".into(),
+            items: vec![domain("steam.example"), domain("epic.example")],
+        },
+        &RuleDestination::Block,
+    )
+    .unwrap();
+
+    // Including target itself in the selection is tolerated and ignored; other
+    // selected rules and groups are flattened, deduplicated, and removed.
+    let updated = add_rules_to_group(
+        &store,
+        &set.id,
+        &[target.id.clone(), single.id.clone(), other_group.id.clone()],
+        &target.id,
+    )
+    .unwrap();
+    assert_eq!(updated.id, target.id);
+    assert!(!updated.enabled);
+    assert_eq!(updated.target, RuleTarget::Direct);
+    assert_eq!(
+        updated.matcher,
+        RuleMatcher::Group {
+            name: "Games".into(),
+            items: vec![
+                domain("steam.example"),
+                domain("epic.example"),
+                domain("valorant.example"),
+            ],
+        }
+    );
+
+    let loaded = store.load().unwrap();
+    assert_eq!(loaded.rule_sets[0].rules.len(), 2);
+    assert_eq!(loaded.rule_sets[0].rules[0].id, target.id);
+    assert_eq!(loaded.rule_sets[0].rules[1].id, first.id);
+
+    // Reject self-only, non-group target, and unknown rule IDs without writing.
+    assert_no_write!(
+        store,
+        add_rules_to_group(&store, &set.id, &[target.id.clone()], &target.id),
+        RuleSetError::InvalidGroup
+    );
+    assert_no_write!(
+        store,
+        add_rules_to_group(&store, &set.id, &[target.id.clone()], &first.id),
+        RuleSetError::InvalidGroup
+    );
+    assert_no_write!(
+        store,
+        add_rules_to_group(&store, &set.id, &[RuleId::new("missing")], &target.id),
+        RuleSetError::RuleNotFound
+    );
+}

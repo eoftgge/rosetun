@@ -569,195 +569,19 @@ pub(super) fn rule_row(
                     }
                 });
                 ui.add_space(MENU_GAP);
+                let can_open_menu = if temporary {
+                    state.can_change_temporary() && !state.operations.rules_edit
+                } else {
+                    state.can_edit_rules()
+                };
                 table_cell(ui, MENU_WIDTH, theme::RULE_ROW, |ui| {
-                    let can_open = if temporary {
-                        state.can_change_temporary() && !state.operations.rules_edit
-                    } else {
-                        state.can_edit_rules()
-                    };
-                    let menu = icons::icon_button_sized(ui, Icon::More, can_open, MENU_WIDTH)
+                    let menu = icons::icon_button_sized(ui, Icon::More, can_open_menu, MENU_WIDTH)
                         .on_hover_text(tr!("more-actions"));
-                    if can_open {
-                        let multi = selected && state.rules.screen.selected_rules.len() >= 2;
+                    if can_open_menu {
                         widgets::menu_popup(&menu).show(|ui| {
-                            let delete_group = crate::i18n::delete_selected_rules(
-                                state.rules.screen.selected_rules.len(),
+                            rule_row_menu(
+                                ui, state, set, rule, index, temporary, selected, actions,
                             );
-                            let labels = if multi {
-                                vec![
-                                    tr!("edit"),
-                                    tr!("group-selected"),
-                                    tr!("move-selected-to-top"),
-                                    tr!("move-to-end"),
-                                    delete_group,
-                                ]
-                            } else {
-                                vec![
-                                    tr!("keep-permanently"),
-                                    tr!("edit"),
-                                    tr!("group-ungroup"),
-                                    tr!("move-to-top"),
-                                    tr!("delete"),
-                                ]
-                            };
-                            widgets::menu_content_width(
-                                ui,
-                                &labels.iter().map(String::as_str).collect::<Vec<_>>(),
-                                widgets::MenuWidth::Compact.points(),
-                            );
-                            if multi {
-                                widgets::menu_item(
-                                    ui,
-                                    widgets::MenuItem {
-                                        label: &tr!("edit"),
-                                        enabled: false,
-                                        selected: false,
-                                        danger: false,
-                                        note: None,
-                                    },
-                                );
-                                if widgets::menu_item(
-                                    ui,
-                                    widgets::MenuItem {
-                                        label: &tr!("group-selected"),
-                                        enabled: true,
-                                        selected: false,
-                                        danger: false,
-                                        note: None,
-                                    },
-                                )
-                                .clicked()
-                                {
-                                    actions.push(Action::OpenGroupSelection);
-                                    ui.close();
-                                }
-                                for (label, action) in [
-                                    (tr!("move-selected-to-top"), Action::MoveSelectedRulesToTop),
-                                    (tr!("move-to-end"), Action::MoveSelectedRulesToEnd),
-                                ] {
-                                    let item = widgets::menu_item(
-                                        ui,
-                                        widgets::MenuItem {
-                                            label: &label,
-                                            enabled: !state.rules.screen.filter.is_active(),
-                                            selected: false,
-                                            danger: false,
-                                            note: None,
-                                        },
-                                    );
-                                    let item = if state.rules.screen.filter.is_active() {
-                                        item.on_hover_text(tr!("reorder-disabled"))
-                                    } else {
-                                        item
-                                    };
-                                    if item.clicked() {
-                                        actions.push(action);
-                                        ui.close();
-                                    }
-                                }
-                                if widgets::menu_item(
-                                    ui,
-                                    widgets::MenuItem {
-                                        label: &crate::i18n::delete_selected_rules(
-                                            state.rules.screen.selected_rules.len(),
-                                        ),
-                                        enabled: true,
-                                        selected: false,
-                                        danger: true,
-                                        note: None,
-                                    },
-                                )
-                                .clicked()
-                                {
-                                    actions.push(Action::DeleteSelectedRules);
-                                    ui.close();
-                                }
-                            } else {
-                                if temporary {
-                                    if widgets::menu_item(
-                                        ui,
-                                        widgets::MenuItem {
-                                            label: &tr!("keep-permanently"),
-                                            enabled: state.can_edit_rules(),
-                                            selected: false,
-                                            danger: false,
-                                            note: None,
-                                        },
-                                    )
-                                    .clicked()
-                                    {
-                                        actions.push(Action::KeepTemporary(rule.id.clone()));
-                                        ui.close();
-                                    }
-                                } else {
-                                    if crate::rules::editable(&rule.matcher)
-                                        && widgets::menu_item(
-                                            ui,
-                                            widgets::MenuItem {
-                                                label: &tr!("edit"),
-                                                enabled: true,
-                                                selected: false,
-                                                danger: false,
-                                                note: None,
-                                            },
-                                        )
-                                        .clicked()
-                                    {
-                                        actions.push(Action::OpenEditRule(rule.id.clone()));
-                                        ui.close();
-                                    }
-                                    if is_group
-                                        && widgets::menu_item(
-                                            ui,
-                                            widgets::MenuItem {
-                                                label: &tr!("group-ungroup"),
-                                                enabled: true,
-                                                selected: false,
-                                                danger: false,
-                                                note: None,
-                                            },
-                                        )
-                                        .clicked()
-                                    {
-                                        actions.push(Action::UngroupRule(rule.id.clone()));
-                                        ui.close();
-                                    }
-                                    if widgets::menu_item(
-                                        ui,
-                                        widgets::MenuItem {
-                                            label: &tr!("move-to-top"),
-                                            enabled: index.is_some_and(|index| index > 0),
-                                            selected: false,
-                                            danger: false,
-                                            note: None,
-                                        },
-                                    )
-                                    .clicked()
-                                    {
-                                        actions.push(Action::MoveRuleToTop(rule.id.clone()));
-                                        ui.close();
-                                    }
-                                }
-                                if widgets::menu_item(
-                                    ui,
-                                    widgets::MenuItem {
-                                        label: &tr!("delete"),
-                                        enabled: true,
-                                        selected: false,
-                                        danger: true,
-                                        note: None,
-                                    },
-                                )
-                                .clicked()
-                                {
-                                    actions.push(if temporary {
-                                        Action::RemoveTemporary(rule.id.clone())
-                                    } else {
-                                        Action::DeleteRule(rule.id.clone())
-                                    });
-                                    ui.close();
-                                }
-                            }
                         });
                     }
                 });
@@ -785,31 +609,61 @@ pub(super) fn rule_row(
             theme::palette().accent_base,
         );
     }
+    if !temporary
+        && !state.config.interface.reduce_motion
+        && let Some((highlighted, generation)) = &state.rules.screen.highlight_rule
+        && highlighted == &rule.id
+    {
+        let pulse_id = ui.scope_id().with(("rule_highlight_pulse", *generation));
+        let now = ui.ctx().input(|input| input.time);
+        let started = ui
+            .ctx()
+            .data_mut(|data| *data.get_temp_mut_or_insert_with(pulse_id, || now));
+        let duration = f64::from(crate::motion::NORMAL) * 2.0;
+        let t = ((now - started) / duration) as f32;
+        if t < 1.0 {
+            let strength = 1.0 - crate::motion::ease_out(t);
+            let accent = theme::palette().accent_base;
+            ui.painter().rect(
+                response.rect,
+                egui::CornerRadius::same(theme::RADIUS),
+                accent.gamma_multiply(theme::alpha::TINT * strength),
+                Stroke::new(theme::stroke::HAIRLINE, accent.gamma_multiply(strength)),
+                egui::StrokeKind::Inside,
+            );
+            ui.ctx().request_repaint();
+        }
+    }
+    let can_open_menu = if temporary {
+        state.can_change_temporary() && !state.operations.rules_edit
+    } else {
+        state.can_edit_rules()
+    };
+    let left = response.rect.left() + ROW_INSET + HANDLE_WIDTH + HANDLE_GAP;
+    let expand_space = if is_group {
+        EXPAND_WIDTH + EXPAND_GAP
+    } else {
+        0.0
+    };
+    let right = response.rect.right()
+        - ROW_INSET
+        - MENU_WIDTH
+        - MENU_GAP
+        - TOGGLE_WIDTH
+        - TARGET_GAP
+        - TARGET_WIDTH
+        - expand_space;
+    let top_bottom = (response.rect.top() + theme::RULE_ROW).min(response.rect.bottom());
+    let body = egui::Rect::from_min_max(
+        egui::pos2(left, response.rect.top()),
+        egui::pos2(right.max(left), top_bottom),
+    );
+    let click = ui.interact(
+        body,
+        ui.scope_id().with("select_rule"),
+        egui::Sense::click(),
+    );
     if !temporary {
-        let left = response.rect.left() + ROW_INSET + HANDLE_WIDTH + HANDLE_GAP;
-        let expand_space = if is_group {
-            EXPAND_WIDTH + EXPAND_GAP
-        } else {
-            0.0
-        };
-        let right = response.rect.right()
-            - ROW_INSET
-            - MENU_WIDTH
-            - MENU_GAP
-            - TOGGLE_WIDTH
-            - TARGET_GAP
-            - TARGET_WIDTH
-            - expand_space;
-        let top_bottom = (response.rect.top() + theme::RULE_ROW).min(response.rect.bottom());
-        let body = egui::Rect::from_min_max(
-            egui::pos2(left, response.rect.top()),
-            egui::pos2(right.max(left), top_bottom),
-        );
-        let click = ui.interact(
-            body,
-            ui.scope_id().with("select_rule"),
-            egui::Sense::click(),
-        );
         if is_group && click.double_clicked() {
             actions.push(Action::ToggleGroupExpanded(rule.id.clone()));
         } else if click.clicked() {
@@ -819,7 +673,18 @@ pub(super) fn rule_row(
                 additive: modifiers.command,
                 range: modifiers.shift,
             });
+        } else if click.secondary_clicked() && !selected {
+            actions.push(Action::SelectRule {
+                rule: rule.id.clone(),
+                additive: false,
+                range: false,
+            });
         }
+    }
+    if can_open_menu {
+        widgets::context_menu_popup(&click).show(|ui| {
+            rule_row_menu(ui, state, set, rule, index, temporary, selected, actions);
+        });
     }
 
     if reorder
@@ -849,6 +714,286 @@ pub(super) fn rule_row(
             }
         }
     }
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "context menu mirrors the rule row inputs without allocating an intermediate struct"
+)]
+fn rule_row_menu(
+    ui: &mut egui::Ui,
+    state: &State,
+    set: &RuleSet,
+    rule: &Rule,
+    index: Option<usize>,
+    temporary: bool,
+    selected: bool,
+    actions: &mut Vec<Action>,
+) {
+    let is_group = matches!(rule.matcher, RuleMatcher::Group { .. });
+    let multi = selected && state.rules.screen.selected_rules.len() >= 2;
+    let source_ids = if multi {
+        state.selected_rule_ids()
+    } else {
+        vec![rule.id.clone()]
+    };
+    let target_groups: Vec<(&RuleId, String)> = if temporary {
+        Vec::new()
+    } else {
+        set.rules
+            .iter()
+            .filter_map(|entry| {
+                let RuleMatcher::Group { name, .. } = &entry.matcher else {
+                    return None;
+                };
+                source_ids
+                    .iter()
+                    .any(|id| id != &entry.id)
+                    .then(|| (&entry.id, crate::display::safe_text(name)))
+            })
+            .collect()
+    };
+    let has_target_groups = !target_groups.is_empty();
+    let delete_group = crate::i18n::delete_selected_rules(state.rules.screen.selected_rules.len());
+    let add_to_group_label = tr!("group-add-to");
+    let mut labels = if multi {
+        vec![
+            tr!("group-selected"),
+            tr!("move-selected-to-top"),
+            tr!("move-to-end"),
+            delete_group.clone(),
+        ]
+    } else {
+        vec![
+            tr!("keep-permanently"),
+            tr!("edit"),
+            tr!("group-ungroup"),
+            tr!("move-to-top"),
+            tr!("delete"),
+        ]
+    };
+    if has_target_groups {
+        labels.push(add_to_group_label.clone());
+    }
+    let label_refs: Vec<&str> = labels.iter().map(String::as_str).collect();
+    if has_target_groups {
+        widgets::menu_choice_width(ui, &label_refs, widgets::MenuWidth::Compact.points());
+    } else {
+        widgets::menu_content_width(ui, &label_refs, widgets::MenuWidth::Compact.points());
+    }
+    if multi {
+        if widgets::menu_item(
+            ui,
+            widgets::MenuItem {
+                label: &tr!("group-selected"),
+                enabled: true,
+                selected: false,
+                danger: false,
+                note: None,
+            },
+        )
+        .clicked()
+        {
+            actions.push(Action::OpenGroupSelection);
+            ui.close();
+        }
+        if has_target_groups {
+            add_to_group_submenu(
+                ui,
+                &add_to_group_label,
+                &target_groups,
+                &source_ids,
+                actions,
+            );
+        }
+        for (label, action) in [
+            (tr!("move-selected-to-top"), Action::MoveSelectedRulesToTop),
+            (tr!("move-to-end"), Action::MoveSelectedRulesToEnd),
+        ] {
+            let item = widgets::menu_item(
+                ui,
+                widgets::MenuItem {
+                    label: &label,
+                    enabled: !state.rules.screen.filter.is_active(),
+                    selected: false,
+                    danger: false,
+                    note: None,
+                },
+            );
+            let item = if state.rules.screen.filter.is_active() {
+                item.on_hover_text(tr!("reorder-disabled"))
+            } else {
+                item
+            };
+            if item.clicked() {
+                actions.push(action);
+                ui.close();
+            }
+        }
+        if widgets::menu_item(
+            ui,
+            widgets::MenuItem {
+                label: &delete_group,
+                enabled: true,
+                selected: false,
+                danger: true,
+                note: None,
+            },
+        )
+        .clicked()
+        {
+            actions.push(Action::DeleteSelectedRules);
+            ui.close();
+        }
+    } else {
+        if temporary {
+            if widgets::menu_item(
+                ui,
+                widgets::MenuItem {
+                    label: &tr!("keep-permanently"),
+                    enabled: state.can_edit_rules(),
+                    selected: false,
+                    danger: false,
+                    note: None,
+                },
+            )
+            .clicked()
+            {
+                actions.push(Action::KeepTemporary(rule.id.clone()));
+                ui.close();
+            }
+        } else {
+            if crate::rules::editable(&rule.matcher)
+                && widgets::menu_item(
+                    ui,
+                    widgets::MenuItem {
+                        label: &tr!("edit"),
+                        enabled: true,
+                        selected: false,
+                        danger: false,
+                        note: None,
+                    },
+                )
+                .clicked()
+            {
+                actions.push(Action::OpenEditRule(rule.id.clone()));
+                ui.close();
+            }
+            if has_target_groups {
+                add_to_group_submenu(
+                    ui,
+                    &add_to_group_label,
+                    &target_groups,
+                    &source_ids,
+                    actions,
+                );
+            }
+            if is_group
+                && widgets::menu_item(
+                    ui,
+                    widgets::MenuItem {
+                        label: &tr!("group-ungroup"),
+                        enabled: true,
+                        selected: false,
+                        danger: false,
+                        note: None,
+                    },
+                )
+                .clicked()
+            {
+                actions.push(Action::UngroupRule(rule.id.clone()));
+                ui.close();
+            }
+            if widgets::menu_item(
+                ui,
+                widgets::MenuItem {
+                    label: &tr!("move-to-top"),
+                    enabled: index.is_some_and(|index| index > 0),
+                    selected: false,
+                    danger: false,
+                    note: None,
+                },
+            )
+            .clicked()
+            {
+                actions.push(Action::MoveRuleToTop(rule.id.clone()));
+                ui.close();
+            }
+        }
+        if widgets::menu_item(
+            ui,
+            widgets::MenuItem {
+                label: &tr!("delete"),
+                enabled: true,
+                selected: false,
+                danger: true,
+                note: None,
+            },
+        )
+        .clicked()
+        {
+            actions.push(if temporary {
+                Action::RemoveTemporary(rule.id.clone())
+            } else {
+                Action::DeleteRule(rule.id.clone())
+            });
+            ui.close();
+        }
+    }
+}
+
+fn add_to_group_submenu(
+    ui: &mut egui::Ui,
+    label: &str,
+    target_groups: &[(&RuleId, String)],
+    source_ids: &[RuleId],
+    actions: &mut Vec<Action>,
+) {
+    widgets::menu_submenu(ui, label, |ui| {
+        let names: Vec<&str> = target_groups
+            .iter()
+            .map(|(_, name)| name.as_str())
+            .collect();
+        widgets::menu_content_width(ui, &names, widgets::MenuWidth::Compact.points());
+        let width = ui.min_rect().width().min(280.0);
+        ui.set_width(width);
+        let mut picked = false;
+        let mut draw_items = |ui: &mut egui::Ui| {
+            ui.set_width(ui.available_width().min(width));
+            for (group_id, group_name) in target_groups {
+                if widgets::menu_item(
+                    ui,
+                    widgets::MenuItem {
+                        label: group_name,
+                        enabled: true,
+                        selected: false,
+                        danger: false,
+                        note: None,
+                    },
+                )
+                .clicked()
+                {
+                    actions.push(Action::AddRulesToGroup(
+                        source_ids.to_vec(),
+                        (*group_id).clone(),
+                    ));
+                    picked = true;
+                }
+            }
+        };
+        if target_groups.len() > 8 {
+            egui::ScrollArea::vertical()
+                .id_salt("add_to_group_submenu")
+                .max_height(260.0)
+                .auto_shrink([false, true])
+                .show(ui, draw_items);
+        } else {
+            draw_items(ui);
+        }
+        if picked {
+            ui.close();
+        }
+    });
 }
 
 fn group_drawer(

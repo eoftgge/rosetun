@@ -53,8 +53,8 @@ pub(crate) use rules::NameDialog;
 pub(crate) use rules::PROCESS_LIST_STALE_MS;
 use rules::RulesState;
 pub(crate) use rules::{
-    AddRuleDialog, AddressError, CheckLine, ChosenProgram, MAX_ADDRESSES, MAX_PROGRAMS,
-    NameDialogKind, RecentSite, RuleInputKind, UndoNotice,
+    AddRuleDialog, AddressError, CheckLine, ChosenProgram, GroupItemKind, MAX_ADDRESSES,
+    MAX_PROGRAMS, NameDialogKind, RecentSite, RuleInputKind, UndoNotice,
 };
 use session::SessionState;
 pub(crate) use session::{RequestInputs, SessionPart};
@@ -427,6 +427,7 @@ pub(crate) enum Action {
     OpenGroupSelection,
     CancelGroupSelection,
     SubmitGroupSelection,
+    AddRulesToGroup(Vec<RuleId>, RuleId),
     UngroupRule(RuleId),
     RemoveGroupItem(RuleId, usize),
     OpenNewGroup,
@@ -603,6 +604,7 @@ pub(crate) enum Job {
     RemoveRule(RuleSetId, RuleId),
     RemoveRules(RuleSetId, Vec<RuleId>),
     GroupRules(RuleSetId, Vec<RuleId>, String, RuleDestination),
+    AddRulesToGroup(RuleSetId, Vec<RuleId>, RuleId),
     UngroupRule(RuleSetId, RuleId),
     RemoveGroupItem(RuleSetId, RuleId, usize),
     RestoreRuleSets(RuleSetsSnapshot),
@@ -783,6 +785,7 @@ impl State {
             | WorkerEvent::RemoveRule(_)
             | WorkerEvent::RemoveRules(_)
             | WorkerEvent::GroupRules(_)
+            | WorkerEvent::AddRulesToGroup(_)
             | WorkerEvent::UngroupRule(_)
             | WorkerEvent::RemoveGroupItem(_)
             | WorkerEvent::RestoreRuleSets(_)) => self.reduce_rules(event),
@@ -1011,6 +1014,7 @@ impl State {
             | Action::OpenGroupSelection
             | Action::CancelGroupSelection
             | Action::SubmitGroupSelection
+            | Action::AddRulesToGroup(_, _)
             | Action::UngroupRule(_)
             | Action::RemoveGroupItem(_, _)
             | Action::OpenNewGroup

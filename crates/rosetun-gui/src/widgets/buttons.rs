@@ -172,7 +172,8 @@ pub(crate) fn outline_button_menu(
     shown.response
 }
 
-pub(crate) fn button_fill_compact(ui: &mut egui::Ui, text: &str, enabled: bool) -> egui::Response {
+#[cfg(test)]
+fn button_fill_compact(ui: &mut egui::Ui, text: &str, enabled: bool) -> egui::Response {
     compact_button(ui, text, enabled, false, false)
 }
 

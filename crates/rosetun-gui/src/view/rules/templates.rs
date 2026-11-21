@@ -181,7 +181,7 @@ pub(super) fn starter_card(
                             let button = if added {
                                 widgets::outline_button_compact(ui, &tr!("template-added"), false)
                             } else {
-                                widgets::button_fill_compact(
+                                widgets::outline_button_compact(
                                     ui,
                                     &tr!("template-add"),
                                     state.can_edit_rules(),
@@ -204,6 +204,63 @@ pub(super) fn starter_card(
             }
         },
     );
+}
+
+fn hairline(ui: &mut egui::Ui) {
+    let (rect, _) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 1.0), egui::Sense::hover());
+    ui.painter().hline(
+        rect.x_range(),
+        rect.center().y,
+        Stroke::new(theme::stroke::HAIRLINE, theme::palette().border),
+    );
+}
+
+fn items_toggle(ui: &mut egui::Ui, expanded: bool, progress: f32) -> egui::Response {
+    let label = if expanded {
+        tr!("templates-hide-items")
+    } else {
+        tr!("templates-show-items")
+    };
+    let font = egui::TextStyle::Small.resolve(ui.style());
+    let galley = ui
+        .painter()
+        .layout_no_wrap(label.clone(), font, theme::palette().text_muted);
+    let chevron_slot = 14.0;
+    let gap = theme::space::XS;
+    let size = egui::vec2(
+        chevron_slot + gap + galley.size().x,
+        galley.size().y.max(24.0),
+    );
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    if ui.is_rect_visible(rect) {
+        let color = if response.hovered() || response.has_focus() {
+            theme::palette().text
+        } else {
+            theme::palette().text_muted
+        };
+        icons::paint(
+            ui.painter(),
+            egui::pos2(rect.left() + chevron_slot / 2.0, rect.center().y),
+            Icon::Chevron { open: progress },
+            color,
+        );
+        let text_galley = ui.painter().layout_no_wrap(
+            label.clone(),
+            egui::TextStyle::Small.resolve(ui.style()),
+            color,
+        );
+        ui.painter().galley(
+            egui::pos2(
+                rect.left() + chevron_slot + gap,
+                rect.center().y - text_galley.size().y / 2.0,
+            ),
+            text_galley,
+            color,
+        );
+    }
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
+    response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
 /// Modal catalog with all built-in presets, per-preset destination picker, and expandable items.
@@ -259,7 +316,7 @@ pub(crate) fn catalog_dialog(ctx: &egui::Context, state: &mut State, actions: &m
                 )
                 .wrap(),
             );
-            ui.add_space(theme::space::L);
+            ui.add_space(theme::space::M);
 
             let Some(catalog) = state.rules.screen.templates_catalog.as_mut() else {
                 return;
@@ -268,11 +325,14 @@ pub(crate) fn catalog_dialog(ctx: &egui::Context, state: &mut State, actions: &m
                 egui::TextStyle::Body.resolve(ui.style()).size,
                 egui::FontFamily::Name(theme::UI_SEMIBOLD.into()),
             );
+            let scroll_height = (ui.ctx().content_rect().height() - 240.0).clamp(240.0, 440.0);
+            hairline(ui);
             egui::ScrollArea::vertical()
                 .id_salt("templates_catalog_scroll")
-                .max_height(440.0)
+                .max_height(scroll_height)
                 .auto_shrink([false, true])
                 .show(ui, |ui| {
+                    ui.add_space(theme::space::S);
                     ui.spacing_mut().item_spacing.y = theme::space::S;
                     for (template, added) in added_flags {
                         ui.push_id(template.key(), |ui| {
@@ -301,95 +361,89 @@ pub(crate) fn catalog_dialog(ctx: &egui::Context, state: &mut State, actions: &m
                                 ));
                             frame.show(ui, |ui| {
                                 ui.set_min_width(ui.available_width());
-                                egui::Sides::new().shrink_left().show(
-                                    ui,
-                                    |ui| {
-                                        ui.horizontal(|ui| {
-                                            ui.spacing_mut().item_spacing.x = theme::space::M;
-                                            icons::icon_badge(ui, preset_icon(template), 32.0);
-                                            ui.vertical(|ui| {
-                                                ui.spacing_mut().item_spacing.y = theme::space::XS;
-                                                ui.horizontal(|ui| {
-                                                    ui.spacing_mut().item_spacing.x =
-                                                        theme::space::S;
-                                                    ui.label(
-                                                        RichText::new(crate::i18n::template_name(
-                                                            template,
-                                                        ))
-                                                        .font(title_font.clone())
-                                                        .color(theme::palette().text),
-                                                    );
-                                                    ui.label(
-                                                        RichText::new(
-                                                            crate::i18n::group_items_count(
-                                                                matchers.len(),
-                                                            ),
-                                                        )
-                                                        .small()
-                                                        .color(theme::palette().text_dim),
-                                                    );
-                                                });
-                                                ui.add(
-                                                    egui::Label::new(
-                                                        RichText::new(
-                                                            crate::i18n::template_description(
-                                                                template,
-                                                            ),
-                                                        )
-                                                        .small()
-                                                        .color(theme::palette().text_muted),
-                                                    )
-                                                    .wrap(),
-                                                );
-                                            });
-                                        });
-                                    },
-                                    |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.spacing_mut().item_spacing.x = theme::space::M;
+                                    icons::icon_badge(ui, preset_icon(template), 32.0);
+                                    ui.vertical(|ui| {
+                                        ui.spacing_mut().item_spacing.y = theme::space::XS;
                                         ui.horizontal(|ui| {
                                             ui.spacing_mut().item_spacing.x = theme::space::S;
-                                            if let Some(chosen) = target_button(
-                                                ui,
-                                                "preset_target",
-                                                &TargetChoice::of(destination.clone(), &exits),
-                                                &target_choices,
-                                                !added && can_edit,
-                                            ) {
-                                                catalog.set_target(template, chosen);
-                                            }
-                                            let button = if added {
-                                                widgets::outline_button_compact(
-                                                    ui,
-                                                    &tr!("template-added"),
-                                                    false,
-                                                )
-                                            } else {
-                                                widgets::button_fill_compact(
-                                                    ui,
-                                                    &tr!("template-add"),
-                                                    can_edit,
-                                                )
-                                            };
-                                            let button = if redundant {
-                                                button.on_hover_text(tr!("template-redundant"))
-                                            } else {
-                                                button
-                                            };
-                                            if !added && button.clicked() {
-                                                actions.push(Action::AddPresetGroup(
-                                                    template,
-                                                    catalog.target(template),
-                                                ));
-                                            }
+                                            ui.label(
+                                                RichText::new(crate::i18n::template_name(template))
+                                                    .font(title_font.clone())
+                                                    .color(theme::palette().text),
+                                            );
+                                            ui.label(
+                                                RichText::new(crate::i18n::group_items_count(
+                                                    matchers.len(),
+                                                ))
+                                                .small()
+                                                .color(theme::palette().text_dim),
+                                            );
                                         });
+                                        ui.add(
+                                            egui::Label::new(
+                                                RichText::new(crate::i18n::template_description(
+                                                    template,
+                                                ))
+                                                .small()
+                                                .color(theme::palette().text_muted),
+                                            )
+                                            .wrap(),
+                                        );
+                                    });
+                                });
+                                ui.add_space(theme::space::M);
+                                let mut toggle_items = false;
+                                egui::Sides::new().shrink_left().height(34.0).show(
+                                    ui,
+                                    |ui| {
+                                        if items_toggle(ui, expanded, progress).clicked() {
+                                            toggle_items = true;
+                                        }
+                                    },
+                                    |ui| {
+                                        // Right side of `Sides` lays out right-to-left:
+                                        // emit the Add button first so it sits at the far right,
+                                        // and the destination picker to its left.
+                                        ui.spacing_mut().item_spacing.x = theme::space::S;
+                                        ui.spacing_mut().interact_size.y = 34.0;
+                                        let button = if added {
+                                            widgets::outline_button(
+                                                ui,
+                                                tr!("template-added"),
+                                                false,
+                                            )
+                                        } else {
+                                            widgets::outline_button(
+                                                ui,
+                                                tr!("template-add"),
+                                                can_edit,
+                                            )
+                                        };
+                                        let button = if redundant {
+                                            button.on_hover_text(tr!("template-redundant"))
+                                        } else {
+                                            button
+                                        };
+                                        if !added && button.clicked() {
+                                            actions.push(Action::AddPresetGroup(
+                                                template,
+                                                catalog.target(template),
+                                            ));
+                                        }
+                                        if let Some(chosen) = target_button(
+                                            ui,
+                                            "preset_target",
+                                            &TargetChoice::of(destination.clone(), &exits),
+                                            &target_choices,
+                                            !added && can_edit,
+                                        ) {
+                                            catalog.set_target(template, chosen);
+                                        }
                                     },
                                 );
-                                ui.add_space(theme::space::XS);
-                                let toggle_label = if expanded {
-                                    tr!("templates-hide-items")
-                                } else {
-                                    tr!("templates-show-items")
-                                };
-                                if widgets::link(ui, &toggle_label, true).clicked() {
+                                if toggle_items {
                                     catalog.toggle_expanded(template);
                                 }
                                 widgets::reveal(
@@ -417,7 +471,9 @@ pub(crate) fn catalog_dialog(ctx: &egui::Context, state: &mut State, actions: &m
                             });
                         });
                     }
+                    ui.add_space(theme::space::S);
                 });
+            hairline(ui);
 
             if widgets::dialog_done(ui, tr!("done")).clicked() {
                 close = true;

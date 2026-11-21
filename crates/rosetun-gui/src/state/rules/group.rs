@@ -1,10 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use rosetun_config::{
-    DomainMatch, MAX_GROUP_ITEMS, ProcessMatch, RULE_GROUP_NAME_LIMIT, Rule, RuleId, RuleMatcher,
-    RuleSetId, RuleTemplate,
+    DomainMatch, List, ListId, MAX_GROUP_ITEMS, ProcessMatch, RULE_GROUP_NAME_LIMIT, Rule, RuleId,
+    RuleMatcher, RuleSetId, RuleTemplate,
 };
-use rosetun_core::RuleDestination;
+use rosetun_core::{IpCidrError, RuleDestination};
 
 use super::super::{Action, Job, State};
 use crate::errors;
@@ -47,12 +47,24 @@ pub(crate) struct GroupSelectionDialog {
     pub(crate) focus: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub(crate) enum GroupItemKind {
+    #[default]
+    Address,
+    Process,
+    List,
+}
+
 pub(crate) struct GroupEditorDialog {
     pub(crate) set: RuleSetId,
     pub(crate) editing: Option<RuleId>,
     pub(crate) name: String,
     pub(crate) items: Vec<RuleMatcher>,
     pub(crate) target: RuleDestination,
+    pub(crate) item_kind: GroupItemKind,
+    pub(crate) subdomains: bool,
+    pub(crate) list: Option<ListId>,
+    pub(crate) category: String,
     pub(crate) input: String,
     pub(crate) input_error: Option<String>,
     pub(crate) error: Option<String>,
@@ -67,6 +79,10 @@ impl GroupEditorDialog {
             name: String::new(),
             items: Vec::new(),
             target: RuleDestination::Proxy,
+            item_kind: GroupItemKind::Address,
+            subdomains: true,
+            list: None,
+            category: String::new(),
             input: String::new(),
             input_error: None,
             error: None,
@@ -84,6 +100,10 @@ impl GroupEditorDialog {
             name: name.clone(),
             items: items.clone(),
             target: RuleDestination::of(rule),
+            item_kind: GroupItemKind::Address,
+            subdomains: true,
+            list: None,
+            category: String::new(),
             input: String::new(),
             input_error: None,
             error: None,
@@ -91,15 +111,108 @@ impl GroupEditorDialog {
         })
     }
 
-    /// Parses the quick-add input line and appends it to `items`, setting `input_error` on failure.
+    pub(crate) fn set_item_kind(&mut self, kind: GroupItemKind) {
+        if self.item_kind != kind {
+            self.item_kind = kind;
+            self.input_error = None;
+        }
+    }
+
+    pub(crate) fn select_list(&mut self, list: ListId) {
+        if self.list.as_ref() != Some(&list) {
+            self.list = Some(list);
+            self.category.clear();
+            self.input_error = None;
+        }
+    }
+
+    pub(crate) fn has_pending_text_input(&self) -> bool {
+        matches!(
+            self.item_kind,
+            GroupItemKind::Address | GroupItemKind::Process
+        ) && !self.input.trim().is_empty()
+    }
+
+    /// Parses the input for the active `item_kind` and appends to `items`, setting `input_error`
+    /// on failure.
     pub(crate) fn commit_input(&mut self) {
         let raw = self.input.trim();
         if raw.is_empty() {
             return;
         }
-        let Ok(matcher) = parse_quick_item(raw) else {
-            self.input_error = Some(tr!("group-item-invalid"));
+        let parsed = match self.item_kind {
+            GroupItemKind::Address => {
+                let mut batch = Vec::new();
+                for token in raw
+                    .split(|ch: char| ch.is_whitespace() || ch == ',' || ch == ';')
+                    .filter(|token| !token.is_empty())
+                {
+                    match parse_address_item(token, self.subdomains) {
+                        Ok(matcher) => batch.push(matcher),
+                        Err(message) => {
+                            self.input_error = Some(message);
+                            return;
+                        }
+                    }
+                }
+                batch
+            }
+            GroupItemKind::Process => match rosetun_core::parse_process_input(raw) {
+                Ok(process) => vec![RuleMatcher::Process(process)],
+                Err(error) => {
+                    self.input_error = Some(capitalize(errors::rule_input(
+                        crate::i18n::language(),
+                        &error,
+                    )));
+                    return;
+                }
+            },
+            GroupItemKind::List => return,
+        };
+        let mut to_add = Vec::new();
+        for matcher in parsed {
+            let duplicate = self
+                .items
+                .iter()
+                .chain(to_add.iter())
+                .any(|item| same_group_item(item, &matcher));
+            if !duplicate {
+                to_add.push(matcher);
+            }
+        }
+        if to_add.is_empty() {
+            self.input_error = Some(tr!("group-item-duplicate"));
             return;
+        }
+        if self.items.len() + to_add.len() > MAX_GROUP_ITEMS {
+            self.input_error = Some(tr!("error-invalid-group"));
+            return;
+        }
+        self.items.extend(to_add);
+        self.input.clear();
+        self.input_error = None;
+        self.error = None;
+    }
+
+    /// Validates and appends a `RuleMatcher::List` item for `list` (using `self.category` when the
+    /// list format has categories).
+    pub(crate) fn commit_list(&mut self, list: &List) {
+        let category = if list.format.has_categories() {
+            let trimmed = self.category.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_owned())
+        } else {
+            None
+        };
+        if let Err(error) = list.validate_category(category.as_deref()) {
+            self.input_error = Some(capitalize(errors::rule_set(
+                crate::i18n::language(),
+                &error.into(),
+            )));
+            return;
+        }
+        let matcher = RuleMatcher::List {
+            list: list.id.clone(),
+            category,
         };
         if self
             .items
@@ -114,9 +227,44 @@ impl GroupEditorDialog {
             return;
         }
         self.items.push(matcher);
-        self.input.clear();
+        self.category.clear();
         self.input_error = None;
         self.error = None;
+    }
+
+    /// Adds or removes a specific list category from `items` when clicking a category chip.
+    pub(crate) fn toggle_list_category(&mut self, list: &List, category: &str) {
+        let matcher = RuleMatcher::List {
+            list: list.id.clone(),
+            category: Some(category.to_owned()),
+        };
+        if let Some(index) = self
+            .items
+            .iter()
+            .position(|item| same_group_item(item, &matcher))
+        {
+            self.items.remove(index);
+            self.input_error = None;
+            self.error = None;
+            return;
+        }
+        if self.items.len() >= MAX_GROUP_ITEMS {
+            self.input_error = Some(tr!("error-invalid-group"));
+            return;
+        }
+        self.items.push(matcher);
+        self.input_error = None;
+        self.error = None;
+    }
+
+    pub(crate) fn contains_list_category(&self, list: &ListId, category: &str) -> bool {
+        self.items.iter().any(|item| {
+            matches!(
+                item,
+                RuleMatcher::List { list: id, category: Some(cat) }
+                    if id == list && cat == category
+            )
+        })
     }
 
     pub(crate) fn remove_item(&mut self, index: usize) {
@@ -125,36 +273,46 @@ impl GroupEditorDialog {
             self.error = None;
         }
     }
+
+    /// Moves the item at `from` to `to`, keeping the other items in order.
+    pub(crate) fn move_item(&mut self, from: usize, to: usize) {
+        if from < self.items.len() && to < self.items.len() && from != to {
+            let item = self.items.remove(from);
+            self.items.insert(to, item);
+            self.error = None;
+        }
+    }
 }
 
-/// Parses a single condition typed in the group editor: IP/CIDR, executable path or `.exe`,
-/// domain (with subdomains), or bare process name.
-pub(crate) fn parse_quick_item(raw: &str) -> Result<RuleMatcher, ()> {
-    let input = raw.trim();
-    if input.is_empty() {
-        return Err(());
+/// Parses a single address token: IP/CIDR, explicit suffix (`*.ru` / `.ru`), or domain whose
+/// subdomain matching follows `include_subdomains`.
+fn parse_address_item(token: &str, include_subdomains: bool) -> Result<RuleMatcher, String> {
+    match rosetun_core::parse_ip_cidr(token) {
+        Ok(cidr) => return Ok(RuleMatcher::IpCidr(cidr)),
+        Err(IpCidrError::HostBits { corrected }) => {
+            return Err(tr!("ip-host-bits", corrected = corrected));
+        }
+        Err(IpCidrError::Invalid) => {}
     }
-    if let Ok(cidr) = rosetun_core::parse_ip_cidr(input) {
-        return Ok(RuleMatcher::IpCidr(cidr));
+    match rosetun_core::parse_domain_input(token) {
+        Ok(DomainMatch::Suffix(suffix)) => Ok(RuleMatcher::Domain(DomainMatch::Suffix(suffix))),
+        Ok(domain) => Ok(RuleMatcher::Domain(rosetun_core::with_subdomains(
+            domain,
+            include_subdomains,
+        ))),
+        Err(error) => Err(capitalize(errors::rule_input(
+            crate::i18n::language(),
+            &error,
+        ))),
     }
-    let is_url = input.starts_with("http://") || input.starts_with("https://");
-    let looks_like_path = !is_url && input.contains(['\\', '/']);
-    let looks_like_exe = input.len() > 4
-        && input.is_char_boundary(input.len() - 4)
-        && input[input.len() - 4..].eq_ignore_ascii_case(".exe");
-    if looks_like_path || looks_like_exe {
-        return rosetun_core::parse_process_input(input)
-            .map(RuleMatcher::Process)
-            .map_err(|_| ());
+}
+
+fn capitalize(text: String) -> String {
+    let mut chars = text.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => text,
     }
-    if let Ok(domain) = rosetun_core::parse_domain_input(input) {
-        return Ok(RuleMatcher::Domain(rosetun_core::with_subdomains(
-            domain, true,
-        )));
-    }
-    rosetun_core::parse_process_input(input)
-        .map(RuleMatcher::Process)
-        .map_err(|_| ())
 }
 
 fn same_group_item(a: &RuleMatcher, b: &RuleMatcher) -> bool {
@@ -270,6 +428,32 @@ impl State {
                     return self.start_rule_edit(job);
                 }
             }
+            Action::AddRulesToGroup(rules, target_group) => {
+                if self.can_edit_rules()
+                    && let Some(set) = self.selected_rules()
+                    && set.rules.iter().any(|item| {
+                        item.id == target_group && matches!(item.matcher, RuleMatcher::Group { .. })
+                    })
+                {
+                    let sources: Vec<RuleId> = rules
+                        .into_iter()
+                        .filter(|id| {
+                            id != &target_group && set.rules.iter().any(|item| item.id == *id)
+                        })
+                        .collect();
+                    if !sources.is_empty() {
+                        let set_id = set.id.clone();
+                        for id in &sources {
+                            self.rules.screen.expanded_groups.remove(id);
+                        }
+                        return self.start_rule_edit(Job::AddRulesToGroup(
+                            set_id,
+                            sources,
+                            target_group,
+                        ));
+                    }
+                }
+            }
             Action::UngroupRule(rule) => {
                 if self.can_edit_rules()
                     && let Some(set_id) = self.selected_rules().and_then(|set| {
@@ -322,8 +506,19 @@ impl State {
                 if self.can_edit_rules()
                     && let Some(dialog) = &mut self.rules.screen.group_editor
                 {
-                    if !dialog.input.trim().is_empty() {
+                    if dialog.has_pending_text_input() {
                         dialog.commit_input();
+                        if dialog.input_error.is_some() {
+                            return None;
+                        }
+                    } else if dialog.item_kind == GroupItemKind::List
+                        && !dialog.category.trim().is_empty()
+                        && let Some(list) = dialog
+                            .list
+                            .as_ref()
+                            .and_then(|id| self.config.lists.iter().find(|entry| &entry.id == id))
+                    {
+                        dialog.commit_list(list);
                         if dialog.input_error.is_some() {
                             return None;
                         }
@@ -368,6 +563,20 @@ impl State {
         None
     }
 
+    fn focus_group_rule(&mut self, id: RuleId) {
+        self.rules.screen.clear_selection();
+        self.rules.screen.selected_rules.insert(id.clone());
+        self.rules.screen.selection_anchor = Some(id.clone());
+        self.rules.screen.reveal_selection = true;
+        let next = self
+            .rules
+            .screen
+            .highlight_rule
+            .as_ref()
+            .map_or(1, |(_, generation)| generation.wrapping_add(1));
+        self.rules.screen.highlight_rule = Some((id, next));
+    }
+
     pub(super) fn finish_group_selection(
         &mut self,
         result: Result<Rule, rosetun_core::RuleSetError>,
@@ -376,9 +585,7 @@ impl State {
         match result {
             Ok(group) => {
                 self.rules.screen.group_selection = None;
-                self.rules.screen.clear_selection();
-                self.rules.screen.selected_rules.insert(group.id.clone());
-                self.rules.screen.selection_anchor = Some(group.id);
+                self.focus_group_rule(group.id);
             }
             Err(error) => {
                 let message = self.text(&errors::rule_set(crate::i18n::language(), &error));
@@ -387,6 +594,20 @@ impl State {
                 } else {
                     self.operation_error = Some(message);
                 }
+            }
+        }
+    }
+
+    pub(super) fn finish_add_rules_to_group(
+        &mut self,
+        result: Result<Rule, rosetun_core::RuleSetError>,
+    ) {
+        self.operations.rules_edit = false;
+        match result {
+            Ok(group) => self.focus_group_rule(group.id),
+            Err(error) => {
+                self.operation_error =
+                    Some(self.text(&errors::rule_set(crate::i18n::language(), &error)));
             }
         }
     }

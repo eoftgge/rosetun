@@ -174,6 +174,17 @@ impl WorkerDispatcher {
         });
     }
 
+    pub(crate) fn add_rules_to_group(
+        &self,
+        set: RuleSetId,
+        rules: Vec<RuleId>,
+        target_group: RuleId,
+    ) {
+        self.spawn_complete("rosetun-add-rules-to-group", move |store| {
+            WorkerEvent::AddRulesToGroup(add_rules_to_group(store, &set, &rules, &target_group))
+        });
+    }
+
     pub(crate) fn ungroup_rule(&self, set: RuleSetId, rule: RuleId) {
         self.spawn_complete("rosetun-ungroup-rule", move |store| {
             WorkerEvent::UngroupRule(ungroup_rule(store, &set, &rule))

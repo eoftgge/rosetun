@@ -13,6 +13,8 @@ pub(crate) enum Icon {
     Chevron {
         open: f32,
     },
+    ChevronUp,
+    ChevronDown,
     Refresh,
     Clock,
     More,
@@ -135,6 +137,22 @@ pub(crate) fn paint(painter: &egui::Painter, center: egui::Pos2, icon: Icon, col
                 egui::vec2(-2.0, 4.0),
             ]
             .map(|point| center + turn * point);
+            painter.add(egui::Shape::line(points.to_vec(), stroke));
+        }
+        Icon::ChevronUp => {
+            let points = [
+                center + egui::vec2(-4.0, 2.0),
+                center + egui::vec2(0.0, -2.0),
+                center + egui::vec2(4.0, 2.0),
+            ];
+            painter.add(egui::Shape::line(points.to_vec(), stroke));
+        }
+        Icon::ChevronDown => {
+            let points = [
+                center + egui::vec2(-4.0, -2.0),
+                center + egui::vec2(0.0, 2.0),
+                center + egui::vec2(4.0, -2.0),
+            ];
             painter.add(egui::Shape::line(points.to_vec(), stroke));
         }
         Icon::Refresh => {

@@ -825,6 +825,85 @@ pub fn group_rules(
     })
 }
 
+/// Moves selected rules (flattening any existing groups among them) into an
+/// existing group rule, keeping the target group's name, destination, enabled
+/// state, and position while skipping duplicate items.
+pub fn add_rules_to_group(
+    store: &Store,
+    set: &RuleSetId,
+    rules: &[RuleId],
+    target_group: &RuleId,
+) -> Result<Rule, RuleSetError> {
+    let selected = rules
+        .iter()
+        .filter(|id| *id != target_group)
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if selected.is_empty() {
+        return Err(RuleSetError::InvalidGroup);
+    }
+    store.modify(|config| {
+        let set = rule_set_mut(config, set)?;
+        let target_index = set
+            .rules
+            .iter()
+            .position(|rule| &rule.id == target_group)
+            .ok_or(RuleSetError::RuleNotFound)?;
+        let (name, mut items) = match &set.rules[target_index].matcher {
+            RuleMatcher::Group { name, items } => (name.clone(), items.clone()),
+            _ => return Err(RuleSetError::InvalidGroup),
+        };
+        if !selected
+            .iter()
+            .all(|id| set.rules.iter().any(|rule| &rule.id == id))
+        {
+            return Err(RuleSetError::RuleNotFound);
+        }
+
+        for rule in set.rules.iter().filter(|rule| selected.contains(&rule.id)) {
+            match &rule.matcher {
+                RuleMatcher::Group {
+                    items: group_items, ..
+                } => {
+                    for item in group_items {
+                        if !items
+                            .iter()
+                            .any(|existing| same_matcher(existing, item, cfg!(windows)))
+                        {
+                            items.push(item.clone());
+                        }
+                    }
+                }
+                other => {
+                    if !items
+                        .iter()
+                        .any(|existing| same_matcher(existing, other, cfg!(windows)))
+                    {
+                        items.push(other.clone());
+                    }
+                }
+            }
+        }
+        if items.is_empty() || items.len() > MAX_GROUP_ITEMS {
+            return Err(RuleSetError::InvalidGroup);
+        }
+
+        let matcher = RuleMatcher::Group { name, items };
+        if set.rules.iter().any(|rule| {
+            &rule.id != target_group
+                && !selected.contains(&rule.id)
+                && same_matcher(&rule.matcher, &matcher, cfg!(windows))
+        }) {
+            return Err(RuleSetError::DuplicateRule);
+        }
+
+        set.rules[target_index].matcher = matcher;
+        let updated = set.rules[target_index].clone();
+        set.rules.retain(|rule| !selected.contains(&rule.id));
+        Ok(updated)
+    })
+}
+
 /// Replaces a group rule in place with individual rules inheriting its enabled
 /// state and destination, skipping items already present in the set.
 pub fn ungroup_rule(

@@ -20,8 +20,8 @@ mod transitions;
 
 pub(crate) use action_notice::{NoticeAction, action_notice};
 pub(crate) use buttons::{
-    button_fill, button_fill_compact, button_fill_icon, link, outline_button,
-    outline_button_compact, outline_button_full, outline_button_icon, outline_button_menu,
+    button_fill, button_fill_icon, link, outline_button, outline_button_compact,
+    outline_button_full, outline_button_icon, outline_button_menu,
 };
 pub(crate) use checkbox::checkbox;
 #[cfg(test)]
@@ -42,7 +42,7 @@ pub(crate) use frames::{
 };
 pub(crate) use menu::{
     MenuItem, MenuWidth, context_menu_popup, menu_choice_width, menu_content_width, menu_item,
-    menu_item_with_country, menu_popup, menu_width,
+    menu_item_with_country, menu_popup, menu_submenu, menu_width,
 };
 pub(crate) use search::{
     MIN_SEARCH_WIDTH, SEARCH_WIDTH, search_field, search_field_with_suffix, search_width_beside,

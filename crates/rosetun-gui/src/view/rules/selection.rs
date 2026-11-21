@@ -30,6 +30,7 @@ pub(super) fn clear_selection_on_click_away(
                     | Action::MoveSelectedRulesToEnd
                     | Action::DeleteSelectedRules
                     | Action::OpenGroupSelection
+                    | Action::AddRulesToGroup(_, _)
                     | Action::ToggleGroupExpanded(_)
                     | Action::ClearRuleSelection
             )
