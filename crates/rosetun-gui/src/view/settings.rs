@@ -1081,8 +1081,7 @@ fn service(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                     ui.spacing_mut().item_spacing.x = theme::space::XS;
                     let (dot, _) =
                         ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
-                    ui.painter().circle_filled(dot.center(), 5.0, color);
-                    ui.colored_label(color, tr!("service-label"));
+                    let label = ui.colored_label(color, tr!("service-label"));
                     ui.colored_label(
                         color,
                         if running {
@@ -1090,6 +1089,11 @@ fn service(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                         } else {
                             tr!("service-stopped")
                         },
+                    );
+                    ui.painter().circle_filled(
+                        egui::pos2(dot.center().x, label.rect.center().y),
+                        5.0,
+                        color,
                     );
                 });
             },
@@ -2673,6 +2677,32 @@ mod pending_notice_tests {
                         .any(|(text, _)| *text == tr!("private-networks-needs-lan")),
                     "{language:?}: {shown:?}"
                 );
+            });
+        }
+    }
+
+    #[test]
+    fn service_status_dot_is_centred_on_title() {
+        for language in LANGUAGES {
+            i18n::in_language(language, || {
+                let state = State::default();
+                let (size, nav) = WINDOWS[0];
+                let mut screen = TestScreen::new(size);
+                let (texts, circles) = screen.settle_with_circles(|ui| {
+                    page(ui, nav, |ui| service(ui, &state, &mut Vec::new()));
+                });
+                let label = texts
+                    .iter()
+                    .find(|(text, _)| *text == tr!("service-label"))
+                    .unwrap_or_else(|| panic!("service-label missing in {language:?}"))
+                    .1;
+                let (dot, _) = circles
+                    .iter()
+                    .find(|(_, radius)| (*radius - 5.0).abs() < 0.01)
+                    .expect("service status dot is painted");
+                assert!(dot.x < label.left(), "dot stands left of the title");
+                let offset = (dot.y - label.center().y).abs();
+                assert!(offset <= 0.5, "{language:?}: dot offset {offset}");
             });
         }
     }

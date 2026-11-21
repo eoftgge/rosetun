@@ -158,36 +158,36 @@ fn service_banner(ui: &mut egui::Ui, state: &State) {
         egui::Sides::new().shrink_left().wrap().spacing(16.0).show(
             ui,
             |ui| {
+                const ICON_SIZE: f32 = 28.0;
                 ui.horizontal_top(|ui| {
-                    let (rect, _) =
-                        ui.allocate_exact_size(egui::vec2(28.0, 28.0), egui::Sense::hover());
-                    ui.painter().circle_stroke(
-                        rect.center(),
-                        13.0,
-                        egui::Stroke::new(theme::stroke::GLYPH, theme::ERROR),
+                    ui.set_min_height(ICON_SIZE);
+                    let origin = ui.cursor().left_top();
+                    let gap = ui.spacing().item_spacing.x;
+                    ui.add_space(ICON_SIZE + gap);
+                    // Center the badge on the text block once its wrapped height is known.
+                    let text = ui
+                        .vertical(|ui| {
+                            ui.label(
+                                RichText::new(tr!("service-down-title"))
+                                    .strong()
+                                    .color(theme::palette().text),
+                            );
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(tr!("service-down-body"))
+                                        .small()
+                                        .color(theme::palette().text_dim),
+                                )
+                                .wrap(),
+                            );
+                        })
+                        .response
+                        .rect;
+                    let center = egui::pos2(
+                        origin.x + ICON_SIZE / 2.0,
+                        text.center().y.max(origin.y + ICON_SIZE / 2.0),
                     );
-                    ui.painter().text(
-                        rect.center(),
-                        egui::Align2::CENTER_CENTER,
-                        "!",
-                        theme::font::title(),
-                        theme::ERROR,
-                    );
-                    ui.vertical(|ui| {
-                        ui.label(
-                            RichText::new(tr!("service-down-title"))
-                                .strong()
-                                .color(theme::palette().text),
-                        );
-                        ui.add(
-                            egui::Label::new(
-                                RichText::new(tr!("service-down-body"))
-                                    .small()
-                                    .color(theme::palette().text_dim),
-                            )
-                            .wrap(),
-                        );
-                    });
+                    paint_warning_badge(ui.painter(), center);
                 });
             },
             |ui| {
@@ -226,6 +226,19 @@ fn service_banner(ui: &mut egui::Ui, state: &State) {
             });
         }
     });
+}
+
+fn paint_warning_badge(painter: &egui::Painter, center: egui::Pos2) {
+    let stroke = egui::Stroke::new(theme::stroke::GLYPH, theme::ERROR);
+    painter.circle_stroke(center, 13.0, stroke);
+    painter.line_segment(
+        [
+            center + egui::vec2(0.0, -5.75),
+            center + egui::vec2(0.0, 1.25),
+        ],
+        stroke,
+    );
+    painter.circle_filled(center + egui::vec2(0.0, 4.75), 1.1, theme::ERROR);
 }
 
 /// The service reports one hold: on Windows an upgrade left it, on Unix
@@ -955,6 +968,38 @@ mod update_strip_tests {
                     cfg!(target_os = "macos"),
                     "{language:?}"
                 );
+            });
+        }
+    }
+
+    #[test]
+    fn service_banner_warning_badge_is_centred_on_text() {
+        for language in [
+            crate::i18n::Language::English,
+            crate::i18n::Language::Russian,
+        ] {
+            crate::i18n::in_language(language, || {
+                let state = State::default();
+                let mut screen = crate::test_ui::TestScreen::new(egui::vec2(960.0, 640.0));
+                let (texts, circles) = screen.settle_with_circles(|ui| {
+                    service_banner(ui, &state);
+                });
+                let rect_of = |wanted: &str| {
+                    texts
+                        .iter()
+                        .find(|(text, _)| text == wanted)
+                        .unwrap_or_else(|| panic!("no text {wanted:?} in {language:?}"))
+                        .1
+                };
+                let title = rect_of(&tr!("service-down-title"));
+                let body = rect_of(&tr!("service-down-body"));
+                let (ring, _) = circles
+                    .iter()
+                    .find(|(_, radius)| (*radius - 13.0).abs() < 0.01)
+                    .expect("warning ring is painted");
+                assert!(ring.x < title.left(), "ring stands left of the text");
+                let offset = (ring.y - title.union(body).center().y).abs();
+                assert!(offset <= 1.0, "{language:?}: ring offset {offset}");
             });
         }
     }
