@@ -28,7 +28,7 @@ One developer maintains Rosetun with help from coding agents. Report problems in
 - Kill switch and system DNS protection.
 - Experimental Lockdown: protection while disconnected too.
 - TUN and System proxy.
-- Rules by program, website, IP and list, with separate exits.
+- Rules by program, website, IP, list and editable groups, with templates and separate exits.
 - Provider subscriptions, QR codes and `rosetun://` links.
 - Local network access and automatic reconnect.
 - Tray, notifications and CLI; English and Russian interfaces.

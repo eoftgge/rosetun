@@ -49,9 +49,9 @@ def banner(version, linux, macos=False):
     result = {}
     for lang, label, platforms, macos_platforms, baseline in (
         ('ru', 'Стабильный выпуск', 'Windows и Linux',
-         'Windows, Linux и macOS (Apple Silicon, экспериментальная сборка)', 'Документация: 0.6'),
+         'Windows, Linux и macOS (Apple Silicon, экспериментальная сборка)', 'Документация: 0.7'),
         ('en', 'Stable release', 'Windows and Linux',
-         'Windows, Linux and macOS (Apple Silicon, experimental)', 'Documentation: 0.6'),
+         'Windows, Linux and macOS (Apple Silicon, experimental)', 'Documentation: 0.7'),
     ):
         if macos and linux and release >= (0, 7, 0):
             supported = macos_platforms
@@ -60,7 +60,7 @@ def banner(version, linux, macos=False):
         else:
             supported = 'Windows'
         result[lang] = f'{label}: {version} · {supported}.'
-        if release < (0, 6, 0):
+        if release < (0, 7, 0):
             result[lang] += f' {baseline}.'
     return result
 

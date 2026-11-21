@@ -11,10 +11,10 @@ overview = "macOS support"
 
 ## What works {#what-works}
 
-- **TUN tunnel (`utun`)** powered by bundled sing-box and Xray (VLESS, VMess, Trojan, Shadowsocks, Hysteria2, REALITY, XHTTP, TLS fragmentation, two-hop exits).
+- **TUN tunnel (`utun`)** powered by bundled sing-box and Xray (VLESS, VMess, Trojan, Shadowsocks, Hysteria2, TUIC v5, AnyTLS, WireGuard, REALITY, XHTTP, TLS fragmentation, two-hop exits).
 - **`launchd` system daemon** (`io.github.eoftgge.rosetun.helper` in `/Library/LaunchDaemons/`) running the privileged helper and engines as `root`.
 - **Desktop app and CLI:** `Rosetun.app` in `/Applications/` and `rosetun` in `/usr/local/bin/rosetun`.
-- **Routing rules:** by domain, IP, GeoIP/GeoSite, lists and running programs.
+- **Routing rules:** by domain, IP, GeoIP/GeoSite, lists, rule groups and running programs.
 - **Reconnect:** automatic tunnel reconnect when the active physical interface changes (for example, between Wi-Fi and Ethernet).
 - **Subscriptions and UI:** Russian and English following the system locale, bundled Noto Color Emoji, macOS system font fallback and opening folders in Finder.
 

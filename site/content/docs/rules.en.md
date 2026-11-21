@@ -10,7 +10,7 @@ group = "Setup"
 - **Exits:** a rule can send its traffic through another country or a specific server while the rest goes through the server on the main screen. Picking a country or a server in the rule creates an exit on the **Exits** tab, where you can change its server and turn on a fallback to any server of the same country. If an exit's server disappears, its rules block traffic; they never go direct.
 - **Lists:** GeoIP and GeoSite (Xray `.dat` files) and sing-box rule sets (`.srs`) and your own text lists, from a file or a link. A list from a link is downloaded again only when it has changed (`ETag` / `Last-Modified`).
 - **Undo:** Ctrl+Z steps back through your changes on the Rules tab, **Revert** returns to the rules applied to the connection, and Del removes the selected rule without asking.
-- **Temporary rules:** add a rule only until disconnect; it applies at once and is never saved.
+- **Temporary rules:** add a rule only until disconnect; it applies at once, appears beside the active rule set on the connection screen and is never saved.
 - **Connections** on the Traffic tab: while connected, what your programs connect to right now, grouped by program, with the route each connection took and why (which rule, list or the default). Create a rule or close a connection from there. The list is kept only in memory for the account that connected and is cleared on disconnect; it is never written to disk or to the log.
 
 ## Groups and templates {#groups}

@@ -25,7 +25,7 @@ text = 'The kill switch blocks traffic when the tunnel drops and keeps the netwo
 
 [[extra.features]]
 title = 'Your rules'
-text = 'Send apps, websites and IP addresses through the VPN, connect directly or block them. Use GeoIP, GeoSite and your own lists. Undo a change with Ctrl+Z. Temporary rules last until you disconnect. Rules by app work on Windows and Linux. See the <a href="docs/rules/">Linux limitations</a>.'
+text = 'Send apps, websites, IP addresses and rule groups through the VPN, connect directly or block them. Use ready-made templates, GeoIP, GeoSite and your own lists. Undo a change with Ctrl+Z. Temporary rules last until you disconnect. Rules by app work on Windows and Linux. See the <a href="docs/rules/">Linux limitations</a>.'
 
 [[extra.features]]
 title = 'More than one exit'
@@ -37,7 +37,7 @@ text = 'Add a subscription with a link, a QR code or a rosetun:// button on your
 
 [[extra.features]]
 title = 'Connection choices'
-text = 'VLESS, VMess, Trojan, Shadowsocks and Hysteria2. sing-box and Xray engines, REALITY and XHTTP, TLS fragmentation. See the provider page for transports and limitations.'
+text = 'VLESS, VMess, Trojan, Shadowsocks, Hysteria2, TUIC v5, AnyTLS and WireGuard. sing-box and Xray engines, REALITY and XHTTP, TLS fragmentation. See the provider page for transports and limitations.'
 
 [[extra.features]]
 title = 'Privacy without promises'

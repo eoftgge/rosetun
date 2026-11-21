@@ -27,7 +27,7 @@ text = 'Kill switch блокирует трафик при потере тунн
 
 [[extra.features]]
 title = 'Ваши правила'
-text = 'Отправляйте программы, сайты и IP через VPN, напрямую или блокируйте. Используйте GeoIP, GeoSite и свои списки. Отменяйте изменения по Ctrl+Z. Временные правила действуют до отключения. Правила по программам работают на Windows и Linux. См. <a href="docs/rules/">ограничения Linux</a>.'
+text = 'Отправляйте программы, сайты, IP и группы правил через VPN, напрямую или блокируйте. Используйте готовые шаблоны, GeoIP, GeoSite и свои списки. Отменяйте изменения по Ctrl+Z. Временные правила действуют до отключения. Правила по программам работают на Windows и Linux. См. <a href="docs/rules/">ограничения Linux</a>.'
 
 [[extra.features]]
 title = 'Несколько направлений'
@@ -39,7 +39,7 @@ text = 'Добавляйте подписку ссылкой, QR-кодом ил
 
 [[extra.features]]
 title = 'Выбор соединения'
-text = 'VLESS, VMess, Trojan, Shadowsocks и Hysteria2. Ядра sing-box и Xray, REALITY и XHTTP, фрагментация TLS. Доступные транспорты и ограничения описаны на странице для провайдеров.'
+text = 'VLESS, VMess, Trojan, Shadowsocks, Hysteria2, TUIC v5, AnyTLS и WireGuard. Ядра sing-box и Xray, REALITY и XHTTP, фрагментация TLS. Доступные транспорты и ограничения описаны на странице для провайдеров.'
 
 [[extra.features]]
 title = 'Приватность без обещаний'

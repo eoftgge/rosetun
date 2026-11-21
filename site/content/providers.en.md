@@ -16,7 +16,7 @@ Format: `rosetun://add/<subscription URL>#name`. The HTTP(S) URL can be raw or p
 <a href="rosetun://add/https%3A%2F%2Fprovider.example%2Fsubscription%2Fdemo#Example">Add to Rosetun</a>
 ```
 
-Once Rosetun is installed, the system opens the link in the app: on Windows through the scheme the installer registers, on Linux through the package's `.desktop` handler (`x-scheme-handler/rosetun`). A later start hands the link to a running Rosetun through a channel only the user's account can open, a named pipe on Windows and a socket in `$XDG_RUNTIME_DIR` on Linux. Users see an add dialog with the provider host. Fetching and adding start only after confirmation. An existing subscription opens its card; a link does not replace an open dialog.
+Once Rosetun is installed, the system opens the link in the app: on Windows through the scheme the installer registers, on Linux through the package's `.desktop` handler (`x-scheme-handler/rosetun`). The experimental macOS build does not implement the `rosetun://` URL handler yet. A later start hands the link to a running Rosetun through a channel only the user's account can open, a named pipe on Windows and a socket in `$XDG_RUNTIME_DIR` on Linux. Users see an add dialog with the provider host. Fetching and adding start only after confirmation. An existing subscription opens its card; a link does not replace an open dialog.
 
 Use HTTPS. An HTTP subscription sends its token without encryption. Escape ampersands as `&amp;` in raw HTML.
 {% </prose_section> %}
@@ -25,11 +25,11 @@ Use HTTPS. An HTTP subscription sends its token without encryption. Escape amper
 {% <prose_section> %}
 <h2>Formats and servers</h2>
 
-One URI per line, plain or base64. Xray JSON: a configuration object or an array of configurations; each supplies the supported outbound tagged proxy, or the first supported outbound. sing-box JSON: an object with outbounds; service entries selector, urltest, direct, block and dns are skipped. This imports servers, not the entire routing configuration.
+One URI per line, plain or base64. Xray JSON: a configuration object or an array of configurations; each supplies the supported outbound tagged proxy, or the first supported outbound. sing-box JSON: an object with outbounds; service entries selector, urltest, direct, block and dns are skipped. WireGuard `.conf` files. This imports servers, not the entire routing configuration.
 
-VLESS, VMess, Trojan, Shadowsocks, Hysteria2. TCP, WebSocket, gRPC, HTTPUpgrade; XHTTP (SplitHTTP) through Xray. Unencrypted transport, TLS and REALITY. Hysteria2 uses QUIC over UDP, with Salamander and port hopping.
+VLESS, VMess, Trojan, Shadowsocks, Hysteria2, TUIC v5, AnyTLS and WireGuard. TCP, WebSocket, gRPC, HTTPUpgrade; XHTTP (SplitHTTP) through Xray. Unencrypted transport, TLS and REALITY. Hysteria2 uses QUIC over UDP, with Salamander and port hopping. TUIC v5 uses QUIC over UDP (`tuic://`, sing-box JSON). AnyTLS uses TCP over TLS or REALITY (`anytls://`, sing-box JSON). WireGuard uses UDP (`wireguard://`, `wg://`, sing-box JSON, Xray JSON and `.conf` files, including Cloudflare WARP `reserved` bytes).
 
-Unsupported: Clash YAML, encrypted Happ links, XHTTP with a separate download server, mKCP, QUIC transport for TCP protocols, HTTP/2, VLESS encryption and Shadowsocks plugins. Unsupported nodes are skipped; reasons appear in the card’s import report. Import fails if no usable nodes remain. The subscription response is limited to 5 MiB after decompression.
+Unsupported: Clash YAML, encrypted Happ links, XHTTP with a separate download server, mKCP, QUIC transport for TCP protocols, HTTP/2, VLESS encryption, Shadowsocks plugins and other protocols (such as AmneziaWG). Unsupported nodes are skipped and named by protocol in the card’s import report. Import fails if no usable nodes remain. The subscription response is limited to 5 MiB after decompression.
 {% </prose_section> %}
 
 
@@ -49,7 +49,7 @@ The default is `User-Agent: Rosetun/<version>`; users can override it. With “S
 
 Sharing is on by default and can be disabled per subscription, or with `--no-hwid` in the CLI. New subscriptions use an ID specific to the subscription server host: paths, tokens and ports do not change it. Different hosts receive different IDs. Subscriptions added before 0.4 retain their previous shared ID. OS version and model are limited to 64 printable ASCII characters; other characters become ?.
 
-On Windows `x-device-os` is `Windows`, the ID comes from `MachineGuid`, the version from the registry and the model from the BIOS. On Linux `x-device-os` is `Linux`, the ID comes from `/etc/machine-id`, the version from `PRETTY_NAME` in `os-release` and the model from `/sys/class/dmi/id/product_name`. The model is `PC` when the system gives none. The system's identifier itself is never sent, only a hash of it.
+On Windows `x-device-os` is `Windows`, the ID comes from `MachineGuid`, the version from the registry and the model from the BIOS. On Linux `x-device-os` is `Linux`, the ID comes from `/etc/machine-id`, the version from `PRETTY_NAME` in `os-release` and the model from `/sys/class/dmi/id/product_name`. The model is `PC` when the system gives none. The system's identifier itself is never sent, only a hash of it. On macOS, device ID headers are not sent yet.
 {% </prose_section> %}
 
 

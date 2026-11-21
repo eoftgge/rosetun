@@ -24,7 +24,7 @@ You can choose an installation folder, but not inside a user profile or where st
 
 **Update:** run the new installer over the old version. With the kill switch on, the network stays closed through the update, and the app starts and connects again. If it cannot connect, the connection screen offers **Connect** and **Open network**; `rosetun open-network` does the same. Lockdown stays on.
 
-From 0.7 on Windows, the new-version notice offers **Download**: the app downloads the installer and checks it, then the button becomes **Install and restart**. The install asks for administrator rights. **Open on GitHub** and **Skip this version** are there too. On Linux, updating stays manual.
+From 0.7 on Windows, the new-version notice offers **Download**: the app downloads the installer and checks it, then the button becomes **Install and restart**. The install asks for administrator rights. **Open on GitHub** and **Skip this version** are there too. On Linux and macOS, updating stays manual.
 
 {% if not r?.deb_url %}
 
@@ -129,18 +129,18 @@ sudo /usr/local/libexec/rosetun/uninstall.sh
 
 The script stops the `launchd` service, removes `Rosetun.app`, the CLI, helper, engines, runtime socket, `/private/var/log/rosetun-helper.log` and the `pkgutil` receipt. User settings in `~/.config/rosetun` stay. Pass `--purge` to also remove helper state and lists in `/Library/Application Support/Rosetun`.
 
-## Updating from 0.5 {#update}
+## Updating from 0.6 {#update}
 
 Before updating, copy your settings folder. The default path is `%APPDATA%\Rosetun` on Windows and `~/.config/rosetun` on Linux. The backup contains your subscription URLs. Keep it private.
 
-Use the update procedure for your platform above to carry over settings and Lockdown. The first settings save in 0.6 converts format 8 to **format 9** and leaves the previous file beside it as `config.v8.json`. The 0.6 beta already uses format 9. Rosetun 0.5 refuses to open a format 9 file and leaves it intact.
+Use the update procedure for your platform above to carry over settings and Lockdown. The first settings save in 0.7 converts format 9 to **format 12** and leaves the previous file beside it as `config.v9.json`. The 0.7 beta already uses format 12. Rosetun 0.6 refuses to open a format 12 file and leaves it intact.
 
-## Going back to 0.5.1 {#rollback}
+## Going back to 0.6 {#rollback}
 
-1. Disconnect in 0.6 so your own proxy settings come back.
-2. Uninstall 0.6 and keep your settings. On Debian, use `apt remove` to retain data that `apt purge` would remove.
-3. Install 0.5.1 and close Rosetun.
-4. If your configuration was saved in format 9, restore a copy of your pre-update `config.json`. You can also copy `config.v8.json` to `config.json` in the settings folder if that backup exists. Keep a separate copy of the format 9 file if you want to retain your 0.6 changes.
+1. Disconnect in 0.7 so your own proxy settings come back.
+2. Uninstall 0.7 and keep your settings. On Debian, use `apt remove` to retain data that `apt purge` would remove.
+3. Install 0.6 and close Rosetun.
+4. If your configuration was saved in format 12, restore a copy of your pre-update `config.json`. You can also copy `config.v9.json` to `config.json` in the settings folder if that backup exists. Keep a separate copy of the format 12 file if you want to retain your 0.7 changes.
 5. Re-enable autostart and Lockdown if you used them.
 
 ## Verify the download {#verify-the-download}
