@@ -4650,7 +4650,7 @@ fn connect_request() -> ConnectRequest {
         temporary_rules: Vec::new(),
         lists: Vec::new(),
         settings: Settings::default(),
-        rule_templates: Vec::new(),
+        rule_groups: Vec::new(),
     }
 }
 
@@ -5581,14 +5581,14 @@ fn invalid_temporary_rules_leave_connect_and_apply_untouched() {
     request.settings.kill_switch = true;
     let mut too_many = request.clone();
     too_many.temporary_rules = vec![temporary_rule(); MAX_TEMPORARY_RULES + 1];
-    let mut template = request.clone();
-    template.temporary_rules.push(Rule {
-        matcher: RuleMatcher::Template(RuleTemplate::Youtube),
+    let mut group = request.clone();
+    group.temporary_rules.push(Rule {
+        matcher: RuleTemplate::Youtube.to_group("YouTube"),
         enabled: false,
         ..temporary_rule()
     });
 
-    for invalid in [&too_many, &template] {
+    for invalid in [&too_many, &group] {
         let error = helper.connect(invalid).expect_err("invalid connect");
         assert_eq!(error.code, ErrorCode::UnsupportedRules);
         assert!(matches!(
@@ -5599,7 +5599,7 @@ fn invalid_temporary_rules_leave_connect_and_apply_untouched() {
     }
 
     helper.connect(&request).expect("connect");
-    for invalid in [&too_many, &template] {
+    for invalid in [&too_many, &group] {
         let error = helper.apply(invalid).expect_err("invalid apply");
         assert_eq!(error.code, ErrorCode::UnsupportedRules);
         assert!(matches!(helper.status().state, ConnectionState::Connected));
@@ -5713,29 +5713,27 @@ fn invalid_tun_names_leave_connect_and_apply_untouched() {
 }
 
 #[test]
-fn base_rule_set_templates_leave_connect_and_apply_untouched() {
+fn base_rule_set_groups_leave_connect_and_apply_untouched() {
     let (helper, controls, prepared, _) = supervised_helper(true);
     let mut request = connect_request();
     request.settings.kill_switch = true;
     let mut invalid = request.clone();
     invalid.rule_set.rules.push(Rule {
-        matcher: RuleMatcher::Template(RuleTemplate::Youtube),
+        matcher: RuleTemplate::Youtube.to_group("YouTube"),
         enabled: false,
         ..temporary_rule()
     });
 
-    let error = helper
-        .connect(&invalid)
-        .expect_err("base template rejected");
+    let error = helper.connect(&invalid).expect_err("base group rejected");
     assert_eq!(error.code, ErrorCode::UnsupportedRules);
-    assert!(error.message.contains("rule set contains a template"));
+    assert!(error.message.contains("rule set contains a group"));
     assert_eq!(helper.status(), Status::default());
     assert_eq!(controls.spawns(), 0);
 
     helper.connect(&request).expect("connect");
-    let error = helper.apply(&invalid).expect_err("base template rejected");
+    let error = helper.apply(&invalid).expect_err("base group rejected");
     assert_eq!(error.code, ErrorCode::UnsupportedRules);
-    assert!(error.message.contains("rule set contains a template"));
+    assert!(error.message.contains("rule set contains a group"));
     assert_eq!(helper.session().unwrap().request.as_ref(), Some(&request));
     assert_eq!(controls.spawns(), 1);
     assert_eq!(prepared.load(Ordering::Acquire), 0);

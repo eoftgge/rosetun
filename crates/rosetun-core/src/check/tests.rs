@@ -46,7 +46,7 @@ fn trojan(id: &str) -> Node {
 fn request(rules: Vec<Rule>) -> ConnectRequest {
     let mut set = RuleSet::new(RuleSetId::new("set"), "Set", RuleTarget::Proxy);
     set.rules = rules;
-    let (rule_set, rule_templates) = set.expand_templates();
+    let (rule_set, rule_groups) = set.expand_groups();
     ConnectRequest {
         selection: Selection {
             subscription: SubscriptionId::new("example"),
@@ -58,7 +58,7 @@ fn request(rules: Vec<Rule>) -> ConnectRequest {
         temporary_rules: Vec::new(),
         lists: Vec::new(),
         settings: Settings::default(),
-        rule_templates,
+        rule_groups,
     }
 }
 
@@ -246,14 +246,14 @@ fn a_list_rule_names_the_list() {
 }
 
 #[test]
-fn a_template_rule_names_the_template() {
+fn a_group_rule_names_the_group() {
     let request = request(vec![rule(
         "torrents",
-        RuleMatcher::Template(RuleTemplate::Torrents),
+        RuleTemplate::Torrents.to_group("Torrents"),
         RuleTarget::Direct,
     )]);
 
-    // The template lists each system's own program names.
+    // The preset lists each system's own program names.
     let name = if cfg!(windows) {
         "qbittorrent.exe"
     } else {
@@ -265,14 +265,11 @@ fn a_template_rule_names_the_template() {
         answer,
         Answer::Known(Explanation::Routed {
             reason: Reason::Rule {
-                source: RuleSource::Template {
-                    template: RuleTemplate::Torrents,
-                    ..
-                },
+                source: RuleSource::Group { ref name, .. },
                 ..
             },
             ..
-        })
+        }) if name == "Torrents"
     ));
 }
 

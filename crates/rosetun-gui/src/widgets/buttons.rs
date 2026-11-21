@@ -87,6 +87,49 @@ pub(crate) fn outline_button(
     .inner
 }
 
+/// A square outlined button carrying only `icon`, as high as a field.
+/// `label` is spoken to assistive tools and shown on hover.
+pub(crate) fn outline_button_icon(
+    ui: &mut egui::Ui,
+    icon: Icon,
+    label: &str,
+    enabled: bool,
+) -> egui::Response {
+    let side = super::text_field::field_height(ui);
+    let enabled = enabled && ui.is_enabled();
+    let response = ui
+        .scope(|ui| {
+            ui.spacing_mut().button_padding = egui::Vec2::ZERO;
+            ui.spacing_mut().interact_size = egui::vec2(side, side);
+            ui.visuals_mut().widgets.inactive.bg_stroke.width = 1.0;
+            ui.add_enabled(
+                enabled,
+                egui::Button::new("")
+                    .min_size(egui::vec2(side, side))
+                    .fill(Color32::TRANSPARENT)
+                    .stroke(Stroke::new(
+                        theme::stroke::HAIRLINE,
+                        if enabled {
+                            theme::palette().border_strong
+                        } else {
+                            theme::palette().border
+                        },
+                    )),
+            )
+        })
+        .inner;
+    if ui.is_rect_visible(response.rect) {
+        let color = if enabled {
+            theme::palette().text_muted
+        } else {
+            theme::DISABLED
+        };
+        icons::paint(ui.painter(), response.rect.center(), icon, color);
+    }
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, label));
+    response.on_hover_text(label).on_disabled_hover_text(label)
+}
+
 /// An outlined button that opens a menu: the chevron stands inside the button, after the text.
 pub(crate) fn outline_button_menu(
     ui: &mut egui::Ui,

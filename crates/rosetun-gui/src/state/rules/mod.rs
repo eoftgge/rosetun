@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use rosetun_config::{RuleId, RuleMatcher, RuleSet, RuleSetId, RuleTarget};
+use rosetun_config::{RuleId, RuleSet, RuleSetId, RuleTarget};
 use rosetun_core::RuleDestination;
 
 use super::{Action, Job, Screen, State};
@@ -13,6 +13,7 @@ mod address;
 mod check;
 mod dialog;
 pub(crate) mod exchange;
+mod group;
 mod history;
 mod recent;
 
@@ -21,6 +22,7 @@ pub(crate) use check::{AddressCheck, CheckLine};
 #[cfg(test)]
 pub(crate) use dialog::PROCESS_LIST_STALE_MS;
 pub(crate) use dialog::{AddRuleDialog, ChosenProgram, MAX_PROGRAMS, RuleInputKind};
+pub(crate) use group::{GroupEditorDialog, GroupSelectionDialog, TemplatesCatalogDialog};
 use history::RuleHistory;
 pub(crate) use history::UndoNotice;
 #[cfg(test)]
@@ -45,6 +47,11 @@ pub(crate) struct RuleScreen {
     pub(crate) filter: RuleFilter,
     pub(crate) selected_rules: BTreeSet<RuleId>,
     pub(crate) selection_anchor: Option<RuleId>,
+    /// Group rules whose accordion drawer is expanded in the table.
+    pub(crate) expanded_groups: BTreeSet<RuleId>,
+    pub(crate) templates_catalog: Option<TemplatesCatalogDialog>,
+    pub(crate) group_selection: Option<GroupSelectionDialog>,
+    pub(crate) group_editor: Option<GroupEditorDialog>,
     pub(crate) name: Option<NameDialog>,
     /// The set waiting for the user's confirmation of its deletion.
     pub(crate) delete_set: Option<RuleSetId>,
@@ -230,6 +237,10 @@ impl State {
                 .screen
                 .selected_rules
                 .retain(|id| existing.contains(id));
+            self.rules
+                .screen
+                .expanded_groups
+                .retain(|id| existing.contains(id));
             if self
                 .rules
                 .screen
@@ -241,6 +252,7 @@ impl State {
             }
         } else {
             self.rules.screen.clear_selection();
+            self.rules.screen.expanded_groups.clear();
         }
         if self
             .rules
@@ -250,6 +262,27 @@ impl State {
             .is_some_and(|dialog| !self.config.rule_sets.iter().any(|set| set.id == dialog.set))
         {
             self.rules.screen.add = None;
+        }
+        if self
+            .rules
+            .screen
+            .group_selection
+            .as_ref()
+            .is_some_and(|dialog| !self.config.rule_sets.iter().any(|set| set.id == dialog.set))
+        {
+            self.rules.screen.group_selection = None;
+        }
+        if self
+            .rules
+            .screen
+            .group_editor
+            .as_ref()
+            .is_some_and(|dialog| !self.config.rule_sets.iter().any(|set| set.id == dialog.set))
+        {
+            self.rules.screen.group_editor = None;
+        }
+        if self.selected_rules().is_none() {
+            self.rules.screen.templates_catalog = None;
         }
     }
 
@@ -270,6 +303,10 @@ impl State {
     }
 
     fn finish_dialog_rule_edit(&mut self, result: Result<(), rosetun_core::RuleSetError>) {
+        if self.rules.screen.group_editor.is_some() {
+            self.finish_group_editor(result);
+            return;
+        }
         self.operations.rules_edit = false;
         if self.rules.screen.add.is_some() {
             match result {
@@ -385,6 +422,14 @@ impl State {
                 }
                 self.finish_rule_edit(result);
             }
+            WorkerEvent::GroupRules(result) => self.finish_group_selection(result),
+            WorkerEvent::UngroupRule(result) => {
+                if result.is_ok() {
+                    self.rules.screen.clear_selection();
+                }
+                self.finish_rule_edit(result.map(|_| ()));
+            }
+            WorkerEvent::RemoveGroupItem(result) => self.finish_rule_edit(result),
             WorkerEvent::RestoreRuleSets(result) => self.reduce_rule_restore(result),
             _ => unreachable!("only rule events are dispatched here"),
         }
@@ -547,32 +592,27 @@ impl State {
                     return self.start_rule_edit(Job::SetDefaultTarget(set.id.clone(), target));
                 }
             }
-            Action::AddTemplate(template) => {
-                if self.can_edit_rules()
-                    && let Some(set) = self.selected_rules()
-                    && !set.rules.iter().any(|rule| {
-                        matches!(&rule.matcher, RuleMatcher::Template(current) if *current == template)
-                    })
-                {
-                    return self.start_rule_edit(Job::AddRule(
-                        set.id.clone(),
-                        RuleMatcher::Template(template),
-                        template.default_target().into(),
-                    ));
-                }
+            action @ (Action::OpenTemplatesCatalog
+            | Action::CloseTemplatesCatalog
+            | Action::AddPresetGroup(_, _)
+            | Action::ToggleGroupExpanded(_)
+            | Action::OpenGroupSelection
+            | Action::CancelGroupSelection
+            | Action::SubmitGroupSelection
+            | Action::UngroupRule(_)
+            | Action::RemoveGroupItem(_, _)
+            | Action::OpenNewGroup
+            | Action::CancelGroupEditor
+            | Action::SubmitGroupEditor) => {
+                return self.act_rule_groups(action);
             }
-            Action::RemoveTemplate(template) => {
-                if self.can_edit_rules()
-                    && let Some(set) = self.selected_rules()
-                    && let Some(rule) = set.rules.iter().find(|rule| {
-                        matches!(&rule.matcher, RuleMatcher::Template(current) if *current == template)
-                    })
-                {
-                    return self.start_rule_edit(Job::RemoveRule(set.id.clone(), rule.id.clone()));
-                }
-            }
-            action @ (Action::OpenAddRule | Action::OpenAddRuleFor(_) | Action::OpenEditRule(_) | Action::CancelAddRule
-            | Action::SelectRuleInput(_) | Action::CorrectRuleIps | Action::RefreshProcesses
+            action @ (Action::OpenAddRule
+            | Action::OpenAddRuleFor(_)
+            | Action::OpenEditRule(_)
+            | Action::CancelAddRule
+            | Action::SelectRuleInput(_)
+            | Action::CorrectRuleIps
+            | Action::RefreshProcesses
             | Action::SubmitAddRule) => {
                 return self.act_rule_dialog(action);
             }

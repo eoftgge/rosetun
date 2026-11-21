@@ -23,6 +23,8 @@ pub(crate) enum UndoNotice {
     RulesImported(usize),
     SetDeleted,
     RulesMoved(usize),
+    RulesGrouped(usize),
+    GroupUngrouped(usize),
     Reverted,
 }
 
@@ -106,6 +108,8 @@ fn step_outcome(event: &WorkerEvent) -> Option<StepOutcome> {
         WorkerEvent::ImportRules(result) => result.is_ok(),
         WorkerEvent::AddRule(result) => result.is_ok(),
         WorkerEvent::AddRules(result) => result.is_ok(),
+        WorkerEvent::GroupRules(result) => result.is_ok(),
+        WorkerEvent::UngroupRule(result) => result.is_ok(),
         WorkerEvent::RenameRuleSet(result)
         | WorkerEvent::DeleteRuleSet(result)
         | WorkerEvent::SetDefaultTarget(result)
@@ -115,7 +119,8 @@ fn step_outcome(event: &WorkerEvent) -> Option<StepOutcome> {
         | WorkerEvent::MoveRule(result)
         | WorkerEvent::MoveRules(result)
         | WorkerEvent::RemoveRule(result)
-        | WorkerEvent::RemoveRules(result) => result.is_ok(),
+        | WorkerEvent::RemoveRules(result)
+        | WorkerEvent::RemoveGroupItem(result) => result.is_ok(),
         _ => return None,
     };
     Some(if ok {
@@ -154,24 +159,29 @@ impl State {
             | Job::UpdateRule(id, _, _, _)
             | Job::SetRuleTarget(id, _, _)
             | Job::SetRuleEnabled(id, _, _)
-            | Job::MoveRule(id, _, _) => (Some(id), false, None),
+            | Job::MoveRule(id, _, _)
+            | Job::RemoveGroupItem(id, _, _) => (Some(id), false, None),
             Job::MoveRules(id, rules, _) => {
                 (Some(id), false, Some(UndoNotice::RulesMoved(rules.len())))
             }
-            Job::RemoveRule(id, rule) => {
-                let template = self
+            Job::GroupRules(id, rules, _, _) => {
+                (Some(id), false, Some(UndoNotice::RulesGrouped(rules.len())))
+            }
+            Job::UngroupRule(id, rule) => {
+                let count = self
                     .config
                     .rule_sets
                     .iter()
                     .find(|set| &set.id == id)
                     .and_then(|set| set.rules.iter().find(|item| &item.id == rule))
-                    .is_some_and(|rule| matches!(rule.matcher, RuleMatcher::Template(_)));
-                (
-                    Some(id),
-                    false,
-                    (!template).then_some(UndoNotice::RulesDeleted(1)),
-                )
+                    .and_then(|item| match &item.matcher {
+                        RuleMatcher::Group { items, .. } => Some(items.len()),
+                        _ => None,
+                    })
+                    .unwrap_or(1);
+                (Some(id), false, Some(UndoNotice::GroupUngrouped(count)))
             }
+            Job::RemoveRule(id, _) => (Some(id), false, Some(UndoNotice::RulesDeleted(1))),
             Job::RemoveRules(id, rules) => {
                 (Some(id), false, Some(UndoNotice::RulesDeleted(rules.len())))
             }

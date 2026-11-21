@@ -10,6 +10,9 @@ pub(super) fn clear_selection_on_click_away(
         || state.rules.screen.name.is_some()
         || state.rules.screen.add.is_some()
         || state.rules.screen.delete_set.is_some()
+        || state.rules.screen.templates_catalog.is_some()
+        || state.rules.screen.group_selection.is_some()
+        || state.rules.screen.group_editor.is_some()
         || state.rules.exchange.export.is_some()
         || state.rules.exchange.import.is_some()
         || state.rules.exchange.error.is_some()
@@ -26,6 +29,8 @@ pub(super) fn clear_selection_on_click_away(
                     | Action::MoveSelectedRulesToTop
                     | Action::MoveSelectedRulesToEnd
                     | Action::DeleteSelectedRules
+                    | Action::OpenGroupSelection
+                    | Action::ToggleGroupExpanded(_)
                     | Action::ClearRuleSelection
             )
         })
@@ -81,6 +86,9 @@ fn selection_toolbar(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>
     ui.label(
         RichText::new(crate::i18n::selected_rule_count(count)).color(theme::palette().text_muted),
     );
+    if widgets::outline_button_compact(ui, &tr!("group-selected"), can_edit).clicked() {
+        actions.push(Action::OpenGroupSelection);
+    }
     for (label, action) in [
         (tr!("move-selected-to-top"), Action::MoveSelectedRulesToTop),
         (tr!("move-to-end"), Action::MoveSelectedRulesToEnd),
@@ -121,6 +129,9 @@ pub(super) fn selection_shortcuts(
         || state.rules.screen.name.is_some()
         || state.rules.screen.add.is_some()
         || state.rules.screen.delete_set.is_some()
+        || state.rules.screen.templates_catalog.is_some()
+        || state.rules.screen.group_selection.is_some()
+        || state.rules.screen.group_editor.is_some()
         || state.rules.exchange.export.is_some()
         || state.rules.exchange.import.is_some()
         || state.rules.exchange.error.is_some()

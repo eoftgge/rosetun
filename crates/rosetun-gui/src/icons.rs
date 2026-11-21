@@ -27,6 +27,9 @@ pub(crate) enum Icon {
     Download,
     Plus,
     Filter,
+    Group,
+    Close,
+    Sparkle,
 }
 
 /// The side of a standard icon button.
@@ -327,6 +330,50 @@ pub(crate) fn paint(painter: &egui::Painter, center: egui::Pos2, icon: Icon, col
                     center + egui::vec2(1.5, 4.5),
                     center + egui::vec2(-1.5, 6.0),
                     center + egui::vec2(-1.5, 0.5),
+                ],
+                stroke,
+            ));
+        }
+        Icon::Group => {
+            painter.add(egui::Shape::closed_line(
+                vec![
+                    center + egui::vec2(-6.5, -4.5),
+                    center + egui::vec2(-1.5, -4.5),
+                    center + egui::vec2(0.5, -2.5),
+                    center + egui::vec2(6.5, -2.5),
+                    center + egui::vec2(6.5, 5.0),
+                    center + egui::vec2(-6.5, 5.0),
+                ],
+                stroke,
+            ));
+        }
+        Icon::Close => {
+            painter.line_segment(
+                [
+                    center + egui::vec2(-4.0, -4.0),
+                    center + egui::vec2(4.0, 4.0),
+                ],
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    center + egui::vec2(4.0, -4.0),
+                    center + egui::vec2(-4.0, 4.0),
+                ],
+                stroke,
+            );
+        }
+        Icon::Sparkle => {
+            painter.add(egui::Shape::closed_line(
+                vec![
+                    center + egui::vec2(0.0, -6.5),
+                    center + egui::vec2(2.0, -2.0),
+                    center + egui::vec2(6.5, 0.0),
+                    center + egui::vec2(2.0, 2.0),
+                    center + egui::vec2(0.0, 6.5),
+                    center + egui::vec2(-2.0, 2.0),
+                    center + egui::vec2(-6.5, 0.0),
+                    center + egui::vec2(-2.0, -2.0),
                 ],
                 stroke,
             ));

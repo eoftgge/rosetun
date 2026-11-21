@@ -21,7 +21,7 @@ mod transitions;
 pub(crate) use action_notice::{NoticeAction, action_notice};
 pub(crate) use buttons::{
     button_fill, button_fill_compact, button_fill_icon, link, outline_button,
-    outline_button_compact, outline_button_full, outline_button_menu,
+    outline_button_compact, outline_button_full, outline_button_icon, outline_button_menu,
 };
 pub(crate) use checkbox::checkbox;
 #[cfg(test)]

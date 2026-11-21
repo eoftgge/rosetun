@@ -82,7 +82,7 @@ pub(crate) fn exit_path_supported(
         temporary_rules: Vec::new(),
         lists: Vec::new(),
         settings: draft.settings,
-        rule_templates: Vec::new(),
+        rule_groups: Vec::new(),
     };
     request.validate_exit_chains().is_ok()
 }

@@ -86,6 +86,10 @@ enum Matcher {
         category: Option<String>,
     },
     Template(RuleTemplate),
+    Group {
+        name: String,
+        items: Vec<Matcher>,
+    },
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Warning {
@@ -189,41 +193,13 @@ pub fn export(
         if selected.is_some_and(|ids| !ids.contains(&rule.id)) {
             continue;
         }
-        let matcher = match &rule.matcher {
-            RuleMatcher::Domain(value) => Matcher::Domain(value.clone()),
-            RuleMatcher::Process(value) => Matcher::Process(value.clone()),
-            RuleMatcher::IpCidr(value) => Matcher::IpCidr(value.clone()),
-            RuleMatcher::Template(value) => Matcher::Template(*value),
-            RuleMatcher::List { list, category } => {
-                let index = if let Some(index) = ids.iter().position(|id| id == list) {
-                    index
-                } else {
-                    let entry = config.lists.iter().find(|entry| &entry.id == list);
-                    document.lists.push(SharedList {
-                        name: entry.map_or_else(String::new, |entry| entry.name.clone()),
-                        format: entry.map_or(ListFormat::Text, |entry| entry.format),
-                        source: entry.and_then(|entry| match &entry.source {
-                            ListSource::Url(url) if with_urls => Some(Source::Url(url.clone())),
-                            ListSource::File { original_name }
-                                if original_name == "list-required" =>
-                            {
-                                None
-                            }
-                            ListSource::File { original_name } => Some(Source::File {
-                                original_name: original_name.clone(),
-                            }),
-                            ListSource::Url(_) => None,
-                        }),
-                    });
-                    ids.push(list.clone());
-                    ids.len() - 1
-                };
-                Matcher::List {
-                    list: index,
-                    category: category.clone(),
-                }
-            }
-        };
+        let matcher = export_matcher(
+            config,
+            &rule.matcher,
+            with_urls,
+            &mut ids,
+            &mut document.lists,
+        );
         document.rules.push(
             serde_json::to_value(SharedRule {
                 enabled: rule.enabled,
@@ -242,6 +218,54 @@ pub fn export(
         return Err(ExchangeError::Size);
     }
     Ok(text)
+}
+
+fn export_matcher(
+    config: &AppConfig,
+    matcher: &RuleMatcher,
+    with_urls: bool,
+    ids: &mut Vec<ListId>,
+    lists: &mut Vec<SharedList>,
+) -> Matcher {
+    match matcher {
+        RuleMatcher::Domain(value) => Matcher::Domain(value.clone()),
+        RuleMatcher::Process(value) => Matcher::Process(value.clone()),
+        RuleMatcher::IpCidr(value) => Matcher::IpCidr(value.clone()),
+        RuleMatcher::List { list, category } => {
+            let index = if let Some(index) = ids.iter().position(|id| id == list) {
+                index
+            } else {
+                let entry = config.lists.iter().find(|entry| &entry.id == list);
+                lists.push(SharedList {
+                    name: entry.map_or_else(String::new, |entry| entry.name.clone()),
+                    format: entry.map_or(ListFormat::Text, |entry| entry.format),
+                    source: entry.and_then(|entry| match &entry.source {
+                        ListSource::Url(url) if with_urls => Some(Source::Url(url.clone())),
+                        ListSource::File { original_name } if original_name == "list-required" => {
+                            None
+                        }
+                        ListSource::File { original_name } => Some(Source::File {
+                            original_name: original_name.clone(),
+                        }),
+                        ListSource::Url(_) => None,
+                    }),
+                });
+                ids.push(list.clone());
+                ids.len() - 1
+            };
+            Matcher::List {
+                list: index,
+                category: category.clone(),
+            }
+        }
+        RuleMatcher::Group { name, items } => Matcher::Group {
+            name: name.clone(),
+            items: items
+                .iter()
+                .map(|item| export_matcher(config, item, with_urls, ids, lists))
+                .collect(),
+        },
+    }
 }
 
 pub fn parse(text: &str) -> Result<Document, ExchangeError> {
@@ -360,20 +384,48 @@ fn normalize(
             if matches!(&value, ProcessMatch::Name(name) if name.is_empty()) {
                 return None;
             }
-            if foreign {
+            if foreign && !warnings.contains(&Warning::OtherSystem) {
                 warnings.push(Warning::OtherSystem);
             }
             RuleMatcher::Process(value)
         }
-        Matcher::Template(value) => RuleMatcher::Template(value),
+        Matcher::Template(value) => value.to_group(value.default_name(false)),
         Matcher::List { list, category } => RuleMatcher::List {
             list: lists.get(list)?.clone(),
             category,
         },
+        Matcher::Group { name, items } => {
+            let trimmed = name.trim();
+            if trimmed.is_empty()
+                || trimmed.chars().count() > crate::RULE_GROUP_NAME_LIMIT
+                || name.chars().any(char::is_control)
+                || items.is_empty()
+                || items.len() > crate::MAX_GROUP_ITEMS
+            {
+                return None;
+            }
+            let mut normalized = Vec::with_capacity(items.len());
+            for item in items {
+                if matches!(item, Matcher::Group { .. } | Matcher::Template(_)) {
+                    return None;
+                }
+                let item = normalize(item, lists, from, to, warnings)?;
+                if !normalized
+                    .iter()
+                    .any(|existing| same_matcher(existing, &item, to))
+                {
+                    normalized.push(item);
+                }
+            }
+            RuleMatcher::Group {
+                name: trimmed.to_owned(),
+                items: normalized,
+            }
+        }
     })
 }
-fn same_rule(a: &Rule, b: &Rule, system: System) -> bool {
-    let matcher = match (&a.matcher, &b.matcher) {
+fn same_matcher(a: &RuleMatcher, b: &RuleMatcher, system: System) -> bool {
+    match (a, b) {
         (
             RuleMatcher::Process(ProcessMatch::Name(a)),
             RuleMatcher::Process(ProcessMatch::Name(b)),
@@ -384,18 +436,106 @@ fn same_rule(a: &Rule, b: &Rule, system: System) -> bool {
         ) if system == System::Windows => a
             .to_string_lossy()
             .eq_ignore_ascii_case(&b.to_string_lossy()),
-        _ => a.matcher == b.matcher,
-    };
-    matcher && a.target == b.target && a.exit == b.exit
+        (
+            RuleMatcher::Group {
+                name: a_name,
+                items: a_items,
+            },
+            RuleMatcher::Group {
+                name: b_name,
+                items: b_items,
+            },
+        ) => {
+            a_name == b_name
+                && a_items.len() == b_items.len()
+                && a_items
+                    .iter()
+                    .zip(b_items)
+                    .all(|(x, y)| same_matcher(x, y, system))
+        }
+        _ => a == b,
+    }
+}
+fn same_rule(a: &Rule, b: &Rule, system: System) -> bool {
+    same_matcher(&a.matcher, &b.matcher, system) && a.target == b.target && a.exit == b.exit
+}
+fn is_broad_direct_matcher(matcher: &RuleMatcher) -> bool {
+    match matcher {
+        RuleMatcher::IpCidr(value) => matches!(value.as_str(), "0.0.0.0/0" | "::/0"),
+        RuleMatcher::Domain(DomainMatch::Suffix(value)) => !value.contains('.'),
+        RuleMatcher::Domain(DomainMatch::Keyword(value)) => value.len() < 4,
+        RuleMatcher::Group { items, .. } => items.iter().any(is_broad_direct_matcher),
+        _ => false,
+    }
 }
 pub fn broad_direct(rule: &Rule) -> bool {
-    rule.target == RuleTarget::Direct
-        && match &rule.matcher {
-            RuleMatcher::IpCidr(value) => matches!(value.as_str(), "0.0.0.0/0" | "::/0"),
-            RuleMatcher::Domain(DomainMatch::Suffix(value)) => !value.contains('.'),
-            RuleMatcher::Domain(DomainMatch::Keyword(value)) => value.len() < 4,
-            _ => false,
+    rule.target == RuleTarget::Direct && is_broad_direct_matcher(&rule.matcher)
+}
+fn validate_preview_lists(
+    matcher: &RuleMatcher,
+    ids: &[ListId],
+    document: &Document,
+    config: &AppConfig,
+    result_lists: &mut [List],
+    warnings: &mut Vec<Warning>,
+) -> Option<()> {
+    match matcher {
+        RuleMatcher::List { list, category } => {
+            if let Some(entry) = result_lists.iter_mut().find(|entry| &entry.id == list) {
+                if entry.format.has_categories() {
+                    let category = category.as_deref()?;
+                    let base = category.split('@').next()?;
+                    if base.is_empty()
+                        || !base.bytes().all(|byte| {
+                            byte.is_ascii_lowercase()
+                                || byte.is_ascii_digit()
+                                || matches!(byte, b'_' | b'-')
+                        })
+                    {
+                        return None;
+                    }
+                    if !entry.categories.iter().any(|existing| existing == base) {
+                        entry.categories.push(base.into());
+                    }
+                }
+                if !matches!(
+                    entry.validate_category(category.as_deref()),
+                    Ok(()) | Err(crate::ListCategoryError::Unknown)
+                ) {
+                    return None;
+                }
+            }
+            let source = ids
+                .iter()
+                .position(|id| id == list)
+                .and_then(|index| document.lists.get(index));
+            if let Some(entry) = config.lists.iter().find(|entry| &entry.id == list)
+                && !matches!(
+                    entry.validate_category(category.as_deref()),
+                    Ok(()) | Err(crate::ListCategoryError::Unknown)
+                )
+            {
+                return None;
+            }
+            match source.and_then(|list| list.source.as_ref()) {
+                None if !warnings.contains(&Warning::NeedsList) => {
+                    warnings.push(Warning::NeedsList);
+                }
+                Some(Source::File { .. }) if !warnings.contains(&Warning::NeedsFile) => {
+                    warnings.push(Warning::NeedsFile);
+                }
+                _ => {}
+            }
+            Some(())
         }
+        RuleMatcher::Group { items, .. } => {
+            for item in items {
+                validate_preview_lists(item, ids, document, config, result_lists, warnings)?;
+            }
+            Some(())
+        }
+        _ => Some(()),
+    }
 }
 /// Builds the entire preview without changing settings or fetching lists.
 pub fn preview(
@@ -471,55 +611,14 @@ pub fn preview(
                 system,
                 &mut report.warnings,
             )?;
-            if let RuleMatcher::List { list, category } = &matcher {
-                let entry = result.lists.iter_mut().find(|entry| &entry.id == list);
-                if let Some(entry) = entry {
-                    if entry.format.has_categories() {
-                        let category = category.as_deref()?;
-                        let base = category.split('@').next()?;
-                        if base.is_empty()
-                            || !base.bytes().all(|byte| {
-                                byte.is_ascii_lowercase()
-                                    || byte.is_ascii_digit()
-                                    || matches!(byte, b'_' | b'-')
-                            })
-                        {
-                            return None;
-                        }
-                        if !entry.categories.iter().any(|existing| existing == base) {
-                            entry.categories.push(base.into());
-                        }
-                    }
-                    if !matches!(
-                        entry.validate_category(category.as_deref()),
-                        Ok(()) | Err(crate::ListCategoryError::Unknown)
-                    ) {
-                        return None;
-                    }
-                }
-            }
-            if let RuleMatcher::List { list, .. } = &matcher {
-                let source = ids
-                    .iter()
-                    .position(|id| id == list)
-                    .and_then(|index| document.lists.get(index));
-                if let Some(entry) = config.lists.iter().find(|entry| &entry.id == list) {
-                    let RuleMatcher::List { category, .. } = &matcher else {
-                        return None;
-                    };
-                    if !matches!(
-                        entry.validate_category(category.as_deref()),
-                        Ok(()) | Err(crate::ListCategoryError::Unknown)
-                    ) {
-                        return None;
-                    }
-                }
-                match source.and_then(|list| list.source.as_ref()) {
-                    None => report.warnings.push(Warning::NeedsList),
-                    Some(Source::File { .. }) => report.warnings.push(Warning::NeedsFile),
-                    Some(Source::Url(_)) => {}
-                }
-            }
+            validate_preview_lists(
+                &matcher,
+                &ids,
+                document,
+                config,
+                &mut result.lists,
+                &mut report.warnings,
+            )?;
             let mut target = shared.target;
             let exit = if target == RuleTarget::Exit {
                 let found = shared.server.as_ref().and_then(|description| {
@@ -639,7 +738,7 @@ mod tests {
                 "example.com".into(),
             ))),
             rule(RuleMatcher::IpCidr("192.0.2.0/24".into())),
-            rule(RuleMatcher::Template(RuleTemplate::Torrents)),
+            rule(RuleTemplate::Torrents.to_group("Torrents")),
             rule(RuleMatcher::Process(ProcessMatch::Name(
                 "FireFox.exe".into(),
             ))),
@@ -660,6 +759,37 @@ mod tests {
             assert_eq!(a.enabled, b.enabled);
             assert_ne!(a.id, b.id);
         }
+    }
+    #[test]
+    fn legacy_template_imports_as_group_and_nested_groups_are_invalid() {
+        let config = AppConfig::default();
+        let document = doc(vec![
+            serde_json::json!({
+                "enabled": true,
+                "matcher": { "template": "youtube" },
+                "target": "proxy"
+            }),
+            serde_json::json!({
+                "enabled": true,
+                "matcher": {
+                    "group": {
+                        "name": "Nested",
+                        "items": [
+                            { "group": { "name": "Inner", "items": [{ "ip_cidr": "192.0.2.0/24" }] } }
+                        ]
+                    }
+                },
+                "target": "proxy"
+            }),
+        ]);
+        let preview = preview(&document, &config, &set(), false, System::Windows);
+        assert_eq!(preview.rules.len(), 1);
+        assert_eq!(
+            preview.rules[0].matcher,
+            RuleTemplate::Youtube.to_group("YouTube")
+        );
+        assert!(!preview.entries[0].invalid);
+        assert!(preview.entries[1].invalid);
     }
     #[test]
     fn process_translation_preserves_linux_case_and_disables_foreign_paths() {

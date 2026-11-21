@@ -12,6 +12,7 @@ error-rule-set-not-found = набор правил не найден
 error-rule-not-found = правило не найдено
 error-rule-set-name-empty = название набора не может быть пустым
 error-duplicate-rule = такое правило уже есть в наборе
+error-invalid-group = у группы должно быть название и хотя бы одно правило
 error-exit-not-found = этого направления больше нет
 error-exit-node-not-found = выбранного сервера больше нет в подписках
 error-exit-name-empty = имя направления не может быть пустым
@@ -632,7 +633,7 @@ connections-why = Почему
 connections-why-rule = Правило { $number } · { $condition }
 connections-why-session-rule = Правило запущенного набора · { $condition }
 connections-why-temporary = Временное правило · { $condition }
-connections-why-template = Шаблон «{ $template }» · { $condition }
+connections-why-group = Группа «{ $group }» · { $condition }
 connections-why-list = Список «{ $list }» · правило { $number }
 connections-why-session-list = Список «{ $list }» · правило запущенного набора
 connections-why-list-condition = список «{ $list }»
@@ -885,7 +886,7 @@ rule-check-basis-number = { $basis } · правило { $number }
 rule-check-outcome = { $route } · { $why }
 rule-check-rule-unknown = правило запущенного набора
 rule-check-temporary = временное правило
-rule-check-template = шаблон «{ $template }»
+rule-check-group = группа «{ $group }»
 rule-check-list = список «{ $list }»
 rule-check-lan = локальная сеть
 rule-check-private = частная сеть за роутером
@@ -910,13 +911,17 @@ caption-addresses = IP-адреса
 default-rule-tooltip = Правило по умолчанию нельзя перемещать или удалять.
 no-rule-sets = Наборов правил пока нет: всё идёт через VPN.
 no-rules-match = Нет правил под этот фильтр.
-rules-templates = Быстрые шаблоны
+templates-button = Шаблоны
+templates-dialog-title = Шаблоны правил
+templates-dialog-subtitle = Готовые группы правил. После добавления их можно свободно менять.
+templates-starter-title = Начните с готового шаблона
+templates-all-button = Все шаблоны…
+templates-show-items = Показать состав
+templates-hide-items = Скрыть состав
 template-add = Добавить
 template-added = Добавлен
-template-remove-hint = Нажмите, чтобы убрать шаблон из набора
 template-redundant = Остальной трафик и так идёт туда же.
 template-contents = Внутри: { $list }
-caption-template = Шаблон · обновляется автоматически
 russian-sites-name = Российские сайты
 russian-sites-description = Домены .ru, .su и .рф, ВКонтакте и Яндекс
 messengers-name = Мессенджеры
@@ -925,6 +930,48 @@ youtube-name = YouTube
 youtube-description = Сайт, видео и превью
 torrents-name = Торренты
 torrents-description = qBittorrent, uTorrent, BitTorrent, Transmission и другие
+ai-services-name = ИИ-сервисы
+ai-services-description = ChatGPT, Claude, Gemini, Perplexity и Copilot
+social-name = Соцсети
+social-description = Instagram, X (Twitter), Facebook и TikTok
+streaming-name = Стриминг и музыка
+streaming-description = Spotify, Netflix, Twitch и SoundCloud
+gaming-name = Игры
+gaming-description = Steam, Epic Games, Battle.net, Riot и EA
+group-items-count = { $count ->
+    [one] { $n } условие
+    [few] { $n } условия
+   *[other] { $n } условий
+}
+rules-grouped = { $count ->
+    [one] Объединили { $n } правило в группу
+    [few] Объединили { $n } правила в группу
+   *[other] Объединили { $n } правил в группу
+}
+group-ungrouped = { $count ->
+    [one] Разгруппировали: { $n } правило
+    [few] Разгруппировали: { $n } правила
+   *[other] Разгруппировали: { $n } правил
+}
+group-selected = В группу
+group-ungroup = Разгруппировать
+group-edit = Изменить группу
+group-new = Новая группа
+group-create-title = Объединить в группу
+group-create-confirm = Создать группу
+group-name-label = Название группы
+group-name-hint = Например: Работа, Игры, Медиа
+group-items-label = Условия в группе
+group-add-item-hint = Добавить сайт, IP/CIDR или имя программы…
+group-add-item-button = Добавить
+group-remove-item-hint = Убрать из группы
+group-last-item-hint = В группе должно остаться хотя бы одно условие
+group-empty-error = Добавьте хотя бы одно условие
+group-name-empty-error = Введите название группы
+group-item-invalid = Введите сайт, IP/CIDR или имя программы
+group-item-duplicate = Уже есть в этой группе
+group-mixed-target-hint = У выбранных правил были разные действия: выберите общее для группы.
+group-expand-hint = Показать или скрыть состав группы
 new-rule-button = + Добавить правило
 new-rule = Новое правило
 edit = Изменить

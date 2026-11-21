@@ -106,7 +106,8 @@ fn config(language: Language, error: &ConfigError) -> String {
         | ConfigError::InvalidFragment
         | ConfigError::InvalidLocalProxyPort
         | ConfigError::InvalidExitDependency
-        | ConfigError::InvalidRuleExit => error.to_string(),
+        | ConfigError::InvalidRuleExit
+        | ConfigError::InvalidRuleGroup => error.to_string(),
     }
 }
 
@@ -142,6 +143,7 @@ pub(crate) fn rule_set(language: Language, error: &RuleSetError) -> String {
         }
         RuleSetError::EmptyName => tr_in(language, "error-rule-set-name-empty", &FluentArgs::new()),
         RuleSetError::DuplicateRule => tr_in(language, "error-duplicate-rule", &FluentArgs::new()),
+        RuleSetError::InvalidGroup => tr_in(language, "error-invalid-group", &FluentArgs::new()),
         RuleSetError::ListNotFound => tr_in(language, "error-list-not-found", &FluentArgs::new()),
         RuleSetError::ListCategory(error) => list_category(language, error),
         RuleSetError::Exit(error) => exit(language, error),

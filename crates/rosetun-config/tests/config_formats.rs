@@ -2,12 +2,12 @@ mod support;
 
 use rosetun_config::{
     AccentPreset, AnyTlsParams, AppConfig, CONFIG_VERSION, ConfigError, ConnectionMode,
-    CountryCode, DelayMode, EngineKind, Exit, ExitId, ExitTarget, FormatError, HwidScope,
-    Hysteria2Params, List, ListFormat, ListId, ListSource, LocalProxySettings, Node, NodeId,
-    Outbound, QuitAction, RealityParams, Rule, RuleId, RuleMatcher, RuleTarget, Selection,
-    StreamSettings, SubscriptionId, TlsFragment, TlsMode, TlsParams, Transport,
-    TuicCongestionControl, TuicParams, TuicUdpRelayMode, VlessParams, WireGuardParams, XhttpExtra,
-    XhttpMode, XhttpRange, XhttpXmux, from_json,
+    CountryCode, DelayMode, DomainMatch, EngineKind, Exit, ExitId, ExitTarget, FormatError,
+    HwidScope, Hysteria2Params, List, ListFormat, ListId, ListSource, LocalProxySettings, Node,
+    NodeId, Outbound, ProcessMatch, QuitAction, RealityParams, Rule, RuleId, RuleMatcher,
+    RuleTarget, RuleTemplate, Selection, StreamSettings, SubscriptionId, TlsFragment, TlsMode,
+    TlsParams, Transport, TuicCongestionControl, TuicParams, TuicUdpRelayMode, VlessParams,
+    WireGuardParams, XhttpExtra, XhttpMode, XhttpRange, XhttpXmux, from_json,
 };
 use serde_json::{Value, json};
 
@@ -24,6 +24,7 @@ const V8: &[u8] = include_bytes!("fixtures/v8.json");
 const V9: &[u8] = include_bytes!("fixtures/v9.json");
 const V10: &[u8] = include_bytes!("fixtures/v10.json");
 const V11: &[u8] = include_bytes!("fixtures/v11.json");
+const V12: &[u8] = include_bytes!("fixtures/v12.json");
 
 #[test]
 fn subscription_vpn_updates_are_enabled_when_migrating_released_settings() {
@@ -217,7 +218,7 @@ fn value(bytes: &[u8]) -> Value {
 #[test]
 fn released_configurations_migrate_to_the_expected_configuration() {
     assert_eq!(
-        CONFIG_VERSION, 11,
+        CONFIG_VERSION, 12,
         "update the current fixture when bumping the settings format"
     );
     let expected = expected_migrated_legacy_config();
@@ -345,7 +346,27 @@ fn current_configuration_fixture_guards_the_serialized_format() {
     };
     expected.interface.delay_mode = DelayMode::Full;
     expected.interface.show_country_flags = false;
-    let (loaded, migrated_from) = from_json(V11).expect("current fixture should load");
+    // Keep the v12 serialized fixture OS-independent by replacing the 4 migrated
+    // template rules (some of which contain OS-specific process names) with
+    // deterministic group rules.
+    expected.rule_sets[0]
+        .rules
+        .retain(|rule| !rule.id.as_str().starts_with("template-"));
+    expected.rule_sets[0].rules.push(Rule {
+        id: RuleId::new("group-example"),
+        enabled: true,
+        matcher: RuleMatcher::Group {
+            name: "Example group".into(),
+            items: vec![
+                RuleMatcher::Domain(DomainMatch::Suffix("youtube.com".into())),
+                RuleMatcher::Process(ProcessMatch::Name("example.exe".into())),
+                RuleMatcher::IpCidr("198.51.100.0/24".into()),
+            ],
+        },
+        target: RuleTarget::Proxy,
+        exit: None,
+    });
+    let (loaded, migrated_from) = from_json(V12).expect("current fixture should load");
 
     assert_eq!(migrated_from, None);
     assert_eq!(loaded, expected);
@@ -377,16 +398,61 @@ fn current_configuration_fixture_guards_the_serialized_format() {
     );
     assert_eq!(
         serde_json::to_value(&expected).expect("serialize expected configuration"),
-        value(V11),
+        value(V12),
         "the serialized configuration shape changed; keep the current fixture in sync"
     );
+}
+
+fn with_migrated_templates(mut config: Value) -> Value {
+    let russian = config
+        .get("interface")
+        .and_then(|interface| interface.get("language"))
+        .and_then(Value::as_str)
+        == Some("russian");
+    if let Some(rule_sets) = config.get_mut("rule_sets").and_then(Value::as_array_mut) {
+        for set in rule_sets {
+            if let Some(rules) = set.get_mut("rules").and_then(Value::as_array_mut) {
+                for rule in rules {
+                    if let Some(key) = rule
+                        .get("matcher")
+                        .and_then(|matcher| matcher.get("template"))
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                        && let Some(template) = RuleTemplate::from_key(&key)
+                    {
+                        rule["matcher"] =
+                            serde_json::to_value(template.to_group(template.default_name(russian)))
+                                .unwrap();
+                    }
+                }
+            }
+        }
+    }
+    config
+}
+
+#[test]
+fn migration_from_eleven_converts_templates_to_editable_groups() {
+    let (config, migrated_from) = from_json(V11).unwrap();
+    assert_eq!(migrated_from, Some(11));
+    let mut expected = with_migrated_templates(value(V11));
+    expected["version"] = json!(CONFIG_VERSION);
+    assert_eq!(serde_json::to_value(&config).unwrap(), expected);
+
+    let mut ru = value(V11);
+    ru["interface"]["language"] = json!("russian");
+    let (ru_config, migrated_from) = from_json(&serde_json::to_vec(&ru).unwrap()).unwrap();
+    assert_eq!(migrated_from, Some(11));
+    assert!(ru_config.rule_sets[0].rules.iter().any(|rule| {
+        matches!(&rule.matcher, RuleMatcher::Group { name, .. } if name == "Российские сайты")
+    }));
 }
 
 #[test]
 fn migration_from_ten_preserves_saved_settings() {
     let (config, migrated_from) = from_json(V10).unwrap();
     assert_eq!(migrated_from, Some(10));
-    let mut expected = value(V10);
+    let mut expected = with_migrated_templates(value(V10));
     expected["version"] = json!(CONFIG_VERSION);
     assert_eq!(serde_json::to_value(config).unwrap(), expected);
 }
@@ -395,7 +461,7 @@ fn migration_from_ten_preserves_saved_settings() {
 fn migration_from_nine_enables_flags_and_preserves_saved_settings() {
     let (config, migrated_from) = from_json(V9).unwrap();
     assert_eq!(migrated_from, Some(9));
-    let mut expected = value(V9);
+    let mut expected = with_migrated_templates(value(V9));
     expected["version"] = json!(CONFIG_VERSION);
     expected["interface"]["show_country_flags"] = json!(true);
     assert_eq!(serde_json::to_value(config).unwrap(), expected);
@@ -412,7 +478,7 @@ fn with_default_fragmentation(mut config: Value) -> Value {
     config["settings"]["connection_mode"] = json!("tun");
     config["settings"]["local_proxy"] =
         serde_json::to_value(LocalProxySettings::default()).unwrap();
-    config
+    with_migrated_templates(config)
 }
 
 #[test]
@@ -980,4 +1046,39 @@ fn dependencies_require_a_distinct_standalone_parent() {
         config.validate(),
         Err(ConfigError::InvalidExitDependency)
     ));
+}
+
+#[test]
+fn invalid_rule_groups_are_refused() {
+    let cases = [
+        RuleMatcher::Group {
+            name: "   ".into(),
+            items: vec![RuleMatcher::IpCidr("192.0.2.0/24".into())],
+        },
+        RuleMatcher::Group {
+            name: "Empty".into(),
+            items: Vec::new(),
+        },
+        RuleMatcher::Group {
+            name: "Nested".into(),
+            items: vec![RuleMatcher::Group {
+                name: "Inner".into(),
+                items: vec![RuleMatcher::IpCidr("192.0.2.0/24".into())],
+            }],
+        },
+    ];
+    for matcher in cases {
+        let (mut config, _) = from_json(V12).unwrap();
+        config.rule_sets[0].rules.push(Rule {
+            id: RuleId::new("bad-group"),
+            enabled: true,
+            matcher,
+            target: RuleTarget::Proxy,
+            exit: None,
+        });
+        assert!(matches!(
+            config.validate(),
+            Err(ConfigError::InvalidRuleGroup)
+        ));
+    }
 }

@@ -12,6 +12,7 @@ error-rule-set-not-found = rule set does not exist
 error-rule-not-found = rule does not exist
 error-rule-set-name-empty = rule set name must not be empty
 error-duplicate-rule = this rule is already in the set
+error-invalid-group = rule group must have a name and at least one rule
 error-exit-not-found = this exit no longer exists
 error-exit-node-not-found = the selected server is no longer in the subscriptions
 error-exit-name-empty = exit name must not be empty
@@ -619,7 +620,7 @@ connections-why = Why
 connections-why-rule = Rule { $number } · { $condition }
 connections-why-session-rule = Rule of the running set · { $condition }
 connections-why-temporary = Temporary rule · { $condition }
-connections-why-template = Template “{ $template }” · { $condition }
+connections-why-group = Group “{ $group }” · { $condition }
 connections-why-list = List “{ $list }” · rule { $number }
 connections-why-session-list = List “{ $list }” · rule of the running set
 connections-why-list-condition = list “{ $list }”
@@ -870,7 +871,7 @@ rule-check-basis-number = { $basis } · rule { $number }
 rule-check-outcome = { $route } · { $why }
 rule-check-rule-unknown = rule of the running set
 rule-check-temporary = temporary rule
-rule-check-template = template “{ $template }”
+rule-check-group = group “{ $group }”
 rule-check-list = list “{ $list }”
 rule-check-lan = local network
 rule-check-private = private network behind the router
@@ -895,13 +896,17 @@ caption-addresses = IP addresses
 default-rule-tooltip = The default rule cannot be moved or removed.
 no-rule-sets = No rule sets yet: everything goes through the VPN.
 no-rules-match = No rules match the filter.
-rules-templates = Quick templates
+templates-button = Templates
+templates-dialog-title = Rule templates
+templates-dialog-subtitle = Ready-made groups you can add and edit freely.
+templates-starter-title = Start with a template
+templates-all-button = All templates…
+templates-show-items = Show items
+templates-hide-items = Hide items
 template-add = Add
 template-added = Added
-template-remove-hint = Click to remove the template from the set
 template-redundant = All other traffic already goes this way.
 template-contents = Includes: { $list }
-caption-template = Template · updates automatically
 russian-sites-name = Russian sites
 russian-sites-description = Domains in .ru, .su and .рф, plus VK and Yandex
 messengers-name = Messengers
@@ -910,6 +915,45 @@ youtube-name = YouTube
 youtube-description = The site, videos and thumbnails
 torrents-name = Torrents
 torrents-description = qBittorrent, uTorrent, BitTorrent, Transmission and others
+ai-services-name = AI services
+ai-services-description = ChatGPT, Claude, Gemini, Perplexity and Copilot
+social-name = Social networks
+social-description = Instagram, X (Twitter), Facebook and TikTok
+streaming-name = Streaming & music
+streaming-description = Spotify, Netflix, Twitch and SoundCloud
+gaming-name = Gaming
+gaming-description = Steam, Epic Games, Battle.net, Riot and EA
+group-items-count = { $count ->
+    [one] { $n } item
+   *[other] { $n } items
+}
+rules-grouped = { $count ->
+    [one] Grouped { $n } rule
+   *[other] Grouped { $n } rules
+}
+group-ungrouped = { $count ->
+    [one] Ungrouped { $n } rule
+   *[other] Ungrouped { $n } rules
+}
+group-selected = Group
+group-ungroup = Ungroup
+group-edit = Edit group
+group-new = New group
+group-create-title = Group selected rules
+group-create-confirm = Create group
+group-name-label = Group name
+group-name-hint = For example: Work, Games, Media
+group-items-label = Conditions in group
+group-add-item-hint = Add a domain, IP/CIDR or app name…
+group-add-item-button = Add
+group-remove-item-hint = Remove from group
+group-last-item-hint = A group must keep at least one item
+group-empty-error = Add at least one condition
+group-name-empty-error = Enter a group name
+group-item-invalid = Enter a site, IP/CIDR or program name
+group-item-duplicate = Already in this group
+group-mixed-target-hint = Selected rules had different actions: pick one for the group.
+group-expand-hint = Show or hide group items
 new-rule-button = + Add rule
 new-rule = New rule
 edit = Edit

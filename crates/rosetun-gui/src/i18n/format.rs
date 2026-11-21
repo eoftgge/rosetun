@@ -104,6 +104,10 @@ pub(crate) fn template_name(template: RuleTemplate) -> String {
         RuleTemplate::Messengers => tr!("messengers-name"),
         RuleTemplate::Youtube => tr!("youtube-name"),
         RuleTemplate::Torrents => tr!("torrents-name"),
+        RuleTemplate::AiServices => tr!("ai-services-name"),
+        RuleTemplate::Social => tr!("social-name"),
+        RuleTemplate::Streaming => tr!("streaming-name"),
+        RuleTemplate::Gaming => tr!("gaming-name"),
     }
 }
 
@@ -113,7 +117,23 @@ pub(crate) fn template_description(template: RuleTemplate) -> String {
         RuleTemplate::Messengers => tr!("messengers-description"),
         RuleTemplate::Youtube => tr!("youtube-description"),
         RuleTemplate::Torrents => tr!("torrents-description"),
+        RuleTemplate::AiServices => tr!("ai-services-description"),
+        RuleTemplate::Social => tr!("social-description"),
+        RuleTemplate::Streaming => tr!("streaming-description"),
+        RuleTemplate::Gaming => tr!("gaming-description"),
     }
+}
+
+pub(crate) fn group_items_count(count: usize) -> String {
+    tr!("group-items-count", count = count, n = count.to_string())
+}
+
+pub(crate) fn rules_grouped(count: usize) -> String {
+    tr!("rules-grouped", count = count, n = count.to_string())
+}
+
+pub(crate) fn group_ungrouped(count: usize) -> String {
+    tr!("group-ungrouped", count = count, n = count.to_string())
 }
 
 pub(crate) fn item_error(item: &str, error: &str) -> String {

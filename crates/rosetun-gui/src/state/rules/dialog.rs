@@ -682,16 +682,23 @@ impl State {
             Action::OpenEditRule(id) => {
                 if self.can_edit_rules()
                     && self.rules.screen.add.is_none()
+                    && self.rules.screen.group_editor.is_none()
                     && let Some(set) = self.selected_rules()
                     && let Some(rule) = set
                         .rules
                         .iter()
                         .find(|rule| rule.id == id && crate::rules::editable(&rule.matcher))
-                    && let Some(dialog) = AddRuleDialog::for_rule(set.id.clone(), rule)
                 {
-                    self.rules.screen.add = Some(dialog);
-                    if self.rules.screen.add.as_ref().unwrap().kind == RuleInputKind::Process {
-                        return self.load_processes();
+                    if let Some(group_dialog) =
+                        super::GroupEditorDialog::for_rule(set.id.clone(), rule)
+                    {
+                        self.rules.screen.group_editor = Some(group_dialog);
+                    } else if let Some(dialog) = AddRuleDialog::for_rule(set.id.clone(), rule) {
+                        let is_process = dialog.kind == RuleInputKind::Process;
+                        self.rules.screen.add = Some(dialog);
+                        if is_process {
+                            return self.load_processes();
+                        }
                     }
                 }
             }

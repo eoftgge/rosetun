@@ -38,6 +38,7 @@ struct ToolbarRects {
     search: egui::Rect,
     tabs: egui::Rect,
     filter: egui::Rect,
+    templates: egui::Rect,
     add: egui::Rect,
     compact_controls: bool,
     two_rows: bool,
@@ -51,7 +52,7 @@ mod sets;
 mod table;
 mod templates;
 
-pub(crate) use dialogs::{delete_dialog, name_dialog};
+pub(crate) use dialogs::{delete_dialog, group_editor_dialog, group_selection_dialog, name_dialog};
 use selection::{clear_selection_on_click_away, selection_shortcuts, selection_slot};
 use sets::set_controls;
 use table::{RowContext, default_rule, rule_row, running_programs, scroll_rules_while_dragging};
@@ -60,9 +61,10 @@ use table::{
     TargetChoice, drag_scroll_delta, drag_target, drop_action, program_icon_path, table_cell,
     target_button, value_cell,
 };
+pub(crate) use templates::catalog_dialog as templates_catalog_dialog;
 #[cfg(test)]
-use templates::template_card;
-use templates::template_section;
+use templates::starter_card;
+use templates::starter_section;
 
 fn set_controls_visible(state: &State) -> bool {
     state.lists.tab == RulesTab::Rules && state.config_ready && state.selected_rules().is_some()
@@ -126,6 +128,8 @@ fn undo_notice(ctx: &egui::Context, state: &State, actions: &mut Vec<Action>) {
         UndoNotice::RulesDeleted(count) => i18n::rules_deleted(count),
         UndoNotice::SetDeleted => tr!("rule-set-deleted"),
         UndoNotice::RulesMoved(count) => i18n::rules_moved(count),
+        UndoNotice::RulesGrouped(count) => i18n::rules_grouped(count),
+        UndoNotice::GroupUngrouped(count) => i18n::group_ungrouped(count),
         UndoNotice::Reverted => tr!("rules-reverted"),
     };
     let undo = tr!("undo");
@@ -210,8 +214,6 @@ fn tab_body(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
         widgets::button_fill(ui, tr!("new-rule-button"), false);
         return;
     };
-    template_section(ui, state, set, actions);
-    ui.add_space(theme::space::XL);
     let temporary = if state.config.active_rule_set.as_ref() == Some(&set.id) {
         state.session.temporary_rules.as_slice()
     } else {
@@ -294,6 +296,9 @@ fn tab_body(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
                 ));
             }
         }
+        if set.rules.is_empty() && temporary.is_empty() {
+            starter_section(ui, state, set, actions);
+        }
         default_rule(ui, state, set, value_width, actions);
     });
     scroll_rules_while_dragging(ui);
@@ -367,23 +372,31 @@ fn filter_controls(
     let side = widgets::field_height(ui);
     let add_label = tr!("new-rule-button");
     let add_icon_label = tr!("new-rule");
-    let add_width = ui
-        .painter()
-        .layout_no_wrap(
-            add_label.clone(),
-            egui::TextStyle::Button.resolve(ui.style()),
-            theme::palette().text,
-        )
-        .size()
-        .x
-        + 2.0 * ui.spacing().button_padding.x
-        + 16.0;
+    let templates_label = tr!("templates-button");
+    let button_width = |label: &str| {
+        ui.painter()
+            .layout_no_wrap(
+                label.to_owned(),
+                egui::TextStyle::Button.resolve(ui.style()),
+                theme::palette().text,
+            )
+            .size()
+            .x
+            + 2.0 * ui.spacing().button_padding.x
+            + 16.0
+    };
+    let add_width = button_width(&add_label);
+    let templates_width = button_width(&templates_label);
     let available = ui.available_width();
     let tabs_width = widgets::segmented_width(ui, &options);
-    let compact_controls =
-        widgets::SEARCH_WIDTH + tabs_width + TARGET_FILTER_WIDTH + add_width + 3.0 * gap
-            > available;
-    let compact_beside = tabs_width + 2.0 * side + 3.0 * gap;
+    let compact_controls = widgets::SEARCH_WIDTH
+        + tabs_width
+        + TARGET_FILTER_WIDTH
+        + templates_width
+        + add_width
+        + 4.0 * gap
+        > available;
+    let compact_beside = tabs_width + 3.0 * side + 4.0 * gap;
     let two_rows = compact_controls && widgets::MIN_SEARCH_WIDTH + compact_beside > available;
     let plain_labels;
     let options = if two_rows && tabs_width + widgets::MIN_SEARCH_WIDTH + gap > available {
@@ -412,11 +425,20 @@ fn filter_controls(
         search: egui::Rect::NOTHING,
         tabs: egui::Rect::NOTHING,
         filter: egui::Rect::NOTHING,
+        templates: egui::Rect::NOTHING,
         add: egui::Rect::NOTHING,
         compact_controls,
         two_rows,
     };
+    let mut open_templates = false;
     let mut add_rule = false;
+    let templates_button = |ui: &mut egui::Ui| {
+        if compact_controls {
+            widgets::outline_button_icon(ui, Icon::Sparkle, &templates_label, true)
+        } else {
+            widgets::outline_button(ui, templates_label.as_str(), true)
+        }
+    };
     let add_button = |ui: &mut egui::Ui| {
         if compact_controls {
             widgets::button_fill_icon(ui, Icon::Plus, &add_icon_label, can_add)
@@ -451,6 +473,9 @@ fn filter_controls(
                 let response = add_button(ui);
                 rects.add = response.rect;
                 add_rule = response.clicked();
+                let response = templates_button(ui);
+                rects.templates = response.rect;
+                open_templates = response.clicked();
             });
         });
     } else {
@@ -462,10 +487,16 @@ fn filter_controls(
         ui.horizontal(|ui| {
             primary(ui, search_width, filter, &mut rects, actions);
             rects.filter = target_filter(ui, filter, exits, compact_controls, actions).rect;
+            let response = templates_button(ui);
+            rects.templates = response.rect;
+            open_templates = response.clicked();
             let response = add_button(ui);
             rects.add = response.rect;
             add_rule = response.clicked();
         });
+    }
+    if open_templates {
+        actions.push(Action::OpenTemplatesCatalog);
     }
     if add_rule {
         actions.push(Action::OpenAddRule);

@@ -139,7 +139,7 @@ impl State {
                 ..
             }) => {
                 let condition = match &source {
-                    RuleSource::Condition(matcher) | RuleSource::Template { matcher, .. } => {
+                    RuleSource::Condition(matcher) | RuleSource::Group { matcher, .. } => {
                         self.rule_condition(matcher)
                     }
                     RuleSource::List { list, category } => tr!(
@@ -160,9 +160,9 @@ impl State {
                         .map(|index| (index + 1, &set.rules[index]))
                 });
                 reason.text = match (&source, position) {
-                    (RuleSource::Template { template, matcher }, _) => tr!(
-                        "connections-why-template",
-                        template = crate::i18n::template_name(*template),
+                    (RuleSource::Group { name, matcher }, _) => tr!(
+                        "connections-why-group",
+                        group = self.text(name),
                         condition = self.rule_condition(matcher)
                     ),
                     (RuleSource::Condition(matcher), Some((number, _))) => tr!(
@@ -186,7 +186,6 @@ impl State {
                 };
                 reason.edit = position
                     .filter(|(_, rule)| crate::rules::editable(&rule.matcher))
-                    .filter(|_| !matches!(source, RuleSource::Template { .. }))
                     .map(|(_, rule)| rule.id.clone());
             }
             Some(Explanation::Routed {
@@ -227,7 +226,7 @@ impl State {
             | RuleMatcher::Process(ProcessMatch::Name(_) | ProcessMatch::Path(_))
             | RuleMatcher::IpCidr(_)
             | RuleMatcher::List { .. }
-            | RuleMatcher::Template(_) => value,
+            | RuleMatcher::Group { .. } => value,
         }
     }
 }

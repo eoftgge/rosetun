@@ -93,6 +93,15 @@ impl Saved {
             Job::RemoveRules(set, rules) => {
                 WorkerEvent::RemoveRules(rosetun_core::remove_rules(store, &set, &rules))
             }
+            Job::GroupRules(set, rules, name, target) => WorkerEvent::GroupRules(
+                rosetun_core::group_rules(store, &set, &rules, &name, &target),
+            ),
+            Job::UngroupRule(set, rule) => {
+                WorkerEvent::UngroupRule(rosetun_core::ungroup_rule(store, &set, &rule))
+            }
+            Job::RemoveGroupItem(set, rule, index) => WorkerEvent::RemoveGroupItem(
+                rosetun_core::remove_group_item(store, &set, &rule, index),
+            ),
             Job::RestoreRuleSets(snapshot) => {
                 WorkerEvent::RestoreRuleSets(rosetun_core::restore_rule_sets(store, &snapshot))
             }
@@ -248,9 +257,18 @@ fn rule_edits() -> Vec<(&'static str, Prepare, Action)> {
             Action::SetDefaultTarget(RuleTarget::Direct),
         ),
         (
-            "template",
+            "preset group",
             no_preparation,
-            Action::AddTemplate(RuleTemplate::Youtube),
+            Action::AddPresetGroup(RuleTemplate::Youtube, RuleDestination::Proxy),
+        ),
+        (
+            "group selected",
+            |state| {
+                select_first_and_last(state);
+                state.act(Action::OpenGroupSelection);
+                state.rules.screen.group_selection.as_mut().unwrap().name = "Selected".into();
+            },
+            Action::SubmitGroupSelection,
         ),
         ("add", open_new_domain, Action::SubmitAddRule),
         ("add addresses", open_new_addresses, Action::SubmitAddRule),
@@ -438,12 +456,26 @@ fn deleting_shows_an_undo_notice_until_it_expires() {
 
     saved.act(&mut state, Action::SetRuleEnabled(RuleId::new("0"), false));
     assert!(state.rule_notice().is_none(), "a toggle needs no notice");
-    saved.act(&mut state, Action::AddTemplate(RuleTemplate::Youtube));
-    saved.act(&mut state, Action::RemoveTemplate(RuleTemplate::Youtube));
-    assert!(
-        state.rule_notice().is_none(),
-        "a template card is its own undo"
-    );
+
+    state.set_frame_time(30_000);
+    select_first_and_last(&mut state);
+    state.act(Action::OpenGroupSelection);
+    state.rules.screen.group_selection.as_mut().unwrap().name = "Bundle".into();
+    saved.act(&mut state, Action::SubmitGroupSelection);
+    assert!(matches!(
+        state.rule_notice(),
+        Some((UndoNotice::RulesGrouped(2), _))
+    ));
+    let group_id = state.config.rule_sets[1].rules[0].id.clone();
+    saved.act(&mut state, Action::RemoveGroupItem(group_id.clone(), 0));
+    saved.act(&mut state, Action::UndoRules);
+    saved.act(&mut state, Action::UngroupRule(group_id));
+    assert!(matches!(
+        state.rule_notice(),
+        Some((UndoNotice::GroupUngrouped(2), _))
+    ));
+    saved.act(&mut state, Action::UndoRules);
+    saved.act(&mut state, Action::UndoRules);
 
     open_delete_set(&mut state);
     saved.act(&mut state, Action::ConfirmDeleteSet);

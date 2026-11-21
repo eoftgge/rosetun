@@ -316,7 +316,7 @@ impl RuleCapabilities {
             }
             rosetun_config::RuleMatcher::IpCidr(_) => self.ip_cidr,
             rosetun_config::RuleMatcher::List { .. } => self.lists,
-            rosetun_config::RuleMatcher::Template(_) => false,
+            rosetun_config::RuleMatcher::Group { .. } => false,
         }
     }
 }

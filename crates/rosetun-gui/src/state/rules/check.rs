@@ -332,10 +332,9 @@ impl State {
                 });
                 let basis = match source {
                     RuleSource::Condition(_) => None,
-                    RuleSource::Template { template, .. } => Some(tr!(
-                        "rule-check-template",
-                        template = crate::i18n::template_name(*template)
-                    )),
+                    RuleSource::Group { name, .. } => {
+                        Some(tr!("rule-check-group", group = self.text(name)))
+                    }
                     RuleSource::List { list, category } => Some(tr!(
                         "rule-check-list",
                         list = self.list_rule_name(list, category.as_deref())

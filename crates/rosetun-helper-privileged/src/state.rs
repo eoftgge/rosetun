@@ -1610,22 +1610,22 @@ fn validate_request(request: &ConnectRequest) -> Result<(), HelperError> {
         .rule_set
         .rules
         .iter()
-        .any(|rule| matches!(rule.matcher, RuleMatcher::Template(_)))
+        .any(|rule| matches!(rule.matcher, RuleMatcher::Group { .. }))
     {
         return Err(HelperError::new(
             ErrorCode::UnsupportedRules,
-            "rule set contains a template; expand templates before sending the request",
+            "rule set contains a group; expand groups before sending the request",
         ));
     }
     if request.temporary_rules.len() > MAX_TEMPORARY_RULES
         || request
             .temporary_rules
             .iter()
-            .any(|rule| matches!(rule.matcher, RuleMatcher::Template(_)))
+            .any(|rule| matches!(rule.matcher, RuleMatcher::Group { .. }))
     {
         return Err(HelperError::new(
             ErrorCode::UnsupportedRules,
-            "temporary rules exceed the limit or contain a template",
+            "temporary rules exceed the limit or contain a group",
         ));
     }
     if request.lists.len() > MAX_TEMPORARY_RULES {

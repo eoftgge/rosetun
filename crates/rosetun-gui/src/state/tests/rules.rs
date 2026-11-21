@@ -638,7 +638,7 @@ fn editing_existing_suffixes_does_not_strip_www_or_reject_a_zone() {
 }
 
 #[test]
-fn editing_a_path_rule_keeps_the_path_and_rejects_templates() {
+fn editing_a_path_rule_keeps_the_path_and_groups_open_group_editor() {
     #[cfg(windows)]
     let path = r"C:\Apps\Tool.exe";
     #[cfg(not(windows))]
@@ -647,7 +647,7 @@ fn editing_a_path_rule_keeps_the_path_and_rejects_templates() {
     let id = state.config.rule_sets[1].rules[1].id.clone();
     state.config.rule_sets[1].rules[1].matcher =
         RuleMatcher::Process(ProcessMatch::Path(PathBuf::from(path)));
-    state.config.rule_sets[1].rules[2].matcher = RuleMatcher::Template(RuleTemplate::Youtube);
+    state.config.rule_sets[1].rules[2].matcher = RuleTemplate::Youtube.to_group("YouTube");
     assert!(
         AddRuleDialog::for_rule(
             state.config.rule_sets[1].id.clone(),
@@ -658,6 +658,17 @@ fn editing_a_path_rule_keeps_the_path_and_rejects_templates() {
     state.act(Action::OpenRules);
     assert!(state.act(Action::OpenEditRule(RuleId::new("2"))).is_none());
     assert!(state.rules.screen.add.is_none());
+    assert_eq!(
+        state
+            .rules
+            .screen
+            .group_editor
+            .as_ref()
+            .and_then(|dialog| dialog.editing.as_ref()),
+        Some(&RuleId::new("2"))
+    );
+    state.act(Action::CancelGroupEditor);
+    assert!(state.rules.screen.group_editor.is_none());
     assert!(
         state
             .act(Action::OpenEditRule(RuleId::new("missing")))
@@ -757,52 +768,122 @@ fn rule_target_filter_can_be_set_and_cleared() {
 }
 
 #[test]
-fn add_template_requires_a_selected_set_and_no_existing_template_or_edit() {
+fn add_preset_group_copies_items_into_editable_group_with_chosen_destination() {
     let mut state = state_with_rules();
     let template = RuleTemplate::RussianSites;
-    assert!(state.act(Action::AddTemplate(template)).is_none());
+    assert!(
+        state
+            .act(Action::AddPresetGroup(template, RuleDestination::Direct))
+            .is_none()
+    );
     state.act(Action::OpenRules);
     state.config.rule_sets[1].rules.clear();
+    let expected_name = crate::i18n::template_name(template);
     assert!(matches!(
-        state.act(Action::AddTemplate(template)),
-        Some(Job::AddRule(set, RuleMatcher::Template(RuleTemplate::RussianSites), RuleDestination::Direct))
-            if set == RuleSetId::new("2")
+        state.act(Action::AddPresetGroup(template, RuleDestination::Block)),
+        Some(Job::AddRule(
+            set,
+            RuleMatcher::Group { name, items },
+            RuleDestination::Block
+        )) if set == RuleSetId::new("2") && name == expected_name && items == template.matchers()
     ));
-    assert!(state.act(Action::AddTemplate(template)).is_none());
+    assert!(
+        state
+            .act(Action::AddPresetGroup(template, RuleDestination::Block))
+            .is_none()
+    );
     state.reduce(WorkerEvent::AddRule(Err(RuleSetError::DuplicateRule)));
     assert!(state.operation_error.is_some());
-    state.config.rule_sets[1].rules.push(Rule {
-        id: RuleId::new("template"),
-        enabled: false,
-        matcher: RuleMatcher::Template(template),
-        target: RuleTarget::Block,
-        exit: None,
-    });
-    assert!(state.act(Action::AddTemplate(template)).is_none());
 }
 
 #[test]
-fn remove_template_uses_the_rule_id_and_requires_presence() {
+fn group_selection_ungroup_and_remove_group_item_validate_and_dispatch_jobs() {
     let mut state = state_with_rules();
     state.act(Action::OpenRules);
-    let template = RuleTemplate::Youtube;
-    assert!(state.act(Action::RemoveTemplate(template)).is_none());
-    state.config.rule_sets[1].rules.push(Rule {
-        id: RuleId::new("template"),
+    assert!(state.act(Action::OpenGroupSelection).is_none());
+    for id in ["0", "2"] {
+        state.act(Action::SelectRule {
+            rule: RuleId::new(id),
+            additive: true,
+            range: false,
+        });
+    }
+    state.act(Action::OpenGroupSelection);
+    let dialog = state.rules.screen.group_selection.as_mut().unwrap();
+    assert_eq!(dialog.rules, vec![RuleId::new("0"), RuleId::new("2")]);
+    dialog.name = "Work sites".into();
+    dialog.target = RuleDestination::Direct;
+    assert!(matches!(
+        state.act(Action::SubmitGroupSelection),
+        Some(Job::GroupRules(set, ids, name, RuleDestination::Direct))
+            if set == RuleSetId::new("2")
+                && ids == vec![RuleId::new("0"), RuleId::new("2")]
+                && name == "Work sites"
+    ));
+    let grouped = Rule {
+        id: RuleId::new("group"),
         enabled: true,
-        matcher: RuleMatcher::Template(template),
+        matcher: RuleTemplate::Youtube.to_group("YouTube"),
         target: RuleTarget::Proxy,
         exit: None,
-    });
+    };
+    state.config.rule_sets[1].rules.push(grouped.clone());
+    state.reduce(WorkerEvent::GroupRules(Ok(grouped)));
+    assert!(state.rules.screen.group_selection.is_none());
+    assert_eq!(
+        state.rules.screen.selected_rules.iter().collect::<Vec<_>>(),
+        [&RuleId::new("group")]
+    );
+
+    state.act(Action::ToggleGroupExpanded(RuleId::new("group")));
+    assert!(
+        state
+            .rules
+            .screen
+            .expanded_groups
+            .contains(&RuleId::new("group"))
+    );
     assert!(matches!(
-        state.act(Action::RemoveTemplate(template)),
-        Some(Job::RemoveRule(set, rule))
-            if set == RuleSetId::new("2") && rule == RuleId::new("template")
+        state.act(Action::RemoveGroupItem(RuleId::new("group"), 0)),
+        Some(Job::RemoveGroupItem(set, rule, 0))
+            if set == RuleSetId::new("2") && rule == RuleId::new("group")
     ));
-    assert!(state.act(Action::RemoveTemplate(template)).is_none());
-    state.reduce(WorkerEvent::RemoveRule(Ok(())));
-    state.config.rule_sets[1].rules.pop();
-    assert!(state.act(Action::RemoveTemplate(template)).is_none());
+    state.reduce(WorkerEvent::RemoveGroupItem(Ok(())));
+    assert!(matches!(
+        state.act(Action::UngroupRule(RuleId::new("group"))),
+        Some(Job::UngroupRule(set, rule))
+            if set == RuleSetId::new("2") && rule == RuleId::new("group")
+    ));
+    assert!(
+        !state
+            .rules
+            .screen
+            .expanded_groups
+            .contains(&RuleId::new("group"))
+    );
+    state.reduce(WorkerEvent::UngroupRule(Ok(vec![])));
+}
+
+#[test]
+fn group_editor_creates_new_group_and_updates_existing_group() {
+    let mut state = state_with_rules();
+    state.act(Action::OpenRules);
+    state.act(Action::OpenTemplatesCatalog);
+    assert!(state.rules.screen.templates_catalog.is_some());
+    state.act(Action::OpenNewGroup);
+    assert!(state.rules.screen.templates_catalog.is_none());
+    let dialog = state.rules.screen.group_editor.as_mut().unwrap();
+    dialog.name = "Custom".into();
+    dialog.input = "example.com".into();
+    dialog.commit_input();
+    dialog.input = "tool.exe".into();
+    assert!(matches!(
+        state.act(Action::SubmitGroupEditor),
+        Some(Job::AddRule(set, RuleMatcher::Group { name, items }, RuleDestination::Proxy))
+            if set == RuleSetId::new("2") && name == "Custom" && items.len() == 2
+    ));
+    state.reduce(WorkerEvent::AddRule(Ok(rule_set("2").rules[0].clone())));
+    assert!(state.rules.screen.group_editor.is_none());
 }
 
 #[test]

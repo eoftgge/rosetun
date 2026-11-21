@@ -38,7 +38,10 @@ pub use prefix::{IpPrefix, LINK_LOCAL_V4, LINK_LOCAL_V6, is_private_address};
 pub use report::{
     hide_public_addresses, ip_literals, is_public_ip, redact_log_credentials, redact_report_text,
 };
-pub use rule::{DomainMatch, ProcessMatch, Rule, RuleMatcher, RuleSet, RuleTarget, RuleTemplate};
+pub use rule::{
+    DomainMatch, MAX_GROUP_ITEMS, ProcessMatch, RULE_GROUP_NAME_LIMIT, Rule, RuleMatcher, RuleSet,
+    RuleTarget, RuleTemplate,
+};
 pub use runtime::{
     ConnectStage, ConnectionNetwork, ConnectionRoute, ConnectionState, FailureKind,
     InstalledProtection, LiveConnection, ProtectionCapabilities, ProtectionShortfall,
@@ -56,7 +59,7 @@ use serde_json::{Map, Value};
 
 /// Bump for every serialized format change, including defaulted fields older releases drop on save.
 /// Add a Value migration and a new fixture; never edit fixtures of released formats.
-pub const CONFIG_VERSION: u32 = 11;
+pub const CONFIG_VERSION: u32 = 12;
 
 pub const EXIT_TRACE_IP: &str = "1.1.1.1";
 pub const EXIT_TRACE_PORT: u16 = 443;
@@ -367,6 +370,8 @@ pub enum ConfigError {
     InvalidExitDependency,
     #[error("a rule has an invalid exit reference")]
     InvalidRuleExit,
+    #[error("a rule group has an invalid name or items")]
+    InvalidRuleGroup,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -411,6 +416,7 @@ pub fn from_json(bytes: &[u8]) -> Result<(AppConfig, Option<u32>), FormatError> 
             8 => migrate_8_to_9(config),
             9 => migrate_9_to_10(config),
             10 => migrate_10_to_11(config),
+            11 => migrate_11_to_12(config),
             _ => return Err(FormatError::UnexpectedValue),
         }
         version += 1;
@@ -424,6 +430,48 @@ pub fn from_json(bytes: &[u8]) -> Result<(AppConfig, Option<u32>), FormatError> 
         config,
         (original_version < CONFIG_VERSION).then_some(original_version),
     ))
+}
+
+fn migrate_11_to_12(config: &mut Map<String, Value>) {
+    let russian = config
+        .get("interface")
+        .and_then(Value::as_object)
+        .and_then(|interface| interface.get("language"))
+        .and_then(Value::as_str)
+        == Some("russian");
+    let Some(rule_sets) = config.get_mut("rule_sets").and_then(Value::as_array_mut) else {
+        return;
+    };
+    for set in rule_sets {
+        let Some(rules) = set
+            .as_object_mut()
+            .and_then(|set| set.get_mut("rules"))
+            .and_then(Value::as_array_mut)
+        else {
+            continue;
+        };
+        for rule in rules {
+            let Some(matcher) = rule
+                .as_object_mut()
+                .and_then(|rule| rule.get_mut("matcher"))
+            else {
+                continue;
+            };
+            let Some(key) = matcher
+                .as_object()
+                .and_then(|obj| obj.get("template"))
+                .and_then(Value::as_str)
+            else {
+                continue;
+            };
+            if let Some(template) = RuleTemplate::from_key(key) {
+                let group = template.to_group(template.default_name(russian));
+                if let Ok(encoded) = serde_json::to_value(group) {
+                    *matcher = encoded;
+                }
+            }
+        }
+    }
 }
 
 fn migrate_10_to_11(_config: &mut Map<String, Value>) {
@@ -582,19 +630,44 @@ impl AppConfig {
                 (RuleTarget::Proxy | RuleTarget::Direct | RuleTarget::Block, None) => {}
                 _ => return Err(ConfigError::InvalidRuleExit),
             }
-            if let RuleMatcher::List { list, category } = &rule.matcher {
+            self.validate_rule_matcher(&rule.matcher)?;
+        }
+        Ok(())
+    }
+
+    fn validate_rule_matcher(&self, matcher: &RuleMatcher) -> Result<(), ConfigError> {
+        match matcher {
+            RuleMatcher::List { list, category } => {
                 let entry = self
                     .lists
                     .iter()
                     .find(|entry| &entry.id == list)
                     .ok_or(ConfigError::MissingList)?;
                 match entry.validate_category(category.as_deref()) {
-                    Ok(()) | Err(ListCategoryError::Unknown) => {}
-                    Err(_) => return Err(ConfigError::InvalidListCategory),
+                    Ok(()) | Err(ListCategoryError::Unknown) => Ok(()),
+                    Err(_) => Err(ConfigError::InvalidListCategory),
                 }
             }
+            RuleMatcher::Group { name, items } => {
+                let trimmed = name.trim();
+                if trimmed.is_empty()
+                    || trimmed.chars().count() > RULE_GROUP_NAME_LIMIT
+                    || name.chars().any(char::is_control)
+                    || items.is_empty()
+                    || items.len() > MAX_GROUP_ITEMS
+                {
+                    return Err(ConfigError::InvalidRuleGroup);
+                }
+                for item in items {
+                    if matches!(item, RuleMatcher::Group { .. }) {
+                        return Err(ConfigError::InvalidRuleGroup);
+                    }
+                    self.validate_rule_matcher(item)?;
+                }
+                Ok(())
+            }
+            RuleMatcher::Domain(_) | RuleMatcher::Process(_) | RuleMatcher::IpCidr(_) => Ok(()),
         }
-        Ok(())
     }
 }
 

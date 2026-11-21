@@ -111,7 +111,11 @@ fn toolbar_controls_do_not_overlap_at_minimum_window_scales() {
                 "{language:?} {width} {scale}"
             );
             assert!(
-                rects.filter.right() <= rects.add.left(),
+                rects.filter.right() <= rects.templates.left(),
+                "{language:?} {width} {scale}"
+            );
+            assert!(
+                rects.templates.right() <= rects.add.left(),
                 "{language:?} {width} {scale}"
             );
             assert!(
@@ -126,6 +130,11 @@ fn toolbar_controls_do_not_overlap_at_minimum_window_scales() {
                     "{language:?} {width} {scale}"
                 );
                 assert_eq!(
+                    rects.templates.size(),
+                    egui::vec2(field_height, field_height),
+                    "{language:?} {width} {scale}"
+                );
+                assert_eq!(
                     rects.add.size(),
                     egui::vec2(field_height, field_height),
                     "{language:?} {width} {scale}"
@@ -136,6 +145,10 @@ fn toolbar_controls_do_not_overlap_at_minimum_window_scales() {
                     "{language:?} {width} {scale}"
                 );
                 assert!(
+                    rects.templates.width() > field_height,
+                    "{language:?} {width} {scale}"
+                );
+                assert!(
                     rects.add.width() > field_height,
                     "{language:?} {width} {scale}"
                 );
@@ -143,6 +156,10 @@ fn toolbar_controls_do_not_overlap_at_minimum_window_scales() {
             if rects.two_rows {
                 assert!(
                     rects.tabs.bottom() <= rects.filter.top(),
+                    "{language:?} {width} {scale}"
+                );
+                assert!(
+                    rects.tabs.bottom() <= rects.templates.top(),
                     "{language:?} {width} {scale}"
                 );
                 assert!(
@@ -690,7 +707,7 @@ fn action_filter_button_matches_the_search_field_height() {
 }
 
 #[test]
-fn template_cards_keep_a_row_of_equal_sized_non_overlapping_cards() {
+fn starter_cards_keep_a_row_of_equal_sized_non_overlapping_cards() {
     let ctx = egui::Context::default();
     theme::apply(&ctx);
     let mut state = State::default();
@@ -702,13 +719,13 @@ fn template_cards_keep_a_row_of_equal_sized_non_overlapping_cards() {
             RuleTarget::Proxy,
         );
         if installed {
-            set.rules = RuleTemplate::ALL
+            set.rules = RuleTemplate::STARTER
                 .into_iter()
                 .enumerate()
                 .map(|(index, template)| Rule {
                     id: RuleId::new(index.to_string()),
                     enabled: true,
-                    matcher: RuleMatcher::Template(template),
+                    matcher: template.to_group(crate::i18n::template_name(template)),
                     target: template.default_target(),
                     exit: None,
                 })
@@ -722,10 +739,10 @@ fn template_cards_keep_a_row_of_equal_sized_non_overlapping_cards() {
                     let mut rects = Vec::new();
                     ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
                         ui.spacing_mut().item_spacing.x = 12.0;
-                        for template in RuleTemplate::ALL {
+                        for template in RuleTemplate::STARTER {
                             let rect = ui
                                 .scope(|ui| {
-                                    template_card(
+                                    starter_card(
                                         ui,
                                         &state,
                                         &set,
@@ -756,6 +773,60 @@ fn template_cards_keep_a_row_of_equal_sized_non_overlapping_cards() {
             output.textures_delta.clear();
         }
     }
+}
+
+#[test]
+fn group_row_expands_drawer_and_renders_items_inline() {
+    let mut state = State::default();
+    state.config_ready = true;
+    state.config.interface.reduce_motion = true;
+    let mut set = RuleSet::new(
+        rosetun_config::RuleSetId::new("set"),
+        "Test",
+        RuleTarget::Proxy,
+    );
+    let group_id = RuleId::new("grp");
+    set.rules.push(Rule {
+        id: group_id.clone(),
+        enabled: true,
+        matcher: RuleMatcher::Group {
+            name: "Video".into(),
+            items: vec![
+                RuleMatcher::Domain(DomainMatch::Suffix("youtube.com".into())),
+                RuleMatcher::Domain(DomainMatch::Suffix("googlevideo.com".into())),
+            ],
+        },
+        target: RuleTarget::Proxy,
+        exit: None,
+    });
+    let mut screen = crate::test_ui::TestScreen::new(egui::vec2(800.0, 400.0));
+    let render = |state: &State, ui: &mut egui::Ui, actions: &mut Vec<Action>| {
+        ui.push_id((set.id.as_str(), set.rules[0].id.as_str()), |ui| {
+            rule_row(
+                ui,
+                state,
+                &RowContext {
+                    set: &set,
+                    target_choices: table::rule_target_choices(&state.config),
+                    unresolved: &crate::destinations::unresolved_exits(&state.config),
+                    running: HashMap::new(),
+                },
+                &set.rules[0],
+                Some(0),
+                (ui.available_width() - 350.0).max(0.0),
+                actions,
+            );
+        });
+    };
+
+    let collapsed = screen.settle(|ui| render(&state, ui, &mut Vec::new()));
+    assert!(collapsed.iter().any(|(text, _)| text == "Video"));
+    assert!(!collapsed.iter().any(|(text, _)| text == "googlevideo.com"));
+
+    state.rules.screen.expanded_groups.insert(group_id);
+    let expanded = screen.settle(|ui| render(&state, ui, &mut Vec::new()));
+    assert!(expanded.iter().any(|(text, _)| text == "youtube.com"));
+    assert!(expanded.iter().any(|(text, _)| text == "googlevideo.com"));
 }
 
 #[test]

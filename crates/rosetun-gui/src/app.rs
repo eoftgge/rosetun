@@ -553,6 +553,13 @@ impl App {
             Job::MoveRules(set, rules, to_index) => self.workers.move_rules(set, rules, to_index),
             Job::RemoveRule(set, rule) => self.workers.remove_rule(set, rule),
             Job::RemoveRules(set, rules) => self.workers.remove_rules(set, rules),
+            Job::GroupRules(set, rules, name, target) => {
+                self.workers.group_rules(set, rules, name, target);
+            }
+            Job::UngroupRule(set, rule) => self.workers.ungroup_rule(set, rule),
+            Job::RemoveGroupItem(set, rule, index) => {
+                self.workers.remove_group_item(set, rule, index);
+            }
             Job::RestoreRuleSets(snapshot) => self.workers.restore_rule_sets(snapshot),
             Job::SetKillSwitch(enabled) => self.workers.set_kill_switch(enabled),
             Job::SetLockdown(enabled) => self.workers.set_lockdown(enabled),

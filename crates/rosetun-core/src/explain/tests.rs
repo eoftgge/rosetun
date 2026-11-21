@@ -3,8 +3,8 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use rosetun_config::{
-    ConnectionNetwork, Node, NodeId, Outbound, Rule, RuleSet, RuleSetId, Selection, Settings,
-    StreamSettings, SubscriptionId, TrojanParams,
+    ConnectionNetwork, Node, NodeId, Outbound, Rule, RuleSet, RuleSetId, RuleTemplate, Selection,
+    Settings, StreamSettings, SubscriptionId, TrojanParams,
 };
 
 use super::*;
@@ -56,7 +56,7 @@ fn list(id: &str) -> RuleMatcher {
 fn request(rules: Vec<Rule>) -> ConnectRequest {
     let mut set = RuleSet::new(RuleSetId::new("set"), "Set", RuleTarget::Proxy);
     set.rules = rules;
-    let (rule_set, rule_templates) = set.expand_templates();
+    let (rule_set, rule_groups) = set.expand_groups();
     ConnectRequest {
         selection: Selection {
             subscription: SubscriptionId::new("example"),
@@ -78,7 +78,7 @@ fn request(rules: Vec<Rule>) -> ConnectRequest {
         temporary_rules: Vec::new(),
         lists: Vec::new(),
         settings: Settings::default(),
-        rule_templates,
+        rule_groups,
     }
 }
 
@@ -114,10 +114,10 @@ fn connection(host: &str, ip: Option<&str>, route: ConnectionRoute) -> LiveConne
 }
 
 #[test]
-fn a_template_rule_names_its_template_and_the_matched_condition() {
+fn a_group_rule_names_its_group_and_the_matched_condition() {
     let request = request(vec![rule(
         "torrents",
-        RuleMatcher::Template(RuleTemplate::Torrents),
+        RuleTemplate::Torrents.to_group("Torrents"),
         RuleTarget::Direct,
     )]);
     let explanation = explain(
@@ -140,8 +140,8 @@ fn a_template_rule_names_its_template_and_the_matched_condition() {
             reason: Reason::Rule {
                 id: RuleId::new("torrents"),
                 temporary: false,
-                source: RuleSource::Template {
-                    template: RuleTemplate::Torrents,
+                source: RuleSource::Group {
+                    name: "Torrents".into(),
                     matcher: RuleMatcher::Process(ProcessMatch::Name(
                         if cfg!(windows) {
                             "qbittorrent.exe"

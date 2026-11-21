@@ -185,6 +185,9 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
         rules::exchange::show(ctx, state, &mut actions);
         rules::name_dialog(ctx, state, &mut actions);
         rules::delete_dialog(ctx, state, &mut actions);
+        rules::templates_catalog_dialog(ctx, state, &mut actions);
+        rules::group_selection_dialog(ctx, state, &mut actions);
+        rules::group_editor_dialog(ctx, state, &mut actions);
         exits::exit_dialog(ctx, state, &mut actions);
         exits::rename_dialog(ctx, state, &mut actions);
         exits::delete_dialog(ctx, state, &mut actions);

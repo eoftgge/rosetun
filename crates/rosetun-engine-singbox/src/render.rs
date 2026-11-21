@@ -970,7 +970,7 @@ fn route_rule(rule: &Rule) -> Option<Map<String, Value>> {
         RuleMatcher::IpCidr(cidr) => {
             value.insert("ip_cidr".into(), json!([cidr]));
         }
-        RuleMatcher::List { .. } | RuleMatcher::Template(_) => return None,
+        RuleMatcher::List { .. } | RuleMatcher::Group { .. } => return None,
     }
 
     Some(value)
@@ -1506,8 +1506,8 @@ mod tests {
                 RuleTarget::Block,
             ),
             (
-                "template",
-                RuleMatcher::Template(RuleTemplate::Torrents),
+                "group",
+                RuleTemplate::Torrents.to_group("Torrents"),
                 RuleTarget::Direct,
             ),
             (
@@ -1527,7 +1527,7 @@ mod tests {
                 exit: None,
             });
         }
-        let rules = rules.with_templates_expanded();
+        let rules = rules.with_groups_expanded();
         let mut settings = Settings {
             kill_switch: true,
             allow_lan: true,
@@ -2596,19 +2596,19 @@ mod tests {
     }
 
     #[test]
-    fn unexpanded_template_is_reported_without_a_match_all_route() {
+    fn unexpanded_group_is_reported_without_a_match_all_route() {
         let mut set = RuleSet::new(RuleSetId::new("set"), "Test", RuleTarget::Proxy);
-        let template = Rule {
-            id: RuleId::new("template"),
+        let group = Rule {
+            id: RuleId::new("group"),
             enabled: true,
-            matcher: RuleMatcher::Template(RuleTemplate::RussianSites),
+            matcher: RuleTemplate::RussianSites.to_group("Russian sites"),
             target: RuleTarget::Direct,
             exit: None,
         };
-        assert_eq!(route_rule(&template), None);
-        set.rules.push(template.clone());
+        assert_eq!(route_rule(&group), None);
+        set.rules.push(group.clone());
         let (route, unsupported) = route_section(&set, RuleCapabilities::ALL, false);
-        assert_eq!(unsupported, vec![template.id]);
+        assert_eq!(unsupported, vec![group.id]);
         assert_eq!(route["rules"].as_array().unwrap().len(), OWN_RULES);
     }
 

@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use eframe::egui::{self, RichText, Stroke};
-use rosetun_config::{List, ListFormat, ListSource, RuleMatcher};
+use rosetun_config::{List, ListFormat, ListSource};
 
 use crate::display;
 use crate::errors;
@@ -194,9 +194,7 @@ fn list_card(
         .rule_sets
         .iter()
         .flat_map(|set| &set.rules)
-        .filter(
-            |rule| matches!(&rule.matcher, RuleMatcher::List { list: id, .. } if id == &list.id),
-        )
+        .filter(|rule| crate::state::matcher_uses_list(&rule.matcher, &list.id))
         .count();
     let usage = if count == 0 {
         tr!("list-unused")

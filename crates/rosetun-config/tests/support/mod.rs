@@ -257,25 +257,27 @@ pub(crate) fn legacy_config() -> AppConfig {
                     rule(
                         "template-russian-sites",
                         true,
-                        RuleMatcher::Template(RuleTemplate::RussianSites),
+                        RuleTemplate::RussianSites
+                            .to_group(RuleTemplate::RussianSites.default_name(true)),
                         RuleTarget::Direct,
                     ),
                     rule(
                         "template-messengers",
                         true,
-                        RuleMatcher::Template(RuleTemplate::Messengers),
+                        RuleTemplate::Messengers
+                            .to_group(RuleTemplate::Messengers.default_name(true)),
                         RuleTarget::Proxy,
                     ),
                     rule(
                         "template-youtube",
                         false,
-                        RuleMatcher::Template(RuleTemplate::Youtube),
+                        RuleTemplate::Youtube.to_group(RuleTemplate::Youtube.default_name(true)),
                         RuleTarget::Block,
                     ),
                     rule(
                         "template-torrents",
                         true,
-                        RuleMatcher::Template(RuleTemplate::Torrents),
+                        RuleTemplate::Torrents.to_group(RuleTemplate::Torrents.default_name(true)),
                         RuleTarget::Direct,
                     ),
                 ],

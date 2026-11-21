@@ -38,7 +38,9 @@ use exits::ExitsState;
 pub(crate) use exits::{DeleteExitDialog, RenameExitDialog};
 pub(crate) use exits::{ExitDialog, ExitKind};
 use lists::ListsState;
-pub(crate) use lists::{AddListDialog, ListOutcome, RulesTab, source_file_name, used_by};
+pub(crate) use lists::{
+    AddListDialog, ListOutcome, RulesTab, matcher_uses_list, source_file_name, used_by,
+};
 #[cfg(test)]
 pub(crate) use lists::{RemoveListDialog, RenameListDialog};
 #[cfg(any(windows, target_os = "linux"))]
@@ -418,8 +420,18 @@ pub(crate) enum Action {
     /// The active set goes back to the rules the running session uses.
     RevertRules,
     SetDefaultTarget(RuleTarget),
-    AddTemplate(RuleTemplate),
-    RemoveTemplate(RuleTemplate),
+    OpenTemplatesCatalog,
+    CloseTemplatesCatalog,
+    AddPresetGroup(RuleTemplate, RuleDestination),
+    ToggleGroupExpanded(RuleId),
+    OpenGroupSelection,
+    CancelGroupSelection,
+    SubmitGroupSelection,
+    UngroupRule(RuleId),
+    RemoveGroupItem(RuleId, usize),
+    OpenNewGroup,
+    CancelGroupEditor,
+    SubmitGroupEditor,
     OpenRulesExport(bool),
     ConfirmRulesExport(bool),
     ReadRulesImport(bool),
@@ -590,6 +602,9 @@ pub(crate) enum Job {
     MoveRules(RuleSetId, Vec<RuleId>, usize),
     RemoveRule(RuleSetId, RuleId),
     RemoveRules(RuleSetId, Vec<RuleId>),
+    GroupRules(RuleSetId, Vec<RuleId>, String, RuleDestination),
+    UngroupRule(RuleSetId, RuleId),
+    RemoveGroupItem(RuleSetId, RuleId, usize),
     RestoreRuleSets(RuleSetsSnapshot),
     SetKillSwitch(bool),
     SetLockdown(bool),
@@ -767,6 +782,9 @@ impl State {
             | WorkerEvent::MoveRules(_)
             | WorkerEvent::RemoveRule(_)
             | WorkerEvent::RemoveRules(_)
+            | WorkerEvent::GroupRules(_)
+            | WorkerEvent::UngroupRule(_)
+            | WorkerEvent::RemoveGroupItem(_)
             | WorkerEvent::RestoreRuleSets(_)) => self.reduce_rules(event),
             #[cfg(windows)]
             event @ WorkerEvent::BrowsedExecutable(_) => self.reduce_rules(event),
@@ -986,8 +1004,18 @@ impl State {
             | Action::DeleteRule(_)
             | Action::DeleteSelectedRules
             | Action::SetDefaultTarget(_)
-            | Action::AddTemplate(_)
-            | Action::RemoveTemplate(_)
+            | Action::OpenTemplatesCatalog
+            | Action::CloseTemplatesCatalog
+            | Action::AddPresetGroup(_, _)
+            | Action::ToggleGroupExpanded(_)
+            | Action::OpenGroupSelection
+            | Action::CancelGroupSelection
+            | Action::SubmitGroupSelection
+            | Action::UngroupRule(_)
+            | Action::RemoveGroupItem(_, _)
+            | Action::OpenNewGroup
+            | Action::CancelGroupEditor
+            | Action::SubmitGroupEditor
             | Action::OpenAddRule
             | Action::OpenAddRuleFor(_)
             | Action::OpenEditRule(_)

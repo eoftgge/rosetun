@@ -162,6 +162,30 @@ impl WorkerDispatcher {
         });
     }
 
+    pub(crate) fn group_rules(
+        &self,
+        set: RuleSetId,
+        rules: Vec<RuleId>,
+        name: String,
+        target: RuleDestination,
+    ) {
+        self.spawn_complete("rosetun-group-rules", move |store| {
+            WorkerEvent::GroupRules(group_rules(store, &set, &rules, &name, &target))
+        });
+    }
+
+    pub(crate) fn ungroup_rule(&self, set: RuleSetId, rule: RuleId) {
+        self.spawn_complete("rosetun-ungroup-rule", move |store| {
+            WorkerEvent::UngroupRule(ungroup_rule(store, &set, &rule))
+        });
+    }
+
+    pub(crate) fn remove_group_item(&self, set: RuleSetId, rule: RuleId, index: usize) {
+        self.spawn_complete("rosetun-remove-group-item", move |store| {
+            WorkerEvent::RemoveGroupItem(remove_group_item(store, &set, &rule, index))
+        });
+    }
+
     pub(crate) fn restore_rule_sets(&self, snapshot: RuleSetsSnapshot) {
         self.spawn_complete("rosetun-restore-rule-sets", move |store| {
             WorkerEvent::RestoreRuleSets(restore_rule_sets(store, &snapshot))

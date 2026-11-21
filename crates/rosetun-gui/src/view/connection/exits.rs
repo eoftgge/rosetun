@@ -171,7 +171,7 @@ mod tests {
             temporary_rules: Vec::new(),
             lists: Vec::new(),
             settings: Settings::default(),
-            rule_templates: Vec::new(),
+            rule_groups: Vec::new(),
         };
         state.set_session_request_for_test(request);
         if let Some(exits) = delays {
