@@ -6628,16 +6628,7 @@ fn subscription_credentials_belong_only_to_the_session_owner_and_expire_on_disco
         )
         .contains(&proxy.password)
     );
-    let mut other = test_caller();
-    #[cfg(windows)]
-    {
-        other.account = AccountIdentity::WindowsSid(vec![99]);
-    }
-    #[cfg(target_os = "linux")]
-    {
-        other.account = AccountIdentity::LinuxUid(99999);
-    }
-    other.administrator = true;
+    let other = Caller::fake(b"other", true);
     assert_eq!(
         helper.subscription_proxy_as(&other).unwrap_err().code,
         ErrorCode::AccessDenied

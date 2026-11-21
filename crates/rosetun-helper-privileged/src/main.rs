@@ -156,7 +156,7 @@ fn main() -> std::process::ExitCode {
     }
     #[cfg(not(any(windows, target_os = "linux")))]
     if mode != Mode::Console {
-        eprintln!("service and install-directory commands are Windows only");
+        eprintln!("this command is not supported on this platform");
         return std::process::ExitCode::from(2);
     }
 
@@ -228,7 +228,7 @@ fn main() -> std::process::ExitCode {
             install_command(&path, "finalized", install_dir::finalize(&path))
         }
         #[cfg(not(windows))]
-        _ => unreachable!("Windows-only modes were rejected above"),
+        _ => unreachable!("unsupported modes were rejected above"),
     }
 }
 

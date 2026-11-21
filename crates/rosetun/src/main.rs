@@ -800,9 +800,9 @@ fn lockdown(
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(windows)]
 const LOCKDOWN_DENIED: &str = "only an administrator can change Lockdown; run this command in a terminal opened as administrator";
-#[cfg(target_os = "linux")]
+#[cfg(not(windows))]
 const LOCKDOWN_DENIED: &str =
     "only root can change Lockdown; run it with sudo, as `sudo rosetun lockdown on`";
 
@@ -838,9 +838,9 @@ fn update_lockdown_lan(enabled: bool, private_networks: bool) -> ExitCode {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(windows)]
 const LAN_KEPT_BY_LOCKDOWN: &str = "the setting is saved, but Lockdown keeps its local network access; run `rosetun lockdown on` in a terminal opened as administrator to apply it";
-#[cfg(target_os = "linux")]
+#[cfg(not(windows))]
 const LAN_KEPT_BY_LOCKDOWN: &str = "the setting is saved, but Lockdown keeps its local network access; run `sudo rosetun lockdown on` to apply it";
 
 /// Under Lockdown the CLI resolves names itself (`rosetun_core::follow_service_status`).
@@ -874,13 +874,13 @@ fn follow_service_status() {
     rosetun_core::follow_service_status(status.as_ref());
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(windows)]
 const RESET_AS_ADMINISTRATOR: &str =
     "run `rosetun reset-firewall` from a terminal opened as administrator";
-#[cfg(target_os = "linux")]
+#[cfg(not(windows))]
 const RESET_AS_ADMINISTRATOR: &str = "run it as root: `sudo rosetun reset-firewall`";
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(windows)]
 const LOCKDOWN_HELP: &str = "Only an administrator changes it.
 reset-firewall removes it without the service; run it as administrator.";
 #[cfg(target_os = "linux")]
@@ -888,6 +888,8 @@ const LOCKDOWN_HELP: &str = "Only root changes it (sudo rosetun lockdown on|off)
 the desktop asks for an administrator password through polkit.
 reset-firewall removes it without the service, also for the next boot:
 sudo rosetun reset-firewall.";
+#[cfg(not(any(windows, target_os = "linux")))]
+const LOCKDOWN_HELP: &str = "Lockdown is not available on this system.";
 
 /// `rosetun-helper-privileged --reset-firewall` from this program's folder.
 fn reset_firewall() -> ExitCode {
@@ -1316,9 +1318,9 @@ mod tests {
             ErrorCode::Busy,
             "a server check is in progress",
         ))));
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(windows)]
         assert!(LOCKDOWN_DENIED.contains("administrator"));
-        #[cfg(target_os = "linux")]
+        #[cfg(not(windows))]
         assert!(LOCKDOWN_DENIED.contains("sudo rosetun lockdown on"));
         assert!(LAN_KEPT_BY_LOCKDOWN.contains("rosetun lockdown on"));
     }

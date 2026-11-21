@@ -1,8 +1,10 @@
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
+#[cfg(any(windows, target_os = "linux", test))]
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rosetun_dns::{AskError, Reply, Transport};
+#[cfg(any(windows, target_os = "linux", test))]
 use rosetun_processes::RunningProcess;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -118,23 +120,33 @@ fn check_local(own_alias: &str) -> Vec<CheckResult> {
     #[cfg(not(any(windows, target_os = "linux")))]
     let proxy = CheckResult::unavailable(CheckKind::Proxy);
 
-    let processes = rosetun_processes::running_processes();
-    #[cfg(windows)]
-    let driver = rosetun_shell::windivert_running();
-    #[cfg(target_os = "linux")]
-    let driver = rosetun_shell::packet_queue_bound();
-    #[cfg(not(any(windows, target_os = "linux")))]
-    let driver = Err(std::io::Error::other("not available on this platform"));
-    let packet_interceptor = match &processes {
-        Ok(processes) => packet_interceptor_result(processes, driver),
-        Err(_) => CheckResult::unavailable(CheckKind::PacketInterceptor),
+    #[cfg(any(windows, target_os = "linux"))]
+    let (packet_interceptor, other_vpn) = {
+        let processes = rosetun_processes::running_processes();
+        #[cfg(windows)]
+        let driver = rosetun_shell::windivert_running();
+        #[cfg(target_os = "linux")]
+        let driver = rosetun_shell::packet_queue_bound();
+        let packet_interceptor = match &processes {
+            Ok(processes) => packet_interceptor_result(processes, driver),
+            Err(_) => CheckResult::unavailable(CheckKind::PacketInterceptor),
+        };
+        let adapters = rosetun_adapters::active_vpn_adapters(own_alias);
+        let other_vpn = match (processes, adapters, std::env::current_exe()) {
+            (Ok(processes), Ok(adapters), Ok(executable)) => {
+                other_vpn_result(&processes, adapters, &executable)
+            }
+            _ => CheckResult::unavailable(CheckKind::OtherVpn),
+        };
+        (packet_interceptor, other_vpn)
     };
-    let adapters = rosetun_adapters::active_vpn_adapters(own_alias);
-    let other_vpn = match (processes, adapters, std::env::current_exe()) {
-        (Ok(processes), Ok(adapters), Ok(executable)) => {
-            other_vpn_result(&processes, adapters, &executable)
-        }
-        _ => CheckResult::unavailable(CheckKind::OtherVpn),
+    #[cfg(not(any(windows, target_os = "linux")))]
+    let (packet_interceptor, other_vpn) = {
+        let _ = own_alias;
+        (
+            CheckResult::unavailable(CheckKind::PacketInterceptor),
+            CheckResult::unavailable(CheckKind::OtherVpn),
+        )
     };
     vec![clock, proxy, packet_interceptor, other_vpn]
 }
@@ -153,7 +165,7 @@ const OTHER_VPN_PROCESSES: &[&str] = &[
     "openvpn.exe",
     "NetZapret.exe",
 ];
-#[cfg(not(windows))]
+#[cfg(all(not(windows), any(target_os = "linux", test)))]
 const OTHER_VPN_PROCESSES: &[&str] = &[
     "v2rayN",
     "nekoray",
@@ -174,14 +186,15 @@ const OTHER_VPN_PROCESSES: &[&str] = &[
 /// Programs that read the packets of other programs: Zapret's `nfqws` and `tpws`, ByeDPI.
 #[cfg(windows)]
 const INTERCEPTOR_PROCESSES: &[&str] = &["winws.exe", "winws2.exe"];
-#[cfg(not(windows))]
+#[cfg(all(not(windows), any(target_os = "linux", test)))]
 const INTERCEPTOR_PROCESSES: &[&str] = &["nfqws", "tpws", "ciadpi", "byedpi"];
 /// Engines the service runs too: another copy of one is another VPN.
 #[cfg(windows)]
 const ENGINE_PROCESSES: &[&str] = &["sing-box.exe", "xray.exe"];
-#[cfg(not(windows))]
+#[cfg(all(not(windows), any(target_os = "linux", test)))]
 const ENGINE_PROCESSES: &[&str] = &["sing-box", "xray"];
 
+#[cfg(any(windows, target_os = "linux", test))]
 fn process_names(
     processes: &[RunningProcess],
     predicate: impl Fn(&RunningProcess) -> bool,
@@ -196,6 +209,7 @@ fn process_names(
     names
 }
 
+#[cfg(any(windows, target_os = "linux", test))]
 fn packet_interceptor_result(
     processes: &[RunningProcess],
     driver: std::io::Result<bool>,
@@ -220,6 +234,7 @@ fn packet_interceptor_result(
     }
 }
 
+#[cfg(any(windows, target_os = "linux", test))]
 fn other_vpn_result(
     processes: &[RunningProcess],
     adapters: Vec<String>,

@@ -875,20 +875,20 @@ pub(crate) fn client(language: Language, error: &ClientError) -> String {
     display::safe_multiline(&message)
 }
 
-/// What to do when the Lockdown command failed: on Linux the command is
-/// `sudo rosetun lockdown`, elsewhere a terminal opened as administrator.
+/// What to do when the Lockdown command failed: on Windows a terminal opened
+/// as administrator, on Unix `sudo rosetun lockdown`.
 fn lockdown_command_failed(language: Language) -> String {
-    #[cfg(target_os = "linux")]
+    #[cfg(windows)]
+    {
+        tr_in(language, "lockdown-command-failed", &FluentArgs::new())
+    }
+    #[cfg(not(windows))]
     {
         tr_in(
             language,
             "lockdown-command-failed-linux",
             &FluentArgs::new(),
         )
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        tr_in(language, "lockdown-command-failed", &FluentArgs::new())
     }
 }
 

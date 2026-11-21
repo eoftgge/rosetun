@@ -352,7 +352,14 @@ impl State {
 
     #[cfg(any(windows, target_os = "linux", test))]
     pub(crate) fn can_save_report(&self) -> bool {
-        (self.config_ready || self.config_unreadable()) && !self.settings.screen.report_running
+        #[cfg(any(windows, target_os = "linux"))]
+        {
+            (self.config_ready || self.config_unreadable()) && !self.settings.screen.report_running
+        }
+        #[cfg(not(any(windows, target_os = "linux")))]
+        {
+            false
+        }
     }
 
     /// Whether closing the window hides it to the tray. With unreadable

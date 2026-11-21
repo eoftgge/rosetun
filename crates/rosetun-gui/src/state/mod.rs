@@ -129,6 +129,7 @@ pub(crate) struct State {
     /// closed: connect at start whatever "Connect at startup" says.
     after_upgrade: bool,
     /// The connect in flight is that start's.
+    #[cfg(any(windows, target_os = "linux", test))]
     after_upgrade_connect: bool,
     /// This run took over from one an upgrade replaced: a hold on the first
     /// status means it should connect.
@@ -141,6 +142,7 @@ pub(crate) struct State {
     pub(crate) service_group: ServiceGroup,
     /// That start found nothing to connect to, or its connect failed: the
     /// window should show why the network is closed.
+    #[cfg(any(windows, target_os = "linux", test))]
     upgrade_attention: bool,
     /// A server picked in the tray while disconnected connects once it is saved.
     connect_after_choice: bool,
@@ -211,12 +213,14 @@ impl Default for State {
             config_ready: false,
             auto_connect_pending: true,
             after_upgrade: false,
+            #[cfg(any(windows, target_os = "linux", test))]
             after_upgrade_connect: false,
             #[cfg(any(target_os = "linux", test))]
             relaunched: false,
             #[cfg(any(target_os = "linux", test))]
             helper_answered: false,
             service_group: ServiceGroup::default(),
+            #[cfg(any(windows, target_os = "linux", test))]
             upgrade_attention: false,
             connect_after_choice: false,
             subscriptions: SubscriptionsState::default(),

@@ -133,7 +133,6 @@ impl<'a> DialogFooter<'a> {
     }
 
     /// A second way forward, between Cancel and the main button.
-    #[cfg(any(windows, target_os = "linux", test))]
     pub(crate) fn other(mut self, other: impl Into<egui::WidgetText>) -> Self {
         self.other = Some(other.into());
         self

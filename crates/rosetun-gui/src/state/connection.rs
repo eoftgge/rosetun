@@ -327,13 +327,17 @@ impl State {
         {
             self.operations.helper = true;
             self.connect_in_flight = true;
-            self.after_upgrade_connect = self.after_upgrade;
+            #[cfg(any(windows, target_os = "linux", test))]
+            {
+                self.after_upgrade_connect = self.after_upgrade;
+            }
             self.reset_failure_interference();
             self.cancelled_connect = false;
             self.deferred_connect = None;
             self.operation_error = None;
             return Some(Job::Connect(self.request_inputs()));
         }
+        #[cfg(any(windows, target_os = "linux", test))]
         if self.after_upgrade && !self.status.state.is_transitional() {
             self.upgrade_attention = !matches!(self.status.state, ConnectionState::Connected);
         }
@@ -631,6 +635,7 @@ impl State {
             }
             WorkerEvent::Connect(result) => {
                 self.connect_in_flight = false;
+                #[cfg(any(windows, target_os = "linux", test))]
                 if std::mem::take(&mut self.after_upgrade_connect)
                     && result.is_err()
                     && !self.cancelled_connect
@@ -888,7 +893,6 @@ impl State {
                     return Some(Job::SelectNode(subscription, node));
                 }
             }
-            #[cfg(any(windows, target_os = "linux", test))]
             #[cfg(any(windows, target_os = "linux", test))]
             Action::Reconnect => {
                 if self.can_reconnect() {

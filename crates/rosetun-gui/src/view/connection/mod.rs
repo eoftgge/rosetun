@@ -221,13 +221,13 @@ fn service_banner(ui: &mut egui::Ui, state: &State) {
     });
 }
 
-/// The service reports one hold: on Windows an upgrade left it, on Linux
+/// The service reports one hold: on Windows an upgrade left it, on Unix
 /// the service's table outlived a crash.
 fn hold_banner() -> String {
-    if cfg!(target_os = "linux") {
-        tr!("crash-hold-banner")
-    } else {
+    if cfg!(windows) {
         tr!("upgrade-hold-banner")
+    } else {
+        tr!("crash-hold-banner")
     }
 }
 
@@ -558,22 +558,22 @@ fn conflict_names(state: &State, names: &[String]) -> String {
 }
 
 /// The confirmation's platform-specific lines: how far it is tested, what
-/// loses the network, and the way out, which on Linux is `sudo`.
+/// loses the network, and the way out, which on Unix is `sudo`.
 fn lockdown_text(text: LockdownText) -> String {
-    #[cfg(target_os = "linux")]
-    {
-        match text {
-            LockdownText::Experimental => tr!("lockdown-experimental-linux"),
-            LockdownText::VirtualMachines => tr!("lockdown-virtual-machines-linux"),
-            LockdownText::WayOut => tr!("lockdown-way-out-linux"),
-        }
-    }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(windows)]
     {
         match text {
             LockdownText::Experimental => tr!("lockdown-experimental"),
             LockdownText::VirtualMachines => tr!("lockdown-virtual-machines"),
             LockdownText::WayOut => tr!("lockdown-way-out"),
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        match text {
+            LockdownText::Experimental => tr!("lockdown-experimental-linux"),
+            LockdownText::VirtualMachines => tr!("lockdown-virtual-machines-linux"),
+            LockdownText::WayOut => tr!("lockdown-way-out-linux"),
         }
     }
 }
