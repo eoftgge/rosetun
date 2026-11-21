@@ -197,7 +197,7 @@ pub(crate) enum WorkerEvent {
     SetDns(Result<(), SettingsError>),
     ResetSettings(Result<(), SettingsError>),
     SetVerboseLog(Result<(), SettingsError>),
-    #[cfg(any(windows, target_os = "linux"))]
+    #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
     OpenFolder(Result<(), std::io::Error>),
     SelectNode(Result<String, SelectNodeError>),
     SelectRuleSet(Result<(), SelectRuleSetError>),

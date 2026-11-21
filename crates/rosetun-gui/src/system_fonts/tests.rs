@@ -232,7 +232,7 @@ fn font_files_are_found_under_the_folders_in_a_stable_order() {
     std::fs::remove_dir_all(root).unwrap();
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
 #[test]
 fn fontconfig_answers_are_parsed_into_a_face_of_a_file() {
     assert_eq!(
@@ -254,8 +254,77 @@ fn fontconfig_answers_are_parsed_into_a_face_of_a_file() {
     }
 }
 
+#[test]
+fn macos_finder_checks_script_fonts_across_folders_before_general_ones() {
+    let primary = FontsFolder::new("macos-primary", &[("SFNS.ttf", CORMORANT)]);
+    let supplemental = FontsFolder::new("macos-supplemental", &[("Thonburi.ttc", MANROPE)]);
+    let fonts = SystemFonts::in_macos_folders(vec![primary.0.clone(), supplemental.0.clone()]);
+
+    let face = request(&fonts, ONLY_IN_CORMORANT).expect("general SFNS fallback");
+    assert_eq!(face.name, "system-1");
+    assert_eq!(
+        macos_locations(&[primary.0.clone(), supplemental.0.clone()], HAN.macos)[0],
+        Location {
+            path: primary.0.join("PingFang.ttc"),
+            index: 2,
+        }
+    );
+    assert_eq!(
+        macos_locations(&[primary.0.clone(), supplemental.0.clone()], KANA.macos)[0].path,
+        primary.0.join("ヒラギノ角ゴシック W3.ttc")
+    );
+    assert_eq!(
+        macos_locations(&[primary.0.clone(), supplemental.0.clone()], HANGUL.macos)[0].path,
+        primary.0.join("AppleSDGothicNeo.ttc")
+    );
+    assert!(
+        macos_locations(
+            &[primary.0.clone(), supplemental.0.clone()],
+            SOUTHEAST_ASIAN.macos
+        )
+        .contains(&Location {
+            path: supplemental.0.join("Thonburi.ttc"),
+            index: 0,
+        })
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_system_fonts_cover_asian_scripts_and_embedded_emoji() {
+    let ctx = egui::Context::default();
+    theme::apply(&ctx);
+    ctx.add_font_provider(Arc::new(SystemFonts::new()));
+    let names = [
+        "東京 · 日本",
+        "서울",
+        "กรุงเทพ",
+        "दिल्ली",
+        "Ελλάδα",
+        "İstanbul",
+        "تهران",
+        "测试",
+        "テスト",
+        "🌍 🇯🇵 🌹",
+    ];
+    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+        for name in names {
+            ui.label(name);
+        }
+    });
+    output.textures_delta.clear();
+    ctx.fonts_mut(|fonts| {
+        let font = FontId::proportional(14.0);
+        for name in names {
+            for c in name.chars().filter(|c| !c.is_whitespace()) {
+                assert!(fonts.has_glyph(&font, c), "{c:?} in {name}");
+            }
+        }
+    });
+}
+
 /// The owner's manual check names on this machine's fonts: run with `--ignored` where the
-/// usual fonts are installed (Windows, or Linux with the Noto fonts).
+/// usual fonts are installed (Windows, macOS, or Linux with the Noto fonts).
 #[test]
 #[ignore = "depends on the fonts installed on this machine"]
 fn the_system_has_fonts_for_the_manual_check_names() {

@@ -513,7 +513,7 @@ impl App {
                 snapshot,
                 own_alias,
             } => self.workers.save_report(snapshot, own_alias),
-            #[cfg(any(windows, target_os = "linux"))]
+            #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
             Job::OpenFolder(folder) => self.workers.open_folder(folder),
             Job::SelectNode(subscription, node) => self.workers.select_node(subscription, node),
             Job::SelectRuleSet(id) => self.workers.select_rule_set(id),
@@ -607,12 +607,12 @@ fn session_ending() -> bool {
     false
 }
 
-#[cfg(all(any(windows, target_os = "linux"), not(test)))]
+#[cfg(all(any(windows, target_os = "linux", target_os = "macos"), not(test)))]
 fn system_language() -> Option<i18n::Language> {
     rosetun_shell::user_language().and_then(|locale| i18n::language_of_locale(&locale))
 }
 
-#[cfg(all(not(any(windows, target_os = "linux")), not(test)))]
+#[cfg(all(not(any(windows, target_os = "linux", target_os = "macos")), not(test)))]
 fn system_language() -> Option<i18n::Language> {
     None
 }

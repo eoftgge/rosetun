@@ -42,7 +42,12 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
 
 fn general(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     widgets::settings_card(ui, |card| {
-        card.row(tr!("scale"), Some(&tr!("zoom-hint")), |ui| {
+        let zoom_hint = if cfg!(target_os = "macos") {
+            tr!("zoom-hint-macos")
+        } else {
+            tr!("zoom-hint")
+        };
+        card.row(tr!("scale"), Some(&zoom_hint), |ui| {
             let scales: Vec<_> = rosetun_core::INTERFACE_SCALES
                 .into_iter()
                 .map(|percent| (percent, i18n::scale(percent)))
@@ -1162,8 +1167,9 @@ fn service(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     ui.add_space(theme::space::L);
     widgets::settings_card(ui, |card| {
         card.row(tr!("log-title"), Some(&tr!("log-detail")), |ui| {
-            #[cfg(any(windows, target_os = "linux"))]
+            #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
             ui.horizontal(|ui| {
+                #[cfg(any(windows, target_os = "linux"))]
                 if widgets::outline_button(
                     ui,
                     if state.settings.screen.report_running {
@@ -1183,7 +1189,7 @@ fn service(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                     actions.push(Action::OpenFolder(AboutFolder::Config));
                 }
             });
-            #[cfg(not(any(windows, target_os = "linux")))]
+            #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
             let _ = ui;
         });
         #[cfg(any(windows, target_os = "linux"))]
@@ -1306,6 +1312,13 @@ fn about(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                             .small()
                             .color(theme::palette().text_muted),
                     );
+                    if cfg!(target_os = "macos") {
+                        ui.label(
+                            RichText::new(tr!("macos-experimental-build"))
+                                .small()
+                                .color(theme::palette().text_dim),
+                        );
+                    }
                 });
             });
         });
@@ -1596,11 +1609,11 @@ fn about_path(
         },
         None,
         |ui| {
-            #[cfg(any(windows, target_os = "linux"))]
+            #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
             if widgets::outline_button(ui, tr!("open-folder"), state.can_open_folders()).clicked() {
                 actions.push(Action::OpenFolder(folder));
             }
-            #[cfg(not(any(windows, target_os = "linux")))]
+            #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
             let _ = (ui, actions, folder);
         },
     );

@@ -826,6 +826,8 @@ fn process_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Ve
     }
     if cfg!(target_os = "linux") {
         destination_note(ui, tr!("rule-app-linux-rights"));
+    } else if cfg!(target_os = "macos") {
+        destination_note(ui, tr!("rule-app-macos-helpers"));
     }
     let folder_id = egui::Id::unique("rule_folder_choice");
     let folder_shown = widgets::reveal_progress(

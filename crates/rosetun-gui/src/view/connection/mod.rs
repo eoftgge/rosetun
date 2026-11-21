@@ -93,6 +93,13 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
         update_strip(ui, state, actions);
         ui.add_space(theme::SECTION_GAP);
     }
+    if cfg!(target_os = "macos") {
+        experimental_macos_strip(ui);
+        ui.add_space(theme::SECTION_GAP);
+    } else if state.kill_switch_unavailable() && state.lockdown_unavailable() {
+        protection_strip(ui, tr!("protection-unavailable-direct-traffic"));
+        ui.add_space(theme::SECTION_GAP);
+    }
     hero_card(ui, state, actions);
     ui.add_space(theme::SECTION_GAP);
     // Protection right under the hero, so a 960 px window shows it without
@@ -245,6 +252,41 @@ fn protection_strip(ui: &mut egui::Ui, text: String) {
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.add(egui::Label::new(RichText::new(text).color(theme::palette().text)).wrap());
+        });
+}
+
+/// Experimental macOS notice: identifies the Apple Silicon build and warns
+/// that Kill switch and Lockdown are unavailable so traffic may go direct if
+/// the tunnel drops.
+fn experimental_macos_strip(ui: &mut egui::Ui) {
+    egui::Frame::new()
+        .fill(theme::palette().input)
+        .stroke(egui::Stroke::new(
+            theme::stroke::HAIRLINE,
+            theme::palette().text_dim,
+        ))
+        .corner_radius(theme::RADIUS)
+        .inner_margin(theme::margin::symmetric(theme::space::L, theme::space::S))
+        .show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.vertical(|ui| {
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(tr!("macos-experimental-build"))
+                            .strong()
+                            .color(theme::palette().text),
+                    )
+                    .wrap(),
+                );
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(tr!("protection-unavailable-direct-traffic"))
+                            .small()
+                            .color(theme::palette().text_dim),
+                    )
+                    .wrap(),
+                );
+            });
         });
 }
 
@@ -568,13 +610,18 @@ fn lockdown_text(text: LockdownText) -> String {
             LockdownText::WayOut => tr!("lockdown-way-out"),
         }
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
     {
         match text {
             LockdownText::Experimental => tr!("lockdown-experimental-linux"),
             LockdownText::VirtualMachines => tr!("lockdown-virtual-machines-linux"),
             LockdownText::WayOut => tr!("lockdown-way-out-linux"),
         }
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        let _ = text;
+        tr!("lockdown-unavailable")
     }
 }
 
@@ -867,6 +914,47 @@ mod update_strip_tests {
                         "{label:?} {rect:?} {language:?}"
                     );
                 }
+            });
+        }
+    }
+
+    #[test]
+    fn connection_screen_warns_when_kill_switch_and_lockdown_are_unavailable() {
+        for language in [
+            crate::i18n::Language::English,
+            crate::i18n::Language::Russian,
+        ] {
+            crate::i18n::in_language(language, || {
+                let mut state = State::default();
+                state.config_ready = true;
+                state.helper_available = true;
+                state.protection = Some(rosetun_config::ProtectionCapabilities::default());
+                let mut screen = crate::test_ui::TestScreen::new(egui::vec2(960.0, 640.0));
+                let texts = screen.settle(|ui| show(ui, &state, &mut Vec::new()));
+                assert!(
+                    texts
+                        .iter()
+                        .any(|(text, _)| *text == tr!("protection-unavailable-direct-traffic")),
+                    "{language:?}"
+                );
+                assert_eq!(
+                    texts
+                        .iter()
+                        .any(|(text, _)| *text == tr!("macos-experimental-build")),
+                    cfg!(target_os = "macos"),
+                    "{language:?}"
+                );
+
+                state.protection = Some(crate::worker::FULL_PROTECTION);
+                let mut screen = crate::test_ui::TestScreen::new(egui::vec2(960.0, 640.0));
+                let texts = screen.settle(|ui| show(ui, &state, &mut Vec::new()));
+                assert_eq!(
+                    texts
+                        .iter()
+                        .any(|(text, _)| *text == tr!("protection-unavailable-direct-traffic")),
+                    cfg!(target_os = "macos"),
+                    "{language:?}"
+                );
             });
         }
     }

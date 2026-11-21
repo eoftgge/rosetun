@@ -154,7 +154,9 @@ fn waits_for_save(action: &Action) -> bool {
         | Action::SetOnQuit(_)
         | Action::SetNotifications(_) => true,
         #[cfg(any(windows, target_os = "linux"))]
-        Action::ShowReportFolder | Action::OpenFolder(_) => true,
+        Action::ShowReportFolder => true,
+        #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
+        Action::OpenFolder(_) => true,
         _ => false,
     }
 }
@@ -344,7 +346,7 @@ impl State {
         !self.config_ready && self.config_error.is_some()
     }
 
-    #[cfg(any(windows, target_os = "linux", test))]
+    #[cfg(any(windows, target_os = "linux", target_os = "macos", test))]
     pub(crate) fn can_open_folders(&self) -> bool {
         (self.config_ready || self.config_unreadable())
             && !self.settings_busy_shown(self.settings.now_ms)
@@ -492,7 +494,7 @@ impl State {
                     }
                 }
             }
-            #[cfg(any(windows, target_os = "linux"))]
+            #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
             WorkerEvent::OpenFolder(result) => {
                 let error = result.err().map(|error| {
                     let message = tr!("error-open-folder", detail = error.to_string());
@@ -820,7 +822,7 @@ impl State {
                     return self.start_settings(Job::OpenFolder(folder));
                 }
             }
-            #[cfg(any(windows, target_os = "linux"))]
+            #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
             Action::OpenFolder(folder) => {
                 let path = match folder {
                     AboutFolder::Config => &self.settings.screen.config_folder,

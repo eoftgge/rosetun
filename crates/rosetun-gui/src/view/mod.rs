@@ -248,7 +248,15 @@ fn config_unreadable_banner(ui: &mut egui::Ui, state: &State, actions: &mut Vec<
             None => {}
         }
     }
-    #[cfg(not(any(windows, target_os = "linux")))]
+    #[cfg(target_os = "macos")]
+    {
+        let label = tr!("open-settings-folder");
+        let buttons = [(label.as_str(), state.can_open_folders())];
+        if widgets::error_with_actions(ui, &state.text(&message), &buttons) == Some(0) {
+            actions.push(Action::OpenFolder(crate::state::AboutFolder::Config));
+        }
+    }
+    #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
     {
         let _ = actions;
         widgets::error_with_actions(ui, &state.text(&message), &[]);

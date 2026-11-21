@@ -355,7 +355,7 @@ pub(crate) enum Action {
     SaveReport,
     #[cfg(any(windows, target_os = "linux"))]
     ShowReportFolder,
-    #[cfg(any(windows, target_os = "linux"))]
+    #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
     OpenFolder(AboutFolder),
     OpenRules,
     OpenActiveRules,
@@ -553,7 +553,7 @@ pub(crate) enum Job {
         snapshot: Box<crate::report::ReportSnapshot>,
         own_alias: String,
     },
-    #[cfg(any(windows, target_os = "linux"))]
+    #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
     OpenFolder(PathBuf),
     SelectNode(SubscriptionId, NodeId),
     SelectRuleSet(Option<RuleSetId>),
@@ -788,7 +788,11 @@ impl State {
                 self.reduce_settings(event);
             }
             #[cfg(any(windows, target_os = "linux"))]
-            event @ (WorkerEvent::ReportSaved { .. } | WorkerEvent::OpenFolder(_)) => {
+            event @ WorkerEvent::ReportSaved { .. } => {
+                self.reduce_settings(event);
+            }
+            #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
+            event @ WorkerEvent::OpenFolder(_) => {
                 self.reduce_settings(event);
             }
             WorkerEvent::UpdateCheck { checked_at, result } => {
@@ -912,7 +916,11 @@ impl State {
                 return self.act_settings(action);
             }
             #[cfg(any(windows, target_os = "linux"))]
-            action @ (Action::SaveReport | Action::ShowReportFolder | Action::OpenFolder(_)) => {
+            action @ (Action::SaveReport | Action::ShowReportFolder) => {
+                return self.act_settings(action);
+            }
+            #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
+            action @ Action::OpenFolder(_) => {
                 return self.act_settings(action);
             }
             #[cfg(any(windows, target_os = "linux", test))]

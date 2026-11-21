@@ -882,13 +882,17 @@ fn lockdown_command_failed(language: Language) -> String {
     {
         tr_in(language, "lockdown-command-failed", &FluentArgs::new())
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
     {
         tr_in(
             language,
             "lockdown-command-failed-linux",
             &FluentArgs::new(),
         )
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        tr_in(language, "lockdown-unavailable", &FluentArgs::new())
     }
 }
 
