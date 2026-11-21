@@ -259,7 +259,10 @@ pub(super) fn server_row(
         ping_result,
         ui.ctx().pointer_hover_pos(),
         ping_region,
-        matches!(&node.outbound, Outbound::Hysteria2(_) | Outbound::Tuic(_)),
+        matches!(
+            &node.outbound,
+            Outbound::Hysteria2(_) | Outbound::Tuic(_) | Outbound::WireGuard(_)
+        ),
     ) {
         response.on_hover_text(hint)
     } else {
@@ -364,7 +367,10 @@ pub(super) fn server_row(
         }
         let (ping_text, color, _) = ping_label(
             result,
-            matches!(&node.outbound, Outbound::Hysteria2(_) | Outbound::Tuic(_)),
+            matches!(
+                &node.outbound,
+                Outbound::Hysteria2(_) | Outbound::Tuic(_) | Outbound::WireGuard(_)
+            ),
         );
         painter.text(
             egui::pos2(right, rect.center().y),

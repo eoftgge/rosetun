@@ -758,7 +758,18 @@ mod tests {
             idle_session_timeout: None,
             min_idle_session: None,
         });
-        for node in [&tuic, &anytls] {
+        let mut wireguard = reality_node();
+        wireguard.outbound = Outbound::WireGuard(rosetun_config::WireGuardParams {
+            private_key: "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=".into(),
+            public_key: "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=".into(),
+            pre_shared_key: None,
+            address: vec!["10.0.0.2/32".into()],
+            reserved: None,
+            mtu: None,
+            persistent_keepalive: None,
+        });
+        wireguard.stream = StreamSettings::default();
+        for node in [&tuic, &anytls, &wireguard] {
             assert!(matches!(
                 proxy_outbound(node, "proxy", "Ethernet", &TlsFragment::default()),
                 Err(EngineError::Unsupported(_))

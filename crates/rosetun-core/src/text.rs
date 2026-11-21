@@ -192,6 +192,7 @@ pub fn node_protocol(node: &Node) -> &'static str {
         Outbound::Hysteria2(_) => "hysteria2",
         Outbound::Tuic(_) => "tuic",
         Outbound::AnyTls(_) => "anytls",
+        Outbound::WireGuard(_) => "wireguard",
         Outbound::Unknown { .. } => "unknown",
     }
 }
@@ -199,6 +200,9 @@ pub fn node_protocol(node: &Node) -> &'static str {
 pub fn node_transport(node: &Node) -> &'static str {
     if matches!(node.outbound, Outbound::Hysteria2(_) | Outbound::Tuic(_)) {
         return "quic";
+    }
+    if matches!(node.outbound, Outbound::WireGuard(_)) {
+        return "udp";
     }
     match &node.stream.transport {
         Transport::Tcp => "tcp",
@@ -212,6 +216,9 @@ pub fn node_transport(node: &Node) -> &'static str {
 pub fn node_tls(node: &Node) -> &'static str {
     if matches!(node.outbound, Outbound::Hysteria2(_) | Outbound::Tuic(_)) {
         return "tls";
+    }
+    if matches!(node.outbound, Outbound::WireGuard(_)) {
+        return "noise";
     }
     match &node.stream.tls {
         TlsMode::Plain => "plain",
@@ -279,6 +286,19 @@ mod tests {
         assert_eq!(node_protocol(&node), "anytls");
         assert_eq!(node_transport(&node), "tcp");
         assert_eq!(node_tls(&node), "tls");
+
+        node.outbound = Outbound::WireGuard(rosetun_config::WireGuardParams {
+            private_key: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".into(),
+            public_key: "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=".into(),
+            pre_shared_key: None,
+            address: vec!["10.0.0.2/32".into()],
+            mtu: None,
+            reserved: None,
+            persistent_keepalive: None,
+        });
+        assert_eq!(node_protocol(&node), "wireguard");
+        assert_eq!(node_transport(&node), "udp");
+        assert_eq!(node_tls(&node), "noise");
         assert_eq!(node_address(&node), "example.com:443");
     }
 

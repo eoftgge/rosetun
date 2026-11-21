@@ -29,9 +29,10 @@ pub use list_validation::{
 pub use node::{
     AnyTlsParams, Hysteria2Params, Node, Outbound, ProxyCredentials, RealityParams,
     ShadowsocksParams, StreamSettings, TlsMode, TlsParams, Transport, TrojanParams,
-    TuicCongestionControl, TuicParams, TuicUdpRelayMode, VlessParams, VmessParams, XhttpExtra,
-    XhttpMode, XhttpRange, XhttpXmux, fragments_tls, is_valid_duration, is_valid_uuid,
-    node_country, uses_xray,
+    TuicCongestionControl, TuicParams, TuicUdpRelayMode, VlessParams, VmessParams,
+    WIREGUARD_MTU_MAX, WIREGUARD_MTU_MIN, WireGuardParams, XhttpExtra, XhttpMode, XhttpRange,
+    XhttpXmux, fragments_tls, is_valid_duration, is_valid_uuid, is_valid_wireguard_address,
+    is_valid_wireguard_key, node_country, uses_xray,
 };
 pub use prefix::{IpPrefix, LINK_LOCAL_V4, LINK_LOCAL_V6, is_private_address};
 pub use report::{
@@ -55,7 +56,7 @@ use serde_json::{Map, Value};
 
 /// Bump for every serialized format change, including defaulted fields older releases drop on save.
 /// Add a Value migration and a new fixture; never edit fixtures of released formats.
-pub const CONFIG_VERSION: u32 = 10;
+pub const CONFIG_VERSION: u32 = 11;
 
 pub const EXIT_TRACE_IP: &str = "1.1.1.1";
 pub const EXIT_TRACE_PORT: u16 = 443;
@@ -409,6 +410,7 @@ pub fn from_json(bytes: &[u8]) -> Result<(AppConfig, Option<u32>), FormatError> 
             7 => migrate_7_to_8(config),
             8 => migrate_8_to_9(config),
             9 => migrate_9_to_10(config),
+            10 => migrate_10_to_11(config),
             _ => return Err(FormatError::UnexpectedValue),
         }
         version += 1;
@@ -422,6 +424,10 @@ pub fn from_json(bytes: &[u8]) -> Result<(AppConfig, Option<u32>), FormatError> 
         config,
         (original_version < CONFIG_VERSION).then_some(original_version),
     ))
+}
+
+fn migrate_10_to_11(_config: &mut Map<String, Value>) {
+    // Format 11 adds WireGuard outbounds; older writers must refuse this file.
 }
 
 fn migrate_9_to_10(_config: &mut Map<String, Value>) {

@@ -108,20 +108,44 @@ pub fn render(request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError
         request.local_proxy.is_some(),
     );
     let mut outbounds = Vec::with_capacity(request.extra.len() + 2);
-    outbounds.push(match request.socks {
-        Some(socks) => socks_outbound(socks, TAG_PROXY),
-        None => proxy_outbound(request.node, TAG_PROXY)?,
-    });
+    let mut endpoints = Vec::new();
+    match request.socks {
+        Some(socks) => outbounds.push(socks_outbound(socks, TAG_PROXY)),
+        None if matches!(request.node.outbound, Outbound::WireGuard(_)) => {
+            endpoints.push(wireguard_endpoint(request.node, TAG_PROXY)?);
+        }
+        None => outbounds.push(proxy_outbound(request.node, TAG_PROXY)?),
+    }
     for extra in request.extra {
         let tag = exit_tag(extra.index);
+        if extra.socks.is_none() && matches!(extra.node.outbound, Outbound::WireGuard(_)) {
+            // WireGuard endpoints are not cloned into a second `hop-{tag}` endpoint:
+            // a WireGuard server peer only permits one active session per client
+            // public key, so two endpoints sharing the same private_key would
+            // continuously steal each other's session. Second hops detour directly
+            // to `tag`.
+            endpoints.push(wireguard_endpoint(extra.node, &tag)?);
+            continue;
+        }
         let mut outbound = match extra.socks {
             Some(socks) => socks_outbound(socks, &tag),
             None => proxy_outbound(extra.node, &tag)?,
         };
         if let Some(via) = extra.via {
-            let first = exit_outbound(via, request.extra)
+            let parent = request
+                .extra
+                .iter()
+                .find(|entry| entry.exit == via)
                 .ok_or_else(|| EngineError::Unsupported("missing first hop".into()))?;
-            outbound["detour"] = format!("hop-{first}").into();
+            let first = exit_tag(parent.index);
+            let detour = if parent.socks.is_none()
+                && matches!(parent.node.outbound, Outbound::WireGuard(_))
+            {
+                first
+            } else {
+                format!("hop-{first}")
+            };
+            outbound["detour"] = detour.into();
             if matches!(extra.node.outbound, Outbound::Socks5(_)) {
                 outbound["network"] = "tcp".into();
             }
@@ -161,6 +185,9 @@ pub fn render(request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError
         "outbounds": outbounds,
         "route": route,
     });
+    if !endpoints.is_empty() {
+        config["endpoints"] = Value::Array(endpoints);
+    }
     if let Some(control) = request.control {
         config["experimental"] = json!({
             "clash_api": {
@@ -235,17 +262,24 @@ pub(crate) fn render_probe(
     request: &ProbeRenderRequest<'_>,
 ) -> Result<RenderedConfig, EngineError> {
     let mut outbounds = Vec::with_capacity(request.nodes.len() + 1);
+    let mut endpoints = Vec::new();
     let mut unsupported_probes = Vec::new();
     for (tag, node) in request.nodes {
         let socks = request.socks.iter().find(|(name, _)| name == tag);
-        let rendered = match socks {
-            Some((_, endpoint)) => Ok(socks_outbound(*endpoint, tag)),
-            None => proxy_outbound(node, tag),
-        };
-        match rendered {
-            Ok(outbound) => outbounds.push(outbound),
-            Err(EngineError::Unsupported(_)) => unsupported_probes.push(tag.clone()),
-            Err(error) => return Err(error),
+        match socks {
+            Some((_, endpoint)) => outbounds.push(socks_outbound(*endpoint, tag)),
+            None if matches!(node.outbound, Outbound::WireGuard(_)) => {
+                match wireguard_endpoint(node, tag) {
+                    Ok(endpoint) => endpoints.push(endpoint),
+                    Err(EngineError::Unsupported(_)) => unsupported_probes.push(tag.clone()),
+                    Err(error) => return Err(error),
+                }
+            }
+            None => match proxy_outbound(node, tag) {
+                Ok(outbound) => outbounds.push(outbound),
+                Err(EngineError::Unsupported(_)) => unsupported_probes.push(tag.clone()),
+                Err(error) => return Err(error),
+            },
         }
     }
     outbounds.push(json!({ "type": "direct", "tag": TAG_DIRECT }));
@@ -254,7 +288,7 @@ pub(crate) fn render_probe(
         Some(interface) => json!({ "final": TAG_DIRECT, "default_interface": interface }),
         None => json!({ "final": TAG_DIRECT, "auto_detect_interface": true }),
     };
-    let config = json!({
+    let mut config = json!({
         "log": { "level": "info", "timestamp": true },
         "outbounds": outbounds,
         "route": route,
@@ -263,6 +297,9 @@ pub(crate) fn render_probe(
             "secret": request.control.secret,
         } },
     });
+    if !endpoints.is_empty() {
+        config["endpoints"] = Value::Array(endpoints);
+    }
     let body = serde_json::to_vec_pretty(&config)
         .map_err(|error| EngineError::Render(error.to_string()))?;
     Ok(RenderedConfig {
@@ -560,6 +597,11 @@ fn proxy_outbound(node: &Node, tag: &str) -> Result<Value, EngineError> {
                 outbound.insert("min_idle_session".into(), min_idle.into());
             }
         }
+        Outbound::WireGuard(_) => {
+            return Err(EngineError::Unsupported(
+                "WireGuard must be rendered as a sing-box endpoint".into(),
+            ));
+        }
         Outbound::Unknown { scheme, .. } => {
             return Err(EngineError::Unsupported(format!(
                 "protocol {scheme} not supported by the sing box backend"
@@ -586,6 +628,41 @@ fn proxy_outbound(node: &Node, tag: &str) -> Result<Value, EngineError> {
     }
 
     Ok(Value::Object(outbound))
+}
+
+fn wireguard_endpoint(node: &Node, tag: &str) -> Result<Value, EngineError> {
+    node.validate_proxy()
+        .map_err(|message| EngineError::Unsupported(message.into()))?;
+    let Outbound::WireGuard(params) = &node.outbound else {
+        return Err(EngineError::Unsupported(
+            "expected a WireGuard node for endpoint rendering".into(),
+        ));
+    };
+    let mut peer = Map::new();
+    peer.insert("address".into(), node.server.clone().into());
+    peer.insert("port".into(), node.port.into());
+    peer.insert("public_key".into(), params.public_key.clone().into());
+    if let Some(psk) = &params.pre_shared_key {
+        peer.insert("pre_shared_key".into(), psk.clone().into());
+    }
+    peer.insert("allowed_ips".into(), json!(["0.0.0.0/0", "::/0"]));
+    if let Some(keepalive) = params.persistent_keepalive {
+        peer.insert("persistent_keepalive_interval".into(), keepalive.into());
+    }
+    if let Some(reserved) = params.reserved {
+        peer.insert("reserved".into(), json!(reserved));
+    }
+
+    let mut endpoint = Map::new();
+    endpoint.insert("type".into(), "wireguard".into());
+    endpoint.insert("tag".into(), tag.into());
+    endpoint.insert("address".into(), json!(params.address));
+    endpoint.insert("private_key".into(), params.private_key.clone().into());
+    if let Some(mtu) = params.mtu {
+        endpoint.insert("mtu".into(), mtu.into());
+    }
+    endpoint.insert("peers".into(), json!([Value::Object(peer)]));
+    Ok(Value::Object(endpoint))
 }
 
 fn tls_section(mode: &TlsMode, use_utls: bool) -> Option<Value> {
@@ -2885,5 +2962,155 @@ mod tests {
             .find(|rule| rule["process_path_regex"] == json!([expected_regex]))
             .expect("escaped helper process_path_regex rule");
         assert_eq!(helper_rule["action"], "reject");
+    }
+
+    #[test]
+    fn wireguard_endpoint_matches_fixture_and_omits_optional_fields() {
+        let mut node = Node {
+            id: NodeId::new("wg-full"),
+            name: "WireGuard".into(),
+            server: "192.0.2.42".into(),
+            port: 51820,
+            outbound: Outbound::WireGuard(rosetun_config::WireGuardParams {
+                private_key: "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=".into(),
+                public_key: "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=".into(),
+                pre_shared_key: Some("AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM=".into()),
+                address: vec!["10.0.0.2/32".into(), "fd00::2/128".into()],
+                reserved: Some([1, 2, 3]),
+                mtu: Some(1280),
+                persistent_keepalive: Some(25),
+            }),
+            stream: StreamSettings::default(),
+            raw: None,
+        };
+        let endpoint = wireguard_endpoint(&node, "proxy").unwrap();
+        let golden: Value =
+            serde_json::from_str(include_str!("../tests/fixtures/wireguard-endpoint.json"))
+                .unwrap();
+        assert_eq!(endpoint, golden);
+
+        node.outbound = Outbound::WireGuard(rosetun_config::WireGuardParams {
+            private_key: "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=".into(),
+            public_key: "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=".into(),
+            pre_shared_key: None,
+            address: vec!["10.0.0.2/32".into()],
+            reserved: None,
+            mtu: None,
+            persistent_keepalive: None,
+        });
+        let minimal = wireguard_endpoint(&node, "proxy").unwrap();
+        assert!(minimal.get("mtu").is_none());
+        let peer = &minimal["peers"][0];
+        assert!(peer.get("pre_shared_key").is_none());
+        assert!(peer.get("persistent_keepalive_interval").is_none());
+        assert!(peer.get("reserved").is_none());
+        assert_eq!(peer["allowed_ips"], json!(["0.0.0.0/0", "::/0"]));
+
+        node.stream.tls = TlsMode::Tls(TlsParams::default());
+        assert!(matches!(
+            wireguard_endpoint(&node, "proxy"),
+            Err(EngineError::Unsupported(_))
+        ));
+    }
+
+    #[test]
+    fn wireguard_renders_in_endpoints_probes_and_two_hop_without_duplicating_endpoint() {
+        let wg = Node {
+            id: NodeId::new("wg-main"),
+            name: "WireGuard".into(),
+            server: "192.0.2.42".into(),
+            port: 51820,
+            outbound: Outbound::WireGuard(rosetun_config::WireGuardParams {
+                private_key: "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=".into(),
+                public_key: "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=".into(),
+                pre_shared_key: None,
+                address: vec!["10.0.0.2/32".into()],
+                reserved: Some([1, 2, 3]),
+                mtu: Some(1280),
+                persistent_keepalive: None,
+            }),
+            stream: StreamSettings::default(),
+            raw: None,
+        };
+        let mut socks = shadowsocks_node("socks", "198.51.100.2");
+        socks.port = 1080;
+        socks.outbound = Outbound::Socks5(Default::default());
+
+        let (a, b) = (ExitId::new("a"), ExitId::new("b"));
+        let extra = [
+            ExtraOutbound {
+                index: 0,
+                via: None,
+                exit: &a,
+                node: &wg,
+                socks: None,
+            },
+            ExtraOutbound {
+                index: 1,
+                via: Some(&a),
+                exit: &b,
+                node: &socks,
+                socks: None,
+            },
+        ];
+        let mut rules = local_proxy_rules();
+        rules.rules.push(Rule {
+            id: RuleId::new("wg-chain"),
+            enabled: true,
+            matcher: RuleMatcher::Domain(DomainMatch::Suffix("example.com".into())),
+            target: RuleTarget::Exit,
+            exit: Some(b.clone()),
+        });
+        let rendered = render(&RenderRequest {
+            node: &wg,
+            socks: None,
+            extra: &extra,
+            rules: &rules,
+            lists: &[],
+            settings: &Settings::default(),
+            lan_segment: &[],
+            lan_servers: &[],
+            control: None,
+            verbose_log: false,
+            local_proxy: None,
+        })
+        .unwrap();
+        let value: Value = serde_json::from_slice(&rendered.body).unwrap();
+        let endpoints = value["endpoints"].as_array().unwrap();
+        let endpoint_tags: Vec<_> = endpoints
+            .iter()
+            .map(|entry| entry["tag"].as_str().unwrap())
+            .collect();
+        // Primary `proxy` and single `exit-0` endpoint — no cloned `hop-exit-0`.
+        assert_eq!(endpoint_tags, ["proxy", "exit-0"]);
+
+        let outbounds = value["outbounds"].as_array().unwrap();
+        let second = outbounds
+            .iter()
+            .find(|outbound| outbound["tag"] == "exit-1")
+            .unwrap();
+        assert_eq!(second["detour"], "exit-0");
+        assert_eq!(second["network"], "tcp");
+        assert!(
+            !outbounds
+                .iter()
+                .any(|outbound| outbound["tag"] == "hop-exit-0")
+        );
+
+        // Probe places WireGuard in `endpoints` and keeps `direct` in `outbounds`.
+        let control = rosetun_engine::ControlEndpoint::local().unwrap();
+        let probe_nodes = [("probe-0".to_owned(), wg)];
+        let probe = render_probe(&ProbeRenderRequest {
+            nodes: &probe_nodes,
+            socks: &[],
+            interface: None,
+            control: &control,
+        })
+        .unwrap();
+        assert!(probe.unsupported_probes.is_empty());
+        let probe_json: Value = serde_json::from_slice(&probe.body).unwrap();
+        assert_eq!(probe_json["endpoints"][0]["tag"], "probe-0");
+        assert_eq!(probe_json["endpoints"][0]["type"], "wireguard");
+        assert_eq!(probe_json["outbounds"][0]["tag"], "direct");
     }
 }

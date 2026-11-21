@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt::Formatter;
 use std::time::Duration;
 
-pub const PROTOCOL_VERSION: u32 = 25;
+pub const PROTOCOL_VERSION: u32 = 26;
 const LOCAL_PROXY_PORT_BUSY: &str = "another program holds the local proxy port ";
 const TUNNEL_ADDRESS_IN_USE: &str = "the tunnel address is still held by the previous session";
 
@@ -838,7 +838,7 @@ mod tests {
             serde_json::to_string(&super::ErrorCode::AccessDenied).unwrap(),
             "\"access_denied\""
         );
-        assert_eq!(super::PROTOCOL_VERSION, 25);
+        assert_eq!(super::PROTOCOL_VERSION, 26);
         assert_eq!(
             serde_json::to_string(&super::Request::OpenNetwork).unwrap(),
             "\"open_network\""
@@ -1683,10 +1683,11 @@ mod tests {
     }
 
     #[test]
-    fn tuic_and_anytls_are_allowed_as_two_hop_parent_and_refused_as_exit_b() {
+    fn tuic_anytls_and_wireguard_are_allowed_as_two_hop_parent_and_refused_as_exit_b() {
         use super::{ConnectRequestError, ExtraNode};
         use rosetun_config::{
             AnyTlsParams, ExitId, ProxyCredentials, TlsMode, TlsParams, Transport, TuicParams,
+            WireGuardParams,
         };
 
         let config = selected_config();
@@ -1734,8 +1735,21 @@ mod tests {
             }),
             TlsMode::Tls(TlsParams::default()),
         );
+        let wireguard = make_node(
+            "wireguard",
+            Outbound::WireGuard(WireGuardParams {
+                private_key: "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=".into(),
+                public_key: "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=".into(),
+                pre_shared_key: None,
+                address: vec!["10.0.0.2/32".into()],
+                reserved: None,
+                mtu: None,
+                persistent_keepalive: None,
+            }),
+            TlsMode::Plain,
+        );
 
-        for parent in [&tuic, &anytls] {
+        for parent in [&tuic, &anytls, &wireguard] {
             let mut request = base_request.clone();
             request.extra_nodes = vec![
                 ExtraNode {

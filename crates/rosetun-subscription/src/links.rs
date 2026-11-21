@@ -22,6 +22,7 @@ pub(crate) fn parse(line: &str) -> Record {
         "hysteria2" | "hy2" => hysteria2(rest),
         "tuic" => tuic(line),
         "anytls" => anytls(line),
+        "wireguard" | "wg" => return crate::wireguard::parse_link(rest),
         "vmess" => vmess(rest),
         "ss" => shadowsocks(rest),
         "happ" | "incy" | "v2raytun" | "hiddify" | "streisand" | "sing-box" | "clash"

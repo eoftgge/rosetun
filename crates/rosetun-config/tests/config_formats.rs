@@ -6,8 +6,8 @@ use rosetun_config::{
     Hysteria2Params, List, ListFormat, ListId, ListSource, LocalProxySettings, Node, NodeId,
     Outbound, QuitAction, RealityParams, Rule, RuleId, RuleMatcher, RuleTarget, Selection,
     StreamSettings, SubscriptionId, TlsFragment, TlsMode, TlsParams, Transport,
-    TuicCongestionControl, TuicParams, TuicUdpRelayMode, VlessParams, XhttpExtra, XhttpMode,
-    XhttpRange, XhttpXmux, from_json,
+    TuicCongestionControl, TuicParams, TuicUdpRelayMode, VlessParams, WireGuardParams, XhttpExtra,
+    XhttpMode, XhttpRange, XhttpXmux, from_json,
 };
 use serde_json::{Value, json};
 
@@ -23,6 +23,7 @@ const V7: &[u8] = include_bytes!("fixtures/v7.json");
 const V8: &[u8] = include_bytes!("fixtures/v8.json");
 const V9: &[u8] = include_bytes!("fixtures/v9.json");
 const V10: &[u8] = include_bytes!("fixtures/v10.json");
+const V11: &[u8] = include_bytes!("fixtures/v11.json");
 
 #[test]
 fn subscription_vpn_updates_are_enabled_when_migrating_released_settings() {
@@ -216,7 +217,7 @@ fn value(bytes: &[u8]) -> Value {
 #[test]
 fn released_configurations_migrate_to_the_expected_configuration() {
     assert_eq!(
-        CONFIG_VERSION, 10,
+        CONFIG_VERSION, 11,
         "update the current fixture when bumping the settings format"
     );
     let expected = expected_migrated_legacy_config();
@@ -314,6 +315,23 @@ fn current_configuration_fixture_guards_the_serialized_format() {
         },
         raw: None,
     });
+    expected.subscriptions[1].nodes.push(Node {
+        id: NodeId::new("wireguard"),
+        name: "WireGuard".into(),
+        server: "192.0.2.42".into(),
+        port: 51820,
+        outbound: Outbound::WireGuard(WireGuardParams {
+            private_key: "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=".into(),
+            public_key: "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=".into(),
+            pre_shared_key: Some("AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM=".into()),
+            address: vec!["10.0.0.2/32".into(), "fd00::2/128".into()],
+            reserved: Some([1, 2, 3]),
+            mtu: Some(1280),
+            persistent_keepalive: Some(25),
+        }),
+        stream: StreamSettings::default(),
+        raw: None,
+    });
     expected.settings.tls_fragment = TlsFragment {
         enabled: true,
         packets: "1-3".parse().unwrap(),
@@ -327,7 +345,7 @@ fn current_configuration_fixture_guards_the_serialized_format() {
     };
     expected.interface.delay_mode = DelayMode::Full;
     expected.interface.show_country_flags = false;
-    let (loaded, migrated_from) = from_json(V10).expect("current fixture should load");
+    let (loaded, migrated_from) = from_json(V11).expect("current fixture should load");
 
     assert_eq!(migrated_from, None);
     assert_eq!(loaded, expected);
@@ -359,9 +377,18 @@ fn current_configuration_fixture_guards_the_serialized_format() {
     );
     assert_eq!(
         serde_json::to_value(&expected).expect("serialize expected configuration"),
-        value(V10),
+        value(V11),
         "the serialized configuration shape changed; keep the current fixture in sync"
     );
+}
+
+#[test]
+fn migration_from_ten_preserves_saved_settings() {
+    let (config, migrated_from) = from_json(V10).unwrap();
+    assert_eq!(migrated_from, Some(10));
+    let mut expected = value(V10);
+    expected["version"] = json!(CONFIG_VERSION);
+    assert_eq!(serde_json::to_value(config).unwrap(), expected);
 }
 
 #[test]

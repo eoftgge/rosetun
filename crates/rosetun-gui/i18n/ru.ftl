@@ -231,7 +231,7 @@ xray-auto-detail = Xray для REALITY и XHTTP, sing-box для остальн�
 xray-off = Без Xray
 xray-off-detail = Серверы REALITY и XHTTP могут не подключиться.
 xray-always = Xray для всех серверов
-xray-always-detail = Кроме Hysteria2, TUIC и AnyTLS. Для серверов, которые работают только с Xray.
+xray-always-detail = Кроме Hysteria2, TUIC, AnyTLS и WireGuard. Для серверов, которые работают только с Xray.
 xray-off-warning = В подписках { $count ->
     [one] { $n } сервер REALITY.
     [few] { $n } сервера REALITY.
@@ -816,7 +816,7 @@ ping-fails-hint = Запрос через сервер не прошёл
 ping-unresolved = адрес не найден
 ping-unresolved-hint = Пока сеть заблокирована, проверяются только серверы с IP-адресом
 ping-unsupported = не поддерживается
-ping-udp-hint = Для Hysteria2 и TUIC используйте проверку URL.
+ping-udp-hint = Для Hysteria2, TUIC и WireGuard используйте проверку URL.
 full-check-busy = Проверка уже идёт
 support = Поддержка
 website = Сайт

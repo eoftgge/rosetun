@@ -480,7 +480,10 @@ fn details(
         .map(|(node, result)| {
             let (label, _, _) = ping_label(
                 result,
-                matches!(&node.outbound, Outbound::Hysteria2(_) | Outbound::Tuic(_)),
+                matches!(
+                    &node.outbound,
+                    Outbound::Hysteria2(_) | Outbound::Tuic(_) | Outbound::WireGuard(_)
+                ),
             );
             ui.painter()
                 .layout_no_wrap(label, font.clone(), theme::palette().text_dim)

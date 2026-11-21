@@ -43,6 +43,7 @@ pub(crate) fn xray_supports(outbound: &Outbound) -> bool {
         | Outbound::Hysteria2(_)
         | Outbound::Tuic(_)
         | Outbound::AnyTls(_)
+        | Outbound::WireGuard(_)
         | Outbound::Unknown { .. } => false,
     }
 }
@@ -118,6 +119,8 @@ pub enum Outbound {
     Tuic(TuicParams),
     #[serde(rename = "anytls")]
     AnyTls(AnyTlsParams),
+    #[serde(rename = "wireguard")]
+    WireGuard(WireGuardParams),
     Unknown {
         scheme: String,
         params: BTreeMap<String, String>,
@@ -136,6 +139,7 @@ impl fmt::Debug for Outbound {
             Self::Hysteria2(params) => f.debug_tuple("Hysteria2").field(params).finish(),
             Self::Tuic(params) => f.debug_tuple("Tuic").field(params).finish(),
             Self::AnyTls(params) => f.debug_tuple("AnyTls").field(params).finish(),
+            Self::WireGuard(params) => f.debug_tuple("WireGuard").field(params).finish(),
             Self::Unknown { scheme, params } => f
                 .debug_struct("Unknown")
                 .field("scheme", scheme)
@@ -214,6 +218,52 @@ pub fn is_valid_duration(value: &str) -> bool {
         rest = &rest[unit_len..];
     }
     non_zero
+}
+
+/// Minimum and maximum interface MTU accepted for WireGuard endpoints.
+pub const WIREGUARD_MTU_MIN: u16 = 576;
+pub const WIREGUARD_MTU_MAX: u16 = 9000;
+
+/// Checks a canonical 44-character standard Base64 32-byte WireGuard key.
+pub fn is_valid_wireguard_key(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.len() != 44 || bytes[43] != b'=' {
+        return false;
+    }
+    let decode = |byte: u8| match byte {
+        b'A'..=b'Z' => Some(byte - b'A'),
+        b'a'..=b'z' => Some(byte - b'a' + 26),
+        b'0'..=b'9' => Some(byte - b'0' + 52),
+        b'+' => Some(62),
+        b'/' => Some(63),
+        _ => None,
+    };
+    if !bytes[..43].iter().all(|&byte| decode(byte).is_some()) {
+        return false;
+    }
+    // 32 bytes = 256 bits = 42 * 6 + 4 bits; the 2 unused low bits of char 42 must be zero.
+    decode(bytes[42]).is_some_and(|bits| bits & 0x03 == 0)
+}
+
+/// Checks a WireGuard interface CIDR (`<ip>/<prefix>`), preserving host bits.
+pub fn is_valid_wireguard_address(value: &str) -> bool {
+    let Some((ip, prefix)) = value.split_once('/') else {
+        return false;
+    };
+    if prefix.is_empty()
+        || !prefix.bytes().all(|byte| byte.is_ascii_digit())
+        || (prefix.len() > 1 && prefix.starts_with('0'))
+    {
+        return false;
+    }
+    let Ok(bits) = prefix.parse::<u8>() else {
+        return false;
+    };
+    match ip.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V4(_)) => bits <= 32,
+        Ok(std::net::IpAddr::V6(_)) => bits <= 128,
+        Err(_) => false,
+    }
 }
 
 fn is_valid_host(server: &str) -> bool {
@@ -330,6 +380,46 @@ impl Node {
                         .is_some_and(|value| i32::try_from(value).is_err())
                 {
                     return Err("AnyTLS idle session settings are invalid");
+                }
+                Ok(())
+            }
+            Outbound::WireGuard(params) => {
+                if !is_valid_host(&self.server) || self.port == 0 {
+                    return Err(
+                        "WireGuard requires a valid DNS name or IP address and a port between 1 and 65535",
+                    );
+                }
+                if self.stream.transport != Transport::Tcp
+                    || !matches!(self.stream.tls, TlsMode::Plain)
+                {
+                    return Err("WireGuard uses its built-in encrypted UDP transport");
+                }
+                if !is_valid_wireguard_key(&params.private_key)
+                    || !is_valid_wireguard_key(&params.public_key)
+                    || params
+                        .pre_shared_key
+                        .as_deref()
+                        .is_some_and(|key| !is_valid_wireguard_key(key))
+                {
+                    return Err("WireGuard keys must be valid 32-byte Base64 values");
+                }
+                if params.address.is_empty()
+                    || params.address.len() > 8
+                    || !params
+                        .address
+                        .iter()
+                        .all(|address| is_valid_wireguard_address(address))
+                {
+                    return Err("WireGuard requires valid interface CIDR addresses");
+                }
+                if params
+                    .mtu
+                    .is_some_and(|mtu| !(WIREGUARD_MTU_MIN..=WIREGUARD_MTU_MAX).contains(&mtu))
+                {
+                    return Err("WireGuard MTU is out of range");
+                }
+                if params.persistent_keepalive == Some(0) {
+                    return Err("WireGuard persistent keepalive must be greater than zero");
                 }
                 Ok(())
             }
@@ -537,6 +627,35 @@ impl fmt::Debug for AnyTlsParams {
             )
             .field("idle_session_timeout", &self.idle_session_timeout)
             .field("min_idle_session", &self.min_idle_session)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WireGuardParams {
+    pub private_key: String,
+    pub public_key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pre_shared_key: Option<String>,
+    pub address: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reserved: Option<[u8; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mtu: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub persistent_keepalive: Option<u16>,
+}
+
+impl fmt::Debug for WireGuardParams {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("WireGuardParams")
+            .field("private_key", &"[redacted]")
+            .field("public_key", &"[redacted]")
+            .field("has_pre_shared_key", &self.pre_shared_key.is_some())
+            .field("address_count", &self.address.len())
+            .field("has_reserved", &self.reserved.is_some())
+            .field("mtu", &self.mtu)
+            .field("persistent_keepalive", &self.persistent_keepalive)
             .finish()
     }
 }
@@ -1366,5 +1485,91 @@ mod tests {
         assert!(!is_valid_duration("0s"));
         assert!(!is_valid_duration("-10s"));
         assert!(!is_valid_duration("10"));
+
+        let wg_key_a = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+        let wg_key_b = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=";
+        let wg_psk = "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=";
+        assert!(is_valid_wireguard_key(wg_key_a));
+        assert!(is_valid_wireguard_key(wg_key_b));
+        assert!(!is_valid_wireguard_key("too-short"));
+        // Trailing unused bits in char 42 ('B' = 1) must be rejected.
+        assert!(!is_valid_wireguard_key(
+            "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB="
+        ));
+        assert!(!is_valid_wireguard_key(
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        ));
+
+        assert!(is_valid_wireguard_address("10.0.0.2/32"));
+        assert!(is_valid_wireguard_address("172.16.0.2/24"));
+        assert!(is_valid_wireguard_address("fd00::2/128"));
+        assert!(!is_valid_wireguard_address("10.0.0.2"));
+        assert!(!is_valid_wireguard_address("10.0.0.2/33"));
+        assert!(!is_valid_wireguard_address("fd00::2/129"));
+        assert!(!is_valid_wireguard_address("10.0.0.2/08"));
+
+        let wg = example_node(
+            Outbound::WireGuard(WireGuardParams {
+                private_key: wg_key_a.into(),
+                public_key: wg_key_b.into(),
+                pre_shared_key: Some(wg_psk.into()),
+                address: vec!["10.0.0.2/32".into(), "fd00::2/128".into()],
+                reserved: Some([1, 2, 3]),
+                mtu: Some(1280),
+                persistent_keepalive: Some(25),
+            }),
+            TlsMode::Plain,
+        );
+        assert!(wg.validate_proxy().is_ok());
+        let debug = format!("{wg:?}");
+        for secret in [wg_key_a, wg_key_b, wg_psk] {
+            assert!(!debug.contains(secret), "debug leaked {secret}: {debug}");
+        }
+        let encoded = serde_json::to_value(&wg).unwrap();
+        assert_eq!(encoded["outbound"]["wireguard"]["mtu"], 1280);
+        assert_eq!(
+            encoded["outbound"]["wireguard"]["reserved"],
+            serde_json::json!([1, 2, 3])
+        );
+
+        let mut bad = wg.clone();
+        bad.stream.tls = TlsMode::Tls(TlsParams::default());
+        assert!(bad.validate_proxy().is_err());
+
+        let mut bad = wg.clone();
+        bad.outbound = Outbound::WireGuard(WireGuardParams {
+            private_key: wg_key_a.into(),
+            public_key: wg_key_b.into(),
+            pre_shared_key: None,
+            address: Vec::new(),
+            reserved: None,
+            mtu: None,
+            persistent_keepalive: None,
+        });
+        assert!(bad.validate_proxy().is_err());
+
+        let mut bad = wg.clone();
+        bad.outbound = Outbound::WireGuard(WireGuardParams {
+            private_key: wg_key_a.into(),
+            public_key: wg_key_b.into(),
+            pre_shared_key: None,
+            address: vec!["10.0.0.2/32".into()],
+            reserved: None,
+            mtu: Some(500),
+            persistent_keepalive: None,
+        });
+        assert!(bad.validate_proxy().is_err());
+
+        let mut bad = wg;
+        bad.outbound = Outbound::WireGuard(WireGuardParams {
+            private_key: wg_key_a.into(),
+            public_key: wg_key_b.into(),
+            pre_shared_key: None,
+            address: vec!["10.0.0.2/32".into()],
+            reserved: None,
+            mtu: None,
+            persistent_keepalive: Some(0),
+        });
+        assert!(bad.validate_proxy().is_err());
     }
 }

@@ -5,6 +5,7 @@ mod json;
 mod links;
 mod meta;
 mod proxy;
+mod wireguard;
 mod xhttp;
 
 use std::collections::BTreeMap;
@@ -19,6 +20,7 @@ pub enum Format {
     Links { base64: bool },
     XrayJson,
     SingBoxJson,
+    WireGuardConf,
 }
 
 pub struct Parsed {
@@ -292,6 +294,9 @@ fn classify(text: &str) -> Result<Option<Format>, ParseError> {
     if starts_ascii_case(text, "<!doctype") || starts_ascii_case(text, "<html") {
         return Err(ParseError::WebPage);
     }
+    if wireguard::is_conf(text) {
+        return Ok(Some(Format::WireGuardConf));
+    }
     if text.starts_with('{') || text.starts_with('[') {
         let value: serde_json::Value =
             serde_json::from_str(text).map_err(|error| ParseError::InvalidJson {
@@ -352,6 +357,7 @@ fn parse_text(
                 })?;
             json::records(&value, format)
         }
+        Format::WireGuardConf => wireguard::parse_conf(text, metadata),
     };
 
     for (offset, (scheme, entry)) in records.into_iter().enumerate() {

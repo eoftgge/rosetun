@@ -392,7 +392,7 @@ fn tls(protocol: &str, fields: &Fields) -> Result<TlsMode, SkipReason> {
     }
 }
 
-fn endpoint(server: &str, port: u16) -> String {
+pub(crate) fn endpoint(server: &str, port: u16) -> String {
     if server.contains(':') && !server.starts_with('[') {
         format!("[{server}]:{port}")
     } else {
@@ -432,6 +432,7 @@ pub(crate) fn stable_id(node: &Node) -> String {
         Outbound::Hysteria2(_) => "hysteria2",
         Outbound::Tuic(_) => "tuic",
         Outbound::AnyTls(_) => "anytls",
+        Outbound::WireGuard(_) => "wireguard",
         Outbound::Unknown { .. } => "unknown",
     };
     let (transport, path, host, service) = match &node.stream.transport {

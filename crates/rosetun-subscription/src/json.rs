@@ -1,6 +1,7 @@
 use serde_json::Value;
 
 use crate::common::{Fields, build, clean, hysteria_ports, is_service_address};
+use crate::wireguard::{self, WireGuardInput};
 use crate::{Entry, Format, ParseError, Record, SkipReason, UnsupportedTransport};
 
 const PROTOCOLS: &[&str] = &[
@@ -11,26 +12,25 @@ const PROTOCOLS: &[&str] = &[
     "hysteria2",
     "tuic",
     "anytls",
+    "wireguard",
 ];
-const XRAY_PROTOCOLS: &[&str] = &["vless", "vmess", "trojan", "shadowsocks"];
+const XRAY_PROTOCOLS: &[&str] = &["vless", "vmess", "trojan", "shadowsocks", "wireguard"];
 
 pub(crate) fn format(value: &Value) -> Result<Format, ParseError> {
     if value.is_array() {
         return Ok(Format::XrayJson);
     }
-    let outbounds = value
-        .get("outbounds")
-        .and_then(Value::as_array)
-        .ok_or(ParseError::UnsupportedFormat)?;
+    let outbounds = value.get("outbounds").and_then(Value::as_array);
+    let endpoints = value.get("endpoints").and_then(Value::as_array);
 
-    if outbounds
-        .iter()
-        .any(|outbound| outbound.get("protocol").is_some())
-    {
+    if outbounds.is_some_and(|list| {
+        list.iter()
+            .any(|outbound| outbound.get("protocol").is_some())
+    }) {
         Ok(Format::XrayJson)
     } else if outbounds
-        .iter()
-        .any(|outbound| outbound.get("type").is_some())
+        .is_some_and(|list| list.iter().any(|outbound| outbound.get("type").is_some()))
+        || endpoints.is_some_and(|list| list.iter().any(|endpoint| endpoint.get("type").is_some()))
     {
         Ok(Format::SingBoxJson)
     } else {
@@ -44,20 +44,31 @@ pub(crate) fn records(value: &Value, format: Format) -> Vec<Record> {
             Some(configs) => configs.iter().map(xray).collect(),
             None => vec![xray(value)],
         },
-        Format::SingBoxJson => value
-            .get("outbounds")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter(|outbound| {
-                !matches!(
-                    outbound.get("type").and_then(Value::as_str),
-                    Some("selector" | "urltest" | "direct" | "block" | "dns")
-                )
-            })
-            .map(sing_box)
-            .collect(),
-        Format::Links { .. } => Vec::new(),
+        Format::SingBoxJson => {
+            let mut result: Vec<Record> = value
+                .get("outbounds")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter(|outbound| {
+                    !matches!(
+                        outbound.get("type").and_then(Value::as_str),
+                        Some("selector" | "urltest" | "direct" | "block" | "dns")
+                    )
+                })
+                .map(sing_box)
+                .collect();
+            result.extend(
+                value
+                    .get("endpoints")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .map(sing_box_endpoint),
+            );
+            result
+        }
+        Format::Links { .. } | Format::WireGuardConf => Vec::new(),
     }
 }
 
@@ -101,6 +112,9 @@ fn xray(config: &Value) -> Record {
         .get("protocol")
         .and_then(Value::as_str)
         .unwrap_or("");
+    if protocol == "wireguard" {
+        return xray_wireguard(config, outbound);
+    }
     let scheme = normalize_protocol(protocol);
     let mut fields = Fields::new();
     put(&mut fields, "name", config.get("remarks"));
@@ -225,6 +239,354 @@ fn xray(config: &Value) -> Record {
     (Some(scheme.to_owned()), build(scheme, &fields).into())
 }
 
+fn xray_wireguard(config: &Value, outbound: &Value) -> Record {
+    let settings = &outbound["settings"];
+    if has_amnezia_options(settings) {
+        return (
+            Some("amneziawg".to_owned()),
+            Entry::Skip(SkipReason::UnsupportedProtocol),
+        );
+    }
+    let Some(peers) = settings.get("peers").and_then(Value::as_array) else {
+        return (
+            Some("wireguard".to_owned()),
+            Entry::Skip(SkipReason::MissingField),
+        );
+    };
+    if peers.is_empty() {
+        return (
+            Some("wireguard".to_owned()),
+            Entry::Skip(SkipReason::MissingField),
+        );
+    }
+    if peers.len() > 1 {
+        return (
+            Some("wireguard".to_owned()),
+            Entry::Skip(SkipReason::UnsupportedOption),
+        );
+    }
+    let peer = &peers[0];
+    if has_amnezia_options(peer) {
+        return (
+            Some("amneziawg".to_owned()),
+            Entry::Skip(SkipReason::UnsupportedProtocol),
+        );
+    }
+
+    let result = (|| -> Result<rosetun_config::Node, SkipReason> {
+        let endpoint = peer
+            .get("endpoint")
+            .and_then(Value::as_str)
+            .ok_or(SkipReason::MissingField)?;
+        let (server, port) = wireguard::parse_endpoint(endpoint)?;
+        let private_key = wireguard::canonical_key(
+            settings
+                .get("secretKey")
+                .and_then(Value::as_str)
+                .ok_or(SkipReason::MissingField)?,
+        )?;
+        let public_key = wireguard::canonical_key(
+            peer.get("publicKey")
+                .and_then(Value::as_str)
+                .ok_or(SkipReason::MissingField)?,
+        )?;
+        let pre_shared_key =
+            wireguard::optional_key(peer.get("preSharedKey").and_then(Value::as_str))?;
+        let address = wireguard::parse_addresses(json_string_list(settings.get("address"))?)?;
+        let reserved = match settings.get("reserved") {
+            Some(value) => wireguard::parse_reserved_json(value)?,
+            None => None,
+        };
+        let mtu = match settings.get("mtu") {
+            Some(value) => wireguard::parse_mtu_json(value)?,
+            None => None,
+        };
+        let persistent_keepalive = match peer.get("keepAlive") {
+            Some(value) => wireguard::parse_keepalive_json(value)?,
+            None => None,
+        };
+        let name = config
+            .get("remarks")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_owned();
+        wireguard::build_node(WireGuardInput {
+            name,
+            server,
+            port,
+            private_key,
+            public_key,
+            pre_shared_key,
+            address,
+            reserved,
+            mtu,
+            persistent_keepalive,
+        })
+    })();
+    (Some("wireguard".to_owned()), result.into())
+}
+
+fn sing_box_endpoint(endpoint: &Value) -> Record {
+    let Some(protocol) = endpoint.get("type").and_then(Value::as_str) else {
+        return (None, Entry::Skip(SkipReason::InvalidRecord));
+    };
+    if protocol.eq_ignore_ascii_case("awg") || protocol.eq_ignore_ascii_case("amneziawg") {
+        return (
+            Some("amneziawg".to_owned()),
+            Entry::Skip(SkipReason::UnsupportedProtocol),
+        );
+    }
+    if protocol != "wireguard" {
+        let scheme = crate::known_scheme(&protocol.to_ascii_lowercase()).map(str::to_owned);
+        return (scheme, Entry::Skip(SkipReason::UnsupportedProtocol));
+    }
+    if has_amnezia_options(endpoint) {
+        return (
+            Some("amneziawg".to_owned()),
+            Entry::Skip(SkipReason::UnsupportedProtocol),
+        );
+    }
+    if endpoint.get("system").and_then(Value::as_bool) == Some(true) {
+        return (
+            Some("wireguard".to_owned()),
+            Entry::Skip(SkipReason::UnsupportedOption),
+        );
+    }
+    let Some(peers) = endpoint.get("peers").and_then(Value::as_array) else {
+        return (
+            Some("wireguard".to_owned()),
+            Entry::Skip(SkipReason::MissingField),
+        );
+    };
+    if peers.is_empty() {
+        return (
+            Some("wireguard".to_owned()),
+            Entry::Skip(SkipReason::MissingField),
+        );
+    }
+    if peers.len() > 1 {
+        return (
+            Some("wireguard".to_owned()),
+            Entry::Skip(SkipReason::UnsupportedOption),
+        );
+    }
+    let peer = &peers[0];
+    if has_amnezia_options(peer) {
+        return (
+            Some("amneziawg".to_owned()),
+            Entry::Skip(SkipReason::UnsupportedProtocol),
+        );
+    }
+
+    let result = (|| -> Result<rosetun_config::Node, SkipReason> {
+        let server = wireguard::normalize_host(
+            peer.get("address")
+                .and_then(Value::as_str)
+                .ok_or(SkipReason::MissingField)?,
+        )?;
+        let port = json_port(peer.get("port"))?;
+        let private_key = wireguard::canonical_key(
+            endpoint
+                .get("private_key")
+                .and_then(Value::as_str)
+                .ok_or(SkipReason::MissingField)?,
+        )?;
+        let public_key = wireguard::canonical_key(
+            peer.get("public_key")
+                .and_then(Value::as_str)
+                .ok_or(SkipReason::MissingField)?,
+        )?;
+        let pre_shared_key =
+            wireguard::optional_key(peer.get("pre_shared_key").and_then(Value::as_str))?;
+        let address = wireguard::parse_addresses(json_string_list(endpoint.get("address"))?)?;
+        let reserved = match peer.get("reserved").or_else(|| endpoint.get("reserved")) {
+            Some(value) => wireguard::parse_reserved_json(value)?,
+            None => None,
+        };
+        let mtu = match endpoint.get("mtu") {
+            Some(value) => wireguard::parse_mtu_json(value)?,
+            None => None,
+        };
+        let persistent_keepalive = match peer.get("persistent_keepalive_interval") {
+            Some(value) => wireguard::parse_keepalive_json(value)?,
+            None => None,
+        };
+        let name = endpoint
+            .get("tag")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_owned();
+        wireguard::build_node(WireGuardInput {
+            name,
+            server,
+            port,
+            private_key,
+            public_key,
+            pre_shared_key,
+            address,
+            reserved,
+            mtu,
+            persistent_keepalive,
+        })
+    })();
+    (Some("wireguard".to_owned()), result.into())
+}
+
+fn sing_box_wireguard_outbound(outbound: &Value) -> Record {
+    if has_amnezia_options(outbound) {
+        return (
+            Some("amneziawg".to_owned()),
+            Entry::Skip(SkipReason::UnsupportedProtocol),
+        );
+    }
+    if outbound.get("system_interface").and_then(Value::as_bool) == Some(true)
+        || outbound.get("system").and_then(Value::as_bool) == Some(true)
+    {
+        return (
+            Some("wireguard".to_owned()),
+            Entry::Skip(SkipReason::UnsupportedOption),
+        );
+    }
+    let peer = if let Some(peers) = outbound.get("peers") {
+        let Some(peers) = peers.as_array() else {
+            return (
+                Some("wireguard".to_owned()),
+                Entry::Skip(SkipReason::InvalidRecord),
+            );
+        };
+        if peers.is_empty() {
+            return (
+                Some("wireguard".to_owned()),
+                Entry::Skip(SkipReason::MissingField),
+            );
+        }
+        if peers.len() > 1 {
+            return (
+                Some("wireguard".to_owned()),
+                Entry::Skip(SkipReason::UnsupportedOption),
+            );
+        }
+        if has_amnezia_options(&peers[0]) {
+            return (
+                Some("amneziawg".to_owned()),
+                Entry::Skip(SkipReason::UnsupportedProtocol),
+            );
+        }
+        Some(&peers[0])
+    } else {
+        None
+    };
+
+    let result = (|| -> Result<rosetun_config::Node, SkipReason> {
+        let server = wireguard::normalize_host(
+            peer.and_then(|peer| peer.get("server").or_else(|| peer.get("address")))
+                .or_else(|| outbound.get("server"))
+                .and_then(Value::as_str)
+                .ok_or(SkipReason::MissingField)?,
+        )?;
+        let port = json_port(
+            peer.and_then(|peer| peer.get("server_port").or_else(|| peer.get("port")))
+                .or_else(|| outbound.get("server_port")),
+        )?;
+        let private_key = wireguard::canonical_key(
+            outbound
+                .get("private_key")
+                .and_then(Value::as_str)
+                .ok_or(SkipReason::MissingField)?,
+        )?;
+        let public_key = wireguard::canonical_key(
+            peer.and_then(|peer| peer.get("public_key"))
+                .or_else(|| outbound.get("peer_public_key"))
+                .or_else(|| outbound.get("public_key"))
+                .and_then(Value::as_str)
+                .ok_or(SkipReason::MissingField)?,
+        )?;
+        let pre_shared_key = wireguard::optional_key(
+            peer.and_then(|peer| peer.get("pre_shared_key"))
+                .or_else(|| outbound.get("pre_shared_key"))
+                .and_then(Value::as_str),
+        )?;
+        let address = wireguard::parse_addresses(json_string_list(
+            outbound
+                .get("local_address")
+                .or_else(|| outbound.get("address")),
+        )?)?;
+        let reserved = match peer
+            .and_then(|peer| peer.get("reserved"))
+            .or_else(|| outbound.get("reserved"))
+        {
+            Some(value) => wireguard::parse_reserved_json(value)?,
+            None => None,
+        };
+        let mtu = match outbound.get("mtu") {
+            Some(value) => wireguard::parse_mtu_json(value)?,
+            None => None,
+        };
+        let persistent_keepalive = match peer
+            .and_then(|peer| peer.get("persistent_keepalive_interval"))
+            .or_else(|| outbound.get("persistent_keepalive_interval"))
+        {
+            Some(value) => wireguard::parse_keepalive_json(value)?,
+            None => None,
+        };
+        let name = outbound
+            .get("tag")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_owned();
+        wireguard::build_node(WireGuardInput {
+            name,
+            server,
+            port,
+            private_key,
+            public_key,
+            pre_shared_key,
+            address,
+            reserved,
+            mtu,
+            persistent_keepalive,
+        })
+    })();
+    (Some("wireguard".to_owned()), result.into())
+}
+
+fn has_amnezia_options(value: &Value) -> bool {
+    value.as_object().is_some_and(|map| {
+        map.iter().any(|(key, value)| {
+            wireguard::is_amnezia_key(key)
+                && !value.is_null()
+                && value.as_str().is_none_or(|text| !text.trim().is_empty())
+        })
+    })
+}
+
+fn json_string_list(value: Option<&Value>) -> Result<Vec<&str>, SkipReason> {
+    match value {
+        None | Some(Value::Null) => Ok(Vec::new()),
+        Some(Value::String(text)) => Ok(vec![text.as_str()]),
+        Some(Value::Array(items)) => items
+            .iter()
+            .map(|item| item.as_str().ok_or(SkipReason::InvalidRecord))
+            .collect(),
+        _ => Err(SkipReason::InvalidRecord),
+    }
+}
+
+fn json_port(value: Option<&Value>) -> Result<u16, SkipReason> {
+    let port = match value {
+        Some(Value::Number(number)) => number
+            .as_u64()
+            .and_then(|raw| u16::try_from(raw).ok())
+            .ok_or(SkipReason::InvalidPort)?,
+        Some(Value::String(text)) => text.trim().parse().map_err(|_| SkipReason::InvalidPort)?,
+        _ => return Err(SkipReason::InvalidPort),
+    };
+    if port == 0 {
+        return Err(SkipReason::InvalidPort);
+    }
+    Ok(port)
+}
+
 // 3x-ui sends its expiry and traffic notice as a socks outbound to 127.0.0.1.
 fn service_notice(config: &Value, outbounds: &[Value]) -> Option<Entry> {
     let address = outbounds
@@ -250,6 +612,9 @@ fn sing_box(outbound: &Value) -> Record {
     if !PROTOCOLS.contains(&protocol) {
         let scheme = crate::known_scheme(&protocol.to_ascii_lowercase()).map(str::to_owned);
         return (scheme, Entry::Skip(SkipReason::UnsupportedProtocol));
+    }
+    if protocol == "wireguard" {
+        return sing_box_wireguard_outbound(outbound);
     }
     let scheme = normalize_protocol(protocol);
     let mut fields = Fields::new();

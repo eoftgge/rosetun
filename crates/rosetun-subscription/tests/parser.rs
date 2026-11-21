@@ -271,7 +271,7 @@ fn unsupported_options_have_typed_reasons() {
         SkipReason::UnsupportedShadowsocksMethod,
     );
     assert_eq!(
-        only_skip("wireguard://test-password@example.com:51820"),
+        only_skip("amneziawg://test-password@example.com:51820"),
         SkipReason::UnsupportedProtocol,
     );
     assert_eq!(only_skip("happ://routing/test"), SkipReason::ClientSettings,);
@@ -1039,7 +1039,7 @@ fn xhttp_debug_and_errors_hide_path_host_and_headers() {
 #[test]
 fn skipped_unsupported_protocols_record_known_schemes_and_wrapper_links_are_client_settings() {
     let body = [
-        "wireguard://secret@192.0.2.1:51820#WG",
+        "amneziawg://secret@192.0.2.1:51820#AWG",
         "hysteria://192.0.2.2:443?auth=secret#Hy1",
         "clash://install-config?url=https://example.com/sub",
         "customproto://secret@192.0.2.3:443#Unknown",
@@ -1056,7 +1056,7 @@ fn skipped_unsupported_protocols_record_known_schemes_and_wrapper_links_are_clie
     assert_eq!(
         summary,
         vec![
-            (Some("wireguard"), &SkipReason::UnsupportedProtocol),
+            (Some("amneziawg"), &SkipReason::UnsupportedProtocol),
             (Some("hysteria"), &SkipReason::UnsupportedProtocol),
             (Some("clash"), &SkipReason::ClientSettings),
             (None, &SkipReason::UnsupportedProtocol),
@@ -1065,25 +1065,25 @@ fn skipped_unsupported_protocols_record_known_schemes_and_wrapper_links_are_clie
 
     let sing_box = r#"{
         "outbounds": [
-            {"type": "wireguard", "tag": "WG"},
+            {"type": "mieru", "tag": "Mieru"},
             {"type": "unknownproto", "tag": "Unknown"},
             {"type": "trojan", "tag": "Good", "server": "192.0.2.5", "server_port": 443, "password": "pw"}
         ]
     }"#;
     let sb = parsed(sing_box);
     assert_eq!(sb.nodes.len(), 1);
-    assert_eq!(sb.skipped[0].scheme.as_deref(), Some("wireguard"));
+    assert_eq!(sb.skipped[0].scheme.as_deref(), Some("mieru"));
     assert_eq!(sb.skipped[0].reason, SkipReason::UnsupportedProtocol);
     assert_eq!(sb.skipped[1].scheme, None);
     assert_eq!(sb.skipped[1].reason, SkipReason::UnsupportedProtocol);
 
     let xray = r#"[
-        {"remarks": "WG", "outbounds": [{"protocol": "wireguard", "tag": "proxy"}]},
+        {"remarks": "Socks", "outbounds": [{"protocol": "socks", "tag": "proxy"}]},
         {"remarks": "Good", "outbounds": [{"protocol": "trojan", "tag": "proxy", "settings": {"servers": [{"address": "192.0.2.6", "port": 443, "password": "pw"}]}}]}
     ]"#;
     let xr = parsed(xray);
     assert_eq!(xr.nodes.len(), 1);
-    assert_eq!(xr.skipped[0].scheme.as_deref(), Some("wireguard"));
+    assert_eq!(xr.skipped[0].scheme.as_deref(), Some("socks"));
     assert_eq!(xr.skipped[0].reason, SkipReason::UnsupportedProtocol);
 }
 
@@ -1373,4 +1373,342 @@ fn anytls_links_and_sing_box_json_parse_supported_fields_and_skip_unsupported_op
     assert_eq!(parsed_json.skipped.len(), 2);
     assert_eq!(parsed_json.skipped[0].reason, SkipReason::UnsupportedOption);
     assert_eq!(parsed_json.skipped[1].reason, SkipReason::UnsupportedPin);
+}
+
+#[test]
+fn wireguard_links_parse_standard_and_warp_fields_and_reject_amneziawg() {
+    let priv_bytes = [0xfb; 32]; // produces + and / in standard Base64
+    let pub_bytes = [0xfe; 32];
+    let psk_bytes = [0x03; 32];
+    let priv_std = STANDARD.encode(priv_bytes);
+    let pub_std = STANDARD.encode(pub_bytes);
+    let psk_std = STANDARD.encode(psk_bytes);
+    let priv_url = URL_SAFE_NO_PAD.encode(priv_bytes);
+    let pub_url = URL_SAFE_NO_PAD.encode(pub_bytes);
+
+    // Percent-encoded and raw Base64 keys (+, /, =) both work under wireguard:// and wg://.
+    for link in [
+        format!(
+            "wireguard://{}@192.0.2.42:51820?publickey={}&presharedkey={}&address=10.0.0.2%2F24,fd00%3A%3A2&reserved=1,2,3&mtu=1280&keepalive=25&dns=1.1.1.1#WG%20Node",
+            encoded(&priv_std),
+            encoded(&pub_std),
+            encoded(&psk_std),
+        ),
+        format!(
+            "wg://{priv_std}@192.0.2.42:51820/?public_key={pub_std}&psk={psk_std}&ip=10.0.0.2/24,fd00::2/128&reserved=AQID&mtu=1280&persistent_keepalive=25#WG%20Node",
+        ),
+        format!(
+            "wireguard://{priv_url}@192.0.2.42:51820?pbk={pub_url}&pre_shared_key={psk_std}&local_address=10.0.0.2/24,fd00::2&reserved=%5B1,2,3%5D&mtu=1280&persistent_keepalive_interval=25#WG%20Node",
+        ),
+    ] {
+        let result = parsed(&link);
+        assert_eq!(result.nodes.len(), 1);
+        let node = &result.nodes[0];
+        assert_eq!(node.name, "WG Node");
+        assert_eq!(node.server, "192.0.2.42");
+        assert_eq!(node.port, 51820);
+        assert_eq!(node.stream.transport, Transport::Tcp);
+        assert_eq!(node.stream.tls, TlsMode::Plain);
+        let Outbound::WireGuard(params) = &node.outbound else {
+            panic!("expected WireGuard");
+        };
+        assert_eq!(params.private_key, priv_std);
+        assert_eq!(params.public_key, pub_std);
+        assert_eq!(params.pre_shared_key.as_deref(), Some(psk_std.as_str()));
+        assert_eq!(params.address, ["10.0.0.2/24", "fd00::2/128"]);
+        assert_eq!(params.reserved, Some([1, 2, 3]));
+        assert_eq!(params.mtu, Some(1280));
+        assert_eq!(params.persistent_keepalive, Some(25));
+        let debug = format!("{node:?}");
+        assert!(!debug.contains(&priv_std));
+        assert!(!debug.contains(&pub_std));
+        assert!(!debug.contains(&psk_std));
+    }
+
+    // IPv6 endpoint and bare IPv4 address.
+    let v6 = parsed(&format!(
+        "wg://{priv_url}@[2001:db8::42]:51820?publickey={pub_url}&address=10.0.0.2&keepalive=0#WGv6"
+    ));
+    assert_eq!(v6.nodes[0].server, "2001:db8::42");
+    let Outbound::WireGuard(params) = &v6.nodes[0].outbound else {
+        panic!("expected WireGuard");
+    };
+    assert_eq!(params.address, ["10.0.0.2/32"]);
+    assert_eq!(params.persistent_keepalive, None);
+
+    // AmneziaWG query parameters are rejected as amneziawg UnsupportedProtocol.
+    match parse(
+        format!("wireguard://{priv_url}@192.0.2.42:51820?publickey={pub_url}&address=10.0.0.2/32&jc=4&s1=15").as_bytes(),
+        &no_headers,
+    ) {
+        Err(ParseError::NoUsableNodes { skipped, .. }) => {
+            assert_eq!(skipped[0].scheme.as_deref(), Some("amneziawg"));
+            assert_eq!(skipped[0].reason, SkipReason::UnsupportedProtocol);
+        }
+        other => panic!("unexpected result: {other:?}"),
+    }
+
+    for (bad, expected) in [
+        (
+            format!("wireguard://{priv_url}@192.0.2.42:51820?address=10.0.0.2/32"),
+            SkipReason::MissingField,
+        ),
+        (
+            format!("wireguard://{priv_url}@192.0.2.42:51820?publickey={pub_url}"),
+            SkipReason::MissingField,
+        ),
+        (
+            format!(
+                "wireguard://shortkey@192.0.2.42:51820?publickey={pub_url}&address=10.0.0.2/32"
+            ),
+            SkipReason::InvalidRecord,
+        ),
+        (
+            format!(
+                "wireguard://{priv_url}@192.0.2.42:51820?publickey={pub_url}&address=10.0.0.2/32&mtu=200"
+            ),
+            SkipReason::InvalidRecord,
+        ),
+        (
+            format!(
+                "wireguard://{priv_url}@192.0.2.42:51820?publickey={pub_url}&address=10.0.0.2/32&reserved=1,2"
+            ),
+            SkipReason::InvalidRecord,
+        ),
+        (
+            format!(
+                "wireguard://{priv_url}@192.0.2.42:51820?publickey={pub_url}&address=10.0.0.2/32&wnoise=m4"
+            ),
+            SkipReason::UnsupportedOption,
+        ),
+    ] {
+        assert_eq!(only_skip(&bad), expected, "{bad}");
+        let err = parse(bad.as_bytes(), &no_headers).unwrap_err();
+        assert!(!format!("{err:?}").contains(&priv_url));
+    }
+}
+
+#[test]
+fn wireguard_sing_box_endpoints_legacy_outbounds_and_xray_json_match_links() {
+    let priv_key = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=";
+    let pub_key = "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=";
+    let psk = "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM=";
+
+    let link = parsed(&format!(
+        "wireguard://{}@192.0.2.42:51820?publickey={}&presharedkey={}&address=10.0.0.2/32,fd00::2/128&reserved=1,2,3&mtu=1280&keepalive=25#WARP",
+        encoded(priv_key),
+        encoded(pub_key),
+        encoded(psk),
+    ));
+
+    // sing-box 1.11+ endpoints-only JSON (without outbounds).
+    let sb_endpoints = parsed(
+        &serde_json::json!({
+            "endpoints": [
+                {
+                    "type": "wireguard",
+                    "tag": "WARP",
+                    "address": ["10.0.0.2/32", "fd00::2/128"],
+                    "private_key": priv_key,
+                    "mtu": 1280,
+                    "peers": [
+                        {
+                            "address": "192.0.2.42",
+                            "port": 51820,
+                            "public_key": pub_key,
+                            "pre_shared_key": psk,
+                            "allowed_ips": ["0.0.0.0/0", "::/0"],
+                            "persistent_keepalive_interval": 25,
+                            "reserved": [1, 2, 3]
+                        }
+                    ]
+                },
+                {
+                    "type": "awg",
+                    "tag": "Amnezia"
+                },
+                {
+                    "type": "wireguard",
+                    "tag": "AmneziaBlock",
+                    "address": ["10.0.0.2/32"],
+                    "private_key": priv_key,
+                    "amnezia": { "jc": 4 },
+                    "peers": [{ "address": "192.0.2.42", "port": 51820, "public_key": pub_key }]
+                },
+                {
+                    "type": "wireguard",
+                    "tag": "MultiPeer",
+                    "address": ["10.0.0.2/32"],
+                    "private_key": priv_key,
+                    "peers": [
+                        { "address": "192.0.2.42", "port": 51820, "public_key": pub_key },
+                        { "address": "192.0.2.43", "port": 51820, "public_key": pub_key }
+                    ]
+                },
+                {
+                    "type": "wireguard",
+                    "tag": "SystemInterface",
+                    "system": true,
+                    "address": ["10.0.0.2/32"],
+                    "private_key": priv_key,
+                    "peers": [{ "address": "192.0.2.42", "port": 51820, "public_key": pub_key }]
+                }
+            ]
+        })
+        .to_string(),
+    );
+    assert_eq!(sb_endpoints.format, Format::SingBoxJson);
+    assert_eq!(sb_endpoints.nodes, link.nodes);
+    assert_eq!(sb_endpoints.skipped.len(), 4);
+    assert_eq!(sb_endpoints.skipped[0].scheme.as_deref(), Some("amneziawg"));
+    assert_eq!(
+        sb_endpoints.skipped[0].reason,
+        SkipReason::UnsupportedProtocol
+    );
+    assert_eq!(sb_endpoints.skipped[1].scheme.as_deref(), Some("amneziawg"));
+    assert_eq!(
+        sb_endpoints.skipped[1].reason,
+        SkipReason::UnsupportedProtocol
+    );
+    assert_eq!(
+        sb_endpoints.skipped[2].reason,
+        SkipReason::UnsupportedOption
+    );
+    assert_eq!(
+        sb_endpoints.skipped[3].reason,
+        SkipReason::UnsupportedOption
+    );
+
+    // Legacy sing-box outbound.
+    let sb_legacy = parsed(
+        &serde_json::json!({
+            "outbounds": [
+                {
+                    "type": "wireguard",
+                    "tag": "WARP",
+                    "server": "192.0.2.42",
+                    "server_port": 51820,
+                    "local_address": ["10.0.0.2/32", "fd00::2/128"],
+                    "private_key": priv_key,
+                    "peer_public_key": pub_key,
+                    "pre_shared_key": psk,
+                    "reserved": "AQID",
+                    "mtu": 1280,
+                    "persistent_keepalive_interval": 25
+                }
+            ]
+        })
+        .to_string(),
+    );
+    assert_eq!(sb_legacy.format, Format::SingBoxJson);
+    assert_eq!(sb_legacy.nodes, link.nodes);
+
+    // Xray JSON WireGuard outbound.
+    let xray = parsed(
+        &serde_json::json!({
+            "remarks": "WARP",
+            "outbounds": [
+                {
+                    "protocol": "wireguard",
+                    "tag": "proxy",
+                    "settings": {
+                        "secretKey": priv_key,
+                        "address": ["10.0.0.2/32", "fd00::2/128"],
+                        "mtu": 1280,
+                        "reserved": [1, 2, 3],
+                        "peers": [
+                            {
+                                "publicKey": pub_key,
+                                "preSharedKey": psk,
+                                "endpoint": "192.0.2.42:51820",
+                                "keepAlive": 25
+                            }
+                        ]
+                    }
+                }
+            ]
+        })
+        .to_string(),
+    );
+    assert_eq!(xray.format, Format::XrayJson);
+    assert_eq!(xray.nodes, link.nodes);
+}
+
+#[test]
+fn wireguard_conf_ini_parses_plain_and_base64_and_rejects_amneziawg() {
+    let priv_key = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=";
+    let pub_key = "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=";
+    let psk = "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM=";
+
+    let conf = format!(
+        "#profile-title: Frankfurt WG\n\
+         [Interface]\n\
+         PrivateKey = {priv_key}\n\
+         Address = 10.0.0.2/32\n\
+         Address = fd00::2/128\n\
+         DNS = 1.1.1.1, 2606:4700:4700::1111\n\
+         MTU = 1280\n\
+         ListenPort = 51820\n\
+         \n\
+         [Peer]\n\
+         PublicKey = {pub_key}\n\
+         PresharedKey = {psk}\n\
+         AllowedIPs = 0.0.0.0/0, ::/0\n\
+         Endpoint = [2001:db8::42]:51820\n\
+         PersistentKeepalive = 25\n\
+         Reserved = 1, 2, 3\n"
+    );
+
+    for body in [conf.clone(), STANDARD.encode(conf.as_bytes())] {
+        let result = parsed(&body);
+        assert_eq!(result.format, Format::WireGuardConf);
+        assert_eq!(result.nodes.len(), 1);
+        let node = &result.nodes[0];
+        assert_eq!(node.name, "Frankfurt WG");
+        assert_eq!(node.server, "2001:db8::42");
+        assert_eq!(node.port, 51820);
+        let Outbound::WireGuard(params) = &node.outbound else {
+            panic!("expected WireGuard");
+        };
+        assert_eq!(params.private_key, priv_key);
+        assert_eq!(params.public_key, pub_key);
+        assert_eq!(params.pre_shared_key.as_deref(), Some(psk));
+        assert_eq!(params.address, ["10.0.0.2/32", "fd00::2/128"]);
+        assert_eq!(params.reserved, Some([1, 2, 3]));
+        assert_eq!(params.mtu, Some(1280));
+        assert_eq!(params.persistent_keepalive, Some(25));
+    }
+
+    // Content-Disposition filename strips .conf when naming the node.
+    let minimal_conf = format!(
+        "[Interface]\nPrivateKey = {priv_key}\nAddress = 10.0.0.2/32\n\n\
+         [Peer]\nPublicKey = {pub_key}\nEndpoint = 192.0.2.42:51820\n"
+    );
+    let header = |name: &str| {
+        name.eq_ignore_ascii_case("content-disposition")
+            .then(|| r#"attachment; filename="nl-amsterdam.conf""#.to_owned())
+    };
+    let named = parse(minimal_conf.as_bytes(), &header).unwrap();
+    assert_eq!(named.nodes[0].name, "nl-amsterdam");
+
+    // AmneziaWG .conf is rejected as amneziawg UnsupportedProtocol.
+    let awg_conf = format!(
+        "[Interface]\nPrivateKey = {priv_key}\nAddress = 10.0.0.2/32\nJc = 4\nS1 = 15\n\n\
+         [Peer]\nPublicKey = {pub_key}\nEndpoint = 192.0.2.42:51820\n"
+    );
+    match parse(awg_conf.as_bytes(), &no_headers) {
+        Err(ParseError::NoUsableNodes { skipped, .. }) => {
+            assert_eq!(skipped[0].scheme.as_deref(), Some("amneziawg"));
+            assert_eq!(skipped[0].reason, SkipReason::UnsupportedProtocol);
+        }
+        other => panic!("unexpected result: {other:?}"),
+    }
+
+    // Multiple [Peer] sections are rejected as UnsupportedOption.
+    let multi_peer = format!(
+        "[Interface]\nPrivateKey = {priv_key}\nAddress = 10.0.0.2/32\n\n\
+         [Peer]\nPublicKey = {pub_key}\nEndpoint = 192.0.2.42:51820\n\n\
+         [Peer]\nPublicKey = {pub_key}\nEndpoint = 192.0.2.43:51820\n"
+    );
+    assert_eq!(only_skip(&multi_peer), SkipReason::UnsupportedOption);
 }

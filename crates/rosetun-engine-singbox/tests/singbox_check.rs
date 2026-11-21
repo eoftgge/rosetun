@@ -312,10 +312,23 @@ fn sing_box_check_validates_local_rule_set_config() {
         short_id: Some("01234567".into()),
         fingerprint: Some("chrome".into()),
     });
+    let mut wireguard = node.clone();
+    wireguard.port = 51820;
+    wireguard.outbound = Outbound::WireGuard(rosetun_config::WireGuardParams {
+        private_key: "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=".into(),
+        public_key: "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=".into(),
+        pre_shared_key: Some("AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM=".into()),
+        address: vec!["10.0.0.2/32".into(), "fd00::2/128".into()],
+        reserved: Some([1, 2, 3]),
+        mtu: Some(1280),
+        persistent_keepalive: Some(25),
+    });
+    wireguard.stream = StreamSettings::default();
     for (name, protocol_node) in [
         ("tuic", &tuic),
         ("anytls", &anytls),
         ("anytls-reality", &anytls_reality),
+        ("wireguard", &wireguard),
     ] {
         let rendered = SingBoxBackend::new(&directory.0)
             .render(&RenderRequest {
@@ -347,6 +360,82 @@ fn sing_box_check_validates_local_rule_set_config() {
             String::from_utf8_lossy(&output.stderr)
         );
     }
+    // Two-hop WireGuard -> SOCKS5 and probe config with WireGuard endpoint.
+    let (wg_exit, socks_exit) = (ExitId::new("wg"), ExitId::new("socks"));
+    let mut second_hop = node.clone();
+    second_hop.server = "198.51.100.2".into();
+    second_hop.port = 1080;
+    second_hop.outbound = Outbound::Socks5(rosetun_config::ProxyCredentials::default());
+    let wg_extra = [
+        ExtraOutbound {
+            index: 0,
+            via: None,
+            exit: &wg_exit,
+            node: &wireguard,
+            socks: None,
+        },
+        ExtraOutbound {
+            index: 1,
+            via: Some(&wg_exit),
+            exit: &socks_exit,
+            node: &second_hop,
+            socks: None,
+        },
+    ];
+    let wg_chain = SingBoxBackend::new(&directory.0)
+        .render(&RenderRequest {
+            node: &wireguard,
+            socks: None,
+            extra: &wg_extra,
+            rules: &rules,
+            lists: &lists,
+            settings: &settings,
+            lan_segment: &[],
+            lan_servers: &[],
+            control: None,
+            verbose_log: false,
+            local_proxy: None,
+        })
+        .unwrap();
+    let wg_chain_path = directory.0.join("wireguard-chain.json");
+    std::fs::write(&wg_chain_path, wg_chain.body).unwrap();
+    let output = Command::new(&binary)
+        .arg("check")
+        .arg("-c")
+        .arg(&wg_chain_path)
+        .current_dir(&directory.0)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "sing-box check rejected wireguard two-hop chain: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let probe_control = ControlEndpoint::local().unwrap();
+    let wg_probe_nodes = [("probe-0".to_owned(), wireguard.clone())];
+    let wg_probe = SingBoxBackend::new(&directory.0)
+        .render_probe(&rosetun_engine::ProbeRenderRequest {
+            nodes: &wg_probe_nodes,
+            socks: &[],
+            interface: None,
+            control: &probe_control,
+        })
+        .unwrap();
+    let wg_probe_path = directory.0.join("wireguard-probe.json");
+    std::fs::write(&wg_probe_path, wg_probe.body).unwrap();
+    let output = Command::new(&binary)
+        .arg("check")
+        .arg("-c")
+        .arg(&wg_probe_path)
+        .current_dir(&directory.0)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "sing-box check rejected wireguard probe config: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     for address in ["127.0.0.1:10808", "[::]:10808"] {
         let config = SingBoxBackend::new(&directory.0)
             .render(&RenderRequest {

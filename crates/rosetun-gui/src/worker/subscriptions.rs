@@ -199,7 +199,9 @@ fn ping_targets<'a>(nodes: &[&'a Node]) -> (Vec<&'a Node>, Vec<&'a Node>) {
     nodes.iter().copied().partition(|node| {
         !matches!(
             &node.outbound,
-            rosetun_config::Outbound::Hysteria2(_) | rosetun_config::Outbound::Tuic(_)
+            rosetun_config::Outbound::Hysteria2(_)
+                | rosetun_config::Outbound::Tuic(_)
+                | rosetun_config::Outbound::WireGuard(_)
         )
     })
 }
@@ -309,13 +311,25 @@ mod tests {
             idle_session_timeout: None,
             min_idle_session: None,
         });
-        let (targets, unsupported) = ping_targets(&[&udp, &tuic, &tcp, &anytls]);
+        let mut wireguard = tcp.clone();
+        wireguard.id = NodeId::new("wireguard");
+        wireguard.outbound = rosetun_config::Outbound::WireGuard(rosetun_config::WireGuardParams {
+            private_key: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".into(),
+            public_key: "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=".into(),
+            pre_shared_key: None,
+            address: vec!["10.0.0.2/32".into()],
+            mtu: None,
+            reserved: None,
+            persistent_keepalive: None,
+        });
+        let (targets, unsupported) = ping_targets(&[&udp, &tuic, &wireguard, &tcp, &anytls]);
         assert_eq!(targets.len(), 2);
         assert_eq!(targets[0].id, tcp.id);
         assert_eq!(targets[1].id, anytls.id);
-        assert_eq!(unsupported.len(), 2);
+        assert_eq!(unsupported.len(), 3);
         assert_eq!(unsupported[0].id, udp.id);
         assert_eq!(unsupported[1].id, tuic.id);
+        assert_eq!(unsupported[2].id, wireguard.id);
     }
 
     #[test]
