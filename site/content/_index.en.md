@@ -8,6 +8,7 @@ headline = 'Your traffic. Your rules.'
 lead = 'VPN client for Windows and Linux: subscriptions, rules, kill switch and Lockdown.'
 download_windows = 'Download for Windows'
 download_linux = 'Download for Linux'
+download_macos = 'macOS (Apple Silicon) · experimental build'
 all_releases = 'All releases'
 verify_download = 'Verify download'
 features_eyebrow = 'MADE FOR YOUR ROUTINE'
@@ -105,6 +106,6 @@ For public tagged releases, the workflow creates an installer provenance attesta
 gh attestation verify .\{{ r?.installer or "rosetun-VERSION-setup.exe" }} --repo eoftgge/rosetun
 ```
 
-<p>The Debian package is in SHA256SUMS.txt and has an attestation too: <a href="docs/install/#debian-13">Debian 13</a>.</p>
+<p>The Debian package and the experimental macOS package are in SHA256SUMS.txt and have attestations too: <a href="docs/install/#debian-13">Debian 13</a>, <a href="docs/install/#macos">macOS (Apple Silicon)</a>.</p>
 
 <p><a href="help/">Installation and first launch</a></p>

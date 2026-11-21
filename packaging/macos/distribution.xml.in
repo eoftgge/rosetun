@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<installer-gui-script minSpecVersion="2">
+    <title>Rosetun @VERSION@ (macOS Apple Silicon · Experimental)</title>
+    <options customize="never" require-scripts="false" hostArchitectures="arm64"/>
+    <volume-check>
+        <allowed-os-versions>
+            <os-version min="14.0"/>
+        </allowed-os-versions>
+    </volume-check>
+    <domains enable_anywhere="false" enable_currentUserHome="false" enable_localSystem="true"/>
+    <choices-outline>
+        <line choice="default">
+            <line choice="io.github.eoftgge.rosetun"/>
+        </line>
+    </choices-outline>
+    <choice id="default"/>
+    <choice id="io.github.eoftgge.rosetun" visible="false">
+        <pkg-ref id="io.github.eoftgge.rosetun"/>
+    </choice>
+    <pkg-ref id="io.github.eoftgge.rosetun" version="@VERSION@" onConclusion="none">#rosetun-component.pkg</pkg-ref>
+</installer-gui-script>

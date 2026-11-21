@@ -116,9 +116,23 @@ class ReleaseData(unittest.TestCase):
             self.assertEqual(data['version'], '2.7.19')
             self.assertEqual(data['installer'], 'rosetun-2.7.19-setup.exe')
 
+    def test_a_macos_package_needs_its_own_checksum(self):
+        name = 'rosetun-1.2.3-macos-arm64-experimental.pkg'
+        release = copy.deepcopy(self.release)
+        release['assets'].append(dict(name=name, browser_download_url=f'{RELEASES}v1.2.3/{name}'))
+        with self.assertRaises(ValueError):
+            replacements(release, self.sums)
+        values = replacements(release, self.sums + 'c' * 64 + f'  {name}\n')
+        self.assertEqual(values['macos'], name)
+        self.assertEqual(values['macos_url'], f'{RELEASES}v1.2.3/{name}')
+
     def test_the_banner_names_the_stable_version_and_its_platforms(self):
         self.assertEqual(banner('0.6.0', True), {'ru': 'Стабильный выпуск: 0.6.0 · Windows и Linux.',
                                                  'en': 'Stable release: 0.6.0 · Windows and Linux.'})
+        self.assertEqual(banner('0.7.0', True, True), {
+            'ru': 'Стабильный выпуск: 0.7.0 · Windows, Linux и macOS (Apple Silicon, экспериментальная сборка).',
+            'en': 'Stable release: 0.7.0 · Windows, Linux and macOS (Apple Silicon, experimental).',
+        })
         self.assertEqual(banner('0.6.0', False)['en'], 'Stable release: 0.6.0 · Windows.')
         self.assertEqual(banner('0.5.1', True)['en'],
                          'Stable release: 0.5.1 · Windows and Linux. Documentation: 0.6.')
@@ -215,6 +229,26 @@ class SiteBuild(unittest.TestCase):
         quiet_check(output, rendered=True)
         self.assertNotIn('linux-', read(output, 'en/index.html'))
         self.assertIn(f'href="{RELEASES}v1.2.3/{name}"', read(output, 'en/docs/install/index.html'))
+
+    def test_macos_package_links_and_hides_cleanly(self):
+        without_macos = build(self.directory.name, preview_values('0.7.0', True, False))
+        quiet_check(without_macos, rendered=True)
+        for prefix in ('en/', ''):
+            install = read(without_macos, f'{prefix}docs/install/index.html')
+            self.assertNotIn('sudo installer -pkg', install)
+            self.assertNotIn('rosetun-0.7.0-macos-arm64-experimental.pkg', install)
+            self.assertTrue((without_macos / f'{prefix}docs/macos/index.html').is_file())
+        self.assertTrue((without_macos / 'ru/docs/macos/index.html').is_file())
+
+        with tempfile.TemporaryDirectory() as directory:
+            with_macos = build(directory, preview_values('0.7.0', True, True))
+            quiet_check(with_macos, rendered=True)
+            pkg = 'rosetun-0.7.0-macos-arm64-experimental.pkg'
+            for prefix in ('en/', ''):
+                install = read(with_macos, f'{prefix}docs/install/index.html')
+                self.assertIn(f'href="{RELEASES}v0.7.0/{pkg}"', install)
+                self.assertIn(f'sudo installer -pkg ./{pkg} -target /', install)
+                self.assertIn(f'gh attestation verify {pkg} --repo eoftgge/rosetun', install)
 
     def test_rendered_site_passes_and_gate_rejects_bad_links_and_resources(self):
         output = self.built()

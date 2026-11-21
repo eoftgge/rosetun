@@ -43,6 +43,10 @@ What stays closed outside the tunnel at each moment:
 
 The difference to remember: **on Windows a crash of the service opens the network**, because the firewall removes a session's filters with its process, and only Lockdown stays. On Linux the firewall table outlives the service, so a kill switch holds the network closed after a crash. A restart of the computer opens both, except under Lockdown. On Windows a hold from an update is Lockdown's persistent set, so by the code it also lasts through a restart (no scenario covers it); on Linux it does not.
 
+## macOS (Apple Silicon) {#macos}
+
+In the experimental Apple Silicon macOS build, **kill switch and Lockdown are unavailable**: Rosetun does not configure `pf` or another host firewall. The network remains **open** in every state, so traffic may go direct if the tunnel drops or an engine restarts. See [macOS support](../macos/).
+
 **Not tested:**
 
 - Windows 10 in the failure tests: it is only known to run on one tester's computer;
@@ -51,6 +55,7 @@ The difference to remember: **on Windows a crash of the service opens the networ
 - a power cut on Linux;
 - going back to 0.4;
 - on Linux, **Local network** from a program that does not pick the interface itself;
-- on Linux, the window, the tray and the polkit prompt in an automated run: no matrix drives a desktop. GNOME was checked by hand; KDE Plasma was not, on Wayland or X11.
+- on Linux, the window, the tray and the polkit prompt in an automated run: no matrix drives a desktop. GNOME was checked by hand; KDE Plasma was not, on Wayland or X11;
+- automated failure matrix on real Apple Silicon hardware (experimental macOS build).
 
 Lockdown protects against accidental leaks: the VPN drops, the service stops, the computer boots. It does not protect against malware you run yourself. The kill switch stays the main protection.

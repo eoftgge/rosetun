@@ -162,8 +162,7 @@ impl App {
             store.path().parent().map(std::borrow::ToOwned::to_owned);
         state.settings.screen.licenses_folder = std::env::current_exe()
             .ok()
-            .and_then(|exe| exe.parent().map(|dir| dir.join("licenses")))
-            .filter(|dir| dir.is_dir());
+            .and_then(|exe| find_licenses_folder(&exe));
         let workers = worker::start(store, tx, repaint.clone());
         #[cfg(windows)]
         workers.move_autostart_to_task();
@@ -1039,11 +1038,38 @@ fn repaint_delay(clock_shown: bool, next_wake: Option<Duration>) -> Option<Durat
     }
 }
 
+fn find_licenses_folder(exe: &std::path::Path) -> Option<std::path::PathBuf> {
+    if cfg!(target_os = "macos")
+        && let Some(dir) = macos_bundle_licenses_folder(exe)
+    {
+        return Some(dir);
+    }
+    exe.parent()
+        .map(|dir| dir.join("licenses"))
+        .filter(|dir| dir.is_dir())
+}
+
+fn macos_bundle_licenses_folder(exe: &std::path::Path) -> Option<std::path::PathBuf> {
+    let macos_dir = exe.parent()?;
+    if macos_dir.file_name() != Some(std::ffi::OsStr::new("MacOS")) {
+        return None;
+    }
+    let contents_dir = macos_dir.parent()?;
+    if contents_dir.file_name() != Some(std::ffi::OsStr::new("Contents")) {
+        return None;
+    }
+    let dir = contents_dir.join("Resources").join("licenses");
+    dir.is_dir().then_some(dir)
+}
+
 #[cfg(test)]
 mod tests {
     #[cfg(windows)]
     use super::centered_position;
-    use super::{initial_accent, initial_scale, next_scale};
+    use super::{
+        find_licenses_folder, initial_accent, initial_scale, macos_bundle_licenses_folder,
+        next_scale,
+    };
     #[cfg(windows)]
     use eframe::egui;
     use rosetun_core::Store;
@@ -1221,5 +1247,42 @@ mod tests",
             super::repaint_delay(true, Some(Duration::ZERO)),
             Some(Duration::ZERO)
         );
+    }
+
+    #[test]
+    fn licenses_folder_finds_sibling_and_macos_bundle_resources() {
+        let root = std::env::temp_dir().join(format!(
+            "rosetun-gui-licenses-folder-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+
+        let sibling_exe = root.join("flat").join("rosetun-gui");
+        let sibling_licenses = root.join("flat").join("licenses");
+        fs::create_dir_all(&sibling_licenses).unwrap();
+        assert_eq!(find_licenses_folder(&sibling_exe), Some(sibling_licenses));
+        assert_eq!(macos_bundle_licenses_folder(&sibling_exe), None);
+
+        let bundle_exe = root
+            .join("Rosetun.app")
+            .join("Contents")
+            .join("MacOS")
+            .join("rosetun-gui");
+        let bundle_licenses = root
+            .join("Rosetun.app")
+            .join("Contents")
+            .join("Resources")
+            .join("licenses");
+        fs::create_dir_all(bundle_exe.parent().unwrap()).unwrap();
+        fs::create_dir_all(&bundle_licenses).unwrap();
+        assert_eq!(
+            macos_bundle_licenses_folder(&bundle_exe),
+            Some(bundle_licenses.clone())
+        );
+        if cfg!(target_os = "macos") {
+            assert_eq!(find_licenses_folder(&bundle_exe), Some(bundle_licenses));
+        }
+
+        fs::remove_dir_all(&root).unwrap();
     }
 }

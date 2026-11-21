@@ -5,7 +5,7 @@ aliases = ["/ru/docs/install/"]
 
 [extra]
 group = "Начало"
-toc_labels = { "debian-13" = "Debian 13" }
+toc_labels = { "debian-13" = "Debian 13", "macos" = "macOS (Apple Silicon)" }
 +++
 
 {%- set r = load_data(path="data/release.json", required=false) -%}
@@ -14,6 +14,8 @@ toc_labels = { "debian-13" = "Debian 13" }
 **Windows:** Windows 11, x64. Windows 10 работает на компьютере одного тестировщика; проверки отказов на ней не прогонялись.
 
 **Linux:** amd64 с systemd, nftables и cgroup v2. Проверки проходят на Debian 13. С polkit (`pkexec`, `polkitd`) можно менять Lockdown в приложении. В терминале для этого есть `sudo rosetun lockdown on` и `sudo rosetun lockdown off`.
+
+**macOS (Apple Silicon) · экспериментальная сборка:** macOS 14 Sonoma или новее на процессоре Apple Silicon (`arm64`). Intel Mac не поддерживаются. Kill switch и Lockdown на macOS недоступны.
 
 ## Windows {#windows}
 
@@ -96,6 +98,38 @@ timeout 5s getent ahosts example.org
 
 **Статус проверки.** Интерфейс проверяли вручную на Arch. Автоматические системные матрицы Linux охватывают Debian 13.
 
+## macOS (Apple Silicon) · экспериментальная сборка {#macos}
+
+Экспериментальная сборка предназначена только для Mac на Apple Silicon (`arm64`) с macOS 14 или новее. **Kill switch и Lockdown на macOS недоступны:** при обрыве туннеля трафик может пойти напрямую. Подробности и ограничения описаны на странице [Поддержка macOS](../macos/).
+
+{% if r?.macos_url %}
+
+Скачайте `{{ r.macos }}` со страницы [Releases]({{ r.macos_url }}), [проверьте его](../install/#verify-the-download) и откройте установщик `.pkg` (или установите из терминала):
+
+```
+sudo installer -pkg ./{{ r.macos }} -target /
+```
+
+{% else %}
+
+В этом стабильном выпуске нет экспериментального пакета macOS. См. [GitHub Releases](https://github.com/eoftgge/rosetun/releases).
+
+{% endif %}
+
+Установщик ставит `/Applications/Rosetun.app`, команду `/usr/local/bin/rosetun`, вспомогательные бинарники и ядра в `/usr/local/libexec/rosetun` (принадлежат `root:wheel`) и запускает системную службу `launchd` (`/Library/LaunchDaemons/io.github.eoftgge.rosetun.helper.plist`). Настройки пользователя хранятся в `~/.config/rosetun`.
+
+Если пакет `.pkg` в выпуске не подписан Apple Developer ID, macOS Gatekeeper может заблокировать открытие двойным щелчком: проверьте контрольную сумму и аттестацию ниже, затем откройте пакет через контекстное меню (**Открыть**) или установите командой `sudo installer`.
+
+**Обновление:** запустите новый `.pkg` поверх установленного. Сценарий установки аккуратно останавливает службу, обновляет файлы и запускает её снова. Настройки в `~/.config/rosetun` сохраняются.
+
+**Удаление:** выполните в терминале:
+
+```
+sudo /usr/local/libexec/rosetun/uninstall.sh
+```
+
+Скрипт останавливает службу `launchd`, удаляет `Rosetun.app`, CLI, службу, ядра, сокет, журнал `/private/var/log/rosetun-helper.log` и запись `pkgutil`. Настройки в `~/.config/rosetun` остаются. Добавьте `--purge`, чтобы дополнительно удалить состояние службы и списки из `/Library/Application Support/Rosetun`.
+
 ## Переход с 0.5 {#update}
 
 Перед обновлением скопируйте папку настроек. На Windows настройки по умолчанию находятся в `%APPDATA%\Rosetun`. На Linux они находятся в `~/.config/rosetun`. В копии остаются ссылки подписок, поэтому храните её у себя.
@@ -112,7 +146,7 @@ timeout 5s getent ahosts example.org
 
 ## Проверка загрузки {#verify-the-download}
 
-В `SHA256SUMS.txt` каждого выпуска есть установщик и пакет. Для выпуска, собранного по тегу, на GitHub есть ещё аттестация происхождения обоих файлов. Аттестация говорит, какой workflow собрал файл; это не подпись кода.
+В `SHA256SUMS.txt` каждого выпуска есть установщики и пакеты. Для выпуска, собранного по тегу, на GitHub есть ещё аттестация происхождения файлов. Аттестация говорит, какой workflow собрал файл; это не подпись кода.
 
 Начиная с 0.7 `SHA256SUMS.txt` подписан ключом выпуска. Скачайте `SHA256SUMS.txt` и `SHA256SUMS.txt.minisig` со страницы выпуска и проверьте подпись с помощью [minisign](https://jedisct1.github.io/minisign/):
 
@@ -136,6 +170,17 @@ Debian:
 ```
 sha256sum --check --ignore-missing SHA256SUMS.txt
 gh attestation verify {{ r?.deb or "rosetun_<версия>_amd64.deb" }} --repo eoftgge/rosetun
+```
+
+{% endif %}
+
+{% if r?.macos_url %}
+
+macOS (Apple Silicon):
+
+```
+shasum -a 256 {{ r.macos }}
+gh attestation verify {{ r.macos }} --repo eoftgge/rosetun
 ```
 
 {% endif %}

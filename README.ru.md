@@ -38,6 +38,7 @@ Rosetun ведёт один разработчик с помощью агент�
 - **Windows 11 x64.** Скачайте установщик `-setup.exe` со страницы выпуска по кнопке выше. [Установка на Windows](https://eoftgge.github.io/rosetun/docs/install/#windows)
 - **Debian 13 amd64.** Установите пакет `.deb`, добавьте свою учётную запись в группу `rosetun` и перезагрузите компьютер. Требования для Ubuntu и Linux Mint перечислены в руководстве. [Установка на Debian](https://eoftgge.github.io/rosetun/docs/install/#debian-13)
 - **Arch Linux.** Соберите `rosetun-bin` по рецепту в этом репозитории. [Установка на Arch](https://eoftgge.github.io/rosetun/docs/install/#arch-linux)
+- **macOS (Apple Silicon) · экспериментальная сборка.** Установите `.pkg` на macOS 14+ (`arm64`). Kill switch и Lockdown на macOS недоступны: при обрыве туннеля трафик может пойти напрямую. [Установка на macOS](https://eoftgge.github.io/rosetun/docs/install/#macos) · [Поддержка macOS](https://eoftgge.github.io/rosetun/docs/macos/)
 
 ## Документация
 

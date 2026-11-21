@@ -38,6 +38,7 @@ One developer maintains Rosetun with help from coding agents. Report problems in
 - **Windows 11 x64.** Download the `-setup.exe` installer from the release linked above. [Windows installation](https://eoftgge.github.io/rosetun/en/docs/install/#windows)
 - **Debian 13 amd64.** Install the `.deb` package, add your account to the `rosetun` group and restart the computer. The guide lists requirements for Ubuntu and Linux Mint. [Debian installation](https://eoftgge.github.io/rosetun/en/docs/install/#debian-13)
 - **Arch Linux.** Build `rosetun-bin` with the recipe in this repository. [Arch installation](https://eoftgge.github.io/rosetun/en/docs/install/#arch-linux)
+- **macOS (Apple Silicon) · experimental build.** Install the `.pkg` on macOS 14+ (`arm64`). Kill switch and Lockdown are unavailable on macOS: traffic may go direct if the tunnel drops. [macOS installation](https://eoftgge.github.io/rosetun/en/docs/install/#macos) · [macOS support](https://eoftgge.github.io/rosetun/en/docs/macos/)
 
 ## Documentation
 

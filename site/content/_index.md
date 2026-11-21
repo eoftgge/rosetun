@@ -10,6 +10,7 @@ headline = 'Ваш трафик. Ваши правила.'
 lead = 'VPN-клиент для Windows и Linux: подписки, правила, kill switch и Lockdown.'
 download_windows = 'Скачать для Windows'
 download_linux = 'Скачать для Linux'
+download_macos = 'macOS (Apple Silicon) · экспериментальная сборка'
 all_releases = 'Все выпуски'
 verify_download = 'Проверить загрузку'
 features_eyebrow = 'ПОД ВАШИ ЗАДАЧИ'
@@ -107,6 +108,6 @@ Get-FileHash .\{{ r?.installer or "rosetun-VERSION-setup.exe" }} -Algorithm SHA2
 gh attestation verify .\{{ r?.installer or "rosetun-VERSION-setup.exe" }} --repo eoftgge/rosetun
 ```
 
-<p>Пакет Debian тоже есть в SHA256SUMS.txt и имеет аттестацию: <a href="docs/install/#debian-13">Debian 13</a>.</p>
+<p>Пакет Debian и экспериментальный пакет macOS тоже есть в SHA256SUMS.txt и имеют аттестацию: <a href="docs/install/#debian-13">Debian 13</a>, <a href="docs/install/#macos">macOS (Apple Silicon)</a>.</p>
 
 <p><a href="help/">Установка и первый запуск</a></p>

@@ -106,8 +106,99 @@ jobs:
           chown -R builder:builder "$GITHUB_WORKSPACE"
           runuser -u builder -- bash tools/arch/check-package.sh target/deb/rosetun-*-linux-amd64.tar.gz
 
+  macos:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify Apple Silicon runner
+        run: |
+          arch=$(uname -m)
+          if [ "$arch" != "arm64" ]; then
+            echo "Expected arm64 runner, got $arch" >&2
+            exit 1
+          fi
+      # No actions/cache here: a release build must not start from cached build tools.
+      - name: Install Rust
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --component rustfmt
+          rustup default "$RUST_TOOLCHAIN"
+          rustc -vV
+      - name: Validate and test on macOS
+        run: |
+          cargo fmt --all --check
+          plutil -lint packaging/macos/io.github.eoftgge.rosetun.helper.plist
+          sed -e 's/@SHORT_VERSION@/0.7.0/g' -e 's/@BUNDLE_VERSION@/0.7.0-beta.1/g' \
+            packaging/macos/Info.plist.in | plutil -lint -
+          sed -e 's/@VERSION@/0.7.0-beta.1/g' \
+            packaging/macos/distribution.xml.in | xmllint --noout -
+          bash -n installer/macos/build-pkg.sh packaging/macos/uninstall.sh \
+            packaging/macos/scripts/preinstall packaging/macos/scripts/postinstall
+          if command -v shellcheck >/dev/null 2>&1; then
+            shellcheck installer/macos/build-pkg.sh packaging/macos/uninstall.sh \
+              packaging/macos/scripts/preinstall packaging/macos/scripts/postinstall
+          fi
+          cargo test -q --workspace --locked --target aarch64-apple-darwin
+      - name: Build macOS package
+        id: build_macos
+        env:
+          MACOS_APP_CERT_P12: ${{ secrets.MACOS_APP_CERT_P12 }}
+          MACOS_APP_CERT_PASSWORD: ${{ secrets.MACOS_APP_CERT_PASSWORD }}
+          MACOS_INSTALLER_CERT_P12: ${{ secrets.MACOS_INSTALLER_CERT_P12 }}
+          MACOS_INSTALLER_CERT_PASSWORD: ${{ secrets.MACOS_INSTALLER_CERT_PASSWORD }}
+          APPLE_DEVELOPER_ID_APP: ${{ secrets.APPLE_DEVELOPER_ID_APP }}
+          APPLE_DEVELOPER_ID_INSTALLER: ${{ secrets.APPLE_DEVELOPER_ID_INSTALLER }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -n "$MACOS_APP_CERT_P12" ] && [ -n "$MACOS_INSTALLER_CERT_P12" ]; then
+            keychain="$RUNNER_TEMP/rosetun-build.keychain-db"
+            keychain_password=$(uuidgen)
+            security create-keychain -p "$keychain_password" "$keychain"
+            security set-keychain-settings -lut 21600 "$keychain"
+            security unlock-keychain -p "$keychain_password" "$keychain"
+            security list-keychains -d user -s "$keychain" login.keychain-db
+
+            app_p12="$RUNNER_TEMP/app-cert.p12"
+            installer_p12="$RUNNER_TEMP/installer-cert.p12"
+            printf '%s' "$MACOS_APP_CERT_P12" | base64 --decode >"$app_p12"
+            printf '%s' "$MACOS_INSTALLER_CERT_P12" | base64 --decode >"$installer_p12"
+            security import "$app_p12" -P "$MACOS_APP_CERT_PASSWORD" -A -t cert -f pkcs12 -k "$keychain"
+            security import "$installer_p12" -P "$MACOS_INSTALLER_CERT_PASSWORD" -A -t cert -f pkcs12 -k "$keychain"
+            security set-key-partition-list -S apple-tool:,apple:,codesign: -k "$keychain_password" "$keychain"
+            rm -f "$app_p12" "$installer_p12"
+
+            if [ -n "$APPLE_API_KEY_P8" ]; then
+              api_key_path="$RUNNER_TEMP/AuthKey.p8"
+              printf '%s' "$APPLE_API_KEY_P8" | base64 --decode >"$api_key_path"
+              chmod 0600 "$api_key_path"
+              export APPLE_API_KEY_PATH="$api_key_path"
+            fi
+            bash installer/macos/build-pkg.sh --release
+          else
+            bash installer/macos/build-pkg.sh --release --allow-unsigned
+          fi
+      - name: Clean up temporary signing credentials
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/rosetun-build.keychain-db" ]; then
+            security delete-keychain "$RUNNER_TEMP/rosetun-build.keychain-db" || true
+          fi
+          rm -f "$RUNNER_TEMP/app-cert.p12" "$RUNNER_TEMP/installer-cert.p12" "$RUNNER_TEMP/AuthKey.p8"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: rosetun-macos
+          path: target/macos/rosetun-*-macos-arm64-experimental.pkg
+          if-no-files-found: error
+          retention-days: 1
+
   release:
-    needs: [deb, linux-dependencies, arch]
+    needs: [deb, linux-dependencies, arch, macos]
     runs-on: windows-2025
     permissions:
       contents: write
@@ -192,6 +283,10 @@ jobs:
         with:
           name: rosetun-deb
           path: target/installer
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: rosetun-macos
+          path: target/installer
       - name: Add the Debian package
         id: deb
         shell: pwsh
@@ -224,6 +319,20 @@ jobs:
           $notes = $notes.Replace('{{linux_archive}}', $archive.Name).Replace('{{linux_archive_sha256}}', $hash)
           [IO.File]::WriteAllText('target/installer/release-notes.md', $notes, $utf8)
           [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "archive=target/installer/$($archive.Name)`n", $utf8)
+      - name: Add the macOS package
+        id: macos
+        shell: pwsh
+        run: |
+          $packages = @(Get-ChildItem -LiteralPath 'target/installer' -Filter 'rosetun-*-macos-arm64-experimental.pkg' -File)
+          if ($packages.Count -ne 1) { throw 'Expected exactly one macOS package.' }
+          $package = $packages[0]
+          $hash = (Get-FileHash -LiteralPath $package.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          $utf8 = [Text.UTF8Encoding]::new($false)
+          [IO.File]::AppendAllText('target/installer/SHA256SUMS.txt', "$hash  $($package.Name)`n", $utf8)
+          $notes = [IO.File]::ReadAllText('target/installer/release-notes.md', $utf8)
+          $notes = $notes.Replace('{{macos_pkg}}', $package.Name).Replace('{{macos_pkg_sha256}}', $hash)
+          [IO.File]::WriteAllText('target/installer/release-notes.md', $notes, $utf8)
+          [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "package=target/installer/$($package.Name)`n", $utf8)
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         if: github.event_name == 'push' && github.event.repository.visibility == 'public'
         with:
@@ -231,6 +340,7 @@ jobs:
             target/installer/rosetun-*-setup.exe
             target/installer/rosetun_*_amd64.deb
             target/installer/rosetun-*-linux-amd64.tar.gz
+            target/installer/rosetun-*-macos-arm64-experimental.pkg
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: github.event_name == 'workflow_dispatch'
         with:
@@ -239,6 +349,7 @@ jobs:
             ${{ steps.build.outputs.setup }}
             ${{ steps.deb.outputs.package }}
             ${{ steps.archive.outputs.archive }}
+            ${{ steps.macos.outputs.package }}
             target/installer/SHA256SUMS.txt
             target/installer/release-notes.md
           if-no-files-found: error
@@ -254,6 +365,7 @@ jobs:
           SETUP: ${{ steps.build.outputs.setup }}
           DEB: ${{ steps.deb.outputs.package }}
           ARCHIVE: ${{ steps.archive.outputs.archive }}
+          MACOS: ${{ steps.macos.outputs.package }}
         run: |
           $sources = @(Get-ChildItem -LiteralPath 'target/installer' -Filter 'sing-box-*-source.tar.gz' -File)
           if ($sources.Count -ne 1) { throw 'Expected exactly one sing-box source archive.' }
@@ -264,6 +376,7 @@ jobs:
             $env:SETUP
             $env:DEB
             $env:ARCHIVE
+            $env:MACOS
             $sources[0].FullName
             $xraySources[0].FullName
             'target/installer/SHA256SUMS.txt'
