@@ -136,7 +136,7 @@ pub(crate) struct Caller {
     administrator: bool,
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 impl Caller {
     pub(crate) fn is_administrator(&self) -> bool {
         self.administrator

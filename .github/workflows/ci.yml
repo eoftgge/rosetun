@@ -95,12 +95,14 @@ jobs:
             ~/.cargo/git/db
             target
           key: cargo-${{ runner.os }}-${{ runner.arch }}-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('Cargo.lock') }}
+      - name: Validate launchd plist
+        run: plutil -lint packaging/macos/io.github.eoftgge.rosetun.helper.plist
       - name: Check workspace
         run: cargo check --workspace --all-targets --locked --target aarch64-apple-darwin
       - name: Build binaries
         run: cargo build --locked --target aarch64-apple-darwin -p rosetun -p rosetun-gui -p rosetun-helper-privileged
-      - name: Run portable tests
-        run: cargo test --locked --target aarch64-apple-darwin -p rosetun-config -p rosetun-subscription
+      - name: Run macOS tests
+        run: cargo test --locked --target aarch64-apple-darwin -p rosetun-config -p rosetun-subscription -p rosetun-ipc -p rosetun-helper-privileged
 
   deny:
     runs-on: ubuntu-24.04

@@ -1,6 +1,6 @@
-//! Termination signals on Linux without an async runtime. `block` runs first
-//! in `main`, before any thread exists, so every later thread inherits the
-//! mask and only the waiter thread takes these signals with `sigwait`.
+//! Termination signals on Linux and macOS without an async runtime. `block`
+//! runs first in `main`, before any thread exists, so every later thread
+//! inherits the mask and only the waiter thread takes these signals with `sigwait`.
 //! Engines do not inherit the mask: the standard library clears it in the
 //! child before `exec`.
 
