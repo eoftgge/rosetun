@@ -54,7 +54,7 @@ pub(crate) fn delete_dialog(ctx: &egui::Context, state: &State, actions: &mut Ve
             if state.config.active_rule_set.as_ref() == Some(id) {
                 ui.add(
                     egui::Label::new(
-                        RichText::new(tr!("delete-active-rule-set-warning")).color(theme::ERROR),
+                        RichText::new(tr!("delete-active-rule-set-warning")).color(theme::error()),
                     )
                     .wrap(),
                 );
@@ -145,7 +145,7 @@ pub(crate) fn group_selection_dialog(
             }
             if let Some(error) = &dialog.error {
                 ui.add_space(theme::space::S);
-                ui.add(egui::Label::new(RichText::new(error).small().color(theme::ERROR)).wrap());
+                ui.add(egui::Label::new(RichText::new(error).small().color(theme::error())).wrap());
             }
             let footer = widgets::DialogFooter::new(
                 if busy {
@@ -579,7 +579,7 @@ pub(crate) fn group_editor_dialog(
                                             let added = dialog
                                                 .contains_list_category(&selected.id, category);
                                             let color = if busy {
-                                                theme::DISABLED
+                                                theme::disabled()
                                             } else if added {
                                                 theme::palette().accent_light
                                             } else {
@@ -618,7 +618,7 @@ pub(crate) fn group_editor_dialog(
 
             if let Some(error) = &dialog.input_error {
                 ui.add_space(theme::space::XS);
-                ui.add(egui::Label::new(RichText::new(error).small().color(theme::ERROR)).wrap());
+                ui.add(egui::Label::new(RichText::new(error).small().color(theme::error())).wrap());
             }
 
             ui.add_space(theme::space::S);
@@ -900,7 +900,7 @@ pub(crate) fn group_editor_dialog(
 
             if let Some(error) = &dialog.error {
                 ui.add_space(theme::space::S);
-                ui.add(egui::Label::new(RichText::new(error).small().color(theme::ERROR)).wrap());
+                ui.add(egui::Label::new(RichText::new(error).small().color(theme::error())).wrap());
             }
 
             let can_save = !busy

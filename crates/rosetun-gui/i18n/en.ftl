@@ -1080,6 +1080,8 @@ accent-cocoa = Cocoa
 accent-lilac = Lilac
 accent-teal = Teal
 accent-amber = Amber
+accent-black = Black
+accent-white = White
 
 stored-as = Stored as { $ascii }
 servers = { $count ->

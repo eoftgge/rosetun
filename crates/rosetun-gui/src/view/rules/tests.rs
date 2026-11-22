@@ -930,7 +930,7 @@ fn exit_rules_read_through_their_exit_in_their_own_colour() {
     );
     assert_eq!(rule_label(&rule, &[]), "Through an exit");
     let destination = RuleDestination::of(&rule);
-    assert_eq!(destination_color(&destination), theme::EXIT);
+    assert_eq!(destination_color(&destination), theme::exit());
     assert_ne!(
         destination_color(&destination),
         target_color(RuleTarget::Block)

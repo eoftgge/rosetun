@@ -234,7 +234,7 @@ fn content_area(
             if let Some(error) = error {
                 ui.add_sized(
                     egui::vec2(width, ERROR_HEIGHT),
-                    egui::Label::new(RichText::new(error).color(theme::ERROR)).truncate(),
+                    egui::Label::new(RichText::new(error).color(theme::error())).truncate(),
                 )
                 .on_hover_text(error);
             }
@@ -701,7 +701,7 @@ fn address_input(
         ui.label(
             RichText::new(tr!("address-limit", n = MAX_ADDRESSES.to_string()))
                 .small()
-                .color(theme::ERROR),
+                .color(theme::error()),
         );
     }
     if dialog
@@ -768,7 +768,7 @@ fn recent_site_button(
 ) -> egui::Response {
     let palette = theme::palette();
     let color = if !enabled {
-        theme::DISABLED
+        theme::disabled()
     } else if added {
         palette.accent_light
     } else if has_rule {
@@ -960,7 +960,7 @@ fn process_list(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Vec
             ui.spacing_mut().item_spacing.y = PROCESS_ROW_GAP;
             if let Some(error) = &dialog.processes_error {
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new(error).small().color(theme::ERROR));
+                    ui.label(RichText::new(error).small().color(theme::error()));
                     if widgets::link(ui, &tr!("retry"), !dialog.busy).clicked() {
                         actions.push(Action::RefreshProcesses);
                     }
@@ -1220,7 +1220,7 @@ fn process_row(ui: &mut egui::Ui, row: ProcessRow<'_>, enabled: bool) -> egui::R
             egui::Align2::CENTER_CENTER,
             row.tile.letter,
             theme::font::semibold(theme::font::CAPTION),
-            theme::palette().text,
+            egui::Color32::WHITE,
         );
     }
     let text_left = tile_rect.right() + PROCESS_ROW_INSET;
@@ -1229,7 +1229,7 @@ fn process_row(ui: &mut egui::Ui, row: ProcessRow<'_>, enabled: bool) -> egui::R
         egui::pos2(rect.right() - PROCESS_ROW_INSET, rect.bottom()),
     ));
     let name_color = if !enabled {
-        theme::DISABLED
+        theme::disabled()
     } else if selected {
         theme::palette().accent_light
     } else {
@@ -1327,7 +1327,7 @@ fn destination_picker(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, config: &Ap
     let color = if enabled {
         destination_color(&dialog.target)
     } else {
-        theme::DISABLED
+        theme::disabled()
     };
     // Whole points, so the list that opens as wide as the field has whole-point items.
     let (rect, response) = ui.allocate_exact_size(
@@ -1392,7 +1392,7 @@ fn destination_picker(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, config: &Ap
             if enabled {
                 theme::palette().text_dim
             } else {
-                theme::DISABLED
+                theme::disabled()
             },
         );
     }
@@ -1466,7 +1466,7 @@ fn destination_item(
         ui.painter().circle_filled(
             egui::pos2(item.rect.left() + 14.0, item.rect.center().y),
             3.5,
-            if enabled { color } else { theme::DISABLED },
+            if enabled { color } else { theme::disabled() },
         );
     }
     let item = match hint {
@@ -1544,7 +1544,7 @@ fn destination_menu(
             if destination_item(
                 ui,
                 &name,
-                theme::EXIT,
+                theme::exit(),
                 true,
                 selected,
                 None,
@@ -1577,7 +1577,7 @@ fn destination_menu(
             if destination_item(
                 ui,
                 &name,
-                theme::EXIT,
+                theme::exit(),
                 !full,
                 selected,
                 None,
@@ -1623,7 +1623,7 @@ fn destination_menu(
             if destination_item(
                 ui,
                 &label,
-                theme::EXIT,
+                theme::exit(),
                 enabled,
                 selected,
                 None,

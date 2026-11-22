@@ -342,7 +342,7 @@ fn details(
                     egui::Rect::from_min_size(bar.min, egui::vec2(bar.width() * fraction, 4.0)),
                     2.0,
                     if fraction >= 1.0 {
-                        theme::ERROR
+                        theme::error()
                     } else {
                         theme::palette().accent_dark
                     },
@@ -418,7 +418,7 @@ fn details(
         );
         if report.selection_cleared {
             ui.add(
-                egui::Label::new(RichText::new(tr!("selection-cleared")).color(theme::ERROR))
+                egui::Label::new(RichText::new(tr!("selection-cleared")).color(theme::error()))
                     .wrap(),
             );
         }
@@ -544,9 +544,9 @@ fn menu_title(language: i18n::Language, subscription: &Subscription) -> String {
 
 fn expiry_color(expire: u64, now: u64) -> Color32 {
     if expire <= now {
-        theme::EXPIRED
+        theme::expired()
     } else if expire - now < 7 * 86_400 {
-        theme::WARNING
+        theme::warning()
     } else {
         theme::palette().text_dim
     }
@@ -926,10 +926,10 @@ mod tests {
         let now = 1_000_000;
         let week = 7 * 86_400;
         assert_eq!(expiry_color(now + week, now), theme::palette().text_dim);
-        assert_eq!(expiry_color(now + week - 1, now), theme::WARNING);
-        assert_eq!(expiry_color(now + 1, now), theme::WARNING);
-        assert_eq!(expiry_color(now, now), theme::EXPIRED);
-        assert_eq!(expiry_color(now - 1, now), theme::EXPIRED);
+        assert_eq!(expiry_color(now + week - 1, now), theme::warning());
+        assert_eq!(expiry_color(now + 1, now), theme::warning());
+        assert_eq!(expiry_color(now, now), theme::expired());
+        assert_eq!(expiry_color(now - 1, now), theme::expired());
     }
 
     #[test]

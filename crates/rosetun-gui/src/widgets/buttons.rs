@@ -16,15 +16,24 @@ fn primary_fill(enabled: bool) -> Color32 {
     }
 }
 
+fn primary_foreground(enabled: bool) -> Color32 {
+    let palette = theme::palette();
+    if enabled {
+        palette.on_accent
+    } else if palette.on_accent == palette.text {
+        palette.text_muted
+    } else {
+        palette.on_accent.gamma_multiply(theme::alpha::MUTED)
+    }
+}
+
 pub(crate) fn button_fill(
     ui: &mut egui::Ui,
     text: impl Into<egui::WidgetText>,
     enabled: bool,
 ) -> egui::Response {
     ui.scope(|ui| {
-        if !enabled {
-            ui.visuals_mut().override_text_color = Some(theme::palette().text_muted);
-        }
+        ui.visuals_mut().override_text_color = Some(primary_foreground(enabled));
         ui.add_enabled(enabled, egui::Button::new(text).fill(primary_fill(enabled)))
     })
     .inner
@@ -53,12 +62,12 @@ pub(crate) fn button_fill_icon(
         })
         .inner;
     if ui.is_rect_visible(response.rect) {
-        let color = if enabled {
-            theme::palette().text
-        } else {
-            theme::palette().text_muted
-        };
-        icons::paint(ui.painter(), response.rect.center(), icon, color);
+        icons::paint(
+            ui.painter(),
+            response.rect.center(),
+            icon,
+            primary_foreground(enabled),
+        );
     }
     response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, label));
     response.on_hover_text(label).on_disabled_hover_text(label)
@@ -122,7 +131,7 @@ pub(crate) fn outline_button_icon(
         let color = if enabled {
             theme::palette().text_muted
         } else {
-            theme::DISABLED
+            theme::disabled()
         };
         icons::paint(ui.painter(), response.rect.center(), icon, color);
     }
@@ -224,8 +233,8 @@ fn compact_button(
         ui.spacing_mut().interact_size.y = 28.0;
         if outlined {
             ui.visuals_mut().widgets.inactive.bg_stroke.width = 1.0;
-        } else if !enabled {
-            ui.visuals_mut().override_text_color = Some(theme::palette().text_muted);
+        } else {
+            ui.visuals_mut().override_text_color = Some(primary_foreground(enabled));
         }
         ui.add_enabled(enabled, button)
     })

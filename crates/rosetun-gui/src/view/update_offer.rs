@@ -100,7 +100,7 @@ pub(crate) fn offer_status(state: &State) -> Option<(String, egui::Color32)> {
         )),
         UpdateDownload::Ready(_) => Some((tr!("update-ready"), muted)),
         UpdateDownload::Installing(_) => Some((tr!("update-installing"), muted)),
-        UpdateDownload::Failed { failure, .. } => Some((failure_text(failure), theme::ERROR)),
+        UpdateDownload::Failed { failure, .. } => Some((failure_text(failure), theme::error())),
     }
 }
 

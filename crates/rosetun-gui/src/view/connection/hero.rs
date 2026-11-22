@@ -212,11 +212,11 @@ mod tests {
     #[test]
     fn hero_title_tells_an_unavailable_service_from_one_not_answered_yet() {
         let mut state = State::default();
-        assert_eq!(hero_title(&state), (tr!("checking"), theme::DISCONNECTED));
+        assert_eq!(hero_title(&state), (tr!("checking"), theme::disconnected()));
         state.helper_error = Some(rosetun_ipc::ClientError::Closed);
         assert_eq!(
             hero_title(&state),
-            (tr!("connection-unavailable"), theme::ERROR)
+            (tr!("connection-unavailable"), theme::error())
         );
         state.helper_available = true;
         state.helper_error = None;
@@ -347,17 +347,17 @@ mod tests {
 fn hero_title(state: &State) -> (String, Color32) {
     let Some(status) = state.visible_status() else {
         return if state.helper_error.is_some() {
-            (tr!("connection-unavailable"), theme::ERROR)
+            (tr!("connection-unavailable"), theme::error())
         } else {
-            (tr!("checking"), theme::DISCONNECTED)
+            (tr!("checking"), theme::disconnected())
         };
     };
     if matches!(status.state, ConnectionState::Reconnecting)
         && status.reconnect_failure_kind == Some(FailureKind::NoNetwork)
     {
-        (tr!("error-code-no-network"), theme::ERROR)
+        (tr!("error-code-no-network"), theme::error())
     } else if status.xray_stopped && matches!(status.state, ConnectionState::Reconnecting) {
-        (tr!("xray-reconnecting-title"), theme::ERROR)
+        (tr!("xray-reconnecting-title"), theme::error())
     } else {
         state_style(&status.state)
     }
@@ -452,7 +452,7 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                         if state.xhttp_without_xray() {
                             ui.add(
                                 egui::Label::new(
-                                    RichText::new(tr!("xhttp-needs-xray")).color(theme::ERROR),
+                                    RichText::new(tr!("xhttp-needs-xray")).color(theme::error()),
                                 )
                                 .wrap(),
                             );
@@ -481,7 +481,7 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                                     .wrap(),
                                 );
                                 if state.running_session_protected() {
-                                    ui.colored_label(theme::ERROR, tr!("no-network-protected"));
+                                    ui.colored_label(theme::error(), tr!("no-network-protected"));
                                 }
                             } else if status.xray_stopped
                                 && matches!(status.state, ConnectionState::Reconnecting)
@@ -542,7 +542,7 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                                             status.xray_use.unwrap_or(state.config.settings.xray),
                                             state.lockdown_active(),
                                         );
-                                        let response = ui.colored_label(theme::ERROR, title);
+                                        let response = ui.colored_label(theme::error(), title);
                                         if let Some(details) = state.failure_details() {
                                             response.on_hover_text(details);
                                         }
@@ -553,7 +553,7 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                                             )
                                         {
                                             ui.colored_label(
-                                                theme::ERROR,
+                                                theme::error(),
                                                 tr!("no-network-protected"),
                                             );
                                         }
@@ -598,7 +598,7 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                                         };
                                         ui.add(
                                             egui::Label::new(
-                                                RichText::new(text).small().color(theme::ERROR),
+                                                RichText::new(text).small().color(theme::error()),
                                             )
                                             .wrap(),
                                         );
@@ -607,7 +607,7 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                                     if let Some(warning) = &state.system_checks.failure_warning {
                                         ui.horizontal_wrapped(|ui| {
                                             ui.colored_label(
-                                                theme::WARNING,
+                                                theme::warning(),
                                                 tr!(
                                                     "system-check-found",
                                                     issue = i18n::check_issue(warning)
@@ -748,7 +748,9 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                                             tr!("ping-ms", ms = millis.max(1).to_string()),
                                             theme::palette().text,
                                         ),
-                                        Some(_) => (tr!("ping-no-answer").to_owned(), theme::ERROR),
+                                        Some(_) => {
+                                            (tr!("ping-no-answer").to_owned(), theme::error())
+                                        }
                                         None => (
                                             tr!("ping-pending").to_owned(),
                                             theme::palette().text_dim,

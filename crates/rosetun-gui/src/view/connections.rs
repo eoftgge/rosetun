@@ -561,7 +561,7 @@ pub(super) fn route_color(route: &ConnectionRoute) -> Color32 {
     match route {
         ConnectionRoute::Proxy => theme::palette().accent_light,
         ConnectionRoute::Direct => theme::palette().text_muted,
-        ConnectionRoute::Exit(_) => theme::EXIT,
+        ConnectionRoute::Exit(_) => theme::exit(),
         ConnectionRoute::Other => theme::palette().text_dim,
     }
 }

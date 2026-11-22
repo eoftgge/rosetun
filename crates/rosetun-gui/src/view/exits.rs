@@ -175,7 +175,12 @@ fn exit_row(
                         );
                         response.on_hover_text(code);
                     } else {
-                        icons::icon_badge_colored(ui, Icon::Globe, theme::space::XXL, theme::EXIT);
+                        icons::icon_badge_colored(
+                            ui,
+                            Icon::Globe,
+                            theme::space::XXL,
+                            theme::exit(),
+                        );
                     }
                     let width = (ui.available_width() - RIGHT_WIDTH).max(100.0);
                     ui.allocate_ui_with_layout(
@@ -189,7 +194,7 @@ fn exit_row(
                             ui.add(
                                 egui::Label::new(RichText::new(&detail).small().color(
                                     if warning {
-                                        theme::WARNING
+                                        theme::warning()
                                     } else {
                                         theme::palette().text_muted
                                     },
@@ -395,7 +400,7 @@ fn node_picker(ui: &mut egui::Ui, dialog: &mut ExitDialog, config: &AppConfig, b
         })
     });
     if gone {
-        note(ui, tr!("exit-node-gone-pick"), theme::WARNING);
+        note(ui, tr!("exit-node-gone-pick"), theme::warning());
     }
     ui.add_space(theme::space::S);
     let country = dialog.fallback_country.clone();
@@ -442,7 +447,7 @@ fn via_picker(ui: &mut egui::Ui, dialog: &mut ExitDialog, config: &AppConfig, bu
                 tr!("exit-path-unsupported")
             };
             let color = if dialog.via.is_some() {
-                theme::WARNING
+                theme::warning()
             } else {
                 theme::palette().text_dim
             };
@@ -526,7 +531,7 @@ fn via_picker(ui: &mut egui::Ui, dialog: &mut ExitDialog, config: &AppConfig, bu
             .wrap_mode(egui::TextWrapMode::Wrap),
         );
         if !candidates.contains(via) {
-            note(ui, tr!("exit-path-unsupported"), theme::WARNING);
+            note(ui, tr!("exit-path-unsupported"), theme::warning());
         }
     }
 }
@@ -594,12 +599,12 @@ pub(crate) fn exit_dialog(ctx: &egui::Context, state: &mut State, actions: &mut 
                                 "where-exits-full",
                                 count = rosetun_ipc::MAX_EXTRA_NODES.to_string()
                             ),
-                            theme::WARNING,
+                            theme::warning(),
                         );
                     }
                     if let Some(error) = &dialog.error {
                         ui.add_space(theme::space::S);
-                        ui.add(egui::Label::new(RichText::new(error).color(theme::ERROR)).wrap());
+                        ui.add(egui::Label::new(RichText::new(error).color(theme::error())).wrap());
                     }
                 });
             let footer = widgets::DialogFooter::new(tr!("save"), tr!("cancel"))
@@ -679,7 +684,7 @@ pub(crate) fn delete_dialog(ctx: &egui::Context, state: &State, actions: &mut Ve
                 );
             }
             if let Some(error) = &dialog.error {
-                ui.add(egui::Label::new(RichText::new(error).color(theme::ERROR)).wrap());
+                ui.add(egui::Label::new(RichText::new(error).color(theme::error())).wrap());
             }
         },
     );
@@ -927,7 +932,7 @@ mod tests {
             ),
             (
                 format!("{node_kind} · {}", tr!("exit-now-gone")),
-                theme::WARNING,
+                theme::warning(),
             ),
             (
                 tr!("exit-rules", count = 1, n = "1"),

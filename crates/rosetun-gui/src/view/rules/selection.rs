@@ -107,9 +107,9 @@ fn selection_toolbar(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>
     let delete = ui
         .scope(|ui| {
             ui.visuals_mut().override_text_color = Some(if can_edit {
-                theme::ERROR
+                theme::error()
             } else {
-                theme::DISABLED
+                theme::disabled()
             });
             widgets::outline_button_compact(ui, &tr!("delete"), can_edit)
         })

@@ -317,14 +317,14 @@ pub(crate) fn remove_dialog(ctx: &egui::Context, state: &State, actions: &mut Ve
             {
                 ui.add(
                     egui::Label::new(
-                        RichText::new(tr!("remove-selected-warning")).color(theme::ERROR),
+                        RichText::new(tr!("remove-selected-warning")).color(theme::error()),
                     )
                     .wrap(),
                 );
             }
             if let Some(error) = &dialog.error {
                 ui.add(
-                    egui::Label::new(RichText::new(state.text(error)).color(theme::ERROR)).wrap(),
+                    egui::Label::new(RichText::new(state.text(error)).color(theme::error())).wrap(),
                 );
             }
         },

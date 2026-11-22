@@ -1100,6 +1100,8 @@ accent-cocoa = Какао
 accent-lilac = Сирень
 accent-teal = Бирюза
 accent-amber = Янтарь
+accent-black = Чёрная
+accent-white = Белая
 
 stored-as = Хранится как { $ascii }
 servers = { $count ->

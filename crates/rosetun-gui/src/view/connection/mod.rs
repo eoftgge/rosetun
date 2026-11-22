@@ -58,7 +58,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
     }) {
         widgets::card_frame().show(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            ui.colored_label(theme::WARNING, tr!("tunnel-dns-warning"));
+            ui.colored_label(theme::warning(), tr!("tunnel-dns-warning"));
         });
         ui.add_space(theme::SECTION_GAP);
     }
@@ -69,7 +69,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
         widgets::card_frame().show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.horizontal_wrapped(|ui| {
-                ui.colored_label(theme::WARNING, tr!("vpn-bypass-warning"));
+                ui.colored_label(theme::warning(), tr!("vpn-bypass-warning"));
                 if state.config.settings.kill_switch {
                     ui.colored_label(theme::palette().text_dim, tr!("next-connect-note"));
                 } else if widgets::outline_button(
@@ -229,7 +229,7 @@ fn service_banner(ui: &mut egui::Ui, state: &State) {
 }
 
 fn paint_warning_badge(painter: &egui::Painter, center: egui::Pos2) {
-    let stroke = egui::Stroke::new(theme::stroke::GLYPH, theme::ERROR);
+    let stroke = egui::Stroke::new(theme::stroke::GLYPH, theme::error());
     painter.circle_stroke(center, 13.0, stroke);
     painter.line_segment(
         [
@@ -238,7 +238,7 @@ fn paint_warning_badge(painter: &egui::Painter, center: egui::Pos2) {
         ],
         stroke,
     );
-    painter.circle_filled(center + egui::vec2(0.0, 4.75), 1.1, theme::ERROR);
+    painter.circle_filled(center + egui::vec2(0.0, 4.75), 1.1, theme::error());
 }
 
 /// The service reports one hold: on Windows an upgrade left it, on Unix
@@ -308,7 +308,7 @@ fn experimental_macos_strip(ui: &mut egui::Ui) {
 fn upgrade_hold_strip(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     egui::Frame::new()
         .fill(theme::palette().input)
-        .stroke(egui::Stroke::new(theme::stroke::HAIRLINE, theme::ERROR))
+        .stroke(egui::Stroke::new(theme::stroke::HAIRLINE, theme::error()))
         .corner_radius(theme::RADIUS)
         .inner_margin(theme::margin::symmetric(theme::space::L, theme::space::S))
         .show(ui, |ui| {
@@ -426,12 +426,12 @@ fn update_strip(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
 
 pub(crate) fn state_style(state: &ConnectionState) -> (String, Color32) {
     match state {
-        ConnectionState::Disconnected => (tr!("disconnected"), theme::DISCONNECTED),
+        ConnectionState::Disconnected => (tr!("disconnected"), theme::disconnected()),
         ConnectionState::Connecting => (tr!("connecting"), theme::palette().accent_bright),
         ConnectionState::Connected => (tr!("connected"), theme::connected()),
         ConnectionState::Reconnecting => (tr!("reconnecting"), theme::palette().accent_bright),
-        ConnectionState::Failed { .. } => (tr!("failed"), theme::ERROR),
-        ConnectionState::FailedProtected { .. } => (tr!("failed-protected"), theme::ERROR),
+        ConnectionState::Failed { .. } => (tr!("failed"), theme::error()),
+        ConnectionState::FailedProtected { .. } => (tr!("failed-protected"), theme::error()),
     }
 }
 
@@ -478,7 +478,7 @@ pub(crate) fn protection_dialog(ctx: &egui::Context, state: &State, actions: &mu
         |ui| {
             ui.add_space(theme::space::M);
             ui.add(
-                egui::Label::new(RichText::new(tr!("protection-warning")).color(theme::ERROR))
+                egui::Label::new(RichText::new(tr!("protection-warning")).color(theme::error()))
                     .wrap(),
             );
             if let Some(error) = &state.operation_error {
@@ -580,7 +580,7 @@ pub(crate) fn lockdown_dialog(ctx: &egui::Context, state: &State, actions: &mut 
             }
             if let Some(error) = &state.operation_error {
                 ui.add(
-                    egui::Label::new(RichText::new(state.text(error)).color(theme::ERROR)).wrap(),
+                    egui::Label::new(RichText::new(state.text(error)).color(theme::error())).wrap(),
                 );
             }
         },

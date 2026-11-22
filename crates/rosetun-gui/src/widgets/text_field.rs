@@ -29,7 +29,7 @@ pub(crate) fn field_vertical_margin(ui: &egui::Ui, height: f32) -> i8 {
 pub(crate) fn style_field(ui: &mut egui::Ui, invalid: bool) {
     let palette = theme::palette();
     let (rest, raised) = if invalid {
-        (theme::ERROR, theme::ERROR)
+        (theme::error(), theme::error())
     } else {
         (palette.border_strong, palette.text_dim)
     };
@@ -69,7 +69,7 @@ pub(crate) fn field_frame(
     let look = visuals.widgets.state(state);
     let stroke = if state == egui::widget_style::WidgetState::Active {
         let focused = if invalid {
-            theme::ERROR
+            theme::error()
         } else {
             theme::palette().accent_base
         };
@@ -383,7 +383,7 @@ mod tests {
                 assert_ne!(letter, wash);
             }
             let focused = if invalid {
-                theme::ERROR
+                theme::error()
             } else {
                 theme::palette().accent_base
             };
@@ -438,7 +438,7 @@ mod tests {
                 "{invalid}"
             );
             let rest = if invalid {
-                theme::ERROR
+                theme::error()
             } else {
                 theme::palette().border_strong
             };

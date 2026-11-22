@@ -57,7 +57,14 @@ pub(crate) fn drop_down<'a>(
                     ui.set_min_width(ui.available_width());
                     // A chosen item is filled with the accent itself, not the faint wash
                     // behind selected text.
-                    ui.visuals_mut().selection.bg_fill = palette.accent_base;
+                    let visuals = ui.visuals_mut();
+                    visuals.override_text_color = None;
+                    visuals.widgets.inactive.fg_stroke.color = palette.text;
+                    visuals.widgets.hovered.fg_stroke.color = palette.text;
+                    visuals.widgets.active.fg_stroke.color = palette.on_accent;
+                    visuals.selection.bg_fill = palette.accent_base;
+                    visuals.selection.stroke =
+                        egui::Stroke::new(theme::stroke::HAIRLINE, palette.on_accent);
                     menu(ui);
                 })
                 .response
@@ -155,7 +162,14 @@ pub(crate) fn filter_combo_icon(
                     .show(ui, |ui| {
                         ui.with_layout(egui::Layout::top_down_justified(egui::Align::LEFT), |ui| {
                             ui.set_min_width(popup_width);
-                            ui.visuals_mut().selection.bg_fill = palette.accent_base;
+                            let visuals = ui.visuals_mut();
+                            visuals.override_text_color = None;
+                            visuals.widgets.inactive.fg_stroke.color = palette.text;
+                            visuals.widgets.hovered.fg_stroke.color = palette.text;
+                            visuals.widgets.active.fg_stroke.color = palette.on_accent;
+                            visuals.selection.bg_fill = palette.accent_base;
+                            visuals.selection.stroke =
+                                egui::Stroke::new(theme::stroke::HAIRLINE, palette.on_accent);
                             menu(ui);
                         });
                     });

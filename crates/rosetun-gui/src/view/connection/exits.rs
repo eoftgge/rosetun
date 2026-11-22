@@ -114,8 +114,8 @@ fn exit_status(outcome: Option<ExitOutcome>) -> (String, Color32) {
             tr!("ping-ms", ms = millis.max(1).to_string()),
             theme::palette().text,
         ),
-        Some(ExitOutcome::Probed(_)) => (tr!("connection-exit-no-answer"), theme::WARNING),
-        Some(ExitOutcome::NoAddress) => (tr!("connection-exit-no-address"), theme::WARNING),
+        Some(ExitOutcome::Probed(_)) => (tr!("connection-exit-no-answer"), theme::warning()),
+        Some(ExitOutcome::NoAddress) => (tr!("connection-exit-no-address"), theme::warning()),
         None => (tr!("ping-pending").to_owned(), theme::palette().text_dim),
     }
 }
@@ -266,8 +266,8 @@ mod tests {
             ("One".to_owned(), theme::palette().text_dim),
             ("DE One".to_owned(), theme::palette().text_dim),
             (tr!("ping-ms", ms = "84"), theme::palette().text),
-            (tr!("connection-exit-no-answer"), theme::WARNING),
-            (tr!("connection-exit-no-address"), theme::WARNING),
+            (tr!("connection-exit-no-answer"), theme::warning()),
+            (tr!("connection-exit-no-address"), theme::warning()),
         ] {
             assert!(
                 texts

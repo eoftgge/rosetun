@@ -597,8 +597,8 @@ pub(crate) fn target_color(target: RuleTarget) -> Color32 {
     match target {
         RuleTarget::Proxy => theme::palette().accent_light,
         RuleTarget::Direct => theme::palette().text_muted,
-        RuleTarget::Block => theme::ERROR,
-        RuleTarget::Exit => theme::EXIT,
+        RuleTarget::Block => theme::error(),
+        RuleTarget::Exit => theme::exit(),
     }
 }
 

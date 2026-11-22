@@ -72,7 +72,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
         actions.push(Action::DismissListsError);
     }
     if let Some(error) = &state.lists.scan_error {
-        ui.colored_label(theme::ERROR, error);
+        ui.colored_label(theme::error(), error);
     }
     if !state.config_ready {
         ui.colored_label(theme::palette().text_dim, tr!("loading"));
@@ -234,7 +234,7 @@ fn list_card(
                             ui.add(
                                 egui::Label::new(RichText::new(&detail).small().color(
                                     if has_warning {
-                                        theme::WARNING
+                                        theme::warning()
                                     } else if applies_later {
                                         theme::palette().accent_light
                                     } else {
@@ -406,7 +406,7 @@ pub(crate) fn add_dialog(
                 ui.add_space(theme::space::S);
                 ui.add(
                     egui::Label::new(
-                        RichText::new(errors::list(i18n::language(), error)).color(theme::ERROR),
+                        RichText::new(errors::list(i18n::language(), error)).color(theme::error()),
                     )
                     .wrap(),
                 );
@@ -479,7 +479,7 @@ pub(crate) fn remove_dialog(ctx: &egui::Context, state: &State, actions: &mut Ve
             ui.add_space(theme::space::M);
             ui.add(egui::Label::new(tr!("delete-list-detail")).wrap());
             if let Some(error) = &dialog.error {
-                ui.add(egui::Label::new(RichText::new(error).color(theme::ERROR)).wrap());
+                ui.add(egui::Label::new(RichText::new(error).color(theme::error())).wrap());
             }
         },
     );

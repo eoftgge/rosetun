@@ -460,7 +460,7 @@ mod tests {
             ]
         );
         assert_ne!(parts[1].0, theme::palette().accent_light);
-        assert_ne!(parts[1].0, theme::ERROR);
+        assert_ne!(parts[1].0, theme::error());
     }
 
     #[test]

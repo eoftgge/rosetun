@@ -110,10 +110,10 @@ pub(super) fn ping_label(result: PingResult, is_udp: bool) -> (String, Color32, 
             theme::palette().text_dim,
             Some(tr!("ping-full-hint")),
         ),
-        PingResult::NoAnswer => (tr!("ping-no-answer"), theme::ERROR, None),
+        PingResult::NoAnswer => (tr!("ping-no-answer"), theme::error(), None),
         PingResult::Fails => (
             tr!("ping-fails"),
-            theme::ERROR,
+            theme::error(),
             Some(tr!("ping-fails-hint")),
         ),
         PingResult::Unresolved => (
@@ -605,13 +605,13 @@ mod tests {
             (
                 PingResult::NoAnswer,
                 tr!("ping-no-answer").to_owned(),
-                theme::ERROR,
+                theme::error(),
                 None,
             ),
             (
                 PingResult::Fails,
                 tr!("ping-fails").to_owned(),
-                theme::ERROR,
+                theme::error(),
                 Some(tr!("ping-fails-hint")),
             ),
             (

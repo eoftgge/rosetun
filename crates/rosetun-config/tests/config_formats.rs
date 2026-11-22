@@ -650,6 +650,8 @@ fn every_accent_keeps_its_stored_name() {
         (AccentPreset::Lilac, "lilac"),
         (AccentPreset::Teal, "teal"),
         (AccentPreset::Amber, "amber"),
+        (AccentPreset::Black, "black"),
+        (AccentPreset::White, "white"),
     ] {
         assert_eq!(serde_json::to_value(accent).unwrap(), json!(name));
     }

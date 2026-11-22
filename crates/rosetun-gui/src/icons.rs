@@ -65,7 +65,7 @@ pub(crate) fn icon_button_sized(
             }
         }
         let color = if !enabled {
-            theme::DISABLED
+            theme::disabled()
         } else if response.hovered() {
             theme::palette().text
         } else {

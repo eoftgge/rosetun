@@ -1,6 +1,6 @@
 use eframe::egui::{self, CornerRadius, Stroke};
 
-use crate::theme::{self, ERROR, RADIUS};
+use crate::theme::{self, RADIUS};
 
 pub(crate) fn card_frame() -> egui::Frame {
     egui::Frame::new()
@@ -43,7 +43,7 @@ pub(crate) fn error_with_actions(
     card_frame()
         .show(ui, |ui| {
             ui.horizontal_top(|ui| {
-                ui.colored_label(ERROR, crate::constants::ERROR_MARK);
+                ui.colored_label(theme::error(), crate::constants::ERROR_MARK);
                 ui.vertical(|ui| {
                     ui.add(egui::Label::new(message).wrap());
                     ui.add_space(theme::space::S);
@@ -80,7 +80,7 @@ pub(crate) fn dismissible_error_with_action(
                 .show(
                     ui,
                     |ui| {
-                        ui.colored_label(ERROR, crate::constants::ERROR_MARK);
+                        ui.colored_label(theme::error(), crate::constants::ERROR_MARK);
                         ui.vertical(|ui| {
                             ui.add(egui::Label::new(message).wrap());
                             if let Some((label, enabled)) = action {

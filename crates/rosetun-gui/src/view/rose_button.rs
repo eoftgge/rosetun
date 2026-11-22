@@ -120,8 +120,8 @@ fn params(phase: RosePhase) -> RoseParams {
                     PetalLayer {
                         k: 1.35,
                         rotation: -24.0,
-                        fill: theme::palette().text.gamma_multiply(0.20),
-                        stroke: theme::palette().text,
+                        fill: theme::palette().on_accent.gamma_multiply(0.20),
+                        stroke: theme::palette().on_accent,
                     },
                     PetalLayer::HIDDEN,
                     PetalLayer::HIDDEN,
@@ -158,42 +158,55 @@ fn params(phase: RosePhase) -> RoseParams {
                 theme::palette().accent_bright.gamma_multiply(0.40),
                 theme::palette().accent_bright,
             ),
-            RosePhase::Bloom => (
-                [
-                    PetalLayer {
-                        k: 2.25,
-                        rotation: 0.0,
-                        fill: theme::palette().accent_dark.gamma_multiply(0.90),
-                        stroke: theme::palette().accent_light.gamma_multiply(0.55),
-                    },
-                    PetalLayer {
-                        k: 1.60,
-                        rotation: 36.0,
-                        fill: theme::palette().accent_base.gamma_multiply(0.92),
-                        stroke: theme::palette().accent_light.gamma_multiply(0.80),
-                    },
-                    PetalLayer {
-                        k: 0.95,
-                        rotation: 18.0,
-                        fill: theme::palette().accent_light.gamma_multiply(0.95),
-                        stroke: theme::palette().text.gamma_multiply(0.55),
-                    },
-                ],
-                1.0,
-                1.0,
-                1.0,
-                theme::palette().accent_base.gamma_multiply(0.10),
-                theme::palette().accent_light.gamma_multiply(0.90),
-                theme::palette().accent_light.gamma_multiply(0.35),
-                theme::palette().text_muted,
-            ),
+            RosePhase::Bloom => {
+                let palette = theme::palette();
+                let core = if palette.light {
+                    palette.accent_bright
+                } else {
+                    palette.accent_light
+                };
+                let middle_stroke = if palette.light {
+                    palette.accent_pale.gamma_multiply(0.70)
+                } else {
+                    palette.accent_light.gamma_multiply(0.80)
+                };
+                (
+                    [
+                        PetalLayer {
+                            k: 2.25,
+                            rotation: 0.0,
+                            fill: palette.accent_dark.gamma_multiply(0.90),
+                            stroke: core.gamma_multiply(0.55),
+                        },
+                        PetalLayer {
+                            k: 1.60,
+                            rotation: 36.0,
+                            fill: palette.accent_base.gamma_multiply(0.92),
+                            stroke: middle_stroke,
+                        },
+                        PetalLayer {
+                            k: 0.95,
+                            rotation: 18.0,
+                            fill: core.gamma_multiply(0.95),
+                            stroke: palette.on_accent.gamma_multiply(0.55),
+                        },
+                    ],
+                    1.0,
+                    1.0,
+                    1.0,
+                    palette.accent_base.gamma_multiply(0.10),
+                    palette.accent_light.gamma_multiply(0.90),
+                    palette.accent_light.gamma_multiply(0.35),
+                    palette.text_muted,
+                )
+            }
             RosePhase::Unavailable => (
                 [
                     PetalLayer {
                         k: 1.25,
                         rotation: 18.0,
-                        fill: theme::DISABLED.gamma_multiply(0.12),
-                        stroke: theme::DISABLED,
+                        fill: theme::disabled().gamma_multiply(0.12),
+                        stroke: theme::disabled(),
                     },
                     PetalLayer::HIDDEN,
                     PetalLayer::HIDDEN,
@@ -202,17 +215,17 @@ fn params(phase: RosePhase) -> RoseParams {
                 0.2,
                 0.0,
                 theme::palette().modal,
-                theme::DISABLED,
+                theme::disabled(),
                 theme::palette().border_strong,
-                theme::DISABLED,
+                theme::disabled(),
             ),
             RosePhase::Blocked => (
                 [
                     PetalLayer {
                         k: 1.35,
                         rotation: -24.0,
-                        fill: theme::ERROR.gamma_multiply(0.18),
-                        stroke: theme::ERROR,
+                        fill: theme::error().gamma_multiply(0.18),
+                        stroke: theme::error(),
                     },
                     PetalLayer::HIDDEN,
                     PetalLayer::HIDDEN,
@@ -221,9 +234,9 @@ fn params(phase: RosePhase) -> RoseParams {
                 0.2,
                 0.0,
                 theme::palette().modal,
-                theme::ERROR,
-                theme::ERROR.gamma_multiply(0.45),
-                theme::ERROR,
+                theme::error(),
+                theme::error().gamma_multiply(0.45),
+                theme::error(),
             ),
         };
     RoseParams {
@@ -597,12 +610,12 @@ mod tests {
         near(bud.layers[OUTER].rotation, -24.0);
         assert_eq!(
             bud.layers[OUTER].fill,
-            theme::palette().text.gamma_multiply(0.20)
+            theme::palette().on_accent.gamma_multiply(0.20)
         );
-        assert_eq!(bud.layers[OUTER].stroke, theme::palette().text);
+        assert_eq!(bud.layers[OUTER].stroke, theme::palette().on_accent);
         assert_eq!(
             params(RosePhase::Blocked).layers[OUTER].stroke,
-            theme::ERROR
+            theme::error()
         );
         assert_ne!(params(RosePhase::Blocked), bud);
 
@@ -648,7 +661,7 @@ mod tests {
                 0.95,
                 18.0,
                 theme::palette().accent_light.gamma_multiply(0.95),
-                theme::palette().text.gamma_multiply(0.55),
+                theme::palette().on_accent.gamma_multiply(0.55),
             ),
         ] {
             near(bloom.layers[index].k, k);

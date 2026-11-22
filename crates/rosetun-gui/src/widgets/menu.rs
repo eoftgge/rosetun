@@ -43,7 +43,7 @@ pub(crate) fn menu_item_with_country(
             ui.painter().rect_filled(
                 rect,
                 radius,
-                theme::ERROR.gamma_multiply(theme::alpha::TINT),
+                theme::error().gamma_multiply(theme::alpha::TINT),
             );
         } else if item.selected {
             ui.painter().rect_filled(rect, radius, selected_fill);
@@ -52,9 +52,9 @@ pub(crate) fn menu_item_with_country(
                 .rect_filled(rect, radius, theme::palette().border);
         }
         let color = if !enabled {
-            theme::DISABLED
+            theme::disabled()
         } else if item.danger {
-            theme::ERROR
+            theme::error()
         } else {
             ui.visuals()
                 .override_text_color
@@ -69,7 +69,7 @@ pub(crate) fn menu_item_with_country(
                 if enabled {
                     theme::palette().text
                 } else {
-                    theme::DISABLED
+                    theme::disabled()
                 },
             );
             right -= CHECK_SPACE;
@@ -89,7 +89,7 @@ pub(crate) fn menu_item_with_country(
                 if enabled {
                     theme::palette().accent_light
                 } else {
-                    theme::DISABLED
+                    theme::disabled()
                 },
             );
             right -= width + 10.0;
@@ -214,7 +214,7 @@ pub(crate) fn menu_submenu(ui: &mut egui::Ui, label: &str, content: impl FnOnce(
                 .override_text_color
                 .unwrap_or(theme::palette().text)
         } else {
-            theme::DISABLED
+            theme::disabled()
         };
         let right = rect.right() - ITEM_SIDE_PADDING;
         icons::paint(
@@ -224,7 +224,7 @@ pub(crate) fn menu_submenu(ui: &mut egui::Ui, label: &str, content: impl FnOnce(
             if enabled {
                 theme::palette().text_muted
             } else {
-                theme::DISABLED
+                theme::disabled()
             },
         );
         let left = rect.left() + ui.spacing().button_padding.x.max(ITEM_SIDE_PADDING);

@@ -363,7 +363,7 @@ fn settings_nav_item(
             egui::Align2::RIGHT_CENTER,
             crate::constants::ERROR_MARK,
             egui::TextStyle::Body.resolve(ui.style()),
-            theme::ERROR,
+            theme::error(),
         );
     }
     if update {

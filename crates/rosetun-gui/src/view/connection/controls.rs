@@ -209,7 +209,7 @@ fn rules_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>, heigh
         if missing > 0 {
             ui.horizontal(|ui| {
                 ui.colored_label(
-                    theme::ERROR,
+                    theme::error(),
                     tr!("list-missing-summary", n = missing.to_string()),
                 );
                 if widgets::link(ui, &tr!("rules"), true).clicked() {

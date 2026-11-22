@@ -96,17 +96,21 @@ pub enum AccentPreset {
     Lilac,
     Teal,
     Amber,
+    Black,
+    White,
 }
 
 impl AccentPreset {
     /// In the order the settings show them.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 8] = [
         Self::Rose,
         Self::Graphite,
         Self::Cocoa,
         Self::Lilac,
         Self::Teal,
         Self::Amber,
+        Self::Black,
+        Self::White,
     ];
 }
 

@@ -169,6 +169,8 @@ fn accent_label(accent: AccentPreset) -> String {
         AccentPreset::Lilac => tr!("accent-lilac"),
         AccentPreset::Teal => tr!("accent-teal"),
         AccentPreset::Amber => tr!("accent-amber"),
+        AccentPreset::Black => tr!("accent-black"),
+        AccentPreset::White => tr!("accent-white"),
     }
 }
 
@@ -819,7 +821,7 @@ fn dns_form(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
         });
     if let Err(error) = &parsed {
         ui.colored_label(
-            theme::ERROR,
+            theme::error(),
             errors::dns_input(crate::i18n::language(), error),
         );
     }
@@ -938,7 +940,7 @@ fn fragment_form(ui: &mut egui::Ui, state: &mut State, editable: bool, actions: 
         });
     if let Err(error) = &parsed {
         ui.colored_label(
-            theme::ERROR,
+            theme::error(),
             errors::fragment_input(crate::i18n::language(), error),
         );
     }
@@ -1015,7 +1017,7 @@ fn xray(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                         egui::Label::new(
                             RichText::new(crate::i18n::xray_off_warning(count))
                                 .small()
-                                .color(theme::ERROR),
+                                .color(theme::error()),
                         )
                         .wrap(),
                     );
@@ -1067,7 +1069,7 @@ fn service(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     let color = if running {
         theme::connected()
     } else {
-        theme::ERROR
+        theme::error()
     };
     let mut detail = tr!("service-detail").to_owned();
     if running && let Some(version) = &state.helper_version {
@@ -1139,7 +1141,7 @@ fn service(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                 };
                 let (icon, color) = match result.status {
                     CheckStatus::Ok => (Icon::Check, theme::connected()),
-                    CheckStatus::Warning => (Icon::Warning, theme::WARNING),
+                    CheckStatus::Warning => (Icon::Warning, theme::warning()),
                     CheckStatus::Unavailable | CheckStatus::Skipped => {
                         (Icon::Unknown, theme::palette().text_dim)
                     }
@@ -1239,7 +1241,7 @@ fn service(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                 let allowed = state.can_reset_settings();
                 let response = widgets::outline_button(
                     ui,
-                    RichText::new(tr!("reset-to-default")).color(theme::ERROR),
+                    RichText::new(tr!("reset-to-default")).color(theme::error()),
                     allowed,
                 );
                 if response.clicked() {
@@ -1256,7 +1258,7 @@ fn service(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
 /// One line under a failed lookup that points to the DNS check.
 pub(crate) fn dns_hint(ui: &mut egui::Ui, actions: &mut Vec<Action>) {
     ui.horizontal_wrapped(|ui| {
-        ui.colored_label(theme::WARNING, tr!("system-check-dns-hint"));
+        ui.colored_label(theme::warning(), tr!("system-check-dns-hint"));
         if ui.link(tr!("system-check-more")).clicked() {
             actions.push(Action::ShowSystemChecks);
         }

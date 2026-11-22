@@ -220,7 +220,7 @@ fn target_picker(
             let color = if enabled {
                 current.color
             } else {
-                theme::DISABLED
+                theme::disabled()
             };
             ui.painter().circle_filled(
                 egui::pos2(rect.left() + TARGET_DOT_X, rect.center().y),
@@ -256,7 +256,7 @@ fn target_picker(
                 if enabled {
                     theme::palette().text_dim
                 } else {
-                    theme::DISABLED
+                    theme::disabled()
                 },
             );
         }
@@ -1213,20 +1213,22 @@ fn rule_value(
         };
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = theme::space::XS;
-            icons::icon_badge_colored(ui, Icon::Warning, 16.0, theme::ERROR)
+            icons::icon_badge_colored(ui, Icon::Warning, 16.0, theme::error())
                 .on_hover_text(tr!("rule-category-hint"));
-            ui.add(egui::Label::new(RichText::new(warning).small().color(theme::ERROR)).truncate())
-                .on_hover_text(tr!("rule-category-hint"));
+            ui.add(
+                egui::Label::new(RichText::new(warning).small().color(theme::error())).truncate(),
+            )
+            .on_hover_text(tr!("rule-category-hint"));
         });
     } else if exit_missing {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = theme::space::XS;
-            icons::icon_badge_colored(ui, Icon::Warning, 16.0, theme::ERROR);
+            icons::icon_badge_colored(ui, Icon::Warning, 16.0, theme::error());
             ui.add(
                 egui::Label::new(
                     RichText::new(tr!("exit-node-missing"))
                         .small()
-                        .color(theme::ERROR),
+                        .color(theme::error()),
                 )
                 .truncate(),
             );

@@ -344,10 +344,10 @@ fn header_status_for(
     connection: Option<&ConnectionState>,
 ) -> (String, Color32) {
     if !helper_available {
-        return (tr!("helper-unavailable").to_owned(), theme::ERROR);
+        return (tr!("helper-unavailable").to_owned(), theme::error());
     }
     let (label, color) = match connection {
-        None | Some(ConnectionState::Disconnected) => (tr!("disconnected"), theme::DISCONNECTED),
+        None | Some(ConnectionState::Disconnected) => (tr!("disconnected"), theme::disconnected()),
         Some(ConnectionState::Connecting) => {
             (tr!("connecting-action"), theme::palette().accent_bright)
         }
@@ -355,8 +355,8 @@ fn header_status_for(
             (tr!("reconnecting-action"), theme::palette().accent_bright)
         }
         Some(ConnectionState::Connected) => (tr!("connected"), theme::connected()),
-        Some(ConnectionState::Failed { .. }) => (tr!("failed"), theme::ERROR),
-        Some(ConnectionState::FailedProtected { .. }) => (tr!("traffic-blocked"), theme::ERROR),
+        Some(ConnectionState::Failed { .. }) => (tr!("failed"), theme::error()),
+        Some(ConnectionState::FailedProtected { .. }) => (tr!("traffic-blocked"), theme::error()),
     };
     (label.to_owned(), color)
 }
@@ -461,12 +461,12 @@ fn window_button(ui: &mut egui::Ui, kind: WindowButton, reduce_motion: bool) -> 
                 Color32::TRANSPARENT.lerp_to_gamma(background, hover),
             );
         }
-        let color = if matches!(kind, WindowButton::Close) {
-            theme::palette().text_muted
+        let (rest, hovered) = if matches!(kind, WindowButton::Close) {
+            (theme::palette().text_muted, theme::palette().on_accent)
         } else {
-            theme::palette().text_dim
-        }
-        .lerp_to_gamma(theme::palette().text, hover);
+            (theme::palette().text_dim, theme::palette().text)
+        };
+        let color = rest.lerp_to_gamma(hovered, hover);
         let glyph = Rect::from_center_size(rect.center(), egui::vec2(14.0, 14.0));
         let point = |x: f32, y: f32| glyph.min + egui::vec2(x, y);
         let stroke = Stroke::new(theme::stroke::GLYPH, color);
@@ -655,7 +655,7 @@ mod tests {
         let states = [
             (
                 ConnectionState::Disconnected,
-                (tr!("disconnected"), theme::DISCONNECTED),
+                (tr!("disconnected"), theme::disconnected()),
             ),
             (
                 ConnectionState::Connecting,
@@ -674,14 +674,14 @@ mod tests {
                     failure_kind: None,
                     reason: String::new(),
                 },
-                (tr!("failed"), theme::ERROR),
+                (tr!("failed"), theme::error()),
             ),
             (
                 ConnectionState::FailedProtected {
                     failure_kind: None,
                     reason: String::new(),
                 },
-                (tr!("traffic-blocked"), theme::ERROR),
+                (tr!("traffic-blocked"), theme::error()),
             ),
         ];
         for (state, expected) in &states {
@@ -691,7 +691,7 @@ mod tests {
             );
             assert_eq!(
                 header_status_for(false, Some(state)),
-                (tr!("helper-unavailable").to_owned(), theme::ERROR),
+                (tr!("helper-unavailable").to_owned(), theme::error()),
             );
         }
         assert_eq!(
@@ -700,11 +700,11 @@ mod tests {
         );
         assert_eq!(
             header_status_for(true, None),
-            (tr!("disconnected").to_owned(), theme::DISCONNECTED)
+            (tr!("disconnected").to_owned(), theme::disconnected())
         );
         assert_eq!(
             header_status_for(false, None),
-            (tr!("helper-unavailable").to_owned(), theme::ERROR),
+            (tr!("helper-unavailable").to_owned(), theme::error()),
         );
     }
 

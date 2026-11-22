@@ -71,7 +71,7 @@ pub(super) fn paint_toggle(
         egui::pos2(rect.left() + 11.0 + 16.0 * progress, rect.center().y),
         8.0,
         faded(if on {
-            theme::palette().text
+            theme::palette().on_accent
         } else {
             theme::palette().text_muted
         }),

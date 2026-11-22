@@ -100,7 +100,7 @@ fn subscription_body(
     qr_status(ui, dialog, actions);
     if dialog.link_error {
         ui.add(
-            egui::Label::new(RichText::new(tr!("error-open-link-invalid")).color(theme::ERROR))
+            egui::Label::new(RichText::new(tr!("error-open-link-invalid")).color(theme::error()))
                 .wrap(),
         );
     }
@@ -109,7 +109,8 @@ fn subscription_body(
         match &normalized {
             Ok(url) if uses_plain_http(url) => {
                 ui.add(
-                    egui::Label::new(RichText::new(tr!("http-warning")).color(theme::ERROR)).wrap(),
+                    egui::Label::new(RichText::new(tr!("http-warning")).color(theme::error()))
+                        .wrap(),
                 );
             }
             Err(error) => {
@@ -120,7 +121,7 @@ fn subscription_body(
                             dialog,
                             &errors::subscription_url(crate::i18n::language(), error),
                         ))
-                        .color(theme::ERROR),
+                        .color(theme::error()),
                     )
                     .wrap(),
                 );
@@ -168,7 +169,7 @@ fn subscription_body(
                     dialog,
                     &errors::add_subscription(crate::i18n::language(), error),
                 ))
-                .color(theme::ERROR),
+                .color(theme::error()),
             )
             .wrap(),
         );
@@ -294,7 +295,7 @@ fn proxy_body(ui: &mut egui::Ui, dialog: &mut AddDialog, actions: &mut Vec<Actio
         ui.add(
             egui::Label::new(
                 RichText::new(errors::add_subscription(crate::i18n::language(), error))
-                    .color(theme::ERROR),
+                    .color(theme::error()),
             )
             .wrap(),
         );
@@ -534,7 +535,7 @@ fn qr_status(ui: &mut egui::Ui, dialog: &AddDialog, actions: &mut Vec<Action>) {
     if let Some(error) = dialog.qr.error {
         ui.add(
             egui::Label::new(
-                RichText::new(errors::qr(crate::i18n::language(), error)).color(theme::ERROR),
+                RichText::new(errors::qr(crate::i18n::language(), error)).color(theme::error()),
             )
             .wrap(),
         );

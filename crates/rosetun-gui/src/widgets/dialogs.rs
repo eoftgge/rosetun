@@ -310,7 +310,7 @@ pub(crate) fn name_modal(ctx: &egui::Context, options: NameModal<'_>) -> ModalCh
             choice = ModalChoice::Confirm;
         }
         if let Some(error) = options.error.as_ref() {
-            ui.colored_label(theme::ERROR, error);
+            ui.colored_label(theme::error(), error);
         }
         let footer = DialogFooter::new(options.submit, tr!("cancel"))
             .primary_enabled(valid)
