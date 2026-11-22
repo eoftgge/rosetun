@@ -1477,12 +1477,17 @@ fn add_rules_to_group_merges_deduplicates_and_preserves_target_group() {
     // Reject self-only, non-group target, and unknown rule IDs without writing.
     assert_no_write!(
         store,
-        add_rules_to_group(&store, &set.id, &[target.id.clone()], &target.id),
+        add_rules_to_group(
+            &store,
+            &set.id,
+            std::slice::from_ref(&target.id),
+            &target.id
+        ),
         RuleSetError::InvalidGroup
     );
     assert_no_write!(
         store,
-        add_rules_to_group(&store, &set.id, &[target.id.clone()], &first.id),
+        add_rules_to_group(&store, &set.id, std::slice::from_ref(&target.id), &first.id),
         RuleSetError::InvalidGroup
     );
     assert_no_write!(
