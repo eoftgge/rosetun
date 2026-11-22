@@ -1,3 +1,5 @@
+use std::io::Read;
+use std::sync::LazyLock;
 use std::sync::atomic::{AtomicU8, Ordering};
 
 use eframe::egui::{
@@ -15,25 +17,37 @@ pub(crate) mod country_badge {
     pub(crate) const SERVER_SIZE: [f32; 2] = [36.0, 26.0];
 }
 
-fn fonts() -> egui::FontDefinitions {
+fn inflate_font(compressed: &[u8]) -> std::sync::Arc<egui::FontData> {
+    let mut decoder = flate2::read::ZlibDecoder::new(compressed);
+    let mut bytes = Vec::new();
+    decoder
+        .read_to_end(&mut bytes)
+        .expect("bundled font should inflate cleanly");
+    std::sync::Arc::new(egui::FontData::from_owned(bytes))
+}
+
+static FONTS: LazyLock<egui::FontDefinitions> = LazyLock::new(|| {
     let mut fonts = egui::FontDefinitions::default();
     fonts.font_data.insert(
         "manrope-regular".to_owned(),
-        std::sync::Arc::new(egui::FontData::from_static(include_bytes!(
-            "../assets/fonts/Manrope-Regular.ttf"
+        inflate_font(include_bytes!(concat!(
+            env!("OUT_DIR"),
+            "/Manrope-Regular.ttf.zlib"
         ))),
     );
     fonts.font_data.insert(
         "manrope-semibold".to_owned(),
-        std::sync::Arc::new(egui::FontData::from_static(include_bytes!(
-            "../assets/fonts/Manrope-SemiBold.ttf"
+        inflate_font(include_bytes!(concat!(
+            env!("OUT_DIR"),
+            "/Manrope-SemiBold.ttf.zlib"
         ))),
     );
     fonts.font_data.insert(
         EMOJI_FONT.to_owned(),
         // The pinned OFL font keeps emoji independent of the installed system fonts.
-        std::sync::Arc::new(egui::FontData::from_static(include_bytes!(
-            "../assets/fonts/Noto-COLRv1.ttf"
+        inflate_font(include_bytes!(concat!(
+            env!("OUT_DIR"),
+            "/Noto-COLRv1.ttf.zlib"
         ))),
     );
     let proportional = fonts
@@ -54,8 +68,9 @@ fn fonts() -> egui::FontDefinitions {
         .insert(FontFamily::Name(UI_SEMIBOLD.into()), semibold);
     fonts.font_data.insert(
         "cormorant-garamond-semibold".to_owned(),
-        std::sync::Arc::new(egui::FontData::from_static(include_bytes!(
-            "../assets/fonts/CormorantGaramond-SemiBold.ttf"
+        inflate_font(include_bytes!(concat!(
+            env!("OUT_DIR"),
+            "/CormorantGaramond-SemiBold.ttf.zlib"
         ))),
     );
     fonts.families.insert(
@@ -63,6 +78,10 @@ fn fonts() -> egui::FontDefinitions {
         vec!["cormorant-garamond-semibold".to_owned()],
     );
     fonts
+});
+
+fn fonts() -> egui::FontDefinitions {
+    FONTS.clone()
 }
 
 /// The colours an accent preset changes: the accent family and the surfaces

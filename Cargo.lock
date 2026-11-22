@@ -2977,6 +2977,7 @@ dependencies = [
  "arboard",
  "eframe",
  "epaint",
+ "flate2",
  "fluent-bundle",
  "fluent-syntax",
  "image",
