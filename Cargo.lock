@@ -2870,7 +2870,7 @@ dependencies = [
 
 [[package]]
 name = "rosetun"
-version = "0.7.0-beta.1"
+version = "0.7.0-beta.2"
 dependencies = [
  "rosetun-config",
  "rosetun-core",
@@ -2885,7 +2885,7 @@ dependencies = [
 
 [[package]]
 name = "rosetun-adapters"
-version = "0.7.0-beta.1"
+version = "0.7.0-beta.2"
 dependencies = [
  "windows-sys 0.61.2",
  "zbus",
@@ -2893,7 +2893,7 @@ dependencies = [
 
 [[package]]
 name = "rosetun-config"
-version = "0.7.0-beta.1"
+version = "0.7.0-beta.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -2904,7 +2904,7 @@ dependencies = [
 
 [[package]]
 name = "rosetun-core"
-version = "0.7.0-beta.1"
+version = "0.7.0-beta.2"
 dependencies = [
  "base64",
  "idna",
@@ -2931,14 +2931,14 @@ dependencies = [
 
 [[package]]
 name = "rosetun-dns"
-version = "0.7.0-beta.1"
+version = "0.7.0-beta.2"
 dependencies = [
  "windows-sys 0.61.2",
 ]
 
 [[package]]
 name = "rosetun-engine"
-version = "0.7.0-beta.1"
+version = "0.7.0-beta.2"
 dependencies = [
  "getrandom 0.4.3",
  "libc",
@@ -2948,7 +2948,7 @@ dependencies = [
 
 [[package]]
 name = "rosetun-engine-singbox"
-version = "0.7.0-beta.1"
+version = "0.7.0-beta.2"
 dependencies = [
  "rosetun-config",
  "rosetun-engine",
@@ -2961,7 +2961,7 @@ dependencies = [
 
 [[package]]
 name = "rosetun-engine-xray"
-version = "0.7.0-beta.1"
+version = "0.7.0-beta.2"
 dependencies = [
  "getrandom 0.4.3",
  "rosetun-config",
@@ -2972,7 +2972,7 @@ dependencies = [
 
 [[package]]
 name = "rosetun-gui"
-version = "0.7.0-beta.1"
+version = "0.7.0-beta.2"
 dependencies = [
  "arboard",
  "eframe",
@@ -3006,7 +3006,7 @@ dependencies = [
 
 [[package]]
 name = "rosetun-helper-privileged"
-version = "0.7.0-beta.1"
+version = "0.7.0-beta.2"
 dependencies = [
  "base64",
  "libc",
@@ -3029,7 +3029,7 @@ dependencies = [
 
 [[package]]
 name = "rosetun-hwid"
-version = "0.7.0-beta.1"
+version = "0.7.0-beta.2"
 dependencies = [
  "rosetun-config",
  "sha2",
@@ -3039,7 +3039,7 @@ dependencies = [
 
 [[package]]
 name = "rosetun-ipc"
-version = "0.7.0-beta.1"
+version = "0.7.0-beta.2"
 dependencies = [
  "libc",
  "rosetun-config",
@@ -3052,7 +3052,7 @@ dependencies = [
 
 [[package]]
 name = "rosetun-processes"
-version = "0.7.0-beta.1"
+version = "0.7.0-beta.2"
 dependencies = [
  "thiserror 2.0.21",
  "windows-sys 0.61.2",
@@ -3060,7 +3060,7 @@ dependencies = [
 
 [[package]]
 name = "rosetun-routing"
-version = "0.7.0-beta.1"
+version = "0.7.0-beta.2"
 dependencies = [
  "libc",
  "rosetun-config",
@@ -3071,7 +3071,7 @@ dependencies = [
 
 [[package]]
 name = "rosetun-shell"
-version = "0.7.0-beta.1"
+version = "0.7.0-beta.2"
 dependencies = [
  "libc",
  "memmap2",
@@ -3084,7 +3084,7 @@ dependencies = [
 
 [[package]]
 name = "rosetun-subscription"
-version = "0.7.0-beta.1"
+version = "0.7.0-beta.2"
 dependencies = [
  "base64",
  "percent-encoding",
