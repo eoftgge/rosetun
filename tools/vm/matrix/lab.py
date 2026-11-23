@@ -58,6 +58,9 @@ MEDIA_RESOURCES = {'windows-media': MEDIA_IMAGE, 'windows-media-record': 'window
                    'windows-list-report': 'windows-list/report.json', 'windows-list-status': 'windows-list/status.json',
                    'windows-list-runner': 'windows-list/runner.json',
                    'windows-list-assessment': 'windows-list/assessment.json'}
+FAILURE_RESOURCES = {f'windows-failure-{key}': f'windows-failure/{leaf}' for key, leaf in (
+    ('plan', 'plan.json'), ('events', 'events.jsonl'), ('report', 'report.json'), ('status', 'status.json'),
+    ('runner', 'runner.json'), ('assessment', 'assessment.json'))}
 # The IDE bus of the machine's own SATA controller that carries the drive (q35 has six, with or without `-nodefaults`).
 MEDIA_BUS = 'ide.2'
 # The guest facade lives this long beyond the capture it waits for: setup, finish and the reads.
@@ -147,7 +150,7 @@ def plan_lab(config, *, tunnel=False, evidence_disk=False, dns=False, control=No
 class LabPair:
     """Capability for two particular runs under their original lease."""
     def __init__(self, lease, runs, lab_id, *, pair_factory=socket.socketpair, tunnel=False, evidence_disk=False,
-                 dns=False, route_flows=False, journal_full=False, poller=False, media=False):
+                 dns=False, route_flows=False, journal_full=False, poller=False, media=False, failure=False):
         lease._check_live()
         if set(runs) != set(MACS) or lease._active or runs['test'] is runs['lab']:
             raise ValueError('invalid-lab-members')
@@ -162,6 +165,7 @@ class LabPair:
         self.journal_full = journal_full is True
         self.poller = poller is True
         self.media = media is True
+        self.failure = failure is True
         self.sockets = {}
         self.used = set()
         self.closed = False
@@ -194,7 +198,8 @@ class LabPair:
         if self.role(run) != 'lab':
             files = DNS_CLIENT_LOG if getattr(self, 'dns', False) else {}
             files = {**files, **JOURNAL_ARTIFACTS} if getattr(self, 'journal_full', False) else files
-            return {**files, **MEDIA_RESOURCES} if getattr(self, 'media', False) else files
+            files = {**files, **MEDIA_RESOURCES} if getattr(self, 'media', False) else files
+            return {**files, **FAILURE_RESOURCES} if getattr(self, 'failure', False) else files
         files = {**ARTIFACTS, **TUNNEL_ARTIFACTS} if self.tunnel else ARTIFACTS
         # Unbound calls with a stand-in object exist in older tests, which know no disk or DNS.
         if getattr(self, 'dns', False):

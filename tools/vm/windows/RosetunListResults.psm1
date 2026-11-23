@@ -77,10 +77,10 @@ function New-RosetunListResults {
         [Parameter(Mandatory)][string]$Directory,
         [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$VmId,
         [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$BootId,
-        [ValidateSet('windows-list', 'windows-proxy')][string]$Suite = 'windows-list',
+        [ValidateSet('windows-list', 'windows-proxy', 'windows-failure')][string]$Suite = 'windows-list',
         [object[]]$Catalog, $Parameters
     )
-    $rows = if ($Suite -eq 'windows-proxy') { $Catalog } else {
+    $rows = if ($Suite -ne 'windows-list') { $Catalog } else {
         @(Get-Content -LiteralPath (Join-Path $PSScriptRoot 'list-checks.json') -Encoding UTF8 -Raw | ConvertFrom-Json | ForEach-Object { $_ })
     }
     $prefix = 'rosetun.' + $Suite + '.'

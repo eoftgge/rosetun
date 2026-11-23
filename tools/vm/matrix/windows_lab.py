@@ -233,6 +233,9 @@ class GuestAsks:
                 break
             except LifecycleError as error:
                 if not repeat or attempt == 2 or str(error) not in REPEATABLE_TIMEOUTS:
+                    if not vm.evidence_failed:
+                        windows_reboot.record(vm, operation + '-failed', attempt=attempt, reason=str(error),
+                                              stderr=vm.qga.stderr_text or '')
                     raise
                 windows_reboot.record(vm, operation + '-timeout', attempt=attempt, seconds=self.seconds,
                                       reason=str(error))

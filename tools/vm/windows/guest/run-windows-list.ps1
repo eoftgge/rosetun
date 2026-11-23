@@ -137,6 +137,7 @@ $runError = $false
 $baselineOpen = $false
 $sessionOpen = $false
 $helperStarted = $false
+$filesVerified = $false
 
 try {
     Set-RosetunRunnerState -State running -Step 'prepare'
@@ -152,6 +153,7 @@ try {
             throw "delivered file differs from the plan: $($file.name)"
         }
     }
+    $filesVerified = $true
     Add-RosetunRunnerNote -Name 'files-verified' -Value @($plan.files).Count
 
     # Defender scans a new executable on its first launch, which outlasts the helper's own version check.
@@ -274,7 +276,7 @@ finally {
                 Start-Sleep -Milliseconds 500
             }
         }
-        $parts['disconnected'] = if ($disconnected) { 'PASS' } else { 'ERROR' }
+        $parts['disconnected'] = if ($disconnected) { 'PASS' } elseif ($helperStarted) { 'ERROR' } else { 'UNVERIFIED' }
         if ($sessionOpen -and $disconnected) {
             [void](Send-RosetunMarker -Plan $plan -Label 'session' -Word 'close')
             $sessionOpen = $false
@@ -298,7 +300,8 @@ finally {
         }
         $parts['helper'] = if (-not (Get-Process -Name 'rosetun-helper-privileged' -ErrorAction SilentlyContinue)) { 'PASS' } else { 'ERROR' }
 
-        if (Test-Path -LiteralPath $helperPath) {
+        # A failed delivery can leave an unchecked executable in the directory being cleaned.
+        if ($filesVerified -and (Test-Path -LiteralPath $helperPath)) {
             $reset = Invoke-RosetunNative -FilePath $helperPath -Arguments @('--reset-firewall') -TimeoutSeconds 60
             $parts['firewall'] = if ($reset.ExitCode -eq 0) { 'PASS' } else { 'ERROR' }
         }

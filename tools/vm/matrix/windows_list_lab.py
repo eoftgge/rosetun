@@ -90,10 +90,14 @@ class Adapters(windows_lab.Adapters):
         self.xorriso = subprocess.run
 
 
+def runtime(config):
+    return config['failure'] if config.get('suite') == 'windows-failure' else config['list']
+
+
 def capture_seconds(config):
     """How long the lab machine captures: the boot, three scripts of the guest before the runner, the settling, the
     runner, two short ones after it, and the room around."""
-    block = config['list']
+    block = runtime(config)
     return (block['agent_wait_seconds'] + 3 * block['script_seconds'] + 2 * 60 + block['settle_seconds']
             + block['runner_seconds'] + CAPTURE_SLACK)
 
@@ -158,20 +162,24 @@ def memory_needed(config):
 def sources(config):
     """The files of the disc that come from outside the plan: (name, path, pin or None). The binaries are pinned by the
     configuration; the runner's files are those of the checkout, hashed and carried in the plan."""
-    block = config['list']
+    block = runtime(config)
     guest_directory = WINDOWS_DIRECTORY / 'guest'
-    return [('rosetun.exe', block['rosetun'], block['rosetun_sha256']),
+    binaries = [('rosetun.exe', block['rosetun'], block['rosetun_sha256']),
             ('rosetun-helper-privileged.exe', block['helper'], block['helper_sha256']),
-            ('sing-box.exe', block['sing_box'], block['sing_box_sha256']),
-            ('lib.ps1', guest_directory / 'lib.ps1', None),
+            ('sing-box.exe', block['sing_box'], block['sing_box_sha256'])]
+    if config['suite'] == 'windows-failure':
+        return binaries + [(name, guest_directory / name, None) for name in
+                           ('lib.ps1', 'run-windows-failure.ps1', 'failure-probes.ps1')] + [
+                               ('RosetunListResults.psm1', WINDOWS_DIRECTORY / 'RosetunListResults.psm1', None)]
+    return binaries + [('lib.ps1', guest_directory / 'lib.ps1', None),
             ('run-windows-list.ps1', guest_directory / 'run-windows-list.ps1', None),
             ('RosetunListResults.psm1', WINDOWS_DIRECTORY / 'RosetunListResults.psm1', None),
             ('list-checks.json', WINDOWS_DIRECTORY / 'list-checks.json', None)]
 
 
-def preflight(config, *, dry_run=False):
+def preflight(config, *, dry_run=False, profile=None):
     """What the run is about to do, after the checks that need no QEMU: the descriptors, the files, the configuration."""
-    validate(config)
+    (profile.validate if profile else validate)(config)
     image = load_windows_descriptor(config['image_descriptor'])
     qemu = WindowsQemuConfig(**config['qemu'])
     qemu.validate()
@@ -203,14 +211,14 @@ def preflight(config, *, dry_run=False):
             files.append(dict(name=name, sha256=digest, size=size))
         from .linux_l2 import source_identity
         controller_source = source_identity(controller)
-    block = config['list']
-    return dict(schema='rosetun.matrix.execution-plan.v1', dry_run=dry_run, suite=SUITE, configuration=config,
+    block = runtime(config)
+    return dict(schema='rosetun.matrix.execution-plan.v1', dry_run=dry_run, suite=config['suite'], configuration=config,
                 image=dict(identifier=image.identifier, sha256=image.sha256, size_bytes=image.size_bytes,
                            profile=image.profile, qualified=False, activated=False),
                 controller_checkout=str(controller), controller_source=controller_source,
                 host_platform=sys.platform, backend_qualified=False, files=files,
                 memory=dict(needed_mib=memory_needed(config), available_mib=None if dry_run else host_memory_mib()),
-                capture_seconds=capture_seconds(config), checks=list(CHECKS),
+                capture_seconds=capture_seconds(config), checks=list(profile.checks if profile else CHECKS),
                 actions=['lease', 'create the Windows run and the lab run with their identities',
                          'overlays of both machines, the copies of the firmware variables and of the TPM state',
                          'the disc of the run: the Rosetun binaries, the pinned sing-box, the runner and its plan',
@@ -262,7 +270,7 @@ def check_cleanup(after_state, runner_cleanup):
     return dict(runner=runner_cleanup, left=after_state['left'] if after_state else None)
 
 
-def judge(config, lab_id, seen, plain, port=None):
+def judge(config, lab_id, seen, plain, port=None, *, labels=LABELS):
     """The windows of the capture, the listing of the baseline and the lab's account of its fixtures.
 
     Nothing here is a verdict of the run: the verdicts are in `judgement`, which reads these and the guest's own."""
@@ -272,7 +280,7 @@ def judge(config, lab_id, seen, plain, port=None):
     node_port = config['lab']['tunnel']['node_port']
     seen['health'] = health
     seen['verdict'] = classify_windows(capture, lab_id, None, health=health, ready=True, tunnel_port=node_port,
-                                       probes=[plain], limit=EVIDENCE_PCAP_LIMIT, required_labels=LABELS, flows=True)
+                                       probes=[plain], limit=EVIDENCE_PCAP_LIMIT, required_labels=labels, flows=True)
     seen['noise'] = windows_noise.report(capture, lab_id, label=BASELINE, probes=[plain], limit=EVIDENCE_PCAP_LIMIT)
     seen['fixtures'] = fixtures_block(health, parsed)
     seen['dns_rows'] = parsed['dns.json']
@@ -301,7 +309,7 @@ def direct_seen(window, expected):
                for protocol, kind, server in expected)
 
 
-def judgement(result, measured, seen, config):
+def judgement(result, measured, seen, config, *, checks_required=CHECKS, labels=LABELS, compare=None):
     """What the run found (exit 1) and what it cannot vouch for (exit 2), as two lists of codes.
 
     Findings are what the guest or the wire says went wrong: a check of the eleven that failed, a leak or a missing
@@ -325,7 +333,7 @@ def judgement(result, measured, seen, config):
     if checks is None:
         unverified.append('checks-not-read')
     else:
-        for check_id in CHECKS:
+        for check_id in checks_required:
             row = checks.get(check_id)
             if row is None or row['result'] == 'SKIP':
                 unverified.append('check-not-run:' + check_id)
@@ -339,7 +347,7 @@ def judgement(result, measured, seen, config):
     verdict, windows = seen['verdict'], measured['windows']
     if verdict is None:
         unverified.append('windows-not-judged')
-    for label in LABELS:
+    for label in labels:
         row = windows.get(label)
         if row is None:
             unverified.append('window-missing:' + label)
@@ -355,7 +363,7 @@ def judgement(result, measured, seen, config):
             findings.append('window-mismatch:' + SESSION)
     markers = measured['markers']
     if markers is None or not all(markers[label][word]['sent'] and markers[label][word]['acknowledged']
-                                  for label in LABELS for word in ('open', 'close')):
+                                  for label in labels for word in ('open', 'close')):
         unverified.append('markers-not-acknowledged')
     fixtures = seen.get('fixtures')
     if fixtures is None:
@@ -368,7 +376,7 @@ def judgement(result, measured, seen, config):
     unverified += ['evidence-disk-not-verified'] * (not seen['evidence_disk'].get('verified'))
     # The guest's own account against the wire: a pass the lab did not see is a pass nobody can vouch for.
     if checks is not None and windows:
-        findings += cross_check(checks, windows, seen, measured)
+        findings += (compare or cross_check)(checks, windows, seen, measured)
     cleanup = measured['cleanup']
     if cleanup is None:
         unverified.append('cleanup-not-read')
@@ -420,11 +428,14 @@ def checks_of(status, events):
     return rows if seen == recorded else None
 
 
-def execution_section(result, config, seen, measured, vms, plan, image, started, clock):
+def execution_section(result, config, seen, measured, vms, plan, image, started, clock, *, profile=None):
     """What the run found, in one place: the network, the runner and its checks, the windows, the lab and the cleanup."""
-    seen['windows'] = windows = window_verdicts(seen['verdict'])
+    seen['windows'] = windows = (profile.window_verdicts if profile else window_verdicts)(seen['verdict'])
     measured['windows'] = windows
-    findings, unverified = judgement(result, measured, seen, config)
+    checks_required = profile.checks if profile else CHECKS
+    expectations = profile.expectations if profile else {BASELINE: BASELINE_EXPECTED, SESSION: SESSION_EXPECTED}
+    findings, unverified = judgement(result, measured, seen, config, checks_required=checks_required,
+                                     labels=tuple(expectations), compare=profile.cross_check if profile else None)
     listing = seen.get('noise')
     runner = measured['runner']
     return dict(
@@ -441,7 +452,7 @@ def execution_section(result, config, seen, measured, vms, plan, image, started,
                                                 polls=measured['polls']),
         checks=None if measured['checks'] is None else [
             dict(id=check_id, result=(measured['checks'].get(check_id) or {}).get('result', 'MISSING'),
-                 reason=(measured['checks'].get(check_id) or {}).get('reason')) for check_id in CHECKS],
+                 reason=(measured['checks'].get(check_id) or {}).get('reason')) for check_id in checks_required],
         assessment=None if measured['assessment'] is None else dict(
             execution=measured['assessment']['execution'], validation=measured['assessment']['validation'],
             cleanup=measured['assessment']['cleanup'], acceptance=measured['assessment']['acceptance']),
@@ -451,7 +462,7 @@ def execution_section(result, config, seen, measured, vms, plan, image, started,
         windows={label: dict(leak=row['leak'], reason=row['leak_reason'], reasons=row['observer_reasons'],
                              categories=row['categories'], verdict=row.get('verdict'),
                              flows=row.get('direct', {}).get('flows'),
-                             expected=expected_flows({BASELINE: BASELINE_EXPECTED, SESSION: SESSION_EXPECTED}[label]),
+                             expected=expected_flows(expectations[label]),
                              listed=label == BASELINE, clock=row.get('clock'))
                  for label, row in windows.items()},
         fixtures=seen.get('fixtures'),
@@ -477,12 +488,19 @@ def run_windows_list(config, *, adapters=None, clock=time.monotonic, sleep=time.
     """One run of the suite; see the module's own text."""
     if config.get('suite') != SUITE:
         raise ValueError('configuration is for another suite')
+    return run_guest_suite(config, adapters=adapters, clock=clock, sleep=sleep, progress=progress)
+
+
+def run_guest_suite(config, *, profile=None, adapters=None, clock=time.monotonic, sleep=time.sleep, progress=None):
+    protocol = profile if profile else guest
+    suite = config['suite']
+    labels = profile.labels if profile else LABELS
     progress = progress or (lambda stage: print(stage, file=sys.stderr, flush=True))
-    result = dict(schema=SUMMARY_SCHEMA, suite=SUITE, mode='lab', identities={}, configuration=config, stages=[],
+    result = dict(schema=profile.SUMMARY_SCHEMA if profile else SUMMARY_SCHEMA, suite=suite, mode='lab', identities={}, configuration=config, stages=[],
                   evidence=[], lab=None, execution=None, completion=dict.fromkeys(ROLES, False), completed=False,
                   manual_recovery_required=False, errors=[], attached=False, qualified=False, diagnostic=True,
                   security_invariants='UNVERIFIED', release_gate=False, exit_code=2)
-    block, lab_config = config['list'], config['lab']
+    block, lab_config = runtime(config), config['lab']
     lease = pair = image = plan = lab_id = None
     runs, vms, closed, states = {}, {}, set(), {}
     stage, interrupted, started = 'preflight', False, clock()
@@ -527,7 +545,7 @@ def run_windows_list(config, *, adapters=None, clock=time.monotonic, sleep=time.
             vms[role].close(hard=hard)
 
     try:
-        result['preflight'] = step('preflight', lambda: preflight(config))
+        result['preflight'] = step('preflight', lambda: profile.preflight(config) if profile else preflight(config))
         adapters = adapters or Adapters()
         measured['host_memory_mib'] = host_memory_mib()
         for binary in (config['qemu']['executable'], config['qemu']['image_executable']):
@@ -542,7 +560,7 @@ def run_windows_list(config, *, adapters=None, clock=time.monotonic, sleep=time.
         exchanges = https_exchanges(lab_id, lambda: secrets.token_hex(12))
         plain = seen['plain'] = dns_checks(lab_id, lambda: secrets.token_hex(12))['plain']
         windows = [(window_marker(lab_id, index, 'open', label), window_marker(lab_id, index, 'close', label))
-                   for index, label in enumerate(LABELS)]
+                   for index, label in enumerate(labels)]
         identities = dict(host_run_id=lab_id + '-test', lab_run_id=lab_id + '-lab', lab_id=lab_id)
         result['identities'] = identities
         lease = StandLease(config['state_directory'], config['stand_id'])
@@ -568,13 +586,13 @@ def run_windows_list(config, *, adapters=None, clock=time.monotonic, sleep=time.
         plan = step('prepare-test', lambda: adapters.prepare(runs['test'], image, WindowsQemuConfig(**config['qemu']),
                                                              executor=executor))
         pair = step('evidence-disk', lambda: adapters.pair(lease, runs, lab_id, tunnel=True, evidence_disk=True,
-                                                           dns=True, media=True))
+                                                           dns=True, media=True, **({'failure': True} if profile else {})))
         if clock() >= deadline:
             raise TimeoutError('preparation deadline')
 
         def make_disc():
             binaries = digest_rows(config)
-            document = guest.plan_document(lab_id, windows, plain, lab_config['tunnel']['node_port'], binaries)
+            document = protocol.plan_document(lab_id, windows, plain, lab_config['tunnel']['node_port'], binaries)
             record = windows_media.build(runs['test'], block['xorriso'], media_sources(config),
                                          {guest.PLAN_FILE: guest.plan_bytes(document)}, runner=adapters.xorriso)
             named = windows_media.files_of(record)
@@ -651,9 +669,9 @@ def run_windows_list(config, *, adapters=None, clock=time.monotonic, sleep=time.
         step('settle', settle)
 
         def start_runner():
-            text = asks.run('guest-start', guest.start_script(disc['files']), repeat=False)
+            text = asks.run('guest-start', protocol.start_script(disc['files']), repeat=False)
             try:
-                value = guest.started(text)
+                value = protocol.started(text)
             except guest.RunnerAnswerError as error:
                 raise LifecycleError(str(error), vm) from None
             measured['start'] = dict(medium=value['medium'])
@@ -663,14 +681,14 @@ def run_windows_list(config, *, adapters=None, clock=time.monotonic, sleep=time.
 
         def read_status():
             """The runner's status file, or None while there is none; the session is replaced before it is spent."""
-            program, arguments = guest.read_arguments()
+            program, arguments = protocol.read_arguments()
             if not vm.qga.valid or vm.qga.calls >= CALLS_BEFORE_NEW_SESSION:
                 asks.ready('guest-poll')
             answered = vm.guest_program(program, arguments, seconds=30)
             if answered.exitcode != 0:
                 return None
             try:
-                return guest.runner_status(answered.stdout.decode('utf-8'), lab_id)
+                return protocol.runner_status(answered.stdout.decode('utf-8'), lab_id)
             except (UnicodeError, guest.RunnerAnswerError) as error:
                 raise LifecycleError(str(error), vm) from None
 
@@ -679,7 +697,7 @@ def run_windows_list(config, *, adapters=None, clock=time.monotonic, sleep=time.
             while True:
                 waited = clock() - began
                 if waited >= block['runner_seconds']:
-                    raise ValueError('windows-list-runner-timeout')
+                    raise ValueError(suite + '-runner-timeout')
                 alone(min(block['poll_seconds'], block['runner_seconds'] - waited))
                 try:
                     status = read_status()
@@ -704,19 +722,19 @@ def run_windows_list(config, *, adapters=None, clock=time.monotonic, sleep=time.
         step('runner', run_runner)
 
         def collect():
-            text = asks.run('guest-collect', guest.collect_script(), repeat=True)
+            text = asks.run('guest-collect', protocol.collect_script(), repeat=True)
             try:
                 value = guest.collected(text)
             except guest.RunnerAnswerError as error:
                 raise LifecycleError(str(error), vm) from None
             run = runs['test']
-            named = {'windows-list/plan.json': value['plan'], 'windows-list/events.jsonl': value['events'],
-                     'windows-list/report.json': value['report'], 'windows-list/status.json': value['status']}
+            named = {suite + '/' + leaf: value[key] for key, leaf in (
+                ('plan', 'plan.json'), ('events', 'events.jsonl'), ('report', 'report.json'), ('status', 'status.json'))}
             for name, body in named.items():
                 if body is not None:
                     write_file(run, name, body.encode('utf-8'), mode='overwrite', readback=True,
                                forbid=run._identity[2])
-            write_file(run, 'windows-list/runner.json', (json.dumps(measured['runner'], sort_keys=True) + '\n').encode(),
+            write_file(run, suite + '/runner.json', (json.dumps(measured['runner'], sort_keys=True) + '\n').encode(),
                        mode='overwrite', readback=True, forbid=run._identity[2])
             measured['helper_tail'] = None if value['helper_tail'] is None else value['helper_tail'][-1500:]
             measured['identity'] = dict(
@@ -735,19 +753,19 @@ def run_windows_list(config, *, adapters=None, clock=time.monotonic, sleep=time.
                 events = None
         measured['checks'] = checks_of(status, events)
         measured['cleanup_runner'] = (status['cleanup'] or {}).get('result')
-        measured['markers'] = guest.markers_of(status, windows)
+        measured['markers'] = protocol.markers_of(status, windows)
 
         def assess():
             run = runs['test']
             if collected['plan'] is None or collected['report'] is None:
                 return None
-            report_path = resource_path(run.directory, 'windows-list/report.json')
-            plan_path = resource_path(run.directory, 'windows-list/plan.json')
+            report_path = resource_path(run.directory, suite + '/report.json')
+            plan_path = resource_path(run.directory, suite + '/plan.json')
             try:
-                assessment = windows_list.assess_files(report_path, plan_path)
+                assessment = (profile if profile else windows_list).assess_files(report_path, plan_path)
             except (OSError, ValueError):
                 return None
-            write_file(run, 'windows-list/assessment.json', (json.dumps(assessment, sort_keys=True) + '\n').encode(),
+            write_file(run, suite + '/assessment.json', (json.dumps(assessment, sort_keys=True) + '\n').encode(),
                        mode='overwrite', readback=True, forbid=run._identity[2])
             return assessment
 
@@ -763,7 +781,7 @@ def run_windows_list(config, *, adapters=None, clock=time.monotonic, sleep=time.
                                                and recorded.get('boot_id') == vm.last_boot_id)
 
         def after():
-            text = asks.run('guest-after', guest.after_script(), repeat=False)
+            text = asks.run('guest-after', protocol.after_script(), repeat=False)
             try:
                 value = guest.after(text)
             except guest.RunnerAnswerError as error:
@@ -796,7 +814,7 @@ def run_windows_list(config, *, adapters=None, clock=time.monotonic, sleep=time.
         if not completion_verified(lab_run.directory, lab_run._read()):
             raise ValueError('lab-completion-unconfirmed')
         step('evidence-read', lambda: read_disk(lab_run, lab_id, seen))
-        step('windows', lambda: judge(config, lab_id, seen, plain))
+        step('windows', lambda: (profile.judge if profile else judge)(config, lab_id, seen, plain))
         step('image-unchanged', lambda: image.validate(runs['test'].directory))
         measured['image_unchanged'] = True
     except BaseException as error:
@@ -810,5 +828,6 @@ def run_windows_list(config, *, adapters=None, clock=time.monotonic, sleep=time.
                 vms[starting] = handle
     finally:
         windows_lab.finish(result, config, lease, pair, runs, vms, closed, seen, measured, interrupted, states, started,
-                           clock, plan=plan, image=image, lab_id=lab_id, section=execution_section, exit_of=exit_code)
+                           clock, plan=plan, image=image, lab_id=lab_id,
+                           section=profile.execution_section if profile else execution_section, exit_of=exit_code)
     return result

@@ -5651,6 +5651,107 @@ longer session is not known.
 
 Nothing in the images. The Windows binaries (build above), the configuration with their hashes, and `xorriso` on the host.
 
+## Stage 10b: the Failure core of a Windows guest in the lab, `windows-failure`
+
+Status: **offline tests, and the developer's runs on the stand written below, which qualify nothing.** Each run executes one
+selected case of the Failure core (`engine-killed`, `helper-killed`, `no-network`, `apply-rules`, `reconnect`, `temporary`
+or `dns-lock`) on a fresh disposable Windows guest against the isolated lab wire, reusing the stage 10a read-only ISO
+delivery (`rosetun.exe`, `rosetun-helper-privileged.exe`, pinned `sing-box.exe` 1.14.3, `lib.ps1`, `run-windows-failure.ps1`,
+`failure-probes.ps1`, `RosetunListResults.psm1`) and autonomous runner loop. The release gate stays false, the security
+invariants stay UNVERIFIED, the image stays `qualified: false`, and `full_matrix` is recorded as `UNVERIFIED`.
+
+### Cases, windows and calibration
+
+Each case selects its slice of `tools/vm/windows/failure-core.tsv`: the four physical baseline checks, the four connect
+checks (`connect.state-is-connected`, `connect.tunnel-carries-traffic-within-5-s-dns-included`,
+`connect.direct-egress-is-blocked`, `connect.ipv6-outside-the-tunnel-is-blocked`), and the case's own scenario group(s):
+
+- `engine-killed` (17 checks): kills `sing-box` under the kill switch, checks `FailedProtected` and blocks across IPv4,
+  IPv6 and DNS, then disconnects and checks recovery.
+- `helper-killed` (12 checks): kills `rosetun-helper-privileged` and its task hard, checks that `sing-box` and the TUN
+  adapter disappear, the kernel closes the dynamic WFP session, and direct IPv4/IPv6/DNS return.
+- `no-network` (15 checks): disables the physical adapter before `connect`, verifies `Failed` / `NoNetwork` within 10 s
+  with no WFP filters, TUN adapter or engine, re-enables the adapter and verifies connect and block.
+- `apply-rules` (14 checks): applies a rule set over a connected session without changing the node and checks tunnel
+  traffic and direct IPv4/IPv6 blocks.
+- `reconnect` (16 checks): reconnects with a background direct-egress probe running and verifies zero leaks across the
+  restart, unchanged node, WFP persistence and tunnel traffic.
+- `temporary` (18 checks): applies a temporary direct rule for `listed.lab.test` with a `block` default, verifies the
+  listed domain goes direct while `unlisted.lab.test` and direct IP egress stay blocked, then disconnects and reconnects
+  with the base request to confirm zero temporary rules remain.
+- `dns-lock` (12 checks): connects with `kill_switch = false` (DNS lock only) and verifies tunnel traffic, direct DNS
+  block and IPv6 block outside the tunnel.
+
+The runner marks **three** windows on the wire (`baseline`, `session`, `recovery`):
+
+- `baseline` (listed, not judged for background noise) and `recovery`: both ends of the run calibrate all four physical
+  paths on the wire (IPv4 HTTPS to `203.0.113.2:443`, IPv6 HTTP to `[2001:db8:6a:2::2]:8080`, UDP DNS and TCP DNS for the
+  run's control name). If any of the four is missing from the wire or resolver log, the run is marked `unverified`
+  (`control-flow-missing:<phase>` or `control-dns-missing:<phase>:<transport>`): a refused probe in `session` is not
+  accepted unless both ends prove the physical path works.
+- `session`: strictly judged with no tolerance by name. Every case except `temporary` expects **zero** direct flows
+  (`verdict: EXPECTED` with `leak: NONE`); `temporary` expects **one** direct TCP flow to `203.0.113.2:443` (the temporary
+  direct rule). If `connect.tunnel-carries-traffic-within-5-s-dns-included` passes without tunnel frames on the wire,
+  cross-checking raises `disagree:connect.tunnel-carries-traffic-within-5-s-dns-included`.
+
+### Post-cleanup WFP verification
+
+After the runner finishes and reports its own cleanup, the controller runs `_AFTER` in the guest. In addition to checking
+tasks, processes, tunnel adapter, binaries and directories, `_AFTER` captures `netsh.exe wfp show state` into temporary
+files under `$env:TEMP` (redirecting stdout/stderr and removing the temporary files in `finally`), fails closed if the
+snapshot is unavailable or incomplete (`<wfpstate>`, `</wfpstate>`, `<providerKey>`, `<subLayerKey>`), and checks that
+neither the Rosetun WFP provider (`51a47ec7-6459-4b84-8854-075e1576e7f9`) nor sublayer
+(`0c035ef5-4c5c-4583-ad9c-179791360f5e`) remains. Any leftover (`wfp_provider`, `wfp_sublayer`, or other resource) is a
+finding (`cleanup-left:...`).
+
+### Command, configuration, summary and omissions
+
+    python3 -B -m tools.vm.matrix run windows-failure --config CONFIG [--dry-run]
+
+The configuration is `execution-windows-failure.example.toml`, schema `rosetun.matrix.execution.windows.v4`, with
+`[failure]` (`case` plus the timing, `xorriso` and binary hash fields of `[list]`). `report` refuses `windows-failure`
+without wire evidence. Summary schema: `rosetun.matrix.windows-failure-summary.v1`.
+
+Omitted from `windows_failure.selected()` (catalog `failure-core.tsv` stays intact, and the plan's `limitations` state
+this explicitly):
+- `engine-killed.server-check-works-under-protection` and `dns-lock.server-check-works-with-the-dns-lock` (alongside
+  `connect.server-check-works-while-connected`): `rosetun probe` tests hardcoded public HTTPS endpoints unreachable on the
+  isolated lab wire.
+- `reconnect.state-is-connected-after-engine-kill` and `reconnect.no-leak-while-reconnecting`: post-crash reconnect phase
+  kept separate from the in-session `reconnect` group.
+
+### Offline tests
+
+`tests/test_windows_failure.py`: catalog slices and check IDs for all 7 cases against `run-windows-failure.ps1`, job plan
+and IPv6/request fields, start script and `SCRIPT_LIMIT_MAX`, schema `windows.v4` validation and `execution-windows-failure.example.toml`,
+CLI `plan` and `report` refusal without wire evidence, full synthetic runs across `engine-killed`, `temporary` and
+`dns-lock`, missing calibration flow/DNS (`exit_code == 2`), unexpected/missing direct flows in `session` (`exit_code == 1`),
+and leftover `wfp_provider` / `wfp_sublayer` findings (`exit_code == 1`). `tools/vm/windows/tests/Test-RosetunScriptArguments.ps1`
+parses `run-windows-failure.ps1` and `failure-probes.ps1`.
+
+### Checked on the stand (2026-11-23, developer runs, not a qualification)
+
+Debian 13 on WSL2 (7.9 GB), QEMU 10.0.13, `windows-11-26h2-pro-v1`, `lab-v5m`, dedicated state directory `state-10b-dev`,
+Windows release build of the checkout and pinned `sing-box` 1.14.3 (working tree dirty with this stage's changes). Three
+cases run back-to-back with the final code:
+
+| case | run | exit | duration | checks | `session` window | cleanup |
+| --- | --- | --- | --- | --- | --- | --- |
+| `engine-killed` | `197b6966...` | 0 | 213.6 s | 17 PASS | `EXPECTED` (`leak: NONE`, tunnel 80, unexpected 0) | runner `PASS`, `left: []` (WFP clean) |
+| `temporary` | `f0616df2...` | 0 | 213.7 s | 18 PASS | `EXPECTED` (tunnel 209, 1 expected direct flow, unexpected 17) | runner `PASS`, `left: []` (WFP clean) |
+| `helper-killed` | `caf0e8cd...` | 0 | 213.2 s | 12 PASS | `EXPECTED` (`leak: NONE`, tunnel 78, unexpected 0) | runner `PASS`, `left: []` (WFP clean) |
+
+All three runs: `accepted: true`, `findings: []`, `unverified: []`, `image_unchanged: true`, all four lab fixtures
+answered (`dns`, `doh`, `https` direct and `via_node`, `node`), all six markers sent once and acknowledged, runner
+finished in ~41 s (2 polls, `sing-box-first-launch-seconds: 2`), guest shut down via ACPI.
+
+### Not done here, UNRUN
+
+- Nothing qualifies: `qualified: false`, diagnostic runs only, no release gate or Hyper-V parity table is touched.
+- Four of the seven cases (`no-network`, `apply-rules`, `reconnect`, `dns-lock`) have offline tests and runner code but
+  have not yet been executed on the live QEMU stand.
+- Remaining Windows suites (Lockdown, Proxy, LAN, Upgrade): stages 10c to 10e.
+
 ## Stage 12: release evidence pack
 
 `evidence` copies the records of chosen finished runs into one new directory and

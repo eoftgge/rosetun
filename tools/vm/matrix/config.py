@@ -6,6 +6,8 @@ import tomllib
 from .catalog import LINUX_ROOT, SUITES, digest, read_catalog, validate_snapshot
 
 PLAN_SCHEMA = "rosetun.matrix.plan.v1"
+FAILURE_SUITE = "windows-failure"
+FAILURE_CATALOG = LINUX_ROOT.parent / "windows" / "failure-core.tsv"
 # The guest resets a suite plans: any other reset of its run is an error.
 PLANNED_REBOOTS = {"linux-l4": 2, "linux-reboot-smoke": 1, "windows-reboot-smoke": 1}
 # The suites whose job runs in phases of the job timeout each, one more than its reboots (see `job_span`).
@@ -69,9 +71,9 @@ def make_plan(suite, profile_name, profile):
     if suite == "windows-list":
         from .windows_list import make_plan as windows_plan
         return windows_plan(profile_name, profile)
-    if suite not in SUITES:
+    if suite not in SUITES and suite != FAILURE_SUITE:
         raise ValueError("unknown suite")
-    rows = read_catalog(LINUX_ROOT / SUITES[suite])
+    rows = read_catalog(FAILURE_CATALOG if suite == FAILURE_SUITE else LINUX_ROOT / SUITES[suite])
     return {
         "schema": PLAN_SCHEMA,
         "suite": suite,
@@ -93,7 +95,7 @@ def validate_plan(plan):
     fields = {"schema", "suite", "profile", "policy", "planned_reboots", "catalog", "catalog_digest"}
     if not isinstance(plan, dict) or set(plan) != fields or plan["schema"] != PLAN_SCHEMA:
         raise ValueError("unsupported plan schema or fields")
-    if not isinstance(plan["suite"], str) or plan["suite"] not in SUITES:
+    if not isinstance(plan["suite"], str) or (plan["suite"] not in SUITES and plan["suite"] != FAILURE_SUITE):
         raise ValueError("unknown plan suite")
     if not isinstance(plan["profile"], str) or not plan["profile"].strip():
         raise ValueError("invalid plan profile")

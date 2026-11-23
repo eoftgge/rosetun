@@ -21,8 +21,8 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from tools.vm.matrix import (lab, lab_protocol as wire, lifecycle, windows_guest, windows_lab, windows_lab_guest as guest,
-                             windows_noise, windows_run, windows_smoke)
+from tools.vm.matrix import (lab, lab_protocol as wire, lifecycle, qemu, windows_guest, windows_lab,
+                             windows_lab_guest as guest, windows_noise, windows_run, windows_smoke)
 from tools.vm.matrix.lifecycle import LifecycleError
 from tools.vm.matrix.resources import _process_status, read_manifest
 from tools.vm.matrix.tests import fake_controller, test_qemu
@@ -585,6 +585,10 @@ class Machines:
 
         def start(run, lab=None):
             role = lab.role(run)
+            manifest = run._read()
+            expected = {r['id']: r['path'] for r in qemu.execution_resources(manifest)}
+            expected.update(lab.resources(run))
+            machines.test.assertEqual(expected, {r['id']: r.get('path') for r in manifest['resources']})
             machines.note('start-' + role)
             vm = Vm(role, run)
             machines.vms[role] = vm
@@ -615,6 +619,9 @@ class Machines:
             return lab.LabPair(*args, pair_factory=lambda *a: (Endpoint(), Endpoint()), **kwargs)
 
         def prepare(run, image, config, executor=None):
+            manifest = run._read()
+            machines.test.assertEqual('prepared', manifest['state'])
+            machines.test.assertEqual(qemu.execution_resources(manifest), manifest['resources'])
             machines.note('prepare-' + ('lab' if run.directory.name.endswith('-lab') else 'test'))
             return dict(kvm_qualified=False)
 

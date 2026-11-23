@@ -70,13 +70,13 @@ def config_document(node_port):
     return config
 
 
-def plan_document(lab_id, windows, dns_check, node_port, files):
+def plan_document(lab_id, windows, dns_check, node_port, files, *, labels=LABELS):
     """The plan of one run. `windows` are the two (opening, closing) markers in the order of `LABELS`; `files` are the
     rows of the medium (`windows_media.stage`): the binaries are listed with their hashes, which the runner checks."""
-    if len(windows) != len(LABELS):
+    if len(windows) != len(labels):
         raise ValueError('invalid-windows')
     markers = dict(port=windows[0][0]['port'])
-    for label, (opening, closing) in zip(LABELS, windows):
+    for label, (opening, closing) in zip(labels, windows):
         markers[label] = dict(open=marker_query(opening).decode('ascii'), close=marker_query(closing).decode('ascii'))
     rows = {row['name']: row for row in files}
     if any(name not in rows for name in BINARIES):
@@ -112,7 +112,7 @@ foreach ($name in $expected.PSObject.Properties.Name) {
     Copy-Item -LiteralPath (Join-Path $medium $name) -Destination $target -Force
     if ((Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expected.$name) { throw 'medium-file-differs' }
 }
-$arguments = '-NoProfile -ExecutionPolicy Bypass -File "' + (Join-Path $root 'run-windows-list.ps1') + '" -Root "' + $root + '" -Medium ' + [string]$found[0].DriveLetter
+$arguments = '-NoProfile -ExecutionPolicy Bypass -File "' + (Join-Path $root '%(entry)s') + '" -Root "' + $root + '" -Medium ' + [string]$found[0].DriveLetter
 $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $arguments -WorkingDirectory $root
 $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
 $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
@@ -121,15 +121,15 @@ Start-ScheduledTask -TaskName '%(task)s'
 ConvertTo-Json -Compress -InputObject @{ medium = $medium; files = @($expected.PSObject.Properties.Name).Count; task = '%(task)s' }'''
 
 
-def start_script(rows):
+def start_script(rows, *, scripts=SCRIPTS, root=ROOT, task=RUNNER_TASK, entry='run-windows-list.ps1'):
     """The script that starts the runner: the plan and the runner's own files, by name and hash, as the medium holds."""
     from .windows_media import files_of
     named = files_of(dict(files=rows))
-    wanted = {name: named[name]['sha256'] for name in (PLAN_FILE, *SCRIPTS)}
+    wanted = {name: named[name]['sha256'] for name in (PLAN_FILE, *scripts)}
     from .windows_media import LABEL
     script = '\n'.join(line.strip() for line in (_START % dict(
-        root=ROOT, files=_quoted(json.dumps(wanted, sort_keys=True, separators=(',', ':'))), label=LABEL,
-        task=RUNNER_TASK)).splitlines() if line.strip())
+        root=_quoted(root), files=_quoted(json.dumps(wanted, sort_keys=True, separators=(',', ':'))), label=LABEL,
+        task=_quoted(task), entry=_quoted(entry))).splitlines() if line.strip())
     return script
 
 
@@ -145,11 +145,11 @@ def _object(text, names, limit=ANSWER_LIMIT):
     return value
 
 
-def started(text):
+def started(text, *, scripts=SCRIPTS, task=RUNNER_TASK):
     """The answer of the start script: the drive the disc was found on, and that the task was made."""
     value = _object(text, ('medium', 'files', 'task'))
     if (type(value['medium']) is not str or not re.fullmatch(r'[A-Z]:\\', value['medium'])
-            or value['files'] != len((PLAN_FILE, *SCRIPTS)) or value['task'] != RUNNER_TASK):
+            or value['files'] != len((PLAN_FILE, *scripts)) or value['task'] != task):
         raise RunnerAnswerError('invalid-guest-start')
     return value
 
@@ -160,7 +160,7 @@ def _words(value, limit=170):
     return value
 
 
-def runner_status(text, lab_id):
+def runner_status(text, lab_id, *, labels=LABELS):
     """The runner's status file, checked in shape: states, checks, markers, notes and the cleanup it reports."""
     value = _object(text, ('schema', 'run', 'state', 'step', 'sequence', 'started_utc', 'updated_utc', 'checks',
                            'markers', 'notes', 'cleanup', 'error'))
@@ -182,7 +182,7 @@ def runner_status(text, lab_id):
             _words(row[key])
     for row in value['markers']:
         if (type(row) is not dict or set(row) != {'label', 'word', 'marker', 'ack', 'error', 'utc'}
-                or row['label'] not in LABELS or row['word'] not in ('open', 'close')
+                or row['label'] not in labels or row['word'] not in ('open', 'close')
                 or any(row[key] is not None and type(row[key]) is not str for key in ('ack', 'error'))
                 or type(row['marker']) is not str or len(row['marker']) > 128
                 or any(row[key] is not None and len(row[key]) > 160 for key in ('ack', 'error'))):
@@ -208,16 +208,16 @@ def runner_status(text, lab_id):
     return value
 
 
-def read_arguments():
+def read_arguments(path=STATUS_PATH):
     """The program that reads the status file: `cmd /c type`, which starts in a moment, where a PowerShell does not."""
-    return CMD, ['/c', 'type', STATUS_PATH]
+    return CMD, ['/c', 'type', path]
 
 
-def markers_of(status, windows):
+def markers_of(status, windows, *, labels=LABELS):
     """What the runner says of the markers, against the ones the plan names: for each window label, whether its two
     markers were sent and acknowledged exactly once with the lab's own text. Anything else is not acknowledged."""
     result = {}
-    for label, (opening, closing) in zip(LABELS, windows):
+    for label, (opening, closing) in zip(labels, windows):
         row = {}
         for word, marker in (('open', opening), ('close', closing)):
             wanted = marker_query(marker).decode('ascii')
@@ -250,8 +250,8 @@ ConvertTo-Json -Compress -InputObject @{
 }'''
 
 
-def collect_script():
-    return '\n'.join(line.strip() for line in (_COLLECT % dict(root=ROOT)).splitlines() if line.strip())
+def collect_script(root=ROOT):
+    return '\n'.join(line.strip() for line in (_COLLECT % dict(root=_quoted(root))).splitlines() if line.strip())
 
 
 def collected(text):
@@ -270,7 +270,21 @@ def collected(text):
 # the controller made to start the runner, which it removes with the runner's directory once its files are read.
 _AFTER = r'''$root = '%(root)s'
 Unregister-ScheduledTask -TaskName '%(task)s' -Confirm:$false -ErrorAction SilentlyContinue
+$tag = 'rosetun-wfp-' + $PID
+$snapshot = Join-Path $env:TEMP ($tag + '.xml')
+$netshOut = Join-Path $env:TEMP ($tag + '.out')
+$netshErr = Join-Path $env:TEMP ($tag + '.err')
+try {
+    $proc = Start-Process -FilePath "$env:SystemRoot\System32\netsh.exe" -ArgumentList @('wfp', 'show', 'state', "file=$snapshot") -NoNewWindow -Wait -PassThru -RedirectStandardOutput $netshOut -RedirectStandardError $netshErr
+    if ($proc.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $snapshot)) { throw 'wfp-state-unavailable' }
+    $raw = [IO.File]::ReadAllText($snapshot, [Text.Encoding]::UTF8)
+} finally {
+    Remove-Item -LiteralPath $snapshot, $netshOut, $netshErr -Force -ErrorAction SilentlyContinue
+}
+if ($raw -notmatch '<wfpstate>' -or $raw -notmatch '</wfpstate>' -or $raw -notmatch '<providerKey>' -or $raw -notmatch '<subLayerKey>') { throw 'wfp-state-incomplete' }
 $state = @{
+    wfp_provider = [bool]($raw -match '<providerKey>\s*\{?51a47ec7-6459-4b84-8854-075e1576e7f9\}?\s*</providerKey>')
+    wfp_sublayer = [bool]($raw -match '<subLayerKey>\s*\{?0c035ef5-4c5c-4583-ad9c-179791360f5e\}?\s*</subLayerKey>')
     runner_task = ($null -ne (Get-ScheduledTask -TaskName '%(task)s' -ErrorAction SilentlyContinue))
     helper_task = ($null -ne (Get-ScheduledTask -TaskName 'RosetunHelper' -ErrorAction SilentlyContinue))
     helper_process = [bool](Get-Process -Name 'rosetun-helper-privileged' -ErrorAction SilentlyContinue)
@@ -283,11 +297,11 @@ Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
 $state.root_removed = (-not (Test-Path -LiteralPath $root))
 ConvertTo-Json -Compress -InputObject $state'''
 AFTER_FIELDS = ('runner_task', 'helper_task', 'helper_process', 'engine_process', 'tunnel_adapter', 'binaries',
-                'list_directory', 'root_removed')
+                'list_directory', 'wfp_provider', 'wfp_sublayer', 'root_removed')
 
 
-def after_script():
-    return '\n'.join(line.strip() for line in (_AFTER % dict(root=ROOT, task=RUNNER_TASK, alias=TUN_ALIAS)).splitlines()
+def after_script(root=ROOT, task=RUNNER_TASK):
+    return '\n'.join(line.strip() for line in (_AFTER % dict(root=_quoted(root), task=_quoted(task), alias=TUN_ALIAS)).splitlines()
                      if line.strip())
 
 

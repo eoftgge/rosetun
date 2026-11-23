@@ -180,10 +180,15 @@ class StatusTests(unittest.TestCase):
 
     def test_what_is_left_in_the_guest_is_named_and_a_clean_guest_has_nothing(self):
         clean = dict(runner_task=False, helper_task=False, helper_process=False, engine_process=False,
-                     tunnel_adapter=False, binaries=False, list_directory=False, root_removed=True)
+                     tunnel_adapter=False, binaries=False, list_directory=False, wfp_provider=False, wfp_sublayer=False,
+                     root_removed=True)
         self.assertEqual(dict(left=[], clean=True), {k: guest.after(json.dumps(clean))[k] for k in ('left', 'clean')})
         dirty = dict(clean, helper_process=True, tunnel_adapter=True, root_removed=False)
         self.assertEqual(['helper_process', 'tunnel_adapter', 'root'], guest.after(json.dumps(dirty))['left'])
+        for name in ('wfp_provider', 'wfp_sublayer'):
+            self.assertEqual([name], guest.after(json.dumps(dict(clean, **{name: True})))['left'])
+            with self.assertRaises(guest.RunnerAnswerError):
+                guest.after(json.dumps({key: value for key, value in clean.items() if key != name}))
         for text in (json.dumps(dict(clean, extra=1)), json.dumps(dict(clean, root_removed='yes')), '', '[]'):
             with self.assertRaises(guest.RunnerAnswerError):
                 guest.after(text)
@@ -495,7 +500,8 @@ class ListMachines(Machines):
         if 'engine_process' in script:
             self.note('guest-after')
             state = dict(runner_task=False, helper_task=False, helper_process=False, engine_process=False,
-                         tunnel_adapter=False, binaries=False, list_directory=False, root_removed=True)
+                         tunnel_adapter=False, binaries=False, list_directory=False, wfp_provider=False,
+                         wfp_sublayer=False, root_removed=True)
             state.update({name: True for name in self.left})
             return json.dumps(state)
         return super().powershell(script)
