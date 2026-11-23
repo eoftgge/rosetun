@@ -976,15 +976,16 @@ fn route_rule(rule: &Rule) -> Option<Map<String, Value>> {
     Some(value)
 }
 
-/// A name matched against the whole path: Windows ignores letter case, Linux does not.
+/// A name matched against the whole path: Windows ignores letter case, Linux and macOS do not.
 /// The GUI's look at its exit goes through the tunnel whatever the rules say. It
 /// has to name the GUI: by address alone it would override the user's rules for
 /// anyone's traffic to that address, a Block included. Linux reads other accounts'
 /// programs only for a session with rules by program, so without them there is no
 /// such rule, and the lookup goes as the rules send it.
 fn exit_trace_rule(rules: &RuleSet) -> Option<Value> {
-    (cfg!(windows) || EngineRights::for_rules(rules) == EngineRights::NetworkAndProcesses).then(
-        || {
+    (cfg!(any(windows, target_os = "macos"))
+        || EngineRights::for_rules(rules) == EngineRights::NetworkAndProcesses)
+        .then(|| {
             json!({
                 "ip_cidr": [format!("{EXIT_TRACE_IP}/32")],
                 "port": [EXIT_TRACE_PORT],
@@ -992,8 +993,7 @@ fn exit_trace_rule(rules: &RuleSet) -> Option<Value> {
                 "action": "route",
                 "outbound": TAG_PROXY,
             })
-        },
-    )
+        })
 }
 
 pub(crate) fn process_name_regex(name: &str) -> String {
@@ -1302,7 +1302,10 @@ mod tests {
     #[test]
     fn the_exit_lookup_has_a_rule_only_where_it_can_name_the_gui() {
         let mut set = RuleSet::new(RuleSetId::new("set"), "Set", RuleTarget::Proxy);
-        assert_eq!(exit_trace_rule(&set).is_some(), cfg!(windows));
+        assert_eq!(
+            exit_trace_rule(&set).is_some(),
+            cfg!(any(windows, target_os = "macos"))
+        );
 
         set.rules.push(Rule {
             id: RuleId::new("curl"),
@@ -1319,7 +1322,11 @@ mod tests {
     use super::*;
 
     /// Sniffing, DNS and, where it can name the GUI, the exit lookup.
-    const OWN_RULES: usize = if cfg!(windows) { 3 } else { 2 };
+    const OWN_RULES: usize = if cfg!(any(windows, target_os = "macos")) {
+        3
+    } else {
+        2
+    };
 
     const NO_PRIVATE: PrivateNetworks<'static> = PrivateNetworks {
         on: false,
@@ -1588,9 +1595,29 @@ mod tests {
 
         #[cfg(target_os = "macos")]
         {
-            let expected = std::str::from_utf8(expected).unwrap();
-            let adjusted = expected.replace("      \"interface_name\": \"rosetun0\",\n", "");
-            assert_eq!(std::str::from_utf8(actual).unwrap(), adjusted);
+            let mut expected: Value = serde_json::from_slice(expected).unwrap();
+            expected["inbounds"][0]
+                .as_object_mut()
+                .unwrap()
+                .remove("interface_name");
+            let rules = expected["route"]["rules"].as_array_mut().unwrap();
+            let has_exit_trace = rules
+                .iter()
+                .any(|rule| rule.get("ip_cidr") == Some(&json!([format!("{EXIT_TRACE_IP}/32")])));
+            if !has_exit_trace {
+                rules.insert(
+                    2,
+                    json!({
+                        "action": "route",
+                        "ip_cidr": [format!("{EXIT_TRACE_IP}/32")],
+                        "outbound": TAG_PROXY,
+                        "port": [EXIT_TRACE_PORT],
+                        "process_path_regex": [process_name_regex(GUI_PROCESS)],
+                    }),
+                );
+            }
+            let actual: Value = serde_json::from_slice(actual).unwrap();
+            assert_eq!(actual, expected);
         }
     }
 

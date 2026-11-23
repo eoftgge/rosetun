@@ -1748,7 +1748,7 @@ mod tests {
             "outbound": "proxy",
         });
         // Linux reads programs only for a session with rules by program.
-        if cfg!(windows) || with_rules_by_program {
+        if cfg!(any(windows, target_os = "macos")) || with_rules_by_program {
             rule["process_path_regex"] =
                 serde_json::json!([render::process_name_regex(render::GUI_PROCESS)]);
         }
@@ -1765,7 +1765,6 @@ mod tests {
             target: RuleTarget::Direct,
             exit: None,
         });
-
         for target in [RuleTarget::Proxy, RuleTarget::Direct, RuleTarget::Block] {
             rule_set.default_target = target;
             let (route, unsupported) =
@@ -1793,7 +1792,7 @@ mod tests {
     /// Linux an engine without a rule by program has no right to look, so nothing
     /// may turn the search on there.
     #[test]
-    fn process_lookup_without_process_rules_is_on_only_on_windows() {
+    fn process_lookup_without_process_rules_is_off_only_on_linux() {
         let rule_set = RuleSet {
             rules: Vec::new(),
             ..rules()
@@ -1806,7 +1805,7 @@ mod tests {
                 .expect("rules")
                 .iter()
                 .any(|rule| rule.get("process_path_regex").is_some()),
-            cfg!(windows)
+            cfg!(any(windows, target_os = "macos"))
         );
         assert!(route.get("find_process").is_none());
     }
@@ -1868,11 +1867,11 @@ mod tests {
             .expect("route rules array");
 
         // Where it can name the GUI, the exit lookup comes after the service's two.
-        let exit_lookup = usize::from(cfg!(windows));
+        let exit_lookup = usize::from(cfg!(any(windows, target_os = "macos")));
         assert_eq!(route_rules.len(), 7 + exit_lookup);
         assert_eq!(route_rules[0]["action"], "sniff");
         assert_eq!(route_rules[1]["action"], "hijack-dns");
-        if cfg!(windows) {
+        if cfg!(any(windows, target_os = "macos")) {
             assert_eq!(route_rules[2]["outbound"], "proxy");
         }
         assert_eq!(route_rules[2 + exit_lookup]["outbound"], "direct");
