@@ -355,10 +355,15 @@ pub enum RenameSubscriptionError {
     NotFound,
     #[error("subscription name must not be empty")]
     EmptyName,
+    #[error("User-Agent must contain printable ASCII characters")]
+    InvalidUserAgent,
 }
 
 /// Longest name kept, in characters: the same limit as a provider title.
 pub const SUBSCRIPTION_NAME_LIMIT: usize = 128;
+
+/// Longest custom `User-Agent` kept, in ASCII bytes.
+pub const SUBSCRIPTION_USER_AGENT_LIMIT: usize = 256;
 
 pub fn rename_subscription(
     store: &Store,
@@ -381,6 +386,46 @@ pub fn rename_subscription(
             .collect::<String>()
             .trim_end()
             .to_owned();
+        Ok(())
+    })
+}
+
+pub fn update_subscription_settings(
+    store: &Store,
+    id: &SubscriptionId,
+    name: &str,
+    user_agent: Option<&str>,
+) -> Result<(), RenameSubscriptionError> {
+    let normalized_ua = match user_agent.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(value)
+            if value.len() <= SUBSCRIPTION_USER_AGENT_LIMIT
+                && crate::is_valid_user_agent(value) =>
+        {
+            Some(value.to_owned())
+        }
+        Some(_) => return Err(RenameSubscriptionError::InvalidUserAgent),
+        None => None,
+    };
+
+    store.modify(|config| {
+        let subscription = config
+            .subscriptions
+            .iter_mut()
+            .find(|subscription| &subscription.id == id)
+            .ok_or(RenameSubscriptionError::NotFound)?;
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(RenameSubscriptionError::EmptyName);
+        }
+        subscription.name = name
+            .chars()
+            .take(SUBSCRIPTION_NAME_LIMIT)
+            .collect::<String>()
+            .trim_end()
+            .to_owned();
+        if !is_local_proxy(subscription) {
+            subscription.user_agent = normalized_ua.clone();
+        }
         Ok(())
     })
 }

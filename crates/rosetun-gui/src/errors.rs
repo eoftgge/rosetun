@@ -719,6 +719,9 @@ pub(crate) fn rename_subscription(language: Language, error: &RenameSubscription
             "error-subscription-name-empty",
             &FluentArgs::new(),
         ),
+        RenameSubscriptionError::InvalidUserAgent => {
+            tr_in(language, "error-fetch-user-agent", &FluentArgs::new())
+        }
     }
 }
 

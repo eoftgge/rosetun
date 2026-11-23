@@ -166,9 +166,14 @@ impl WorkerDispatcher {
         });
     }
 
-    pub(crate) fn rename_subscription(&self, id: SubscriptionId, name: String) {
+    pub(crate) fn rename_subscription(
+        &self,
+        id: SubscriptionId,
+        name: String,
+        user_agent: Option<String>,
+    ) {
         self.spawn_complete("rosetun-rename-subscription", move |store| {
-            let result = rename_subscription(store, &id, &name);
+            let result = update_subscription_settings(store, &id, &name, user_agent.as_deref());
             if let Err(error) = &result {
                 log_subscription_error("rename", error);
             }

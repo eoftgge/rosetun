@@ -150,6 +150,17 @@ fn subscription_body(
         dialog.error = None;
     }
     ui.add_space(theme::space::L);
+    let (ua_changed, _) = super::subscriptions::user_agent_field(
+        ui,
+        "add_subscription_user_agent",
+        &mut dialog.user_agent,
+        !dialog.busy,
+    );
+    if ua_changed {
+        dialog.error = None;
+    }
+    let user_agent_valid = dialog.user_agent_valid();
+    ui.add_space(theme::space::L);
     ui.horizontal(|ui| {
         widgets::toggle(ui, &mut dialog.send_hwid, !dialog.busy);
         ui.label(tr!("send-device-id"));
@@ -182,7 +193,7 @@ fn subscription_body(
         },
         tr!("cancel"),
     )
-    .primary_enabled(editable && normalized.is_ok())
+    .primary_enabled(editable && normalized.is_ok() && user_agent_valid)
     .busy(dialog.busy);
     submit_or_cancel(ui, footer, actions);
 }

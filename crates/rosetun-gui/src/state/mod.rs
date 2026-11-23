@@ -64,7 +64,8 @@ pub(crate) use settings::{AboutFolder, SettingsSection};
 pub(crate) use subscriptions::OpenedLink;
 use subscriptions::SubscriptionsState;
 pub(crate) use subscriptions::{
-    AddDialog, PingResult, QrSource, QrStage, UpdateOutcome, shared_auto_update_hours,
+    AddDialog, PingResult, QrSource, QrStage, UpdateOutcome, UserAgentChoice, UserAgentDraft,
+    shared_auto_update_hours,
 };
 #[cfg(test)]
 pub(crate) use subscriptions::{RemoveDialog, RenameDialog};
@@ -659,7 +660,7 @@ pub(crate) enum Job {
     },
     UpdateAll,
     Remove(SubscriptionId),
-    RenameSubscription(SubscriptionId, String),
+    RenameSubscription(SubscriptionId, String, Option<String>),
     MoveSubscription(SubscriptionId, usize),
 }
 

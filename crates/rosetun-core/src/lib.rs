@@ -35,7 +35,9 @@ pub use explain::{
     Destination, ExplainedRoute, Explanation, Reason, RuleSource, SessionLists, explain,
     explain_connection, read_session_lists,
 };
-pub use fetch::{FetchError, Timeouts, fetch};
+pub use fetch::{
+    DEFAULT_USER_AGENT, FetchError, HAPP_USER_AGENT, Timeouts, fetch, is_valid_user_agent,
+};
 pub use lists::{
     ListError, ListOperation, ListParseError, ListPayload, ListPreparationError, ListUpdateResult,
     MAX_LIST_BYTES, MissingListCategory, PayloadFormat, PreparedConnection, PreparedListPayload,
@@ -79,10 +81,11 @@ pub use subscription_url::{
 pub use subscriptions::{
     AddFromUrlError, AddOptions, AddSubscriptionError, CommitUpdateError, MoveSubscriptionError,
     PreparedSubscription, RemoveSubscriptionError, RenameSubscriptionError,
-    SUBSCRIPTION_NAME_LIMIT, SubscriptionUpdateResult, UpdateSubscriptionError,
-    add_prepared_subscription, add_subscription, commit_subscription_update, is_local_proxy,
-    move_subscription, prepare_subscription, remove_subscription, rename_subscription, save_proxy,
-    update_all, update_subscription,
+    SUBSCRIPTION_NAME_LIMIT, SUBSCRIPTION_USER_AGENT_LIMIT, SubscriptionUpdateResult,
+    UpdateSubscriptionError, add_prepared_subscription, add_subscription,
+    commit_subscription_update, is_local_proxy, move_subscription, prepare_subscription,
+    remove_subscription, rename_subscription, save_proxy, update_all, update_subscription,
+    update_subscription_settings,
 };
 #[cfg(feature = "system-checks")]
 pub use system_checks::{CheckDetail, CheckKind, CheckResult, CheckStatus, check_system};

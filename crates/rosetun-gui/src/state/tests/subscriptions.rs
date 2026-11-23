@@ -245,7 +245,7 @@ fn renaming_subscription_validates_and_tracks_the_result() {
     state.subscriptions.rename.as_mut().unwrap().name = "  New name  ".to_owned();
     assert!(matches!(
         state.act(Action::SubmitRename),
-        Some(Job::RenameSubscription(job_id, name)) if job_id == id && name == "New name"
+        Some(Job::RenameSubscription(job_id, name, None)) if job_id == id && name == "New name"
     ));
     assert!(state.operations.renaming);
     assert!(state.act(Action::SubmitRename).is_none());
@@ -269,6 +269,75 @@ fn renaming_subscription_validates_and_tracks_the_result() {
     state.reduce(WorkerEvent::RenameSubscription(Ok(())));
     assert!(state.subscriptions.rename.is_none());
     assert!(!state.operations.renaming);
+
+    // Changing only User-Agent saves even when the name is unchanged, recognizes Happ, and rejects non-ASCII custom UA.
+    state.config.subscriptions[0].user_agent = Some("OldClient/1".to_owned());
+    state.act(Action::RequestRename(id.clone()));
+    let draft = &state.subscriptions.rename.as_ref().unwrap().user_agent;
+    assert_eq!(draft.choice, crate::state::UserAgentChoice::Custom);
+    assert_eq!(draft.custom, "OldClient/1");
+
+    state
+        .subscriptions
+        .rename
+        .as_mut()
+        .unwrap()
+        .user_agent
+        .custom = "НеASCII/1".to_owned();
+    assert!(state.act(Action::SubmitRename).is_none());
+    assert_eq!(
+        state
+            .subscriptions
+            .rename
+            .as_ref()
+            .unwrap()
+            .error
+            .as_deref(),
+        Some(tr!("error-fetch-user-agent")).as_deref()
+    );
+
+    state
+        .subscriptions
+        .rename
+        .as_mut()
+        .unwrap()
+        .user_agent
+        .choice = crate::state::UserAgentChoice::Happ;
+    assert!(matches!(
+        state.act(Action::SubmitRename),
+        Some(Job::RenameSubscription(job_id, name, Some(ua)))
+            if job_id == id && name == "[NL] Provider" && ua == rosetun_core::HAPP_USER_AGENT
+    ));
+    state.reduce(WorkerEvent::RenameSubscription(Ok(())));
+    assert!(state.subscriptions.rename.is_none());
+
+    // Reopening a subscription with the Happ preset pre-selects Happ; switching to Rosetun resets to None.
+    state.config.subscriptions[0].user_agent = Some(rosetun_core::HAPP_USER_AGENT.to_owned());
+    state.act(Action::RequestRename(id.clone()));
+    assert_eq!(
+        state
+            .subscriptions
+            .rename
+            .as_ref()
+            .unwrap()
+            .user_agent
+            .choice,
+        crate::state::UserAgentChoice::Happ
+    );
+    state
+        .subscriptions
+        .rename
+        .as_mut()
+        .unwrap()
+        .user_agent
+        .choice = crate::state::UserAgentChoice::Rosetun;
+    assert!(matches!(
+        state.act(Action::SubmitRename),
+        Some(Job::RenameSubscription(job_id, name, None))
+            if job_id == id && name == "[NL] Provider"
+    ));
+    state.reduce(WorkerEvent::RenameSubscription(Ok(())));
+    assert!(state.subscriptions.rename.is_none());
 }
 
 #[test]
@@ -899,6 +968,41 @@ fn add_failure_keeps_inputs_and_success_closes_and_expands() {
             .expanded
             .contains(&SubscriptionId::new("1"))
     );
+}
+
+#[test]
+fn add_dialog_validates_and_forwards_user_agent() {
+    let mut state = State::default();
+    state.act(Action::OpenAdd);
+    let dialog = state.subscriptions.add.as_mut().unwrap();
+    dialog.url = "https://example.com/sub".into();
+    dialog.user_agent.choice = crate::state::UserAgentChoice::Custom;
+    dialog.user_agent.custom = "НеASCII/1".into();
+    assert!(state.act(Action::SubmitAdd).is_none());
+    assert!(matches!(
+        state.subscriptions.add.as_ref().unwrap().error,
+        Some(AddFromUrlError::Fetch {
+            source: rosetun_core::FetchError::InvalidUserAgent,
+            ..
+        })
+    ));
+
+    state.subscriptions.add.as_mut().unwrap().user_agent.custom = "  CustomClient/2  ".into();
+    assert!(matches!(
+        state.act(Action::SubmitAdd),
+        Some(Job::Add { options, .. }) if options.user_agent.as_deref() == Some("CustomClient/2")
+    ));
+
+    let mut state = State::default();
+    state.act(Action::OpenAdd);
+    let dialog = state.subscriptions.add.as_mut().unwrap();
+    dialog.url = "https://example.com/sub".into();
+    dialog.user_agent.choice = crate::state::UserAgentChoice::Happ;
+    assert!(matches!(
+        state.act(Action::SubmitAdd),
+        Some(Job::Add { options, .. })
+            if options.user_agent.as_deref() == Some(rosetun_core::HAPP_USER_AGENT)
+    ));
 }
 
 #[test]

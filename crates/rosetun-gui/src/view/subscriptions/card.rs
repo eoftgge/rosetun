@@ -159,7 +159,7 @@ pub(super) fn subscription_card(
                                 label: &if rosetun_core::is_local_proxy(subscription) {
                                     tr!("proxy-edit")
                                 } else {
-                                    tr!("rename")
+                                    tr!("edit")
                                 },
                                 enabled: state.config_ready
                                     && !state.operations.renaming
