@@ -5750,7 +5750,111 @@ finished in ~41 s (2 polls, `sing-box-first-launch-seconds: 2`), guest shut down
 - Nothing qualifies: `qualified: false`, diagnostic runs only, no release gate or Hyper-V parity table is touched.
 - Four of the seven cases (`no-network`, `apply-rules`, `reconnect`, `dns-lock`) have offline tests and runner code but
   have not yet been executed on the live QEMU stand.
-- Remaining Windows suites (Lockdown, Proxy, LAN, Upgrade): stages 10c to 10e.
+- Remaining Windows suites (Proxy, LAN, Upgrade): stages 10d and 10e.
+
+## Stage 10c: Windows Lockdown (`windows-lockdown`) and controller `power_cycle`
+
+`run windows-lockdown` exercises Rosetun Lockdown on the isolated two-machine wire (`lab-v5m` + `windows-11-26h2-pro-v1`),
+covering Scenarios 1–2 and 4–10 (Lockdown on while disconnected, Lockdown with an active tunnel, helper crash/restart
+under Lockdown, clean reboot with boot-time Lockdown persistence, abrupt power cuts while Lockdown is active/connected,
+`lockdown off`, `reset-firewall`, and `uninstall`). Every run stays `qualified: false` and diagnostic only.
+
+### Controller `power_cycle` capability
+
+To simulate hard power loss without leaving the run or discarding the guest's disk/UEFI/TPM state:
+
+- `lifecycle.Vm.power_cycle()` kills the running `test` QEMU process (`SIGKILL`) and terminates its paired `swtpm`,
+  records `power-cycle-N` in `run-state.json` (with a strict per-run `planned_power_cuts` budget), closes the old QMP/QGA
+  handles, and restarts `swtpm` + QEMU inside the **same run** on the same `root.qcow2` overlay, `OVMF_VARS.fd`, `tpm/`
+  directory, `vm_uuid`, and `windows-media.iso`.
+- Each restarted generation is registered in `manifest.json` as `qemu-N` / `swtpm-N` (starting at `1`), stderr continues
+  into `qemu-stderr.log` in append mode, and `lifecycle.attach()` selects the highest `qemu`/`qemu-N` and
+  `swtpm`/`swtpm-N` generation so `recover --close` works on post-`power_cycle` runs.
+- `lab._WireRelay` is framing-aware (`uint32` big-endian Ethernet frame length prefix) and reconnectable on the `test`
+  socket while keeping the `lab` socket and `capture.pcap` stream continuously open: an abrupt disconnect mid-frame on
+  the `test` side discards the partial frame without corrupting the `lab` stream, and `prepare_test_reconnect()` accepts
+  the restarted `test` VM seamlessly.
+
+### Guest suite, cases and wire windows
+
+Catalog: `tools/vm/windows/lockdown-core.tsv` (72 checks in total across Scenarios 1–2 and 4–10). Guest runner:
+`tools/vm/windows/guest/run-windows-lockdown.ps1` (64,461 bytes, below the 65,536-byte QGA script limit). Three cases
+are supported under `[lockdown]`:
+
+- `core` (`power_cut_repeats = 0`, single boot): 57 checks, 3 wire windows (`baseline`, `lockdown-core`, `recovery`).
+- `reboot` (`power_cut_repeats = 1..3`, multi-boot): 18–24 checks (`1 + 1 + 2 * repeats` boots), 3 wire windows
+  (`baseline`, `reboot-lockdown`, `recovery`).
+- `full` (`power_cut_repeats = 1..3`, multi-boot; canonical `power_cut_repeats = 3`, `power_cut_delay_seconds = 2`):
+  72 checks across 8 distinct boots (`1` initial boot + `1` clean guest reboot + `6` abrupt power cuts), 4 wire windows
+  (`baseline`, `lockdown-core`, `reboot-lockdown`, `recovery`).
+
+How the four wire windows are judged:
+
+- `baseline` and `recovery` (calibration only, `verdict: null`): verify direct IPv4 HTTPS (`203.0.113.2:443`), direct
+  IPv6 HTTP (`[2001:db8:6a:2::2]:8080`), and plain UDP + TCP DNS (`203.0.113.53:53`) work before Lockdown and after
+  Lockdown teardown/uninstall. Missing calibration flows or DNS are recorded as `unverified` (`exit_code == 2`).
+- `lockdown-core` (judged): expects **one** direct TCP flow (`203.0.113.2:443`, corresponding to
+  `on.cli-path-egress-open` while Lockdown permits only the configured Rosetun CLI/helper egress path) plus tunnel frames
+  for `connected.tunnel-carries-traffic`, and zero other unexpected traffic.
+- `reboot-lockdown` (judged): opens immediately before enabling Lockdown prior to the clean Windows reboot and closes
+  immediately after `rosetun lockdown off` on the post-reboot desktop (with a 2 s settle delay before `lockdown off` so
+  OS background probes cannot wake before the UDP close marker is sent). Expects **zero** direct flows (`leak: NONE`),
+  tunnel frames for `reboot.connect-opens-tunnel`, and grants `REBOOT_ALLOWANCES = ('ipv6-dad', 'arp-probe', 'arp-announcement')`
+  only for genuine RFC 4862 / RFC 5227 address-duplication frames emitted by Windows during reboot.
+- Multi-boot invariants: `boot_chain` must contain `1 + planned_reboots + planned_power_cuts` distinct `win-*` boot IDs,
+  and `guest_resets` / `power_cycles` must match the planned counts; any mismatch marks the run `unverified` (`exit_code == 2`).
+
+### Post-cleanup Lockdown verification
+
+After the runner finishes and reports its own cleanup, the controller runs `_AFTER` in the guest. Beyond the standard
+task/process/adapter/binary/directory and session WFP checks, `_AFTER` inspects `netsh.exe wfp show state` for the
+Lockdown WFP provider (`f12dbedd-f3c7-4a72-b0f8-20559c88b112`) and sublayer (`f829a64d-c373-4d92-9d66-e1c680f3794f`),
+verifies the `Rosetun` service, `RosetunLockdownResume` / `RosetunLockdownBootCheck` tasks, and the temporary
+`RosetunMatrixUser` standard user are absent. Any leftover raises `cleanup-left:...` (`exit_code == 1`).
+
+### Command and configuration
+
+    python3 -B -m tools.vm.matrix run windows-lockdown --config CONFIG [--dry-run]
+
+The configuration is `execution-windows-lockdown.example.toml`, schema `rosetun.matrix.execution.windows.v5`, with
+`[lockdown]` (`case`, `power_cut_repeats`, `power_cut_delay_seconds`, plus the timing, `xorriso`, and pinned binary hash
+fields). `report` refuses `windows-lockdown` without wire evidence.
+
+### Offline tests
+
+`tests/test_windows_lockdown.py`: catalog slices and check-ID parity against `run-windows-lockdown.ps1`, QGA payload and
+`status.json` size ceilings for 72 checks, schema `windows.v5` validation and `execution-windows-lockdown.example.toml`,
+CLI `plan` and `report` refusal, `run_state` / `resources` / `diagnostics` power-cut extensions, framing-aware
+`_WireRelay` survival across abrupt `test` disconnect, `lifecycle.Vm.power_cycle()` budget enforcement,
+`lifecycle.attach()` latest `qemu-N`/`swtpm-N` generation selection, and full synthetic multi-boot runs (8 boots,
+`core`, `reboot` leak detection, leftover Lockdown WFP/task/user findings, and truncated `boot_chain` `unverified`).
+`tools/vm/windows/tests/Test-RosetunScriptArguments.ps1` parses `run-windows-lockdown.ps1`.
+
+### Checked on the stand (2026-11-23 / 2026-11-24, developer runs, not a qualification)
+
+Debian 13 on WSL2, QEMU 10.0.13, `windows-11-26h2-pro-v1`, `lab-v5m`, dedicated state directory `state-10c-dev`,
+Windows release build of the checkout and pinned `sing-box` 1.14.3, canonical `settle_seconds = 60`,
+`power_cut_repeats = 3`, `power_cut_delay_seconds = 2` (working tree dirty with this stage's changes):
+
+| case | run | exit | duration | checks | boots (`boot_chain`) | judged windows | cleanup |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `core` | `b0961bce...` | 0 | 311.6 s | 57 PASS | 1 (`win-4`) | `lockdown-core: EXPECTED` (tunnel 199, 1 expected direct flow, unexpected 15) | runner `PASS`, `left: []` |
+| `full` (run 1) | `7d11bd8f...` | 0 | 623.8 s | 72 PASS | 8 (`win-4`..`win-11`, 1 reboot + 6 cuts) | `lockdown-core: EXPECTED` (tunnel 197, 1 expected direct flow, unexpected 17); `reboot-lockdown: EXPECTED` (`leak: NONE`, tunnel 86, unexpected 0, allowed `arp-probe: 3, arp-announcement: 2`) | runner `PASS`, `left: []` |
+| `full` (run 2) | `620e1b8f...` | 0 | 622.7 s | 72 PASS | 8 (`win-4`..`win-11`, 1 reboot + 6 cuts) | `lockdown-core: EXPECTED` (tunnel 211, 1 expected direct flow, unexpected 15); `reboot-lockdown: EXPECTED` (`leak: NONE`, tunnel 84, unexpected 0, allowed `arp-probe: 3, arp-announcement: 2`) | runner `PASS`, `left: []` |
+
+All three runs: `accepted: true`, `findings: []`, `unverified: []`, `image_unchanged: true`, both `-lab` and `-test`
+`completion_verified: true`, zero leftover Lockdown/session WFP providers/sublayers, tasks, services, or users. Live
+bring-up also caught and fixed: `attach()` generation lookup for post-`power_cycle` `qemu-N`/`swtpm-N` processes;
+Windows RFC 5227 IPv4 DAD frames (`arp-probe` + `arp-announcement`) during clean reboot; moving the 2 s settle sleep
+before `rosetun lockdown off` so post-reboot OS probes cannot fire before the UDP close marker; and adding a 5 s pause
+after restoring the helper at the end of Scenario 5 so OS background retries woken by TUN teardown settle before
+`reboot-lockdown` opens.
+
+### Not done here, UNRUN
+
+- Nothing qualifies: `qualified: false`, diagnostic runs only, no release gate or Hyper-V parity table is touched.
+- Scenario 3 (LAN / inbound listener), DHCP renewal, sleep/resume, and real hardware power loss are out of scope here.
+- Remaining Windows suites (Proxy, LAN, Upgrade): stages 10d and 10e.
 
 ## Stage 12: release evidence pack
 

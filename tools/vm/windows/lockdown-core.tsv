@@ -1,0 +1,73 @@
+id	required	evidence	group	detail	title
+off.no-objects	yes	guest	baseline	lockdown-core	no Lockdown WFP objects exist
+off.status-off	yes	guest	baseline	lockdown-core	status reports lockdown off
+off.direct-egress	yes	guest-and-wire	baseline	lockdown-core	direct egress works before Lockdown
+off.direct-dns	yes	guest-and-wire	baseline	lockdown-core	direct UDP and TCP DNS work before Lockdown
+off.ipv6-open	yes	guest-and-wire	baseline	lockdown-core	IPv6 to the host works before Lockdown
+off.cli-path-egress	yes	guest-and-wire	baseline	lockdown-core	curl at the CLI path works before Lockdown
+off.standard-fetch	yes	guest-and-wire	baseline	lockdown-core	standard-account sing-box fetch works plain and physical
+off.engine-copy-acl	yes	guest	baseline	lockdown-core	engine copy ACL allows only SYSTEM and Administrators
+off.standard-engine-copy-denied	yes	guest	baseline	lockdown-core	engine copy cannot be started by a standard account
+on.command-succeeds	yes	guest	on-disconnected	lockdown-core	rosetun lockdown on succeeds
+on.objects-present	yes	guest	on-disconnected	lockdown-core	Lockdown WFP objects are present without LAN
+on.status-on	yes	guest	on-disconnected	lockdown-core	status reports lockdown on
+on.cli-permits-present	yes	guest	on-disconnected	lockdown-core	CLI permits are present and retired permits are absent
+on.standard-fetch-blocked	yes	guest-and-wire	on-disconnected	lockdown-core	standard-account sing-box fetch fails plain and physical
+on.direct-egress-closed	yes	guest-and-wire	on-disconnected	lockdown-core	direct egress is blocked under Lockdown
+on.direct-dns-closed	yes	guest-and-wire	on-disconnected	lockdown-core	direct UDP and TCP DNS are blocked under Lockdown
+on.ipv6-closed	yes	guest-and-wire	on-disconnected	lockdown-core	IPv6 outside the tunnel is blocked under Lockdown
+on.loopback-open	yes	guest	on-disconnected	lockdown-core	IPv4 and IPv6 loopback stay open under Lockdown
+on.cli-path-egress-open	yes	guest-and-wire	on-disconnected	lockdown-core	program at the CLI path gets out while disconnected
+connected.connect-succeeds	yes	guest	connected	lockdown-core	connect succeeds under Lockdown
+connected.tunnel-carries-traffic	yes	guest-and-wire	connected	lockdown-core	tunnel carries traffic under Lockdown
+connected.direct-egress-closed	yes	guest-and-wire	connected	lockdown-core	direct egress is blocked while connected
+connected.direct-dns-closed	yes	guest-and-wire	connected	lockdown-core	direct UDP and TCP DNS are blocked while connected
+connected.ipv6-closed	yes	guest-and-wire	connected	lockdown-core	IPv6 outside the tunnel is blocked while connected
+connected.cli-permits-removed	yes	guest	connected	lockdown-core	CLI permits are removed for the session
+connected.cli-path-egress-closed	yes	guest-and-wire	connected	lockdown-core	program at the CLI path is blocked outside the tunnel
+connected.standard-fetch-physical-blocked	yes	guest-and-wire	connected	lockdown-core	standard-account physical sing-box fetch fails while connected
+connected.standard-engine-copy-denied	yes	guest	connected	lockdown-core	engine copy cannot be started by a standard account while connected
+disconnected.closed-and-objects-present	yes	guest-and-wire	connected	lockdown-core	after disconnect, egress stays closed, session filters gone and objects remain
+disconnected.cli-permits-and-standard-fetch	yes	guest-and-wire	connected	lockdown-core	after disconnect, CLI permits return and standard-account fetch fails
+killswitch-off.forced-closed	yes	guest-and-wire	connected	lockdown-core	connect with kill_switch=false succeeds and Lockdown forces egress closed
+killed-on.egress-and-ipv6-closed	yes	guest-and-wire	helper-killed	lockdown-core	killed helper under Lockdown keeps direct egress and IPv6 closed
+killed-on.session-gone-objects-stay	yes	guest	helper-killed	lockdown-core	killed helper drops dynamic session filters while Lockdown objects stay
+killed-on.cli-permits-absent	yes	guest	helper-killed	lockdown-core	killed helper leaves CLI permits absent until restart
+restarted-on.finds-lockdown-complete	yes	guest	helper-killed	lockdown-core	restarted helper finds Lockdown complete
+restarted-on.status-on	yes	guest	helper-killed	lockdown-core	restarted helper reports lockdown on
+restarted-on.cli-permits-restored	yes	guest	helper-killed	lockdown-core	restarted helper restores CLI permits without a session
+killed-off.off-succeeds	yes	guest	helper-killed	lockdown-core	rosetun lockdown off succeeds before fail-open check
+killed-off.fails-open	yes	guest-and-wire	helper-killed	lockdown-core	without Lockdown, killed helper fails open and direct egress works
+reboot.boot-check-before-helper	yes	guest-and-wire	reboot	lockdown-core	boot check ran before helper started and no attempt reached the target
+reboot.objects-present	yes	guest	reboot	lockdown-core	Lockdown WFP objects survive clean reboot
+reboot.egress-and-ipv6-closed	yes	guest-and-wire	reboot	lockdown-core	direct egress and IPv6 stay closed after reboot before helper starts
+reboot.helper-started-closed	yes	guest-and-wire	reboot	lockdown-core	direct egress stays closed after helper starts before connect
+reboot.connect-opens-tunnel	yes	guest-and-wire	reboot	lockdown-core	connect opens the tunnel after reboot under Lockdown
+reboot.disconnected-closed	yes	guest-and-wire	reboot	lockdown-core	direct egress stays closed after disconnect following reboot
+cut.pass-1.on-persists	yes	guest	power-cut	lockdown-core	pass 1: Lockdown objects survive abrupt power cut after on
+cut.pass-1.off-persists	yes	guest	power-cut	lockdown-core	pass 1: Lockdown removal survives abrupt power cut after off
+cut.pass-1.off-egress-open	yes	guest	power-cut	lockdown-core	pass 1: direct egress works after abrupt power cut following off
+cut.pass-2.on-persists	yes	guest	power-cut	lockdown-core	pass 2: Lockdown objects survive abrupt power cut after on
+cut.pass-2.off-persists	yes	guest	power-cut	lockdown-core	pass 2: Lockdown removal survives abrupt power cut after off
+cut.pass-2.off-egress-open	yes	guest	power-cut	lockdown-core	pass 2: direct egress works after abrupt power cut following off
+cut.pass-3.on-persists	yes	guest	power-cut	lockdown-core	pass 3: Lockdown objects survive abrupt power cut after on
+cut.pass-3.off-persists	yes	guest	power-cut	lockdown-core	pass 3: Lockdown removal survives abrupt power cut after off
+cut.pass-3.off-egress-open	yes	guest	power-cut	lockdown-core	pass 3: direct egress works after abrupt power cut following off
+off-connected.succeeds-and-no-objects	yes	guest	off	lockdown-core	lockdown off while connected succeeds and removes Lockdown objects
+off-connected.tunnel-and-killswitch-hold	yes	guest	off	lockdown-core	while connected, tunnel stays alive and request kill switch still blocks egress
+off-connected.no-in-use	yes	guest	off	lockdown-core	no FWP_E_IN_USE in helper log after lockdown off while connected
+off-unprotected.succeeds-and-releases	yes	guest	off	lockdown-core	lockdown off with kill_switch=false releases forced kill switch while tunnel stays alive
+off-disconnected.succeeds-and-no-objects	yes	guest	off	lockdown-core	lockdown off while disconnected succeeds and removes Lockdown objects
+off-disconnected.egress-and-ipv6-open	yes	guest	off	lockdown-core	after lockdown off while disconnected, direct egress and IPv6 work
+off-disconnected.idempotent-and-no-in-use	yes	guest	off	lockdown-core	second lockdown off succeeds and helper log has no FWP_E_IN_USE
+reset-running.standard-off-refused	yes	guest	reset-firewall	lockdown-core	rosetun lockdown off from standard account is refused and Lockdown stays
+reset-running.connect-and-standard-off-refused	yes	guest	reset-firewall	lockdown-core	connected through SCM service, standard account lockdown off is refused and Lockdown stays
+reset-running.reset-succeeds-and-no-objects	yes	guest	reset-firewall	lockdown-core	--reset-firewall while running succeeds and removes Lockdown objects
+reset-running.service-and-egress-open	yes	guest	reset-firewall	lockdown-core	after --reset-firewall, service runs with lockdown off and direct egress works
+reset-stopped.closed-while-stopped	yes	guest	reset-firewall	lockdown-core	with SCM service stopped under Lockdown, direct egress stays closed
+reset-stopped.cli-reset-and-no-objects	yes	guest	reset-firewall	lockdown-core	rosetun reset-firewall while service stopped succeeds and removes objects
+reset-stopped.egress-open-and-stays-stopped	yes	guest	reset-firewall	lockdown-core	after CLI reset-firewall, direct egress works and service stays stopped
+reset-stopped.service-starts-off	yes	guest	reset-firewall	lockdown-core	starting SCM service reports lockdown off
+uninstall.steps-succeed	yes	guest	uninstall	lockdown-core	--uninstall-service and --reset-firewall both succeed under Lockdown
+uninstall.no-objects	yes	guest	uninstall	lockdown-core	no Lockdown objects remain after uninstall
+uninstall.egress-and-ipv6-open	yes	guest-and-wire	uninstall	lockdown-core	direct egress and IPv6 work after uninstall

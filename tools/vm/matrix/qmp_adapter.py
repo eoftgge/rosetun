@@ -146,7 +146,8 @@ class Qmp:
     failure. Without them the budget belongs to this object, as before.
     """
 
-    def __init__(self, stream, *, client_factory=None, relay_factory=ByteRelay, spent=None, persist=None):
+    def __init__(self, stream, *, client_factory=None, relay_factory=ByteRelay, spent=None, persist=None,
+                 call_limit=128, event_limit=128):
         if client_factory is None:
             if version('qemu.qmp') != '0.0.6':
                 raise ValueError('qemu-qmp-0.0.6-required')
@@ -160,6 +161,8 @@ class Qmp:
         spent = spent or {}
         self.events = spent.get('events', 0)
         self.calls = spent.get('calls', 0)
+        self.call_limit = call_limit
+        self.event_limit = event_limit
         self.persist = persist
         # What each RESET event said, in order, as `ResetEvent`s.
         self.resets = []
@@ -173,7 +176,7 @@ class Qmp:
 
     def _event(self, event):
         self.events += 1
-        if self.events > 128 or len(bytes(event)) > 65536:
+        if self.events > self.event_limit or len(bytes(event)) > 65536:
             raise ValueError('qmp-event-limit')
         if self.persist is not None:
             self.persist('qmp_events', self.events)
@@ -237,9 +240,9 @@ class Qmp:
                 arguments is not None and not _arguments_valid(name, arguments)):
             raise ValueError('invalid-qmp-arguments')
         self.last_command_accepted = False
-        # The last of the 128 calls belongs to quit, so that an exhausted budget
+        # The last call in the budget belongs to quit, so that an exhausted budget
         # cannot push teardown onto signals alone.
-        if self.calls >= 128 or (self.calls >= 127 and name != 'quit'):
+        if self.calls >= self.call_limit or (self.calls >= self.call_limit - 1 and name != 'quit'):
             raise ValueError('qmp-command-limit')
         if self.persist is not None:
             # Nothing is sent when the record fails, so the channel stays usable.

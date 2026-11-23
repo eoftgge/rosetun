@@ -36,6 +36,7 @@ SCRIPTS = ('lib.ps1', 'run-windows-list.ps1', 'RosetunListResults.psm1', 'list-c
 PLAN_FILE = 'plan.json'
 # The states of a runner, and the two that end it.
 STATES = ('starting', 'running', 'cleaning', 'finished', 'failed')
+LOCKDOWN_STATES = STATES + ('reboot-requested', 'power-cut-requested')
 ENDED = ('finished', 'failed')
 CLEANUP_RESULTS = ('PASS', 'ERROR', 'UNVERIFIED')
 ANSWER_LIMIT = 16 * 1024
@@ -160,15 +161,16 @@ def _words(value, limit=170):
     return value
 
 
-def runner_status(text, lab_id, *, labels=LABELS):
+def runner_status(text, lab_id, *, labels=LABELS, states=STATES, max_checks=32, max_notes=32,
+                  answer_limit=ANSWER_LIMIT):
     """The runner's status file, checked in shape: states, checks, markers, notes and the cleanup it reports."""
     value = _object(text, ('schema', 'run', 'state', 'step', 'sequence', 'started_utc', 'updated_utc', 'checks',
-                           'markers', 'notes', 'cleanup', 'error'))
-    if (value['schema'] != STATUS_SCHEMA or value['run'] != lab_id or value['state'] not in STATES
+                           'markers', 'notes', 'cleanup', 'error'), limit=answer_limit)
+    if (value['schema'] != STATUS_SCHEMA or value['run'] != lab_id or value['state'] not in states
             or type(value['sequence']) is not int or not 0 < value['sequence'] < 100000
-            or type(value['checks']) is not list or len(value['checks']) > 32
+            or type(value['checks']) is not list or len(value['checks']) > max_checks
             or type(value['markers']) is not list or len(value['markers']) > 16
-            or type(value['notes']) is not list or len(value['notes']) > 32):
+            or type(value['notes']) is not list or len(value['notes']) > max_notes):
         raise RunnerAnswerError('invalid-runner-status')
     _words(value['step'], 48)
     for stamp in (value['started_utc'], value['updated_utc']):
@@ -241,22 +243,26 @@ function Read-Text([string]$path, [int]$limit, [bool]$tail) {
 }
 $results = Join-Path $root 'results'
 ConvertTo-Json -Compress -InputObject @{
-    plan = Read-Text (Join-Path $results 'plan.json') 8000 $false
-    events = Read-Text (Join-Path $results 'events.jsonl') 6000 $false
-    report = Read-Text (Join-Path $results 'report.json') 8000 $false
-    status = Read-Text (Join-Path $results 'status.json') 2000 $false
-    helper_tail = Read-Text (Join-Path $root 'logs\helper.log') 3000 $true
+    plan = Read-Text (Join-Path $results 'plan.json') %(plan)d $false
+    events = Read-Text (Join-Path $results 'events.jsonl') %(events)d $false
+    report = Read-Text (Join-Path $results 'report.json') %(report)d $false
+    status = Read-Text (Join-Path $results 'status.json') %(status)d $false
+    helper_tail = Read-Text (Join-Path $root 'logs\helper.log') %(helper_tail)d $true
     identity = @{ uuid = [string](Get-CimInstance Win32_ComputerSystemProduct).UUID }
 }'''
+COLLECT_LIMITS = dict(plan=8000, events=6000, report=8000, status=2000, helper_tail=3000)
 
 
-def collect_script(root=ROOT):
-    return '\n'.join(line.strip() for line in (_COLLECT % dict(root=_quoted(root))).splitlines() if line.strip())
+def collect_script(root=ROOT, limits=None):
+    sizes = dict(COLLECT_LIMITS)
+    if limits:
+        sizes.update(limits)
+    return '\n'.join(line.strip() for line in (_COLLECT % dict(root=_quoted(root), **sizes)).splitlines() if line.strip())
 
 
-def collected(text):
+def collected(text, *, limit=48 * 1024):
     """The files the recorder left, as text, each of which may be missing (None)."""
-    value = _object(text, ('plan', 'events', 'report', 'status', 'helper_tail', 'identity'), limit=48 * 1024)
+    value = _object(text, ('plan', 'events', 'report', 'status', 'helper_tail', 'identity'), limit=limit)
     for name in ('plan', 'events', 'report', 'status', 'helper_tail'):
         if value[name] is not None and type(value[name]) is not str:
             raise RunnerAnswerError('invalid-guest-answer')
@@ -292,25 +298,37 @@ $state = @{
     tunnel_adapter = ($null -ne (Get-NetAdapter -Name '%(alias)s' -ErrorAction SilentlyContinue))
     binaries = (Test-Path -LiteralPath (Join-Path $root 'bin'))
     list_directory = (Test-Path -LiteralPath (Join-Path $root 'list-matrix'))
-}
+%(extra)s}
 Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
 $state.root_removed = (-not (Test-Path -LiteralPath $root))
 ConvertTo-Json -Compress -InputObject $state'''
+_AFTER_LOCKDOWN_EXTRA = r'''    lockdown_wfp_provider = [bool]($raw -match '<providerKey>\s*\{?f12dbedd-f3c7-4a72-b0f8-20559c88b112\}?\s*</providerKey>')
+    lockdown_wfp_sublayer = [bool]($raw -match '<subLayerKey>\s*\{?f829a64d-c373-4d92-9d66-e1c680f3794f\}?\s*</subLayerKey>')
+    lockdown_service = ($null -ne (Get-Service -Name 'Rosetun' -ErrorAction SilentlyContinue))
+    resume_task = ($null -ne (Get-ScheduledTask -TaskName 'RosetunLockdownResume' -ErrorAction SilentlyContinue))
+    boot_check_task = ($null -ne (Get-ScheduledTask -TaskName 'RosetunLockdownBootCheck' -ErrorAction SilentlyContinue))
+    matrix_user = ($null -ne (Get-LocalUser -Name 'RosetunMatrixUser' -ErrorAction SilentlyContinue))
+'''
 AFTER_FIELDS = ('runner_task', 'helper_task', 'helper_process', 'engine_process', 'tunnel_adapter', 'binaries',
                 'list_directory', 'wfp_provider', 'wfp_sublayer', 'root_removed')
+LOCKDOWN_AFTER_FIELDS = AFTER_FIELDS[:-1] + (
+    'lockdown_wfp_provider', 'lockdown_wfp_sublayer', 'lockdown_service', 'resume_task', 'boot_check_task',
+    'matrix_user', 'root_removed')
 
 
-def after_script(root=ROOT, task=RUNNER_TASK):
-    return '\n'.join(line.strip() for line in (_AFTER % dict(root=_quoted(root), task=_quoted(task), alias=TUN_ALIAS)).splitlines()
-                     if line.strip())
+def after_script(root=ROOT, task=RUNNER_TASK, *, lockdown=False):
+    extra = _AFTER_LOCKDOWN_EXTRA if lockdown else ''
+    return '\n'.join(line.strip() for line in (_AFTER % dict(
+        root=_quoted(root), task=_quoted(task), alias=TUN_ALIAS, extra=extra)).splitlines() if line.strip())
 
 
-def after(text):
+def after(text, *, lockdown=False):
     """What is left in the guest, as the controller sees it: a leftover is True, except `root_removed`, which is the aim."""
-    value = _object(text, AFTER_FIELDS)
-    if any(type(value[name]) is not bool for name in AFTER_FIELDS):
+    fields = LOCKDOWN_AFTER_FIELDS if lockdown else AFTER_FIELDS
+    value = _object(text, fields)
+    if any(type(value[name]) is not bool for name in fields):
         raise RunnerAnswerError('invalid-guest-answer')
-    left = sorted(name for name in AFTER_FIELDS[:-1] if value[name]) + ([] if value['root_removed'] else ['root'])
+    left = sorted(name for name in fields[:-1] if value[name]) + ([] if value['root_removed'] else ['root'])
     return dict(left=left, clean=not left, fields=value)
 
 

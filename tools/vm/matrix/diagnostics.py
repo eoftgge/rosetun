@@ -5,11 +5,11 @@ import threading
 
 
 class StderrSink:
-    def __init__(self, path, token, limit=256 * 1024):
-        self.file = path.open('xb', buffering=0)
+    def __init__(self, path, token, limit=256 * 1024, *, append=False):
+        self.file = path.open('ab' if append else 'xb', buffering=0)
         self.token = token.encode()
         self.limit = limit
-        self.total = 0
+        self.total = path.stat().st_size if append else 0
         self.pending = b''
         self.overflow = False
         self.error = False

@@ -530,7 +530,10 @@ class PreparedRun:
 
     def register(self, resource):
         data = self._read()
-        if data["state"] not in ("preparing", "prepared", "starting"):
+        power_cycle_process = (data["state"] == "running" and isinstance(resource, dict)
+                               and resource.get("kind") == "process" and isinstance(resource.get("id"), str)
+                               and bool(re.fullmatch(r"(?:qemu|swtpm)-[1-9][0-9]*", resource["id"])))
+        if data["state"] not in ("preparing", "prepared", "starting") and not power_cycle_process:
             raise ValueError("run is no longer accepting resources")
         _resource(resource, self.directory)
         if any(entry["id"] == resource["id"] or

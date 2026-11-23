@@ -61,12 +61,24 @@ function Get-RosetunListNodeCleanup {
     catch { return 'UNVERIFIED' }
 }
 
+function Write-RosetunListDurable {
+    param([string]$Path, [string]$Text, [bool]$Append = $false)
+    $bytes = [Text.Encoding]::UTF8.GetBytes($Text)
+    $mode = if ($Append) { [IO.FileMode]::Append } else { [IO.FileMode]::Create }
+    $stream = [IO.FileStream]::new($Path, $mode, [IO.FileAccess]::Write, [IO.FileShare]::Read)
+    try {
+        $stream.Write($bytes, 0, $bytes.Length)
+        $stream.Flush($true)
+    }
+    finally { $stream.Dispose() }
+}
+
 function Write-RosetunListJson {
     param($Recorder, [string]$Name, $Value)
     $temporary = Join-Path $Recorder.Directory ($Name + '.tmp')
     try {
         $json = ConvertTo-Json -InputObject $Value -Depth 20 -Compress
-        [IO.File]::WriteAllText($temporary, $json + "`n", [Text.UTF8Encoding]::new($false))
+        Write-RosetunListDurable -Path $temporary -Text ($json + "`n") -Append $false
         [IO.File]::Move($temporary, (Join-Path $Recorder.Directory $Name))
     }
     catch { $Recorder.Broken = $true; throw 'List result write failed.' }
@@ -77,7 +89,7 @@ function New-RosetunListResults {
         [Parameter(Mandatory)][string]$Directory,
         [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$VmId,
         [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$BootId,
-        [ValidateSet('windows-list', 'windows-proxy', 'windows-failure')][string]$Suite = 'windows-list',
+        [ValidateSet('windows-list', 'windows-proxy', 'windows-failure', 'windows-lockdown')][string]$Suite = 'windows-list',
         [object[]]$Catalog, $Parameters
     )
     $rows = if ($Suite -ne 'windows-list') { $Catalog } else {
@@ -96,8 +108,36 @@ function New-RosetunListResults {
         Events = [Collections.Generic.List[object]]::new(); Errors = [Collections.Generic.List[object]]::new()
         Broken = $false; Finished = $false }
     Write-RosetunListJson $recorder 'plan.json' $plan
-    [IO.File]::WriteAllText((Join-Path $recorder.Directory 'events.jsonl'), '', [Text.UTF8Encoding]::new($false))
+    Write-RosetunListDurable -Path (Join-Path $recorder.Directory 'events.jsonl') -Text '' -Append $false
     return $recorder
+}
+
+function Resume-RosetunListResults {
+    param([Parameter(Mandatory)][string]$Directory)
+    $Directory = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Directory)
+    $planPath = Join-Path $Directory 'plan.json'
+    $eventsPath = Join-Path $Directory 'events.jsonl'
+    if (-not (Test-Path -LiteralPath $planPath) -or -not (Test-Path -LiteralPath $eventsPath)) {
+        throw 'List results cannot be resumed: missing plan or events.'
+    }
+    $plan = Get-Content -LiteralPath $planPath -Encoding UTF8 -Raw | ConvertFrom-Json
+    $prefix = 'rosetun.' + [string]$plan.suite + '.'
+    $events = [Collections.Generic.List[object]]::new()
+    $raw = [IO.File]::ReadAllText($eventsPath, [Text.Encoding]::UTF8)
+    if ($raw) {
+        foreach ($line in ($raw -split "\r?\n")) {
+            if ($line.Trim()) { $events.Add(($line | ConvertFrom-Json)) }
+        }
+    }
+    return [pscustomobject]@{
+        Directory = $Directory
+        Plan = $plan
+        Prefix = $prefix
+        Events = $events
+        Errors = [Collections.Generic.List[object]]::new()
+        Broken = $false
+        Finished = $false
+    }
 }
 
 function Add-RosetunListResult {
@@ -111,8 +151,8 @@ function Add-RosetunListResult {
         sequence = $Recorder.Events.Count + 1; id = $Id; result = $Result; reason = $Reason }
     $Recorder.Events.Add($event)
     try {
-        [IO.File]::AppendAllText((Join-Path $Recorder.Directory 'events.jsonl'),
-            (ConvertTo-Json -InputObject $event -Compress) + "`n", [Text.UTF8Encoding]::new($false))
+        Write-RosetunListDurable -Path (Join-Path $Recorder.Directory 'events.jsonl') `
+            -Text ((ConvertTo-Json -InputObject $event -Compress) + "`n") -Append $true
     }
     catch { $Recorder.Broken = $true; throw 'List event write failed.' }
 }
@@ -151,4 +191,4 @@ function Complete-RosetunListResults {
     if ($Recorder.Broken) { throw 'List result export failed.' }
 }
 
-Export-ModuleMember -Function New-RosetunListResults, Add-RosetunListResult, Add-RosetunListError, Complete-RosetunListResults, Get-RosetunListNodeCleanup, Get-RosetunListCatalogDigest
+Export-ModuleMember -Function New-RosetunListResults, Resume-RosetunListResults, Add-RosetunListResult, Add-RosetunListError, Complete-RosetunListResults, Get-RosetunListNodeCleanup, Get-RosetunListCatalogDigest

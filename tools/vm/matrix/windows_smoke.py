@@ -19,7 +19,7 @@ import time
 import tomllib
 import uuid
 
-from . import windows_failure, windows_lab, windows_list_lab, windows_reboot, windows_run
+from . import windows_failure, windows_lab, windows_list_lab, windows_lockdown, windows_reboot, windows_run
 from .images import load_windows_descriptor
 from .orchestrator import (SUMMARY_SCHEMA, begin_state, failure, finish_state, mark_step, save, seal,
                            _RETAINED_LEASES)
@@ -50,6 +50,8 @@ def validate(config):
         return windows_list_lab.validate(config)
     if type(config) is dict and config.get('schema') == windows_failure.SCHEMA:
         return windows_failure.validate(config)
+    if type(config) is dict and config.get('schema') == windows_lockdown.SCHEMA:
+        return windows_lockdown.validate(config)
     if type(config) is not dict or config.get('schema') != SCHEMA or config.get('suite') not in SMOKE_TIMES:
         raise ValueError('unsupported execution schema')
     _exact(config, FIELDS)
@@ -91,6 +93,8 @@ def preflight(config, *, dry_run=False):
         return windows_list_lab.preflight(config, dry_run=dry_run)
     if config['suite'] == windows_failure.FAILURE_SUITE:
         return windows_failure.preflight(config, dry_run=dry_run)
+    if config['suite'] == windows_lockdown.LOCKDOWN_SUITE:
+        return windows_lockdown.preflight(config, dry_run=dry_run)
     image = load_windows_descriptor(config['image_descriptor'])
     qemu = WindowsQemuConfig(**config['qemu'])
     qemu.validate()

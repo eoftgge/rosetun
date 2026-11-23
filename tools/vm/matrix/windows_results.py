@@ -4,7 +4,7 @@ from pathlib import Path
 from .catalog import digest
 from .report import ASSESSMENT_SCHEMA, read_json, _unique_object, _invalid_constant
 
-def assess(report, status, events, plan, event_problems=(), *, adapter):
+def assess(report, status, events, plan, event_problems=(), *, adapter, expected_end_boot_id=None):
     adapter.validate_plan(plan)
     PREFIX = adapter.PREFIX
     proxy = plan["suite"] == "windows-proxy"
@@ -19,7 +19,8 @@ def assess(report, status, events, plan, event_problems=(), *, adapter):
             problems.append('invalid ' + kind + ' schema')
         if identity is None or value.get('identity') != identity:
             problems.append(kind + ' identity mismatch')
-    if report.get('boot_id_at_end') != (identity or {}).get('boot_id'):
+    end_boot = expected_end_boot_id if expected_end_boot_id is not None else (identity or {}).get('boot_id')
+    if report.get('boot_id_at_end') != end_boot:
         problems.append('final boot mismatch')
     if status.get('state') != 'finished':
         problems.append('completion marker missing')
@@ -139,7 +140,7 @@ def assess(report, status, events, plan, event_problems=(), *, adapter):
     return assessment
 
 
-def assess_files(report_path, plan_path, *, adapter):
+def assess_files(report_path, plan_path, *, adapter, expected_end_boot_id=None):
     plan, plan_hash = read_json(plan_path)
     try:
         adapter.validate_plan(plan)
@@ -170,7 +171,10 @@ def assess_files(report_path, plan_path, *, adapter):
             return None, None
     report, report_hash = optional(report_path)
     status, status_hash = optional(directory / 'status.json')
-    result = adapter.assess(report, status, events, plan, problems)
+    if expected_end_boot_id is not None:
+        result = adapter.assess(report, status, events, plan, problems, expected_end_boot_id=expected_end_boot_id)
+    else:
+        result = adapter.assess(report, status, events, plan, problems)
     result['sources'] = dict(plan_sha256=plan_hash, report_sha256=report_hash,
                              status_sha256=status_hash, events_sha256=events_hash)
     return result

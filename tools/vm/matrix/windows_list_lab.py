@@ -91,7 +91,12 @@ class Adapters(windows_lab.Adapters):
 
 
 def runtime(config):
-    return config['failure'] if config.get('suite') == 'windows-failure' else config['list']
+    suite = config.get('suite')
+    if suite == 'windows-failure':
+        return config['failure']
+    if suite == 'windows-lockdown':
+        return config['lockdown']
+    return config['list']
 
 
 def capture_seconds(config):
@@ -102,7 +107,7 @@ def capture_seconds(config):
             + block['runner_seconds'] + CAPTURE_SLACK)
 
 
-def validate(config):
+def validate(config, *, max_runner_seconds=1200):
     if type(config) is not dict or config.get('schema') != SCHEMA or config.get('suite') != SUITE:
         raise ValueError('unsupported execution schema')
     exact(config, FIELDS)
@@ -114,7 +119,8 @@ def validate(config):
     block = config['list']
     exact(block, LIST_FIELDS)
     for name, (low, high) in LIST_TIMES.items():
-        if type(block[name]) is not int or not low <= block[name] <= high:
+        ceiling = max_runner_seconds if name == 'runner_seconds' else high
+        if type(block[name]) is not int or not low <= block[name] <= ceiling:
             raise ValueError('invalid list time')
     for name in ('xorriso', 'rosetun', 'helper', 'sing_box'):
         if type(block[name]) is not str or not block[name]:
@@ -170,6 +176,10 @@ def sources(config):
     if config['suite'] == 'windows-failure':
         return binaries + [(name, guest_directory / name, None) for name in
                            ('lib.ps1', 'run-windows-failure.ps1', 'failure-probes.ps1')] + [
+                               ('RosetunListResults.psm1', WINDOWS_DIRECTORY / 'RosetunListResults.psm1', None)]
+    if config['suite'] == 'windows-lockdown':
+        return binaries + [(name, guest_directory / name, None) for name in
+                           ('lib.ps1', 'run-windows-lockdown.ps1', 'failure-probes.ps1')] + [
                                ('RosetunListResults.psm1', WINDOWS_DIRECTORY / 'RosetunListResults.psm1', None)]
     return binaries + [('lib.ps1', guest_directory / 'lib.ps1', None),
             ('run-windows-list.ps1', guest_directory / 'run-windows-list.ps1', None),
@@ -270,7 +280,7 @@ def check_cleanup(after_state, runner_cleanup):
     return dict(runner=runner_cleanup, left=after_state['left'] if after_state else None)
 
 
-def judge(config, lab_id, seen, plain, port=None, *, labels=LABELS):
+def judge(config, lab_id, seen, plain, port=None, *, labels=LABELS, window_allowances=None):
     """The windows of the capture, the listing of the baseline and the lab's account of its fixtures.
 
     Nothing here is a verdict of the run: the verdicts are in `judgement`, which reads these and the guest's own."""
@@ -280,7 +290,8 @@ def judge(config, lab_id, seen, plain, port=None, *, labels=LABELS):
     node_port = config['lab']['tunnel']['node_port']
     seen['health'] = health
     seen['verdict'] = classify_windows(capture, lab_id, None, health=health, ready=True, tunnel_port=node_port,
-                                       probes=[plain], limit=EVIDENCE_PCAP_LIMIT, required_labels=labels, flows=True)
+                                       probes=[plain], limit=EVIDENCE_PCAP_LIMIT, required_labels=labels, flows=True,
+                                       window_allowances=window_allowances)
     seen['noise'] = windows_noise.report(capture, lab_id, label=BASELINE, probes=[plain], limit=EVIDENCE_PCAP_LIMIT)
     seen['fixtures'] = fixtures_block(health, parsed)
     seen['dns_rows'] = parsed['dns.json']
@@ -309,11 +320,12 @@ def direct_seen(window, expected):
                for protocol, kind, server in expected)
 
 
-def judgement(result, measured, seen, config, *, checks_required=CHECKS, labels=LABELS, compare=None):
+def judgement(result, measured, seen, config, *, checks_required=CHECKS, labels=LABELS, compare=None,
+              judged_labels=(SESSION,)):
     """What the run found (exit 1) and what it cannot vouch for (exit 2), as two lists of codes.
 
     Findings are what the guest or the wire says went wrong: a check of the eleven that failed, a leak or a missing
-    direct connection in the window `session`, a pass the wire contradicts, a cleanup that left something. Everything
+    direct connection in the judged windows, a pass the wire contradicts, a cleanup that left something. Everything
     that leaves the run unable to say so is unverified: an error, a machine that did not finish, a runner that did not
     end, a check that did not run, an artifact the assessment refuses, a window that was not observed whole, a marker
     that was not acknowledged, a fixture of the lab that did not answer, a cleanup nobody could read.
@@ -355,12 +367,13 @@ def judgement(result, measured, seen, config, *, checks_required=CHECKS, labels=
             unverified.append('window-unverified:' + label)
     if verdict is not None and (verdict['extra_windows'] or verdict['observer_reasons']):
         unverified.append('observer-not-clean')
-    session = windows.get(SESSION)
-    if session is not None and not session['observer_reasons']:
-        if session.get('verdict') == 'DETECTED':
-            findings.append('window-detected:' + SESSION)
-        elif session.get('verdict') == 'MISMATCH':
-            findings.append('window-mismatch:' + SESSION)
+    for label in judged_labels:
+        row = windows.get(label)
+        if row is not None and not row['observer_reasons']:
+            if row.get('verdict') == 'DETECTED':
+                findings.append('window-detected:' + label)
+            elif row.get('verdict') == 'MISMATCH':
+                findings.append('window-mismatch:' + label)
     markers = measured['markers']
     if markers is None or not all(markers[label][word]['sent'] and markers[label][word]['acknowledged']
                                   for label in labels for word in ('open', 'close')):
@@ -434,8 +447,11 @@ def execution_section(result, config, seen, measured, vms, plan, image, started,
     measured['windows'] = windows
     checks_required = profile.checks if profile else CHECKS
     expectations = profile.expectations if profile else {BASELINE: BASELINE_EXPECTED, SESSION: SESSION_EXPECTED}
+    judged_labels = getattr(profile, 'judged_labels', (SESSION,)) if profile else (SESSION,)
+    listed_labels = getattr(profile, 'listed_labels', (BASELINE,)) if profile else (BASELINE,)
     findings, unverified = judgement(result, measured, seen, config, checks_required=checks_required,
-                                     labels=tuple(expectations), compare=profile.cross_check if profile else None)
+                                     labels=tuple(expectations), compare=profile.cross_check if profile else None,
+                                     judged_labels=judged_labels)
     listing = seen.get('noise')
     runner = measured['runner']
     return dict(
@@ -463,7 +479,7 @@ def execution_section(result, config, seen, measured, vms, plan, image, started,
                              categories=row['categories'], verdict=row.get('verdict'),
                              flows=row.get('direct', {}).get('flows'),
                              expected=expected_flows(expectations[label]),
-                             listed=label == BASELINE, clock=row.get('clock'))
+                             listed=label in listed_labels, clock=row.get('clock'))
                  for label, row in windows.items()},
         fixtures=seen.get('fixtures'),
         baseline_noise=None if listing is None else dict(noise=listing['noise'], frames=listing.get('frames')),
@@ -508,7 +524,11 @@ def run_guest_suite(config, *, profile=None, adapters=None, clock=time.monotonic
                 evidence_disk=dict(verified=False, reason='not-read', pcap_bytes=0, pcap_sha256=None))
     measured = dict(network=None, certificate=None, settle=None, media=None, start=None, runner=None, runner_seconds=None,
                     polls=0, checks=None, assessment=None, markers=None, cleanup=None, identity=None, windows={},
-                    shutdown=None, image_unchanged=None, host_memory_mib=None, helper_tail=None)
+                    shutdown=None, image_unchanged=None, host_memory_mib=None, helper_tail=None,
+                    boot_chain=[], guest_resets=0, power_cycles=0)
+    planned_reboots = getattr(profile, 'planned_reboots', 0) if profile else 0
+    planned_power_cuts = getattr(profile, 'planned_power_cuts', 0) if profile else 0
+    reconnectable = planned_power_cuts > 0
 
     def step(name, operation):
         nonlocal stage
@@ -585,8 +605,15 @@ def run_guest_suite(config, *, profile=None, adapters=None, clock=time.monotonic
                                                      QemuConfig(**lab_config['qemu']), executor=executor))
         plan = step('prepare-test', lambda: adapters.prepare(runs['test'], image, WindowsQemuConfig(**config['qemu']),
                                                              executor=executor))
+        pair_kwargs = {}
+        if suite == 'windows-failure':
+            pair_kwargs['failure'] = True
+        elif suite == 'windows-lockdown':
+            pair_kwargs['lockdown'] = True
+        if reconnectable:
+            pair_kwargs['reconnectable'] = True
         pair = step('evidence-disk', lambda: adapters.pair(lease, runs, lab_id, tunnel=True, evidence_disk=True,
-                                                           dns=True, media=True, **({'failure': True} if profile else {})))
+                                                           dns=True, media=True, **pair_kwargs))
         if clock() >= deadline:
             raise TimeoutError('preparation deadline')
 
@@ -621,11 +648,18 @@ def run_guest_suite(config, *, profile=None, adapters=None, clock=time.monotonic
             raise ValueError('capture-not-ready')
         step('media-unchanged', lambda: windows_media.verify(runs['test'], disc))
         vm = vms['test'] = step('start-test', lambda: adapters.start(runs['test'], lab=pair))
+        if planned_reboots > 0:
+            vm.planned_reboots = planned_reboots
+        if planned_power_cuts > 0:
+            vm.planned_power_cuts = planned_power_cuts
         step('resume-test', vm.resume)
         step('boot-test', lambda: vm.wait_initial_guest(timeout=block['agent_wait_seconds'], clock=clock, sleep=sleep,
                                                        try_seconds=windows_reboot.TRY_SECONDS))
-        # Both machines are up: QEMU owns the two ends of the wire, the controller drops its copies.
-        step('wire-close', pair.close)
+        # For single-boot runs QEMU owns both ends of the wire and the controller drops its copies now.
+        # For reconnectable power-cycle runs the relay stays open until teardown after both VMs stop.
+        if not reconnectable:
+            step('wire-close', pair.close)
+        measured['boot_chain'] = list(getattr(vm, 'boot_chain', []) or ([vm.last_boot_id] if vm.last_boot_id else []))
         identities.update(boot_id=vm.last_boot_id, vm_uuid=vm.vm_uuid)
         states['test'].update('identities', boot_id=vm.last_boot_id, vm_uuid=vm.vm_uuid)
         smoke = dict(smoke=dict(script_seconds=block['script_seconds']))
@@ -693,12 +727,16 @@ def run_guest_suite(config, *, profile=None, adapters=None, clock=time.monotonic
                 raise LifecycleError(str(error), vm) from None
 
         def run_runner():
-            began, failures = clock(), 0
+            began, failures, handled_sequence = clock(), 0, 0
             while True:
                 waited = clock() - began
                 if waited >= block['runner_seconds']:
                     raise ValueError(suite + '-runner-timeout')
-                alone(min(block['poll_seconds'], block['runner_seconds'] - waited))
+                waiting_resume = (handled_sequence > 0
+                                  and (measured['runner'] is None
+                                       or measured['runner']['sequence'] <= handled_sequence))
+                interval = min(block['poll_seconds'], 3) if waiting_resume else block['poll_seconds']
+                alone(min(interval, block['runner_seconds'] - waited))
                 try:
                     status = read_status()
                     failures = 0
@@ -713,6 +751,38 @@ def run_guest_suite(config, *, profile=None, adapters=None, clock=time.monotonic
                 if status is None:
                     continue
                 measured['runner'] = status
+                if status['state'] == 'reboot-requested' and status['sequence'] > handled_sequence:
+                    handled_sequence = status['sequence']
+                    reboot_index = vm.guest_resets + 1
+                    step(f'guest-reboot-{reboot_index}', vm.request_guest_reboot)
+                    step(f'wait-reset-{reboot_index}', lambda: vm.wait_guest_reset(
+                        timeout=block['shutdown_wait_seconds'], clock=clock, sleep=sleep))
+                    step(f'await-reboot-{reboot_index}', lambda: vm.await_rebooted_guest(
+                        timeout=block['agent_wait_seconds'], clock=clock, sleep=sleep,
+                        attempts=windows_reboot.REBOOT_ATTEMPTS, try_seconds=windows_reboot.TRY_SECONDS,
+                        retry_seconds=windows_reboot.RETRY_SECONDS))
+                    measured['boot_chain'] = list(vm.boot_chain)
+                    measured['guest_resets'] = vm.guest_resets
+                    identities['boot_id'] = vm.last_boot_id
+                    failures = 0
+                    continue
+                if status['state'] == 'power-cut-requested' and status['sequence'] > handled_sequence:
+                    handled_sequence = status['sequence']
+                    cut_index = vm.power_cycles + 1
+                    delay = block.get('power_cut_delay_seconds', 0)
+                    if delay > 0:
+                        alone(delay)
+                    step(f'power-cycle-{cut_index}', vm.power_cycle)
+                    step(f'resume-after-cut-{cut_index}', vm.resume)
+                    step(f'await-power-cut-{cut_index}', lambda: vm.await_rebooted_guest(
+                        timeout=block['agent_wait_seconds'], clock=clock, sleep=sleep,
+                        attempts=windows_reboot.REBOOT_ATTEMPTS, try_seconds=windows_reboot.TRY_SECONDS,
+                        retry_seconds=windows_reboot.RETRY_SECONDS))
+                    measured['boot_chain'] = list(vm.boot_chain)
+                    measured['power_cycles'] = vm.power_cycles
+                    identities['boot_id'] = vm.last_boot_id
+                    failures = 0
+                    continue
                 if status['state'] in guest.ENDED:
                     measured['runner_seconds'] = round(clock() - began, 1)
                     windows_reboot.record(vm, 'guest-runner-ended', state=status['state'], step=status['step'],
@@ -724,7 +794,7 @@ def run_guest_suite(config, *, profile=None, adapters=None, clock=time.monotonic
         def collect():
             text = asks.run('guest-collect', protocol.collect_script(), repeat=True)
             try:
-                value = guest.collected(text)
+                value = (profile.collected if profile and hasattr(profile, 'collected') else guest.collected)(text)
             except guest.RunnerAnswerError as error:
                 raise LifecycleError(str(error), vm) from None
             run = runs['test']
@@ -762,7 +832,10 @@ def run_guest_suite(config, *, profile=None, adapters=None, clock=time.monotonic
             report_path = resource_path(run.directory, suite + '/report.json')
             plan_path = resource_path(run.directory, suite + '/plan.json')
             try:
-                assessment = (profile if profile else windows_list).assess_files(report_path, plan_path)
+                if profile and getattr(profile, 'multi_boot', False):
+                    assessment = profile.assess_files(report_path, plan_path, expected_end_boot_id=vm.last_boot_id)
+                else:
+                    assessment = (profile if profile else windows_list).assess_files(report_path, plan_path)
             except (OSError, ValueError):
                 return None
             write_file(run, suite + '/assessment.json', (json.dumps(assessment, sort_keys=True) + '\n').encode(),
@@ -771,19 +844,20 @@ def run_guest_suite(config, *, profile=None, adapters=None, clock=time.monotonic
 
         measured['assessment'] = step('assess', assess)
         if measured['identity'] is not None and collected['plan'] is not None:
-            # The recorder names the machine and the boot it saw from inside; they are the ones the controller took.
+            # The recorder names the machine and the initial boot it saw from inside; they are the ones the controller took.
             try:
                 recorded = json.loads(collected['plan']).get('identity') or {}
             except ValueError:
                 recorded = {}
+            initial_boot = measured['boot_chain'][0] if measured['boot_chain'] else vm.last_boot_id
             measured['identity']['matches'] = (measured['identity']['matches']
                                                and recorded.get('vm_id') == vm.vm_uuid
-                                               and recorded.get('boot_id') == vm.last_boot_id)
+                                               and recorded.get('boot_id') == initial_boot)
 
         def after():
             text = asks.run('guest-after', protocol.after_script(), repeat=False)
             try:
-                value = guest.after(text)
+                value = (profile.after if profile and hasattr(profile, 'after') else guest.after)(text)
             except guest.RunnerAnswerError as error:
                 raise LifecycleError(str(error), vm) from None
             windows_reboot.record(vm, 'guest-after', left=value['left'], stderr=vm.qga.stderr_text or '')

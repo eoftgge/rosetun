@@ -318,6 +318,10 @@ class Vm:
         self.reset_merged = 0
         self.unplanned_reset = None
         self._planned_reboots = 0
+        self._planned_power_cuts = 0
+        self.power_cycles = 0
+        self._processes = {}
+        self._launch = None
         self.qga_reason = 'initial'
         self.launch_sockets = []
         self.guest_observation = None
@@ -336,9 +340,13 @@ class Vm:
         if self.state is None:
             return Qmp(stream)
         budgets = self.state.document['budgets']
+        extra = {}
+        if self._planned_power_cuts > 0:
+            extra['call_limit'] = run_state.limit('qmp_calls', self._planned_reboots, self._planned_power_cuts)
+            extra['event_limit'] = run_state.limit('qmp_events', self._planned_reboots, self._planned_power_cuts)
         return Qmp(stream, spent=dict(calls=budgets['qmp_calls'], events=budgets['qmp_events'],
                                       bytes=(budgets['qmp_bytes_o'], budgets['qmp_bytes_i'])),
-                   persist=self.state.record)
+                   persist=self.state.record, **extra)
 
     @property
     def planned_reboots(self):
@@ -354,13 +362,33 @@ class Vm:
             self.state.planned_reboots = value
 
     @property
+    def planned_power_cuts(self):
+        return self._planned_power_cuts
+
+    @planned_power_cuts.setter
+    def planned_power_cuts(self, value):
+        """How many abrupt QEMU power cycles the run plans: each earns a QGA recovery and expanded budgets."""
+        if type(value) is not int or not 0 <= value <= run_state.MAX_PLANNED_POWER_CUTS:
+            raise ValueError('invalid-planned-power-cuts')
+        self._planned_power_cuts = value
+        if self.state is not None:
+            self.state.planned_power_cuts = value
+            if value > 0:
+                self.state.update('collected', planned_power_cuts=value)
+
+    @property
     def qga_recovery_limit(self):
-        return run_state.limit('qga_recoveries', self._planned_reboots)
+        return run_state.limit('qga_recoveries', self._planned_reboots, self._planned_power_cuts)
+
+    @property
+    def qga_observation_limit(self):
+        return run_state.limit('qga_observations', self._planned_reboots, self._planned_power_cuts)
 
     def _spend(self, name):
         """Record one more of a per-run budget before it is used; no record, no use."""
         if self.state is not None:
             self.state.planned_reboots = self._planned_reboots
+            self.state.planned_power_cuts = self._planned_power_cuts
             try:
                 self.state.spend(name)
             except (OSError, ValueError):
@@ -480,7 +508,7 @@ class Vm:
             raise LifecycleError('vm-child-has-exited', self)
         if self.qga_recoveries >= self.qga_recovery_limit:
             raise LifecycleError('qga-recovery-limit', self)
-        if self.qga_observations >= 32:
+        if self.qga_observations >= self.qga_observation_limit:
             raise LifecycleError('qga-observation-limit', self)
         self._spend('qga_recoveries')
         self.qga_recoveries += 1
@@ -529,7 +557,7 @@ class Vm:
             raise LifecycleError('qga-not-configured', self)
         # A reset the guest made is told by QMP, not by the agent: take it in before judging any boot ID.
         self._sync_resets()
-        if self.qga_observations >= 32:
+        if self.qga_observations >= self.qga_observation_limit:
             raise LifecycleError('qga-observation-limit', self)
         self._spend('qga_observations')
         self.qga_observations += 1
@@ -555,7 +583,7 @@ class Vm:
             row['new_boot_confirmed'] = self.reset_pending and row['boot_comparison'] == 'changed'
             if row['boot_comparison'] == 'changed' and not self.reset_pending:
                 raise _BootRefused('boot-id-changed-without-reset')
-            if self.reset_kind == 'guest' and self.reset_pending and row['boot_comparison'] == 'same':
+            if self.reset_kind in ('guest', 'power-cycle') and self.reset_pending and row['boot_comparison'] == 'same':
                 # The guest that made the reset is gone: an agent that still reports the old boot is no new boot.
                 raise _BootRefused('guest-reset-boot-id-unchanged')
             if row['new_boot_confirmed'] and row['boot_id'] in self.boot_chain:
@@ -819,6 +847,7 @@ class Vm:
         if self.state is not None:
             try:
                 self.state.planned_reboots = self._planned_reboots
+                self.state.planned_power_cuts = self._planned_power_cuts
                 if not self.state.boot_chain:
                     # The run that never wrote its first boot into the state starts the chain here.
                     self.state.update('identities', boot_id=self.boot_chain[0])
@@ -828,12 +857,14 @@ class Vm:
                 raise LifecycleError('run-state-write-failed', self) from None
             if kind == 'guest':
                 self._step('guest-reset-%d' % self.guest_resets, 'done')
+            elif kind == 'power-cycle':
+                self._step('power-cycle-%d' % self.power_cycles, 'done')
         self.boot_chain.append(boot_id)
         self._event('boot-chain-extended', str(len(self.boot_chain)))
 
     def await_rebooted_guest(self, *, timeout, clock=time.monotonic, sleep=time.sleep, attempts=RESET_ATTEMPTS,
                              try_seconds=10, retry_seconds=RESET_RETRY_SECONDS):
-        """After a planned guest reset: the one recovery it earns, then bounded tries until the new boot answers.
+        """After a planned guest reset or power cycle: the one recovery it earns, then bounded tries until the new boot answers.
 
         The first try is `recover_guest` and spends the recovery. The guest needs a while to boot, so a try that
         fails is followed by new sessions that, like those of the first boot, spend no recovery but each one an
@@ -841,7 +872,7 @@ class Vm:
         than a Linux one: its caller says how many tries there are, how long each one may take and how far apart they
         are.
         """
-        if not self.reset_pending or self.reset_kind != 'guest':
+        if not self.reset_pending or self.reset_kind not in ('guest', 'power-cycle'):
             raise LifecycleError('no-guest-reset-pending', self)
         if type(attempts) is not int or not 0 < attempts <= 32 or not 0 < try_seconds <= 60 or retry_seconds < 0:
             raise LifecycleError('invalid-reboot-wait', self)
@@ -1017,6 +1048,105 @@ class Vm:
         return self.close(hard=True)
 
     @_guest_serialized
+    def power_cycle(self):
+        """Abruptly kill QEMU (SIGKILL) and restart QEMU + swtpm in the same run on the same disk/NVRAM/TPM.
+
+        Models sudden power loss without ACPI shutdown or QMP quit. Requires `planned_power_cuts > 0`
+        and a live run launched by `start()`. Leaves the restarted VM paused (`prelaunch`); the caller
+        must call `resume()` and then `await_rebooted_guest()`.
+        """
+        self._check()
+        if self.attached or self._launch is None:
+            raise LifecycleError('power-cycle-unavailable', self)
+        if self.reset_pending or not self.boot_chain:
+            raise LifecycleError('power-cycle-requires-confirmed-boot', self)
+        if self.power_cycles >= self._planned_power_cuts:
+            raise LifecycleError('power-cycle-not-planned', self)
+        launch = self._launch
+        if launch['lab'] is not None and not getattr(launch['lab'], 'reconnectable', False):
+            raise LifecycleError('power-cycle-wire-not-reconnectable', self)
+        self._reserve(8)
+        self.power_cycles += 1
+        index = self.power_cycles
+        self._step(f'power-cycle-{index}', 'intent')
+        self._event('power-cycle', f'intent {index}-of-{self._planned_power_cuts}')
+        if self.process is not None and self.process.poll() is None:
+            self.process.kill()
+        if self.process is not None:
+            try:
+                self.process.wait(timeout=self.timeout)
+            except subprocess.TimeoutExpired:
+                raise LifecycleError('power-cycle-kill-unconfirmed', self) from None
+        self._stop_swtpm()
+        if self.qmp is not None:
+            self.qmp.close()
+            self.qmp = None
+        if self.qga is not None:
+            self.qga.close()
+            self.qga = None
+        if self.stderr is not None:
+            self.stderr.close()
+            if self.stderr.overflow or self.stderr.error:
+                raise LifecycleError('stderr-limit-or-error', self)
+            self.stderr = None
+        for stale in (launch['qmp_socket'], launch['qga_socket'], launch['tpm_socket']):
+            if stale is not None and os.path.lexists(stale):
+                try:
+                    os.unlink(stale)
+                except OSError:
+                    raise LifecycleError('power-cycle-socket-cleanup-failed', self) from None
+        try:
+            self.run._read()
+            argv = list(launch['base_argv'])
+            descriptors = []
+            if launch['lab'] is not None:
+                network_argv, network_fd = launch['lab'].reconnect_network(self.run, adapter=launch['windows'])
+                argv += network_argv
+                descriptors.append(network_fd)
+            argv += launch['qga_argv']
+            if launch['windows']:
+                self._start_swtpm(launch['swtpm_argv'], launch['swtpm_executable'],
+                                  launch['tpm_socket'], identifier=f'swtpm-{index}')
+            self.stderr = StderrSink(resource_path(self.run.directory, 'qemu-stderr.log'),
+                                     self.run._identity[2], append=True)
+            self.process = subprocess.Popen(
+                argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE, shell=False, close_fds=True, bufsize=0,
+                pass_fds=tuple(descriptors), start_new_session=True, umask=0o177)
+            if launch['lab'] is not None:
+                launch['lab'].release_child(self.run)
+            self.stderr.start(self.process.stderr)
+            qemu_id = f'qemu-{index}'
+            self.run.register(_identity(self.process, launch['config'].executable, qemu_id))
+            self._processes[qemu_id] = self.process
+            stream = _open_control(launch['qmp_socket'], self.timeout, self._alive)
+            self.launch_sockets.append(stream)
+            self.qmp = self._new_qmp(stream)
+            self.launch_sockets.remove(stream)
+            self.qmp.handshake(self.timeout)
+            if self.qmp.command('query-uuid', self.timeout) != {'UUID': self.vm_uuid}:
+                raise LifecycleError('qmp-uuid-mismatch', self)
+            kvm = self.qmp.command('query-kvm', self.timeout)
+            if type(kvm) is not dict or kvm.get('enabled') is not True or kvm.get('present') is not True:
+                raise LifecycleError('qmp-kvm-not-enabled', self)
+            if self.status()['status'] != 'prelaunch':
+                raise LifecycleError('qmp-initial-state-mismatch', self)
+            if launch['config'].qga:
+                self._new_qga()
+        except BaseException as error:
+            if isinstance(error, LifecycleError):
+                raise
+            if not isinstance(error, Exception) or isinstance(error, AssertionError):
+                raise
+            raise LifecycleError('power-cycle-restart-failed', self) from None
+        self.reset_boot_id = self.boot_chain[-1]
+        self.reset_pending = True
+        self.reset_kind = 'power-cycle'
+        self.qga_reason = 'power-cycle'
+        self.guest_observation = None
+        self._event('power-cycle', f'restarted {index}-of-{self._planned_power_cuts}')
+
+    @_guest_serialized
     def close(self, *, hard=False):
         if self.completed:
             return
@@ -1121,15 +1251,18 @@ class Vm:
 
     def _exits(self, processes):
         """The exit of each recorded process in the ledger's order; a process that is not this VM's refuses completion."""
-        known = {'qemu': self.process}
-        if self.windows:
-            known['swtpm'] = self.swtpm
+        if self._processes:
+            known = dict(self._processes)
+        else:
+            known = {'qemu': self.process}
+            if self.windows:
+                known['swtpm'] = self.swtpm
         if (self.process is None or len(processes) != len(known) or {r['id'] for r in processes} != set(known)
                 or any(known[r['id']] is None or r['pid'] != known[r['id']].pid for r in processes)):
             raise LifecycleError('completion-process-identity-missing', self)
         return [{'resource': r, 'returncode': known[r['id']].returncode} for r in processes]
 
-    def _start_swtpm(self, argv, executable, path):
+    def _start_swtpm(self, argv, executable, path, identifier='swtpm'):
         """Start the TPM and wait for its control socket. The controller never connects to it: swtpm ends when
         the first connection closes, and that connection is QEMU's."""
         self.run._read()
@@ -1138,7 +1271,9 @@ class Vm:
         self.swtpm = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                       stderr=subprocess.DEVNULL, shell=False, close_fds=True, start_new_session=True,
                                       umask=0o177)
-        self.run.register(_identity(self.swtpm, executable, 'swtpm'))
+        self.swtpm_done = False
+        self.run.register(_identity(self.swtpm, executable, identifier))
+        self._processes[identifier] = self.swtpm
         self._event('swtpm', 'started', teardown=True)
         deadline = time.monotonic() + self.timeout
         while not os.path.lexists(path):
@@ -1201,8 +1336,25 @@ def attach(run, *, timeout=5):
     resources = {r['id']: r for r in manifest['resources']}
     processes = [r for r in manifest['resources'] if r['kind'] == 'process']
     by_id = {r['id']: r for r in processes}
+    def _process_gen(item_id):
+        if item_id in ('qemu', 'swtpm'):
+            return item_id, 0
+        head, sep, tail = item_id.partition('-')
+        if sep and head in ('qemu', 'swtpm') and tail.isdigit() and not tail.startswith('0'):
+            return head, int(tail)
+        return None, -1
+
+    latest = {}
+    valid_ids = True
+    for r in processes:
+        kind, gen = _process_gen(r['id'])
+        if kind is None:
+            valid_ids = False
+            break
+        if kind not in latest or gen > latest[kind][0]:
+            latest[kind] = (gen, r)
     if (manifest['state'] not in ('starting', 'running', 'stopping') or len(by_id) != len(processes)
-            or 'qemu' not in by_id or set(by_id) - {'qemu', 'swtpm'}
+            or not valid_ids or 'qemu' not in latest
             or resources.get('qmp-socket', {}).get('kind') != 'socket'):
         raise LifecycleError('run-not-attachable')
     try:
@@ -1214,18 +1366,18 @@ def attach(run, *, timeout=5):
         events = _journal_rows(run)
     except (KeyError, TypeError, OSError, ValueError):
         raise LifecycleError('run-records-unusable') from None
-    if windows != ('swtpm' in by_id):
+    if windows != ('swtpm' in latest):
         raise LifecycleError('run-not-attachable')
     if state.document['host']['boot_id'] != run_state.host_boot_id():
         raise LifecycleError('host-boot-changed')
-    process = ForeignProcess(by_id['qemu'])
+    process = ForeignProcess(latest['qemu'][1])
     swtpm = None
     if windows:
         # The TPM ends when QEMU's connection to it does; one that is gone already is closed with the run.
         try:
-            swtpm = ForeignProcess(by_id['swtpm'])
+            swtpm = ForeignProcess(latest['swtpm'][1])
         except LifecycleError:
-            swtpm = _Gone(by_id['swtpm'])
+            swtpm = _Gone(latest['swtpm'][1])
     vm = Vm(run, timeout)
     vm.process, vm.attached, vm.state, vm.vm_uuid, vm.events = process, True, state, vm_uuid, events
     vm.swtpm, vm.windows = swtpm, windows
@@ -1417,8 +1569,8 @@ def start(run, *, timeout=5, executor=execute, lab=None):
         raise LifecycleError('vm-start-failed') from None
     vm = Vm(run, timeout)
     vm.state = state
-    if lab is not None and getattr(lab, 'journal_full', False) and lab.role(run) == 'test':
-        # The whole journal of the service comes back in one reply, which the ordinary limit would end.
+    if lab is not None and (getattr(lab, 'journal_full', False) or getattr(lab, 'lockdown', False)) and lab.role(run) == 'test':
+        # The whole journal of the service (or the 72-check multi-boot Lockdown collection) comes back in one reply.
         vm.qga_line_limit = DIAGNOSTIC_LINE_LIMIT
     vm.vm_uuid = plan['uuid']
     vm.wire = f'{lab.role(run)}-wire' if lab is not None else None
@@ -1441,13 +1593,18 @@ def start(run, *, timeout=5, executor=execute, lab=None):
                     argv = windows_run.join_wire(argv, image.facts()['mac'])
                 except ValueError as error:
                     raise LifecycleError(str(error)) from None
+            base_argv = list(argv)
             argv += network_argv
             descriptors.append(network_fd)
+        else:
+            base_argv = list(argv)
+        qga_argv = []
         if config.qga:
             vm.qga_path = sockets['qga-socket']
-            argv += ['-chardev', f'socket,id=guestagent,path={vm.qga_path},server=on,wait=off',
-                     '-device', plan['windows_run']['qga_device'] if windows else 'virtio-serial-pci,id=guestserial',
-                     '-device', 'virtserialport,bus=guestserial.0,chardev=guestagent,name=org.qemu.guest_agent.0']
+            qga_argv = ['-chardev', f'socket,id=guestagent,path={vm.qga_path},server=on,wait=off',
+                        '-device', plan['windows_run']['qga_device'] if windows else 'virtio-serial-pci,id=guestserial',
+                        '-device', 'virtserialport,bus=guestserial.0,chardev=guestagent,name=org.qemu.guest_agent.0']
+            argv += qga_argv
             resource_path(run.directory, 'qga-observations.jsonl').touch(exist_ok=False)
             resource_path(run.directory, 'job-evidence.jsonl').touch(exist_ok=False)
         run._read()
@@ -1460,8 +1617,16 @@ def start(run, *, timeout=5, executor=execute, lab=None):
         vm.process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                       stderr=subprocess.PIPE, shell=False, close_fds=True, bufsize=0,
                                       pass_fds=tuple(descriptors), start_new_session=True, umask=0o177)
+        if lab is not None and getattr(lab, 'reconnectable', False):
+            lab.release_child(run)
         vm.stderr.start(vm.process.stderr)
         run.register(_identity(vm.process, config.executable))
+        vm._processes['qemu'] = vm.process
+        vm._launch = dict(
+            base_argv=base_argv, qmp_socket=sockets['qmp-socket'], qga_socket=sockets.get('qga-socket'),
+            qga_argv=qga_argv, config=config, windows=windows,
+            swtpm_argv=plan['windows_run']['swtpm_argv'] if windows else None,
+            swtpm_executable=config.swtpm if windows else None, tpm_socket=tpm_socket, lab=lab)
         stream = _open_control(sockets['qmp-socket'], timeout, vm._alive)
         vm.launch_sockets.append(stream)
         vm.qmp = vm._new_qmp(stream)

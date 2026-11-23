@@ -42,6 +42,8 @@ BUDGETS = {'qmp_calls': 128, 'qmp_events': 128, 'qmp_bytes_o': 1024 * 1024, 'qmp
            'qga_recoveries': 4, 'qga_observations': 32, 'job_calls': 112, 'job_polls': 4}
 # The most guest resets a run may plan; each one allows one more QGA recovery on top of `BUDGETS`.
 MAX_PLANNED_REBOOTS = 2
+# The most abrupt power cuts a run may plan; each cut spawns a fresh QEMU process and boot.
+MAX_PLANNED_POWER_CUTS = 8
 IDENTITIES = ('host_run_id', 'guest_run_id', 'import_id', 'lab_id', 'vm_uuid', 'boot_id')
 JOB_FIELDS = ('submission', 'launcher', 'job', 'pid', 'session')
 TRANSITION_LIMIT = 256
@@ -68,9 +70,17 @@ def owner_digest(token):
     return hashlib.sha256(token.encode()).hexdigest()
 
 
-def limit(name, planned_reboots=0):
-    """What one run may spend of a budget; a planned guest reset earns one more QGA recovery."""
-    return BUDGETS[name] + (planned_reboots if name == 'qga_recoveries' else 0)
+def limit(name, planned_reboots=0, planned_power_cuts=0):
+    """What one run may spend of a budget; planned resets and power cuts add bounded headroom."""
+    if type(planned_power_cuts) is not int or not 0 <= planned_power_cuts <= MAX_PLANNED_POWER_CUTS:
+        raise ValueError('planned_power_cuts out of range')
+    base = BUDGETS[name]
+    if name == 'qga_recoveries':
+        return base + planned_reboots + planned_power_cuts
+    if planned_power_cuts:
+        extra = {'qmp_calls': 16, 'qmp_events': 8, 'qga_observations': 16}.get(name, 0)
+        return base + extra * planned_power_cuts
+    return base
 
 
 def _name(value, *, optional=False):
@@ -123,21 +133,25 @@ def validate(document, *, run_id, stand_id, token):
         raise RunStateError('run-state-deadlines')
     for key in deadlines:
         _name(key)
-    budgets = document['budgets']
-    if (type(budgets) is not dict or set(budgets) != set(BUDGETS)
-            or any(type(v) is not int or not 0 <= v <= limit(k, MAX_PLANNED_REBOOTS) for k, v in budgets.items())):
-        raise RunStateError('run-state-budgets')
-    chain = document['boot_chain']
-    if (type(chain) is not list or len(chain) > MAX_PLANNED_REBOOTS + 1 or len(set(chain)) != len(chain)
-            or (chain[-1] if chain else None) != identities['boot_id']):
-        raise RunStateError('run-state-boot-chain')
-    for value in chain:
-        _name(value)
     collected = document['collected']
     if type(collected) is not dict or any(type(v) not in (bool, int, str) for v in collected.values()):
         raise RunStateError('run-state-collected')
     for key in collected:
         _name(key)
+    cuts = collected.get('planned_power_cuts', 0)
+    if type(cuts) is not int or not 0 <= cuts <= MAX_PLANNED_POWER_CUTS:
+        raise RunStateError('run-state-collected')
+    budgets = document['budgets']
+    if (type(budgets) is not dict or set(budgets) != set(BUDGETS)
+            or any(type(v) is not int or not 0 <= v <= limit(k, MAX_PLANNED_REBOOTS, cuts)
+                   for k, v in budgets.items())):
+        raise RunStateError('run-state-budgets')
+    chain = document['boot_chain']
+    if (type(chain) is not list or len(chain) > MAX_PLANNED_REBOOTS + cuts + 1 or len(set(chain)) != len(chain)
+            or (chain[-1] if chain else None) != identities['boot_id']):
+        raise RunStateError('run-state-boot-chain')
+    for value in chain:
+        _name(value)
     job = document['job']
     if job is not None:
         if type(job) is not dict or set(job) != set(JOB_FIELDS):
@@ -160,8 +174,10 @@ class RunState:
     def __init__(self, run, document):
         self.run = run
         self.document = document
-        # How many guest resets this run plans: set once by whoever starts or attaches it.
+        # How many guest resets and power cuts this run plans: set once by whoever starts or attaches it.
         self.planned_reboots = 0
+        cuts = document.get('collected', {}).get('planned_power_cuts', 0)
+        self.planned_power_cuts = cuts if type(cuts) is int and 0 <= cuts <= MAX_PLANNED_POWER_CUTS else 0
         # The QMP relay records its byte ceiling from its own thread.
         self._lock = threading.RLock()
 
@@ -269,7 +285,7 @@ class RunState:
         """Append a boot the controller confirmed; `identities.boot_id` follows it in the same write."""
         with self._lock:
             chain = self.document['boot_chain']
-            if not chain or boot_id in chain or len(chain) >= MAX_PLANNED_REBOOTS + 1:
+            if not chain or boot_id in chain or len(chain) >= MAX_PLANNED_REBOOTS + self.planned_power_cuts + 1:
                 raise RunStateError('run-state-boot-chain')
             chain.append(_name(boot_id))
             self.document['identities']['boot_id'] = boot_id
@@ -285,7 +301,10 @@ class RunState:
     def record(self, name, value):
         """Record `value` as spent before it is used; a value past the limit or a failed write refuses."""
         with self._lock:
-            if name not in BUDGETS or type(value) is not int or not 0 <= value <= limit(name, self.planned_reboots):
+            if name not in BUDGETS or type(value) is not int:
+                raise RunStateError('run-state-budget-exhausted')
+            bound = limit(name, self.planned_reboots, self.planned_power_cuts)
+            if not 0 <= value <= bound:
                 raise RunStateError('run-state-budget-exhausted')
             if value > self.document['budgets'][name]:
                 self.document['budgets'][name] = value

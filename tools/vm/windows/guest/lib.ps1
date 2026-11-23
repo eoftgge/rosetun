@@ -45,14 +45,50 @@ function Initialize-RosetunRunner {
     Save-RosetunStatus
 }
 
+function Resume-RosetunRunner {
+    param([Parameter(Mandatory)][string]$StatusPath, [Parameter(Mandatory)][string]$RunId)
+    $script:RunnerStatusPath = $StatusPath
+    $raw = [IO.File]::ReadAllText($StatusPath, [Text.Encoding]::UTF8)
+    $loaded = $raw | ConvertFrom-Json
+    if ([string]$loaded.schema -ne 'rosetun.matrix.windows-runner-status.v1' -or [string]$loaded.run -ne $RunId) {
+        throw 'runner-status-resume-mismatch'
+    }
+    $checks = [Collections.Generic.List[object]]::new()
+    foreach ($item in @($loaded.checks)) { if ($null -ne $item) { $checks.Add($item) } }
+    $markers = [Collections.Generic.List[object]]::new()
+    foreach ($item in @($loaded.markers)) { if ($null -ne $item) { $markers.Add($item) } }
+    $notes = [Collections.Generic.List[object]]::new()
+    foreach ($item in @($loaded.notes)) { if ($null -ne $item) { $notes.Add($item) } }
+    $script:RunnerStatus = [ordered]@{
+        schema = [string]$loaded.schema
+        run = [string]$loaded.run
+        state = [string]$loaded.state
+        step = [string]$loaded.step
+        sequence = [int]$loaded.sequence
+        started_utc = [string]$loaded.started_utc
+        updated_utc = [string]$loaded.updated_utc
+        checks = $checks
+        markers = $markers
+        notes = $notes
+        cleanup = $loaded.cleanup
+        error = $loaded.error
+    }
+}
+
 function Save-RosetunStatus {
-    # Write the new text beside the file and put it in place: the reader sees the old status or the new one, whole.
-    # A reader that has the file open for a moment (`type` shares no delete right) is waited for, not failed on.
+    # Write the new text beside the file, flush to disk and put it in place: the reader sees the old status or the new
+    # one, whole, and an abrupt power cut cannot leave an empty or half-written file.
     $script:RunnerStatus.sequence = [int]$script:RunnerStatus.sequence + 1
     $script:RunnerStatus.updated_utc = Get-RosetunUtcNow
     $json = ConvertTo-Json -InputObject $script:RunnerStatus -Depth 8 -Compress
     $temporary = $script:RunnerStatusPath + '.tmp'
-    [IO.File]::WriteAllText($temporary, $json + "`n", (New-Object Text.UTF8Encoding $false))
+    $bytes = [Text.Encoding]::UTF8.GetBytes($json + "`n")
+    $stream = [IO.FileStream]::new($temporary, [IO.FileMode]::Create, [IO.FileAccess]::Write, [IO.FileShare]::None)
+    try {
+        $stream.Write($bytes, 0, $bytes.Length)
+        $stream.Flush($true)
+    }
+    finally { $stream.Dispose() }
     for ($attempt = 1; $attempt -le 100; $attempt++) {
         try {
             if (Test-Path -LiteralPath $script:RunnerStatusPath) {
@@ -71,7 +107,7 @@ function Save-RosetunStatus {
 }
 
 function Set-RosetunRunnerState {
-    param([Parameter(Mandatory)][ValidateSet('starting', 'running', 'cleaning', 'finished', 'failed')][string]$State,
+    param([Parameter(Mandatory)][ValidateSet('starting', 'running', 'reboot-requested', 'power-cut-requested', 'cleaning', 'finished', 'failed')][string]$State,
         [string]$Step)
     $script:RunnerStatus.state = $State
     if ($Step) { $script:RunnerStatus.step = $Step }

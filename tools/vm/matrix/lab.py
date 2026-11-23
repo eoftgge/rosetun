@@ -7,7 +7,9 @@ import os
 import re
 from pathlib import Path
 import secrets
+import select
 import socket
+import threading
 import time
 import tomllib
 import uuid
@@ -59,6 +61,9 @@ MEDIA_RESOURCES = {'windows-media': MEDIA_IMAGE, 'windows-media-record': 'window
                    'windows-list-runner': 'windows-list/runner.json',
                    'windows-list-assessment': 'windows-list/assessment.json'}
 FAILURE_RESOURCES = {f'windows-failure-{key}': f'windows-failure/{leaf}' for key, leaf in (
+    ('plan', 'plan.json'), ('events', 'events.jsonl'), ('report', 'report.json'), ('status', 'status.json'),
+    ('runner', 'runner.json'), ('assessment', 'assessment.json'))}
+LOCKDOWN_RESOURCES = {f'windows-lockdown-{key}': f'windows-lockdown/{leaf}' for key, leaf in (
     ('plan', 'plan.json'), ('events', 'events.jsonl'), ('report', 'report.json'), ('status', 'status.json'),
     ('runner', 'runner.json'), ('assessment', 'assessment.json'))}
 # The IDE bus of the machine's own SATA controller that carries the drive (q35 has six, with or without `-nodefaults`).
@@ -147,10 +152,172 @@ def plan_lab(config, *, tunnel=False, evidence_disk=False, dns=False, control=No
     return plan
 
 
+_WIRE_FRAME_LIMIT = 65536
+
+
+class _WireRelay:
+    """Frame-preserving host relay between a persistent lab QEMU socket and replaceable test QEMU sockets.
+
+    QEMU `-netdev stream` frames each Ethernet packet with a 4-byte big-endian uint32 length. Relaying only
+    complete frames keeps the lab VM's stream synchronized when the test QEMU is killed mid-packet and restarted
+    during a planned power cycle.
+    """
+
+    def __init__(self, lab_socket, test_socket):
+        self._lab = lab_socket
+        self._test = test_socket
+        self._reader_sock = None
+        self._stopped = False
+        self._send_lock = threading.Lock()
+        self._cond = threading.Condition()
+        self._threads = (
+            threading.Thread(target=self._lab_to_test, name='rosetun-wire-lab-to-test', daemon=True),
+            threading.Thread(target=self._test_to_lab, name='rosetun-wire-test-to-lab', daemon=True),
+        )
+        for thread in self._threads:
+            thread.start()
+
+    def _recv_exact(self, sock, count, *, is_test):
+        if not hasattr(sock, 'recv'):
+            return None
+        data = bytearray()
+        while len(data) < count:
+            with self._cond:
+                if self._stopped or (is_test and self._test is not sock):
+                    return None
+            try:
+                fd = sock.fileno()
+            except OSError:
+                return None
+            if fd < 0:
+                return None
+            try:
+                ready, _, _ = select.select([sock], [], [], 0.2)
+            except (OSError, ValueError):
+                return None
+            if not ready:
+                continue
+            try:
+                chunk = sock.recv(count - len(data))
+            except OSError:
+                return None
+            if not chunk:
+                return None
+            data.extend(chunk)
+        return bytes(data)
+
+    def _read_frame(self, sock, *, is_test):
+        header = self._recv_exact(sock, 4, is_test=is_test)
+        if header is None:
+            return None
+        length = int.from_bytes(header, 'big')
+        if length == 0 or length > _WIRE_FRAME_LIMIT:
+            return None
+        payload = self._recv_exact(sock, length, is_test=is_test)
+        if payload is None:
+            return None
+        return header + payload
+
+    def _lab_to_test(self):
+        while True:
+            frame = self._read_frame(self._lab, is_test=False)
+            if frame is None:
+                return
+            with self._send_lock:
+                with self._cond:
+                    sock = self._test
+                if sock is not None:
+                    try:
+                        sock.sendall(frame)
+                    except OSError:
+                        pass
+
+    def _test_to_lab(self):
+        while True:
+            with self._cond:
+                while not self._stopped and self._test is None:
+                    self._cond.wait(0.2)
+                if self._stopped:
+                    return
+                sock = self._test
+                self._reader_sock = sock
+            try:
+                while True:
+                    frame = self._read_frame(sock, is_test=True)
+                    if frame is None:
+                        break
+                    self._lab.sendall(frame)
+            except OSError:
+                pass
+            finally:
+                with self._send_lock:
+                    with self._cond:
+                        if self._test is sock:
+                            self._test = None
+                        self._reader_sock = None
+                        self._cond.notify_all()
+                    try:
+                        sock.close()
+                    except OSError:
+                        pass
+
+    def attach_test(self, new_socket):
+        """Attach a fresh host-side socket for a restarted test QEMU, retiring the previous one."""
+        to_shutdown = None
+        with self._send_lock:
+            with self._cond:
+                if self._stopped:
+                    raise ValueError('lab-wire-relay-closed')
+                old = self._test
+                self._test = new_socket
+                if old is not None and old is self._reader_sock:
+                    to_shutdown = old
+                self._cond.notify_all()
+            if old is not None and to_shutdown is None:
+                try:
+                    old.close()
+                except OSError:
+                    pass
+        if to_shutdown is not None:
+            try:
+                to_shutdown.shutdown(socket.SHUT_RDWR)
+            except (OSError, AttributeError):
+                pass
+
+    def close(self):
+        with self._send_lock:
+            with self._cond:
+                self._stopped = True
+                old = self._test
+                self._test = None
+                reader = self._reader_sock
+                self._cond.notify_all()
+            if old is not None and old is not reader:
+                try:
+                    old.close()
+                except OSError:
+                    pass
+        for sock in (reader, self._lab):
+            if sock is not None:
+                try:
+                    sock.shutdown(socket.SHUT_RDWR)
+                except (OSError, AttributeError):
+                    pass
+        for thread in self._threads:
+            thread.join(timeout=2)
+        try:
+            self._lab.close()
+        except OSError:
+            pass
+        if self._lab.fileno() != -1:
+            raise ValueError('endpoint-close-unconfirmed')
+
+
 class LabPair:
     """Capability for two particular runs under their original lease."""
     def __init__(self, lease, runs, lab_id, *, pair_factory=socket.socketpair, tunnel=False, evidence_disk=False,
-                 dns=False, route_flows=False, journal_full=False, poller=False, media=False, failure=False):
+                 dns=False, route_flows=False, journal_full=False, poller=False, media=False, failure=False,
+                 lockdown=False, reconnectable=False):
         lease._check_live()
         if set(runs) != set(MACS) or lease._active or runs['test'] is runs['lab']:
             raise ValueError('invalid-lab-members')
@@ -158,6 +325,7 @@ class LabPair:
             if run._lease is not lease or run._read()['state'] != 'prepared':
                 raise ValueError('foreign-lab-member')
         self.lease, self.runs, self.lab_id = lease, dict(runs), _identifier(lab_id)
+        self._pair_factory = pair_factory
         self.tunnel = tunnel is True
         self.evidence_disk = evidence_disk is True
         self.dns = dns is True
@@ -166,6 +334,9 @@ class LabPair:
         self.poller = poller is True
         self.media = media is True
         self.failure = failure is True
+        self.lockdown = lockdown is True
+        self.reconnectable = reconnectable is True
+        self._relay = None
         self.sockets = {}
         self.used = set()
         self.closed = False
@@ -185,8 +356,14 @@ class LabPair:
                     with resource_path(run.directory, name).open('r+b') as image:
                         image.truncate(EVIDENCE_SIZE)
         # Both endpoint records already exist in the execution identity ledgers.
-        a, b = pair_factory(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.sockets = dict(test=a, lab=b)
+        if self.reconnectable:
+            lab_host, lab_child = pair_factory(socket.AF_UNIX, socket.SOCK_STREAM)
+            test_host, test_child = pair_factory(socket.AF_UNIX, socket.SOCK_STREAM)
+            self._relay = _WireRelay(lab_host, test_host)
+            self.sockets = dict(test=test_child, lab=lab_child)
+        else:
+            a, b = pair_factory(socket.AF_UNIX, socket.SOCK_STREAM)
+            self.sockets = dict(test=a, lab=b)
 
     def role(self, run):
         roles = [role for role, member in self.runs.items() if member is run]
@@ -199,7 +376,8 @@ class LabPair:
             files = DNS_CLIENT_LOG if getattr(self, 'dns', False) else {}
             files = {**files, **JOURNAL_ARTIFACTS} if getattr(self, 'journal_full', False) else files
             files = {**files, **MEDIA_RESOURCES} if getattr(self, 'media', False) else files
-            return {**files, **FAILURE_RESOURCES} if getattr(self, 'failure', False) else files
+            files = {**files, **FAILURE_RESOURCES} if getattr(self, 'failure', False) else files
+            return {**files, **LOCKDOWN_RESOURCES} if getattr(self, 'lockdown', False) else files
         files = {**ARTIFACTS, **TUNNEL_ARTIFACTS} if self.tunnel else ARTIFACTS
         # Unbound calls with a stand-in object exist in older tests, which know no disk or DNS.
         if getattr(self, 'dns', False):
@@ -221,18 +399,7 @@ class LabPair:
         if len(self.lease._active) >= 2:
             raise ValueError('lab-capacity')
 
-    def network(self, run, *, adapter=False):
-        """The arguments that join the machine to its end of the wire, and the descriptor to pass on.
-
-        A machine whose image already has its network adapter (a Windows guest binds its settings to it, so the
-        launch profile names it) gets only the backend, `adapter=True`, and the adapter is told to use `labwire`.
-        """
-        self.lease._check_live()
-        role = self.role(run)
-        if self.closed or role in self.used:
-            raise ValueError('lab-endpoint-already-consumed')
-        self.used.add(role)
-        fd = self.sockets[role].fileno()
+    def _network_argv(self, run, role, fd, adapter):
         argv = ['-netdev', f'stream,id=labwire,addr.type=fd,addr.str={fd},server=off']
         if not adapter:
             argv += ['-device', f'virtio-net-pci,netdev=labwire,id={role}-wire,mac={MACS[role]}']
@@ -250,11 +417,55 @@ class LabPair:
                                               'file': {'driver': 'file', 'filename': str(image), 'read-only': True}},
                                              sort_keys=True),
                      '-device', 'ide-cd,drive=winmedia,bus=' + MEDIA_BUS + ',id=winmedia']
-        return argv, fd
+        return argv
+
+    def network(self, run, *, adapter=False):
+        """The arguments that join the machine to its end of the wire, and the descriptor to pass on.
+
+        A machine whose image already has its network adapter (a Windows guest binds its settings to it, so the
+        launch profile names it) gets only the backend, `adapter=True`, and the adapter is told to use `labwire`.
+        """
+        self.lease._check_live()
+        role = self.role(run)
+        if self.closed or role in self.used:
+            raise ValueError('lab-endpoint-already-consumed')
+        self.used.add(role)
+        fd = self.sockets[role].fileno()
+        return LabPair._network_argv(self, run, role, fd, adapter), fd
+
+    def reconnect_network(self, run, *, adapter=False):
+        """Create a fresh test-side socketpair and attach it to the relay for a planned power cycle."""
+        self.lease._check_live()
+        role = self.role(run)
+        if (role != 'test' or not self.reconnectable or self._relay is None
+                or self.closed or role not in self.used):
+            raise ValueError('lab-wire-not-reconnectable')
+        previous = self.sockets.get(role)
+        if previous is not None:
+            previous.close()
+        test_host, test_child = self._pair_factory(socket.AF_UNIX, socket.SOCK_STREAM)
+        self._relay.attach_test(test_host)
+        self.sockets[role] = test_child
+        fd = test_child.fileno()
+        return LabPair._network_argv(self, run, role, fd, adapter), fd
+
+    def release_child(self, run):
+        """Close the controller's copy of a child wire descriptor after QEMU has inherited it."""
+        role = self.role(run)
+        endpoint = self.sockets.get(role)
+        if endpoint is not None:
+            endpoint.close()
+            if endpoint.fileno() != -1:
+                raise ValueError('endpoint-close-unconfirmed')
 
     def close(self):
         self.closed = False
         errors = []
+        if self._relay is not None:
+            try:
+                self._relay.close()
+            except (OSError, ValueError) as error:
+                errors.append(error)
         for endpoint in self.sockets.values():
             try:
                 endpoint.close()
