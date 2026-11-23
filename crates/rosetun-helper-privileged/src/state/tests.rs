@@ -4354,6 +4354,10 @@ fn xray_chain_helper() -> XrayChainHelper {
 fn reality_request() -> ConnectRequest {
     let mut request = connect_request();
     request.settings.kill_switch = true;
+    request.node.outbound = Outbound::Vless(VlessParams {
+        uuid: "00000000-0000-0000-0000-000000000000".to_owned(),
+        flow: None,
+    });
     request.node.stream.tls = rosetun_config::TlsMode::Reality(rosetun_config::RealityParams {
         sni: Some("example.com".into()),
         public_key: "test-public-key".into(),
@@ -4396,6 +4400,27 @@ fn xray_chain_protects_then_starts_xray_then_singbox() {
             .unwrap()
             .load(Ordering::Acquire)
     );
+}
+
+#[test]
+fn plain_vless_node_uses_xray_in_auto_mode() {
+    let (helper, controls, runner, binaries, _, _) = xray_chain_helper();
+    let mut vless = connect_request();
+    vless.settings.kill_switch = true;
+    vless.node.outbound = Outbound::Vless(VlessParams {
+        uuid: "00000000-0000-0000-0000-000000000000".to_owned(),
+        flow: None,
+    });
+    vless.node.stream.tls = rosetun_config::TlsMode::Tls(rosetun_config::TlsParams::default());
+
+    helper.connect(&vless).unwrap();
+    assert_eq!(binaries.lock().unwrap()[0].len(), 2);
+    assert_eq!(
+        *controls.events.lock().unwrap(),
+        ["protect", "xray", "sing-box", "tunnel"]
+    );
+    assert_eq!(runner.starts.load(Ordering::Acquire), 1);
+    assert!(helper.status().xray);
 }
 
 #[test]
@@ -4638,9 +4663,8 @@ fn connect_request() -> ConnectRequest {
             name: "test".to_owned(),
             server: "127.0.0.1".to_owned(),
             port: 443,
-            outbound: Outbound::Vless(VlessParams {
-                uuid: "00000000-0000-0000-0000-000000000000".to_owned(),
-                flow: None,
+            outbound: Outbound::Trojan(rosetun_config::TrojanParams {
+                password: "test-password".to_owned(),
             }),
             stream: Default::default(),
             raw: None,
@@ -6131,7 +6155,9 @@ fn probe_mixes_plain_and_reality_nodes_in_one_xray_process() {
         .with_xray_runner(Arc::clone(&runner) as Arc<dyn XrayRunner>)
         .with_test_physical_interface(|_| Some("Ethernet".into()));
     let mut request = probe_request();
-    request.nodes[0].stream.tls = reality_request().node.stream.tls;
+    let reality = reality_request().node;
+    request.nodes[0].outbound = reality.outbound;
+    request.nodes[0].stream.tls = reality.stream.tls;
     let mut plain = connect_request().node;
     plain.id = NodeId::new("plain");
     request.nodes.push(plain);
@@ -7266,7 +7292,9 @@ fn apply_with_other_extra_nodes_restarts_and_rollback_restores_them() {
 fn xray_is_permitted_when_only_an_extra_node_needs_it() {
     let (helper, _, runner, binaries, _, _) = xray_chain_helper();
     let mut request = exit_request("other", "198.51.100.20");
-    request.extra_nodes[0].node.stream.tls = reality_request().node.stream.tls;
+    let reality = reality_request().node;
+    request.extra_nodes[0].node.outbound = reality.outbound;
+    request.extra_nodes[0].node.stream.tls = reality.stream.tls;
     helper.connect(&request).unwrap();
 
     let permitted = binaries.lock().unwrap()[0].clone();
@@ -7294,8 +7322,11 @@ fn xray_is_not_permitted_when_no_node_needs_it() {
 fn main_and_extra_nodes_share_one_xray_process() {
     let (helper, _, runner, binaries, _, _) = xray_chain_helper();
     let mut request = exit_request("other", "198.51.100.20");
-    request.node.stream.tls = reality_request().node.stream.tls;
-    request.extra_nodes[0].node.stream.tls = reality_request().node.stream.tls;
+    let reality = reality_request().node;
+    request.node.outbound = reality.outbound.clone();
+    request.node.stream.tls = reality.stream.tls.clone();
+    request.extra_nodes[0].node.outbound = reality.outbound;
+    request.extra_nodes[0].node.stream.tls = reality.stream.tls;
     helper.connect(&request).unwrap();
 
     assert_eq!(binaries.lock().unwrap()[0].len(), 2);

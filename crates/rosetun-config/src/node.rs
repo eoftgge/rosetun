@@ -5,9 +5,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::{CountryCode, NodeId, Settings, XrayUse};
 
-// sing-box#4520: REALITY servers on Xray 26.9.8+ reject sing-box's handshake.
-const XRAY_FOR_REALITY: bool = true;
-
 /// Whether Xray carries this node. Every caller asks here, so a connect, an apply and a server
 /// check always agree.
 pub fn uses_xray(node: &Node, settings: &Settings) -> bool {
@@ -15,15 +12,12 @@ pub fn uses_xray(node: &Node, settings: &Settings) -> bool {
         XrayUse::Off => false,
         // Splitting the packets to the server is Xray's feature, so a node it can run goes there.
         _ if settings.tls_fragment.applies_to(node) => true,
-        // sing-box has no XHTTP transport, so such a node has no other route.
+        // VLESS is Xray's native protocol (including REALITY, where sing-box#4520 breaks on Xray
+        // 26.9.8+), and sing-box has no XHTTP transport.
         XrayUse::Auto if matches!(node.stream.transport, Transport::Xhttp { .. }) => {
             xray_supports(&node.outbound)
         }
-        XrayUse::Auto => {
-            XRAY_FOR_REALITY
-                && matches!(&node.outbound, Outbound::Vless(_))
-                && matches!(&node.stream.tls, TlsMode::Reality(_))
-        }
+        XrayUse::Auto => matches!(&node.outbound, Outbound::Vless(_)),
         XrayUse::Always => xray_supports(&node.outbound),
     }
 }
@@ -1045,11 +1039,13 @@ mod tests {
         ];
         for (outbound, supported) in outbounds {
             node.outbound = outbound;
-            for tls in [TlsMode::Plain, reality.clone()] {
+            for tls in [
+                TlsMode::Plain,
+                TlsMode::Tls(TlsParams::default()),
+                reality.clone(),
+            ] {
                 node.stream.tls = tls;
-                let auto = supported
-                    && matches!(node.outbound, Outbound::Vless(_))
-                    && matches!(node.stream.tls, TlsMode::Reality(_));
+                let auto = matches!(node.outbound, Outbound::Vless(_));
                 assert_eq!(uses_xray(&node, &with_xray(XrayUse::Auto)), auto);
                 assert!(!uses_xray(&node, &with_xray(XrayUse::Off)));
                 assert_eq!(uses_xray(&node, &with_xray(XrayUse::Always)), supported);
@@ -1193,14 +1189,19 @@ mod tests {
 
     #[test]
     fn the_hello_mode_leaves_a_node_without_tls_on_sing_box() {
-        let vless = every_outbound().remove(0).0;
-        let node = example_node(vless, TlsMode::Plain);
+        let vmess = every_outbound().remove(1).0;
+        let node = example_node(vmess, TlsMode::Plain);
         let hello = with_fragment(XrayUse::Auto, "tlshello");
         assert!(!uses_xray(&node, &hello));
         assert!(!fragments_tls(&node, &hello));
         let range = with_fragment(XrayUse::Auto, "1-3");
         assert!(uses_xray(&node, &range));
         assert!(fragments_tls(&node, &range));
+
+        let vless = every_outbound().remove(0).0;
+        let vless_plain = example_node(vless, TlsMode::Plain);
+        assert!(uses_xray(&vless_plain, &hello));
+        assert!(!fragments_tls(&vless_plain, &hello));
     }
 
     fn xhttp() -> Transport {
