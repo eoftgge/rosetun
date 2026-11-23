@@ -41,7 +41,7 @@ Enabled rules by program additionally require `CAP_SYS_PTRACE` and `CAP_DAC_READ
 
 ## About Rosetun {#about-rosetun}
 
-Rosetun is a VPN client for Windows and Linux. sing-box runs the tunnel, rules and DNS; for VLESS + REALITY servers, Xray behind sing-box carries the connection to the server. A system service keeps the kill switch and the DNS lock in the firewall. Rules split traffic by program, website and IP address, and provider subscriptions supply the servers.
+Rosetun is a VPN client for Windows and Linux. sing-box runs the tunnel, rules and DNS; for VLESS, XHTTP and Xray balancer servers, Xray behind sing-box carries the connection to the server. A system service keeps the kill switch and the DNS lock in the firewall. Rules split traffic by program, website and IP address, and provider subscriptions supply the servers.
 
 **Young project:** one developer maintains it with AI coding agents, and it has few users yet. Please report what breaks in [Issues](https://github.com/eoftgge/rosetun/issues).
 

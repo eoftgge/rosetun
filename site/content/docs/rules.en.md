@@ -53,7 +53,7 @@ Limits:
 
 - Exactly two exits. An exit cannot connect through itself, and there are no cycles or third hops.
 - B is an HTTP, HTTPS or SOCKS5 proxy, and its server is an IPv4 or IPv6 address, not a name. HTTPS still verifies the certificate; set the expected TLS server name where it is needed.
-- A can be any server that sing-box can reach, including one that runs through Xray, such as VLESS with REALITY when Xray is set to **Automatically**. B through Xray and TLS fragmentation do not work for this path.
+- A can be any server that sing-box can reach, including one that runs through Xray, such as VLESS when Xray is set to **Automatically**. B through Xray and TLS fragmentation do not work for this path.
 - Rosetun does not look up B's name itself, so B's address must be given as a number. The name of A is resolved by the usual rules. DNS for the sites you open follows your DNS settings, so this feature does not promise that all DNS goes through B.
 - UDP, including QUIC, that a rule sends through B is blocked. It does not fall back to A or to a direct connection. Other rules keep their behaviour.
 - A missing exit, an unreachable proxy, wrong credentials or a failed HTTPS handshake never switches to a shorter path. After a changed subscription, a country fallback or a different mode, the service checks the path again.

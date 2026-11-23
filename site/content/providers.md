@@ -27,11 +27,11 @@ lead = "Обычная подписка. Одна кнопка для добав
 {% <prose_section> %}
 <h2>Форматы и серверы</h2>
 
-Список URI по одному на строку, обычный или base64. Xray JSON: объект конфигурации или массив конфигураций; из каждой берётся поддерживаемый outbound с тегом proxy, иначе первый поддерживаемый. sing-box JSON: объект с outbounds; служебные selector, urltest, direct, block и dns пропускаются. Конфигурации WireGuard (`.conf`). Это импорт серверов, а не всей конфигурации маршрутизации.
+Список URI по одному на строку, обычный или base64. Xray JSON: объект конфигурации или массив конфигураций; если в конфигурации заданы `routing.balancers`, импортируется один сервер-балансировщик Xray со всеми подходящими outbound (VLESS, VMess, Trojan, Shadowsocks) по `selector` и необязательному `fallbackTag` (`random`, `roundRobin`, `leastPing`, `leastLoad` и `observatory` / `burstObservatory`; поле `connectivity` у `burstObservatory` опускается, чтобы проверки не выходили мимо туннеля); иначе берётся поддерживаемый outbound с тегом `proxy` или первый поддерживаемый. sing-box JSON: объект с outbounds; служебные selector, urltest, direct, block и dns пропускаются. Конфигурации WireGuard (`.conf`). Это импорт серверов, а не всей конфигурации маршрутизации.
 
-VLESS, VMess, Trojan, Shadowsocks, Hysteria2, TUIC v5, AnyTLS и WireGuard. TCP, WebSocket, gRPC, HTTPUpgrade; XHTTP (SplitHTTP) через Xray. Режимы безопасности: без шифрования, TLS и REALITY. Для Hysteria2: QUIC поверх UDP, Salamander и смена портов. Для TUIC v5: QUIC поверх UDP (`tuic://`, sing-box JSON). Для AnyTLS: TCP поверх TLS или REALITY (`anytls://`, sing-box JSON). Для WireGuard: UDP (`wireguard://`, `wg://`, sing-box JSON, Xray JSON и `.conf`, включая байты `reserved` для Cloudflare WARP).
+VLESS, VMess, Trojan, Shadowsocks, Hysteria2, TUIC v5, AnyTLS и WireGuard. TCP, WebSocket, gRPC, HTTPUpgrade; XHTTP (SplitHTTP) через Xray. Режимы безопасности: без шифрования, TLS (включая `enableSessionResumption`) и REALITY. Для Xray JSON поддерживается `streamSettings.finalmask.tcp` (`header-custom`). Для Hysteria2: QUIC поверх UDP, Salamander и смена портов. Для TUIC v5: QUIC поверх UDP (`tuic://`, sing-box JSON). Для AnyTLS: TCP поверх TLS или REALITY (`anytls://`, sing-box JSON). Для WireGuard: UDP (`wireguard://`, `wg://`, sing-box JSON, Xray JSON и `.conf`, включая байты `reserved` для Cloudflare WARP).
 
-Не поддерживаются: Clash YAML, зашифрованные ссылки Happ, XHTTP с отдельным сервером загрузки, mKCP, QUIC-транспорт для TCP-протоколов, HTTP/2, шифрование VLESS, плагины Shadowsocks и другие протоколы (например, AmneziaWG). Неподдерживаемые узлы пропускаются с указанием протокола в отчёте импорта в карточке. Если подходящих узлов нет, добавление завершается ошибкой. Ответ подписки ограничен 5 МиБ после распаковки.
+Не поддерживаются: Clash YAML, зашифрованные ссылки Happ, XHTTP с отдельным сервером загрузки, UDP `finalmask` / `quicParams` и типы `finalmask` кроме TCP `header-custom`, mKCP, QUIC-транспорт для TCP-протоколов, HTTP/2, шифрование VLESS, плагины Shadowsocks и другие протоколы (например, AmneziaWG). Неподдерживаемые узлы пропускаются с указанием протокола в отчёте импорта в карточке. Если подходящих узлов нет, добавление завершается ошибкой. Ответ подписки ограничен 5 МиБ после распаковки.
 {% </prose_section> %}
 
 
@@ -47,7 +47,7 @@ VLESS, VMess, Trojan, Shadowsocks, Hysteria2, TUIC v5, AnyTLS и WireGuard. TCP,
 {% <prose_section> %}
 <h2>Что получает ваш сервер</h2>
 
-По умолчанию `User-Agent: Rosetun/<версия>`; пользователь может задать другой User-Agent. При включённом «Отправлять ID устройства» запрос добавляет `x-hwid`, `x-device-os`, `x-ver-os`, `x-device-model`. Если сведения об устройстве получить не удалось, запрос идёт без них.
+По умолчанию `User-Agent: Rosetun/<версия>`; пользователь может выбрать `Happ` (`Happ/4.0.0`) или задать свой User-Agent для подписки. При включённом «Отправлять ID устройства» запрос добавляет `x-hwid`, `x-device-os`, `x-ver-os`, `x-device-model`. Если сведения об устройстве получить не удалось, запрос идёт без них.
 
 Отправка включена по умолчанию и выключается для каждой подписки, в CLI через `--no-hwid`. Новые подписки получают ID, свой для каждого хоста сервера подписок: путь, токен и порт его не меняют. Разные хосты получают разные ID. У подписок, добавленных до 0.4, сохраняется прежний общий ID. Версия ОС и модель ограничены 64 печатными ASCII-символами; остальные символы заменяются на ?.
 

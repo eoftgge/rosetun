@@ -133,14 +133,14 @@ The script stops the `launchd` service, removes `Rosetun.app`, the CLI, helper, 
 
 Before updating, copy your settings folder. The default path is `%APPDATA%\Rosetun` on Windows and `~/.config/rosetun` on Linux. The backup contains your subscription URLs. Keep it private.
 
-Use the update procedure for your platform above to carry over settings and Lockdown. The first settings save in 0.7 converts format 9 to **format 12** and leaves the previous file beside it as `config.v9.json`. The 0.7 beta already uses format 12. Rosetun 0.6 refuses to open a format 12 file and leaves it intact.
+Use the update procedure for your platform above to carry over settings and Lockdown. The first settings save in 0.7 converts format 9 to **format 13** and leaves the previous file beside it (`config.v9.json` from 0.6, or `config.v12.json` from 0.7.0-beta.1). Rosetun 0.6 and 0.7.0-beta.1 refuse to open a format 13 file and leave it intact.
 
 ## Going back to 0.6 {#rollback}
 
 1. Disconnect in 0.7 so your own proxy settings come back.
 2. Uninstall 0.7 and keep your settings. On Debian, use `apt remove` to retain data that `apt purge` would remove.
 3. Install 0.6 and close Rosetun.
-4. If your configuration was saved in format 12, restore a copy of your pre-update `config.json`. You can also copy `config.v9.json` to `config.json` in the settings folder if that backup exists. Keep a separate copy of the format 12 file if you want to retain your 0.7 changes.
+4. If your configuration was saved in format 13, restore a copy of your pre-update `config.json`. You can also copy `config.v9.json` to `config.json` in the settings folder if that backup exists. Keep a separate copy of the format 13 file if you want to retain your 0.7 changes.
 5. Re-enable autostart and Lockdown if you used them.
 
 ## Verify the download {#verify-the-download}

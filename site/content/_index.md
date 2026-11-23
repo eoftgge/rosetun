@@ -39,7 +39,7 @@ text = 'Добавляйте подписку ссылкой, QR-кодом ил
 
 [[extra.features]]
 title = 'Выбор соединения'
-text = 'VLESS, VMess, Trojan, Shadowsocks, Hysteria2, TUIC v5, AnyTLS и WireGuard. Ядра sing-box и Xray, REALITY и XHTTP, фрагментация TLS. Доступные транспорты и ограничения описаны на странице для провайдеров.'
+text = 'VLESS, VMess, Trojan, Shadowsocks, Hysteria2, TUIC v5, AnyTLS и WireGuard. Ядра sing-box и Xray, REALITY, XHTTP, балансировщики и finalmask, фрагментация TLS. Доступные транспорты и ограничения описаны на странице для провайдеров.'
 
 [[extra.features]]
 title = 'Приватность без обещаний'

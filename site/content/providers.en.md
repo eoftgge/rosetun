@@ -25,11 +25,11 @@ Use HTTPS. An HTTP subscription sends its token without encryption. Escape amper
 {% <prose_section> %}
 <h2>Formats and servers</h2>
 
-One URI per line, plain or base64. Xray JSON: a configuration object or an array of configurations; each supplies the supported outbound tagged proxy, or the first supported outbound. sing-box JSON: an object with outbounds; service entries selector, urltest, direct, block and dns are skipped. WireGuard `.conf` files. This imports servers, not the entire routing configuration.
+One URI per line, plain or base64. Xray JSON: a configuration object or an array of configurations; when a configuration defines `routing.balancers`, it is imported as one balanced Xray server with its matching supported outbounds (VLESS, VMess, Trojan, Shadowsocks) from `selector` and optional `fallbackTag` (`random`, `roundRobin`, `leastPing`, `leastLoad` and `observatory` / `burstObservatory`; `burstObservatory.pingConfig.connectivity` is omitted so probes stay inside the tunnel); otherwise each configuration supplies the supported outbound tagged `proxy`, or the first supported outbound. sing-box JSON: an object with outbounds; service entries selector, urltest, direct, block and dns are skipped. WireGuard `.conf` files. This imports servers, not the entire routing configuration.
 
-VLESS, VMess, Trojan, Shadowsocks, Hysteria2, TUIC v5, AnyTLS and WireGuard. TCP, WebSocket, gRPC, HTTPUpgrade; XHTTP (SplitHTTP) through Xray. Unencrypted transport, TLS and REALITY. Hysteria2 uses QUIC over UDP, with Salamander and port hopping. TUIC v5 uses QUIC over UDP (`tuic://`, sing-box JSON). AnyTLS uses TCP over TLS or REALITY (`anytls://`, sing-box JSON). WireGuard uses UDP (`wireguard://`, `wg://`, sing-box JSON, Xray JSON and `.conf` files, including Cloudflare WARP `reserved` bytes).
+VLESS, VMess, Trojan, Shadowsocks, Hysteria2, TUIC v5, AnyTLS and WireGuard. TCP, WebSocket, gRPC, HTTPUpgrade; XHTTP (SplitHTTP) through Xray. Unencrypted transport, TLS (including `enableSessionResumption`) and REALITY. Xray JSON also supports `streamSettings.finalmask.tcp` (`header-custom`). Hysteria2 uses QUIC over UDP, with Salamander and port hopping. TUIC v5 uses QUIC over UDP (`tuic://`, sing-box JSON). AnyTLS uses TCP over TLS or REALITY (`anytls://`, sing-box JSON). WireGuard uses UDP (`wireguard://`, `wg://`, sing-box JSON, Xray JSON and `.conf` files, including Cloudflare WARP `reserved` bytes).
 
-Unsupported: Clash YAML, encrypted Happ links, XHTTP with a separate download server, mKCP, QUIC transport for TCP protocols, HTTP/2, VLESS encryption, Shadowsocks plugins and other protocols (such as AmneziaWG). Unsupported nodes are skipped and named by protocol in the card’s import report. Import fails if no usable nodes remain. The subscription response is limited to 5 MiB after decompression.
+Unsupported: Clash YAML, encrypted Happ links, XHTTP with a separate download server, UDP `finalmask` / `quicParams` and `finalmask` types other than TCP `header-custom`, mKCP, QUIC transport for TCP protocols, HTTP/2, VLESS encryption, Shadowsocks plugins and other protocols (such as AmneziaWG). Unsupported nodes are skipped and named by protocol in the card’s import report. Import fails if no usable nodes remain. The subscription response is limited to 5 MiB after decompression.
 {% </prose_section> %}
 
 
@@ -45,7 +45,7 @@ Control and bidirectional formatting characters are removed from display text. I
 {% <prose_section> %}
 <h2>What your server receives</h2>
 
-The default is `User-Agent: Rosetun/<version>`; users can override it. With “Send device ID” enabled, requests include `x-hwid`, `x-device-os`, `x-ver-os` and `x-device-model`. If device information cannot be obtained, the request proceeds without it.
+The default is `User-Agent: Rosetun/<version>`; users can switch to `Happ` (`Happ/4.0.0`) or set a custom User-Agent per subscription. With “Send device ID” enabled, requests include `x-hwid`, `x-device-os`, `x-ver-os` and `x-device-model`. If device information cannot be obtained, the request proceeds without it.
 
 Sharing is on by default and can be disabled per subscription, or with `--no-hwid` in the CLI. New subscriptions use an ID specific to the subscription server host: paths, tokens and ports do not change it. Different hosts receive different IDs. Subscriptions added before 0.4 retain their previous shared ID. OS version and model are limited to 64 printable ASCII characters; other characters become ?.
 

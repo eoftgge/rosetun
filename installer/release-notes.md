@@ -2,22 +2,17 @@
 
 ## What’s new
 
+- **Xray balancers, observatory, TCP finalmask and Xray for all VLESS.** In **Automatically** mode, all VLESS servers now go through Xray. Xray JSON subscriptions support `routing.balancers` (`random`, `roundRobin`, `leastPing`, `leastLoad` and `fallbackTag`), `observatory` / `burstObservatory`, `streamSettings.finalmask.tcp` (`header-custom`) and `tlsSettings.enableSessionResumption`. [Subscriptions](https://eoftgge.github.io/rosetun/en/docs/subscriptions/) · [For providers](https://eoftgge.github.io/rosetun/en/providers/)
+- **Subscription User-Agent selector.** Pick a subscription’s `User-Agent` when adding or editing it: **Rosetun (default)**, **Happ** (`Happ/4.0.0`), or **Custom**, for providers that return different configs depending on the client. [Subscriptions](https://eoftgge.github.io/rosetun/en/docs/subscriptions/)
 - **Rule groups and templates catalog.** Combine websites, apps, IP addresses and lists into an editable group with one toggle and route. Expand groups inline in the table, add or reorder conditions inside the group editor, group or move rules from the right-click menu, undo with Ctrl+Z and export or import groups. Pick from 8 ready-made presets in **Templates**. [Rules](https://eoftgge.github.io/rosetun/en/docs/rules/#groups)
 - **Search and address check in one field.** Search your rules and test where a site, IP or program goes from the same input, with compact square-icon controls on narrow windows. Temporary rules now appear beside the active rule set on the connection screen. [Check an address](https://eoftgge.github.io/rosetun/en/docs/rules/#test)
 - **TUIC v5, AnyTLS and WireGuard.** Added `tuic://`, `anytls://`, `wireguard://`, `wg://`, WireGuard `.conf` and sing-box/Xray JSON support (including Cloudflare WARP `reserved` bytes), all carried by sing-box. Subscription import reports now name skipped unsupported protocols. [Subscriptions](https://eoftgge.github.io/rosetun/en/docs/subscriptions/)
 - **Verified in-app updates on Windows.** `SHA256SUMS.txt` is now signed with the release key (`SHA256SUMS.txt.minisig`). On Windows, the update notice can download, verify and launch the installer right from the app. Updating stays manual on Linux and macOS. [Install and verify](https://eoftgge.github.io/rosetun/en/docs/install/#windows)
-- **macOS (Apple Silicon) · experimental build.** `.pkg` installer with `Rosetun.app`, CLI, `launchd` service, sing-box and Xray for macOS 14+ (`arm64`). Kill switch and Lockdown are unavailable on macOS: traffic may go direct if the tunnel drops. [macOS support](https://eoftgge.github.io/rosetun/en/docs/macos/)
-- **Black and White themes.** Added a light porcelain **White** theme with the signature rose accent and a deep OLED **Black** theme with a calm steel-graphite accent in **Settings → General → Color themes**.
-- **Country flags or codes and color emoji.** Choose how countries appear in **Settings → General → Country display**. Bundled Noto Color Emoji renders server names consistently on Windows, Linux and macOS.
+- **macOS (Apple Silicon) · experimental build.** `.pkg` installer with `Rosetun.app`, CLI, `launchd` service, sing-box and Xray for macOS 14+ (`arm64`). Kill switch and Lockdown are unavailable on macOS: traffic may go direct if the tunnel drops. Fixed process lookup on macOS when no user program rules are set. [macOS support](https://eoftgge.github.io/rosetun/en/docs/macos/)
+- **Black and White themes, country display and smaller binaries.** Added a light porcelain **White** theme and a deep OLED **Black** theme in **Settings → General → Color themes** (8 themes total), configurable country flags or two-letter codes, bundled Noto Color Emoji, vertically centered error banners, and smaller release binaries (LTO, stripped symbols and compressed fonts).
 - **Clearer two-hop setup and smoother program list.** **Connect through** shows only usable exits and explains when TLS fragmentation blocks chaining; loading running programs and icons no longer stalls the traffic chart. [Two-hop exits](https://eoftgge.github.io/rosetun/en/docs/rules/#two-hop)
 
 Includes sing-box {{sing_box_version}} and [Xray-core {{xray_version}}](https://github.com/XTLS/Xray-core/releases/tag/v{{xray_version}}). Building from source requires Rust 1.99+.
-
-## Upgrading from 0.6
-
-Back up your settings before installing (`%APPDATA%\Rosetun` on Windows, `~/.config/rosetun` on Linux). Install 0.7 over 0.6 to keep your settings and Lockdown. On first save, 0.7 writes **format 12** and leaves the format 9 file beside it as `config.v9.json`. Rosetun 0.6 refuses to open a format 12 file and leaves it intact.
-
-**Going back to 0.6.** Disconnect and uninstall 0.7 keeping your settings. Install 0.6, close the app and restore your backup or copy `config.v9.json` over `config.json`. Changes made in 0.7 will not carry back. Re-enable autostart and Lockdown if you used them. [Install, update and rollback](https://eoftgge.github.io/rosetun/en/docs/install/#update)
 
 ## Download and verify
 
@@ -38,22 +33,17 @@ Engine sources: `sing-box-{{sing_box_version}}-source.tar.gz` (GPL-3.0-or-later)
 
 ### Что нового
 
+- **Балансировщики Xray, observatory, TCP finalmask и Xray для всех VLESS.** В режиме **Автоматически** через Xray теперь идут все серверы VLESS. В подписках Xray JSON поддерживаются `routing.balancers` (`random`, `roundRobin`, `leastPing`, `leastLoad` и `fallbackTag`), `observatory` / `burstObservatory`, `streamSettings.finalmask.tcp` (`header-custom`) и `tlsSettings.enableSessionResumption`. [Подписки](https://eoftgge.github.io/rosetun/docs/subscriptions/) · [Для провайдеров](https://eoftgge.github.io/rosetun/providers/)
+- **Выбор User-Agent для подписок.** При добавлении и редактировании подписки можно выбрать `User-Agent`: **Rosetun (по умолчанию)**, **Happ** (`Happ/4.0.0`) или **Другое**, если провайдер отдаёт разные конфиги в зависимости от клиента. [Подписки](https://eoftgge.github.io/rosetun/docs/subscriptions/)
 - **Группы правил и каталог шаблонов.** Объединяйте сайты, программы, IP-адреса и списки в редактируемую группу с одним переключателем и маршрутом. Группы раскрываются прямо в таблице, условия внутри редактора группы можно добавлять по вкладкам и менять местами, правила объединяются и добавляются в группу через контекстное меню, изменения отменяются по Ctrl+Z и поддерживаются при экспорте и импорте. В окне **Шаблоны** доступны 8 готовых пресетов. [Правила](https://eoftgge.github.io/rosetun/docs/rules/#groups)
 - **Поиск и проверка адреса в одном поле.** Поиск по правилам и проверка маршрута для сайта, IP или программы теперь в одной строке, а на узких окнах панель сжимается до компактных иконок. Временные правила отображаются рядом с активным набором на экране подключения. [Проверка адреса](https://eoftgge.github.io/rosetun/docs/rules/#test)
 - **TUIC v5, AnyTLS и WireGuard.** Добавлена поддержка `tuic://`, `anytls://`, `wireguard://`, `wg://`, файлов WireGuard `.conf` и sing-box/Xray JSON (включая байты `reserved` для Cloudflare WARP), все через sing-box. В отчёте импорта подписок теперь указаны названия пропущенных неподдерживаемых протоколов. [Подписки](https://eoftgge.github.io/rosetun/docs/subscriptions/)
 - **Обновление из приложения на Windows.** Файл `SHA256SUMS.txt` подписывается ключом выпуска (`SHA256SUMS.txt.minisig`). На Windows уведомление о новой версии скачивает, проверяет и запускает установщик прямо из приложения. На Linux и macOS обновление остаётся ручным. [Установка и проверка](https://eoftgge.github.io/rosetun/docs/install/#windows)
-- **macOS (Apple Silicon) · экспериментальная сборка.** Установщик `.pkg` с `Rosetun.app`, CLI, службой `launchd`, sing-box и Xray для macOS 14+ (`arm64`). Kill switch и Lockdown на macOS недоступны: при обрыве туннеля трафик может пойти напрямую. [Поддержка macOS](https://eoftgge.github.io/rosetun/docs/macos/)
-- **Чёрная и Белая темы.** В **Настройки → Основные → Цветовые темы** добавлены светлая фарфоровая **Белая** тема с фирменным акцентом розы и глубокая OLED **Чёрная** тема со спокойным стально-графитовым акцентом.
-- **Флаги или коды стран и цветные эмодзи.** Выбор отображения стран в **Настройки → Основные → Отображение страны**. Встроенный Noto Color Emoji одинаково рисует эмодзи на Windows, Linux и macOS.
+- **macOS (Apple Silicon) · экспериментальная сборка.** Установщик `.pkg` с `Rosetun.app`, CLI, службой `launchd`, sing-box и Xray для macOS 14+ (`arm64`). Kill switch и Lockdown на macOS недоступны: при обрыве туннеля трафик может пойти напрямую. Исправлено определение процессов в sing-box на macOS без пользовательских правил по программам. [Поддержка macOS](https://eoftgge.github.io/rosetun/docs/macos/)
+- **Чёрная и Белая темы, отображение стран и меньший размер сборок.** В **Настройки → Основные → Цветовые темы** добавлены светлая фарфоровая **Белая** и глубокая OLED **Чёрная** темы (всего 8 тем), выбор флагов или кодов стран, встроенный Noto Color Emoji, выравнивание баннеров ошибок и компактнее релизные бинарники (LTO, удаление отладочных символов и сжатие шрифтов).
 - **Понятнее настройка двух звеньев и плавнее список программ.** **Подключаться через** показывает только подходящие направления и поясняет ограничение фрагментации TLS; загрузка процессов и значков больше не тормозит график трафика. [Двухзвенные направления](https://eoftgge.github.io/rosetun/docs/rules/#two-hop)
 
 В комплекте sing-box {{sing_box_version}} и [Xray-core {{xray_version}}](https://github.com/XTLS/Xray-core/releases/tag/v{{xray_version}}). Для сборки из исходников нужен Rust 1.99+.
-
-### Переход с 0.6
-
-Перед установкой сделайте копию настроек (`%APPDATA%\Rosetun` на Windows, `~/.config/rosetun` на Linux). Установите 0.7 поверх 0.6, чтобы сохранить настройки и Lockdown. При первом сохранении 0.7 записывает **формат 12** и оставляет файл формата 9 рядом как `config.v9.json`. Rosetun 0.6 отказывается открывать файл формата 12 и оставляет его целым.
-
-**Возврат к 0.6.** Отключитесь и удалите 0.7, сохранив настройки. Установите 0.6, закройте приложение и восстановите резервную копию или скопируйте `config.v9.json` поверх `config.json`. Изменения настроек в 0.7 не перенесутся. Включите автозапуск и Lockdown заново, если пользовались ими. [Установка, обновление и возврат](https://eoftgge.github.io/rosetun/docs/install/#update)
 
 ### Загрузка и проверка
 

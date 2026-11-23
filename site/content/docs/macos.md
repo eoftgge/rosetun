@@ -12,7 +12,7 @@ overview = "Поддержка macOS"
 
 ## Что работает {#what-works}
 
-- **Туннель TUN (`utun`)** на ядрах sing-box и Xray (VLESS, VMess, Trojan, Shadowsocks, Hysteria2, TUIC v5, AnyTLS, WireGuard, REALITY, XHTTP, фрагментация TLS, двухзвенные направления).
+- **Туннель TUN (`utun`)** на ядрах sing-box и Xray (VLESS, VMess, Trojan, Shadowsocks, Hysteria2, TUIC v5, AnyTLS, WireGuard, REALITY, XHTTP, балансировщики Xray и TCP `finalmask`, фрагментация TLS, двухзвенные направления).
 - **Системная служба `launchd`** (`io.github.eoftgge.rosetun.helper` в `/Library/LaunchDaemons/`) управляет туннелем и ядрами от имени `root`.
 - **Графическое приложение и CLI:** `Rosetun.app` в `/Applications/` и команда `rosetun` в `/usr/local/bin/rosetun`.
 - **Правила маршрутизации:** по доменам, IP, GeoIP/GeoSite, спискам, группам правил и запущенным программам.

@@ -37,7 +37,7 @@ text = 'Add a subscription with a link, a QR code or a rosetun:// button on your
 
 [[extra.features]]
 title = 'Connection choices'
-text = 'VLESS, VMess, Trojan, Shadowsocks, Hysteria2, TUIC v5, AnyTLS and WireGuard. sing-box and Xray engines, REALITY and XHTTP, TLS fragmentation. See the provider page for transports and limitations.'
+text = 'VLESS, VMess, Trojan, Shadowsocks, Hysteria2, TUIC v5, AnyTLS and WireGuard. sing-box and Xray engines, REALITY, XHTTP, balancers and finalmask, TLS fragmentation. See the provider page for transports and limitations.'
 
 [[extra.features]]
 title = 'Privacy without promises'
