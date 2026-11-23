@@ -77,20 +77,31 @@ impl Session {
             return;
         }
         self.bypass.next = Some(now + INTERVAL);
+        let literal_matches = |node: &rosetun_config::Node, address: &IpAddr| {
+            node.server.parse::<IpAddr>().ok() == Some(*address)
+                || matches!(
+                    &node.outbound,
+                    rosetun_config::Outbound::XrayBalancer(balancer)
+                        if balancer
+                            .members
+                            .iter()
+                            .any(|member| member.server.parse::<IpAddr>().ok() == Some(*address))
+                )
+        };
         let excluded = |address: &IpAddr| {
-            request.node.server.parse::<IpAddr>().ok() == Some(*address)
+            literal_matches(&request.node, address)
                 || self
                     .last_endpoint
                     .as_ref()
-                    .is_some_and(|server| server.address == *address)
+                    .is_some_and(|server| server.contains_address(*address))
                 || self
                     .last_extra_endpoints
                     .values()
-                    .any(|server| server.address == *address)
+                    .any(|server| server.contains_address(*address))
                 || request
                     .extra_nodes
                     .iter()
-                    .any(|extra| extra.node.server.parse::<IpAddr>().ok() == Some(*address))
+                    .any(|extra| literal_matches(&extra.node, address))
                 || (request.settings.allow_lan
                     && self
                         .lan

@@ -290,6 +290,7 @@ fn sing_box_check_validates_local_rule_set_config() {
         alpn: vec!["h3".into()],
         allow_insecure: true,
         fingerprint: None,
+        enable_session_resumption: None,
     });
     let mut anytls = node.clone();
     anytls.port = 8445;
@@ -304,6 +305,7 @@ fn sing_box_check_validates_local_rule_set_config() {
         alpn: vec!["h2".into()],
         allow_insecure: false,
         fingerprint: Some("firefox".into()),
+        enable_session_resumption: None,
     });
     let mut anytls_reality = anytls.clone();
     anytls_reality.stream.tls = rosetun_config::TlsMode::Reality(rosetun_config::RealityParams {

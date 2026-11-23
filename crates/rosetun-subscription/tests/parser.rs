@@ -1712,3 +1712,224 @@ fn wireguard_conf_ini_parses_plain_and_base64_and_rejects_amneziawg() {
     );
     assert_eq!(only_skip(&multi_peer), SkipReason::UnsupportedOption);
 }
+
+#[test]
+fn xray_json_balancer_array_parses_members_observatory_finalmask_and_distinct_ids() {
+    use rosetun_config::{
+        BalancerStrategy, HeaderCustomPacket, HeaderCustomPacketType, TcpFinalMask, XrayObservatory,
+    };
+
+    let body = format!(
+        r#"[
+            {{
+                "remarks": "NL",
+                "routing": {{
+                    "rules": [
+                        {{"ip": ["geoip:private"], "outboundTag": "direct"}},
+                        {{"network": "tcp,udp", "balancerTag": "bal"}}
+                    ],
+                    "balancers": [{{
+                        "tag": "bal",
+                        "selector": ["proxy"],
+                        "strategy": {{"type": "leastLoad", "settings": {{"maxRTT": "3000ms", "tolerance": 0.5}}}},
+                        "fallbackTag": "mask"
+                    }}]
+                }},
+                "outbounds": [
+                    {{
+                        "tag": "proxy",
+                        "protocol": "vless",
+                        "settings": {{"vnext": [{{"address": "nl.example.com", "port": 443, "users": [{{"id": "{UUID}", "encryption": "none", "flow": "xtls-rprx-vision"}}]}}]}},
+                        "streamSettings": {{"network": "tcp", "security": "reality", "realitySettings": {{"serverName": "blog.example.com", "publicKey": "test-public-key", "fingerprint": "firefox"}}}}
+                    }},
+                    {{
+                        "tag": "mask",
+                        "protocol": "vless",
+                        "settings": {{"vnext": [{{"address": "nl4.example.com", "port": 443, "users": [{{"id": "{UUID}", "encryption": "none", "flow": "xtls-rprx-vision"}}]}}]}},
+                        "streamSettings": {{
+                            "network": "tcp",
+                            "security": "tls",
+                            "tlsSettings": {{"serverName": "nl4.example.com", "enableSessionResumption": false, "fingerprint": "firefox", "alpn": ["http/1.1"]}},
+                            "finalmask": {{"tcp": [{{"type": "header-custom", "settings": {{"servers": [[{{"type": "str", "packet": "SSH-2.0-OpenSSH_9.6p1\r\n"}}]]}}}}]}}
+                        }}
+                    }},
+                    {{"tag": "direct", "protocol": "freedom"}}
+                ],
+                "burstObservatory": {{
+                    "subjectSelector": ["proxy"],
+                    "pingConfig": {{
+                        "timeout": "5s",
+                        "interval": "15s",
+                        "sampling": 2,
+                        "httpMethod": "GET",
+                        "destination": "https://connectivitycheck.gstatic.com/generate_204",
+                        "connectivity": "https://probe-should-be-omitted.example.com"
+                    }}
+                }}
+            }},
+            {{
+                "remarks": "JP",
+                "routing": {{"rules": [{{"ip": ["geoip:private"], "outboundTag": "direct"}}]}},
+                "outbounds": [
+                    {{
+                        "tag": "proxy",
+                        "protocol": "vless",
+                        "settings": {{"vnext": [{{"address": "jp.example.com", "port": 443, "users": [{{"id": "{UUID}", "encryption": "none", "flow": "xtls-rprx-vision"}}]}}]}},
+                        "streamSettings": {{"network": "tcp", "security": "reality", "realitySettings": {{"serverName": "jp.example.com", "publicKey": "test-public-key", "fingerprint": "firefox"}}}}
+                    }},
+                    {{"tag": "direct", "protocol": "freedom"}}
+                ]
+            }},
+            {{
+                "remarks": "RU Relay A",
+                "routing": {{
+                    "rules": [{{"network": "tcp,udp", "balancerTag": "bal-europe"}}],
+                    "balancers": [{{
+                        "tag": "bal-europe",
+                        "selector": ["Europe"],
+                        "strategy": {{"type": "leastPing"}},
+                        "fallbackTag": "proxy"
+                    }}]
+                }},
+                "outbounds": [
+                    {{
+                        "tag": "proxy",
+                        "protocol": "vless",
+                        "settings": {{"vnext": [{{"address": "ru2.example.com", "port": 443, "users": [{{"id": "{UUID}", "encryption": "none", "flow": "xtls-rprx-vision"}}]}}]}},
+                        "streamSettings": {{"network": "tcp", "security": "reality", "realitySettings": {{"serverName": "ru2.example.com", "publicKey": "test-public-key"}}}}
+                    }},
+                    {{
+                        "tag": "Europe",
+                        "protocol": "vless",
+                        "settings": {{"vnext": [{{"address": "nl.example.com", "port": 443, "users": [{{"id": "{UUID}", "encryption": "none", "flow": "xtls-rprx-vision"}}]}}]}},
+                        "streamSettings": {{"network": "tcp", "security": "reality", "realitySettings": {{"serverName": "blog.example.com", "publicKey": "test-public-key"}}}}
+                    }}
+                ],
+                "observatory": {{
+                    "subjectSelector": ["Europe"],
+                    "probeUrl": "https://connectivitycheck.gstatic.com/generate_204",
+                    "probeInterval": "1m",
+                    "enableConcurrency": true
+                }}
+            }},
+            {{
+                "remarks": "RU Relay B",
+                "routing": {{
+                    "rules": [{{"network": "tcp,udp", "balancerTag": "bal-europe"}}],
+                    "balancers": [{{
+                        "tag": "bal-europe",
+                        "selector": ["Europe"],
+                        "strategy": {{"type": "leastPing"}},
+                        "fallbackTag": "proxy"
+                    }}]
+                }},
+                "outbounds": [
+                    {{
+                        "tag": "proxy",
+                        "protocol": "vless",
+                        "settings": {{"vnext": [{{"address": "ru3.example.com", "port": 443, "users": [{{"id": "{UUID}", "encryption": "none", "flow": "xtls-rprx-vision"}}]}}]}},
+                        "streamSettings": {{"network": "tcp", "security": "tls", "tlsSettings": {{"serverName": "ru3.example.com"}}}}
+                    }},
+                    {{
+                        "tag": "Europe",
+                        "protocol": "vless",
+                        "settings": {{"vnext": [{{"address": "nl.example.com", "port": 443, "users": [{{"id": "{UUID}", "encryption": "none", "flow": "xtls-rprx-vision"}}]}}]}},
+                        "streamSettings": {{"network": "tcp", "security": "reality", "realitySettings": {{"serverName": "blog.example.com", "publicKey": "test-public-key"}}}}
+                    }}
+                ],
+                "observatory": {{
+                    "subjectSelector": ["Europe"],
+                    "probeUrl": "https://connectivitycheck.gstatic.com/generate_204",
+                    "probeInterval": "1m"
+                }}
+            }}
+        ]"#
+    );
+
+    let result = parsed(&body);
+    assert_eq!(result.nodes.len(), 4);
+    assert!(result.skipped.is_empty());
+
+    // Entry 0: balanced NL with burstObservatory + finalmask + enableSessionResumption=false
+    let nl = &result.nodes[0];
+    assert_eq!(nl.name, "NL");
+    assert_eq!(nl.server, "nl.example.com");
+    assert!(nl.requires_xray());
+    let Outbound::XrayBalancer(nl_bal) = &nl.outbound else {
+        panic!("expected XrayBalancer for NL");
+    };
+    assert_eq!(nl_bal.members.len(), 2);
+    assert_eq!(nl_bal.selector, ["proxy"]);
+    assert_eq!(nl_bal.fallback_tag.as_deref(), Some("mask"));
+    let BalancerStrategy::LeastLoad(ll) = &nl_bal.strategy else {
+        panic!("expected LeastLoad");
+    };
+    assert_eq!(ll.max_rtt.as_deref(), Some("3000ms"));
+    assert_eq!(ll.tolerance_bp, Some(5000));
+    let Some(XrayObservatory::Burst(burst)) = &nl_bal.observatory else {
+        panic!("expected BurstObservatory");
+    };
+    assert_eq!(burst.subject_selector, ["proxy"]);
+    assert_eq!(burst.interval.as_deref(), Some("15s"));
+    assert_eq!(burst.timeout.as_deref(), Some("5s"));
+    assert_eq!(burst.sampling, Some(2));
+    assert_eq!(burst.http_method.as_deref(), Some("GET"));
+
+    let mask_member = &nl_bal.members[1];
+    assert_eq!(mask_member.tag, "mask");
+    let TlsMode::Tls(mask_tls) = &mask_member.stream.tls else {
+        panic!("expected TLS on mask member");
+    };
+    assert_eq!(mask_tls.enable_session_resumption, Some(false));
+    assert_eq!(mask_tls.alpn, ["http/1.1"]);
+    let mask = mask_member.stream.finalmask.as_ref().unwrap();
+    assert_eq!(mask.tcp.len(), 1);
+    let TcpFinalMask::HeaderCustom(custom) = &mask.tcp[0];
+    assert_eq!(custom.servers.len(), 1);
+    assert_eq!(
+        custom.servers[0][0].packet_type,
+        Some(HeaderCustomPacketType::Str)
+    );
+    assert_eq!(
+        custom.servers[0][0].packet,
+        Some(HeaderCustomPacket::Text("SSH-2.0-OpenSSH_9.6p1\r\n".into()))
+    );
+
+    // Entry 1: plain JP VLESS node (no balancer)
+    assert!(matches!(result.nodes[1].outbound, Outbound::Vless(_)));
+    assert!(!result.nodes[1].requires_xray());
+
+    // Entries 2 and 3: both have Europe (nl.example.com) as primary selector, different fallback relays -> distinct IDs
+    let ru_a = &result.nodes[2];
+    let ru_b = &result.nodes[3];
+    assert_ne!(ru_a.id, ru_b.id);
+    assert_ne!(nl.id, ru_a.id);
+    let Outbound::XrayBalancer(ru_a_bal) = &ru_a.outbound else {
+        panic!("expected XrayBalancer for RU Relay A");
+    };
+    assert_eq!(ru_a.server, "nl.example.com");
+    assert_eq!(ru_a_bal.selector, ["Europe"]);
+    assert_eq!(ru_a_bal.fallback_tag.as_deref(), Some("proxy"));
+    assert!(matches!(
+        ru_a_bal.observatory,
+        Some(XrayObservatory::Standard(ref obs)) if obs.enable_concurrency
+    ));
+
+    // Unsupported finalmask (e.g. udp mask or unknown tcp type) skips only that node.
+    let bad_mask = format!(
+        r#"{{
+            "remarks": "BadMask",
+            "outbounds": [{{
+                "tag": "proxy",
+                "protocol": "vless",
+                "settings": {{"vnext": [{{"address": "192.0.2.50", "port": 443, "users": [{{"id": "{UUID}", "encryption": "none"}}]}}]}},
+                "streamSettings": {{
+                    "network": "tcp",
+                    "security": "tls",
+                    "finalmask": {{"udp": [{{"type": "salamander"}}]}}
+                }}
+            }}]
+        }}"#
+    );
+    assert_eq!(only_skip(&bad_mask), SkipReason::UnsupportedOption);
+}

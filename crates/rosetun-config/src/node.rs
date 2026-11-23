@@ -10,6 +10,8 @@ use crate::{CountryCode, NodeId, Settings, XrayUse};
 pub fn uses_xray(node: &Node, settings: &Settings) -> bool {
     match settings.xray {
         XrayUse::Off => false,
+        // Balancers and finalmask are Xray-only features.
+        _ if node.requires_xray() => true,
         // Splitting the packets to the server is Xray's feature, so a node it can run goes there.
         _ if settings.tls_fragment.applies_to(node) => true,
         // VLESS is Xray's native protocol (including REALITY, where sing-box#4520 breaks on Xray
@@ -28,7 +30,7 @@ pub fn fragments_tls(node: &Node, settings: &Settings) -> bool {
     settings.xray != XrayUse::Off && settings.tls_fragment.applies_to(node)
 }
 
-pub(crate) fn xray_supports(outbound: &Outbound) -> bool {
+pub(crate) fn xray_supports_member(outbound: &Outbound) -> bool {
     match outbound {
         Outbound::Vmess(params) => params.alter_id == 0,
         Outbound::Vless(_) | Outbound::Trojan(_) | Outbound::Shadowsocks(_) => true,
@@ -38,8 +40,13 @@ pub(crate) fn xray_supports(outbound: &Outbound) -> bool {
         | Outbound::Tuic(_)
         | Outbound::AnyTls(_)
         | Outbound::WireGuard(_)
+        | Outbound::XrayBalancer(_)
         | Outbound::Unknown { .. } => false,
     }
+}
+
+pub(crate) fn xray_supports(outbound: &Outbound) -> bool {
+    matches!(outbound, Outbound::XrayBalancer(_)) || xray_supports_member(outbound)
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -115,6 +122,8 @@ pub enum Outbound {
     AnyTls(AnyTlsParams),
     #[serde(rename = "wireguard")]
     WireGuard(WireGuardParams),
+    #[serde(rename = "xray_balancer")]
+    XrayBalancer(Box<XrayBalancer>),
     Unknown {
         scheme: String,
         params: BTreeMap<String, String>,
@@ -134,6 +143,7 @@ impl fmt::Debug for Outbound {
             Self::Tuic(params) => f.debug_tuple("Tuic").field(params).finish(),
             Self::AnyTls(params) => f.debug_tuple("AnyTls").field(params).finish(),
             Self::WireGuard(params) => f.debug_tuple("WireGuard").field(params).finish(),
+            Self::XrayBalancer(params) => f.debug_tuple("XrayBalancer").field(params).finish(),
             Self::Unknown { scheme, params } => f
                 .debug_struct("Unknown")
                 .field("scheme", scheme)
@@ -277,8 +287,19 @@ fn is_valid_host(server: &str) -> bool {
 }
 
 impl Node {
+    /// Whether this node uses an Xray-only feature (a balancer or `finalmask`).
+    pub fn requires_xray(&self) -> bool {
+        matches!(self.outbound, Outbound::XrayBalancer(_)) || self.stream.finalmask.is_some()
+    }
+
     /// Validates external proxies and strict native protocols at both storage and engine boundaries.
     pub fn validate_proxy(&self) -> Result<(), &'static str> {
+        if let Some(finalmask) = &self.stream.finalmask {
+            if !xray_supports_member(&self.outbound) {
+                return Err("finalmask is only supported on Xray outbounds");
+            }
+            finalmask.validate()?;
+        }
         match &self.outbound {
             Outbound::Http(credentials) | Outbound::Socks5(credentials) => {
                 if !is_valid_host(&self.server) || self.port == 0 {
@@ -417,6 +438,7 @@ impl Node {
                 }
                 Ok(())
             }
+            Outbound::XrayBalancer(balancer) => balancer.validate(),
             _ => Ok(()),
         }
     }
@@ -660,6 +682,8 @@ pub struct StreamSettings {
     pub transport: Transport,
     #[serde(default)]
     pub tls: TlsMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finalmask: Option<FinalMask>,
 }
 
 #[derive(Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -844,6 +868,8 @@ pub struct TlsParams {
     pub allow_insecure: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fingerprint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enable_session_resumption: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -855,6 +881,431 @@ pub struct RealityParams {
     pub short_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fingerprint: Option<String>,
+}
+
+pub const MAX_BALANCER_MEMBERS: usize = 16;
+pub const MAX_FINALMASK_LAYERS: usize = 8;
+pub const MAX_FINALMASK_STEPS: usize = 16;
+pub const MAX_FINALMASK_ITEMS: usize = 16;
+pub const MAX_FINALMASK_PAYLOAD: usize = 4096;
+
+/// Xray `streamSettings.finalmask` options carried from a subscription.
+/// Subscriptions are parsed into this typed model and checked against its limits;
+/// nothing from a subscription reaches Xray as raw JSON.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct FinalMask {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tcp: Vec<TcpFinalMask>,
+}
+
+impl FinalMask {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.tcp.is_empty() || self.tcp.len() > MAX_FINALMASK_LAYERS {
+            return Err("finalmask requires between 1 and 8 TCP layers");
+        }
+        for mask in &self.tcp {
+            match mask {
+                TcpFinalMask::HeaderCustom(custom) => custom.validate()?,
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "kebab-case")]
+pub enum TcpFinalMask {
+    HeaderCustom(HeaderCustomTcp),
+}
+
+#[derive(Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct HeaderCustomTcp {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub clients: Vec<Vec<HeaderCustomItem>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub servers: Vec<Vec<HeaderCustomItem>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub errors: Vec<Vec<HeaderCustomItem>>,
+}
+
+impl HeaderCustomTcp {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.clients.is_empty() && self.servers.is_empty() && self.errors.is_empty() {
+            return Err("header-custom finalmask must define at least one packet sequence");
+        }
+        for sequence in [&self.clients, &self.servers, &self.errors] {
+            if sequence.len() > MAX_FINALMASK_STEPS {
+                return Err("header-custom finalmask has too many steps");
+            }
+            for step in sequence {
+                if step.is_empty() || step.len() > MAX_FINALMASK_ITEMS {
+                    return Err("header-custom finalmask step has invalid item count");
+                }
+                for item in step {
+                    item.validate()?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+impl fmt::Debug for HeaderCustomTcp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HeaderCustomTcp")
+            .field("clients_steps", &self.clients.len())
+            .field("servers_steps", &self.servers.len())
+            .field("errors_steps", &self.errors.len())
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct HeaderCustomItem {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delay: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rand: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rand_range: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub packet_type: Option<HeaderCustomPacketType>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub packet: Option<HeaderCustomPacket>,
+}
+
+impl HeaderCustomItem {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.rand.is_some() && self.packet.is_some() {
+            return Err("header-custom item cannot set both rand and packet");
+        }
+        if self.delay.is_some_and(|delay| delay > 60_000) {
+            return Err("header-custom delay is out of range");
+        }
+        if self
+            .rand
+            .is_some_and(|rand| rand > MAX_FINALMASK_PAYLOAD as u32)
+        {
+            return Err("header-custom rand length is out of range");
+        }
+        if let Some(range) = self.rand_range.as_deref()
+            && !is_valid_byte_range(range)
+        {
+            return Err("header-custom randRange must be a byte range 0-255");
+        }
+        match &self.packet {
+            Some(HeaderCustomPacket::Bytes(bytes)) if bytes.len() > MAX_FINALMASK_PAYLOAD => {
+                return Err("header-custom packet payload is too large");
+            }
+            Some(HeaderCustomPacket::Text(text)) if text.len() > MAX_FINALMASK_PAYLOAD => {
+                return Err("header-custom packet payload is too large");
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+}
+
+impl fmt::Debug for HeaderCustomItem {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HeaderCustomItem")
+            .field("delay", &self.delay)
+            .field("rand", &self.rand)
+            .field("rand_range", &self.rand_range)
+            .field("packet_type", &self.packet_type)
+            .field("has_packet", &self.packet.is_some())
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HeaderCustomPacketType {
+    Array,
+    Str,
+    Hex,
+    Base64,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum HeaderCustomPacket {
+    Bytes(Vec<u8>),
+    Text(String),
+}
+
+impl fmt::Debug for HeaderCustomPacket {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("HeaderCustomPacket([redacted])")
+    }
+}
+
+fn is_valid_byte_range(value: &str) -> bool {
+    let Some((start, end)) = value.split_once('-') else {
+        return false;
+    };
+    let (Ok(start), Ok(end)) = (start.parse::<u8>(), end.parse::<u8>()) else {
+        return false;
+    };
+    start <= end
+}
+
+fn is_valid_balancer_tag(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && value
+            .bytes()
+            .all(|byte| !byte.is_ascii_control() && !byte.is_ascii_whitespace() && byte.is_ascii())
+}
+
+fn is_valid_probe_url(value: &str) -> bool {
+    let rest = value
+        .strip_prefix("https://")
+        .or_else(|| value.strip_prefix("http://"));
+    let Some(rest) = rest else {
+        return false;
+    };
+    !rest.is_empty()
+        && value.len() <= 512
+        && value
+            .bytes()
+            .all(|byte| !byte.is_ascii_control() && !byte.is_ascii_whitespace() && byte.is_ascii())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct XrayBalancer {
+    pub members: Vec<BalancerMember>,
+    pub selector: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback_tag: Option<String>,
+    #[serde(default)]
+    pub strategy: BalancerStrategy,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observatory: Option<XrayObservatory>,
+}
+
+impl XrayBalancer {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.members.is_empty() || self.members.len() > MAX_BALANCER_MEMBERS {
+            return Err("Xray balancer requires between 1 and 16 member outbounds");
+        }
+        let mut tags = std::collections::HashSet::with_capacity(self.members.len());
+        for member in &self.members {
+            if !is_valid_balancer_tag(&member.tag) || !tags.insert(member.tag.as_str()) {
+                return Err("Xray balancer member tags must be unique ASCII tokens");
+            }
+            if !is_valid_host(&member.server) || member.port == 0 {
+                return Err("Xray balancer member requires a valid host and port");
+            }
+            if !xray_supports_member(&member.outbound) {
+                return Err("Xray balancer member uses an unsupported outbound protocol");
+            }
+            if let Some(finalmask) = &member.stream.finalmask {
+                finalmask.validate()?;
+            }
+        }
+        if self.selector.is_empty() || self.selector.len() > MAX_BALANCER_MEMBERS {
+            return Err("Xray balancer requires at least one selector prefix");
+        }
+        for prefix in &self.selector {
+            if !is_valid_balancer_tag(prefix)
+                || !self.members.iter().any(|m| m.tag.starts_with(prefix))
+            {
+                return Err("Xray balancer selector must match at least one member");
+            }
+        }
+        if let Some(fallback) = self.fallback_tag.as_deref()
+            && !tags.contains(fallback)
+        {
+            return Err("Xray balancer fallbackTag must match a member tag");
+        }
+        if let BalancerStrategy::LeastLoad(settings) = &self.strategy {
+            settings.validate()?;
+        }
+        if let Some(observatory) = &self.observatory {
+            observatory.validate(&self.members)?;
+        }
+        Ok(())
+    }
+
+    /// Primary member for display/defaults: the first member matched by `selector`, or the first member.
+    pub fn primary_member(&self) -> Option<&BalancerMember> {
+        self.members
+            .iter()
+            .find(|member| {
+                self.selector
+                    .iter()
+                    .any(|prefix| member.tag.starts_with(prefix))
+            })
+            .or_else(|| self.members.first())
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BalancerMember {
+    pub tag: String,
+    pub server: String,
+    pub port: u16,
+    pub outbound: Outbound,
+    #[serde(default)]
+    pub stream: StreamSettings,
+}
+
+impl fmt::Debug for BalancerMember {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BalancerMember")
+            .field("tag", &self.tag)
+            .field("server", &"[redacted]")
+            .field("port", &self.port)
+            .field("outbound", &self.outbound)
+            .field("stream", &self.stream)
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum BalancerStrategy {
+    #[default]
+    Random,
+    RoundRobin,
+    LeastPing,
+    LeastLoad(LeastLoadSettings),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct LeastLoadSettings {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_rtt: Option<String>,
+    /// Tolerance in ten-thousandths (`0..=10_000`, where `5000` represents `0.5`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tolerance_bp: Option<u16>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub baselines: Vec<String>,
+}
+
+impl LeastLoadSettings {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self
+            .max_rtt
+            .as_deref()
+            .is_some_and(|value| !is_valid_duration(value))
+        {
+            return Err("Xray balancer maxRTT must be a positive duration");
+        }
+        if self.tolerance_bp.is_some_and(|bp| bp > 10_000) {
+            return Err("Xray balancer tolerance must be between 0 and 1");
+        }
+        if self.baselines.len() > MAX_BALANCER_MEMBERS
+            || self.baselines.iter().any(|value| !is_valid_duration(value))
+        {
+            return Err("Xray balancer baselines must be positive durations");
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum XrayObservatory {
+    Standard(StandardObservatory),
+    Burst(BurstObservatory),
+}
+
+impl XrayObservatory {
+    pub fn validate(&self, members: &[BalancerMember]) -> Result<(), &'static str> {
+        let selectors = match self {
+            Self::Standard(obs) => {
+                if obs
+                    .probe_url
+                    .as_deref()
+                    .is_some_and(|url| !is_valid_probe_url(url))
+                {
+                    return Err("Xray observatory probeUrl must be an HTTP(S) URL");
+                }
+                if obs
+                    .probe_interval
+                    .as_deref()
+                    .is_some_and(|value| !is_valid_duration(value))
+                {
+                    return Err("Xray observatory probeInterval must be a positive duration");
+                }
+                &obs.subject_selector
+            }
+            Self::Burst(obs) => {
+                if obs
+                    .destination
+                    .as_deref()
+                    .is_some_and(|url| !is_valid_probe_url(url))
+                {
+                    return Err("Xray burstObservatory destination must be an HTTP(S) URL");
+                }
+                if obs
+                    .interval
+                    .as_deref()
+                    .is_some_and(|value| !is_valid_duration(value))
+                {
+                    return Err("Xray burstObservatory interval must be a positive duration");
+                }
+                if obs
+                    .timeout
+                    .as_deref()
+                    .is_some_and(|value| !is_valid_duration(value))
+                {
+                    return Err("Xray burstObservatory timeout must be a positive duration");
+                }
+                if obs.sampling.is_some_and(|n| n == 0 || n > 64) {
+                    return Err("Xray burstObservatory sampling must be between 1 and 64");
+                }
+                if obs
+                    .http_method
+                    .as_deref()
+                    .is_some_and(|method| !matches!(method, "HEAD" | "GET"))
+                {
+                    return Err("Xray burstObservatory httpMethod must be HEAD or GET");
+                }
+                &obs.subject_selector
+            }
+        };
+        if selectors.is_empty() || selectors.len() > MAX_BALANCER_MEMBERS {
+            return Err("Xray observatory requires at least one subjectSelector");
+        }
+        for prefix in selectors {
+            if !is_valid_balancer_tag(prefix) || !members.iter().any(|m| m.tag.starts_with(prefix))
+            {
+                return Err("Xray observatory subjectSelector must match at least one member");
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct StandardObservatory {
+    pub subject_selector: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub probe_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub probe_interval: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub enable_concurrency: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct BurstObservatory {
+    pub subject_selector: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub destination: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interval: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sampling: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub http_method: Option<String>,
 }
 
 #[cfg(test)]
@@ -1077,6 +1528,7 @@ mod tests {
             stream: StreamSettings {
                 transport: Transport::Tcp,
                 tls,
+                finalmask: None,
             },
             raw: None,
         }
@@ -1294,6 +1746,7 @@ mod tests {
             stream: StreamSettings {
                 transport: xhttp(),
                 tls: TlsMode::Plain,
+                finalmask: None,
             },
             raw: None,
         };
@@ -1331,6 +1784,7 @@ mod tests {
             stream: StreamSettings {
                 transport: Transport::Tcp,
                 tls: TlsMode::Tls(TlsParams::default()),
+                finalmask: None,
             },
             raw: Some(
                 "tuic://00000000-0000-4000-8000-000000000042:test-secret-tuic@example.com:443"
@@ -1366,6 +1820,7 @@ mod tests {
             stream: StreamSettings {
                 transport: Transport::Tcp,
                 tls: TlsMode::Tls(TlsParams::default()),
+                finalmask: None,
             },
             raw: Some("anytls://test-secret-anytls@example.com:443".into()),
         };

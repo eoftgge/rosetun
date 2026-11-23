@@ -203,16 +203,81 @@ enum StartMode {
 
 struct StartOptions {
     mode: StartMode,
-    endpoint: Option<IpAddr>,
+    endpoint: Option<ResolvedNodeEndpoints>,
     /// Extra node addresses in request order; `None` resolves them for `mode`.
-    extra_endpoints: Option<Vec<Option<IpAddr>>>,
+    extra_endpoints: Option<Vec<Option<ResolvedNodeEndpoints>>>,
     dns_timeout: Duration,
 }
 
 #[derive(Debug, Clone)]
-struct SuccessfulEndpoint {
+pub(super) struct SuccessfulEndpoint {
     server: String,
     address: IpAddr,
+    /// Normalized host -> IP for all resolved hosts of this node (used by Xray balancers).
+    members: HashMap<String, IpAddr>,
+}
+
+impl SuccessfulEndpoint {
+    pub(super) fn lookup(&self, server: &str) -> Option<IpAddr> {
+        let key = normalize_server(server);
+        self.members
+            .get(&key)
+            .copied()
+            .or_else(|| (self.server == key).then_some(self.address))
+    }
+
+    pub(super) fn contains_address(&self, address: IpAddr) -> bool {
+        self.address == address || self.members.values().any(|&ip| ip == address)
+    }
+}
+
+/// Resolved IP addresses for one node (single server or all resolved members of
+/// an [`rosetun_config::Outbound::XrayBalancer`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ResolvedNodeEndpoints {
+    pub(super) primary: IpAddr,
+    pub(super) members: HashMap<String, IpAddr>,
+}
+
+impl ResolvedNodeEndpoints {
+    pub(super) fn single(server: &str, address: IpAddr) -> Self {
+        let mut members = HashMap::new();
+        members.insert(normalize_server(server), address);
+        Self {
+            primary: address,
+            members,
+        }
+    }
+
+    pub(super) fn from_members(primary: IpAddr, members: HashMap<String, IpAddr>) -> Self {
+        Self { primary, members }
+    }
+
+    pub(super) fn ip_for(&self, server: &str) -> Option<IpAddr> {
+        server
+            .parse::<IpAddr>()
+            .ok()
+            .or_else(|| self.members.get(&normalize_server(server)).copied())
+    }
+
+    pub(super) fn push_unique_ips(&self, out: &mut Vec<IpAddr>) {
+        if !out.contains(&self.primary) {
+            out.push(self.primary);
+        }
+        for &ip in self.members.values() {
+            if !out.contains(&ip) {
+                out.push(ip);
+            }
+        }
+    }
+
+    pub(super) fn into_successful(self, server: &str) -> SuccessfulEndpoint {
+        SuccessfulEndpoint {
+            server: normalize_server(server),
+            address: self.primary,
+            members: self.members,
+        }
+    }
 }
 
 /// A pending automatic reconnect.
@@ -2149,12 +2214,88 @@ impl Session {
         Ok(())
     }
 
+    fn resolve_node_endpoints(
+        &self,
+        node: &Node,
+        lookup: NameLookup,
+    ) -> Result<ResolvedNodeEndpoints, HelperError> {
+        let rosetun_config::Outbound::XrayBalancer(balancer) = &node.outbound else {
+            let ip = select_endpoint(&self.resolve_server(&node.server, node.port, lookup)?)?;
+            return Ok(ResolvedNodeEndpoints::single(&node.server, ip));
+        };
+        let mut members = HashMap::new();
+        let mut primary = None;
+        let mut first_error = None;
+        for member in &balancer.members {
+            let key = normalize_server(&member.server);
+            if let Some(&existing) = members.get(&key) {
+                primary.get_or_insert(existing);
+                continue;
+            }
+            if let Ok(ip) = member.server.parse::<IpAddr>() {
+                members.insert(key, ip);
+                primary.get_or_insert(ip);
+                continue;
+            }
+            match (self.name_lookup)(&member.server, member.port, lookup)
+                .map_err(|failure| failure.error)
+                .and_then(|addresses| select_endpoint(&addresses))
+            {
+                Ok(ip) => {
+                    members.insert(key, ip);
+                    primary.get_or_insert(ip);
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        server = %member.server,
+                        %error,
+                        ?lookup,
+                        "failed to resolve an Xray balancer member endpoint"
+                    );
+                    first_error.get_or_insert(error);
+                }
+            }
+        }
+        if let Some(primary) = primary {
+            return Ok(ResolvedNodeEndpoints::from_members(primary, members));
+        }
+        // Zero members resolved: if network_wait is active, wait on the first
+        // member so offline startup still retries until the network comes up.
+        if !self.network_wait.is_zero()
+            && let Some(first) = balancer.members.first()
+        {
+            let ip = select_endpoint(&self.resolve_server(&first.server, first.port, lookup)?)?;
+            members.insert(normalize_server(&first.server), ip);
+            for member in balancer.members.iter().skip(1) {
+                let key = normalize_server(&member.server);
+                if members.contains_key(&key) {
+                    continue;
+                }
+                if let Ok(addr) = member.server.parse::<IpAddr>() {
+                    members.insert(key, addr);
+                } else if let Ok(addr) = (self.name_lookup)(&member.server, member.port, lookup)
+                    .map_err(|failure| failure.error)
+                    .and_then(|addresses| select_endpoint(&addresses))
+                {
+                    members.insert(key, addr);
+                }
+            }
+            return Ok(ResolvedNodeEndpoints::from_members(ip, members));
+        }
+        Err(first_error.unwrap_or_else(|| {
+            HelperError::new(
+                ErrorCode::ServerNameUnresolved,
+                "failed to resolve any Xray balancer member endpoint",
+            )
+        }))
+    }
+
     fn start(
         &mut self,
         request: &ConnectRequest,
         mode: StartMode,
-        endpoint: Option<IpAddr>,
-        extra_endpoints: Option<Vec<Option<IpAddr>>>,
+        endpoint: Option<ResolvedNodeEndpoints>,
+        extra_endpoints: Option<Vec<Option<ResolvedNodeEndpoints>>>,
     ) -> Result<(), HelperError> {
         self.start_with_options(
             request,
@@ -2240,18 +2381,16 @@ impl Session {
         let endpoint = if endpoint.is_some() {
             endpoint
         } else if mode == StartMode::ProtectedReconnect {
-            Some(protected_endpoint(node, self.last_endpoint.as_ref())?)
+            Some(protected_endpoints(node, self.last_endpoint.as_ref())?)
         } else if settings.engine == rosetun_config::EngineKind::SingBox {
-            Some(select_endpoint(&self.resolve_server(
-                &node.server,
-                node.port,
-                lookup,
-            )?)?)
+            Some(self.resolve_node_endpoints(node, lookup)?)
         } else {
             None
         };
 
-        let resolved_node = endpoint.map(|address| node_with_endpoint(node, address));
+        let resolved_node = endpoint
+            .as_ref()
+            .map(|resolved| node_with_endpoints(node, resolved));
         let extra_endpoints = extra_endpoints.unwrap_or_else(|| {
             exits::start_endpoints(
                 &request.extra_nodes,
@@ -2261,11 +2400,13 @@ impl Session {
             )
         });
         let extra = exits::ExtraNodes::new(&request.extra_nodes, &extra_endpoints, rules);
-        let servers = endpoint
-            .iter()
-            .chain(extra_endpoints.iter().flatten())
-            .copied()
-            .collect::<Vec<_>>();
+        let mut servers = Vec::new();
+        if let Some(resolved) = &endpoint {
+            resolved.push_unique_ips(&mut servers);
+        }
+        for resolved in extra_endpoints.iter().flatten() {
+            resolved.push_unique_ips(&mut servers);
+        }
         let lan = self.lan.access_for(settings, &servers);
         let lan_prefixes = lan.segment.route_networks();
         self.follow_servers_in_lockdown(&servers)?;
@@ -2771,10 +2912,7 @@ impl Session {
 
         self.ensure_xray_running(ErrorCode::XrayStartFailed)?;
         // Do not poison the successful endpoint cache with a failed attempt.
-        self.last_endpoint = endpoint.map(|address| SuccessfulEndpoint {
-            server: normalize_server(&node.server),
-            address,
-        });
+        self.last_endpoint = endpoint.map(|resolved| resolved.into_successful(&node.server));
         exits::remember(
             &mut self.last_extra_endpoints,
             &request.extra_nodes,
@@ -3392,23 +3530,54 @@ fn normalize_server(server: &str) -> String {
     server.trim_end_matches('.').to_ascii_lowercase()
 }
 
+pub(super) fn protected_endpoints(
+    node: &Node,
+    cached: Option<&SuccessfulEndpoint>,
+) -> Result<ResolvedNodeEndpoints, HelperError> {
+    let err = || {
+        HelperError::new(
+            ErrorCode::RoutingFailed,
+            "cannot resolve a new server name while protection is active; use an IP address or the last connected server",
+        )
+    };
+    let rosetun_config::Outbound::XrayBalancer(balancer) = &node.outbound else {
+        if let Ok(address) = node.server.parse::<IpAddr>() {
+            return Ok(ResolvedNodeEndpoints::single(&node.server, address));
+        }
+        let address = cached
+            .and_then(|endpoint| endpoint.lookup(&node.server))
+            .ok_or_else(err)?;
+        return Ok(ResolvedNodeEndpoints::single(&node.server, address));
+    };
+    let mut members = HashMap::new();
+    let mut primary = None;
+    for member in &balancer.members {
+        let key = normalize_server(&member.server);
+        if let Some(&existing) = members.get(&key) {
+            primary.get_or_insert(existing);
+            continue;
+        }
+        let ip = member
+            .server
+            .parse::<IpAddr>()
+            .ok()
+            .or_else(|| cached.and_then(|endpoint| endpoint.lookup(&member.server)));
+        if let Some(ip) = ip {
+            members.insert(key, ip);
+            primary.get_or_insert(ip);
+        }
+    }
+    primary
+        .map(|primary| ResolvedNodeEndpoints::from_members(primary, members))
+        .ok_or_else(err)
+}
+
+#[cfg(test)]
 fn protected_endpoint(
     node: &Node,
     cached: Option<&SuccessfulEndpoint>,
 ) -> Result<IpAddr, HelperError> {
-    if let Ok(address) = node.server.parse::<IpAddr>() {
-        return Ok(address);
-    }
-
-    cached
-        .filter(|endpoint| endpoint.server == normalize_server(&node.server))
-        .map(|endpoint| endpoint.address)
-        .ok_or_else(|| {
-            HelperError::new(
-                ErrorCode::RoutingFailed,
-                "cannot resolve a new server name while protection is active; use an IP address or the last connected server",
-            )
-        })
+    protected_endpoints(node, cached).map(|resolved| resolved.primary)
 }
 
 /// Who looks a server name up.
@@ -3522,31 +3691,101 @@ fn select_endpoint(addresses: &[IpAddr]) -> Result<IpAddr, HelperError> {
         })
 }
 
-fn node_with_endpoint(node: &Node, endpoint: IpAddr) -> Node {
+fn preserve_stream_host(original_server: &str, stream: &mut rosetun_config::StreamSettings) {
     use rosetun_config::{TlsMode, Transport};
 
-    let mut prepared = node.clone();
-    if node.server.parse::<IpAddr>().is_err() {
-        match &mut prepared.stream.tls {
+    if original_server.parse::<IpAddr>().is_err() {
+        match &mut stream.tls {
             TlsMode::Tls(params) => {
-                params.sni.get_or_insert_with(|| node.server.clone());
+                params.sni.get_or_insert_with(|| original_server.to_owned());
             }
             TlsMode::Reality(params) => {
-                params.sni.get_or_insert_with(|| node.server.clone());
+                params.sni.get_or_insert_with(|| original_server.to_owned());
             }
             TlsMode::Plain => {}
         }
 
-        match &mut prepared.stream.transport {
+        match &mut stream.transport {
             Transport::Ws { host, .. }
             | Transport::HttpUpgrade { host, .. }
             | Transport::Xhttp { host, .. } => {
-                host.get_or_insert_with(|| node.server.clone());
+                host.get_or_insert_with(|| original_server.to_owned());
             }
             Transport::Tcp | Transport::Grpc { .. } => {}
         }
     }
+}
+
+fn node_with_endpoint(node: &Node, endpoint: IpAddr) -> Node {
+    let mut prepared = node.clone();
+    preserve_stream_host(&node.server, &mut prepared.stream);
     prepared.server = endpoint.to_string();
+    prepared
+}
+
+pub(super) fn node_with_endpoints(node: &Node, endpoints: &ResolvedNodeEndpoints) -> Node {
+    let mut prepared = node.clone();
+    let rosetun_config::Outbound::XrayBalancer(balancer) = &mut prepared.outbound else {
+        preserve_stream_host(&node.server, &mut prepared.stream);
+        prepared.server = endpoints.primary.to_string();
+        return prepared;
+    };
+
+    let mut kept = Vec::with_capacity(balancer.members.len());
+    for mut member in std::mem::take(&mut balancer.members) {
+        if let Some(ip) = endpoints.ip_for(&member.server) {
+            preserve_stream_host(&member.server, &mut member.stream);
+            member.server = ip.to_string();
+            kept.push(member);
+        }
+    }
+    if kept.is_empty() {
+        // Unreachable when `endpoints` came from resolving `node`, but never emit
+        // an empty balancer.
+        prepared.server = endpoints.primary.to_string();
+        return prepared;
+    }
+
+    prepared.server = kept[0].server.clone();
+    prepared.port = kept[0].port;
+    balancer.members = kept;
+
+    if let Some(fallback) = balancer.fallback_tag.as_deref()
+        && !balancer.members.iter().any(|m| m.tag == fallback)
+    {
+        balancer.fallback_tag = None;
+    }
+
+    balancer.selector.retain(|prefix| {
+        balancer
+            .members
+            .iter()
+            .any(|m| m.tag.starts_with(prefix.as_str()))
+    });
+    if balancer.selector.is_empty() {
+        let first_tag = balancer.members[0].tag.clone();
+        if balancer.fallback_tag.as_deref() == Some(first_tag.as_str()) {
+            balancer.fallback_tag = None;
+        }
+        balancer.selector.push(first_tag);
+    }
+
+    if let Some(observatory) = &mut balancer.observatory {
+        let subject_selector = match observatory {
+            rosetun_config::XrayObservatory::Standard(obs) => &mut obs.subject_selector,
+            rosetun_config::XrayObservatory::Burst(obs) => &mut obs.subject_selector,
+        };
+        subject_selector.retain(|prefix| {
+            balancer
+                .members
+                .iter()
+                .any(|m| m.tag.starts_with(prefix.as_str()))
+        });
+        if subject_selector.is_empty() {
+            *subject_selector = balancer.selector.clone();
+        }
+    }
+
     prepared
 }
 

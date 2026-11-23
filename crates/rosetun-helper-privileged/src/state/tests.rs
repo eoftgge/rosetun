@@ -3971,6 +3971,7 @@ fn protected_helper(
             // This domain must never be resolved during reconnect.
             server: "cached.invalid".to_owned(),
             address: "203.0.113.10".parse().expect("IP"),
+            members: HashMap::new(),
         });
         session.process = Some(Box::new(ExitedProcess));
     }
@@ -5510,6 +5511,7 @@ fn apply_reuses_normalized_cached_server_name() {
     helper.session().unwrap().last_endpoint = Some(SuccessfulEndpoint {
         server: "cached.invalid".to_owned(),
         address,
+        members: HashMap::new(),
     });
     let mut changed = request.clone();
     changed.node.server = "CACHED.INVALID.".to_owned();
@@ -7250,6 +7252,7 @@ fn protected_reconnect_uses_the_remembered_extra_address() {
             SuccessfulEndpoint {
                 server: "exit.invalid".into(),
                 address: "198.51.100.21".parse().unwrap(),
+                members: HashMap::new(),
             },
         );
     }
@@ -9685,7 +9688,10 @@ fn unavailable_first_hop_blocks_b_and_retains_independent_exit_identity() {
         NameLookup::System,
     );
     assert_eq!(
-        endpoints,
+        endpoints
+            .iter()
+            .map(|resolved| resolved.as_ref().map(|r| r.primary))
+            .collect::<Vec<_>>(),
         [
             Some("198.51.100.2".parse().unwrap()),
             None,
@@ -9929,4 +9935,161 @@ fn apply_and_probe_exclude_actual_utun_interface_while_connected() {
 
     helper.disconnect_as(&test_caller()).unwrap();
     assert_eq!(helper.effective_tun_name(&request.settings.tun), "rosetun0");
+}
+
+#[test]
+fn xray_balancer_endpoints_preserve_sni_failover_on_partial_dns_and_cache_for_reconnect() {
+    use rosetun_config::{
+        BalancerMember, BalancerStrategy, BurstObservatory, LeastLoadSettings, RealityParams,
+        StreamSettings, TlsMode, TlsParams, Transport, VlessParams, XrayBalancer, XrayObservatory,
+    };
+
+    let balanced = Node {
+        id: NodeId::new("bal-nl"),
+        name: "NL".into(),
+        server: "nl.example.invalid".into(),
+        port: 443,
+        outbound: Outbound::XrayBalancer(Box::new(XrayBalancer {
+            members: vec![
+                BalancerMember {
+                    tag: "proxy".into(),
+                    server: "nl.example.invalid".into(),
+                    port: 443,
+                    outbound: Outbound::Vless(VlessParams {
+                        uuid: "00000000-0000-4000-8000-000000000001".into(),
+                        flow: Some("xtls-rprx-vision".into()),
+                    }),
+                    stream: StreamSettings {
+                        transport: Transport::Tcp,
+                        tls: TlsMode::Reality(RealityParams {
+                            sni: None,
+                            public_key: "test-public-key".into(),
+                            short_id: None,
+                            fingerprint: Some("firefox".into()),
+                        }),
+                        finalmask: None,
+                    },
+                },
+                BalancerMember {
+                    tag: "mask".into(),
+                    server: "nl4.example.invalid".into(),
+                    port: 443,
+                    outbound: Outbound::Vless(VlessParams {
+                        uuid: "00000000-0000-4000-8000-000000000001".into(),
+                        flow: Some("xtls-rprx-vision".into()),
+                    }),
+                    stream: StreamSettings {
+                        transport: Transport::Tcp,
+                        tls: TlsMode::Tls(TlsParams::default()),
+                        finalmask: None,
+                    },
+                },
+            ],
+            selector: vec!["proxy".into()],
+            strategy: BalancerStrategy::LeastLoad(LeastLoadSettings {
+                max_rtt: Some("3000ms".into()),
+                tolerance_bp: Some(5000),
+                expected: None,
+                baselines: Vec::new(),
+            }),
+            fallback_tag: Some("mask".into()),
+            observatory: Some(XrayObservatory::Burst(BurstObservatory {
+                subject_selector: vec!["proxy".into()],
+                destination: Some("https://connectivitycheck.gstatic.com/generate_204".into()),
+                interval: Some("15s".into()),
+                timeout: Some("5s".into()),
+                sampling: Some(2),
+                http_method: Some("GET".into()),
+            })),
+        })),
+        stream: StreamSettings::default(),
+        raw: None,
+    };
+
+    // Case 1: both members resolve -> SNI preserved on both, both cached for protected reconnect.
+    let mut map = HashMap::new();
+    map.insert("nl.example.invalid".into(), "192.0.2.10".parse().unwrap());
+    map.insert("nl4.example.invalid".into(), "192.0.2.11".parse().unwrap());
+    let both = ResolvedNodeEndpoints::from_members("192.0.2.10".parse().unwrap(), map);
+    let prepared = node_with_endpoints(&balanced, &both);
+    prepared.validate_proxy().unwrap();
+    let Outbound::XrayBalancer(bal) = &prepared.outbound else {
+        panic!("expected balancer");
+    };
+    assert_eq!(bal.members.len(), 2);
+    assert_eq!(bal.members[0].server, "192.0.2.10");
+    assert_eq!(bal.members[1].server, "192.0.2.11");
+    assert!(matches!(
+        &bal.members[0].stream.tls,
+        TlsMode::Reality(r) if r.sni.as_deref() == Some("nl.example.invalid")
+    ));
+    assert!(matches!(
+        &bal.members[1].stream.tls,
+        TlsMode::Tls(t) if t.sni.as_deref() == Some("nl4.example.invalid")
+    ));
+
+    let cached = both.into_successful(&balanced.server);
+    let reconnected = protected_endpoints(&balanced, Some(&cached)).unwrap();
+    let mut ips = Vec::new();
+    reconnected.push_unique_ips(&mut ips);
+    assert!(ips.contains(&"192.0.2.10".parse().unwrap()));
+    assert!(ips.contains(&"192.0.2.11".parse().unwrap()));
+
+    // Case 2: primary fails DNS, only fallback resolves -> fallback promoted to selector.
+    let mut fallback_only_map = HashMap::new();
+    fallback_only_map.insert("nl4.example.invalid".into(), "192.0.2.11".parse().unwrap());
+    let fallback_only =
+        ResolvedNodeEndpoints::from_members("192.0.2.11".parse().unwrap(), fallback_only_map);
+    let failover = node_with_endpoints(&balanced, &fallback_only);
+    failover.validate_proxy().unwrap();
+    let Outbound::XrayBalancer(bal) = &failover.outbound else {
+        panic!("expected balancer");
+    };
+    assert_eq!(bal.members.len(), 1);
+    assert_eq!(bal.members[0].tag, "mask");
+    assert_eq!(bal.selector, ["mask"]);
+    assert_eq!(bal.fallback_tag, None);
+    let Some(XrayObservatory::Burst(obs)) = &bal.observatory else {
+        panic!("expected burst observatory");
+    };
+    assert_eq!(obs.subject_selector, ["mask"]);
+
+    // Case 3: connecting a balanced node via helper resolves both members and starts Xray,
+    // and probing with XrayUse::Off marks it Unsupported.
+    let (helper, _, runner, _, _, _) = xray_chain_helper();
+    {
+        let mut session = helper.session.lock().unwrap();
+        session.name_lookup = |server, _, _| match server {
+            "nl.example.invalid" => Ok(vec!["192.0.2.10".parse().unwrap()]),
+            "nl4.example.invalid" => Ok(vec!["192.0.2.11".parse().unwrap()]),
+            _ => Err(Unresolved {
+                error: HelperError::new(ErrorCode::ServerNameUnresolved, "unknown"),
+                offline: false,
+            }),
+        };
+    }
+    let mut request = reality_request();
+    request.node = balanced.clone();
+    request.settings.kill_switch = false;
+    request.settings.xray = rosetun_config::XrayUse::Auto;
+    helper.connect_as(&test_caller(), &request).unwrap();
+    assert_eq!(runner.starts.load(Ordering::Acquire), 1);
+    {
+        let session = helper.session.lock().unwrap();
+        let saved = session.last_endpoint.as_ref().unwrap();
+        assert!(saved.contains_address("192.0.2.10".parse().unwrap()));
+        assert!(saved.contains_address("192.0.2.11".parse().unwrap()));
+    }
+    helper.disconnect_as(&test_caller()).unwrap();
+
+    let mut off_settings = request.settings.clone();
+    off_settings.xray = rosetun_config::XrayUse::Off;
+    let probe = helper
+        .probe_nodes(&rosetun_ipc::ProbeRequest {
+            nodes: vec![balanced],
+            settings: off_settings,
+        })
+        .unwrap();
+    assert_eq!(probe.len(), 1);
+    assert_eq!(probe[0].outcome, rosetun_ipc::ProbeOutcome::Unsupported);
 }

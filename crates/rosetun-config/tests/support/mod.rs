@@ -58,6 +58,7 @@ pub(crate) fn legacy_config() -> AppConfig {
                 short_id: Some("01234567".to_owned()),
                 fingerprint: Some("chrome".to_owned()),
             }),
+            finalmask: None,
         },
     );
     let vmess = node(
@@ -80,7 +81,9 @@ pub(crate) fn legacy_config() -> AppConfig {
                 alpn: vec!["h2".to_owned(), "http/1.1".to_owned()],
                 allow_insecure: true,
                 fingerprint: Some("firefox".to_owned()),
+                enable_session_resumption: None,
             }),
+            finalmask: None,
         },
     );
     let trojan = node(
@@ -100,7 +103,9 @@ pub(crate) fn legacy_config() -> AppConfig {
                 alpn: vec!["h2".to_owned()],
                 allow_insecure: false,
                 fingerprint: None,
+                enable_session_resumption: None,
             }),
+            finalmask: None,
         },
     );
     let shadowsocks = node(

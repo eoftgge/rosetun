@@ -1707,6 +1707,7 @@ mod tests {
             stream: StreamSettings {
                 transport: Transport::Tcp,
                 tls,
+                finalmask: None,
             },
             raw: None,
         };

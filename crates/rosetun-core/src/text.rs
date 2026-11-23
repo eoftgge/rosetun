@@ -180,6 +180,54 @@ pub fn traffic_text(info: &SubscriptionInfo) -> String {
     }
 }
 
+fn balancer_primary_member(
+    balancer: &rosetun_config::XrayBalancer,
+) -> Option<&rosetun_config::BalancerMember> {
+    balancer
+        .members
+        .iter()
+        .find(|member| {
+            balancer
+                .selector
+                .iter()
+                .any(|prefix| member.tag.starts_with(prefix))
+        })
+        .or_else(|| balancer.members.first())
+}
+
+fn outbound_transport(
+    outbound: &Outbound,
+    stream: &rosetun_config::StreamSettings,
+) -> &'static str {
+    if matches!(outbound, Outbound::Hysteria2(_) | Outbound::Tuic(_)) {
+        return "quic";
+    }
+    if matches!(outbound, Outbound::WireGuard(_)) {
+        return "udp";
+    }
+    match &stream.transport {
+        Transport::Tcp => "tcp",
+        Transport::Ws { .. } => "ws",
+        Transport::Grpc { .. } => "grpc",
+        Transport::HttpUpgrade { .. } => "httpupgrade",
+        Transport::Xhttp { .. } => "xhttp",
+    }
+}
+
+fn outbound_tls(outbound: &Outbound, stream: &rosetun_config::StreamSettings) -> &'static str {
+    if matches!(outbound, Outbound::Hysteria2(_) | Outbound::Tuic(_)) {
+        return "tls";
+    }
+    if matches!(outbound, Outbound::WireGuard(_)) {
+        return "noise";
+    }
+    match &stream.tls {
+        TlsMode::Plain => "plain",
+        TlsMode::Tls(_) => "tls",
+        TlsMode::Reality(_) => "reality",
+    }
+}
+
 pub fn node_protocol(node: &Node) -> &'static str {
     match &node.outbound {
         Outbound::Http(_) if matches!(node.stream.tls, rosetun_config::TlsMode::Tls(_)) => "https",
@@ -193,38 +241,27 @@ pub fn node_protocol(node: &Node) -> &'static str {
         Outbound::Tuic(_) => "tuic",
         Outbound::AnyTls(_) => "anytls",
         Outbound::WireGuard(_) => "wireguard",
+        Outbound::XrayBalancer(_) => "balancer",
         Outbound::Unknown { .. } => "unknown",
     }
 }
 
 pub fn node_transport(node: &Node) -> &'static str {
-    if matches!(node.outbound, Outbound::Hysteria2(_) | Outbound::Tuic(_)) {
-        return "quic";
+    if let Outbound::XrayBalancer(balancer) = &node.outbound {
+        return balancer_primary_member(balancer).map_or("tcp", |member| {
+            outbound_transport(&member.outbound, &member.stream)
+        });
     }
-    if matches!(node.outbound, Outbound::WireGuard(_)) {
-        return "udp";
-    }
-    match &node.stream.transport {
-        Transport::Tcp => "tcp",
-        Transport::Ws { .. } => "ws",
-        Transport::Grpc { .. } => "grpc",
-        Transport::HttpUpgrade { .. } => "httpupgrade",
-        Transport::Xhttp { .. } => "xhttp",
-    }
+    outbound_transport(&node.outbound, &node.stream)
 }
 
 pub fn node_tls(node: &Node) -> &'static str {
-    if matches!(node.outbound, Outbound::Hysteria2(_) | Outbound::Tuic(_)) {
-        return "tls";
+    if let Outbound::XrayBalancer(balancer) = &node.outbound {
+        return balancer_primary_member(balancer).map_or("plain", |member| {
+            outbound_tls(&member.outbound, &member.stream)
+        });
     }
-    if matches!(node.outbound, Outbound::WireGuard(_)) {
-        return "noise";
-    }
-    match &node.stream.tls {
-        TlsMode::Plain => "plain",
-        TlsMode::Tls(_) => "tls",
-        TlsMode::Reality(_) => "reality",
-    }
+    outbound_tls(&node.outbound, &node.stream)
 }
 
 pub fn node_address(node: &Node) -> String {
@@ -427,6 +464,61 @@ mod tests {
         assert_eq!(node_address(&node), "[2001:db8::1]:443");
         node.server = "192.0.2.1".to_owned();
         assert_eq!(node_address(&node), "192.0.2.1:443");
+    }
+
+    #[test]
+    fn xray_balancer_details_use_primary_member_stream() {
+        let node = Node {
+            id: rosetun_config::NodeId::new("bal"),
+            name: "NL".into(),
+            server: "nl.example.invalid".into(),
+            port: 443,
+            outbound: Outbound::XrayBalancer(Box::new(rosetun_config::XrayBalancer {
+                members: vec![
+                    rosetun_config::BalancerMember {
+                        tag: "mask".into(),
+                        server: "nl4.example.invalid".into(),
+                        port: 443,
+                        outbound: Outbound::Vless(rosetun_config::VlessParams {
+                            uuid: "00000000-0000-4000-8000-000000000001".into(),
+                            flow: None,
+                        }),
+                        stream: rosetun_config::StreamSettings {
+                            tls: TlsMode::Tls(Default::default()),
+                            ..Default::default()
+                        },
+                    },
+                    rosetun_config::BalancerMember {
+                        tag: "proxy".into(),
+                        server: "nl.example.invalid".into(),
+                        port: 443,
+                        outbound: Outbound::Vless(rosetun_config::VlessParams {
+                            uuid: "00000000-0000-4000-8000-000000000001".into(),
+                            flow: Some("xtls-rprx-vision".into()),
+                        }),
+                        stream: rosetun_config::StreamSettings {
+                            transport: Transport::Tcp,
+                            tls: TlsMode::Reality(rosetun_config::RealityParams {
+                                sni: Some("blog.example.invalid".into()),
+                                public_key: "pubkey".into(),
+                                short_id: None,
+                                fingerprint: Some("firefox".into()),
+                            }),
+                            finalmask: None,
+                        },
+                    },
+                ],
+                selector: vec!["proxy".into()],
+                strategy: rosetun_config::BalancerStrategy::Random,
+                fallback_tag: Some("mask".into()),
+                observatory: None,
+            })),
+            stream: rosetun_config::StreamSettings::default(),
+            raw: None,
+        };
+        assert_eq!(node_protocol(&node), "balancer");
+        assert_eq!(node_transport(&node), "tcp");
+        assert_eq!(node_tls(&node), "reality");
     }
 
     #[test]

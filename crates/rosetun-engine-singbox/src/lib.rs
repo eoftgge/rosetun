@@ -683,6 +683,7 @@ mod tests {
                     short_id: Some("ab".to_owned()),
                     fingerprint: None,
                 }),
+                finalmask: None,
             },
             raw: None,
         }

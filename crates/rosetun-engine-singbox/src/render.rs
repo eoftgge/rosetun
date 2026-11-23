@@ -465,6 +465,11 @@ fn socks_outbound(socks: SocksProxy<'_>, tag: &str) -> Value {
 fn proxy_outbound(node: &Node, tag: &str) -> Result<Value, EngineError> {
     node.validate_proxy()
         .map_err(|message| EngineError::Unsupported(message.into()))?;
+    if node.stream.finalmask.is_some() {
+        return Err(EngineError::Unsupported(
+            "finalmask is only supported by the Xray backend".into(),
+        ));
+    }
     let mut outbound = Map::new();
     outbound.insert("tag".into(), tag.into());
     outbound.insert("server".into(), node.server.clone().into());
@@ -600,6 +605,11 @@ fn proxy_outbound(node: &Node, tag: &str) -> Result<Value, EngineError> {
         Outbound::WireGuard(_) => {
             return Err(EngineError::Unsupported(
                 "WireGuard must be rendered as a sing-box endpoint".into(),
+            ));
+        }
+        Outbound::XrayBalancer(_) => {
+            return Err(EngineError::Unsupported(
+                "Xray balancer nodes require the Xray backend".into(),
             ));
         }
         Outbound::Unknown { scheme, .. } => {
@@ -1451,6 +1461,7 @@ mod tests {
                     extra: rosetun_config::XhttpExtra::default(),
                 },
                 tls: TlsMode::Plain,
+                finalmask: None,
             },
             raw: None,
         };
@@ -2227,6 +2238,7 @@ mod tests {
                     alpn: vec!["h3".into()],
                     fingerprint: Some("firefox".into()),
                     allow_insecure: true,
+                    enable_session_resumption: None,
                 }),
                 ..Default::default()
             },
@@ -2308,6 +2320,7 @@ mod tests {
                     alpn: vec!["h2".into(), "http/1.1".into()],
                     fingerprint: Some("firefox".into()),
                     allow_insecure: false,
+                    enable_session_resumption: None,
                 }),
                 ..Default::default()
             },

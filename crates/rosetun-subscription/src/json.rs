@@ -1,6 +1,11 @@
+use rosetun_config::{
+    BalancerMember, BalancerStrategy, BurstObservatory, FinalMask, HeaderCustomItem,
+    HeaderCustomPacket, HeaderCustomPacketType, HeaderCustomTcp, LeastLoadSettings, Node, NodeId,
+    Outbound, StandardObservatory, StreamSettings, TcpFinalMask, XrayBalancer, XrayObservatory,
+};
 use serde_json::Value;
 
-use crate::common::{Fields, build, clean, hysteria_ports, is_service_address};
+use crate::common::{Fields, build, clean, endpoint, hysteria_ports, is_service_address};
 use crate::wireguard::{self, WireGuardInput};
 use crate::{Entry, Format, ParseError, Record, SkipReason, UnsupportedTransport};
 
@@ -15,6 +20,7 @@ const PROTOCOLS: &[&str] = &[
     "wireguard",
 ];
 const XRAY_PROTOCOLS: &[&str] = &["vless", "vmess", "trojan", "shadowsocks", "wireguard"];
+const XRAY_BALANCER_PROTOCOLS: &[&str] = &["vless", "vmess", "trojan", "shadowsocks"];
 
 pub(crate) fn format(value: &Value) -> Result<Format, ParseError> {
     if value.is_array() {
@@ -76,6 +82,11 @@ fn xray(config: &Value) -> Record {
     let Some(outbounds) = config.get("outbounds").and_then(Value::as_array) else {
         return (None, Entry::Skip(SkipReason::InvalidRecord));
     };
+
+    if let Some(balancer) = active_xray_balancer(config) {
+        return xray_balanced(config, outbounds, balancer);
+    }
+
     let supported = |outbound: &&Value| {
         outbound
             .get("protocol")
@@ -116,8 +127,310 @@ fn xray(config: &Value) -> Record {
         return xray_wireguard(config, outbound);
     }
     let scheme = normalize_protocol(protocol);
+    let result = parse_xray_outbound(outbound, config.get("remarks"));
+    (Some(scheme.to_owned()), result.into())
+}
+
+fn active_xray_balancer(config: &Value) -> Option<&Value> {
+    let balancers = config.pointer("/routing/balancers")?.as_array()?;
+    if balancers.is_empty() {
+        return None;
+    }
+    if let Some(rules) = config.pointer("/routing/rules").and_then(Value::as_array) {
+        let balancer_rules: Vec<&Value> = rules
+            .iter()
+            .filter(|rule| rule.get("balancerTag").and_then(Value::as_str).is_some())
+            .collect();
+        let chosen_tag = balancer_rules
+            .iter()
+            .rev()
+            .find(|rule| {
+                rule.get("domain").is_none()
+                    && rule.get("ip").is_none()
+                    && rule.get("port").is_none()
+                    && rule.get("protocol").is_none()
+                    && rule.get("inboundTag").is_none()
+            })
+            .or_else(|| balancer_rules.last())
+            .and_then(|rule| rule.get("balancerTag").and_then(Value::as_str));
+        if let Some(tag) = chosen_tag
+            && let Some(found) = balancers
+                .iter()
+                .find(|balancer| balancer.get("tag").and_then(Value::as_str) == Some(tag))
+        {
+            return Some(found);
+        }
+    }
+    balancers.first()
+}
+
+fn xray_balanced(config: &Value, outbounds: &[Value], balancer: &Value) -> Record {
+    let result = (|| -> Result<Node, SkipReason> {
+        let selector = balancer
+            .get("selector")
+            .and_then(Value::as_array)
+            .ok_or(SkipReason::MissingField)?
+            .iter()
+            .map(|value| {
+                value
+                    .as_str()
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_owned)
+                    .ok_or(SkipReason::InvalidRecord)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        if selector.is_empty() {
+            return Err(SkipReason::MissingField);
+        }
+        let fallback_tag = balancer
+            .get("fallbackTag")
+            .and_then(Value::as_str)
+            .filter(|tag| !tag.is_empty())
+            .map(str::to_owned);
+
+        let mut members = Vec::new();
+        for outbound in outbounds {
+            let Some(tag) = outbound.get("tag").and_then(Value::as_str) else {
+                continue;
+            };
+            let matches_selector = selector.iter().any(|prefix| tag.starts_with(prefix));
+            let matches_fallback = fallback_tag.as_deref() == Some(tag);
+            if !matches_selector && !matches_fallback {
+                continue;
+            }
+            let protocol = outbound
+                .get("protocol")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            if !XRAY_BALANCER_PROTOCOLS.contains(&protocol) {
+                return Err(SkipReason::UnsupportedOption);
+            }
+            let parsed = parse_xray_outbound(outbound, None)?;
+            members.push(BalancerMember {
+                tag: tag.to_owned(),
+                server: parsed.server,
+                port: parsed.port,
+                outbound: parsed.outbound,
+                stream: parsed.stream,
+            });
+        }
+        if members.is_empty() {
+            return Err(SkipReason::MissingField);
+        }
+
+        let strategy = parse_balancer_strategy(balancer.get("strategy"))?;
+        let observatory = parse_xray_observatory(config, &members)?;
+
+        let xray_balancer = XrayBalancer {
+            members,
+            selector,
+            fallback_tag,
+            strategy,
+            observatory,
+        };
+        xray_balancer
+            .validate()
+            .map_err(|_| SkipReason::InvalidRecord)?;
+
+        let primary = xray_balancer
+            .primary_member()
+            .ok_or(SkipReason::MissingField)?;
+        let server = primary.server.clone();
+        let port = primary.port;
+        let mut name = config
+            .get("remarks")
+            .and_then(Value::as_str)
+            .map(|text| clean(text, 128))
+            .unwrap_or_default();
+        if name.is_empty() {
+            name = clean(&endpoint(&server, port), 128);
+        }
+        let node = Node {
+            id: NodeId::new(""),
+            name,
+            server,
+            port,
+            outbound: Outbound::XrayBalancer(Box::new(xray_balancer)),
+            stream: StreamSettings::default(),
+            raw: None,
+        };
+        node.validate_proxy()
+            .map_err(|_| SkipReason::InvalidRecord)?;
+        Ok(node)
+    })();
+
+    (Some("xray".to_owned()), result.into())
+}
+
+fn parse_balancer_strategy(value: Option<&Value>) -> Result<BalancerStrategy, SkipReason> {
+    let Some(strategy) = value.filter(|value| !value.is_null()) else {
+        return Ok(BalancerStrategy::Random);
+    };
+    let strategy = strategy.as_object().ok_or(SkipReason::InvalidRecord)?;
+    let kind = strategy
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or("random");
+    match kind {
+        "random" => Ok(BalancerStrategy::Random),
+        "roundRobin" => Ok(BalancerStrategy::RoundRobin),
+        "leastPing" => Ok(BalancerStrategy::LeastPing),
+        "leastLoad" => {
+            let mut settings = LeastLoadSettings::default();
+            if let Some(raw) = strategy.get("settings").filter(|v| !v.is_null()) {
+                let raw = raw.as_object().ok_or(SkipReason::InvalidRecord)?;
+                if let Some(expected) = raw.get("expected").filter(|v| !v.is_null()) {
+                    let value = expected
+                        .as_u64()
+                        .and_then(|v| u32::try_from(v).ok())
+                        .ok_or(SkipReason::InvalidRecord)?;
+                    settings.expected = Some(value);
+                }
+                if let Some(max_rtt) = raw.get("maxRTT").filter(|v| !v.is_null()) {
+                    let value = max_rtt.as_str().ok_or(SkipReason::InvalidRecord)?;
+                    if !value.is_empty() {
+                        settings.max_rtt = Some(value.to_owned());
+                    }
+                }
+                if let Some(tolerance) = raw.get("tolerance").filter(|v| !v.is_null()) {
+                    let value = tolerance.as_f64().ok_or(SkipReason::InvalidRecord)?;
+                    if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+                        return Err(SkipReason::InvalidRecord);
+                    }
+                    settings.tolerance_bp = Some((value * 10_000.0).round() as u16);
+                }
+                if let Some(baselines) = raw.get("baselines").filter(|v| !v.is_null()) {
+                    let list = baselines.as_array().ok_or(SkipReason::InvalidRecord)?;
+                    settings.baselines = list
+                        .iter()
+                        .map(|entry| {
+                            entry
+                                .as_str()
+                                .map(str::to_owned)
+                                .ok_or(SkipReason::InvalidRecord)
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                }
+            }
+            settings.validate().map_err(|_| SkipReason::InvalidRecord)?;
+            Ok(BalancerStrategy::LeastLoad(settings))
+        }
+        _ => Err(SkipReason::UnsupportedOption),
+    }
+}
+
+fn parse_xray_observatory(
+    config: &Value,
+    members: &[BalancerMember],
+) -> Result<Option<XrayObservatory>, SkipReason> {
+    if let Some(burst) = config.get("burstObservatory").filter(|v| !v.is_null()) {
+        let burst = burst.as_object().ok_or(SkipReason::InvalidRecord)?;
+        let subject_selector = parse_subject_selector(burst.get("subjectSelector"), members)?;
+        if subject_selector.is_empty() {
+            return Ok(None);
+        }
+        let mut parsed = BurstObservatory {
+            subject_selector,
+            ..BurstObservatory::default()
+        };
+        if let Some(ping) = burst.get("pingConfig").filter(|v| !v.is_null()) {
+            let ping = ping.as_object().ok_or(SkipReason::InvalidRecord)?;
+            // `connectivity` is intentionally omitted: in TUN mode it sends direct out-of-tunnel
+            // HTTP requests that can loop into the tunnel or bypass the kill switch.
+            if let Some(destination) = ping.get("destination").and_then(Value::as_str)
+                && !destination.is_empty()
+            {
+                parsed.destination = Some(destination.to_owned());
+            }
+            if let Some(interval) = ping.get("interval").and_then(Value::as_str)
+                && !interval.is_empty()
+            {
+                parsed.interval = Some(interval.to_owned());
+            }
+            if let Some(timeout) = ping.get("timeout").and_then(Value::as_str)
+                && !timeout.is_empty()
+            {
+                parsed.timeout = Some(timeout.to_owned());
+            }
+            if let Some(sampling) = ping.get("sampling").filter(|v| !v.is_null()) {
+                let value = sampling
+                    .as_u64()
+                    .and_then(|v| u32::try_from(v).ok())
+                    .ok_or(SkipReason::InvalidRecord)?;
+                parsed.sampling = Some(value);
+            }
+            if let Some(method) = ping.get("httpMethod").and_then(Value::as_str)
+                && !method.is_empty()
+            {
+                parsed.http_method = Some(method.to_ascii_uppercase());
+            }
+        }
+        let obs = XrayObservatory::Burst(parsed);
+        obs.validate(members)
+            .map_err(|_| SkipReason::InvalidRecord)?;
+        return Ok(Some(obs));
+    }
+
+    if let Some(standard) = config.get("observatory").filter(|v| !v.is_null()) {
+        let standard = standard.as_object().ok_or(SkipReason::InvalidRecord)?;
+        let subject_selector = parse_subject_selector(standard.get("subjectSelector"), members)?;
+        if subject_selector.is_empty() {
+            return Ok(None);
+        }
+        let probe_url = standard
+            .get("probeUrl")
+            .or_else(|| standard.get("probeURL"))
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned);
+        let probe_interval = standard
+            .get("probeInterval")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned);
+        let enable_concurrency = standard
+            .get("enableConcurrency")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let obs = XrayObservatory::Standard(StandardObservatory {
+            subject_selector,
+            probe_url,
+            probe_interval,
+            enable_concurrency,
+        });
+        obs.validate(members)
+            .map_err(|_| SkipReason::InvalidRecord)?;
+        return Ok(Some(obs));
+    }
+
+    Ok(None)
+}
+
+fn parse_subject_selector(
+    value: Option<&Value>,
+    members: &[BalancerMember],
+) -> Result<Vec<String>, SkipReason> {
+    let Some(list) = value.and_then(Value::as_array) else {
+        return Ok(Vec::new());
+    };
+    let mut selectors = Vec::new();
+    for item in list {
+        let prefix = item.as_str().ok_or(SkipReason::InvalidRecord)?;
+        if !prefix.is_empty() && members.iter().any(|m| m.tag.starts_with(prefix)) {
+            selectors.push(prefix.to_owned());
+        }
+    }
+    Ok(selectors)
+}
+
+fn parse_xray_outbound(outbound: &Value, remarks: Option<&Value>) -> Result<Node, SkipReason> {
+    let protocol = outbound
+        .get("protocol")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let scheme = normalize_protocol(protocol);
     let mut fields = Fields::new();
-    put(&mut fields, "name", config.get("remarks"));
+    put(&mut fields, "name", remarks);
 
     let settings = &outbound["settings"];
     match protocol {
@@ -161,6 +474,7 @@ fn xray(config: &Value) -> Record {
         ("alpn", "alpn"),
         ("fingerprint", "fingerprint"),
         ("allowInsecure", "insecure"),
+        ("enableSessionResumption", "enable_session_resumption"),
     ] {
         put(&mut fields, target, tls.get(source));
     }
@@ -236,7 +550,138 @@ fn xray(config: &Value) -> Record {
         _ => {}
     }
 
-    (Some(scheme.to_owned()), build(scheme, &fields).into())
+    let finalmask = match stream.get("finalmask").filter(|v| !v.is_null()) {
+        Some(value) => Some(parse_finalmask(value)?),
+        None => None,
+    };
+
+    let mut node = build(scheme, &fields)?;
+    node.stream.finalmask = finalmask;
+    if node.stream.finalmask.is_some() {
+        node.validate_proxy()
+            .map_err(|_| SkipReason::InvalidRecord)?;
+    }
+    Ok(node)
+}
+
+fn parse_finalmask(value: &Value) -> Result<FinalMask, SkipReason> {
+    let object = value.as_object().ok_or(SkipReason::InvalidRecord)?;
+    if object
+        .get("udp")
+        .and_then(Value::as_array)
+        .is_some_and(|list| !list.is_empty())
+        || object.get("quicParams").is_some_and(|v| !v.is_null())
+    {
+        return Err(SkipReason::UnsupportedOption);
+    }
+    let tcp_list = object
+        .get("tcp")
+        .and_then(Value::as_array)
+        .ok_or(SkipReason::UnsupportedOption)?;
+    let mut tcp = Vec::with_capacity(tcp_list.len());
+    for entry in tcp_list {
+        let entry = entry.as_object().ok_or(SkipReason::InvalidRecord)?;
+        let kind = entry
+            .get("type")
+            .and_then(Value::as_str)
+            .ok_or(SkipReason::MissingField)?;
+        match kind {
+            "header-custom" => {
+                let settings = entry
+                    .get("settings")
+                    .and_then(Value::as_object)
+                    .ok_or(SkipReason::MissingField)?;
+                let custom = HeaderCustomTcp {
+                    clients: parse_header_custom_steps(settings.get("clients"))?,
+                    servers: parse_header_custom_steps(settings.get("servers"))?,
+                    errors: parse_header_custom_steps(settings.get("errors"))?,
+                };
+                tcp.push(TcpFinalMask::HeaderCustom(custom));
+            }
+            _ => return Err(SkipReason::UnsupportedOption),
+        }
+    }
+    let finalmask = FinalMask { tcp };
+    finalmask
+        .validate()
+        .map_err(|_| SkipReason::InvalidRecord)?;
+    Ok(finalmask)
+}
+
+fn parse_header_custom_steps(
+    value: Option<&Value>,
+) -> Result<Vec<Vec<HeaderCustomItem>>, SkipReason> {
+    let Some(steps) = value.filter(|v| !v.is_null()) else {
+        return Ok(Vec::new());
+    };
+    let steps = steps.as_array().ok_or(SkipReason::InvalidRecord)?;
+    let mut parsed_steps = Vec::with_capacity(steps.len());
+    for step in steps {
+        let items = step.as_array().ok_or(SkipReason::InvalidRecord)?;
+        let mut parsed_items = Vec::with_capacity(items.len());
+        for item in items {
+            let item = item.as_object().ok_or(SkipReason::InvalidRecord)?;
+            let delay = match item.get("delay").filter(|v| !v.is_null()) {
+                Some(v) => Some(
+                    v.as_u64()
+                        .and_then(|n| u32::try_from(n).ok())
+                        .ok_or(SkipReason::InvalidRecord)?,
+                ),
+                None => None,
+            };
+            let rand = match item.get("rand").filter(|v| !v.is_null()) {
+                Some(v) => Some(
+                    v.as_u64()
+                        .and_then(|n| u32::try_from(n).ok())
+                        .ok_or(SkipReason::InvalidRecord)?,
+                ),
+                None => None,
+            };
+            let rand_range = match item.get("randRange").filter(|v| !v.is_null()) {
+                Some(v) => {
+                    let text = v.as_str().ok_or(SkipReason::InvalidRecord)?;
+                    (!text.is_empty()).then(|| text.to_owned())
+                }
+                None => None,
+            };
+            let packet_type = match item.get("type").filter(|v| !v.is_null()) {
+                Some(v) => match v.as_str().ok_or(SkipReason::InvalidRecord)? {
+                    "" => None,
+                    "array" => Some(HeaderCustomPacketType::Array),
+                    "str" => Some(HeaderCustomPacketType::Str),
+                    "hex" => Some(HeaderCustomPacketType::Hex),
+                    "base64" => Some(HeaderCustomPacketType::Base64),
+                    _ => return Err(SkipReason::UnsupportedOption),
+                },
+                None => None,
+            };
+            let packet = match item.get("packet").filter(|v| !v.is_null()) {
+                Some(Value::String(text)) => Some(HeaderCustomPacket::Text(text.clone())),
+                Some(Value::Array(array)) => {
+                    let bytes = array
+                        .iter()
+                        .map(|v| {
+                            v.as_u64()
+                                .and_then(|n| u8::try_from(n).ok())
+                                .ok_or(SkipReason::InvalidRecord)
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                    Some(HeaderCustomPacket::Bytes(bytes))
+                }
+                Some(_) => return Err(SkipReason::InvalidRecord),
+                None => None,
+            };
+            parsed_items.push(HeaderCustomItem {
+                delay,
+                rand,
+                rand_range,
+                packet_type,
+                packet,
+            });
+        }
+        parsed_steps.push(parsed_items);
+    }
+    Ok(parsed_steps)
 }
 
 fn xray_wireguard(config: &Value, outbound: &Value) -> Record {

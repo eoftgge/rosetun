@@ -295,7 +295,11 @@ pub(crate) fn build(protocol: &str, fields: &Fields) -> Result<Node, SkipReason>
         server: server.to_owned(),
         port,
         outbound,
-        stream: StreamSettings { transport, tls },
+        stream: StreamSettings {
+            transport,
+            tls,
+            finalmask: None,
+        },
         raw: None,
     };
     if matches!(node.outbound, Outbound::Tuic(_) | Outbound::AnyTls(_)) {
@@ -366,21 +370,28 @@ fn tls(protocol: &str, fields: &Fields) -> Result<TlsMode, SkipReason> {
             Err(SkipReason::UnsupportedSecurity)
         }
         "" | "none" => Ok(TlsMode::Plain),
-        "tls" => Ok(TlsMode::Tls(TlsParams {
-            sni: optional(fields, "sni"),
-            alpn: field(fields, "alpn")
-                .split(',')
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(str::to_owned)
-                .collect(),
-            allow_insecure: if matches!(protocol, "tuic" | "anytls") {
-                parse_bool(field(fields, "insecure"))?
-            } else {
-                truth(field(fields, "insecure"))
-            },
-            fingerprint: optional(fields, "fingerprint"),
-        })),
+        "tls" => {
+            let enable_session_resumption = match field(fields, "enable_session_resumption") {
+                "" => None,
+                value => Some(parse_bool(value)?),
+            };
+            Ok(TlsMode::Tls(TlsParams {
+                sni: optional(fields, "sni"),
+                alpn: field(fields, "alpn")
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_owned)
+                    .collect(),
+                allow_insecure: if matches!(protocol, "tuic" | "anytls") {
+                    parse_bool(field(fields, "insecure"))?
+                } else {
+                    truth(field(fields, "insecure"))
+                },
+                fingerprint: optional(fields, "fingerprint"),
+                enable_session_resumption,
+            }))
+        }
         "reality" => Ok(TlsMode::Reality(RealityParams {
             sni: optional(fields, "sni"),
             public_key: optional(fields, "public_key")
@@ -408,8 +419,8 @@ pub(crate) fn is_service_address(host: &str) -> bool {
         .is_ok_and(|address| address.is_unspecified() || address.is_loopback())
 }
 
-pub(crate) fn is_service(node: &Node) -> bool {
-    let uuid = match &node.outbound {
+fn is_service_parts(server: &str, outbound: &Outbound) -> bool {
+    let uuid = match outbound {
         Outbound::Vless(params) => Some(params.uuid.as_str()),
         Outbound::Vmess(params) => Some(params.uuid.as_str()),
         Outbound::Tuic(params) => Some(params.uuid.as_str()),
@@ -418,11 +429,26 @@ pub(crate) fn is_service(node: &Node) -> bool {
     let zero_uuid = uuid.is_some_and(|uuid| {
         uuid == "00000000-0000-0000-0000-000000000000" || uuid == "00000000000000000000000000000000"
     });
-    is_service_address(&node.server) || zero_uuid
+    is_service_address(server) || zero_uuid
 }
 
-pub(crate) fn stable_id(node: &Node) -> String {
-    let protocol = match &node.outbound {
+pub(crate) fn is_service(node: &Node) -> bool {
+    match &node.outbound {
+        Outbound::XrayBalancer(balancer) => balancer
+            .members
+            .iter()
+            .all(|member| is_service_parts(&member.server, &member.outbound)),
+        _ => is_service_parts(&node.server, &node.outbound),
+    }
+}
+
+fn canonical_parts(
+    server: &str,
+    port: u16,
+    outbound: &Outbound,
+    stream: &StreamSettings,
+) -> String {
+    let protocol = match outbound {
         Outbound::Http(_) => "http",
         Outbound::Socks5(_) => "socks5",
         Outbound::Vless(_) => "vless",
@@ -433,9 +459,10 @@ pub(crate) fn stable_id(node: &Node) -> String {
         Outbound::Tuic(_) => "tuic",
         Outbound::AnyTls(_) => "anytls",
         Outbound::WireGuard(_) => "wireguard",
+        Outbound::XrayBalancer(_) => "xray_balancer",
         Outbound::Unknown { .. } => "unknown",
     };
-    let (transport, path, host, service) = match &node.stream.transport {
+    let (transport, path, host, service) = match &stream.transport {
         Transport::Tcp => ("tcp", "", "", ""),
         Transport::Ws { path, host } => ("ws", path.as_str(), host.as_deref().unwrap_or(""), ""),
         Transport::Grpc { service_name } => ("grpc", "", "", service_name.as_str()),
@@ -449,16 +476,47 @@ pub(crate) fn stable_id(node: &Node) -> String {
             ("xhttp", path.as_str(), host.as_deref().unwrap_or(""), "")
         }
     };
-    let (security, sni) = match &node.stream.tls {
+    let (security, sni) = match &stream.tls {
         TlsMode::Plain => ("none", ""),
         TlsMode::Tls(params) => ("tls", params.sni.as_deref().unwrap_or("")),
         TlsMode::Reality(params) => ("reality", params.sni.as_deref().unwrap_or("")),
     };
-    let canonical = format!(
+    format!(
         "{protocol}|{}|{}|{transport}|{path}|{host}|{service}|{security}|{sni}",
-        node.server.to_lowercase(),
-        node.port,
-    );
+        server.to_lowercase(),
+        port,
+    )
+}
+
+pub(crate) fn stable_id(node: &Node) -> String {
+    let canonical = match &node.outbound {
+        Outbound::XrayBalancer(balancer) => {
+            let members = balancer
+                .members
+                .iter()
+                .map(|member| {
+                    format!(
+                        "{}:{}",
+                        member.tag,
+                        canonical_parts(
+                            &member.server,
+                            member.port,
+                            &member.outbound,
+                            &member.stream
+                        )
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(",");
+            format!(
+                "xray_balancer|{}|{}|{}",
+                balancer.selector.join(","),
+                balancer.fallback_tag.as_deref().unwrap_or(""),
+                members
+            )
+        }
+        _ => canonical_parts(&node.server, node.port, &node.outbound, &node.stream),
+    };
 
     // DefaultHasher does not guarantee a stable algorithm across Rust versions.
     let mut hash = 0xcbf29ce484222325_u64;

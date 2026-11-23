@@ -20,9 +20,18 @@ use rosetun_routing::RoutingGuard;
 
 use super::repeated::repeated_delay_any;
 use super::{
-    Acquired, Caller, Helper, NameLookup, SESSION_WAIT, SessionHolder, lockdown,
-    node_with_endpoint, resolve_quiet, select_endpoint, validate_tun_name, wait_for_engine_ready,
+    Acquired, Caller, Helper, NameLookup, ResolvedNodeEndpoints, SESSION_WAIT, SessionHolder,
+    SuccessfulEndpoint, lockdown, node_with_endpoint, normalize_server, resolve_quiet,
+    select_endpoint, validate_tun_name, wait_for_engine_ready,
 };
+
+struct ProbeItem {
+    result_index: usize,
+    is_primary: bool,
+    force_xray: bool,
+    tag: String,
+    node: Node,
+}
 
 const RESOLVE_TIMEOUT: Duration = Duration::from_secs(10);
 const APPLY_DNS_SLOT_POLL: Duration = Duration::from_millis(25);
@@ -246,23 +255,80 @@ impl Helper {
                 outcome: ProbeOutcome::Unresolved,
             })
             .collect::<Vec<_>>();
+
+        let mut items = Vec::with_capacity(request.nodes.len());
+        for (index, node) in request.nodes.iter().enumerate() {
+            if let rosetun_config::Outbound::XrayBalancer(balancer) = &node.outbound {
+                if request.settings.xray == rosetun_config::XrayUse::Off {
+                    results[index].outcome = ProbeOutcome::Unsupported;
+                    continue;
+                }
+                for (member_index, member) in balancer.members.iter().enumerate() {
+                    let is_primary = balancer
+                        .selector
+                        .iter()
+                        .any(|prefix| member.tag.starts_with(prefix.as_str()));
+                    items.push(ProbeItem {
+                        result_index: index,
+                        is_primary,
+                        force_xray: true,
+                        tag: format!("probe-{index}-{member_index}"),
+                        node: Node {
+                            id: node.id.clone(),
+                            name: node.name.clone(),
+                            server: member.server.clone(),
+                            port: member.port,
+                            outbound: member.outbound.clone(),
+                            stream: member.stream.clone(),
+                            raw: None,
+                        },
+                    });
+                }
+            } else {
+                items.push(ProbeItem {
+                    result_index: index,
+                    is_primary: true,
+                    force_xray: false,
+                    tag: format!("probe-{index}"),
+                    node: node.clone(),
+                });
+            }
+        }
+        if items.is_empty() {
+            return Ok(results);
+        }
+
         let lookup = NameLookup::new(
             lockdown::read(&self.lockdown).enabled,
             self.with_status(|status| status.state == ConnectionState::Connected),
         );
-        let endpoints = resolve_nodes(&request.nodes, lookup);
-        let nodes = request
-            .nodes
+        let item_nodes = items
+            .iter()
+            .map(|item| item.node.clone())
+            .collect::<Vec<_>>();
+        let endpoints = resolve_nodes(&item_nodes, lookup);
+        let mut item_outcomes = vec![ProbeOutcome::Unresolved; items.len()];
+        let resolved_items = items
             .iter()
             .enumerate()
-            .filter_map(|(index, node)| {
-                endpoints[index]
-                    .map(|address| (format!("probe-{index}"), node_with_endpoint(node, address)))
+            .filter_map(|(item_index, item)| {
+                endpoints[item_index].map(|address| {
+                    (
+                        item_index,
+                        item.force_xray,
+                        item.tag.clone(),
+                        node_with_endpoint(&item.node, address),
+                    )
+                })
             })
             .collect::<Vec<_>>();
-        if nodes.is_empty() {
+        if resolved_items.is_empty() {
             return Ok(results);
         }
+        let nodes = resolved_items
+            .iter()
+            .map(|(_, _, tag, node)| (tag.clone(), node.clone()))
+            .collect::<Vec<_>>();
 
         let control = ControlEndpoint::local().map_err(|_| {
             HelperError::new(
@@ -280,10 +346,10 @@ impl Helper {
                 "physical interface is unavailable for server checks",
             ));
         }
-        let xray_nodes = nodes
+        let xray_nodes = resolved_items
             .iter()
-            .filter(|(_, node)| uses_xray(node, &request.settings))
-            .map(|(tag, node)| {
+            .filter(|(_, force_xray, _, node)| *force_xray || uses_xray(node, &request.settings))
+            .map(|(_, _, tag, node)| {
                 SocksEndpoint::local()
                     .map(|socks| (tag.clone(), node.clone(), socks))
                     .map_err(|_| {
@@ -370,28 +436,18 @@ impl Helper {
             process: None,
             config_path,
         };
-        for (index, endpoint) in endpoints.iter().enumerate() {
-            if endpoint.is_some()
-                && config
-                    .unsupported_probes
-                    .contains(&format!("probe-{index}"))
-            {
-                results[index].outcome = ProbeOutcome::Unsupported;
+        for &(item_index, _, ref tag, _) in &resolved_items {
+            if config.unsupported_probes.contains(tag) {
+                item_outcomes[item_index] = ProbeOutcome::Unsupported;
             }
         }
-        let supported = nodes
+        let supported = resolved_items
             .iter()
-            .filter(|(tag, _)| !config.unsupported_probes.contains(tag))
-            .map(|(tag, _)| {
-                (
-                    tag["probe-".len()..]
-                        .parse::<usize>()
-                        .expect("generated tag"),
-                    tag.as_str(),
-                )
-            })
+            .filter(|(_, _, tag, _)| !config.unsupported_probes.contains(tag))
+            .map(|(item_index, _, tag, _)| (*item_index, tag.as_str()))
             .collect::<Vec<_>>();
         if supported.is_empty() {
+            aggregate_probe_outcomes(&items, &item_outcomes, &mut results);
             return Ok(results);
         }
         if !socks.is_empty() {
@@ -475,8 +531,8 @@ impl Helper {
             )
         })?;
 
-        for &(index, _) in &supported {
-            results[index].outcome = ProbeOutcome::Fails;
+        for &(item_index, _) in &supported {
+            item_outcomes[item_index] = ProbeOutcome::Fails;
         }
         let next = AtomicUsize::new(0);
         thread::scope(|scope| {
@@ -488,7 +544,7 @@ impl Helper {
                     let backend = Arc::clone(&backend);
                     scope.spawn(move || {
                         let mut outcomes = Vec::new();
-                        while let Some(&(index, tag)) =
+                        while let Some(&(item_index, tag)) =
                             supported.get(next.fetch_add(1, Ordering::Relaxed))
                         {
                             let outcome = probe_outcome(url_test_any(
@@ -497,7 +553,7 @@ impl Helper {
                                 UrlTestTarget::Probe(tag),
                                 PROBE_TIMEOUT,
                             ));
-                            outcomes.push((index, outcome));
+                            outcomes.push((item_index, outcome));
                         }
                         outcomes
                     })
@@ -506,14 +562,15 @@ impl Helper {
             for worker in workers {
                 match worker.join() {
                     Ok(outcomes) => {
-                        for (index, outcome) in outcomes {
-                            results[index].outcome = outcome;
+                        for (item_index, outcome) in outcomes {
+                            item_outcomes[item_index] = outcome;
                         }
                     }
                     Err(_) => tracing::warn!("URL test worker panicked"),
                 }
             }
         });
+        aggregate_probe_outcomes(&items, &item_outcomes, &mut results);
         Ok(results)
     }
 
@@ -650,6 +707,51 @@ fn probe_outcome<E>(result: Result<Duration, E>) -> ProbeOutcome {
     }
 }
 
+fn aggregate_probe_outcomes(
+    items: &[ProbeItem],
+    item_outcomes: &[ProbeOutcome],
+    results: &mut [ProbeResult],
+) {
+    let mut best_primary: Vec<Option<u32>> = vec![None; results.len()];
+    let mut best_fallback: Vec<Option<u32>> = vec![None; results.len()];
+    let mut has_fail = vec![false; results.len()];
+    let mut has_unsupported = vec![false; results.len()];
+    let mut has_item = vec![false; results.len()];
+
+    for (item, &outcome) in items.iter().zip(item_outcomes) {
+        let idx = item.result_index;
+        has_item[idx] = true;
+        match outcome {
+            ProbeOutcome::Works { millis } => {
+                let slot = if item.is_primary {
+                    &mut best_primary[idx]
+                } else {
+                    &mut best_fallback[idx]
+                };
+                *slot = Some(slot.map_or(millis, |best| best.min(millis)));
+            }
+            ProbeOutcome::Fails => has_fail[idx] = true,
+            ProbeOutcome::Unsupported => has_unsupported[idx] = true,
+            ProbeOutcome::Unresolved => {}
+        }
+    }
+
+    for idx in 0..results.len() {
+        if !has_item[idx] {
+            continue;
+        }
+        results[idx].outcome = if let Some(millis) = best_primary[idx].or(best_fallback[idx]) {
+            ProbeOutcome::Works { millis }
+        } else if has_fail[idx] {
+            ProbeOutcome::Fails
+        } else if has_unsupported[idx] {
+            ProbeOutcome::Unsupported
+        } else {
+            ProbeOutcome::Unresolved
+        };
+    }
+}
+
 pub(super) fn resolve_nodes(nodes: &[Node], lookup: NameLookup) -> Vec<Option<IpAddr>> {
     resolve_with_workers(
         nodes,
@@ -658,6 +760,58 @@ pub(super) fn resolve_nodes(nodes: &[Node], lookup: NameLookup) -> Vec<Option<Ip
         Instant::now() + RESOLVE_TIMEOUT,
         DnsWorkerSlot::acquire,
     )
+}
+
+pub(super) fn resolve_node_for_apply(
+    node: &Node,
+    cached: Option<&SuccessfulEndpoint>,
+    lookup: NameLookup,
+) -> Option<ResolvedNodeEndpoints> {
+    let rosetun_config::Outbound::XrayBalancer(balancer) = &node.outbound else {
+        let ip = node
+            .server
+            .parse::<IpAddr>()
+            .ok()
+            .or_else(|| cached.and_then(|endpoint| endpoint.lookup(&node.server)))
+            .or_else(|| resolve_for_apply(node, lookup))?;
+        return Some(ResolvedNodeEndpoints::single(&node.server, ip));
+    };
+    let mut members = std::collections::HashMap::new();
+    let mut primary = None;
+    for member in &balancer.members {
+        let key = normalize_server(&member.server);
+        if let Some(&existing) = members.get(&key) {
+            primary.get_or_insert(existing);
+            continue;
+        }
+        let ip = member
+            .server
+            .parse::<IpAddr>()
+            .ok()
+            .or_else(|| cached.and_then(|endpoint| endpoint.lookup(&member.server)))
+            .or_else(|| resolve_host_for_apply(&member.server, member.port, lookup));
+        if let Some(ip) = ip {
+            members.insert(key, ip);
+            primary.get_or_insert(ip);
+        }
+    }
+    primary.map(|primary| ResolvedNodeEndpoints::from_members(primary, members))
+}
+
+fn resolve_host_for_apply(server: &str, port: u16, lookup: NameLookup) -> Option<IpAddr> {
+    let node = Node {
+        id: rosetun_config::NodeId::new(""),
+        name: String::new(),
+        server: server.to_owned(),
+        port,
+        outbound: rosetun_config::Outbound::Unknown {
+            scheme: String::new(),
+            params: std::collections::BTreeMap::new(),
+        },
+        stream: rosetun_config::StreamSettings::default(),
+        raw: None,
+    };
+    resolve_for_apply(&node, lookup)
 }
 
 pub(super) fn resolve_for_apply(node: &Node, lookup: NameLookup) -> Option<IpAddr> {

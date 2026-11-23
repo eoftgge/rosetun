@@ -27,12 +27,15 @@ pub use list_validation::{
     validate_srs,
 };
 pub use node::{
-    AnyTlsParams, Hysteria2Params, Node, Outbound, ProxyCredentials, RealityParams,
-    ShadowsocksParams, StreamSettings, TlsMode, TlsParams, Transport, TrojanParams,
-    TuicCongestionControl, TuicParams, TuicUdpRelayMode, VlessParams, VmessParams,
-    WIREGUARD_MTU_MAX, WIREGUARD_MTU_MIN, WireGuardParams, XhttpExtra, XhttpMode, XhttpRange,
-    XhttpXmux, fragments_tls, is_valid_duration, is_valid_uuid, is_valid_wireguard_address,
-    is_valid_wireguard_key, node_country, uses_xray,
+    AnyTlsParams, BalancerMember, BalancerStrategy, BurstObservatory, FinalMask, HeaderCustomItem,
+    HeaderCustomPacket, HeaderCustomPacketType, HeaderCustomTcp, Hysteria2Params,
+    LeastLoadSettings, MAX_BALANCER_MEMBERS, MAX_FINALMASK_ITEMS, MAX_FINALMASK_LAYERS,
+    MAX_FINALMASK_PAYLOAD, MAX_FINALMASK_STEPS, Node, Outbound, ProxyCredentials, RealityParams,
+    ShadowsocksParams, StandardObservatory, StreamSettings, TcpFinalMask, TlsMode, TlsParams,
+    Transport, TrojanParams, TuicCongestionControl, TuicParams, TuicUdpRelayMode, VlessParams,
+    VmessParams, WIREGUARD_MTU_MAX, WIREGUARD_MTU_MIN, WireGuardParams, XhttpExtra, XhttpMode,
+    XhttpRange, XhttpXmux, XrayBalancer, XrayObservatory, fragments_tls, is_valid_duration,
+    is_valid_uuid, is_valid_wireguard_address, is_valid_wireguard_key, node_country, uses_xray,
 };
 pub use prefix::{IpPrefix, LINK_LOCAL_V4, LINK_LOCAL_V6, is_private_address};
 pub use report::{
@@ -59,7 +62,7 @@ use serde_json::{Map, Value};
 
 /// Bump for every serialized format change, including defaulted fields older releases drop on save.
 /// Add a Value migration and a new fixture; never edit fixtures of released formats.
-pub const CONFIG_VERSION: u32 = 12;
+pub const CONFIG_VERSION: u32 = 13;
 
 pub const EXIT_TRACE_IP: &str = "1.1.1.1";
 pub const EXIT_TRACE_PORT: u16 = 443;
@@ -421,6 +424,7 @@ pub fn from_json(bytes: &[u8]) -> Result<(AppConfig, Option<u32>), FormatError> 
             9 => migrate_9_to_10(config),
             10 => migrate_10_to_11(config),
             11 => migrate_11_to_12(config),
+            12 => migrate_12_to_13(config),
             _ => return Err(FormatError::UnexpectedValue),
         }
         version += 1;
@@ -434,6 +438,11 @@ pub fn from_json(bytes: &[u8]) -> Result<(AppConfig, Option<u32>), FormatError> 
         config,
         (original_version < CONFIG_VERSION).then_some(original_version),
     ))
+}
+
+fn migrate_12_to_13(_config: &mut Map<String, Value>) {
+    // Format 13 adds Xray balancer outbounds, stream finalmask, and TLS session resumption;
+    // older writers must refuse this file.
 }
 
 fn migrate_11_to_12(config: &mut Map<String, Value>) {

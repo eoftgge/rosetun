@@ -4,7 +4,7 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
-use crate::node::{Node, TlsMode, xray_supports};
+use crate::node::{Node, TlsMode};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -221,11 +221,26 @@ impl TlsFragment {
 
     /// Whether the node's connection to its server is split when this is on. It needs Xray to
     /// run the node, and the TLS hello mode needs a hello to split.
-    pub fn applies_to(&self, node: &Node) -> bool {
+    pub fn applies_to_parts(
+        &self,
+        outbound: &crate::Outbound,
+        stream: &crate::StreamSettings,
+    ) -> bool {
         self.enabled
-            && xray_supports(&node.outbound)
+            && crate::node::xray_supports_member(outbound)
+            && stream.finalmask.is_none()
             && (matches!(self.packets, FragmentPackets::Range(_))
-                || !matches!(node.stream.tls, TlsMode::Plain))
+                || !matches!(stream.tls, TlsMode::Plain))
+    }
+
+    pub fn applies_to(&self, node: &Node) -> bool {
+        match &node.outbound {
+            crate::Outbound::XrayBalancer(balancer) => balancer
+                .members
+                .iter()
+                .any(|member| self.applies_to_parts(&member.outbound, &member.stream)),
+            _ => self.applies_to_parts(&node.outbound, &node.stream),
+        }
     }
 }
 
