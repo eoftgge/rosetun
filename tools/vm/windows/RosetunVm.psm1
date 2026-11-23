@@ -293,16 +293,16 @@ function Start-RosetunTestNode {
     $config = Get-Content -Path (Join-Path $PSScriptRoot 'test-node.json') -Raw | ConvertFrom-Json
     $tcpPort = Get-RosetunTestNodePort -CloudflareBlocked:$CloudflareBlocked -ExitNode:$ExitNode
     $tcpOnly = $CloudflareBlocked -or $ExitNode
-    $tcpPorts = if ($tcpOnly) {
-        @($tcpPort)
+    # @() keeps 0- and 1-port results arrays; Set-StrictMode has no .Count on $null or a scalar.
+    $tcpPorts = @(if ($tcpOnly) {
+        $tcpPort
     } else {
-        @($tcpPort) + @($config.inbounds | Where-Object { $_.type -eq 'anytls' } | ForEach-Object { $_.listen_port })
-    }
-    $udpPorts = if ($tcpOnly) {
-        @()
-    } else {
-        @($config.inbounds | Where-Object { $_.type -in @('hysteria2', 'tuic') } | ForEach-Object { $_.listen_port })
-    }
+        $tcpPort
+        $config.inbounds | Where-Object { $_.type -eq 'anytls' } | ForEach-Object { $_.listen_port }
+    })
+    $udpPorts = @(if (-not $tcpOnly) {
+        $config.inbounds | Where-Object { $_.type -in @('hysteria2', 'tuic') } | ForEach-Object { $_.listen_port }
+    })
     $suffix = if ($CloudflareBlocked) { '-cloudflare-blocked' } elseif ($ExitNode) { '-exit' } else { '' }
     if ($tcpOnly) {
         $config.inbounds = @($config.inbounds | Where-Object { $_.type -eq 'shadowsocks' })
@@ -465,16 +465,16 @@ function Stop-RosetunTestNode {
     $config = Get-Content -Path (Join-Path $PSScriptRoot 'test-node.json') -Raw | ConvertFrom-Json
     $tcpPort = Get-RosetunTestNodePort -CloudflareBlocked:$CloudflareBlocked -ExitNode:$ExitNode
     $tcpOnly = $CloudflareBlocked -or $ExitNode
-    $tcpPorts = if ($tcpOnly) {
-        @($tcpPort)
+    # @() keeps 0- and 1-port results arrays; Set-StrictMode has no .Count on $null or a scalar.
+    $tcpPorts = @(if ($tcpOnly) {
+        $tcpPort
     } else {
-        @($tcpPort) + @($config.inbounds | Where-Object { $_.type -eq 'anytls' } | ForEach-Object { $_.listen_port })
-    }
-    $udpPorts = if ($tcpOnly) {
-        @()
-    } else {
-        @($config.inbounds | Where-Object { $_.type -in @('hysteria2', 'tuic') } | ForEach-Object { $_.listen_port })
-    }
+        $tcpPort
+        $config.inbounds | Where-Object { $_.type -eq 'anytls' } | ForEach-Object { $_.listen_port }
+    })
+    $udpPorts = @(if (-not $tcpOnly) {
+        $config.inbounds | Where-Object { $_.type -in @('hysteria2', 'tuic') } | ForEach-Object { $_.listen_port }
+    })
     $ports = if ($udpPorts.Count -eq 0) {
         "TCP $($tcpPorts -join ', ')"
     } else {
