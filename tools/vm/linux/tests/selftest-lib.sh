@@ -230,10 +230,215 @@ expect_not "an L3 stage refuses the L2 job" l3_allows guest/run-l2.sh
 expect_not "an L2 stage refuses the L3 job" start_allows guest/run-l3.sh
 expect_not "an L3 stage refuses another request" l3_allows artifacts/request-other.json
 expect "start.sh picks the job by the stage" grep -q 'job="$run/guest/run-$stage.sh"' "$start"
+
+# --- the reboot smoke stage: the guest scripts and the record of the build, nothing of Rosetun
+smoke_allows() { bash -c '. "$1" && reboot_smoke_start_path_allowed "$2"' _ "$start" "$1"; }
+required_smoke=$(bash -c '. "$1" && printf "%s\n" "${REBOOT_SMOKE_START_REQUIRED[@]}"' _ "$start")
+expect "start.sh requires the smoke job, its catalog and the record of the build" \
+    test "$(printf '%s\n' "$required_smoke" | wc -l)" -eq 7
+while IFS= read -r path; do
+    expect "every required smoke path passes both lists: $path" \
+        bash -c '. "$1" && l2_launch_path_allowed "$3" && . "$2" && reboot_smoke_start_path_allowed "$3"' _ "$launch" "$start" "$path"
+done <<<"$required_smoke"
+expect_not "the smoke stage refuses a program" smoke_allows artifacts/rosetun
+expect_not "the smoke stage refuses the L2 fixture" smoke_allows artifacts/l2_transport_fixture
+expect_not "the smoke stage refuses another job" smoke_allows guest/run-l4.sh
+expect_not "an L2 stage refuses the smoke job" start_allows guest/run-reboot-smoke.sh
+expect "start.sh tells the smoke stage by its job" \
+    grep -q "grep -q '  guest/run-reboot-smoke\\\\.sh\$' \"\$run/manifest.sha256\"" "$start"
+expect "the smoke stage reads the keys of an L2 job.env only" \
+    grep -q '^    case \$stage in l2 | reboot-smoke) ;; \*) keys+=(HOST_ADDRESS NODE_PORT PROBE_ADDRESS DNS_PROBE_ADDRESS) ;; esac$' "$start"
+smoke=$here/../guest/run-reboot-smoke.sh
+expect "run-reboot-smoke.sh is valid shell" bash -n "$smoke"
+expect "run-reboot-smoke.sh reads exactly the keys of an L2 job.env" \
+    grep -q 'USER_B BIOS_GUID \\$' "$smoke"
+expect "run-reboot-smoke.sh does not finish a report before its reboot is over" \
+    grep -q '^    \[ -f "\$STATE/rebooting" \] && return 0$' "$smoke"
+expect_not "run-reboot-smoke.sh touches no Rosetun file or unit" grep -Eq 'rosetun-(helper|lockdown|engine)|/usr/lib/rosetun' "$smoke"
 expect "run-l3.sh reads the host node values through the strict reader" \
     grep -q 'JOB_TIMEOUT_SECONDS HOST_ADDRESS NODE_PORT PROBE_ADDRESS DNS_PROBE_ADDRESS' "$here/../guest/run-l3.sh"
 expect_not "run-l3.sh never deletes the service's own table" \
     grep -Eq 'delete table inet rosetun([^-]|$)' "$here/../guest/run-l3.sh"
+
+# --- run-l3.sh: the lab window markers (only with LAB_MARKER_ADDRESS)
+l3=$here/../guest/run-l3.sh
+expect "run-l3.sh takes LAB_MARKER_ADDRESS as an optional key of job.env" \
+    grep -q 'DNS_PROBE_ADDRESS LAB_MARKER_ADDRESS LAB_CONTROL || return 1' "$l3"
+lib=$here/../guest/lib.sh
+expect "lib.sh sends no marker unless the address is set" grep -q '^    \[ -n "\$LAB_MARKER_ADDRESS" \] || return 0$' "$lib"
+expect_not "run-l3.sh keeps no marker function of its own" grep -Eq '^lab_(mark|label|send|run_id)\(\)' "$l3"
+expect "start.sh lets only an L3, Proxy, L5 or L4 stage read LAB_MARKER_ADDRESS" \
+    grep -q '^    case \$stage in l3 | proxy | l5 | l4) keys+=(LAB_MARKER_ADDRESS LAB_CONTROL) ;; esac$' "$start"
+expect "start.sh lets the L4 stage alone read LAB_POLLER_KEY" \
+    grep -q '^    \[ "\$stage" != l4 \] || keys+=(LAB_POLLER_KEY)$' "$start"
+expect "run-l4.sh takes the lab keys of job.env, the poller's key among them, as optional keys" \
+    grep -q 'DNS_PROBE_ADDRESS LAB_MARKER_ADDRESS LAB_CONTROL LAB_POLLER_KEY || return 1' "$here/../guest/run-l4.sh"
+expect "run-l4.sh refuses a control without a marker address" \
+    grep -q '^    \[ -z "\$LAB_CONTROL" \] || { \[ "\$LAB_CONTROL" = stop-helper \] && \[ -n "\$LAB_MARKER_ADDRESS" \]; } ||$' "$here/../guest/run-l4.sh"
+expect "run-l4.sh refuses a poller key that is not an ed25519 blob or has no marker address" \
+    grep -q 'AAAAC3NzaC1lZDI1NTE5AAAAI\[A-Za-z0-9+/\]{43}\$ \]\] && \[ -n "\$LAB_MARKER_ADDRESS" \]' "$here/../guest/run-l4.sh"
+expect "run-l5.sh takes LAB_MARKER_ADDRESS and LAB_CONTROL as optional keys of job.env" \
+    grep -q 'DNS_PROBE_ADDRESS LAB_MARKER_ADDRESS LAB_CONTROL || return 1' "$here/../guest/run-l5.sh"
+expect "run-l5.sh refuses a control without a marker address" \
+    grep -q '^    \[ -z "\$LAB_CONTROL" \] || { \[ "\$LAB_CONTROL" = stop-helper \] && \[ -n "\$LAB_MARKER_ADDRESS" \]; } ||$' "$here/../guest/run-l5.sh"
+l5_start=$work/l5-start.sh
+expect "start.sh reads the lab keys of a Hyper-V L5 job.env as before: they are absent" \
+    bash -c '. "$1" && RUN_ID= LAB_MARKER_ADDRESS= && printf "RUN_ID=x\n" >"$2" && l2_read_env_file "$2" RUN_ID LAB_MARKER_ADDRESS LAB_CONTROL && [ -z "$LAB_MARKER_ADDRESS" ]' _ "$lib" "$l5_start"
+expect "run-proxy.sh takes LAB_MARKER_ADDRESS and LAB_CONTROL as optional keys of job.env" \
+    grep -q 'DNS_PROBE_ADDRESS LAB_MARKER_ADDRESS LAB_CONTROL || return 1' "$here/../guest/run-proxy.sh"
+expect "run-proxy.sh refuses a control without a marker address" \
+    grep -q '^    \[ -z "\$LAB_CONTROL" \] || { \[ "\$LAB_CONTROL" = stop-helper \] && \[ -n "\$LAB_MARKER_ADDRESS" \]; } ||$' "$here/../guest/run-proxy.sh"
+# --- run-l4.sh: what its lab wrappers do without a lab and with one (the functions only, lib.sh's own lab_mark)
+l4_functions=$work/l4-functions.sh
+awk '/^(lockdown|lockdown_lan_on|poller_authorize)\(\) \{/ { on = 1 } on { print } /^}/ { on = 0 }' \
+    "$here/../guest/run-l4.sh" >"$l4_functions"
+expect "the L4 lab wrappers were found in run-l4.sh" test -s "$l4_functions"
+l4_state=$work/l4-state
+mkdir -p "$l4_state"
+expect "without a lab the L4 wrappers send nothing, note nothing and install no key" \
+    bash -c '. "$1"; . "$2"; d=$3; lockdown_as_root() { echo "on $*" >>"$d/calls"; }; STATE=$d
+        LAB_MARKER_ADDRESS= LAB_POLLER_KEY= POLLER_DIR=$d/ssh POLLER_AUTHORIZED=$d/ssh/authorized_keys
+        lockdown --lan off && lockdown_lan_on && poller_authorize &&
+        [ "$(cat "$d/calls")" = "$(printf "on on --lan off\non on --lan on")" ] && [ ! -e "$d/lan-on-ms" ] &&
+        [ ! -e "$d/ssh" ] && [ ! -e "$d/poller-key" ]' _ "$lib" "$l4_functions" "$l4_state"
+rm -rf "$l4_state"
+mkdir -p "$l4_state"
+expect "with a lab the local network is noted before it goes on, in milliseconds, and the key is made restricted" \
+    bash -c '. "$1"; . "$2"; d=$3; lockdown_as_root() { [ -s "$d/lan-on-ms" ] && echo noted-before >"$d/order"; }; STATE=$d
+        # The stand installs as root for root; here only the mode counts.
+        install() { local keep=(); while [ $# -gt 0 ]; do case $1 in -o | -g) shift 2 ;; *) keep+=("$1"); shift ;; esac; done
+            command install "${keep[@]}"; }
+        LAB_POLLER_KEY=AAAAC3NzaC1lZDI1NTE5AAAAIDdaiAGCsQq31Uv+08lkBzoO4XLz2qYjJa8CGmj3B1Ea
+        POLLER_DIR=$d/ssh POLLER_AUTHORIZED=$d/ssh/authorized_keys LAB_MARKER_ADDRESS=203.0.113.2:9100
+        lockdown_lan_on && grep -qx noted-before "$d/order" && grep -Eq "^[0-9]{13}$" "$d/lan-on-ms" &&
+        poller_authorize && [ "$(stat -c %a "$d/ssh")" = 700 ] && [ "$(stat -c %a "$d/ssh/authorized_keys")" = 600 ] &&
+        grep -qx "restrict,command=\"/bin/true\" ssh-ed25519 $LAB_POLLER_KEY rosetun-lab-poller" "$d/ssh/authorized_keys" &&
+        [ -e "$d/poller-dir" ] && [ -e "$d/poller-file" ] && [ -e "$d/poller-key" ]' _ "$lib" "$l4_functions" "$l4_state"
+lab_functions=$work/lab-functions.sh
+awk '/^# -+ lab windows/ { on = 1 } on' "$lib" >"$lab_functions"
+expect "the lab window functions were found in lib.sh" test -s "$lab_functions"
+py=$(command -v python3 || command -v python || true)
+if [ -n "$py" ]; then
+    cat >"$work/echo-server.py" <<'PY'
+import socket, sys
+server = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+server.bind(('127.0.0.1', 0))
+open(sys.argv[1], 'w').write(str(server.getsockname()[1]))
+with open(sys.argv[2], 'ab', buffering=0) as log:
+    while True:
+        data, peer = server.recvfrom(512)
+        log.write(data + b'\n')
+        server.sendto(b'rosetun-lab-ack:' + data, peer)
+PY
+    "$py" "$work/echo-server.py" "$work/echo-port" "$work/echo-log" &
+    echo_pid=$!
+    for _ in $(seq 1 50); do [ -s "$work/echo-port" ] && break; sleep 0.1; done
+    mark_state=$work/mark-state
+    mkdir -p "$mark_state"
+    # A stand-in for the guest: the table, the state and the two helpers lab_mark calls.
+    cat >"$work/mark-harness.sh" <<'SH'
+. "$LAB_FUNCTIONS"
+STATE=$MARK_STATE RUN_ID=20261113T101010Z-0a1b2c3d
+table_present() { [ -f "$MARK_STATE/table" ]; }
+state_line() { if [ -e "$MARK_STATE/service-stopped" ]; then :; else cat "$MARK_STATE/state"; fi; }
+systemctl() { [ ! -e "$MARK_STATE/service-stopped" ]; }
+connect_with() { lab_mark "$1"; }
+connect_ks() { connect_with open; }
+disconnect() { lab_mark close; }
+Odd_Name.1() { connect_with open; }
+"$@"
+SH
+    mark() { LAB_FUNCTIONS=$lab_functions MARK_STATE=$mark_state LAB_MARKER_ADDRESS=${MARK_ADDRESS-127.0.0.1:$(cat "$work/echo-port")} bash "$work/mark-harness.sh" "$@"; }
+    export -f mark
+    export work lab_functions mark_state
+    run_id_hash=$(printf '%s' 'rosetun-lab-run:20261113T101010Z-0a1b2c3d' | sha256sum | cut -c1-32)
+    printf 'Disconnected\n' >"$mark_state/state"
+    expect "without an address nothing is sent or written" bash -c 'MARK_ADDRESS= ; export MARK_ADDRESS; LAB_FUNCTIONS=$1 MARK_STATE=$2 LAB_MARKER_ADDRESS= bash "$3" connect_ks; [ ! -e "$2/lab-window" ] && [ ! -e "$2/lab-index" ]' _ "$lab_functions" "$mark_state" "$work/mark-harness.sh"
+    expect "a closing marker without an open window sends nothing" mark disconnect
+    expect "an open window is sent by the function that asked for it" mark connect_ks
+    expect "the first window has index 0 and the function's name" grep -qx "rosetun-lab-marker:$run_id_hash.0.open.connect_ks" "$work/echo-log"
+    expect "the open window is kept in STATE" grep -qx '0 connect_ks' "$mark_state/lab-window"
+    expect "the closing marker keeps the index and the label of the opening one" mark disconnect
+    expect "the closing marker is on the wire" grep -qx "rosetun-lab-marker:$run_id_hash.0.close.connect_ks" "$work/echo-log"
+    expect_not "a closed window leaves nothing open" test -e "$mark_state/lab-window"
+    expect "the next window has the next index, a lower-case label" mark 'Odd_Name.1'
+    expect "an odd function name becomes a valid label" grep -qx "rosetun-lab-marker:$run_id_hash.1.open.odd_name.1" "$work/echo-log"
+    expect "a second closing marker without a window is not sent" bash -c 'before=$(wc -l <"$1"); mark disconnect; mark disconnect; [ "$(wc -l <"$1")" -eq $((before + 1)) ]' _ "$work/echo-log"
+    : >"$work/echo-log"
+    : >"$mark_state/table"
+    expect "no marker is sent while the table is there" bash -c 'mark connect_ks; [ ! -s "$1" ]' _ "$work/echo-log"
+    rm -f -- "$mark_state/table"
+    printf 'Connected\n' >"$mark_state/state"
+    expect "no marker is sent unless the state is Disconnected" bash -c 'mark connect_ks; [ ! -s "$1" ]' _ "$work/echo-log"
+    expect "a refused marker leaves no window and uses no index" bash -c '[ ! -e "$1/lab-window" ] && [ "$(cat "$1/lab-index")" = 2 ]' _ "$mark_state"
+    printf 'Disconnected\n' >"$mark_state/state"
+    expect "an echo that never comes does not fail the caller" bash -c 'MARK_ADDRESS=127.0.0.1:9; export MARK_ADDRESS; mark connect_ks'
+    mark connect_ks
+    : >"$work/echo-log"
+    printf 'Connected\n' >"$mark_state/state"
+    expect "a closing marker waits while a service that answers is not Disconnected" bash -c 'mark disconnect; [ ! -s "$1" ]' _ "$work/echo-log"
+    : >"$mark_state/service-stopped"
+    : >"$mark_state/table"
+    expect "no closing marker is sent while the table is there, a stopped service or not" bash -c 'mark disconnect; [ ! -s "$1" ]' _ "$work/echo-log"
+    rm -f -- "$mark_state/table"
+    expect "an opening marker is not sent while the service is stopped" bash -c 'mark connect_ks; [ ! -s "$1" ]' _ "$work/echo-log"
+    expect "the window is still open after the refused markers" test -f "$mark_state/lab-window"
+    expect "a closing marker is sent once the service is stopped and the table is gone" bash -c 'mark disconnect; grep -q "\.close\.connect_ks$" "$1"' _ "$work/echo-log"
+    expect_not "the window is closed after that marker" test -e "$mark_state/lab-window"
+    rm -f -- "$mark_state/service-stopped"
+    kill "$echo_pid" 2>/dev/null
+    wait "$echo_pid" 2>/dev/null
+else
+    printf 'note  no python; the lab marker functions were not run
+'
+fi
+
+# --- run-proxy.sh: the lab's private address for sharing (only with LAB_MARKER_ADDRESS)
+proxy=$here/../guest/run-proxy.sh
+share_functions=$work/share-functions.sh
+awk '/^lab_share_up\(\) \{/ { on = 1 } on { print } on && /^share_address\(\) \{/ { last = 1 } last && /^\}/ { exit }' \
+    "$proxy" >"$share_functions"
+expect "the lab share functions were found in run-proxy.sh" grep -q '^share_address() {' "$share_functions"
+expect "run-proxy.sh adds only the owner-approved private address" grep -qx 'LAB_SHARE_ADDRESS=192.168.77.2/24' "$proxy"
+cat >"$work/share-harness.sh" <<'SH'
+. "$SHARE_FUNCTIONS"
+STATE=$SHARE_STATE PHYS=eth9 LAB_SHARE_ADDRESS=192.168.77.2/24
+# A stand-in for ip(8): every call is logged, the address list is a file.
+ip() {
+    printf '%s\n' "$*" >>"$SHARE_STATE/ip-calls"
+    case "$1 $2" in
+        "addr add") printf '    inet %s scope global %s\n' "$3" "$5" >>"$SHARE_STATE/addresses" ;;
+        "addr del") grep -vF " $3 " "$SHARE_STATE/addresses" >"$SHARE_STATE/a.tmp"; mv "$SHARE_STATE/a.tmp" "$SHARE_STATE/addresses" ;;
+        "-4 -o") printf '2: eth9    inet 192.0.2.2/24 brd 192.0.2.255 scope global eth9\n'; sed 's/^/2: eth9/' "$SHARE_STATE/addresses" ;;
+    esac
+}
+phys_address() { printf '192.0.2.2'; }
+"$@"
+SH
+share() { SHARE_FUNCTIONS=$share_functions SHARE_STATE=$share_state LAB_MARKER_ADDRESS=$SHARE_MARKER bash "$work/share-harness.sh" "$@"; }
+share_state=$work/share-state
+mkdir -p "$share_state"
+: >"$share_state/addresses"
+SHARE_MARKER=''
+share lab_share_up
+expect "without a lab the private address is never added" test ! -e "$share_state/ip-calls"
+expect "without a lab nothing is kept in STATE for it" test ! -e "$share_state/lab-share-address"
+expect "without a lab sharing is looked for on the physical interface's own address" test "$(share share_address)" = 192.0.2.2
+expect "without a lab there is nothing to remove" share lab_share_down
+expect "without a lab no ip command runs at all" test ! -e "$share_state/ip-calls"
+SHARE_MARKER=203.0.113.2:9100
+share lab_share_up
+expect "with a lab the private address goes on the physical interface" grep -qx 'addr add 192.168.77.2/24 dev eth9' "$share_state/ip-calls"
+expect "with a lab the interface is kept in STATE for a later finalize" grep -qx eth9 "$share_state/lab-share-address"
+expect "with a lab sharing is looked for on the private address" test "$(share share_address)" = 192.168.77.2
+expect "the private address is removed again" share lab_share_down
+expect "the removal names the same address and interface" grep -qx 'addr del 192.168.77.2/24 dev eth9' "$share_state/ip-calls"
+expect_not "nothing of it is left in STATE" test -e "$share_state/lab-share-address"
+expect "after the removal sharing is looked for on the physical interface's own address" test "$(share share_address)" = 192.0.2.2
+expect "a removal after the last scenario is a cleanup action" grep -q 'private address ${LAB_SHARE_ADDRESS%/\*} after the last scenario"$' "$proxy"
+expect "a removal by the cleanup is a cleanup action" grep -q '^        lab_share_down && note ' "$proxy"
+expect "the address goes on only after the service is installed, before the first session" \
+    bash -c 'grep -A1 "^    if passed install.service; then$" "$1" | grep -qx "        lab_share_up"' _ "$proxy"
 
 read_manifest() { bash -c '. "$1" && l2_launch_read_manifest "$2"' _ "$launch" "$1"; }
 h=$(printf '0%.0s' $(seq 1 64))

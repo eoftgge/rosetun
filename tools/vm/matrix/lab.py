@@ -1,0 +1,1049 @@
+"""One two-VM isolated lab. No assessment profile or L3 execution."""
+import base64
+import hashlib
+from dataclasses import fields
+import json
+import os
+import re
+from pathlib import Path
+import secrets
+import select
+import socket
+import threading
+import time
+import tomllib
+import uuid
+
+from . import l3_requests
+from .evidence import ReadbackError, write_file
+from .execution import exact
+from .images import ImageDescriptor
+from .qemu import QemuConfig, prepare, execute
+from .lifecycle import start, _host
+from .resources import (StandLease, create_run, completion_verified, resource_path,
+                        EXECUTION_FILES, _identifier, _state_path)
+from .orchestrator import save, failure, _RETAINED_LEASES
+from .lab_protocol import (MACS, CAPTURE_LIMIT, LOG_LIMIT, PORTS, CANARY_PORT, HTTPS_PORT, SOCKS_PORT, EGRESS,
+                           probes, markers, qualify, leak_verdict, https_exchanges, https_answer, dns_checks, dns_name,
+                           plain_reply_ok, DNS_CHECK_DOH, DOH_NAME, RESOLVER, DOH_ADDRESS,
+                           DURATION, DURATION_MAX, EVIDENCE_SIZE, EVIDENCE_PCAP_LIMIT, EVIDENCE_HEADER_SIZE,
+                           EVIDENCE_SERIAL, parse_evidence_header, HELPER_REASON, CONTROLS, GUEST_CONTROLS)
+
+ENTRY = '/usr/local/libexec/rosetun-lab/entry'
+SCHEMA_V1, SCHEMA_V2 = 'rosetun.matrix.lab.v1', 'rosetun.matrix.lab.v2'
+ARTIFACTS = {'lab-capture': 'capture.pcap', 'lab-targets': 'targets.json', 'lab-health': 'health.json'}
+# Only a tunnel run reads these two; they are registered with the lab run only then.
+TUNNEL_ARTIFACTS = {'lab-https': 'https.json', 'lab-node': 'node.log'}
+# Only a run with the lab resolver and DoH target has the log of their questions.
+DNS_ARTIFACTS = {'lab-dns': 'dns.json'}
+# Only a diagnostic L3 run counts the flows behind the node.
+ROUTE_ARTIFACTS = {'lab-route-flows': 'route-flows.json'}
+# Only a Linux L4 run has the log of the lab's SSH poller: every attempt with its time and result.
+POLLER_ARTIFACTS = {'lab-poller': 'poller.json'}
+# Only a diagnostic L3 run keeps the whole journal of the service, and it keeps it in the run of the test machine
+# (`JOURNAL_FULL` of `linux_l2` under `linux-l3/`). It is registered here because `lifecycle.start` accepts exactly
+# the resources that preparation and the lab pair registered, and no others.
+JOURNAL_ARTIFACTS = {'lab-journal-full': 'linux-l3/helper-journal-full.txt'}
+# The DNS check's throwaway client of the test machine: its log is saved in the test run, whatever came of the check.
+DNS_CLIENT_LOG = {'lab-dns-client-log': 'client.log'}
+# The helper_reason of a failed helper that printed no code of its own (an older helper, a cut or foreign stderr).
+HELPER_REASON_MISSING = 'reason-not-reported'
+# The exchanges of the DNS check, as the helper names them when one of them failed.
+DNS_EXCHANGES = ('dns-plain', 'dns-client', DNS_CHECK_DOH)
+# Only a run with an evidence disk registers the image; the capture is then read from it.
+EVIDENCE_IMAGE = 'evidence.img'
+EVIDENCE_RESOURCES = {'lab-evidence-disk': EVIDENCE_IMAGE}
+# Stage 10a: a read-only medium of a Windows test machine (the Rosetun binaries and the runner), and its record.
+MEDIA_IMAGE = 'windows-media.iso'
+MEDIA_RESOURCES = {'windows-media': MEDIA_IMAGE, 'windows-media-record': 'windows-media.json',
+                   'windows-list-plan': 'windows-list/plan.json', 'windows-list-events': 'windows-list/events.jsonl',
+                   'windows-list-report': 'windows-list/report.json', 'windows-list-status': 'windows-list/status.json',
+                   'windows-list-runner': 'windows-list/runner.json',
+                   'windows-list-assessment': 'windows-list/assessment.json'}
+FAILURE_RESOURCES = {f'windows-failure-{key}': f'windows-failure/{leaf}' for key, leaf in (
+    ('plan', 'plan.json'), ('events', 'events.jsonl'), ('report', 'report.json'), ('status', 'status.json'),
+    ('runner', 'runner.json'), ('assessment', 'assessment.json'))}
+LOCKDOWN_RESOURCES = {f'windows-lockdown-{key}': f'windows-lockdown/{leaf}' for key, leaf in (
+    ('plan', 'plan.json'), ('events', 'events.jsonl'), ('report', 'report.json'), ('status', 'status.json'),
+    ('runner', 'runner.json'), ('assessment', 'assessment.json'))}
+PROXY_RESOURCES = {f'windows-proxy-{key}': f'windows-proxy/{leaf}' for key, leaf in (
+    ('plan', 'plan.json'), ('events', 'events.jsonl'), ('report', 'report.json'), ('status', 'status.json'),
+    ('runner', 'runner.json'), ('assessment', 'assessment.json'))}
+LAN_RESOURCES = {f'windows-lan-{key}': f'windows-lan/{leaf}' for key, leaf in (
+    ('plan', 'plan.json'), ('events', 'events.jsonl'), ('report', 'report.json'), ('status', 'status.json'),
+    ('runner', 'runner.json'), ('assessment', 'assessment.json'))}
+UPGRADE_RESOURCES = {f'windows-upgrade-{key}': f'windows-upgrade/{leaf}' for key, leaf in (
+    ('plan', 'plan.json'), ('events', 'events.jsonl'), ('report', 'report.json'), ('status', 'status.json'),
+    ('runner', 'runner.json'), ('assessment', 'assessment.json'))}
+PROTOCOLS_RESOURCES = {f'windows-protocols-{key}': f'windows-protocols/{leaf}' for key, leaf in (
+    ('plan', 'plan.json'), ('events', 'events.jsonl'), ('report', 'report.json'), ('status', 'status.json'),
+    ('runner', 'runner.json'), ('assessment', 'assessment.json'))}
+TWOHOP_RESOURCES = {f'windows-twohop-{key}': f'windows-twohop/{leaf}' for key, leaf in (
+    ('plan', 'plan.json'), ('events', 'events.jsonl'), ('report', 'report.json'), ('status', 'status.json'),
+    ('runner', 'runner.json'), ('assessment', 'assessment.json'))}
+# The IDE bus of the machine's own SATA controller that carries the drive (q35 has six, with or without `-nodefaults`).
+MEDIA_BUS = 'ide.2'
+# The guest facade lives this long beyond the capture it waits for: setup, finish and the reads.
+GUEST_LIFETIME = 90
+# What a negative control of stage 7c1 has to end in, as the summary says it.
+CONTROL_EXPECTATIONS = {
+    'extra-packet': 'leak DETECTED, the canary flows tcp and udp and nothing else, the window proven',
+    'observer-stopped': 'leak UNVERIFIED and never NONE, the capture ended by request inside the window '
+                        '(capture-halted-in-window), the closing marker missing, the closing exchange refused',
+    'observer-killed': 'leak UNVERIFIED and never NONE, no health report from the killed observer '
+                       '(observer-gone), the closing marker missing, the closing exchange refused',
+    'link-down': 'leak UNVERIFIED and never NONE, the capture healthy to its end but without the closing marker '
+                 '(no capture-halted-in-window), the link back before the end'}
+# A control that stops something between the markers makes the test machine wait; the polls of its helper allow for it.
+CONTROL_POLLS = 120
+
+
+def controls(run):
+    return {name: dict(kind='inherited-unix-stream', run_id=run._identity[0], purpose='management')
+            for name in ('qmp', 'qga')}
+
+
+def load_lab(path):
+    with Path(path).open('rb') as stream:
+        config = tomllib.load(stream)
+    return validate(config)
+
+
+def validate_tunnel(block):
+    """The pinned fixtures of stage 7b1: one engine binary in both images, the CA, the node port."""
+    exact(block, ('sing_box_sha256', 'ca_sha256', 'node_port'))
+    for name in ('sing_box_sha256', 'ca_sha256'):
+        if type(block[name]) is not str or not re.fullmatch('[0-9a-f]{64}', block[name]):
+            raise ValueError('lab-tunnel-hash')
+    port = block['node_port']
+    if (type(port) is not int or not 1 <= port <= 65535
+            or port in (*PORTS.values(), CANARY_PORT, HTTPS_PORT, SOCKS_PORT)):
+        raise ValueError('lab-tunnel-port')
+
+
+def validate(config):
+    base = ('schema', 'state_directory', 'stand_id', 'qemu', 'test_image', 'lab_image')
+    # Version 1 reads exactly as before; version 2 only adds the tunnel block.
+    exact(config, base + (('tunnel',) if type(config) is dict and config.get('schema') == SCHEMA_V2 else ()))
+    if config['schema'] not in (SCHEMA_V1, SCHEMA_V2):
+        raise ValueError('unsupported-lab-schema')
+    if config['schema'] == SCHEMA_V2:
+        validate_tunnel(config['tunnel'])
+    _state_path(config['state_directory'])
+    _identifier(config['stand_id'])
+    exact(config['qemu'], [f.name for f in fields(QemuConfig)])
+    if config['qemu']['machine'] != 'pc-i440fx-10.0' or config['qemu']['qga'] is not True:
+        raise ValueError('lab-requires-pinned-machine-and-qga')
+    for role in MACS:
+        exact(config[role + '_image'], [f.name for f in fields(ImageDescriptor)])
+    return config
+
+
+def plan_lab(config, *, tunnel=False, evidence_disk=False, dns=False, control=None):
+    """Read only: no lease, directories, subprocesses or sockets."""
+    validate(config)
+    if control is not None and (control not in CONTROLS or tunnel):
+        raise ValueError('lab-control-invalid')
+    if tunnel and config['schema'] != SCHEMA_V2:
+        raise ValueError('lab-tunnel-requires-v2')
+    if dns and not tunnel:
+        raise ValueError('lab-dns-requires-tunnel')
+    state = _state_path(config['state_directory'])
+    QemuConfig(**config['qemu']).validate()
+    for role in MACS:
+        ImageDescriptor(**config[role + '_image']).validate(state)
+    plan = dict(schema='rosetun.matrix.lab-plan.v1', dry_run=True, configuration=config,
+                topology='test -> inherited AF_UNIX stream pair -> lab -> guest namespace',
+                roles=MACS, capture_limit=CAPTURE_LIMIT, duration_seconds=60,
+                qualification='UNRUN', security_invariants='UNVERIFIED', release_gate=False)
+    if dns:
+        plan['dns'] = dict(resolver=RESOLVER, doh=DOH_ADDRESS, doh_name=DOH_NAME,
+                           exchanges=['dns-plain', DNS_CHECK_DOH])
+    if evidence_disk:
+        plan['evidence_disk'] = dict(size_bytes=EVIDENCE_SIZE, pcap_limit_bytes=EVIDENCE_PCAP_LIMIT,
+                                     serial=EVIDENCE_SERIAL, role='lab')
+    if control is not None:
+        plan['control'] = dict(name=control, expected=CONTROL_EXPECTATIONS[control])
+    return plan
+
+
+_WIRE_FRAME_LIMIT = 65536
+
+
+class _WireRelay:
+    """Frame-preserving host relay between a persistent lab QEMU socket and replaceable test QEMU sockets.
+
+    QEMU `-netdev stream` frames each Ethernet packet with a 4-byte big-endian uint32 length. Relaying only
+    complete frames keeps the lab VM's stream synchronized when the test QEMU is killed mid-packet and restarted
+    during a planned power cycle.
+    """
+
+    def __init__(self, lab_socket, test_socket):
+        self._lab = lab_socket
+        self._test = test_socket
+        self._reader_sock = None
+        self._stopped = False
+        self._send_lock = threading.Lock()
+        self._cond = threading.Condition()
+        self._threads = (
+            threading.Thread(target=self._lab_to_test, name='rosetun-wire-lab-to-test', daemon=True),
+            threading.Thread(target=self._test_to_lab, name='rosetun-wire-test-to-lab', daemon=True),
+        )
+        for thread in self._threads:
+            thread.start()
+
+    def _recv_exact(self, sock, count, *, is_test):
+        if not hasattr(sock, 'recv'):
+            return None
+        data = bytearray()
+        while len(data) < count:
+            with self._cond:
+                if self._stopped or (is_test and self._test is not sock):
+                    return None
+            try:
+                fd = sock.fileno()
+            except OSError:
+                return None
+            if fd < 0:
+                return None
+            try:
+                ready, _, _ = select.select([sock], [], [], 0.2)
+            except (OSError, ValueError):
+                return None
+            if not ready:
+                continue
+            try:
+                chunk = sock.recv(count - len(data))
+            except OSError:
+                return None
+            if not chunk:
+                return None
+            data.extend(chunk)
+        return bytes(data)
+
+    def _read_frame(self, sock, *, is_test):
+        header = self._recv_exact(sock, 4, is_test=is_test)
+        if header is None:
+            return None
+        length = int.from_bytes(header, 'big')
+        if length == 0 or length > _WIRE_FRAME_LIMIT:
+            return None
+        payload = self._recv_exact(sock, length, is_test=is_test)
+        if payload is None:
+            return None
+        return header + payload
+
+    def _lab_to_test(self):
+        while True:
+            frame = self._read_frame(self._lab, is_test=False)
+            if frame is None:
+                return
+            with self._send_lock:
+                with self._cond:
+                    sock = self._test
+                if sock is not None:
+                    try:
+                        sock.sendall(frame)
+                    except OSError:
+                        pass
+
+    def _test_to_lab(self):
+        while True:
+            with self._cond:
+                while not self._stopped and self._test is None:
+                    self._cond.wait(0.2)
+                if self._stopped:
+                    return
+                sock = self._test
+                self._reader_sock = sock
+            try:
+                while True:
+                    frame = self._read_frame(sock, is_test=True)
+                    if frame is None:
+                        break
+                    self._lab.sendall(frame)
+            except OSError:
+                pass
+            finally:
+                with self._send_lock:
+                    with self._cond:
+                        if self._test is sock:
+                            self._test = None
+                        self._reader_sock = None
+                        self._cond.notify_all()
+                    try:
+                        sock.close()
+                    except OSError:
+                        pass
+
+    def attach_test(self, new_socket):
+        """Attach a fresh host-side socket for a restarted test QEMU, retiring the previous one."""
+        to_shutdown = None
+        with self._send_lock:
+            with self._cond:
+                if self._stopped:
+                    raise ValueError('lab-wire-relay-closed')
+                old = self._test
+                self._test = new_socket
+                if old is not None and old is self._reader_sock:
+                    to_shutdown = old
+                self._cond.notify_all()
+            if old is not None and to_shutdown is None:
+                try:
+                    old.close()
+                except OSError:
+                    pass
+        if to_shutdown is not None:
+            try:
+                to_shutdown.shutdown(socket.SHUT_RDWR)
+            except (OSError, AttributeError):
+                pass
+
+    def close(self):
+        with self._send_lock:
+            with self._cond:
+                self._stopped = True
+                old = self._test
+                self._test = None
+                reader = self._reader_sock
+                self._cond.notify_all()
+            if old is not None and old is not reader:
+                try:
+                    old.close()
+                except OSError:
+                    pass
+        for sock in (reader, self._lab):
+            if sock is not None:
+                try:
+                    sock.shutdown(socket.SHUT_RDWR)
+                except (OSError, AttributeError):
+                    pass
+        for thread in self._threads:
+            thread.join(timeout=2)
+        try:
+            self._lab.close()
+        except OSError:
+            pass
+        if self._lab.fileno() != -1:
+            raise ValueError('endpoint-close-unconfirmed')
+
+
+class LabPair:
+    """Capability for two particular runs under their original lease."""
+    def __init__(self, lease, runs, lab_id, *, pair_factory=socket.socketpair, tunnel=False, evidence_disk=False,
+                 dns=False, route_flows=False, journal_full=False, poller=False, media=False, failure=False,
+                 lockdown=False, proxy=False, lan=False, upgrade=False, protocols=False, twohop=False,
+                 reconnectable=False):
+        lease._check_live()
+        if set(runs) != set(MACS) or lease._active or runs['test'] is runs['lab']:
+            raise ValueError('invalid-lab-members')
+        for run in runs.values():
+            if run._lease is not lease or run._read()['state'] != 'prepared':
+                raise ValueError('foreign-lab-member')
+        self.lease, self.runs, self.lab_id = lease, dict(runs), _identifier(lab_id)
+        self._pair_factory = pair_factory
+        self.tunnel = tunnel is True
+        self.evidence_disk = evidence_disk is True
+        self.dns = dns is True
+        self.route_flows = route_flows is True
+        self.journal_full = journal_full is True
+        self.poller = poller is True
+        self.media = media is True
+        self.failure = failure is True
+        self.lockdown = lockdown is True
+        self.proxy = proxy is True
+        self.lan = lan is True
+        self.upgrade = upgrade is True
+        self.protocols = protocols is True
+        self.twohop = twohop is True
+        self.reconnectable = reconnectable is True
+        self._relay = None
+        self.sockets = {}
+        self.used = set()
+        self.closed = False
+        for role, run in runs.items():
+            linkage = json.loads(resource_path(run.directory, 'execution-identity.json').read_bytes())
+            if (linkage.get('lab_id') != lab_id or linkage.get('role') != role
+                    or linkage.get('members') != {r: runs[r]._identity[0] for r in MACS}
+                    or linkage.get('controls') != controls(run)
+                    or linkage.get('endpoint') != dict(kind='inherited-unix-stream', role=role, mac=MACS[role])):
+                raise ValueError('lab-linkage-mismatch')
+            for identifier, name in self.resources(run).items():
+                run.register(dict(id=identifier, kind='file', path=name))
+                resource_path(run.directory, name).parent.mkdir(parents=True, exist_ok=True)
+                resource_path(run.directory, name).touch(exist_ok=False)
+                if name == EVIDENCE_IMAGE:
+                    # Fixed and zeroed: a sparse file, so the helper can never grow or shrink it.
+                    with resource_path(run.directory, name).open('r+b') as image:
+                        image.truncate(EVIDENCE_SIZE)
+        # Both endpoint records already exist in the execution identity ledgers.
+        if self.reconnectable:
+            lab_host, lab_child = pair_factory(socket.AF_UNIX, socket.SOCK_STREAM)
+            test_host, test_child = pair_factory(socket.AF_UNIX, socket.SOCK_STREAM)
+            self._relay = _WireRelay(lab_host, test_host)
+            self.sockets = dict(test=test_child, lab=lab_child)
+        else:
+            a, b = pair_factory(socket.AF_UNIX, socket.SOCK_STREAM)
+            self.sockets = dict(test=a, lab=b)
+
+    def role(self, run):
+        roles = [role for role, member in self.runs.items() if member is run]
+        if len(roles) != 1:
+            raise ValueError('foreign-lab-run')
+        return roles[0]
+
+    def resources(self, run):
+        if self.role(run) != 'lab':
+            files = DNS_CLIENT_LOG if getattr(self, 'dns', False) else {}
+            files = {**files, **JOURNAL_ARTIFACTS} if getattr(self, 'journal_full', False) else files
+            files = {**files, **MEDIA_RESOURCES} if getattr(self, 'media', False) else files
+            files = {**files, **FAILURE_RESOURCES} if getattr(self, 'failure', False) else files
+            files = {**files, **LOCKDOWN_RESOURCES} if getattr(self, 'lockdown', False) else files
+            files = {**files, **PROXY_RESOURCES} if getattr(self, 'proxy', False) else files
+            files = {**files, **LAN_RESOURCES} if getattr(self, 'lan', False) else files
+            files = {**files, **UPGRADE_RESOURCES} if getattr(self, 'upgrade', False) else files
+            files = {**files, **PROTOCOLS_RESOURCES} if getattr(self, 'protocols', False) else files
+            return {**files, **TWOHOP_RESOURCES} if getattr(self, 'twohop', False) else files
+        files = {**ARTIFACTS, **TUNNEL_ARTIFACTS} if self.tunnel else ARTIFACTS
+        # Unbound calls with a stand-in object exist in older tests, which know no disk or DNS.
+        if getattr(self, 'dns', False):
+            files = {**files, **DNS_ARTIFACTS}
+        if getattr(self, 'route_flows', False):
+            files = {**files, **ROUTE_ARTIFACTS}
+        if getattr(self, 'poller', False):
+            files = {**files, **POLLER_ARTIFACTS}
+        return {**files, **EVIDENCE_RESOURCES} if getattr(self, 'evidence_disk', False) else files
+
+    def check_start(self, run):
+        self.lease._check_live()
+        role = self.role(run)
+        if self.closed or role in self.used or run._lease is not self.lease:
+            raise ValueError('lab-launch-ownership-mismatch')
+        if any(not any(vm.run is member for member in self.runs.values()) or vm.run is run
+               for vm in self.lease._active):
+            raise ValueError('foreign-active-vm')
+        if len(self.lease._active) >= 2:
+            raise ValueError('lab-capacity')
+
+    def _network_argv(self, run, role, fd, adapter):
+        argv = ['-netdev', f'stream,id=labwire,addr.type=fd,addr.str={fd},server=off']
+        if not adapter:
+            argv += ['-device', f'virtio-net-pci,netdev=labwire,id={role}-wire,mac={MACS[role]}']
+        if self.evidence_disk and role == 'lab':
+            # A second, writable raw disk that only the lab machine has.
+            image = resource_path(run.directory, EVIDENCE_IMAGE)
+            argv += ['-blockdev', json.dumps({'driver': 'raw', 'node-name': 'evidence', 'read-only': False,
+                                              'file': {'driver': 'file', 'filename': str(image)}}, sort_keys=True),
+                     '-device', 'virtio-blk-pci,drive=evidence,id=evidence,serial=' + EVIDENCE_SERIAL]
+        # Unbound calls with a stand-in object exist in older tests, which know no medium.
+        if getattr(self, 'media', False) and role == 'test':
+            # A read-only optical drive: Windows reads it with the drivers it has, and nothing can write to it.
+            image = resource_path(run.directory, MEDIA_IMAGE)
+            argv += ['-blockdev', json.dumps({'driver': 'raw', 'node-name': 'winmedia', 'read-only': True,
+                                              'file': {'driver': 'file', 'filename': str(image), 'read-only': True}},
+                                             sort_keys=True),
+                     '-device', 'ide-cd,drive=winmedia,bus=' + MEDIA_BUS + ',id=winmedia']
+        return argv
+
+    def network(self, run, *, adapter=False):
+        """The arguments that join the machine to its end of the wire, and the descriptor to pass on.
+
+        A machine whose image already has its network adapter (a Windows guest binds its settings to it, so the
+        launch profile names it) gets only the backend, `adapter=True`, and the adapter is told to use `labwire`.
+        """
+        self.lease._check_live()
+        role = self.role(run)
+        if self.closed or role in self.used:
+            raise ValueError('lab-endpoint-already-consumed')
+        self.used.add(role)
+        fd = self.sockets[role].fileno()
+        return LabPair._network_argv(self, run, role, fd, adapter), fd
+
+    def reconnect_network(self, run, *, adapter=False):
+        """Create a fresh test-side socketpair and attach it to the relay for a planned power cycle."""
+        self.lease._check_live()
+        role = self.role(run)
+        if (role != 'test' or not self.reconnectable or self._relay is None
+                or self.closed or role not in self.used):
+            raise ValueError('lab-wire-not-reconnectable')
+        previous = self.sockets.get(role)
+        if previous is not None:
+            previous.close()
+        test_host, test_child = self._pair_factory(socket.AF_UNIX, socket.SOCK_STREAM)
+        self._relay.attach_test(test_host)
+        self.sockets[role] = test_child
+        fd = test_child.fileno()
+        return LabPair._network_argv(self, run, role, fd, adapter), fd
+
+    def release_child(self, run):
+        """Close the controller's copy of a child wire descriptor after QEMU has inherited it."""
+        role = self.role(run)
+        endpoint = self.sockets.get(role)
+        if endpoint is not None:
+            endpoint.close()
+            if endpoint.fileno() != -1:
+                raise ValueError('endpoint-close-unconfirmed')
+
+    def close(self):
+        self.closed = False
+        errors = []
+        if self._relay is not None:
+            try:
+                self._relay.close()
+            except (OSError, ValueError) as error:
+                errors.append(error)
+        for endpoint in self.sockets.values():
+            try:
+                endpoint.close()
+                if endpoint.fileno() != -1:
+                    raise ValueError('endpoint-close-unconfirmed')
+            except (OSError, ValueError) as error:
+                errors.append(error)
+        if errors:
+            raise ValueError('lab-channel-close-unconfirmed')
+        self.closed = True
+
+
+class HelperFailed(ValueError):
+    """A guest helper exited nonzero. `helper_reason` is the code it printed, or None."""
+
+    def __init__(self, message, helper_reason=None):
+        super().__init__(message)
+        self.helper_reason = helper_reason
+
+
+def helper_code(status):
+    """The code after `lab-helper-failed:` in the helper's stderr, or None when there is none that fits."""
+    try:
+        text = base64.b64decode(status.get('err-data', ''), validate=True).decode('ascii')
+    except (ValueError, UnicodeDecodeError):
+        return None
+    match = re.fullmatch(r'lab-helper-failed:(' + HELPER_REASON.pattern + r')\s*', text)
+    return match[1] if match else None
+
+
+def refusal(status):
+    """'lab-helper-failed', plus the helper's own fixed reason when it printed a plain one."""
+    code = helper_code(status)
+    return 'lab-helper-failed-' + code if code and re.fullmatch('[a-z0-9-]{1,64}', code) else 'lab-helper-failed'
+
+
+class Guest:
+    """Fixed installed entry point, serialized QGA, no shell or arbitrary paths."""
+    def __init__(self, vm, role, lab_id, *, clock=time.monotonic, sleep=time.sleep, lifetime=GUEST_LIFETIME):
+        self.vm, self.role, self.lab_id = vm, role, lab_id
+        self.clock, self.sleep = clock, sleep
+        # The capture itself runs in a helper process of its own and ends with `finish` or at
+        # its own deadline; this only bounds how long the controller may keep talking to the guest.
+        self.deadline = clock() + lifetime
+
+    def rpc(self, name, args):
+        self.vm._check()
+        if self.clock() >= self.deadline or self.vm.reset_pending:
+            raise ValueError('lab-guest-deadline-or-reset')
+        self.vm.qga.deadline = time.monotonic() + min(5, self.deadline - self.clock())
+        return self.vm.qga._rpc(name, 5, args)
+
+    def call(self, operation, expected, window=(), canary=False, tunnel=None, options=None, poll=None, attempts=40):
+        if operation not in ({'setup', 'finish', 'window', 'halt', 'probe_proxy', 'lan_state',
+                              'fixture_state', 'fixture_control'}
+                             if self.role == 'lab' else {'probe'}):
+            raise ValueError('invalid-lab-operation')
+        with self.vm._guest_lock:
+            self.vm.qga.deadline = time.monotonic() + 10
+            if self.vm.qga.read_boot_id(5) != self.vm.last_boot_id:
+                raise ValueError('lab-boot-changed')
+            request = dict(operation=operation, role=self.role, lab_id=self.lab_id,
+                           vm_uuid=self.vm.vm_uuid, boot_id=self.vm.last_boot_id, probes=expected,
+                           markers=list(window), canary=canary is True)
+            if tunnel is not None:
+                request['tunnel'] = tunnel
+            if options:
+                if not set(options) <= {'evidence_disk', 'duration_seconds', 'dns', 'dns_check', 'windows',
+                                        'certificates', 'route_flows', 'control', 'poller', 'lan_fixtures',
+                                        'extended_fixtures', 'action'}:
+                    raise ValueError('invalid-lab-option')
+                request.update(options)
+            self.vm.qga.jobs_enabled = True
+            self.vm.qga.probe(5)
+            response = self.rpc('guest-exec', {'path': ENTRY, 'arg': [json.dumps(request)], 'capture-output': True})
+            if type(response) is not dict or set(response) != {'pid'} or type(response['pid']) is not int:
+                raise ValueError('invalid-lab-exec')
+            for _ in range(attempts):
+                status = self.rpc('guest-exec-status', response)
+                if status.get('exited') is True:
+                    if status.get('exitcode') != 0 or status.get('out-truncated') or status.get('err-truncated'):
+                        # A line cut by the output limit may be a part of its code: it says nothing.
+                        code = None if status.get('err-truncated') else helper_code(status)
+                        raise HelperFailed(refusal(status), code or HELPER_REASON_MISSING)
+                    raw = base64.b64decode(status.get('out-data', ''), validate=True)
+                    if len(raw) > LOG_LIMIT:
+                        raise ValueError('lab-helper-output-limit')
+                    result = json.loads(raw)
+                    if result.get('lab_id') != self.lab_id or result.get('boot_id') != self.vm.last_boot_id:
+                        raise ValueError('lab-helper-identity-mismatch')
+                    return result
+                # The other machine's control acts while this helper runs, from here and only once it has run.
+                if poll is not None:
+                    poll()
+                self.sleep(0.5)
+            raise ValueError('lab-helper-timeout')
+
+    def read(self, name, limit):
+        if name not in (*ARTIFACTS.values(), *TUNNEL_ARTIFACTS.values(), *DNS_ARTIFACTS.values(),
+                        *ROUTE_ARTIFACTS.values(), *POLLER_ARTIFACTS.values()):
+            raise ValueError('invalid-lab-artifact')
+        with self.vm._guest_lock:
+            handle = self.rpc('guest-file-open', {'path': '/run/rosetun-lab/' + self.lab_id + '/' + name, 'mode': 'r'})
+            if type(handle) is not int:
+                raise ValueError('invalid-lab-file-handle')
+            data = bytearray()
+            try:
+                for _ in range(limit // 16384 + 2):
+                    row = self.rpc('guest-file-read', {'handle': handle, 'count': 16384})
+                    block = base64.b64decode(row['buf-b64'], validate=True)
+                    if len(block) != row['count'] or len(data) + len(block) > limit:
+                        raise ValueError('lab-artifact-size-limit')
+                    data.extend(block)
+                    if row.get('eof') is True:
+                        return bytes(data)
+                    if not block:
+                        break
+                raise ValueError('incomplete-lab-artifact')
+            finally:
+                if self.vm.qga.valid:
+                    if self.rpc('guest-file-close', {'handle': handle}) != {}:
+                        raise ValueError('lab-artifact-close-unconfirmed')
+
+
+class Adapters:
+    host = staticmethod(_host)
+    prepare = staticmethod(prepare)
+    start = staticmethod(start)
+    execute = staticmethod(execute)
+    pair = LabPair
+    guest = Guest
+
+
+def read_evidence(image, lab_id):
+    """The pcap of a finished run from its evidence image, or a ValueError naming the defect.
+
+    Everything is checked before a byte of the pcap is used: the header (magic, version,
+    run ID, completion flag), the size of the image, the length and SHA-256 of the pcap,
+    and that nothing but zeros follows it.
+    """
+    with image.open('rb') as stream:
+        size = os.fstat(stream.fileno()).st_size
+        length, digest = parse_evidence_header(stream.read(EVIDENCE_HEADER_SIZE), lab_id)
+        if size < EVIDENCE_HEADER_SIZE + length:
+            raise ValueError('evidence-truncated')
+        if size != EVIDENCE_SIZE:
+            raise ValueError('evidence-size')
+        pcap = stream.read(length)
+        if hashlib.sha256(pcap).digest() != digest:
+            raise ValueError('evidence-sha256')
+        while block := stream.read(1024 * 1024):
+            if block.count(0) != len(block):
+                raise ValueError('evidence-trailing-bytes')
+    return pcap
+
+
+def expected_leak(result):
+    """An ordinary run must see no leak; a canary run must see exactly its own two flows.
+
+    The canary also needs the proven window an ordinary run needs for NONE: a seen leak
+    outside a bracketed, healthy capture proves nothing about the observer.
+    """
+    if result['canary']:
+        window = result['window']
+        return (result['leak'] == 'DETECTED' and result['canary_flows'] == ['tcp', 'udp']
+                and result['canary_other'] == 0 and window['markers_found'] is True
+                and window['ordered'] is True and result['observer_reasons'] == [])
+    return result['leak'] == 'NONE'
+
+
+def probe_error_is_the_closing_marker(row):
+    """The one refusal a control that stops something between the markers is meant to cause."""
+    reason = row.get('helper_reason') if type(row) is dict else None
+    return (type(reason) is str and reason.startswith('marker-close:4:')
+            and (row.get('stage'), row.get('kind')) == ('probe', 'HelperFailed'))
+
+
+def control_met(result):
+    """True only when the run ended in exactly the refusal its control is there to show."""
+    control = result.get('control')
+    if type(control) is not dict or control.get('name') not in CONTROLS:
+        return False
+    name = control['name']
+    window = result['window']
+    if name == 'extra-packet':
+        return (result['leak'] == 'DETECTED' and result['canary_flows'] == ['tcp', 'udp'] and result['canary_other'] == 0
+                and window['markers_found'] is True and window['ordered'] is True and result['observer_reasons'] == []
+                and result['errors'] == [] and result['qualification']['qualified'] is True)
+    # The closing marker never reached the observer, so the window stays open: not a clean run, never a leak-free one.
+    errors, reasons = result['errors'], result['observer_reasons']
+    if not (control['intervened'] is True and result['leak'] == 'UNVERIFIED' and window['markers_found'] is False
+            and (name != 'link-down' or control['link_restored'] is True)
+            and errors and probe_error_is_the_closing_marker(errors[0])):
+        return False
+    if name == 'observer-killed':
+        # A killed observer writes no health.json and no log, so nothing could be read and nothing was judged.
+        return (reasons == ['observer-gone']
+                and errors[1:] == [dict(stage='lab-smoke', kind='ValueError', reason='observer-gone')])
+    # Only a stopped observer says it ended inside the window; a cut link leaves it running to the finish.
+    return (len(errors) == 1 and 'window-markers-missing-or-repeated' in reasons
+            and ('capture-halted-in-window' in reasons) == (name == 'observer-stopped'))
+
+
+def tunnel_request(config, exchanges):
+    """The block sent to both helpers. Method and password come from the one public template."""
+    shadowsocks = l3_requests.template()['node']['outbound']['shadowsocks']
+    block = config['tunnel']
+    return dict(port=block['node_port'], method=shadowsocks['method'], password=shadowsocks['password'],
+                sing_box_sha256=block['sing_box_sha256'], ca_sha256=block['ca_sha256'], https=exchanges)
+
+
+def tunnel_summary(exchanges, reports, log, health, categories):
+    """What the tunnel run proved, from the helper's answers and the target's own log."""
+    direct, via_node = exchanges
+    reports = reports if type(reports) is dict else {}
+
+    def report(kind, exchange):
+        row = reports.get(kind)
+        return row if (type(row) is dict and row.get('path') == exchange['path']
+                       and row.get('response') == https_answer(exchange).hex()) else None
+
+    def rows(exchange):
+        return [row for row in log if type(row) is dict and row.get('path') == exchange['path']]
+
+    sent, relayed = report('direct', direct), report('tunnel', via_node)
+    direct_rows, relayed_rows = rows(direct), rows(via_node)
+    node = health.get('node') if type(health) is dict and type(health.get('node')) is dict else {}
+    code = node.get('exit_code')
+    client = reports.get('client_exit')
+    return dict(
+        direct=(sent is not None and type(sent.get('client_port')) is int and len(direct_rows) == 1
+                and direct_rows[0].get('source') == direct['source']
+                and direct_rows[0].get('port') == sent['client_port']),
+        via_node=relayed is not None and len(relayed_rows) == 1 and relayed_rows[0].get('source') == EGRESS,
+        tunnel_frames=categories.get('tunnel', 0),
+        node=dict(alive_at_finish=node.get('alive_at_finish') is True,
+                  exit_code=code if type(code) is int else None),
+        client_exit=client if type(client) is int else None)
+
+
+def dns_failure(reports):
+    """The exchange of the DNS check that failed, as the helper reported it, or None when none did or it is unreadable."""
+    row = reports.get('failed') if type(reports) is dict else None
+    if (type(row) is dict and set(row) == {'exchange', 'reason', 'elapsed_ms'} and row['exchange'] in DNS_EXCHANGES
+            and type(row['reason']) is str and HELPER_REASON.fullmatch(row['reason'])
+            and type(row['elapsed_ms']) is int and row['elapsed_ms'] >= 0):
+        return dict(exchange=row['exchange'], reason=row['reason'], elapsed_ms=row['elapsed_ms'])
+    return None
+
+
+def save_client_log(run, reports, result):
+    """The DNS client's log in `client.log` of the test run; its path, or None when there is no log or it did not save."""
+    text = reports.get('client_log') if type(reports) is dict else None
+    if type(text) is not str:
+        return None
+    try:
+        write_file(run, 'client.log', text.encode('utf-8'), mode='overwrite', readback=True, forbid=run._identity[2])
+    except (OSError, ValueError) as error:
+        result['errors'].append(failure('client-log', error))
+        return None
+    return str(resource_path(run.directory, 'client.log'))
+
+
+def dns_summary(checks, reports, dns_log, https_log):
+    """What the DNS check proved, from the helper's answers and the resolver's and target's own logs."""
+    reports = reports if type(reports) is dict else {}
+    plain, doh = checks['plain'], checks['doh']
+    rows = [row for row in dns_log if type(row) is dict]
+    reached = [row for row in https_log if type(row) is dict and row.get('path') == doh['path']]
+    sent = reports.get('plain')
+    answered = reports.get('doh')
+    plain_rows = [row for row in rows if row.get('name') == dns_name(plain)]
+    doh_rows = [row for row in rows if row.get('name') == dns_name(doh)]
+    code = reports.get('client_exit')
+    return dict(
+        plain=(type(sent) is dict and plain_reply_ok(plain, bytes.fromhex(sent.get('response', '')))
+               and len(plain_rows) == 1 and (plain_rows[0].get('source'), plain_rows[0].get('transport'),
+                                             plain_rows[0].get('type')) == (plain['source'], 'udp', 'A')),
+        doh_via_node=(type(answered) is dict and answered.get('response') == https_answer(doh).hex()
+                      and len(doh_rows) >= 1 and all((row.get('source'), row.get('transport')) == (EGRESS, 'doh')
+                                                     for row in doh_rows)
+                      and len(reached) == 1 and reached[0].get('source') == EGRESS),
+        doh_requests=sum(row.get('transport') == 'doh' for row in rows),
+        client_exit=code if type(code) is int else None,
+        client_log=reports.get('client_log') if type(reports.get('client_log')) is str else None,
+        client_log_path=None,
+        failed=dns_failure(reports))
+
+
+def dns_ok(result):
+    """The DNS check, when it was asked for: both lookups proven by the logs of the lab, none of them failed."""
+    block = result.get('dns')
+    return block is None or (block['plain'] is True and block['doh_via_node'] is True and block['failed'] is None)
+
+
+def tunnel_ok(result):
+    """Everything a tunnel run needs beyond the ordinary or canary condition."""
+    block = result.get('tunnel')
+    return (block is None or (block['direct'] is True and block['via_node'] is True
+                              and block['tunnel_frames'] > 0 and block['node']['alive_at_finish'] is True))
+
+
+def lab_smoke(config, *, canary=False, tunnel=False, evidence_disk=False, duration_seconds=None,
+              dns=False, control=None, adapters=None, clock=time.monotonic, sleep=time.sleep):
+    plan_lab(config, tunnel=tunnel, dns=dns, control=control)
+    if control is not None and canary:
+        raise ValueError('lab-control-invalid')
+    if duration_seconds is not None and (type(duration_seconds) is not int
+                                         or not DURATION <= duration_seconds <= DURATION_MAX):
+        raise ValueError('lab-duration-out-of-range')
+    adapters = adapters or Adapters()
+    lab_id = uuid.uuid4().hex
+    expected = probes(lab_id, lambda: secrets.token_hex(12))
+    window = markers(lab_id, lambda: secrets.token_hex(12))
+    exchanges = https_exchanges(lab_id, lambda: secrets.token_hex(12)) if tunnel else []
+    extra = dict(tunnel=tunnel_request(config, exchanges)) if tunnel else {}
+    checks = dns_checks(lab_id, lambda: secrets.token_hex(12)) if dns else None
+    request_options = {**({'evidence_disk': True} if evidence_disk else {}),
+               **({'duration_seconds': duration_seconds} if duration_seconds is not None else {}),
+               **({'dns': True, 'dns_check': checks} if dns else {}),
+               **({'control': control} if control in GUEST_CONTROLS else {})}
+    if request_options:
+        extra['options'] = request_options
+    result = dict(schema='rosetun.matrix.lab-summary.v1', lab_id=lab_id, readiness={},
+                  artifact_directories={}, configuration=config,
+                  qualification=dict(qualified=False, ipv4='UNVERIFIED', ipv6='UNVERIFIED',
+                                     services='UNVERIFIED', observer='UNVERIFIED', evidence='UNVERIFIED'),
+                  probes=expected, markers=window, completion={}, channel_closed=False, completed=False,
+                  leak='UNVERIFIED', leak_reason='not-evaluated', observer_reasons=['not-evaluated'], categories={}, unexpected=[], canary_flows=[], canary_other=0,
+                  window=dict(markers_found=False, ordered=False), canary=canary is True,
+                  errors=[], security_invariants='UNVERIFIED', release_gate=False, exit_code=2)
+    if evidence_disk:
+        result['evidence_disk'] = dict(verified=False, reason='not-read', pcap_bytes=0, pcap_sha256=None)
+    if control is not None:
+        # Only a control run has this block; the summaries of every other run stay as they were.
+        result['control'] = dict(name=control, expected=CONTROL_EXPECTATIONS[control], intervened=False,
+                                 link_restored=False, met=False)
+    link_is_down = False
+    if tunnel:
+        # Stage 6a and 6b summaries gain nothing; only a tunnel run carries these.
+        result.update(https=exchanges, tunnel=dict(direct=False, via_node=False, tunnel_frames=0,
+                      node=dict(alive_at_finish=False, exit_code=None), client_exit=None))
+    if dns:
+        result['dns'] = dict(plain=False, doh_via_node=False, doh_requests=0, client_exit=None, client_log=None,
+                             client_log_path=None, failed=None)
+    lease, pair, runs, vms = None, None, {}, {}
+    try:
+        adapters.host()
+        for binary in ('executable', 'image_executable'):
+            version = adapters.execute([config['qemu'][binary], '--version'], timeout=5, output_limit=4096)
+            if version.returncode != 0 or not re.search(rb'\bversion 10\.0\.13(?:\s|$)', version.stdout.split(b'\n')[0]):
+                raise ValueError('lab-requires-qemu-10-0-13')
+        lease = StandLease(config['state_directory'], config['stand_id']).acquire()
+        for role in MACS:
+            run = create_run(lease, lab_id + '-' + role)
+            runs[role] = run
+            result['artifact_directories'][role] = str(run.directory)
+            for identifier, name in EXECUTION_FILES.items():
+                run.register(dict(id=identifier, kind='file', path=name))
+            save(run, 'execution-identity.json', dict(lab_id=lab_id, role=role,
+                 members={r: lab_id + '-' + r for r in MACS}, controls=controls(run),
+                 endpoint=dict(kind='inherited-unix-stream', role=role, mac=MACS[role])), initial=True)
+            save(run, 'execution-summary.json', result, initial=True)
+            adapters.prepare(run, ImageDescriptor(**config[role + '_image']), QemuConfig(**config['qemu']))
+        pair = adapters.pair(lease, runs, lab_id, **({'tunnel': True} if tunnel else {}),
+                             **({'evidence_disk': True} if evidence_disk else {}), **({'dns': True} if dns else {}))
+        for role in MACS:
+            vm = adapters.start(runs[role], lab=pair)
+            vms[role] = vm
+            vm.resume()
+            observed = vm.wait_initial_guest(timeout=120, clock=clock, sleep=sleep)
+            result['readiness'][role] = dict(vm_uuid=vm.vm_uuid, boot_id=vm.last_boot_id,
+                                             vm=True, qga=observed['result'] == 'observed')
+        # Drop controller duplicates before probes; QEMU owns both remaining ends.
+        pair.close()
+        lifetime = {'lifetime': GUEST_LIFETIME + duration_seconds} if duration_seconds is not None else {}
+        lab = adapters.guest(vms['lab'], 'lab', lab_id, clock=clock, sleep=sleep, **lifetime)
+        test = adapters.guest(vms['test'], 'test', lab_id, clock=clock, sleep=sleep, **lifetime)
+        ready = lab.call('setup', expected, window, **extra)
+        if ready.get('capture_ready') is not True:
+            raise ValueError('capture-not-ready')
+        sent, reports, dns_reports = {}, None, None
+
+        def intervene():
+            """Once the lab has answered every exchange of the test machine, and only then: stop what this control stops."""
+            nonlocal link_is_down
+            if (result['control']['intervened']
+                    or lab.call('window', expected, window, **extra).get('exchanges_done') is not True):
+                return
+            result['control']['intervened'] = True
+            if control in ('observer-stopped', 'observer-killed'):
+                lab.call('halt', expected, window, **extra)
+            else:
+                vms['test'].set_link(False)
+                link_is_down = True
+
+        def restore_link():
+            nonlocal link_is_down
+            if link_is_down:
+                vms['test'].set_link(True)
+                link_is_down = False
+                result['control']['link_restored'] = True
+
+        try:
+            guest_control = ({'poll': intervene, 'attempts': CONTROL_POLLS} if control in GUEST_CONTROLS else {})
+            probed = test.call('probe', expected, window, canary=canary or control == 'extra-packet',
+                               **guest_control, **extra)
+            replies, marker_replies, sent = probed['replies'], probed['marker_replies'], probed['marker_sent']
+            reports = probed.get('https')
+            dns_reports = probed.get('dns')
+            if dns:
+                # Kept at once: a later failure must not take away what the client said.
+                answers = dns_reports if type(dns_reports) is dict else {}
+                result['dns'].update(
+                    failed=dns_failure(answers), client_log_path=save_client_log(runs['test'], answers, result),
+                    client_exit=answers['client_exit'] if type(answers.get('client_exit')) is int else None,
+                    client_log=answers['client_log'] if type(answers.get('client_log')) is str else None)
+        except Exception as error:
+            result['errors'].append(failure('probe', error))
+            replies, marker_replies = [], []
+        if control in GUEST_CONTROLS and not result['control']['intervened']:
+            # The exchanges did not all finish while the test machine waited: nothing was stopped, so nothing is shown.
+            result['errors'].append(dict(stage='control', kind='ValueError', reason='exchanges-not-completed'))
+        result['replies'] = replies
+        finished = lab.call('finish', expected, window, **extra)
+        # The observer has stopped, so what the test machine sends once its link is back is not judged.
+        restore_link()
+        if control == 'observer-killed' and finished.get('observer_gone') is True:
+            # The killed observer left no health.json and no log: nothing to read, nothing judged, the run refused.
+            result.update(leak_reason='observer-gone', observer_reasons=['observer-gone'])
+            raise ValueError('observer-gone')
+        evidence = {}
+        files = (('targets.json', LOG_LIMIT), ('health.json', LOG_LIMIT))
+        if not evidence_disk:
+            files = (('capture.pcap', CAPTURE_LIMIT),) + files
+        if tunnel:
+            files += (('https.json', LOG_LIMIT), ('node.log', LOG_LIMIT))
+        if dns:
+            files += (('dns.json', LOG_LIMIT),)
+        for name, limit in files:
+            raw = lab.read(name, limit)
+            try:
+                # A pcap is binary and guest-supplied; only the JSON files are checked.
+                forbid = None if name == 'capture.pcap' else runs['lab']._identity[2]
+                write_file(runs['lab'], name, raw, mode='overwrite', readback=True, forbid=forbid)
+            except ReadbackError:
+                raise ValueError('lab-evidence-readback-failed') from None
+            evidence[name] = raw
+        if evidence_disk:
+            # The lab machine must be gone before its disk is read: nothing may still be writing.
+            lab_run = runs['lab']
+            vms['lab'].close()
+            if not completion_verified(lab_run.directory, lab_run._read()):
+                raise ValueError('lab-completion-unconfirmed')
+            try:
+                raw = read_evidence(resource_path(lab_run.directory, EVIDENCE_IMAGE), lab_id)
+                write_file(lab_run, 'capture.pcap', raw, mode='overwrite', readback=True)
+            except ReadbackError:
+                raise ValueError('lab-evidence-readback-failed') from None
+            except (OSError, ValueError) as error:
+                reason = str(error) if str(error).startswith('evidence-') else 'evidence-unreadable'
+                result['evidence_disk'].update(reason=reason)
+                result.update(leak='UNVERIFIED', leak_reason=reason, observer_reasons=[reason])
+                raise ValueError(reason) from None
+            evidence['capture.pcap'] = raw
+            result['evidence_disk'] = dict(verified=True, reason=None, pcap_bytes=len(raw),
+                                           pcap_sha256=hashlib.sha256(raw).hexdigest())
+        result['evidence_sha256'] = {name: hashlib.sha256(raw).hexdigest() for name, raw in evidence.items()}
+        health = json.loads(evidence['health.json'])
+        # The leak verdict comes first so that a rejected capture cannot hide a seen leak.
+        options = {}
+        if tunnel:
+            log = json.loads(evidence['https.json'])
+            direct_report = reports.get('direct') if type(reports) is dict else None
+            options = dict(tunnel_port=config['tunnel']['node_port'],
+                           https=dict(direct=exchanges[0], log=log, client_port=(
+                               direct_report.get('client_port') if type(direct_report) is dict else None)))
+        if evidence_disk:
+            options['limit'] = EVIDENCE_PCAP_LIMIT
+        # The plain lookup is a probe by its tuple and its question; everything else of DNS is a leak.
+        verdict = leak_verdict(evidence['capture.pcap'], expected + ([checks['plain']] if dns else []), window,
+                               health, ready['capture_ready'], marker_replies, **options)
+        verdict['window'] = dict(verdict['window'], test_clock_sent=sent)
+        result.update(verdict)
+        if tunnel:
+            result['tunnel'] = tunnel_summary(exchanges, reports, log, health, verdict['categories'])
+        if dns:
+            result['dns'] = dict(dns_summary(checks, dns_reports, json.loads(evidence['dns.json']), log),
+                                 client_log_path=result['dns']['client_log_path'])
+        result['qualification'] = qualify(expected, replies, json.loads(evidence['targets.json']),
+                    evidence['capture.pcap'], ready['capture_ready'], health,
+                    **({'limit': EVIDENCE_PCAP_LIMIT} if evidence_disk else {}))
+    except BaseException as error:
+        result['errors'].append(failure('lab-smoke', error))
+        if isinstance(error, KeyboardInterrupt):
+            result['exit_code'] = 130
+    finally:
+        if link_is_down:
+            # Never leave the wire cut on a machine that is about to be closed, whatever went wrong before.
+            try:
+                vms['test'].set_link(True)
+                link_is_down = False
+                result['control']['link_restored'] = True
+            except BaseException as error:
+                result['errors'].append(failure('link-restore', error))
+        if lease is not None:
+            # Includes a failed start's handle, never unrelated processes.
+            for vm in list(lease._active):
+                if any(vm.run is member for member in runs.values()):
+                    try:
+                        vm.close(hard=True)
+                    except BaseException as error:
+                        result['errors'].append(failure('vm-close', error))
+            if pair is not None:
+                try:
+                    pair.close()
+                    result['channel_closed'] = pair.closed
+                except BaseException as error:
+                    result['errors'].append(failure('channel-close', error))
+                    for run in runs.values():
+                        try:
+                            run.mark('quarantined', 'lab-channel-close-unconfirmed')
+                        except (OSError, ValueError):
+                            result['errors'].append(dict(stage='quarantine', reason='ledger-write-failed'))
+            for role, run in runs.items():
+                try:
+                    result['completion'][role] = completion_verified(run.directory, run._read())
+                except (OSError, ValueError):
+                    result['completion'][role] = False
+                    result['errors'].append(dict(stage='completion', reason='ledger-read-failed'))
+            result['completed'] = (set(result['completion']) == set(MACS)
+                                   and all(result['completion'].values()) and result['channel_closed'])
+            if result['exit_code'] != 130 and control is not None:
+                # A control passes only on exactly its own refusal, and with both machines confirmed gone.
+                result['control']['met'] = control_met(result)
+                result['exit_code'] = 0 if result['completed'] and result['control']['met'] else 2
+            elif result['exit_code'] != 130:
+                result['exit_code'] = 0 if (result['completed'] and not result['errors']
+                                            and result['qualification']['qualified'] and expected_leak(result)
+                                            and tunnel_ok(result) and dns_ok(result)) else 2
+            for run in runs.values():
+                try:
+                    save(run, 'execution-summary.json', result)
+                except (OSError, ValueError):
+                    result['errors'].append(dict(stage='summary', reason='summary-write-failed'))
+                    result['exit_code'] = 2
+            if lease._active or (pair is not None and not pair.closed):
+                _RETAINED_LEASES.append(lease)
+            else:
+                try:
+                    lease.release()
+                except (OSError, ValueError):
+                    result['errors'].append(dict(stage='lease', reason='lease-release-failed'))
+                    result['exit_code'] = 2
+    return result

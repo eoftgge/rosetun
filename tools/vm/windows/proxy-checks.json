@@ -1,0 +1,370 @@
+[
+  {
+    "id": "plain.connect",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "plain",
+    "detail": "-",
+    "title": "Connect without kill switch"
+  },
+  {
+    "id": "plain.adapter",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "plain",
+    "detail": "-",
+    "title": "No TUN adapter"
+  },
+  {
+    "id": "plain.proxy",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "plain",
+    "detail": "-",
+    "title": "Proxy carries traffic"
+  },
+  {
+    "id": "plain.direct",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "plain",
+    "detail": "-",
+    "title": "Direct egress works"
+  },
+  {
+    "id": "plain.unshared",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "plain",
+    "detail": "-",
+    "title": "Unshared proxy rejects LAN"
+  },
+  {
+    "id": "busy.reject",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "busy",
+    "detail": "-",
+    "title": "Busy port rejects connect naming port"
+  },
+  {
+    "id": "busy.engine",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "busy",
+    "detail": "-",
+    "title": "No engine after busy port"
+  },
+  {
+    "id": "busy.direct",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "busy",
+    "detail": "-",
+    "title": "Network remains open after busy port"
+  },
+  {
+    "id": "strict.connect",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "strict",
+    "detail": "-",
+    "title": "Connect with kill switch"
+  },
+  {
+    "id": "strict.proxy",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "strict",
+    "detail": "-",
+    "title": "Strict proxy carries traffic"
+  },
+  {
+    "id": "strict.direct",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "strict",
+    "detail": "-",
+    "title": "Strict direct egress blocked"
+  },
+  {
+    "id": "strict.dns",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "strict",
+    "detail": "-",
+    "title": "Strict direct DNS blocked"
+  },
+  {
+    "id": "strict.restart",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "strict",
+    "detail": "-",
+    "title": "Killed engine reconnects"
+  },
+  {
+    "id": "strict.watch",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "strict",
+    "detail": "-",
+    "title": "No direct egress during engine restart"
+  },
+  {
+    "id": "mode.tun",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "mode",
+    "detail": "-",
+    "title": "Connect TUN with kill switch"
+  },
+  {
+    "id": "mode.to-proxy",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "mode",
+    "detail": "-",
+    "title": "Apply TUN to proxy"
+  },
+  {
+    "id": "mode.adapter-gone",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "mode",
+    "detail": "-",
+    "title": "TUN adapter removed"
+  },
+  {
+    "id": "mode.proxy",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "mode",
+    "detail": "-",
+    "title": "Proxy carries traffic after apply"
+  },
+  {
+    "id": "mode.to-tun",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "mode",
+    "detail": "-",
+    "title": "Apply proxy to TUN"
+  },
+  {
+    "id": "mode.tunnel",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "mode",
+    "detail": "-",
+    "title": "TUN adapter returns and carries traffic"
+  },
+  {
+    "id": "mode.watch",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "mode",
+    "detail": "-",
+    "title": "No direct egress during mode changes"
+  },
+  {
+    "id": "sharing.plain.connect",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "sharing",
+    "detail": "-",
+    "title": "sharing plain connect"
+  },
+  {
+    "id": "sharing.plain.host",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "sharing",
+    "detail": "-",
+    "title": "sharing plain host"
+  },
+  {
+    "id": "sharing.plain.server",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "sharing",
+    "detail": "host-node",
+    "title": "sharing plain server"
+  },
+  {
+    "id": "sharing.plain.loopback",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "sharing",
+    "detail": "-",
+    "title": "sharing plain loopback"
+  },
+  {
+    "id": "sharing.strict.connect",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "sharing",
+    "detail": "-",
+    "title": "sharing strict connect"
+  },
+  {
+    "id": "sharing.strict.host",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "sharing",
+    "detail": "-",
+    "title": "sharing strict host"
+  },
+  {
+    "id": "sharing.strict.server",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "sharing",
+    "detail": "host-node",
+    "title": "sharing strict server"
+  },
+  {
+    "id": "sharing.strict.loopback",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "sharing",
+    "detail": "-",
+    "title": "sharing strict loopback"
+  },
+  {
+    "id": "sharing.off",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "sharing",
+    "detail": "-",
+    "title": "sharing off"
+  },
+  {
+    "id": "sharing.disconnected",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "sharing",
+    "detail": "-",
+    "title": "sharing disconnected"
+  },
+  {
+    "id": "desktop.set",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "desktop",
+    "detail": "-",
+    "title": "desktop set"
+  },
+  {
+    "id": "desktop.record",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "desktop",
+    "detail": "-",
+    "title": "desktop record"
+  },
+  {
+    "id": "desktop.restore",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "desktop",
+    "detail": "-",
+    "title": "desktop restore"
+  },
+  {
+    "id": "desktop.record-gone",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "desktop",
+    "detail": "-",
+    "title": "desktop record-gone"
+  },
+  {
+    "id": "crash.persist",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "crash",
+    "detail": "-",
+    "title": "crash persist"
+  },
+  {
+    "id": "crash.restore",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "crash",
+    "detail": "-",
+    "title": "crash restore"
+  },
+  {
+    "id": "foreign.preserve",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "foreign",
+    "detail": "-",
+    "title": "foreign preserve"
+  },
+  {
+    "id": "lockdown.on",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "lockdown",
+    "detail": "-",
+    "title": "lockdown on"
+  },
+  {
+    "id": "lockdown.connect",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "lockdown",
+    "detail": "-",
+    "title": "lockdown connect"
+  },
+  {
+    "id": "lockdown.proxy",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "lockdown",
+    "detail": "-",
+    "title": "lockdown proxy"
+  },
+  {
+    "id": "lockdown.direct",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "lockdown",
+    "detail": "-",
+    "title": "lockdown direct"
+  },
+  {
+    "id": "lockdown.host-blocked",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "lockdown",
+    "detail": "-",
+    "title": "lockdown host-blocked"
+  },
+  {
+    "id": "lockdown.lan-on",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "lockdown",
+    "detail": "-",
+    "title": "lockdown lan-on"
+  },
+  {
+    "id": "lockdown.lan-connect",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "lockdown",
+    "detail": "-",
+    "title": "lockdown lan-connect"
+  },
+  {
+    "id": "lockdown.host-allowed",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "lockdown",
+    "detail": "-",
+    "title": "lockdown host-allowed"
+  }
+]

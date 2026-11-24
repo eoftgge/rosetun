@@ -55,6 +55,12 @@ NAT_TABLE=rosetun-l3-nat
 
 RUN_ID='' STAND_ID='' EXPECTED_BOOT_ID='' USER_A='' USER_B='' BIOS_GUID=''
 HOST_ADDRESS='' NODE_PORT='' PROBE_ADDRESS='' DNS_PROBE_ADDRESS=''
+# ADDRESS:PORT of the lab observer's marker service. Empty (the default, and always on
+# Hyper-V) means no markers: nothing below sends a datagram or writes a file for them.
+LAB_MARKER_ADDRESS=''
+# A control of the lab (only `stop-helper`, only with a marker address; empty on Hyper-V): the one
+# place it acts is control_stop_helper, and nothing else in this file reads it.
+LAB_CONTROL=''
 SCENARIO_TIMEOUT_SECONDS=30 UNIT_TIMEOUT_SECONDS=180 JOB_TIMEOUT_SECONDS=1800
 EXPECTED_ARCH=x86_64
 PHYS=''
@@ -139,7 +145,9 @@ connect_with() {
     local request=$1
     # A scenario that failed half-way may have left a session.
     [[ $(state_line) =~ ^Disconnected ]] || cli 60 disconnect
+    lab_mark close
     install -m 0600 -o "$(uid_of "$USER_A")" -g "$(gid_of "$USER_A")" -- "$ART/$request" "$RUN/work-$USER_A/$request"
+    lab_mark open
     cli 120 connect "$request"
     [ "$CLI_RC" -eq 0 ] || { fail_reason="connect with $request failed: $(cli_error)"; return 1; }
     wait_state '^Connected' 30
@@ -147,7 +155,8 @@ connect_with() {
 
 disconnect() {
     cli 60 disconnect
-    wait_state '^Disconnected' 30
+    wait_state '^Disconnected' 30 || return 1
+    lab_mark close
 }
 
 table_present() { "$NFT" list table inet rosetun >/dev/null 2>&1; }
@@ -502,6 +511,14 @@ scenario_engine() {
     check engine.files "the engine reads its configuration and writes nothing, an ordinary account does not get in" files
 }
 
+# The positive control of the lab observer: inside the window of the kill-switch session the service
+# stops and one direct request goes where it was refused a moment ago. The scenarios after it run as
+# they are and may fail; the observer has to see that request.
+control_stop_helper() {
+    timeout "$UNIT_TIMEOUT_SECONDS" systemctl stop rosetun-helper.service
+    direct_https >/dev/null
+}
+
 scenario_kill_switch() {
     connect_ks() {
         connect_with request-kill-switch.json || return 1
@@ -512,6 +529,7 @@ scenario_kill_switch() {
     if ! passed killswitch.direct-blocked; then
         return
     fi
+    [ "$LAB_CONTROL" != stop-helper ] || control_stop_helper
     check killswitch.tunnel-passes "HTTPS through the tunnel answered" expect_reached "HTTPS through the tunnel" tunnel_https
     check lan.off "the host node was refused on the physical interface" expect_blocked "the host node" direct_node
 
@@ -573,6 +591,71 @@ EOF
     }
     check killswitch.flush-restored "the table came back, the direct path was refused, the journal and status said so" flush_restored
     check killswitch.disconnect "the table went away and the direct path answered" disconnect_removes
+}
+
+# A route to the probe address more specific than the default, in the main table, as a
+# DHCP server's classless static routes (option 121) would put it there during a session.
+# The engine's routes leave it in force, so that address is reached past the tunnel: the
+# kill switch drops it (no leak, the address is unreachable); a DNS lock alone does not.
+# STATE remembers the route before it goes in, so cleanup removes it whatever happens.
+specific_route_add() {
+    printf '%s %s %s\n' "$PROBE_ADDRESS/32" "$1" "$PHYS" >"$STATE/specific-route"
+    ip -4 route replace "$PROBE_ADDRESS/32" via "$1" dev "$PHYS" ||
+        { fail_reason="could not add the route $PROBE_ADDRESS/32 via $1 dev $PHYS"; return 1; }
+}
+
+specific_route_remove() {
+    local destination gateway device
+    [ -f "$STATE/specific-route" ] || return 0
+    read -r destination gateway device <"$STATE/specific-route"
+    ip -4 route del "$destination" via "$gateway" dev "$device" 2>/dev/null
+    [ -z "$(ip -4 route show exact "$destination" dev "$device" 2>/dev/null)" ] || return 1
+    rm -f -- "$STATE/specific-route"
+}
+
+# The result is the kill-switch part's alone; the DNS-lock session only adds to the note.
+scenario_specific_route() {
+    local id=route.specific-bypass started gateway ks_note='' dns_note=''
+    started=$(l2_now_ms)
+    write_status running "$id"
+    gateway=$(ip -4 route show default dev "$PHYS" 2>/dev/null | sed -n 's/^default via \([0-9.]*\).*/\1/p' | head -n 1)
+    specific_bypass() {
+        [ -n "$gateway" ] || { fail_reason="no IPv4 default gateway on $PHYS for the specific route"; return 1; }
+        connect_with request-kill-switch.json || return 1
+        table_present || { fail_reason="connected but the table is missing"; return 1; }
+        specific_route_add "$gateway" || return 1
+        local rc
+        rc=$(tunnel_https)
+        if reached_rc "$rc"; then
+            ks_note="HTTPS through the tunnel still answered"
+        else
+            ks_note="HTTPS through the tunnel did not answer (curl exit $rc)"
+        fi
+        expect_blocked "HTTPS to $PROBE_ADDRESS on $PHYS with the specific route" direct_https || return 1
+        specific_route_remove || { fail_reason="could not remove the route $PROBE_ADDRESS/32"; return 1; }
+        disconnect
+    }
+    specific_bypass_dns_lock() {
+        if ! connect_with request-dns-lock.json; then
+            dns_note="the DNS-lock session did not connect: $fail_reason"
+            return
+        fi
+        if specific_route_add "$gateway"; then
+            dns_note="with the DNS lock alone HTTPS went: $(route_of "$USER_A" "$(command -v curl)")"
+        else
+            dns_note="with the DNS lock alone: $fail_reason"
+        fi
+        specific_route_remove
+        disconnect
+    }
+    if specific_bypass; then
+        specific_bypass_dns_lock
+        record "$id" PASS "with the kill switch the direct path was refused; $ks_note; $dns_note" "$started"
+    else
+        record "$id" FAIL "${fail_reason:-the condition did not hold}${ks_note:+; $ks_note}" "$started"
+    fi
+    specific_route_remove
+    fail_reason=''
 }
 
 # engine_capabilities MASK: sing-box holds exactly these, in the three sets.
@@ -949,8 +1032,11 @@ scenario_ipv6() {
         connect_with request-lan.json || return 1
         # Without a cache entry the ping needs neighbor discovery first.
         ip -6 neigh flush dev "$PHYS"
-        ping -6 -c 2 -W 3 "$router%$PHYS" >/dev/null 2>&1 ||
-            { fail_reason="the IPv6 router $router did not answer under the kill switch: $(ip -6 neigh show "$router" dev "$PHYS")"; return 1; }
+        # On failure the reason keeps ping's own error and the route the kernel picks, so that a refusal on this
+        # machine (no route, unreachable) is told apart from a request that left and got no answer.
+        local ping_error
+        ping_error=$(ping -6 -c 2 -W 3 "$router%$PHYS" 2>&1 >/dev/null) ||
+            { fail_reason="the IPv6 router $router did not answer under the kill switch: $(ip -6 neigh show "$router" dev "$PHYS"); ping: $(printf '%s' "$ping_error" | tr '\n' ' ' | cut -c 1-200); route: $(ip -6 route get "$router" oif "$PHYS" 2>&1 | head -n 1)"; return 1; }
         local out
         out=$(curl -v -s -o /dev/null --connect-timeout 3 --max-time 4 --interface "$PHYS" "tftp://[2001:db8::1]:69/rosetun-l3" 2>&1 </dev/null)
         printf '%s' "$out" | grep -q 'Operation not permitted' ||
@@ -963,11 +1049,22 @@ scenario_ipv6() {
         record "$id" FAIL "${fail_reason:-the condition did not hold}" "$started"
     fi
     fail_reason=''
+    # A failure above returns before the disconnect: the next scenario starts without Rosetun.
+    [[ $(state_line) =~ ^Disconnected ]] || cli 60 disconnect
+    lab_mark close
 }
 
 scenario_peer() {
     FORWARD_BEFORE=''
     inbound() {
+        # The peer and its baseline are set up without Rosetun; a session an earlier scenario left would stand in
+        # the way of both.
+        if ! [[ $(state_line) =~ ^Disconnected ]]; then
+            cli 60 disconnect
+            wait_state '^Disconnected' 30 ||
+                { fail_reason="a session an earlier scenario left did not end before the peer was set up"; return 1; }
+            lab_mark close
+        fi
         peer_up || return 1
         FORWARD_BEFORE=$(peer_https)
         # The peer opens a TCP session to sshd and reads its banner; once the
@@ -1011,6 +1108,7 @@ scenario_peer() {
     }
     check forward.blocked "forwarded HTTPS answered, was dropped under the kill switch, answered again" forwarded
     [[ $(state_line) =~ ^Disconnected ]] || cli 60 disconnect
+    lab_mark close
     # What stays is the cleanup's to remove and report.
     peer_down
 }
@@ -1038,6 +1136,7 @@ scenario_crash() {
         cli 30 open-network
         [ "$CLI_RC" -eq 0 ] || { fail_reason="open-network failed: $CLI_OUT"; return 1; }
         ! table_present || { fail_reason="the table stays after open-network"; return 1; }
+        lab_mark close
         expect_reached "HTTPS to $PROBE_ADDRESS on $PHYS" direct_https
     }
     check crash.open-network "the table went away and the direct path answered" opened
@@ -1049,6 +1148,7 @@ scenario_crash() {
         [ "$KILLED_TABLE_PRESENT" = 1 ] || { fail_reason="the table went away with the helper, before the restart"; return 1; }
         ! printf '%s\n' "$CLI_OUT" | grep -q '^network: held closed' || { fail_reason="status reports the network held closed after a DNS-lock crash"; return 1; }
         ! table_present || { fail_reason="the restarted helper kept the DNS lock's table"; return 1; }
+        lab_mark close
         journalctl -b -u rosetun-helper.service --no-pager 2>/dev/null | grep -q 'removed the DNS lock a crashed helper left' ||
             { fail_reason="the journal does not say that the DNS lock was removed"; return 1; }
         expect_udp_dns_sent || return 1
@@ -1156,6 +1256,7 @@ scenario_stop() {
         connect_with request-kill-switch.json || return 1
         timeout "$UNIT_TIMEOUT_SECONDS" systemctl stop rosetun-helper.service || { fail_reason="systemctl stop failed"; return 1; }
         ! table_present || { fail_reason="the table stays after a normal stop"; return 1; }
+        lab_mark close
         expect_reached "HTTPS to $PROBE_ADDRESS on $PHYS" direct_https
     }
     check stop.removes-table "the table went away with the stop and the direct path answered" stopped
@@ -1175,6 +1276,10 @@ cleanup() {
     fi
     if [ -f "$STATE/nft-untrusted" ]; then
         chmod o-w "$NFT" && rm -f -- "$STATE/nft-untrusted" && note "gave $NFT its mode back" || problem "could not give $NFT its mode back"
+    fi
+    if [ -f "$STATE/specific-route" ]; then
+        specific_route_remove && note "removed the specific route to $PROBE_ADDRESS/32" ||
+            problem "could not remove the specific route to $PROBE_ADDRESS/32 from the main table"
     fi
     if [ -f "$STATE/peer" ]; then
         peer_down && note "removed the peer namespace" || problem "could not remove the peer namespace $PEER_NS, its NAT table or routing rule"
@@ -1265,13 +1370,17 @@ finalize() {
 
 load_job() {
     l2_read_env_file "$RUN/job.env" RUN_ID STAND_ID EXPECTED_BOOT_ID USER_A USER_B BIOS_GUID \
-        SCENARIO_TIMEOUT_SECONDS UNIT_TIMEOUT_SECONDS JOB_TIMEOUT_SECONDS HOST_ADDRESS NODE_PORT PROBE_ADDRESS DNS_PROBE_ADDRESS || return 1
+        SCENARIO_TIMEOUT_SECONDS UNIT_TIMEOUT_SECONDS JOB_TIMEOUT_SECONDS HOST_ADDRESS NODE_PORT PROBE_ADDRESS DNS_PROBE_ADDRESS LAB_MARKER_ADDRESS LAB_CONTROL || return 1
     l2_valid_run_id "$RUN_ID" || { echo "invalid run id" >&2; return 1; }
     [ "$(basename -- "$RUN")" = "$RUN_ID" ] || { echo "run directory does not match the run id" >&2; return 1; }
     [[ $HOST_ADDRESS =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || { echo "invalid host address" >&2; return 1; }
     [[ $PROBE_ADDRESS =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || { echo "invalid probe address" >&2; return 1; }
     [[ $DNS_PROBE_ADDRESS =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || { echo "invalid DNS probe address" >&2; return 1; }
     [[ $NODE_PORT =~ ^[0-9]{1,5}$ ]] || { echo "invalid node port" >&2; return 1; }
+    [ -z "$LAB_MARKER_ADDRESS" ] || [[ $LAB_MARKER_ADDRESS =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}:[0-9]{1,5}$ ]] ||
+        { echo "invalid lab marker address" >&2; return 1; }
+    [ -z "$LAB_CONTROL" ] || { [ "$LAB_CONTROL" = stop-helper ] && [ -n "$LAB_MARKER_ADDRESS" ]; } ||
+        { echo "invalid lab control" >&2; return 1; }
 }
 
 load_job || exit 65
@@ -1303,6 +1412,7 @@ if preflight_ok; then
         scenario_protection_reported
         scenario_engine
         scenario_kill_switch
+        scenario_specific_route
         scenario_program_rules
         scenario_lan_on
         scenario_bypass_warning

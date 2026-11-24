@@ -4,13 +4,15 @@
 # Never run it as root and never cross-build from Windows: the stand accepts only
 # an x86-64 ELF made here, together with provenance.json describing the build.
 #
-#   tools/vm/linux/build-artifacts.sh [--l3 | --proxy | --deb] OUTPUT_DIR
+#   tools/vm/linux/build-artifacts.sh [--l3 | --l4 | --proxy | --deb | --reboot-smoke] OUTPUT_DIR
 #
 # Without an option: the L2 artifacts (transport fixture and unit test binaries). With
 # --l3: the release helper and CLI that the L3 matrix installs as the real service.
+# --l4: the same programs as --l3, recorded as the build of the L4 job (the job that reboots the guest twice).
 # --proxy: the same, and the tool that changes the desktop's proxy as the GUI does.
 # With --deb: the package twice, as the new version and as an older one to upgrade
-# from; it needs what installer/linux/build-deb.sh needs.
+# from; it needs what installer/linux/build-deb.sh needs. With --reboot-smoke: no program at all, only the record
+# of the build (provenance.json) for the job that reboots the guest once.
 # OUTPUT_DIR must not exist yet. Needs Rust 1.99.1 (the project toolchain) and a C linker.
 # CARGO_TARGET_DIR may point at a Linux filesystem directory to keep the build fast.
 
@@ -21,15 +23,21 @@ stage=l2
 if [ "${1-}" = --l3 ]; then
     stage=l3
     shift
+elif [ "${1-}" = --l4 ]; then
+    stage=l4
+    shift
 elif [ "${1-}" = --proxy ]; then
     stage=proxy
     shift
 elif [ "${1-}" = --deb ]; then
     stage=l5
     shift
+elif [ "${1-}" = --reboot-smoke ]; then
+    stage=reboot-smoke
+    shift
 fi
 out=${1-}
-[ -n "$out" ] || { echo "usage: build-artifacts.sh [--l3 | --proxy | --deb] OUTPUT_DIR" >&2; exit 64; }
+[ -n "$out" ] || { echo "usage: build-artifacts.sh [--l3 | --l4 | --proxy | --deb | --reboot-smoke] OUTPUT_DIR" >&2; exit 64; }
 [ "$(id -u)" -ne 0 ] || { echo "build-artifacts.sh: do not build as root" >&2; exit 1; }
 if [ "$(uname -s)" != Linux ] || [ "$(uname -m)" != x86_64 ]; then
     echo "build-artifacts.sh: needs an x86_64 Linux host" >&2
@@ -76,7 +84,10 @@ provenance() {
 
 target_dir=$(cargo +1.99.1 metadata --locked --format-version 1 --no-deps | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')
 
-if [ "$stage" = l5 ]; then
+if [ "$stage" = reboot-smoke ]; then
+    mkdir -p -- "$out"
+    provenance >"$out/provenance.json"
+elif [ "$stage" = l5 ]; then
     # build_deb DESTINATION ARGS...: one package, under the name the stand expects.
     build_deb() {
         local destination=$1 built
@@ -103,7 +114,7 @@ elif [ "$stage" = proxy ]; then
     install -m 0755 -- "$target_dir/release/rosetun" "$out/rosetun"
     install -m 0755 -- "$target_dir/release/examples/desktop_proxy" "$out/desktop_proxy"
     provenance rosetun-helper-privileged rosetun desktop_proxy >"$out/provenance.json"
-elif [ "$stage" = l3 ]; then
+elif [ "$stage" = l3 ] || [ "$stage" = l4 ]; then
     cargo +1.99.1 build -q --locked --release -p rosetun-helper-privileged -p rosetun
     for name in rosetun-helper-privileged rosetun; do
         [ -f "$target_dir/release/$name" ] || { echo "build-artifacts.sh: a build product was not found" >&2; exit 1; }

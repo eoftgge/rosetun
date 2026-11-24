@@ -523,7 +523,7 @@ Assert-That 'the proxy scenarios cover the strict kill switch, sharing, Lockdown
 # --- L3: scenarios, requests, the stage's composition
 $l3 = @(Get-RosetunLinuxScenarios -Stage L3)
 Assert-That 'the L3 scenarios load' ($l3.Count -ge 15)
-Assert-That 'every runnable L3 scenario but the IPv6 neighbor is required' ((@($l3 | Where-Object { -not $_.Required -and $_.Evidence -ne 'not-run' } | ForEach-Object { $_.Id }) -join ',') -ceq 'ipv6.neighbor')
+Assert-That 'every runnable L3 scenario but the specific route and the IPv6 neighbor is required' ((@($l3 | Where-Object { -not $_.Required -and $_.Evidence -ne 'not-run' } | ForEach-Object { $_.Id }) -join ',') -ceq 'route.specific-bypass,ipv6.neighbor')
 Assert-That 'two-hop L3 observations remain explicitly unrun' (@($l3 | Where-Object { $_.Id -like 'two-hop.*' -and ($_.Required -or $_.Evidence -ne 'not-run') }).Count -eq 0)
 Assert-That 'TUIC and AnyTLS L3 rows are present and explicitly unrun' (@($l3 | Where-Object { $_.Id -in @('protocol.tuic', 'protocol.anytls') -and -not $_.Required -and $_.Evidence -eq 'not-run' }).Count -eq 2)
 Assert-That 'the L3 list covers the crash and the stop' (@($l3 | Where-Object { $_.Id -in @('crash.helper-killed', 'crash.open-network', 'stop.removes-table') }).Count -eq 3)
@@ -638,6 +638,20 @@ $probe = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\guest\run-l4.sh')
 Assert-That 'the check catches the mistake it is for' ('timeout --kill-after=3 60 as_user /usr/bin/x' -match '\btimeout(?: --?[a-z-]+(?:=\S+)?)* +\S+ +([a-z_][a-z0-9_]*)(?=\s)' -and $Matches[1] -eq 'as_user')
 $unguarded = [regex]::Matches($probe, '(?m)^\s*scope_probe [a-z-]+\s*$').Count
 Assert-That 'every L4 scope probe stops on a scope that did not run' ($unguarded -eq 0) "$unguarded unguarded"
+
+# --- the Hyper-V path of L4 is as it was: it names no lab key, the job's defaults are empty, nothing is sent
+foreach ($name in @('RosetunLinuxVm.psm1', 'Invoke-LinuxL2Matrix.ps1')) {
+    $stand = Get-Content -LiteralPath (Join-Path $PSScriptRoot "..\$name") -Raw
+    Assert-That "$name writes no lab key into a job.env" ($stand -notmatch 'LAB_(MARKER_ADDRESS|CONTROL|POLLER_KEY)') $name
+}
+foreach ($key in @('LAB_MARKER_ADDRESS', 'LAB_CONTROL', 'LAB_POLLER_KEY')) {
+    Assert-That "run-l4.sh has no $key unless job.env names it" ($probe -match "(?m)^$key=''$")
+}
+Assert-That 'run-l4.sh notes the local network and installs the poller key only for a lab' (
+    $probe -match [regex]::Escape('[ -z "$LAB_MARKER_ADDRESS" ] || date +%s%3N >"$STATE/lan-on-ms"') -and
+    $probe -match [regex]::Escape('[ -n "$LAB_POLLER_KEY" ] || return 0'))
+Assert-That 'run-l4.sh turns the control on only when asked' (
+    ([regex]::Matches($probe, [regex]::Escape('[ "$LAB_CONTROL" != stop-helper ] ||'))).Count -eq 2)
 
 Write-Host "Test-LinuxHarness: $script:Passed passed, $script:Failed failed"
 if ($script:Failed -gt 0) { exit 1 }

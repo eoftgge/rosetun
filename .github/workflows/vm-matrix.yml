@@ -1,0 +1,62 @@
+name: VM matrix tests
+
+on:
+  push:
+    branches: [master, dev]
+    paths:
+      - 'tools/vm/**'
+      - 'packaging/linux/**'
+      - '.github/workflows/vm-matrix.yml'
+  pull_request:
+    paths:
+      - 'tools/vm/**'
+      - 'packaging/linux/**'
+      - '.github/workflows/vm-matrix.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vm-matrix-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  offline:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          # 3.13 is the stand's Python. On Windows it stays 3.11, the floor of the tools: there 3.13 reports
+          # st_ctime differently for an open file and for a path, and the Linux-only file identity checks
+          # (linux_l2._hash, images.verify_bytes) compare both.
+          python-version: ${{ matrix.os == 'windows-2025' && '3.11' || '3.13' }}
+      - name: Run offline VM matrix tests
+        # qemu.qmp is not installed here: tests that need it are skipped.
+        run: python -m unittest discover -s tools/vm/matrix/tests -t .
+      - name: Validate the execution examples
+        # No stand is needed, but the examples name the stand's Linux paths, which are not absolute on Windows.
+        if: runner.os == 'Linux'
+        run: |
+          python -B - <<'PY'
+          import glob
+          import tomllib
+          from tools.vm.matrix import execution, windows_smoke
+
+          paths = sorted(glob.glob('tools/vm/matrix/execution*.example.toml'))
+          assert paths, 'no execution example found'
+          for path in paths:
+              with open(path, 'rb') as stream:
+                  config = tomllib.load(stream)
+              if config['schema'].startswith('rosetun.matrix.execution.windows.'):
+                  print(path, windows_smoke.validate(config)['suite'])
+              else:
+                  print(path, execution.suite_of(execution.validate(config)))
+          PY

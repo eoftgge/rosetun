@@ -1,0 +1,43 @@
+schema = "rosetun.matrix.lab.v2"
+state_directory = "/srv/rosetun-lab-state"
+stand_id = "isolated-lab-example"
+
+[qemu]
+schema = "rosetun.matrix.qemu.v1"
+executable = "/opt/qemu-10.0.13/bin/qemu-system-x86_64"
+image_executable = "/opt/qemu-10.0.13/bin/qemu-img"
+bios = "/opt/qemu-10.0.13/share/qemu/bios.bin"
+machine = "pc-i440fx-10.0"
+accelerator = "kvm"
+cpu = "host"
+memory_mib = 1024
+vcpus = 1
+qga = true
+
+[test_image]
+schema = "rosetun.matrix.image.v1"
+identifier = "prepared-lab-test-v5"
+guest_os = "linux"
+architecture = "x86_64"
+path = "/srv/images/lab-test-v5.qcow2"
+size_bytes = 1
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+format = "qcow2"
+profile = "bios-i440fx-v1"
+
+[lab_image]
+schema = "rosetun.matrix.image.v1"
+identifier = "prepared-lab-router-v5"
+guest_os = "linux"
+architecture = "x86_64"
+path = "/srv/images/lab-router-v5.qcow2"
+size_bytes = 1
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+format = "qcow2"
+profile = "bios-i440fx-v1"
+
+# The same sing-box binary is installed in both images; the certificate is the lab CA's, as installed on the test image.
+[tunnel]
+sing_box_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+ca_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+node_port = 8388

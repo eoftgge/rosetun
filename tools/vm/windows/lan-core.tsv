@@ -1,0 +1,73 @@
+id	required	evidence	group	detail	title
+baseline.egress	yes	guest-and-wire	baseline	lan-core	direct egress works before connect
+baseline.dns	yes	guest-and-wire	baseline	lan-core	direct UDP DNS works before connect
+lan-on.connect	yes	guest-and-wire	lan-on	lan-core	lan-on connects
+lan-on.log	yes	guest	lan-on	lan-core	service opens guest network without VPN server exclusion
+lan-on.peer-route	yes	guest	lan-on	lan-core	peer route goes through physical adapter
+lan-on.peer-tcp	yes	guest-and-wire	lan-on	lan-core	TCP to peer connects from physical address
+lan-on.peer-dns-blocked	yes	guest-and-wire	lan-on	lan-core	TCP to peer port 53 is blocked
+lan-on.mdns-physical	yes	guest-and-wire	lan-on	lan-core	mDNS on physical adapter reaches lab capture
+lan-on.ssdp-physical	yes	guest-and-wire	lan-on	lan-core	SSDP on physical adapter reaches lab capture
+lan-on.route-multicast-kept	yes	guest	lan-on	lan-core	rosetun0 keeps 224.0.0.0/4
+lan-on.route-broadcast-absent	yes	guest	lan-on	lan-core	rosetun0 drops 255.255.255.255/32
+lan-on.route-broadcast-physical	yes	guest	lan-on	lan-core	Find-NetRoute sends limited broadcast through physical adapter
+lan-on.socket-broadcast-physical	yes	guest	lan-on	lan-core	unbound limited broadcast socket picks physical address
+lan-on.broadcast-reaches	yes	guest-and-wire	lan-on	lan-core	limited broadcast reaches lab capture
+lan-on.behind-router-vpn	yes	guest-and-wire	lan-on	lan-core	private address behind router goes through VPN without private networks
+lan-on.long-session	yes	guest-and-wire	lan-on	lan-core	long TCP session to peer stays alive outside tunnel
+address-change.connect	yes	guest-and-wire	address-change	lan-core	lan-on connects for address change
+address-change.quiet-before	yes	guest	address-change	lan-core	service settles before adding extra network
+address-change.follows-add	yes	guest-and-wire	address-change	lan-core	service follows added public network
+address-change.connected-after-add	yes	guest	address-change	lan-core	session remains Connected after adding extra network
+address-change.log-hides-network	yes	guest	address-change	lan-core	helper log hides extra public CIDR
+address-change.extra-route-physical	yes	guest	address-change	lan-core	extra network peer routes through physical adapter
+address-change.quiet-after-add	yes	guest	address-change	lan-core	service settles on extra network
+address-change.follows-remove	yes	guest	address-change	lan-core	service follows removal of extra network
+address-change.connected-after-remove	yes	guest	address-change	lan-core	session remains Connected after removing extra network
+address-change.extra-route-tunnel	yes	guest	address-change	lan-core	removed extra network routes back into tunnel
+address-change.route-multicast-kept	yes	guest	address-change	lan-core	rosetun0 keeps 224.0.0.0/4 after address change
+address-change.route-broadcast-absent	yes	guest	address-change	lan-core	rosetun0 keeps 255.255.255.255/32 absent after address change
+address-change.route-broadcast-physical	yes	guest	address-change	lan-core	Find-NetRoute keeps limited broadcast on physical adapter after address change
+address-change.socket-broadcast-physical	yes	guest	address-change	lan-core	unbound limited broadcast socket keeps physical address after address change
+lan-rule.connect	yes	guest-and-wire	lan-rule	lan-core	lan-rule connects
+lan-rule.peer-direct	yes	guest-and-wire	lan-rule	lan-core	LAN segment overrides proxy user rule for peer
+lan-private.connect	yes	guest-and-wire	lan-private	lan-core	lan-private connects
+lan-private.behind-router-direct	yes	guest-and-wire	lan-private	lan-core	private address behind router goes direct with private networks
+lan-off.connect	yes	guest-and-wire	lan-off	lan-core	lan-off connects
+lan-off.peer-tcp-blocked	yes	guest-and-wire	lan-off	lan-core	TCP to peer does not leave physical adapter when LAN is off
+lan-off.mdns-physical-blocked	yes	guest-and-wire	lan-off	lan-core	mDNS on physical adapter does not reach wire when LAN is off
+lan-off.ssdp-physical-blocked	yes	guest-and-wire	lan-off	lan-core	SSDP on physical adapter does not reach wire when LAN is off
+lan-off.direct-egress-blocked	yes	guest-and-wire	lan-off	lan-core	direct egress stays blocked when LAN is off
+lan-off.route-multicast-kept	yes	guest	lan-off	lan-core	rosetun0 keeps 224.0.0.0/4 when LAN is off
+lan-off.route-broadcast-present	yes	guest	lan-off	lan-core	rosetun0 keeps 255.255.255.255/32 when LAN is off
+lan-off.socket-broadcast-tunnel	yes	guest	lan-off	lan-core	unbound limited broadcast socket takes tunnel address when LAN is off
+lan-off.mdns-routed-blocked	yes	guest-and-wire	lan-off	lan-core	routed mDNS does not reach wire when LAN is off
+lan-off.ssdp-routed-blocked	yes	guest-and-wire	lan-off	lan-core	routed SSDP does not reach wire when LAN is off
+lan-off.broadcast-routed-blocked	yes	guest-and-wire	lan-off	lan-core	routed limited broadcast does not reach wire when LAN is off
+switch.lan-on-connect	yes	guest-and-wire	switch	lan-core	lan-on connects before apply test
+switch.lan-on-broadcast-route	yes	guest	switch	lan-core	broadcast route stays on physical adapter with lan-on
+switch.apply-lan-off-refused	yes	guest	switch	lan-core	applying lan-off to running lan-on session is refused
+switch.after-refusal-broadcast-route	yes	guest	switch	lan-core	broadcast route remains on physical adapter after refused apply
+switch.lan-off-connect	yes	guest-and-wire	switch	lan-core	lan-off connects after switch
+switch.lan-off-broadcast-route	yes	guest	switch	lan-core	broadcast route returns to tunnel with lan-off
+switch.lan-on-reconnect	yes	guest-and-wire	switch	lan-core	lan-on reconnects after lan-off
+switch.lan-on-reconnect-broadcast-route	yes	guest	switch	lan-core	broadcast route moves back to physical adapter after reconnect
+switch.broadcast-reaches-again	yes	guest-and-wire	switch	lan-core	limited broadcast reaches lab capture again after reconnect
+lan-server.connect	yes	guest-and-wire	lan-server	lan-core	lan-server connects with VPN server in guest network
+lan-server.log	yes	guest	lan-server	lan-core	service leaves out only the VPN server address
+lan-server.peer-route	yes	guest	lan-server	lan-core	another LAN peer still routes through physical adapter
+lan-server.peer-tcp	yes	guest-and-wire	lan-server	lan-core	TCP to another LAN peer connects from physical address
+lan-server.peer-dns-blocked	yes	guest-and-wire	lan-server	lan-core	TCP to another LAN peer port 53 is blocked
+lan-server.server-route	yes	guest	lan-server	lan-core	VPN server address is routed into tunnel
+lan-server.server-direct-blocked	yes	guest-and-wire	lan-server	lan-core	direct physical TCP to VPN server listener is blocked
+lan-server.server-through-tunnel	yes	guest-and-wire	lan-server	lan-core	listener on VPN server host answers through tunnel
+lan-server.tunnel-egress	yes	guest-and-wire	lan-server	lan-core	engine reaches HTTPS target through in-network VPN server
+lan-server-private.connect	yes	guest-and-wire	lan-server-private	lan-core	lan-server-private connects
+lan-server-private.server-direct-blocked	yes	guest-and-wire	lan-server-private	lan-core	direct physical TCP to VPN server stays blocked with private networks
+lan-server-private.server-route	yes	guest	lan-server-private	lan-core	VPN server address stays routed into tunnel with private networks
+lan-server-private.server-through-tunnel	yes	guest-and-wire	lan-server-private	lan-core	listener on VPN server host still answers through tunnel
+lan-server-private.server-not-direct	yes	guest-and-wire	lan-server-private	lan-core	VPN server address connection does not route direct in engine
+lan-server-private.behind-router-direct	yes	guest-and-wire	lan-server-private	lan-core	private address behind router goes direct with in-network VPN server
+lan-server-private.tunnel-egress	yes	guest-and-wire	lan-server-private	lan-core	engine reaches HTTPS target with lan-server-private
+lan-reopen.connect	yes	guest-and-wire	lan-reopen	lan-core	lan-on connects after moving VPN server out of network
+lan-reopen.server-direct	yes	guest-and-wire	lan-reopen	lan-core	former VPN server host opens directly from physical address

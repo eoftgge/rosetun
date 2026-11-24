@@ -1,0 +1,83 @@
+schema = "rosetun.matrix.execution.v3"
+suite = "linux-l3"
+mode = "exploratory"
+platform = "linux-x86_64-kvm"
+state_directory = "/srv/rosetun-state"
+stand_id = "linux-l3-lab-example"
+xorriso = "/usr/bin/xorriso"
+content_directory = "/srv/l3-content"
+source_checkout = "/srv/l3-source"
+
+# The test machine: the prepared image of the lab (contract v5), with the importer and launcher.
+[image]
+schema = "rosetun.matrix.image.v1"
+identifier = "prepared-lab-test-v5"
+guest_os = "linux"
+architecture = "x86_64"
+path = "/srv/images/lab-test-v5.qcow2"
+# Replace both placeholders with independently verified prepared-image values.
+size_bytes = 1
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+format = "qcow2"
+profile = "bios-i440fx-v1"
+
+# One QEMU for both machines: the lab pins 10.0.13.
+[qemu]
+schema = "rosetun.matrix.qemu.v1"
+executable = "/opt/qemu-10.0.13/bin/qemu-system-x86_64"
+image_executable = "/opt/qemu-10.0.13/bin/qemu-img"
+bios = "/opt/qemu-10.0.13/share/qemu/bios.bin"
+machine = "pc-i440fx-10.0"
+accelerator = "kvm"
+cpu = "host"
+memory_mib = 2048
+vcpus = 2
+qga = true
+
+[accounts]
+user_a = "l2a"
+user_b = "l2b"
+
+[timeouts]
+scenario = 30
+unit = 180
+# A run of every scenario. The lab's capture lasts job + 300 seconds and covers the boot and the
+# import too; the controller waits job + 125 seconds before it collects. At most 1800.
+job = 900
+
+[deadlines]
+preparation = 600
+boot = 300
+import = 900
+execution = 1080
+
+[l3]
+# SHA-256 of the Linux sing-box that sits in the content directory as artifacts/sing-box.
+sing_box_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+# In the lab these are the lab's own: the node on the router side, the HTTPS target, the resolver.
+host_address = "192.0.2.1"
+node_port = 8388
+probe_address = "203.0.113.2"
+dns_probe_address = "203.0.113.53"
+
+[lab]
+# The certificates of the HTTPS target and of the DoH target, as installed on the lab image.
+https_cert_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+doh_cert_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+
+[lab.image]
+schema = "rosetun.matrix.image.v1"
+identifier = "prepared-lab-router-v5"
+guest_os = "linux"
+architecture = "x86_64"
+path = "/srv/images/lab-router-v5.qcow2"
+size_bytes = 1
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+format = "qcow2"
+profile = "bios-i440fx-v1"
+
+# As in the lab.v2 configuration; node_port must equal [l3] node_port.
+[lab.tunnel]
+sing_box_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+ca_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+node_port = 8388

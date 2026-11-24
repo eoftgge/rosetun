@@ -58,9 +58,18 @@ NAT_TABLE=rosetun-l3-nat
 
 RUN_ID='' STAND_ID='' EXPECTED_BOOT_ID='' USER_A='' USER_B='' BIOS_GUID=''
 HOST_ADDRESS='' NODE_PORT='' PROBE_ADDRESS='' DNS_PROBE_ADDRESS=''
+# ADDRESS:PORT of the lab observer's marker service. Empty (the default, and always on
+# Hyper-V) means no markers: nothing below sends a datagram or writes a file for them.
+LAB_MARKER_ADDRESS=''
+# A control of the lab (only `stop-helper`, only with a marker address; empty on Hyper-V).
+LAB_CONTROL=''
 SCENARIO_TIMEOUT_SECONDS=30 UNIT_TIMEOUT_SECONDS=180 JOB_TIMEOUT_SECONDS=1800
 EXPECTED_ARCH=x86_64
 PHYS=''
+# Only in the lab: the service shares its proxy only on a private address of a physical
+# interface, and the lab's own addresses are documentation ones. The owner approved this
+# one private address as an exception for the lab run; Hyper-V never adds it.
+LAB_SHARE_ADDRESS=192.168.77.2/24
 
 write_status() {
     printf '{"run_id":%s,"state":%s,"current":%s,"updated":%s,"boot_id":%s}\n' \
@@ -138,11 +147,14 @@ wait_state() {
     return 1
 }
 
+# The lab's window markers (lab_mark, in lib.sh) do nothing without LAB_MARKER_ADDRESS.
 connect_with() {
     local request=$1
     # A scenario that failed half-way may have left a session.
     [[ $(state_line) =~ ^Disconnected ]] || cli 60 disconnect
+    lab_mark close
     install -m 0600 -o "$(uid_of "$USER_A")" -g "$(gid_of "$USER_A")" -- "$ART/$request" "$RUN/work-$USER_A/$request"
+    lab_mark open
     cli 120 connect "$request"
     [ "$CLI_RC" -eq 0 ] || { fail_reason="connect with $request failed: $(cli_error)"; return 1; }
     wait_state '^Connected' 30
@@ -150,7 +162,8 @@ connect_with() {
 
 disconnect() {
     cli 60 disconnect
-    wait_state '^Disconnected' 30
+    wait_state '^Disconnected' 30 || return 1
+    lab_mark close
 }
 
 table_present() { "$NFT" list table inet rosetun >/dev/null 2>&1; }
@@ -445,18 +458,48 @@ phys_address() {
     ip -4 -o addr show dev "$PHYS" scope global 2>/dev/null | awk '{ print $4 }' | cut -d/ -f1 | head -n 1
 }
 
+# The lab's private address: added to the physical interface before the first session, only
+# with LAB_MARKER_ADDRESS. The service reads the private addresses at every connect, so the
+# address needs to exist only before the first shared session. The interface is kept in STATE
+# for a finalize that runs in a process of its own.
+lab_share_up() {
+    [ -n "$LAB_MARKER_ADDRESS" ] || return 0
+    printf '%s\n' "$PHYS" >"$STATE/lab-share-address"
+    ip addr add "$LAB_SHARE_ADDRESS" dev "$PHYS"
+}
+
+lab_share_present() {
+    [ -f "$STATE/lab-share-address" ] &&
+        ip -4 -o addr show dev "$(cat "$STATE/lab-share-address")" 2>/dev/null | grep -qF " ${LAB_SHARE_ADDRESS%/*}/"
+}
+
+lab_share_down() {
+    [ -f "$STATE/lab-share-address" ] || return 0
+    ip addr del "$LAB_SHARE_ADDRESS" dev "$(cat "$STATE/lab-share-address")" 2>/dev/null
+    lab_share_present && return 1
+    rm -f -- "$STATE/lab-share-address"
+}
+
+# Where sharing is looked for: the lab's private address while it is there, else the
+# physical interface's own address.
+share_address() {
+    if lab_share_present; then printf '%s' "${LAB_SHARE_ADDRESS%/*}"; else phys_address; fi
+}
+
 no_adapter() {
     [ ! -e "/sys/class/net/$TUN_NAME" ] || { fail_reason="the adapter $TUN_NAME exists in the proxy mode"; return 1; }
 }
 
+# The function that opens a session names its lab window (lab_label), so the functions
+# below are named after their windows.
 scenario_plain() {
-    plain() {
+    proxy_open() {
         connect_with request-proxy.json || return 1
         no_adapter || return 1
         ! table_present || { fail_reason="the table is there without the kill switch"; return 1; }
         expect_reached "HTTPS through the proxy" through_proxy
     }
-    check proxy.through "connected without an adapter or a table, and the proxy answered" plain
+    check proxy.through "connected without an adapter or a table, and the proxy answered" proxy_open
     around() { expect_reached "HTTPS to $PROBE_ADDRESS on $PHYS" direct_https; }
     check proxy.around-open "a request around the proxy went out by itself" around
     loopback_only() {
@@ -500,14 +543,23 @@ scenario_busy() {
     check proxy.port-busy "the connect failed naming the port, with no table" busy
 }
 
+# The positive control of the lab observer: inside the window of the strict session the service
+# stops and one direct request goes where it was refused a moment ago. The scenarios after it
+# run as they are and may fail; the observer has to see that request.
+control_stop_helper() {
+    timeout "$UNIT_TIMEOUT_SECONDS" systemctl stop rosetun-helper.service
+    direct_https >/dev/null
+}
+
 scenario_strict() {
-    connected() {
+    strict() {
         connect_with request-proxy-strict.json || return 1
         no_adapter || return 1
         table_present || { fail_reason="no table with the kill switch"; return 1; }
         expect_reached "HTTPS through the proxy" through_proxy
     }
-    check strict.through "the kill switch stood, without an adapter, and the proxy answered" connected
+    check strict.through "the kill switch stood, without an adapter, and the proxy answered" strict
+    [ "$LAB_CONTROL" != stop-helper ] || ! passed strict.through || control_stop_helper
     around() { expect_blocked "HTTPS to $PROBE_ADDRESS on $PHYS" direct_https; }
     check strict.around-blocked "a request around the proxy was refused" around
     no_lock() {
@@ -537,7 +589,7 @@ scenario_strict() {
 }
 
 scenario_mode_change() {
-    change() {
+    mode_change() {
         connect_with request-kill-switch.json || return 1
         install -m 0600 -o "$(uid_of "$USER_A")" -g "$(gid_of "$USER_A")" -- "$ART/request-proxy-strict.json" "$RUN/work-$USER_A/request-proxy-strict.json"
         cli 120 apply request-proxy-strict.json
@@ -553,13 +605,13 @@ scenario_mode_change() {
         [ -e "/sys/class/net/$TUN_NAME" ] || { fail_reason="the adapter did not come back"; return 1; }
         expect_blocked "HTTPS to $PROBE_ADDRESS on $PHYS" direct_https
     }
-    check mode.change "TUN to the proxy and back through apply, the table up throughout" change
+    check mode.change "TUN to the proxy and back through apply, the table up throughout" mode_change
 }
 
 scenario_share() {
     local own
-    own=$(phys_address)
-    shared() {
+    own=$(share_address)
+    share() {
         connect_with request-proxy-share.json || return 1
         listening_on | grep -qxF "$own" || { fail_reason="nothing listens on $own: $(listening_on | tr '\n' ' ')"; return 1; }
         rosetun_private "$own" || { fail_reason="$own is not a private address, so the check says nothing"; return 1; }
@@ -567,7 +619,7 @@ scenario_share() {
         rc=$(proxy_rc "$own")
         reached_rc "$rc" || { fail_reason="the proxy on $own did not answer (curl $rc)"; return 1; }
     }
-    check share.listens "the shared proxy listens on the physical interface's address and answers there" shared
+    check share.listens "the shared proxy listens on the physical interface's address and answers there" share
     not_on_software() {
         listening_on | grep -qxF "$PEER_HOST_ADDRESS" && { fail_reason="the proxy listens on the peer's link"; return 1; }
         listening_on | grep -qE '^(0\.0\.0\.0|::|\*)$' && { fail_reason="the proxy listens on a wildcard"; return 1; }
@@ -577,12 +629,12 @@ scenario_share() {
         blocked_rc "$rc" || { fail_reason="the peer got through (curl $rc)"; return 1; }
     }
     check share.peer-refused "a peer behind a software link does not reach the proxy" not_on_software
-    unshared() {
+    share_off() {
         connect_with request-proxy.json || return 1
         listening_on | grep -qxF "$own" && { fail_reason="the proxy still listens on $own"; return 1; }
         return 0
     }
-    check share.off "with the switch off nothing listens on the physical interface's address" unshared
+    check share.off "with the switch off nothing listens on the physical interface's address" share_off
     disconnect
 }
 
@@ -597,7 +649,10 @@ scenario_lockdown() {
         fail_reason="rosetun lockdown $*: $(printf '%s' "$CLI_OUT" | sed 's/\x1b\[[0-9;]*m//g' | tail -n 1)"
         return 1
     }
-    closed() {
+    lockdown_share() {
+        # Under Lockdown the table stays and no marker goes out, so the one window of
+        # the Lockdown scenarios opens before Lockdown goes on and closes after it is off.
+        lab_mark open
         install -m 0644 -o root -g root "$ART/rosetun-lockdown.service" "$LOCKDOWN_UNIT_FILE" &&
             systemctl daemon-reload && systemctl enable --quiet rosetun-lockdown.service ||
             { fail_reason="installing the Lockdown unit failed"; return 1; }
@@ -610,15 +665,15 @@ scenario_lockdown() {
         connect_with request-proxy-share.json || return 1
         expect_reached "HTTPS through the proxy" through_proxy || return 1
         expect_blocked "HTTPS to $PROBE_ADDRESS on $PHYS" direct_https || return 1
-        listening_on | grep -qxF "$(phys_address)" && { fail_reason="sharing is on without Lockdown's local network"; return 1; }
+        listening_on | grep -qxF "$(share_address)" && { fail_reason="sharing is on without Lockdown's local network"; return 1; }
         return 0
     }
-    check lockdown.share-closed "without its local network Lockdown keeps the proxy on loopback" closed
+    check lockdown.share-closed "without its local network Lockdown keeps the proxy on loopback" lockdown_share
     opened() {
         disconnect || return 1
         lockdown_cli on --lan on || return 1
         connect_with request-proxy-share.json || return 1
-        listening_on | grep -qxF "$(phys_address)" || { fail_reason="sharing stayed off with Lockdown's local network"; return 1; }
+        listening_on | grep -qxF "$(share_address)" || { fail_reason="sharing stayed off with Lockdown's local network"; return 1; }
         "$NFT" list table inet rosetun | grep -q 'ip saddr {' || { fail_reason="the input chain takes no private range"; return 1; }
     }
     check lockdown.share-open "with its local network the proxy is shared and the input chain takes the private ranges" opened
@@ -626,6 +681,7 @@ scenario_lockdown() {
         disconnect || return 1
         lockdown_cli off || return 1
         ! table_present || { fail_reason="the table stayed after Lockdown went off"; return 1; }
+        lab_mark close
     }
     check lockdown.off "Lockdown went off with the session" off
 }
@@ -680,6 +736,7 @@ scenario_stop() {
         connect_with request-proxy-strict.json || return 1
         timeout "$UNIT_TIMEOUT_SECONDS" systemctl stop rosetun-helper.service || { fail_reason="systemctl stop failed"; return 1; }
         ! table_present || { fail_reason="the table stays after a normal stop"; return 1; }
+        lab_mark close
         expect_reached "HTTPS to $PROBE_ADDRESS on $PHYS" direct_https
     }
     check stop.removes-table "the table went away with the stop and the direct path answered" stopped
@@ -701,6 +758,14 @@ cleanup() {
     fi
     if [ -f "$STATE/peer" ]; then
         peer_down && note "removed the peer namespace" || problem "could not remove the peer namespace $PEER_NS, its NAT table or routing rule"
+    fi
+    if [ -f "$STATE/lab-share-address-removed" ]; then
+        rm -f -- "$STATE/lab-share-address-removed"
+        note "removed the lab's private address ${LAB_SHARE_ADDRESS%/*} after the last scenario"
+    fi
+    if [ -f "$STATE/lab-share-address" ]; then
+        lab_share_down && note "removed the lab's private address ${LAB_SHARE_ADDRESS%/*}" ||
+            problem "could not remove the lab's private address $LAB_SHARE_ADDRESS"
     fi
     if [ -f "$STATE/foreign-table" ]; then
         if "$NFT" delete table inet "$FOREIGN_TABLE" 2>/dev/null || ! "$NFT" list table inet "$FOREIGN_TABLE" >/dev/null 2>&1; then
@@ -786,13 +851,17 @@ finalize() {
 
 load_job() {
     l2_read_env_file "$RUN/job.env" RUN_ID STAND_ID EXPECTED_BOOT_ID USER_A USER_B BIOS_GUID \
-        SCENARIO_TIMEOUT_SECONDS UNIT_TIMEOUT_SECONDS JOB_TIMEOUT_SECONDS HOST_ADDRESS NODE_PORT PROBE_ADDRESS DNS_PROBE_ADDRESS || return 1
+        SCENARIO_TIMEOUT_SECONDS UNIT_TIMEOUT_SECONDS JOB_TIMEOUT_SECONDS HOST_ADDRESS NODE_PORT PROBE_ADDRESS DNS_PROBE_ADDRESS LAB_MARKER_ADDRESS LAB_CONTROL || return 1
     l2_valid_run_id "$RUN_ID" || { echo "invalid run id" >&2; return 1; }
     [ "$(basename -- "$RUN")" = "$RUN_ID" ] || { echo "run directory does not match the run id" >&2; return 1; }
     [[ $HOST_ADDRESS =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || { echo "invalid host address" >&2; return 1; }
     [[ $PROBE_ADDRESS =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || { echo "invalid probe address" >&2; return 1; }
     [[ $DNS_PROBE_ADDRESS =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || { echo "invalid DNS probe address" >&2; return 1; }
     [[ $NODE_PORT =~ ^[0-9]{1,5}$ ]] || { echo "invalid node port" >&2; return 1; }
+    [ -z "$LAB_MARKER_ADDRESS" ] || [[ $LAB_MARKER_ADDRESS =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}:[0-9]{1,5}$ ]] ||
+        { echo "invalid lab marker address" >&2; return 1; }
+    [ -z "$LAB_CONTROL" ] || { [ "$LAB_CONTROL" = stop-helper ] && [ -n "$LAB_MARKER_ADDRESS" ]; } ||
+        { echo "invalid lab control" >&2; return 1; }
 }
 
 load_job || exit 65
@@ -820,6 +889,7 @@ scenario_preflight
 if preflight_ok; then
     scenario_install
     if passed install.service; then
+        lab_share_up
         scenario_plain
         scenario_busy
         scenario_strict
@@ -828,6 +898,9 @@ if preflight_ok; then
         scenario_lockdown
         scenario_desktop
         scenario_stop
+        if [ -f "$STATE/lab-share-address" ] && lab_share_down; then
+            : >"$STATE/lab-share-address-removed"
+        fi
     fi
     skip_rest "an earlier step failed; see the first FAIL"
 else

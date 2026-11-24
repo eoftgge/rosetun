@@ -57,9 +57,20 @@ L5_START_REQUIRED=(guest/launch.sh guest/lib.sh guest/run-l5.sh guest/start.sh s
     artifacts/rosetun-old.deb artifacts/rosetun-new.deb artifacts/request-kill-switch.json
     artifacts/request-lan.json artifacts/request-dns-lock.json artifacts/provenance.json)
 
+reboot_smoke_start_path_allowed() {
+    [[ $1 =~ ^(guest/(launch|lib|run-reboot-smoke|start)\.sh|scenarios-reboot-smoke\.tsv|job\.env|artifacts/provenance\.json)$ ]]
+}
+REBOOT_SMOKE_START_REQUIRED=(guest/launch.sh guest/lib.sh guest/run-reboot-smoke.sh guest/start.sh
+    scenarios-reboot-smoke.tsv job.env artifacts/provenance.json)
+
 l2_start_root_only() {
     [ ! -L "$1" ] && [ "$(stat -c %u -- "$1")" -eq 0 ] && [ $((0$(stat -c %a -- "$1") & 022)) -eq 0 ]
 }
+
+smoke_start_path_allowed() {
+    [[ $1 =~ ^(guest/(launch|lib|run-smoke|start)\.sh|job\.env)$ ]]
+}
+SMOKE_START_REQUIRED=(guest/launch.sh guest/lib.sh guest/run-smoke.sh guest/start.sh job.env)
 
 l2_start_main() {
     [ "$(id -u)" -eq 0 ] || die "run it through the launcher with sudo"
@@ -72,22 +83,29 @@ l2_start_main() {
         die "start.sh runs only from the run directory the launcher filled"
     [ -d "$BASE" ] && l2_start_root_only "$BASE" || die "$BASE is not a root-owned directory without group or other write"
     local dir
-    for dir in "$run" "$run/guest" "$run/artifacts"; do
+    for dir in "$run" "$run/guest"; do
         [ -d "$dir" ] && l2_start_root_only "$dir" || die "$dir is not a root-owned directory without group or other write"
     done
     [ -f "$run/manifest.sha256" ] && l2_start_root_only "$run/manifest.sha256" || die "the run's manifest is missing or not root-owned"
     [ "$(sha256sum -- "$run/manifest.sha256" | cut -d' ' -f1)" = "$manifest_hash" ] || die "the run's manifest is not the one the host computed"
 
-    # A stage that carries the L3, L4 or L5 job is that stage and must hold only its files.
+    # A stage that carries the L3, L4, L5 or reboot smoke job is that stage and must hold only its files.
     local stage=l2 allowed=l2_start_path_allowed required=("${L2_START_REQUIRED[@]}")
-    if grep -q '  guest/run-l3\.sh$' "$run/manifest.sha256"; then
+    if grep -q '  guest/run-smoke\.sh$' "$run/manifest.sha256"; then
+        stage=smoke allowed=smoke_start_path_allowed required=("${SMOKE_START_REQUIRED[@]}")
+    elif grep -q '  guest/run-l3\.sh$' "$run/manifest.sha256"; then
         stage=l3 allowed=l3_start_path_allowed required=("${L3_START_REQUIRED[@]}")
     elif grep -q '  guest/run-l4\.sh$' "$run/manifest.sha256"; then
         stage=l4 allowed=l4_start_path_allowed required=("${L4_START_REQUIRED[@]}")
     elif grep -q '  guest/run-l5\.sh$' "$run/manifest.sha256"; then
         stage=l5 allowed=l5_start_path_allowed required=("${L5_START_REQUIRED[@]}")
+    elif grep -q '  guest/run-reboot-smoke\.sh$' "$run/manifest.sha256"; then
+        stage=reboot-smoke allowed=reboot_smoke_start_path_allowed required=("${REBOOT_SMOKE_START_REQUIRED[@]}")
     elif grep -q '  guest/run-proxy\.sh$' "$run/manifest.sha256"; then
         stage=proxy allowed=proxy_start_path_allowed required=("${PROXY_START_REQUIRED[@]}")
+    fi
+    if [ "$stage" != smoke ]; then
+        [ -d "$run/artifacts" ] && l2_start_root_only "$run/artifacts" || die "unsafe artifacts directory"
     fi
     local line path paths=()
     while IFS= read -r line; do
@@ -107,7 +125,27 @@ l2_start_main() {
     expected=$(printf '%s\n' "${paths[@]}" | LC_ALL=C sort)
     [ "$found" = "$expected" ] || die "the run directory holds files the manifest does not list"
     found=$(cd -- "$run" && find . -mindepth 1 -type d -printf '%P\n' | LC_ALL=C sort | tr '\n' ' ')
-    [ "$found" = "artifacts guest " ] || die "the run directory holds unexpected folders: $found"
+    if [ "$stage" = smoke ]; then
+        [ "$found" = "guest " ] || die "unexpected smoke folders"
+    else
+        [ "$found" = "artifacts guest " ] || die "the run directory holds unexpected folders: $found"
+    fi
+
+    if [ "$stage" = smoke ]; then
+        . "$run/guest/lib.sh"
+        . "$run/guest/run-smoke.sh"
+        smoke_validate "$run" "$manifest_hash" || die "invalid smoke identity or inputs"
+        install -d -m 0700 -- "$run/report" || die "cannot create smoke report"
+        sync -- "$run" || die "cannot sync smoke run"
+        local smoke_job="$run/guest/run-smoke.sh"
+        systemd-run --quiet --collect --unit="rosetun-l2-$run_id" \
+            --property=KillMode=control-group --property=TimeoutStopSec=5 \
+            --property=RuntimeMaxSec=45 --property=LimitFSIZE=8192 \
+            --property=StandardOutput=null --property=StandardError=null \
+            --property="ExecStopPost=/bin/bash $smoke_job finalize $run $manifest_hash" \
+            /bin/bash "$smoke_job" run "$run" "$manifest_hash" || die "systemd-run failed"
+        return
+    fi
 
     # One stand run at a time, and only on a machine that has no Rosetun service.
     if systemctl list-units --all --no-legend 'rosetun-l2-*' 2>/dev/null | grep -q 'running\|activating'; then
@@ -122,7 +160,11 @@ l2_start_main() {
     RUN_ID='' JOB_TIMEOUT_SECONDS=900
     local keys=(RUN_ID STAND_ID EXPECTED_BOOT_ID USER_A USER_B BIOS_GUID
         SCENARIO_TIMEOUT_SECONDS UNIT_TIMEOUT_SECONDS JOB_TIMEOUT_SECONDS)
-    [ "$stage" = l2 ] || keys+=(HOST_ADDRESS NODE_PORT PROBE_ADDRESS DNS_PROBE_ADDRESS)
+    case $stage in l2 | reboot-smoke) ;; *) keys+=(HOST_ADDRESS NODE_PORT PROBE_ADDRESS DNS_PROBE_ADDRESS) ;; esac
+    # The lab observer's marker service; absent from every job.env of the Hyper-V matrix.
+    case $stage in l3 | proxy | l5 | l4) keys+=(LAB_MARKER_ADDRESS LAB_CONTROL) ;; esac
+    # The public half of the lab's one-time SSH poller key, for L4 alone.
+    [ "$stage" != l4 ] || keys+=(LAB_POLLER_KEY)
     l2_read_env_file "$run/job.env" "${keys[@]}" || die "job.env is not valid"
     [ "$RUN_ID" = "$run_id" ] || die "job.env belongs to another run"
     [[ $JOB_TIMEOUT_SECONDS =~ ^[0-9]{2,5}$ ]] || die "invalid job time limit"

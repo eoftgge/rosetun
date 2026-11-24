@@ -1,0 +1,41 @@
+schema = "rosetun.matrix.execution.windows.v1"
+suite = "windows-reboot-smoke"
+mode = "exploratory"
+platform = "linux-x86_64-kvm"
+# A state directory of its own: a diagnostic run is not a qualification and shares no stand with one. The stand's
+# record of the disk's digest lives in it too (image-digests/), so the disk is hashed in full only the first time.
+state_directory = "/srv/rosetun-state-windows"
+stand_id = "windows-reboot-smoke-example"
+# The image.json the image build of stage 9a wrote; the controller reads it strictly and hashes the disk, the
+# firmware variables and the TPM files it names. Its `qualified` must be false, and it is.
+image_descriptor = "/srv/rosetun-images/windows-11-26h2-pro-v1/image.json"
+
+[qemu]
+schema = "rosetun.matrix.qemu.v1"
+executable = "/opt/qemu-10.0.13/bin/qemu-system-x86_64"
+image_executable = "/opt/qemu-10.0.13/bin/qemu-img"
+# The firmware code of the image, the same file the descriptor names (uefi.code.path).
+bios = "/srv/rosetun-images/firmware/OVMF_CODE.fd"
+machine = "q35"
+accelerator = "kvm"
+cpu = "host"
+# Memory and vCPUs of the image's devices, as its descriptor says.
+memory_mib = 4096
+vcpus = 4
+qga = true
+swtpm = "/usr/bin/swtpm"
+
+[smoke]
+# The agent of a Windows guest answered 28 to 78 seconds after QEMU started in stages 9a and 9b, and its first
+# PowerShell takes some seconds more: 300 is the most the controller allows for the first boot.
+agent_wait_seconds = 300
+# From the request to restart to the RESET that QEMU reports: Windows stops its services first.
+reset_wait_seconds = 180
+# From the RESET to the agent of the new boot answering with its boot identity.
+reboot_wait_seconds = 300
+# How long the guest may take to shut down after the ACPI power-down request.
+shutdown_wait_seconds = 240
+
+[deadlines]
+# Preparation hashes the whole disk of the image the first time and only checks its identity afterwards.
+preparation = 900

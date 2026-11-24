@@ -1,0 +1,133 @@
+id	required	evidence	group	detail	title
+baseline.direct-egress-works-before-connect	yes	guest-and-wire	baseline	failure-core	direct egress works before connect
+baseline.direct-dns-works-before-connect	yes	guest-and-wire	baseline	failure-core	direct DNS works before connect
+baseline.direct-tcp-dns-works-before-connect	yes	guest-and-wire	baseline	failure-core	direct TCP DNS works before connect
+baseline.ipv6-to-the-host-works-before-connect	yes	guest-and-wire	baseline	failure-core	IPv6 to the host works before connect
+baseline.lan-listener-is-reachable-before-connect	yes	guest	baseline	failure-core	LAN listener is reachable before connect
+no-network.failed-with-no-network-within-10-s	yes	guest	no network	failure-core	Failed with no network within 10 s
+no-network.no-wfp-filters-were-installed	yes	guest	no network	failure-core	no WFP filters were installed
+no-network.no-tun-adapter-was-created	yes	guest	no network	failure-core	no TUN adapter was created
+no-network.engine-did-not-start	yes	guest	no network	failure-core	engine did not start
+no-network.physical-route-returns-after-adapter-enable	yes	guest	no network	failure-core	physical route returns after adapter enable
+connect.example-com-is-in-the-dns-cache-before-connect	yes	guest	connect	failure-core	example.com is in the DNS cache before connect
+connect.state-is-connected	yes	guest	connect	failure-core	state is Connected
+connect.connecting-flushes-the-dns-cache	yes	guest	connect	failure-core	connecting flushes the DNS cache
+connect.tunnel-carries-traffic-within-5-s-dns-included	yes	guest-and-wire	connect	failure-core	tunnel carries traffic within 5 s, DNS included
+connect.direct-egress-is-blocked	yes	guest-and-wire	connect	failure-core	direct egress is blocked
+connect.ipv6-outside-the-tunnel-is-blocked	yes	guest-and-wire	connect	failure-core	IPv6 outside the tunnel is blocked
+connect.server-check-works-while-connected	yes	guest	connect	failure-core	server check works while connected
+connect.tunnel-delay-works	yes	guest	connect	failure-core	tunnel delay works
+connect.full-and-repeated-delay-both-work	yes	guest	connect	failure-core	full and repeated delay both work
+connect.udp-reaches-the-internet-through-the-node-ntp	yes	guest	connect	failure-core	UDP reaches the internet through the node (NTP)
+no-network.connect-succeeds-after-the-route-returns	yes	guest	no network	failure-core	connect succeeds after the route returns
+no-network.direct-egress-is-blocked-after-the-route-returns	yes	guest-and-wire	no network	failure-core	direct egress is blocked after the route returns
+no-network-session.auto-reconnect-request-is-connected	yes	guest	no network session	failure-core	auto-reconnect request is Connected
+no-network-session.direct-egress-is-blocked-before-network-loss	yes	guest-and-wire	no network session	failure-core	direct egress is blocked before network loss
+no-network-session.status-reports-no-network-while-waiting	yes	guest	no network session	failure-core	status reports no network while waiting
+no-network-session.wfp-filters-stay-installed	yes	guest	no network session	failure-core	WFP filters stay installed
+no-network-session.physical-route-returns	yes	guest	no network session	failure-core	physical route returns
+no-network-session.reconnected-within-60-s-of-adapter-enable	yes	guest	no network session	failure-core	reconnected within 60 s of adapter enable
+no-network-session.direct-egress-stays-blocked-after-recovery	yes	guest-and-wire	no network session	failure-core	direct egress stays blocked after recovery
+no-network-session.no-direct-leak-through-loss-and-recovery	yes	guest-and-wire	no network session	failure-core	no direct leak through loss and recovery
+no-network-session.base-request-is-restored	yes	guest	no network session	failure-core	base request is restored
+apply-rules.apply-succeeds	yes	guest	apply rules	failure-core	apply succeeds
+apply-rules.state-is-connected	yes	guest	apply rules	failure-core	state is Connected
+apply-rules.node-is-unchanged	yes	guest	apply rules	failure-core	node is unchanged
+apply-rules.tunnel-carries-traffic	yes	guest-and-wire	apply rules	failure-core	tunnel carries traffic
+apply-rules.direct-egress-is-blocked	yes	guest-and-wire	apply rules	failure-core	direct egress is blocked
+apply-rules.ipv6-outside-the-tunnel-is-blocked	yes	guest-and-wire	apply rules	failure-core	IPv6 outside the tunnel is blocked
+reconnect.reconnect-succeeds	yes	guest	reconnect	failure-core	reconnect succeeds
+reconnect.state-is-connected	yes	guest	reconnect	failure-core	state is Connected
+reconnect.wfp-filters-stay-installed	yes	guest	reconnect	failure-core	WFP filters stay installed
+reconnect.direct-egress-is-blocked	yes	guest-and-wire	reconnect	failure-core	direct egress is blocked
+reconnect.ipv6-outside-the-tunnel-is-blocked	yes	guest-and-wire	reconnect	failure-core	IPv6 outside the tunnel is blocked
+reconnect.no-direct-leak-through-the-restart	yes	guest-and-wire	reconnect	failure-core	no direct leak through the restart
+reconnect.node-is-unchanged	yes	guest	reconnect	failure-core	node is unchanged
+reconnect.tunnel-carries-traffic	yes	guest-and-wire	reconnect	failure-core	tunnel carries traffic
+apply-unreachable.apply-fails-within-60-s	yes	guest	apply unreachable	failure-core	apply fails within 60 s
+apply-unreachable.state-is-connected	yes	guest	apply unreachable	failure-core	state is Connected
+apply-unreachable.previous-node-is-reported	yes	guest	apply unreachable	failure-core	previous node is reported
+apply-unreachable.tunnel-carries-traffic	yes	guest-and-wire	apply unreachable	failure-core	tunnel carries traffic
+apply-unreachable.direct-egress-is-blocked	yes	guest-and-wire	apply unreachable	failure-core	direct egress is blocked
+apply-protection.apply-fails	yes	guest	apply protection	failure-core	apply fails
+apply-protection.state-is-connected	yes	guest	apply protection	failure-core	state is Connected
+apply-protection.direct-egress-stays-blocked	yes	guest-and-wire	apply protection	failure-core	direct egress stays blocked
+temporary.apply-succeeds	yes	guest	temporary	failure-core	apply succeeds
+temporary.state-is-connected	yes	guest	temporary	failure-core	state is Connected
+temporary.one-rule-is-reported	yes	guest	temporary	failure-core	one rule is reported
+temporary.rule-is-returned	yes	guest	temporary	failure-core	rule is returned
+temporary.domain-goes-direct	yes	guest-and-wire	temporary	failure-core	domain goes direct
+temporary.unmatched-domain-is-blocked	yes	guest-and-wire	temporary	failure-core	unmatched domain is blocked
+temporary.physical-egress-stays-blocked	yes	guest-and-wire	temporary	failure-core	physical egress stays blocked
+temporary-restart.state-returns-to-connected	yes	guest	temporary restart	failure-core	state returns to Connected
+temporary-restart.one-rule-is-reported	yes	guest	temporary restart	failure-core	one rule is reported
+temporary-restart.domain-still-goes-direct	yes	guest-and-wire	temporary restart	failure-core	domain still goes direct
+temporary-restart.physical-egress-stays-blocked	yes	guest-and-wire	temporary restart	failure-core	physical egress stays blocked
+temporary-disconnect.original-request-connects	yes	guest	temporary disconnect	failure-core	original request connects
+temporary-disconnect.no-temporary-rules-remain	yes	guest	temporary disconnect	failure-core	no temporary rules remain
+temporary-disconnect.rule-list-is-empty	yes	guest	temporary disconnect	failure-core	rule list is empty
+engine-killed.state-is-failedprotected	yes	guest	engine killed	failure-core	state is FailedProtected
+engine-killed.direct-egress-is-blocked	yes	guest-and-wire	engine killed	failure-core	direct egress is blocked
+engine-killed.direct-dns-is-blocked	yes	guest-and-wire	engine killed	failure-core	direct DNS is blocked
+engine-killed.ipv6-outside-the-tunnel-is-blocked	yes	guest-and-wire	engine killed	failure-core	IPv6 outside the tunnel is blocked
+engine-killed.server-check-works-under-protection	yes	guest	engine killed	failure-core	server check works under protection
+engine-killed.direct-egress-is-still-blocked	yes	guest-and-wire	engine killed	failure-core	direct egress is still blocked
+reconnect.state-is-connected-after-engine-kill	yes	guest	reconnect	failure-core	state is Connected
+reconnect.no-leak-while-reconnecting	yes	guest-and-wire	reconnect	failure-core	no leak while reconnecting
+failed-reconnect.state-stays-failedprotected	yes	guest	failed reconnect	failure-core	state stays FailedProtected
+failed-reconnect.direct-egress-is-blocked	yes	guest-and-wire	failed reconnect	failure-core	direct egress is blocked
+unreachable-reconnect.connect-fails-before-it-can-be-used	yes	guest	unreachable reconnect	failure-core	connect fails before it can be used
+unreachable-reconnect.state-stays-failedprotected	yes	guest	unreachable reconnect	failure-core	state stays FailedProtected
+unreachable-reconnect.direct-egress-is-blocked	yes	guest-and-wire	unreachable reconnect	failure-core	direct egress is blocked
+disconnect.state-is-disconnected	yes	guest	disconnect	failure-core	state is Disconnected
+disconnect.direct-egress-works-again	yes	guest-and-wire	disconnect	failure-core	direct egress works again
+disconnect.ipv6-works-again	yes	guest-and-wire	disconnect	failure-core	IPv6 works again
+disconnect.tunnel-adapter-is-gone	yes	guest	disconnect	failure-core	tunnel adapter is gone
+graceful-disconnect.connects	yes	guest	graceful disconnect	failure-core	connects
+graceful-disconnect.example-com-is-in-the-dns-cache-through-the-tunnel	yes	guest	graceful disconnect	failure-core	example.com is in the DNS cache through the tunnel
+graceful-disconnect.adapter-rosetun0-is-gone-within-2-s	yes	guest	graceful disconnect	failure-core	adapter rosetun0 is gone within 2 s
+graceful-disconnect.disconnecting-flushes-the-dns-cache	yes	guest	graceful disconnect	failure-core	disconnecting flushes the DNS cache
+graceful-disconnect.helper-log-shows-a-graceful-sing-box-stop	yes	guest	graceful disconnect	failure-core	helper log shows a graceful sing-box stop
+unreachable-connect.connect-fails-before-it-can-be-used	yes	guest	unreachable connect	failure-core	connect fails before it can be used
+unreachable-connect.state-is-failed	yes	guest	unreachable connect	failure-core	state is Failed
+unreachable-connect.direct-egress-works-again	yes	guest-and-wire	unreachable connect	failure-core	direct egress works again
+unreachable-connect.tunnel-adapter-is-gone	yes	guest	unreachable connect	failure-core	tunnel adapter is gone
+cancel-connect.reached-connecting-before-cancellation	yes	guest	cancel connect	failure-core	reached Connecting before cancellation
+cancel-connect.disconnect-succeeds	yes	guest	cancel connect	failure-core	disconnect succeeds
+cancel-connect.state-becomes-disconnected-in-under-one-second	yes	guest	cancel connect	failure-core	state becomes Disconnected in under one second
+cancel-connect.direct-egress-works-again	yes	guest-and-wire	cancel connect	failure-core	direct egress works again
+cancel-connect.tunnel-adapter-is-gone	yes	guest	cancel connect	failure-core	tunnel adapter is gone
+dead-server.failure-is-serverunreachable-within-20-s	yes	guest	dead server	failure-core	failure is ServerUnreachable within 20 s
+dead-server.state-is-failed	yes	guest	dead server	failure-core	state is Failed
+dead-server.direct-egress-works-again	yes	guest-and-wire	dead server	failure-core	direct egress works again
+helper-killed.engine-died-with-the-helper	yes	guest	helper killed	failure-core	engine died with the helper
+helper-killed.tunnel-adapter-is-gone	yes	guest	helper killed	failure-core	tunnel adapter is gone
+helper-killed.direct-egress-works-again	yes	guest-and-wire	helper killed	failure-core	direct egress works again
+helper-killed.direct-dns-works-again	yes	guest-and-wire	helper killed	failure-core	direct DNS works again
+dns-lock.state-is-connected	yes	guest	dns lock	failure-core	state is Connected
+dns-lock.tunnel-carries-traffic	yes	guest-and-wire	dns lock	failure-core	tunnel carries traffic
+dns-lock.direct-dns-is-blocked	yes	guest-and-wire	dns lock	failure-core	direct DNS is blocked
+dns-lock.ipv6-outside-the-tunnel-is-blocked-without-the-kill-switch	yes	guest-and-wire	dns lock	failure-core	IPv6 outside the tunnel is blocked without the kill switch
+dns-lock-apply.apply-succeeds	yes	guest	dns lock apply	failure-core	apply succeeds
+dns-lock-apply.state-is-connected	yes	guest	dns lock apply	failure-core	state is Connected
+dns-lock-apply.direct-dns-is-blocked	yes	guest-and-wire	dns lock apply	failure-core	direct DNS is blocked
+dns-lock-apply.tunnel-carries-traffic	yes	guest-and-wire	dns lock apply	failure-core	tunnel carries traffic
+dns-lock.server-check-works-with-the-dns-lock	yes	guest	dns lock	failure-core	server check works with the DNS lock
+dns-lock-restart.state-is-reconnecting	yes	guest	dns lock restart	failure-core	state is Reconnecting
+dns-lock-restart.direct-udp-dns-is-blocked	yes	guest-and-wire	dns lock restart	failure-core	direct UDP DNS is blocked
+dns-lock-restart.direct-tcp-dns-is-blocked	yes	guest-and-wire	dns lock restart	failure-core	direct TCP DNS is blocked
+dns-lock-restart.non-dns-egress-still-works	yes	guest	dns lock restart	failure-core	non-DNS egress still works
+dns-lock-restart.state-returns-to-connected-within-45-s	yes	guest	dns lock restart	failure-core	state returns to Connected within 45 s
+dns-lock-exhausted.state-is-failed-within-90-s	yes	guest	dns lock exhausted	failure-core	state is Failed within 90 s
+dns-lock-exhausted.direct-dns-works-again	yes	guest-and-wire	dns lock exhausted	failure-core	direct DNS works again
+protection-status.the-dns-lock-is-in-place-and-nothing-is-missing	yes	guest	protection status	failure-core	the DNS lock is in place and nothing is missing
+protection-status.the-kill-switch-goes-with-the-service-on-windows	yes	guest	protection status	failure-core	the kill switch goes with the service on Windows
+dns-lock-manual.connect-succeeds-and-state-is-connected	yes	guest	dns lock manual	failure-core	connect succeeds and state is Connected
+dns-lock-manual.state-is-failed	yes	guest	dns lock manual	failure-core	state is Failed
+dns-lock-manual.direct-dns-works-again	yes	guest-and-wire	dns lock manual	failure-core	direct DNS works again
+dns-lock-disconnect.connect-succeeds-and-state-is-connected	yes	guest	dns lock disconnect	failure-core	connect succeeds and state is Connected
+dns-lock-disconnect.state-is-disconnected	yes	guest	dns lock disconnect	failure-core	state is Disconnected
+dns-lock-disconnect.direct-dns-works-again	yes	guest-and-wire	dns lock disconnect	failure-core	direct DNS works again
+dns-lock-disconnect.ipv6-works-again	yes	guest-and-wire	dns lock disconnect	failure-core	IPv6 works again
+dns-lock-helper-killed.connect-succeeds-and-state-is-connected	yes	guest	dns lock helper killed	failure-core	connect succeeds and state is Connected
+dns-lock-helper-killed.direct-dns-works-again	yes	guest-and-wire	dns lock helper killed	failure-core	direct DNS works again

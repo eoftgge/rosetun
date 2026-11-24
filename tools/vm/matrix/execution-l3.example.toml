@@ -1,0 +1,61 @@
+schema = "rosetun.matrix.execution.v2"
+suite = "linux-l3"
+mode = "exploratory"
+platform = "linux-x86_64-kvm"
+state_directory = "/srv/rosetun-state"
+stand_id = "linux-l3-example"
+xorriso = "/usr/bin/xorriso"
+content_directory = "/srv/l3-content"
+source_checkout = "/srv/l3-source"
+
+[image]
+schema = "rosetun.matrix.image.v1"
+identifier = "prepared-l3-example"
+guest_os = "linux"
+architecture = "x86_64"
+path = "/srv/images/prepared-l3.qcow2"
+# Replace both placeholders with independently verified prepared-image values.
+size_bytes = 1
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+format = "qcow2"
+profile = "bios-i440fx-v1"
+
+[qemu]
+schema = "rosetun.matrix.qemu.v1"
+executable = "/usr/bin/qemu-system-x86_64"
+image_executable = "/usr/bin/qemu-img"
+bios = "/usr/share/seabios/bios.bin"
+machine = "pc-i440fx-10.0"
+accelerator = "kvm"
+cpu = "host"
+memory_mib = 2048
+vcpus = 2
+qga = true
+
+[accounts]
+user_a = "l2a"
+user_b = "l2b"
+
+[timeouts]
+scenario = 30
+unit = 180
+# Stage 7a stops after the preflight checks, so a short job suffices. The controller
+# waits job + 125 seconds before it collects. Raise it for a run of every scenario.
+job = 300
+
+[deadlines]
+preparation = 600
+boot = 300
+import = 900
+execution = 480
+
+[l3]
+# SHA-256 of the Linux sing-box that sits in the content directory as artifacts/sing-box.
+# It is hashed, never executed, on the controller. Replace the placeholder.
+sing_box_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+# The next four are the defaults; they feed job.env and the generated requests and must
+# be documentation addresses. The VM has no network, so none of them is reachable.
+host_address = "192.0.2.1"
+node_port = 8388
+probe_address = "203.0.113.2"
+dns_probe_address = "203.0.113.53"

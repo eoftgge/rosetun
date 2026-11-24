@@ -1,0 +1,362 @@
+[
+  {
+    "id": "baseline.egress",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "baseline",
+    "detail": "-",
+    "title": "physical HTTPS reaches the lab target"
+  },
+  {
+    "id": "baseline.dns",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "baseline",
+    "detail": "-",
+    "title": "physical UDP DNS reaches the lab resolver"
+  },
+  {
+    "id": "lockdown.old-installed",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "lockdown",
+    "detail": "-",
+    "title": "the old setup installs and serves requests"
+  },
+  {
+    "id": "lockdown.before-closed",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "lockdown",
+    "detail": "-",
+    "title": "disconnected Lockdown blocks physical egress"
+  },
+  {
+    "id": "lockdown.new-installed",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "lockdown",
+    "detail": "-",
+    "title": "the new setup installs and serves requests"
+  },
+  {
+    "id": "lockdown.setup-saw-lockdown",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "lockdown",
+    "detail": "-",
+    "title": "setup detects Lockdown and adds no hold"
+  },
+  {
+    "id": "lockdown.status",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "lockdown",
+    "detail": "-",
+    "title": "new service reports Lockdown without an upgrade hold"
+  },
+  {
+    "id": "lockdown.wfp",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "lockdown",
+    "detail": "-",
+    "title": "Lockdown remains and the hold marker is absent"
+  },
+  {
+    "id": "lockdown.after-closed",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "lockdown",
+    "detail": "-",
+    "title": "physical egress stays closed after upgrade"
+  },
+  {
+    "id": "lockdown.watch-closed",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "lockdown",
+    "detail": "-",
+    "title": "no watch probes escape during upgrade"
+  },
+  {
+    "id": "lockdown.uninstall-clears",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "lockdown",
+    "detail": "-",
+    "title": "uninstall removes persistent Lockdown objects"
+  },
+  {
+    "id": "kill-switch.old-installed",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "kill-switch",
+    "detail": "-",
+    "title": "the old setup installs and serves requests"
+  },
+  {
+    "id": "kill-switch.before-connected",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "kill-switch",
+    "detail": "-",
+    "title": "the old service connects with kill switch on"
+  },
+  {
+    "id": "kill-switch.before-closed",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "kill-switch",
+    "detail": "-",
+    "title": "physical egress is blocked before upgrade"
+  },
+  {
+    "id": "kill-switch.new-installed",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "kill-switch",
+    "detail": "-",
+    "title": "the new setup installs and serves requests"
+  },
+  {
+    "id": "kill-switch.setup-placed-hold",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "kill-switch",
+    "detail": "-",
+    "title": "setup reports placing the hold"
+  },
+  {
+    "id": "kill-switch.gui-reconnect-launch",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "kill-switch",
+    "detail": "-",
+    "title": "setup launches the GUI to reconnect"
+  },
+  {
+    "id": "kill-switch.hold-status",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "kill-switch",
+    "detail": "-",
+    "title": "the new service reports hold without Lockdown"
+  },
+  {
+    "id": "kill-switch.hold-wfp",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "kill-switch",
+    "detail": "-",
+    "title": "the persistent upgrade hold marker exists"
+  },
+  {
+    "id": "kill-switch.after-closed",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "kill-switch",
+    "detail": "-",
+    "title": "physical egress is blocked by the hold"
+  },
+  {
+    "id": "kill-switch.upgrade-closed",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "kill-switch",
+    "detail": "-",
+    "title": "no watch probes escape during setup"
+  },
+  {
+    "id": "kill-switch.reconnect",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "kill-switch",
+    "detail": "-",
+    "title": "the new service reconnects with the kill switch"
+  },
+  {
+    "id": "kill-switch.tunnel",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "kill-switch",
+    "detail": "-",
+    "title": "the new tunnel carries lab traffic"
+  },
+  {
+    "id": "kill-switch.hold-lifted",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "kill-switch",
+    "detail": "-",
+    "title": "reconnect lifts the hold without turning on Lockdown"
+  },
+  {
+    "id": "kill-switch.reconnect-direct-closed",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "kill-switch",
+    "detail": "-",
+    "title": "the reconnected kill switch blocks physical egress"
+  },
+  {
+    "id": "kill-switch.reconnect-closed",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "kill-switch",
+    "detail": "-",
+    "title": "no watch probes escape while reconnecting"
+  },
+  {
+    "id": "kill-switch.disconnect-opens",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "kill-switch",
+    "detail": "-",
+    "title": "disconnect restores direct egress"
+  },
+  {
+    "id": "no-kill-switch.old-installed",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "no-kill-switch",
+    "detail": "-",
+    "title": "the old setup installs and serves requests"
+  },
+  {
+    "id": "no-kill-switch.before-connected",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "no-kill-switch",
+    "detail": "-",
+    "title": "the old service connects without a kill switch"
+  },
+  {
+    "id": "no-kill-switch.direct-open",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "no-kill-switch",
+    "detail": "-",
+    "title": "direct egress is open after setup"
+  },
+  {
+    "id": "no-kill-switch.new-installed",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "no-kill-switch",
+    "detail": "-",
+    "title": "the new setup installs and serves requests"
+  },
+  {
+    "id": "no-kill-switch.setup-skips-hold",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "no-kill-switch",
+    "detail": "-",
+    "title": "setup reports no hold without kill switch"
+  },
+  {
+    "id": "no-kill-switch.no-reconnect-launch",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "no-kill-switch",
+    "detail": "-",
+    "title": "setup does not try to launch the GUI to reconnect"
+  },
+  {
+    "id": "no-kill-switch.no-protection",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "no-kill-switch",
+    "detail": "-",
+    "title": "new service and WFP report neither Lockdown nor hold"
+  },
+  {
+    "id": "broken.old-installed",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "broken",
+    "detail": "-",
+    "title": "the old setup installs and serves requests"
+  },
+  {
+    "id": "broken.before-connected",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "broken",
+    "detail": "-",
+    "title": "the old service connects with a kill switch"
+  },
+  {
+    "id": "broken.before-closed",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "broken",
+    "detail": "-",
+    "title": "the kill switch blocks egress before setup"
+  },
+  {
+    "id": "broken.interrupted-held",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "broken",
+    "detail": "-",
+    "title": "setup is interrupted after placing the hold and stopping the old service"
+  },
+  {
+    "id": "broken.after-closed",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "broken",
+    "detail": "-",
+    "title": "physical egress stays closed after interrupted setup"
+  },
+  {
+    "id": "broken.watch-closed",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "broken",
+    "detail": "-",
+    "title": "no watch probes escape during or after interrupted setup"
+  },
+  {
+    "id": "broken.reset-succeeds",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "broken",
+    "detail": "-",
+    "title": "the external CLI reset-firewall succeeds"
+  },
+  {
+    "id": "broken.reset-clears",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "broken",
+    "detail": "-",
+    "title": "reset removes the upgrade hold and Lockdown WFP objects"
+  },
+  {
+    "id": "broken.reset-opens",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "broken",
+    "detail": "-",
+    "title": "reset restores direct egress"
+  },
+  {
+    "id": "recovery.egress",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "recovery",
+    "detail": "-",
+    "title": "physical HTTPS works after cleanup"
+  },
+  {
+    "id": "recovery.dns",
+    "required": true,
+    "evidence": "legacy-check",
+    "group": "recovery",
+    "detail": "-",
+    "title": "physical UDP DNS works after cleanup"
+  }
+]

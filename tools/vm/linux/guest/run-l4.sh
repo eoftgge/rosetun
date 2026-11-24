@@ -67,6 +67,14 @@ NETWORK_MANAGERS=(NetworkManager.service systemd-networkd.service networking.ser
 
 RUN_ID='' STAND_ID='' EXPECTED_BOOT_ID='' USER_A='' USER_B='' BIOS_GUID=''
 HOST_ADDRESS='' NODE_PORT='' PROBE_ADDRESS='' DNS_PROBE_ADDRESS=''
+# ADDRESS:PORT of the lab observer's marker service. Empty (the default, and always on Hyper-V) means no markers:
+# nothing below sends a datagram or writes a file for them.
+LAB_MARKER_ADDRESS=''
+# A control of the lab (only `stop-helper`, only with a marker address; empty on Hyper-V).
+LAB_CONTROL=''
+# The public half of the lab poller's one-time SSH key, as the base64 blob of an ssh-ed25519 key. Empty on Hyper-V,
+# where the host polls with a key of its own.
+LAB_POLLER_KEY=''
 SCENARIO_TIMEOUT_SECONDS=30 UNIT_TIMEOUT_SECONDS=180 JOB_TIMEOUT_SECONDS=3000
 EXPECTED_ARCH=x86_64
 PHYS=''
@@ -274,6 +282,47 @@ helper_answers() {
 lockdown_as_root() {
     cli_root 60 lockdown "$@"
     [ "$CLI_RC" -eq 0 ] || { fail_reason="sudo rosetun lockdown $* failed: $CLI_OUT"; return 1; }
+}
+
+# The lab's window markers (lab_mark, in lib.sh) do nothing without LAB_MARKER_ADDRESS. This suite has one window,
+# `lockdown`, which this function opens right before Lockdown goes on (the first time, `--lan off`) and `reset` of
+# exit.reset-firewall closes once the table is gone. Under Lockdown no marker can leave, so the window stays open
+# through every scenario between them and through the first reboot; the label is the name of this function.
+lockdown() {
+    lab_mark open
+    lockdown_as_root on "$@"
+}
+
+# `lockdown on --lan on`, noting when it began for the lab's observer, which admits the poller's answers from then on.
+# The note is taken before the command, so it is never later than the change. Nothing is noted without a lab.
+lockdown_lan_on() {
+    [ -z "$LAB_MARKER_ADDRESS" ] || date +%s%3N >"$STATE/lan-on-ms"
+    lockdown_as_root on --lan on
+}
+
+# The lab's poller logs in as root with a key of this run, which restricts it to `true`: sshd's journal then holds
+# the `Accepted publickey ... from HOST_ADDRESS` that `inbound.lan-open` waits for. The key comes in job.env, never from
+# the image; cleanup takes it out again, and what this function created with it.
+POLLER_DIR=/root/.ssh
+POLLER_AUTHORIZED=$POLLER_DIR/authorized_keys
+poller_authorize() {
+    [ -n "$LAB_POLLER_KEY" ] || return 0
+    [ -d "$POLLER_DIR" ] || { install -d -m 0700 -o root -g root -- "$POLLER_DIR" && : >"$STATE/poller-dir"; } || return 1
+    [ -e "$POLLER_AUTHORIZED" ] || { install -m 0600 -o root -g root /dev/null "$POLLER_AUTHORIZED" && : >"$STATE/poller-file"; } ||
+        return 1
+    printf 'restrict,command="/bin/true" ssh-ed25519 %s rosetun-lab-poller\n' "$LAB_POLLER_KEY" >>"$POLLER_AUTHORIZED" &&
+        : >"$STATE/poller-key"
+}
+
+# The positive control of the lab (LAB_CONTROL=stop-helper), in two steps. Before the first reboot, with the helper
+# stopped, the boot unit of Lockdown is turned off, so nothing closes the network early in the next boot. Right after
+# that boot, before anything of the job runs, one direct request goes out: the network is open then and the request
+# reaches the target, so the window shows one direct connection more than the job asks for.
+control_stop_helper() {
+    systemctl disable --quiet rosetun-lockdown.service
+}
+control_direct_request() {
+    direct_https >/dev/null
 }
 
 in_peer() { ip netns exec "$PEER_NS" "$@"; }
@@ -540,7 +589,7 @@ scenario_enable() {
     check lockdown.denied "an ordinary account is refused and nothing changes" denied
 
     turned_on() {
-        lockdown_as_root on --lan off || return 1
+        lockdown --lan off || return 1
         [[ $(lockdown_line) == on ]] || { fail_reason="status does not say Lockdown is on: $CLI_OUT"; return 1; }
         [ "$(stat -c '%u %a' -- "$RECORD" 2>/dev/null)" = "0 600" ] || { fail_reason="the record is missing or not root's alone"; return 1; }
         "$NFT" list table inet rosetun 2>/dev/null | grep -q 'hook input' || { fail_reason="the table has no input chain"; return 1; }
@@ -582,7 +631,7 @@ scenario_enable() {
     # From here on the local network stays on: the host's SSH comes back.
     inbound_lan() {
         local input since
-        lockdown_as_root on --lan on || return 1
+        lockdown_lan_on || return 1
         since=$(date +%s)
         input=$(input_chain) || { fail_reason="could not list the input chain"; return 1; }
         printf '%s\n' "$input" | grep -Eq "^[[:space:]]*iifname \"$PHYS\" ip saddr [^[:space:]].* accept\$" ||
@@ -749,6 +798,7 @@ phase_one() {
         skip_rest "a preflight check failed, nothing was installed"
         return
     fi
+    poller_authorize
     scenario_install
     if passed install.service; then
         scenario_enable
@@ -766,6 +816,7 @@ phase_one() {
                 }
                 systemctl disable --quiet rosetun-helper.service 2>/dev/null
                 timeout "$UNIT_TIMEOUT_SECONDS" systemctl stop rosetun-helper.service
+                [ "$LAB_CONTROL" != stop-helper ] || control_stop_helper
                 reboot_now reboot-1 && return
                 record reboot.table-before-network ERROR "could not reboot" "$(l2_now_ms)"
             fi
@@ -789,6 +840,7 @@ started_us() { systemctl show -p ExecMainStartTimestampMonotonic --value "$1" 2>
 ended_us() { systemctl show -p ExecMainExitTimestampMonotonic --value "$1" 2>/dev/null || echo 0; }
 
 phase_after_first_reboot() {
+    [ "$LAB_CONTROL" != stop-helper ] || control_direct_request
     before_network() {
         local early="$STATE/early-$(boot_id)" lockdown_end manager start ran=0
         [ -f "$early" ] || { fail_reason="rosetun-l2-early.service did not run in this boot"; return 1; }
@@ -842,6 +894,7 @@ phase_after_first_reboot() {
         cli_root 120 reset-firewall
         [ "$CLI_RC" -eq 0 ] || { fail_reason="sudo rosetun reset-firewall failed: $CLI_OUT"; return 1; }
         ! table_present || { fail_reason="the table stays after reset-firewall"; return 1; }
+        lab_mark close
         [ ! -e "$RECORD" ] || { fail_reason="the record stays after reset-firewall"; return 1; }
         helper_answers || return 1
         [[ $(lockdown_line) == off ]] || { fail_reason="the helper still reports Lockdown: $CLI_OUT"; return 1; }
@@ -898,6 +951,18 @@ cleanup() {
         systemctl disable --quiet "$EARLY_UNIT" "$RESUME_UNIT" 2>/dev/null
         rm -f -- "$STAND_UNIT_DIR/$EARLY_UNIT" "$STAND_UNIT_DIR/$RESUME_UNIT" && rm -f -- "$STATE/stand-units" &&
             note "removed the stand's boot units"
+    fi
+    if [ -f "$STATE/poller-key" ]; then
+        # Only the line of this run goes; what the file or its directory held before stays, and what the stand made goes.
+        { grep -vF -- "$LAB_POLLER_KEY" "$POLLER_AUTHORIZED" >"$STATE/authorized-keys-kept" || [ ! -s "$STATE/authorized-keys-kept" ]; } &&
+            cat -- "$STATE/authorized-keys-kept" >"$POLLER_AUTHORIZED" && rm -f -- "$STATE/authorized-keys-kept" "$STATE/poller-key" &&
+            { [ ! -f "$STATE/poller-file" ] || { rm -f -- "$POLLER_AUTHORIZED" "$STATE/poller-file"; }; } &&
+            { [ ! -f "$STATE/poller-dir" ] || { rmdir -- "$POLLER_DIR" && rm -f -- "$STATE/poller-dir"; }; } &&
+            note "removed the poller's key" || problem "could not remove the poller's key"
+    fi
+    if [ -f "$STATE/lan-on-ms" ]; then
+        # For the lab's observer: when the local network went on, on this machine's clock.
+        note "lan-on-ms=$(cat -- "$STATE/lan-on-ms")"
     fi
     if [ -f "$STATE/nftables-enabled" ]; then
         # Disabled, not stopped: stopping it would flush whatever is left to report.
@@ -1006,13 +1071,19 @@ finalize() {
 
 load_job() {
     l2_read_env_file "$RUN/job.env" RUN_ID STAND_ID EXPECTED_BOOT_ID USER_A USER_B BIOS_GUID \
-        SCENARIO_TIMEOUT_SECONDS UNIT_TIMEOUT_SECONDS JOB_TIMEOUT_SECONDS HOST_ADDRESS NODE_PORT PROBE_ADDRESS DNS_PROBE_ADDRESS || return 1
+        SCENARIO_TIMEOUT_SECONDS UNIT_TIMEOUT_SECONDS JOB_TIMEOUT_SECONDS HOST_ADDRESS NODE_PORT PROBE_ADDRESS DNS_PROBE_ADDRESS LAB_MARKER_ADDRESS LAB_CONTROL LAB_POLLER_KEY || return 1
     l2_valid_run_id "$RUN_ID" || { echo "invalid run id" >&2; return 1; }
     [ "$(basename -- "$RUN")" = "$RUN_ID" ] || { echo "run directory does not match the run id" >&2; return 1; }
     [[ $HOST_ADDRESS =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || { echo "invalid host address" >&2; return 1; }
     [[ $PROBE_ADDRESS =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || { echo "invalid probe address" >&2; return 1; }
     [[ $DNS_PROBE_ADDRESS =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || { echo "invalid DNS probe address" >&2; return 1; }
     [[ $JOB_TIMEOUT_SECONDS =~ ^[0-9]{2,5}$ ]] || { echo "invalid job time limit" >&2; return 1; }
+    [ -z "$LAB_MARKER_ADDRESS" ] || [[ $LAB_MARKER_ADDRESS =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}:[0-9]{1,5}$ ]] ||
+        { echo "invalid lab marker address" >&2; return 1; }
+    [ -z "$LAB_CONTROL" ] || { [ "$LAB_CONTROL" = stop-helper ] && [ -n "$LAB_MARKER_ADDRESS" ]; } ||
+        { echo "invalid lab control" >&2; return 1; }
+    [ -z "$LAB_POLLER_KEY" ] || { [[ $LAB_POLLER_KEY =~ ^AAAAC3NzaC1lZDI1NTE5AAAAI[A-Za-z0-9+/]{43}$ ]] && [ -n "$LAB_MARKER_ADDRESS" ]; } ||
+        { echo "invalid lab poller key" >&2; return 1; }
 }
 
 load_job || exit 65

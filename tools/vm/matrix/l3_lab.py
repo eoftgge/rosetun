@@ -1,0 +1,664 @@
+"""Linux L3 (stage 7b2b), Linux Proxy (stage 8a) and Linux L5 (stage 8b) inside the two-machine lab: exploratory,
+nothing here is an acceptance.
+
+The test machine runs `run-l3.sh`, `run-proxy.sh` or `run-l5.sh` as `run linux-l3`, `run linux-proxy` or
+`run linux-l5` does; next to it the lab machine holds the VPN node, the HTTPS target, the resolver and the DoH
+target and captures the wire to its evidence disk. The script marks every protected session on the wire; the
+controller finds those windows in the capture and sets the observer's verdict beside the script's own results.
+"""
+
+from datetime import datetime, timezone
+import hashlib
+import json
+import re
+import secrets
+import sys
+import time
+import uuid
+
+from . import lab as labmod, poller_key
+from .evidence import ReadbackError, write_file
+from .execution import lab_of, preflight
+from .config import job_span, planned_reboots_of, wait_seconds
+from .lab_protocol import (CAPTURE_SLACK, LOG_LIMIT, PORTS, TARGETS, EVIDENCE_PCAP_LIMIT, CLIENTS, EGRESS, HELPER_REASON,
+                           ROUTE_FLOW_LIMIT, ROUTE_FLOWS_LIMIT, classify_windows, https_exchanges, marker_run_id,
+                           probes)
+from .orchestrator import _RETAINED_LEASES, begin_state, failure, finish_state, mark_step, save
+from .l3_align import align
+from .l3_summary import CONTROLS, LAB_SUITES, tables_for
+from .resources import StandLease, completion_verified, create_run, resource_path, EXECUTION_FILES
+
+SCHEMA = 'rosetun.matrix.l3-summary.v1'
+# Each suite of the lab: the schema of its summary and the stage profile of its package.
+SCHEMAS = {'linux-l3': SCHEMA, 'linux-proxy': 'rosetun.matrix.proxy-summary.v1',
+           'linux-l5': 'rosetun.matrix.l5-summary.v1', 'linux-l4': 'rosetun.matrix.l4-summary.v1'}
+PROFILES = {'linux-l3': 'l3', 'linux-proxy': 'proxy', 'linux-l5': 'l5', 'linux-l4': 'l4'}
+ROLES = ('lab', 'test')
+# What the lab machine keeps beside the capture, and the bound of each file.
+LAB_FILES = (('targets.json', LOG_LIMIT), ('health.json', LOG_LIMIT), ('https.json', LOG_LIMIT),
+             ('node.log', LOG_LIMIT), ('dns.json', LOG_LIMIT))
+# What only a run with the SSH poller (Linux L4) reads besides: every attempt of the poller with its time and result.
+POLLER_FILE = ('poller.json', LOG_LIMIT)
+# What only a diagnostic run reads besides: the flows behind the node, which are never needed to judge anything.
+ROUTE_FILE = ('route-flows.json', ROUTE_FLOWS_LIMIT)
+
+
+class Adapters:
+    """Lazy execution imports; the tests replace operations, not the controller."""
+
+    def __init__(self):
+        from .orchestrator import Adapters as Linux
+        linux, lab = Linux(), labmod.Adapters()
+        self.prepare, self.execute, self.config, self.image = linux.prepare, linux.execute, linux.config, linux.image
+        self.start, self.attach, self.importer, self.requests = linux.start, linux.attach, linux.importer, linux.requests
+        self.host, self.pair, self.guest = lab.host, lab.pair, lab.guest
+
+
+def marker_address():
+    """Where the job sends its window markers: the target of the lab, on the port of the observer."""
+    return TARGETS[4] + ':' + str(PORTS['marker'])
+
+
+def capture_seconds(config):
+    """The span of the job (every phase and every planned reboot) and the room for the boots around it."""
+    return job_span(config.get('suite'), config['timeouts']['job']) + CAPTURE_SLACK
+
+
+def saved_report(run, job, profile='l3'):
+    """The bytes of the report the job collected last, exactly as the guest wrote them, else None."""
+    polls = getattr(job, 'polls', 0)
+    if not isinstance(polls, int) or polls < 1:
+        return None
+    try:
+        return resource_path(run.directory, 'linux-' + profile + '/' + str(polls) + '/report.json').read_bytes()
+    except OSError:
+        return None
+
+
+def legacy_block(raw, assessment):
+    """`run-l3.sh` as it reported: the bytes' SHA-256, its summary and every row, unchanged."""
+    block = dict(report_sha256=None, summary=None, cleanup=None, scenarios=[], assessment=None)
+    if assessment is not None:
+        block['assessment'] = dict(validation=assessment.get('validation'), execution=assessment.get('execution'),
+                                   acceptance=assessment.get('acceptance'))
+    if raw is None:
+        return block
+    block['report_sha256'] = hashlib.sha256(raw).hexdigest()
+    try:
+        report = json.loads(raw)
+        rows = report['scenarios']
+        block.update(summary=report.get('summary'), cleanup=report.get('cleanup'), scenarios=[
+            dict(id=row['id'], group=row.get('group'), evidence=row.get('evidence'), result=row['result'],
+                 reason=row.get('reason'), duration_ms=row.get('duration_ms')) for row in rows])
+    except (ValueError, KeyError, TypeError):
+        block.update(summary=None, scenarios=[], unreadable=True)
+    return block
+
+
+def https_fixture(log):
+    """The HTTPS target worked when it answered the test machine directly and answered the node's exit.
+
+    The counters of an L3 run (the `counts` element of `https.json`) say who was answered, however many
+    requests there were. A log without them is the one of stage 7b1, whose rows are the answers. A refusal
+    row (it has a `reason`) says the target turned a client away, not that it answered.
+    """
+    counts = next((row for row in log if type(row) is dict and row.get('kind') == 'counts'), None)
+    if counts is not None and type(counts.get('counts')) is list:
+        entries = [(row.get('source'), row['count']) for row in counts['counts']
+                   if type(row) is dict and type(row.get('count')) is int and row['count'] > 0]
+    else:
+        entries = [(row.get('source'), 1) for row in log if type(row) is dict and 'reason' not in row]
+    sources = {}
+    for source, count in entries:
+        if type(source) is str:
+            sources[source] = sources.get(source, 0) + count
+    direct, via_node = sources.get(CLIENTS[4], 0) > 0, sources.get(EGRESS, 0) > 0
+    return dict(answered=direct and via_node, direct=direct, via_node=via_node, requests=sum(sources.values()))
+
+
+# The most refusal rows the HTTPS target keeps (`REFUSAL_ROWS` of the lab helper) and the shape of one.
+REFUSAL_ROWS = 8
+_SERVICE = re.compile(r'[a-z0-9-]{1,16}')
+
+
+def https_refusals(log):
+    """The rows in which the HTTPS target turned a connection away: service, family and the reason.
+
+    A row of the log is a refusal when it has a `reason`. Only the three fields are passed on, and only
+    in the shape the helper writes them, so that nothing else of the lab machine reaches the summary.
+    """
+    rows = []
+    for row in log if type(log) is list else []:
+        if type(row) is not dict or 'reason' not in row or len(rows) >= REFUSAL_ROWS:
+            continue
+        service, family, reason = row.get('service'), row.get('family'), row['reason']
+        rows.append(dict(
+            service=service if type(service) is str and _SERVICE.fullmatch(service) else 'invalid',
+            family=family if type(family) is int and family in (4, 6) else None,
+            reason=reason if type(reason) is str and HELPER_REASON.fullmatch(reason) else 'invalid'))
+    return rows
+
+
+_ENDPOINT = re.compile(r'[0-9A-Za-z.:\[\]]{1,64}')
+_COUNTERS = ('frames_out', 'frames_back', 'bytes_out', 'bytes_back')
+
+
+def _count(value):
+    return type(value) is int and 0 <= value < 2**40
+
+
+def _seconds(value):
+    return type(value) in (int, float) and 0 <= value < 2**32
+
+
+def route_flows_block(document):
+    """The flows behind the node as the helper counted them, in the shape it writes and no other.
+
+    The document is the lab machine's: a row that is not of that shape is left out and counted in
+    `rejected_rows`, and nothing is passed on but the fields below. None when there is no document.
+    """
+    if type(document) is not dict or type(document.get('flows')) is not list:
+        return None
+    rows, rejected = [], 0
+    for row in document['flows']:
+        try:
+            ok = (type(row) is dict and row['proto'] in ('tcp', 'udp')
+                  and all(type(row[k]) is str and _ENDPOINT.fullmatch(row[k]) for k in ('client', 'server'))
+                  and all(_count(row[k]) for k in _COUNTERS) and all(_seconds(row[k]) for k in ('first_at', 'last_at'))
+                  and type(row['syn']) is bool and type(row['syn_ack']) is bool
+                  and all(type(row[k]) is list and len(row[k]) <= 2 and set(row[k]) <= {'out', 'back'}
+                          and len(set(row[k])) == len(row[k]) for k in ('fin', 'rst')))
+        except KeyError:
+            ok = False
+        if not ok or len(rows) >= ROUTE_FLOW_LIMIT:
+            rejected += 1
+            continue
+        rows.append({k: row[k] for k in ('proto', 'client', 'server', *_COUNTERS, 'first_at', 'last_at', 'syn',
+                                         'syn_ack', 'fin', 'rst')})
+    error, dropped = document.get('error'), document.get('dropped')
+    return dict(flows=rows, rejected_rows=rejected,
+                omitted_frames=document['omitted_frames'] if _count(document.get('omitted_frames')) else None,
+                other_frames=document['other_frames'] if _count(document.get('other_frames')) else None,
+                unparsed_frames=document['unparsed_frames'] if _count(document.get('unparsed_frames')) else None,
+                error=error if type(error) is str and HELPER_REASON.fullmatch(error) else None,
+                dropped=dropped if _count(dropped) else None)
+
+
+def fixtures_block(health, logs):
+    """What the lab's fixtures were seen to do: from the observer's own files, never from the guest."""
+    def rows(name):
+        value = logs.get(name)
+        return value if type(value) is list else []
+    node = health.get('node') if type(health) is dict and type(health.get('node')) is dict else {}
+    dns = [row for row in rows('dns.json') if type(row) is dict]
+    return dict(node=dict(alive_at_finish=node.get('alive_at_finish') is True,
+                          exit_code=node.get('exit_code') if type(node.get('exit_code')) is int else None),
+                https=https_fixture(rows('https.json')),
+                dns=dict(answered=any(row.get('transport') in ('udp', 'tcp') for row in dns),
+                         requests=sum(row.get('transport') in ('udp', 'tcp') for row in dns)),
+                doh=dict(answered=any(row.get('transport') == 'doh' for row in dns),
+                         requests=sum(row.get('transport') == 'doh' for row in dns)))
+
+
+def lab_block(lab_id, evidence_disk, verdict, fixtures, hashes, refusals=(), route_flows=False, poller=None):
+    """The observer's side: the fixtures, the evidence disk and every window the markers named.
+
+    `https_refusals` are the connections the HTTPS target turned away, and each window has its `flows`:
+    both are there to say what happened to a connection, and neither is judged. A diagnostic run adds
+    `route_flows`, what crossed the link behind the node (`route_flows_block`, None if it was not read).
+    """
+    block = dict(lab_id=lab_id, qualification=dict(fixtures=fixtures, evidence=evidence_disk, observer=dict(
+        ready=verdict is not None, reasons=verdict['observer_reasons'] if verdict else ['not-evaluated'])),
+        windows=[], outside_window=None, missing_labels=[], extra_windows=[], artifacts_sha256=hashes,
+        https_refusals=list(refusals))
+    if route_flows is not False:
+        block['route_flows'] = route_flows
+    if poller is not None:
+        block['poller'] = poller
+    if verdict is not None:
+        block.update(windows=verdict['windows'], outside_window=verdict['outside_window'],
+                     missing_labels=verdict['missing_labels'], extra_windows=verdict['extra_windows'])
+    return block
+
+
+def run_linux_l3_lab(config, **options):
+    """One L3 run in the lab. A diagnostic run asks the engine to name destinations and is never a qualification.
+
+    A run with `control` is the positive control of the observer, not a qualification: the script stops the
+    service inside a window and the run succeeds only if the observer saw what that did.
+    """
+    return run_linux_lab(config, suite='linux-l3', **options)
+
+
+def run_linux_proxy_lab(config, **options):
+    """One Linux Proxy run in the lab (stage 8a), with the same steps and the tables of `proxy_tables`."""
+    return run_linux_lab(config, suite='linux-proxy', **options)
+
+
+def run_linux_l5_lab(config, **options):
+    """One Linux L5 run in the lab (stage 8b), with the same steps and the tables of `l5_tables`."""
+    return run_linux_lab(config, suite='linux-l5', **options)
+
+
+def run_linux_l4_lab(config, **options):
+    """One Linux L4 run in the lab (stage 8d): one window, the SSH poller and three boots of the test machine."""
+    return run_linux_lab(config, suite='linux-l4', **options)
+
+
+def run_linux_lab(config, *, suite, diagnostic=False, control=None, adapters=None, clock=time.monotonic,
+                  sleep=time.sleep, progress=None):
+    """One run of a suite of the real service in the lab; see `run_linux_l3_lab`."""
+    if suite not in LAB_SUITES or config.get('suite') != suite or lab_of(config) is None:
+        raise ValueError('configuration is not for the lab')
+    if control is not None and (control not in tables_for(suite).CONTROLS or diagnostic):
+        raise ValueError('lab-control-invalid')
+    # The diagnostic run lines the scenarios of the L3 group up with the flows; there is no such table for Proxy.
+    if diagnostic and suite != 'linux-l3':
+        raise ValueError('lab-diagnostic-l3-only')
+    profile = PROFILES[suite]
+    tables = tables_for(suite)
+    # A suite with the lab's SSH poller (L4) gets a key pair of its own for this run: the public half goes to the test
+    # machine in job.env, the private half to the lab machine alone, and neither is kept anywhere.
+    private_key, public_key = poller_key.new_pair() if tables.INBOUND_POLL else (None, None)
+    progress = progress or (lambda stage: print(stage, file=sys.stderr, flush=True))
+    l3, lab_config = config['l3'], config['lab']
+    result = dict(schema=SCHEMAS[suite], suite=suite, mode='lab', identities={}, configuration=config, stages=[],
+                  evidence=[], legacy=None, lab=None, crosscheck=[], out_of_scope=[], delivery=None,
+                  execution=None, completion=dict.fromkeys(ROLES, False), completed=False,
+                  manual_recovery_required=False, errors=[], security_invariants='UNVERIFIED',
+                  release_gate=False, exit_code=2)
+    if diagnostic:
+        result['diagnostic'] = True
+    if control is not None:
+        result['control'] = control
+    lease = pair = job = attempt = lab_id = None
+    runs, vms, closed, states = {}, {}, set(), {}
+    stage = 'preflight'
+    interrupted = False
+    # What the finally block summarizes: kept as it arrives, so that a late failure loses nothing.
+    seen = dict(raw_report=None, logs={}, hashes={}, health=None, verdict=None, evidence_disk=dict(
+        verified=False, reason='not-read', pcap_bytes=0, pcap_sha256=None), secrets=[private_key], suite=suite)
+
+    def step(name, operation):
+        nonlocal stage
+        stage = name
+        progress(name)
+        row = dict(stage=name, state='started')
+        result['stages'].append(row)
+        current = list(states.values())
+        mark_step(current, name, 'intent')
+        try:
+            value = operation()
+        except BaseException:
+            row['state'] = 'error'
+            mark_step(current, name, 'error')
+            raise
+        row['state'] = 'completed'
+        mark_step(current, name, 'done')
+        return value
+
+    def bounded_executor(deadline):
+        def execute(argv, *, timeout, output_limit):
+            remaining = deadline - clock()
+            if remaining <= 0:
+                raise TimeoutError('preparation deadline')
+            value = adapters.execute(argv, timeout=min(timeout, remaining), output_limit=output_limit)
+            if clock() > deadline:
+                raise TimeoutError('preparation deadline')
+            return value
+        return execute
+
+    def close_machine(role, hard):
+        if role in vms and role not in closed:
+            closed.add(role)
+            vms[role].close(hard=hard)
+
+    try:
+        result['preflight'] = step('preflight', lambda: preflight(config))
+        adapters = adapters or Adapters()
+        for binary in ('executable', 'image_executable'):
+            version = step('qemu-version', lambda: adapters.execute([config['qemu'][binary], '--version'],
+                                                                    timeout=5, output_limit=4096))
+            if (version.returncode != 0
+                    or not re.search(rb'\bversion 10\.0\.13(?:\s|$)', version.stdout.split(b'\n')[0])):
+                raise ValueError('lab-requires-qemu-10-0-13')
+        guest_run_id = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ-') + uuid.uuid4().hex[:8]
+        lab_id = marker_run_id(guest_run_id)
+        identities = dict(host_run_id=lab_id + '-test', lab_run_id=lab_id + '-lab', lab_id=lab_id,
+                          guest_run_id=guest_run_id, import_id=uuid.uuid4().hex)
+        result['identities'] = identities
+        lease = StandLease(config['state_directory'], config['stand_id'])
+        step('lease', lease.acquire)
+        members = {role: lab_id + '-' + role for role in ROLES}
+        for role in ROLES:
+            run = step('create-run-' + role, lambda: create_run(lease, members[role]))
+            runs[role] = run
+            result.setdefault('artifact_directories', {})[role] = str(run.directory)
+            for identifier, name in EXECUTION_FILES.items():
+                run.register(dict(id=identifier, kind='file', path=name))
+            states[role] = begin_state(run, config, result['preflight'], lab_id=lab_id, **(
+                dict(host_run_id=identities['host_run_id'], guest_run_id=guest_run_id,
+                     import_id=identities['import_id']) if role == 'test' else dict(host_run_id=members[role])))
+            save(run, 'execution-identity.json', {
+                **(identities if role == 'test' else {}),
+                'schema': 'rosetun.matrix.execution-identity.v1', 'lab_id': lab_id, 'role': role,
+                'members': members, 'controls': labmod.controls(run),
+                'endpoint': dict(kind='inherited-unix-stream', role=role, mac=labmod.MACS[role])}, initial=True)
+            save(run, 'execution-summary.json', result, initial=True)
+        deadline = clock() + config['deadlines']['preparation']
+        executor = bounded_executor(deadline)
+        step('prepare-lab', lambda: adapters.prepare(runs['lab'], adapters.image(**lab_config['image']),
+                                                     adapters.config(**config['qemu']), executor=executor))
+        step('prepare-test', lambda: adapters.prepare(runs['test'], adapters.image(**config['image']),
+                                                      adapters.config(**config['qemu']), executor=executor))
+        step('requests', lambda: adapters.requests(runs['test'], l3['host_address'], l3['node_port'],
+                                                   **({'diagnostic': True} if diagnostic else {}),
+                                                   **({'profile': profile} if profile != 'l3' else {})))
+        step('media', lambda: adapters.attach(runs['test'], directory=config['content_directory'],
+             checkout=config['source_checkout'], xorriso=config['xorriso'], executor=executor,
+             profile=profile, sing_box_sha256=l3.get('sing_box_sha256')))
+        # The pair registers its files in both runs (the test machine's DNS client log among them), while the
+        # requests and the media accept only the resources of a freshly prepared run: so it comes last.
+        # The evidence disk is made with the pair; it belongs to the lab machine alone.
+        pair = step('evidence-disk', lambda: adapters.pair(lease, runs, lab_id, tunnel=True, evidence_disk=True,
+                                                           dns=True,
+                                                           **({'route_flows': True, 'journal_full': True}
+                                                              if diagnostic else {}),
+                                                           **({'poller': True} if private_key else {})))
+        if clock() >= deadline:
+            raise TimeoutError('preparation deadline')
+
+        expected = probes(lab_id, lambda: secrets.token_hex(12))
+        exchanges = https_exchanges(lab_id, lambda: secrets.token_hex(12))
+        tunnel = labmod.tunnel_request(lab_config, exchanges)
+        options = dict(evidence_disk=True, duration_seconds=capture_seconds(config), dns=True, windows=True,
+                       certificates=dict(https_sha256=lab_config['https_cert_sha256'],
+                                         doh_sha256=lab_config['doh_cert_sha256']),
+                       **({'route_flows': True} if diagnostic else {}),
+                       **({'poller': dict(private_key=private_key)} if private_key else {}))
+
+        def lab_call(operation):
+            # A new facade each time: the capture's own deadline, not the facade's, bounds the run.
+            guest = adapters.guest(vms['lab'], 'lab', lab_id, clock=clock, sleep=sleep)
+            return guest, guest.call(operation, expected, (), tunnel=tunnel, options=options)
+
+        vms['lab'] = step('start-lab', lambda: adapters.start(runs['lab'], lab=pair))
+        step('resume-lab', vms['lab'].resume)
+        step('boot-lab', lambda: vms['lab'].wait_initial_guest(timeout=config['deadlines']['boot'],
+                                                              clock=clock, sleep=sleep))
+        ready = step('lab-setup', lambda: lab_call('setup')[1])
+        if ready.get('capture_ready') is not True:
+            raise ValueError('capture-not-ready')
+        vm = vms['test'] = step('start-test', lambda: adapters.start(runs['test'], lab=pair))
+        # The guest resets the suite plans (the three boots of L4) are taken as events; any other reset is an error.
+        vm.planned_reboots = planned_reboots_of(suite)
+        step('resume-test', vm.resume)
+        step('boot-test', lambda: vm.wait_initial_guest(timeout=config['deadlines']['boot'],
+                                                       clock=clock, sleep=sleep))
+        # Both machines are up: QEMU owns the two ends of the wire, the controller drops its copies.
+        step('wire-close', pair.close)
+        identities.update(boot_id=vm.last_boot_id, vm_uuid=vm.vm_uuid)
+
+        def recovery():
+            return vm.recover_guest()
+
+        attempt = step('import-create', lambda: adapters.importer(vm, enabled=True,
+              guest_run_id=guest_run_id, import_id=identities['import_id'], **config['accounts'],
+              **{k + '_timeout': v for k, v in config['timeouts'].items()},
+              l3=dict(l3, lab_marker_address=marker_address(), **({'lab_control': control} if control else {}),
+                      **({'lab_poller_key': public_key} if public_key else {}))))
+        attempt.deadline = min(attempt.deadline, clock() + config['deadlines']['import'])
+        try:
+            step('import', attempt.stage)
+        except Exception:
+            if vm.qga.valid:
+                raise
+            sleep(max(0, attempt.deadline - clock() - 60))
+            step('import-recovery', recovery)
+            step('receipt-after-uncertainty', attempt.check_receipt)
+        else:
+            step('import-refresh', recovery)
+            step('receipt', attempt.check_receipt)
+        result['delivery'] = dict(state=attempt.state, receipt_verified=attempt.receipt_verified)
+        job = step('job-create', lambda: attempt.linux_l2_job(checkout=config['source_checkout'], enabled=True))
+        job_failed = False
+        try:
+            try:
+                step('submit', job.submit)
+            except Exception:
+                if vm.qga.valid or job.submission != 'unknown':
+                    raise
+                step('submit-recovery', recovery)
+            step('wait', lambda: job.wait(wait_seconds(suite, config['timeouts']['job']), sleep=sleep, clock=clock))
+            try:
+                step('collect', job.collect)
+            except Exception:
+                if not vm.qga.valid:
+                    step('collect-recovery', recovery)
+                sleep(15)
+                step('collect-final', job.collect)
+        except Exception as error:
+            # The job failed, but the lab machine is still capturing and its disk still holds what it saw: the run
+            # goes on to read both, so that the summary says what the lab saw and not "not-read". The failure stays
+            # and decides the exit code.
+            job_failed = True
+            result['errors'].append(failure(stage, error))
+        result['execution'] = job.snapshot()
+        seen['raw_report'] = saved_report(runs['test'], job, profile)
+        seen['job_failed'] = job_failed
+        if diagnostic and not job_failed:
+            # The report is in; a journal the guest cannot give is noted and changes nothing already collected.
+            try:
+                step('journal-full', job.full_journal)
+            except Exception as error:
+                result['journal_full_error'] = failure('journal-full', error)
+
+        # The capture ends here; the lab machine says what it saw.
+        guest, _ = step('lab-finish', lambda: lab_call('finish'))
+        for name, limit in LAB_FILES + ((POLLER_FILE,) if private_key else ()):
+            raw = step('lab-read-' + name, lambda: guest.read(name, limit))
+            try:
+                write_file(runs['lab'], name, raw, mode='overwrite', readback=True, forbid=runs['lab']._identity[2])
+            except ReadbackError:
+                raise ValueError('lab-evidence-readback-failed') from None
+            seen['hashes'][name] = hashlib.sha256(raw).hexdigest()
+            seen['logs'][name] = raw
+        if diagnostic:
+            # Only a diagnosis needs the flows, so a file the lab cannot give changes nothing else of the run.
+            try:
+                raw = step('lab-read-' + ROUTE_FILE[0], lambda: guest.read(*ROUTE_FILE))
+                write_file(runs['lab'], ROUTE_FILE[0], raw, mode='overwrite', readback=True,
+                           forbid=runs['lab']._identity[2])
+            except Exception as error:
+                result['route_flows_error'] = failure('lab-read-' + ROUTE_FILE[0], error)
+            else:
+                seen['hashes'][ROUTE_FILE[0]] = hashlib.sha256(raw).hexdigest()
+                seen['logs'][ROUTE_FILE[0]] = raw
+        # Both machines stop, and only then is the lab's disk read: nothing may still be writing.
+        step('close-test', lambda: close_machine('test', job_failed))
+        step('close-lab', lambda: close_machine('lab', False))
+        lab_run = runs['lab']
+        if not completion_verified(lab_run.directory, lab_run._read()):
+            raise ValueError('lab-completion-unconfirmed')
+        step('evidence-read', lambda: read_disk(lab_run, lab_id, seen))
+        step('windows', lambda: judge(lab_id, config, seen, suite))
+    except BaseException as error:
+        interrupted = isinstance(error, KeyboardInterrupt)
+        result['errors'].append(failure(stage, error))
+        starting = {'start-lab': 'lab', 'start-test': 'test'}.get(stage)
+        if starting and starting not in vms and lease is not None:
+            # start() retains ownership even when it failed before it returned a handle.
+            handle = getattr(error, 'vm', None) or next(iter(lease._active - set(vms.values())), None)
+            if handle is not None:
+                vms[starting] = handle
+    finally:
+        finish(result, lease, pair, runs, vms, closed, job, attempt, seen, interrupted, lab_id, states)
+    return result
+
+
+def read_disk(lab_run, lab_id, seen):
+    """The capture from the lab's evidence image, checked in full before a byte of it is used."""
+    disk = seen['evidence_disk']
+    try:
+        raw = labmod.read_evidence(resource_path(lab_run.directory, labmod.EVIDENCE_IMAGE), lab_id)
+        write_file(lab_run, 'capture.pcap', raw, mode='overwrite', readback=True)
+    except ReadbackError:
+        raise ValueError('lab-evidence-readback-failed') from None
+    except (OSError, ValueError) as error:
+        reason = str(error) if str(error).startswith('evidence-') else 'evidence-unreadable'
+        disk.update(reason=reason)
+        raise ValueError(reason) from None
+    seen['logs']['capture.pcap'] = raw
+    seen['hashes']['capture.pcap'] = hashlib.sha256(raw).hexdigest()
+    disk.update(verified=True, reason=None, pcap_bytes=len(raw), pcap_sha256=seen['hashes']['capture.pcap'])
+
+
+def judge(lab_id, config, seen, suite='linux-l3'):
+    """Split the capture into the windows its markers name; the labels of the group must each have one."""
+    tables = tables_for(suite)
+    seen['health'] = json.loads(seen['logs']['health.json'])
+    # The poller's answers are admitted from the moment the guest says its local network went on, less the slack of
+    # the two clocks; a run that never said so admits none.
+    poll = None
+    if tables.INBOUND_POLL:
+        replies_from = lan_on_seconds(seen.get('raw_report'), tables.LAN_ON_SLACK_SECONDS)
+        if replies_from is None and seen.get('job_failed') and seen.get('raw_report') is None:
+            # A job that failed before it gave a report has said nothing about its network, so there is no moment
+            # to judge the poller's answers by: the run is unproven by its error, and they are not called leaks.
+            replies_from = 0
+        poll = dict(replies_from=replies_from)
+    seen['verdict'] = classify_windows(seen['logs']['capture.pcap'], lab_id, None, health=seen['health'], ready=True,
+                                       tunnel_port=config['lab']['tunnel']['node_port'],
+                                       required_labels=tables.GROUP_LABELS, limit=EVIDENCE_PCAP_LIMIT, flows=True,
+                                       window_allowances=tables.WINDOW_ALLOWANCES, inbound_poll=poll)
+
+
+# The guest's note in `cleanup.actions` of its report: the epoch milliseconds at which its local network went on.
+LAN_ON = re.compile(r'(?:^|; )lan-on-ms=([0-9]{13})(?:;|$)')
+
+
+def lan_on_seconds(raw, slack):
+    """When the test machine's local network went on, as seconds on the clock of the machines less `slack`, or None."""
+    try:
+        actions = json.loads(raw)['cleanup']['actions']
+    except (TypeError, ValueError, KeyError):
+        return None
+    match = LAN_ON.search(actions) if type(actions) is str else None
+    return int(match[1]) / 1000 - slack if match else None
+
+
+def poller_block(rows):
+    """What the poller's log says, counted: its attempts by result and when the first login was accepted."""
+    rows = [row for row in rows if type(row) is dict] if type(rows) is list else []
+    results = [row.get('result') for row in rows]
+    accepted = [row.get('at') for row in rows if row.get('result') == 'accepted' and type(row.get('at')) is float]
+    return dict(attempts=len(rows), accepted=results.count('accepted'), failed=results.count('failed'),
+                timeouts=results.count('timeout'), errors=results.count('error'),
+                first_accepted_at=min(accepted) if accepted else None,
+                last_attempt_at=rows[-1].get('at') if rows else None)
+
+
+def finish(result, lease, pair, runs, vms, closed, job, attempt, seen, interrupted, lab_id, states=None):
+    """Close what is still open, then write the summary into both runs; never raises."""
+    if job is not None:
+        result['execution'] = job.snapshot()
+        if seen['raw_report'] is None:
+            seen['raw_report'] = saved_report(runs['test'], job, PROFILES.get(result.get('suite'), 'l3'))
+    if attempt is not None:
+        result['delivery'] = dict(state=attempt.state, receipt_verified=attempt.receipt_verified)
+    for role in ROLES:
+        if role in vms and role not in closed:
+            closed.add(role)
+            try:
+                vms[role].close(hard=bool(result['errors']))
+            except BaseException as error:
+                interrupted |= isinstance(error, KeyboardInterrupt)
+                result['errors'].append(failure('close-' + role, error))
+    if pair is not None:
+        try:
+            pair.close()
+        except BaseException as error:
+            result['errors'].append(failure('channel-close', error))
+            for run in runs.values():
+                try:
+                    run.mark('quarantined', 'lab-channel-close-unconfirmed')
+                except (OSError, ValueError):
+                    result['errors'].append(dict(stage='quarantine', reason='ledger-write-failed'))
+    for role, run in runs.items():
+        try:
+            result['completion'][role] = bool(completion_verified(run.directory, run._read()))
+        except (OSError, ValueError):
+            result['completion'][role] = False
+    result['completed'] = (set(runs) == set(ROLES) and all(result['completion'].values())
+                           and (pair is None or pair.closed))
+    for role, state in (states or {}).items():
+        finish_state(state, result['completion'].get(role, False), result)
+    result['manual_recovery_required'] = bool(runs) and not result['completed']
+    result['legacy'] = legacy_block(seen['raw_report'], getattr(job, 'assessment', None))
+    parsed = {k: _json_or_none(v) for k, v in seen['logs'].items() if k.endswith('.json')}
+    result['lab'] = lab_block(lab_id, seen['evidence_disk'], seen['verdict'],
+                              fixtures_block(seen['health'] or {}, parsed), seen['hashes'],
+                              https_refusals(parsed.get('https.json')),
+                              route_flows_block(parsed.get('route-flows.json')) if result.get('diagnostic') else False,
+                              poller_block(parsed.get('poller.json')) if seen.get('suite') == 'linux-l4' else None)
+    if result.get('diagnostic'):
+        # Which flows were open while each scenario ran; a diagnostic that judges nothing and may fail alone.
+        try:
+            result['alignment'] = align(result['legacy']['scenarios'], seen['raw_report'], result['lab'])
+        except Exception as error:
+            result['alignment'] = None
+            result['alignment_error'] = failure('alignment', error)
+    from .l3_summary import decide
+    decide(result, interrupted)
+    # The private key of the poller is in no summary: if it ever is, it is removed and the run cannot vouch for itself.
+    for secret in seen.get('secrets', ()):
+        # As the text of a JSON string: the key's lines are separated by newlines, which JSON writes escaped.
+        needle = json.dumps(secret)[1:-1] if secret else None
+        if needle and needle in json.dumps(result):
+            result.update(json.loads(json.dumps(result).replace(needle, '[redacted-key]')))
+            result['errors'].append(dict(stage='summary', kind='RedactionError', reason='poller-key-redacted'))
+            result['exit_code'] = 130 if interrupted else 2
+    if runs:
+        payload = json.dumps(result)
+        for run in runs.values():
+            if run._identity[2] in payload:
+                result.update(json.loads(payload.replace(run._identity[2], '[redacted-owner-token]')))
+                result['errors'].append(dict(stage='summary', kind='RedactionError', reason='owner-token-redacted'))
+                result['exit_code'] = 130 if interrupted else 2
+                break
+    for role, run in runs.items():
+        try:
+            for entry in run._read()['resources']:
+                if entry['kind'] != 'file' or entry['path'] == 'execution-summary.json':
+                    continue
+                path = resource_path(run.directory, entry['path'])
+                if path.is_file():
+                    digest = hashlib.sha256()
+                    with path.open('rb') as stream:
+                        for block in iter(lambda: stream.read(1024 * 1024), b''):
+                            digest.update(block)
+                    result['evidence'].append(dict(role=role, path=entry['path'], sha256=digest.hexdigest()))
+        except BaseException as error:
+            result['errors'].append(failure('summary-' + role, error))
+            result['exit_code'] = 130 if interrupted else 2
+    for run in runs.values():
+        try:
+            save(run, 'execution-summary.json', result)
+        except BaseException as error:
+            result['errors'].append(failure('summary', error))
+            result['exit_code'] = 130 if interrupted else 2
+    if lease is not None and lease._active:
+        _RETAINED_LEASES.append(lease)
+    if lease is not None and lease._stream is not None and not lease._active:
+        try:
+            lease.release()
+        except Exception as error:
+            result['errors'].append(failure('lease-release', error))
+            result['exit_code'] = 130 if interrupted else 2
+
+
+def _json_or_none(raw):
+    try:
+        return json.loads(raw)
+    except (ValueError, TypeError):
+        return None

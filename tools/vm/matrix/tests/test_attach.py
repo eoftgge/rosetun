@@ -1,0 +1,299 @@
+"""A controller killed in each phase, then attach or recover --close from this process.
+
+The controller is a real process (`fake_controller`) on a real ledger, run
+state and `lifecycle.start`; its QEMU is `fake_qemu`, a real process that
+listens on the named sockets. Only the guest job is stood in for: the import
+and the job's guest files are not part of the fake guest.
+"""
+
+import json
+import os
+from pathlib import Path
+import select
+import signal
+import subprocess
+import sys
+import tempfile
+from types import SimpleNamespace
+import unittest
+from unittest.mock import patch
+
+from tools.vm.matrix import lifecycle, orchestrator
+from tools.vm.matrix.linux_l2 import LinuxL2Job
+from tools.vm.matrix.resources import (StandLease, archive_run, bind_run, completion_verified, inspect_runs,
+                                       read_manifest, _process_status)
+from tools.vm.matrix.tests import fake_controller, fake_qemu
+
+REPOSITORY = Path(__file__).resolve().parents[4]
+ORDINARY = [('start', 'intent'), ('start', 'qmp-ready-paused'), ('cont', 'intent'), ('cont', 'command-accepted'),
+            ('cont', 'confirmed'), ('close', 'intent'), ('exit', 'child-reaped'), ('qga', 'closed'),
+            ('close', 'confirmed'), ('completion', 'controls-closed-child-reaped')]
+
+
+@unittest.skipUnless(sys.platform.startswith('linux') and hasattr(os, 'pidfd_open'), 'needs Linux /proc and pidfds')
+class AttachTests(unittest.TestCase):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.state = Path(temp.name) / 'state'
+        for item in [*fake_controller.patches(), patch.object(orchestrator, '_current_commit', return_value=None),
+                     patch.dict(os.environ, FAKE_QEMU_CONTROL=str(Path(temp.name) / 'fake.ctl'))]:
+            item.start()
+            self.addCleanup(item.stop)
+        self.addCleanup(self.stop_leftovers)
+
+    def stop_leftovers(self):
+        # A failed test must not leave a fake QEMU behind: only a process whose recorded identity still holds.
+        for directory in (self.state / 'runs').glob('*'):
+            try:
+                for resource in read_manifest(directory)['resources']:
+                    if resource['kind'] == 'process' and _process_status(resource) == 'alive':
+                        os.kill(resource['pid'], signal.SIGKILL)
+            except (OSError, ValueError):
+                pass
+
+    def controller(self, phase, *options):
+        # The shared patches replace Popen for QEMU; the controller itself is a plain process.
+        process = fake_controller.REAL_POPEN([sys.executable, '-B', '-m', 'tools.vm.matrix.tests.fake_controller',
+                                    str(self.state), phase, *options], cwd=REPOSITORY, stdout=subprocess.PIPE,
+                                   stderr=subprocess.DEVNULL, start_new_session=True)
+        self.addCleanup(lambda: process.poll() is None and process.kill())
+        self.addCleanup(process.wait)
+        self.addCleanup(process.stdout.close)
+        if not select.select([process.stdout], [], [], 60)[0]:
+            self.fail('the controller did not reach ' + phase)
+        word, run_id = process.stdout.readline().decode().split()
+        self.assertEqual('CLOSED' if phase == 'end' else 'READY', word)
+        return process, run_id
+
+    def killed(self, phase, *options):
+        process, run_id = self.controller(phase, *options)
+        os.kill(process.pid, signal.SIGKILL)
+        process.wait()
+        return run_id
+
+    def directory(self, run_id):
+        return self.state / 'runs' / run_id
+
+    def record(self, run_id):
+        return json.loads((self.directory(run_id) / 'run-state.json').read_text())
+
+    def journal(self, run_id):
+        return (self.directory(run_id) / 'lifecycle.jsonl').read_bytes()
+
+    def process_alive(self, run_id):
+        resources = read_manifest(self.directory(run_id))['resources']
+        return any(_process_status(r) == 'alive' for r in resources if r['kind'] == 'process')
+
+    def assert_stand_free(self):
+        self.assertTrue(all(run['completion_verified'] for run in inspect_runs(self.state)))
+        StandLease(self.state, 'stand').acquire().release()
+
+    def fake_job(self):
+        job = SimpleNamespace(assessment=None, collects=0, loads=0)
+        def collect():
+            job.collects += 1
+            job.assessment = dict(acceptance=dict(accepted=True, release=False))
+        def load():
+            job.loads += 1
+            job.assessment = dict(acceptance=dict(accepted=True, release=False))
+        job.collect = collect
+        job.load_assessment = load
+        job.wait = lambda seconds, **kwargs: None
+        job.snapshot = lambda: dict(accepted=job.assessment is not None)
+        return job
+
+    def test_an_ordinary_run_on_named_sockets_keeps_its_journal(self):
+        _, run_id = self.controller('end')
+        rows = [json.loads(line) for line in self.journal(run_id).splitlines()]
+        self.assertEqual(ORDINARY, [(row['action'], row['result']) for row in rows])
+        self.assert_stand_free()
+
+    def test_a_controller_killed_while_preparing_leaves_nothing_to_attach_and_the_run_archives(self):
+        run_id = self.killed('preparing')
+        result = orchestrator.attach_run(self.state, run_id, sleep=lambda s: None, progress=lambda s: None)
+        self.assertEqual(('attach-phase-not-resumable', 2, False),
+                         (result['refused'], result['exit_code'], result['attached']))
+        answer, code = orchestrator.close_run(self.state, run_id)
+        self.assertEqual(('run-not-attachable', 1), (answer['refused'], code))
+        self.assertTrue(archive_run(self.state, run_id)['archived'])
+
+    def test_a_controller_killed_before_submission_is_refused_and_recover_close_frees_the_stand(self):
+        run_id = self.killed('boot')
+        journal, before = self.journal(run_id), self.record(run_id)
+        result = orchestrator.attach_run(self.state, run_id, sleep=lambda s: None, progress=lambda s: None)
+        self.assertEqual('attach-phase-not-resumable', result['refused'])
+        self.assertEqual(journal, self.journal(run_id))
+        self.assertTrue(self.process_alive(run_id))
+        answer, code = orchestrator.close_run(self.state, run_id)
+        self.assertEqual(0, code, answer)
+        self.assertEqual((True, 'quarantined', 'closed-by-recover'),
+                         (answer['completion_verified'], answer['phase'], answer['reason']))
+        self.assertFalse(self.process_alive(run_id))
+        after = self.record(run_id)
+        self.assertGreater(after['budgets']['qmp_calls'], before['budgets']['qmp_calls'])
+        rows = [json.loads(line) for line in self.journal(run_id).splitlines()]
+        self.assertIn(('exit', 'exit-observed'), [(row['action'], row['result']) for row in rows])
+        summary = json.loads((self.directory(run_id) / 'execution-summary.json').read_text())
+        self.assertEqual((True, 1, 2), (summary['attached'], summary['attachments'], summary['exit_code']))
+        self.assert_stand_free()
+
+    def test_attach_carries_a_run_killed_in_each_later_phase_to_a_completed_summary(self):
+        for phase in ('submit', 'wait', 'collect', 'close'):
+            with self.subTest(phase=phase):
+                run_id = self.killed(phase)
+                before = self.record(run_id)
+                job = self.fake_job()
+                with patch.object(LinuxL2Job, 'restore', return_value=job):
+                    result = orchestrator.attach_run(self.state, run_id, sleep=lambda s: None, progress=lambda s: None)
+                self.assertEqual([], result['errors'], phase)
+                self.assertEqual((True, 1, True, 0),
+                                 (result['attached'], result['attachments'], result['completion'],
+                                  result['exit_code']))
+                # Killed while closing, the collection is already saved: it is read back, never asked again.
+                self.assertEqual((0, 1) if phase == 'close' else (1, 0), (job.collects, job.loads))
+                after = self.record(run_id)
+                self.assertEqual('completed', after['phase'])
+                for name, value in before['budgets'].items():
+                    self.assertGreaterEqual(after['budgets'][name], value, name)
+                self.assertGreater(after['budgets']['qmp_calls'], before['budgets']['qmp_calls'])
+                self.assertEqual(0 if phase == 'close' else 1, after['budgets']['qga_recoveries'])
+                self.assertTrue(completion_verified(self.directory(run_id), read_manifest(self.directory(run_id))))
+                self.assert_stand_free()
+
+    def attached_after_a_reboot(self, phase):
+        run_id = self.killed(phase, 'reboot')
+        before = self.record(run_id)
+        job = self.fake_job()
+        with patch.object(LinuxL2Job, 'restore', return_value=job):
+            result = orchestrator.attach_run(self.state, run_id, sleep=lambda s: None, progress=lambda s: None)
+        return run_id, before, self.record(run_id), result, job
+
+    def test_attach_after_a_planned_reboot_carries_on_from_the_last_boot_of_the_chain(self):
+        run_id, before, after, result, job = self.attached_after_a_reboot('wait')
+        # The dead controller saw the reset and took the new boot: the chain and the identity say so.
+        self.assertEqual(([fake_qemu.BOOT, fake_controller.NEW_BOOT], fake_controller.NEW_BOOT, 1),
+                         (before['boot_chain'], before['identities']['boot_id'], before['budgets']['qga_recoveries']))
+        self.assertEqual([], result['errors'])
+        self.assertEqual((True, 1, True, 0), (result['attached'], result['attachments'], result['completion'],
+                                              result['exit_code']))
+        self.assertEqual(before['boot_chain'], after['boot_chain'])
+        # The recovery of the reboot stays spent: attaching is one more, not the first.
+        self.assertEqual(2, after['budgets']['qga_recoveries'])
+        self.assertEqual('completed', after['phase'])
+        self.assert_stand_free()
+
+    def test_attach_to_a_run_killed_between_the_reset_and_its_boot_takes_that_boot_into_the_chain(self):
+        run_id, before, after, result, job = self.attached_after_a_reboot('reset-seen')
+        pending = [(row['step'], row['status']) for row in before['transitions'] if row['step'].startswith('guest-reset')]
+        self.assertEqual(([fake_qemu.BOOT], [('guest-reset-1', 'intent')], 0),
+                         (before['boot_chain'], pending, before['budgets']['qga_recoveries']))
+        self.assertEqual([], result['errors'])
+        self.assertEqual(([fake_qemu.BOOT, fake_controller.NEW_BOOT], fake_controller.NEW_BOOT, 1),
+                         (after['boot_chain'], after['identities']['boot_id'], after['budgets']['qga_recoveries']))
+        done = [(row['step'], row['status']) for row in after['transitions'] if row['step'].startswith('guest-reset')]
+        self.assertEqual([('guest-reset-1', 'intent'), ('guest-reset-1', 'done')], done)
+        self.assertEqual(0, result['exit_code'])
+        self.assert_stand_free()
+
+    def attached_to_a_pending_reset(self):
+        run_id = self.killed('reset-seen', 'reboot')
+        lease = StandLease(self.state, 'stand').acquire(recovery=True)
+        self.addCleanup(lease.release)
+        run = bind_run(lease, run_id)
+        from tools.vm.matrix.run_state import RunState
+        RunState.load(run)
+        vm = lifecycle.attach(run)
+        self.addCleanup(vm.close)
+        vm.planned_reboots = 1
+        return run_id, vm
+
+    def rows_of(self, run_id, *actions):
+        rows = map(json.loads, self.journal(run_id).splitlines())
+        return [(row['action'], row['result']) for row in rows if row['action'] in actions]
+
+    def test_attach_goes_on_merging_resets_of_a_reboot_from_the_time_of_its_first_reset(self):
+        run_id, vm = self.attached_to_a_pending_reset()
+        # The dead controller recorded the first RESET (QEMU's time 1.000000); the next one comes 67 ms later.
+        self.assertEqual((1, True, 1000000, 0), (vm.guest_resets, vm.reset_pending, vm.reset_first_us, vm.reset_merged))
+        fake_controller.steer('reset-event guest guest-reset 1 67000')
+        vm.watch_resets()
+        self.assertEqual((1, 1), (vm.guest_resets, vm.reset_merged))
+        self.assertEqual([('guest-reset-coalesced', '1-of-1 merged=1 +67ms reason=guest-reset qemu=1.067000')],
+                         self.rows_of(run_id, 'guest-reset-coalesced'))
+        self.assertEqual(1, self.record(run_id)['collected']['guest_reset_1_merged'])
+        # Two seconds on, with the boot still unconfirmed, a reset is a reboot that nobody saw the boot of.
+        fake_controller.steer('reset-event guest guest-reset 3 0')
+        with self.assertRaisesRegex(lifecycle.LifecycleError, 'guest-reboot-unobserved'):
+            vm.watch_resets()
+
+    def test_attach_to_a_reset_with_no_recorded_time_merges_nothing(self):
+        run_id = self.killed('reset-seen', 'reboot')
+        path = self.directory(run_id) / 'run-state.json'
+        record = json.loads(path.read_text())
+        # A run state of a controller that saw a reset without a time of QEMU's.
+        record['collected'] = {}
+        path.write_text(json.dumps(record))
+        lease = StandLease(self.state, 'stand').acquire(recovery=True)
+        self.addCleanup(lease.release)
+        run = bind_run(lease, run_id)
+        from tools.vm.matrix.run_state import RunState
+        RunState.load(run)
+        vm = lifecycle.attach(run)
+        self.addCleanup(vm.close)
+        vm.planned_reboots = 1
+        self.assertEqual((None, True), (vm.reset_first_us, vm.reset_pending))
+        fake_controller.steer('reset-event guest guest-reset 1 67000')
+        with self.assertRaisesRegex(lifecycle.LifecycleError, 'guest-reboot-unobserved'):
+            vm.watch_resets()
+
+    def test_the_journal_of_a_run_with_a_reboot_says_what_the_controller_saw(self):
+        run_id = self.killed('wait', 'reboot')
+        rows = [(row['action'], row['result']) for row in map(json.loads, self.journal(run_id).splitlines())]
+        # The row says what QEMU said of the reset: its reason and its own time.
+        self.assertEqual([('guest-reset-observed', '1-of-1 reason=guest-reset qemu=1.000000'),
+                          ('boot-chain-extended', '2')],
+                         [row for row in rows if row[0] in ('guest-reset-observed', 'boot-chain-extended')])
+        self.assertTrue(self.process_alive(run_id))
+        self.assertEqual(0, orchestrator.close_run(self.state, run_id)[1])
+
+    def test_a_second_attach_is_refused_while_the_first_holds_the_run(self):
+        run_id = self.killed('wait')
+        lease = StandLease(self.state, 'stand').acquire(recovery=True)
+        run = bind_run(lease, run_id)
+        from tools.vm.matrix.run_state import RunState
+        RunState.load(run)
+        vm = lifecycle.attach(run)
+        try:
+            self.assertEqual('stand-locked', orchestrator.attach_run(self.state, run_id)['refused'])
+            with self.assertRaisesRegex(lifecycle.LifecycleError, 'run-control-locked'):
+                lifecycle.attach(bind_run(lease, run_id))
+        finally:
+            vm.close()
+            lease.release()
+        self.assert_stand_free()
+
+    def test_a_process_that_is_not_the_recorded_one_is_refused_and_left_alone(self):
+        run_id = self.killed('wait')
+        manifest_path = self.directory(run_id) / 'manifest.json'
+        original = manifest_path.read_bytes()
+        manifest = json.loads(original)
+        for resource in manifest['resources']:
+            if resource['kind'] == 'process':
+                # Same pid, another start time: what a reused pid looks like.
+                resource['start_id'] = str(int(resource['start_id']) + 1)
+        manifest_path.write_text(json.dumps(manifest))
+        journal, record = self.journal(run_id), self.record(run_id)
+        result = orchestrator.attach_run(self.state, run_id, sleep=lambda s: None, progress=lambda s: None)
+        self.assertEqual('vm-process-not-alive', result['refused'])
+        self.assertEqual(('vm-process-not-alive', 1),
+                         (lambda a: (a[0]['refused'], a[1]))(orchestrator.close_run(self.state, run_id)))
+        self.assertEqual(journal, self.journal(run_id))
+        self.assertEqual(record['budgets'], self.record(run_id)['budgets'])
+        manifest_path.write_bytes(original)
+        self.assertTrue(self.process_alive(run_id))
+        self.assertEqual(0, orchestrator.close_run(self.state, run_id)[1])
+
+
+if __name__ == '__main__':
+    unittest.main()

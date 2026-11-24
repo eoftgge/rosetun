@@ -1,0 +1,276 @@
+"""Strict execution configuration, separate from assessment profiles."""
+
+from dataclasses import fields
+import ipaddress
+from pathlib import Path
+import platform
+import os
+from importlib.metadata import version
+import re
+import sys
+import tomllib
+
+from .config import job_span, wait_seconds
+from .images import ImageDescriptor, local_file
+from .qemu import QemuConfig
+from .resources import _identifier, _state_path, inspect_runs
+
+SCHEMA = 'rosetun.matrix.execution.v1'
+SCHEMA_V2 = 'rosetun.matrix.execution.v2'
+# Version 3 is version 2 for the L3, Proxy or L5 suite plus the block that makes it a run inside the lab.
+SCHEMA_V3 = 'rosetun.matrix.execution.v3'
+SUITES = ('linux-l2', 'linux-l3', 'linux-proxy', 'linux-l5', 'linux-l4', 'linux-reboot-smoke')
+# The suites of the real service: they carry the `[l3]` block (the node, the probes, the engine's hash) and may
+# run inside the lab. Proxy and L5 take the same block as L3, under the same name; L5 without the engine's hash,
+# since its packages bring their engines (provenance.json vouches for the packages).
+SERVICE_SUITES = ('linux-l3', 'linux-proxy', 'linux-l5', 'linux-l4')
+# The stage profile of each suite's package.
+PROFILE_OF = {'linux-l2': 'l2', 'linux-l3': 'l3', 'linux-proxy': 'proxy', 'linux-l5': 'l5', 'linux-l4': 'l4',
+              'linux-reboot-smoke': 'reboot-smoke'}
+# The suites whose package carries no engine of its own and whose `[l3]` block names no engine hash.
+WITHOUT_ENGINE = ('linux-l5',)
+FIELDS = {'schema', 'mode', 'platform', 'state_directory', 'stand_id', 'image', 'qemu',
+          'xorriso', 'content_directory', 'source_checkout', 'accounts', 'timeouts', 'deadlines'}
+
+
+def exact(value, names):
+    if type(value) is not dict or set(value) != set(names):
+        raise ValueError('unknown or missing execution configuration fields')
+
+
+def suite_of(config):
+    """Version 1 has no suite field and always means the L2 job."""
+    return config.get('suite', 'linux-l2')
+
+
+def validate_l3(block, *, engine=True):
+    """Fill the optional job.env values; the hash of the delivered engine has no default.
+
+    Without `engine` (L5, whose packages bring the engines) the block names no engine hash at all.
+    """
+    from .linux_l2 import DOCUMENTATION_V4, L3_DEFAULTS
+    if (type(block) is not dict or ('sing_box_sha256' in block) != engine or
+            set(block) - {'sing_box_sha256'} - set(L3_DEFAULTS)):
+        raise ValueError('unknown or missing L3 configuration fields')
+    block = dict(L3_DEFAULTS, **block)
+    if engine and (type(block['sing_box_sha256']) is not str or
+                   not re.fullmatch('[0-9a-f]{64}', block['sing_box_sha256'])):
+        raise ValueError('sing-box SHA-256 must be 64 lowercase hex digits')
+    for name in ('host_address', 'probe_address', 'dns_probe_address'):
+        value = block[name]
+        if (type(value) is not str or not re.fullmatch(r'[0-9]{1,3}(\.[0-9]{1,3}){3}', value) or
+                not any(ipaddress.IPv4Address(value) in net for net in DOCUMENTATION_V4)):
+            raise ValueError('L3 addresses must be documentation IPv4 addresses')
+    if type(block['node_port']) is not int or not 1 <= block['node_port'] <= 65535:
+        raise ValueError('invalid L3 node port')
+    return block
+
+
+def lab_of(config):
+    """The lab block of a version 3 configuration, else None: versions 1 and 2 never run in the lab."""
+    return config.get('lab') if config.get('schema') == SCHEMA_V3 else None
+
+
+def validate_lab(block, l3, job_timeout, span=None):
+    """The lab machine's image, the pinned fixtures of stage 7b1 and the certificates of stage 7b2a."""
+    from .lab import validate_tunnel
+    from .lab_protocol import CAPTURE_SLACK, DURATION_MAX, GATEWAYS, JOB_TIMEOUT_SECONDS, RESOLVER, TARGETS
+    exact(block, ('image', 'tunnel', 'https_cert_sha256', 'doh_cert_sha256'))
+    exact(block['image'], [f.name for f in fields(ImageDescriptor)])
+    validate_tunnel(block['tunnel'])
+    for name in ('https_cert_sha256', 'doh_cert_sha256'):
+        if type(block[name]) is not str or not re.fullmatch('[0-9a-f]{64}', block[name]):
+            raise ValueError('lab certificate hashes must be 64 lowercase hex digits')
+    # The node and the HTTPS target are the lab's own: the requests and job.env must name them.
+    if (l3['host_address'], l3['probe_address'], l3['node_port']) != (
+            GATEWAYS[4], TARGETS[4], block['tunnel']['node_port']):
+        raise ValueError('L3 addresses and node port must be those of the lab')
+    # The expected UDP 53 of the DNS-lock windows is an exchange with the lab resolver (EXPECTED_FLOWS).
+    if l3['dns_probe_address'] != RESOLVER:
+        raise ValueError('the L3 DNS probe address must be the lab resolver')
+    if job_timeout > JOB_TIMEOUT_SECONDS:
+        raise ValueError('the lab capture covers a job of at most ' + str(JOB_TIMEOUT_SECONDS) + ' seconds')
+    # The capture also covers the boots and the import around the job (CAPTURE_SLACK of the lab run).
+    if (span or job_timeout) + CAPTURE_SLACK > DURATION_MAX:
+        raise ValueError('the lab capture covers a job of at most ' + str(DURATION_MAX - CAPTURE_SLACK) +
+                         ' seconds, every phase and every reboot of it counted')
+
+
+def validate(config):
+    if type(config) is not dict or config.get('schema') not in (SCHEMA, SCHEMA_V2, SCHEMA_V3):
+        raise ValueError('unsupported execution schema')
+    if config['schema'] == SCHEMA:
+        exact(config, FIELDS)
+    else:
+        suite = config.get('suite')
+        if suite not in SUITES or (config['schema'] == SCHEMA_V3 and suite not in SERVICE_SUITES):
+            raise ValueError('unsupported execution suite')
+        exact(config, FIELDS | {'suite'} | ({'l3'} if suite in SERVICE_SUITES else set())
+              | ({'lab'} if config['schema'] == SCHEMA_V3 else set()))
+        if suite in SERVICE_SUITES:
+            config['l3'] = validate_l3(config['l3'], engine=suite not in WITHOUT_ENGINE)
+    if config['mode'] != 'exploratory':
+        raise ValueError('execution supports exploratory only; release is unsupported')
+    if config['platform'] != 'linux-x86_64-kvm':
+        raise ValueError('unsupported execution platform')
+    for name, cls in (('image', ImageDescriptor), ('qemu', QemuConfig)):
+        exact(config[name], [f.name for f in fields(cls)])
+    if config['qemu']['machine'] != 'pc-i440fx-10.0' or config['qemu']['qga'] is not True:
+        raise ValueError('execution requires pinned i440fx machine and QGA')
+    exact(config['accounts'], ('user_a', 'user_b'))
+    users = list(config['accounts'].values())
+    if any(type(u) is not str or not re.fullmatch('[a-z_][a-z0-9_-]{0,31}', u) for u in users) or users[0] == users[1]:
+        raise ValueError('two distinct guest test accounts required')
+    exact(config['timeouts'], ('scenario', 'unit', 'job'))
+    for name, value in config['timeouts'].items():
+        low, high = (60, 7200) if name == 'job' else (10, 86400)
+        if type(value) is not int or not low <= value <= high:
+            raise ValueError('invalid L2 timeout')
+    exact(config['deadlines'], ('preparation', 'boot', 'import', 'execution'))
+    for name, value in config['deadlines'].items():
+        if type(value) is not int or not 1 <= value <= 86400:
+            raise ValueError('invalid execution deadline')
+    if config['deadlines']['import'] > 900 or config['deadlines']['boot'] > 300:
+        raise ValueError('deadline exceeds supported stage limit')
+    # A job that reboots the guest has the job timeout for each of its phases and room for each reboot.
+    span = job_span(suite_of(config), config['timeouts']['job'])
+    if config['deadlines']['execution'] != span + 180:
+        raise ValueError('execution deadline must equal job timeout plus 180 seconds' if span == config['timeouts']['job']
+                         else 'execution deadline must equal the span of the job (every phase and every reboot) '
+                              'plus 180 seconds')
+    if config['schema'] == SCHEMA_V3:
+        validate_lab(config['lab'], config['l3'], config['timeouts']['job'], span)
+    _identifier(config['stand_id'])
+    for name in ('state_directory', 'content_directory', 'source_checkout'):
+        _state_path(config[name])
+    return config
+
+
+def load_execution(path):
+    with Path(path).open('rb') as stream:
+        return validate(tomllib.load(stream))
+
+
+def preflight(config, *, dry_run=False):
+    validate(config)
+    state = _state_path(config['state_directory'])
+    image = ImageDescriptor(**config['image'])
+    image.validate(state)
+    QemuConfig(**config['qemu']).validate()
+    local_file(config['xorriso'])
+    from .linux_l2 import validate_package
+    suite = suite_of(config)
+    l3 = config.get('l3')
+    lab = lab_of(config)
+    if lab:
+        ImageDescriptor(**lab['image']).validate(state)
+    profile = PROFILE_OF[suite]
+    extra = dict(profile=profile, sing_box_sha256=l3.get('sing_box_sha256'), without_requests=True) if l3 else (
+        dict(profile=profile) if profile != 'l2' else {})
+    package = validate_package(config['content_directory'], checkout=config['source_checkout'],
+                               immutable=True, check_source=not dry_run, **extra)
+    from .l2_media import TOTAL_LIMIT
+    if l3:
+        # Rendered in memory only: the same generator the run later writes from.
+        from .l3_requests import render_for
+        render_for(profile, l3['host_address'], l3['node_port'])
+    if sum(package['sizes'].values()) > TOTAL_LIMIT:
+        raise ValueError('L2 content exceeds media limit')
+    if any(r['stand_id'] in (None, config['stand_id']) and not r.get('completion_verified')
+           for r in inspect_runs(state)):
+        raise ValueError('stand has unresolved ledger; inspect recover')
+    controller = Path(__file__).resolve().parents[3]
+    controller_source = 'deferred'
+    if not dry_run:
+        if sys.platform != 'linux' or platform.machine() != 'x86_64':
+            raise ValueError('execution requires Linux x86_64 KVM')
+        if not os.access('/dev/kvm', os.R_OK | os.W_OK):
+            raise ValueError('KVM is unavailable')
+        if version('qemu.qmp') != '0.0.6':
+            raise ValueError('qemu.qmp 0.0.6 required')
+        from .linux_l2 import source_identity
+        controller_source = source_identity(controller)
+    actions = ['lease', 'create run and identities', 'overlay', 'ISO', 'start paused',
+               'resume', 'observe boot', 'import once', 'verify receipt', 'submit once',
+               'wait for the job by reading its status, at most job timeout + 125 seconds', 'collect at most twice', 'close', 'summary']
+    limitations = ['attach carries a run on only after its job was submitted; before that, recover --close',
+                   'no automatic file cleanup', 'no network', 'dry-run does not execute binary version checks']
+    if suite == 'linux-reboot-smoke':
+        actions[9] = 'submit once (the job reboots the guest once)'
+        actions[10] += '; the one planned guest reset is taken from QMP, then a new agent session and the new boot ID'
+        limitations += ['the job needs no network and no Rosetun program: the package holds the guest scripts '
+                        'and the record of the build',
+                        'attach carries the run on after the reboot as well as before it; any other guest reset '
+                        'is an error']
+    if l3:
+        actions.insert(2, 'write the six L3 lab requests into the run directory')
+        if not lab:
+            limitations += ['the VM has no network: preflight.baseline is expected to FAIL and the '
+                            'remaining scenarios to ERROR']
+        limitations += ['the sing-box binary is hashed, never executed, on the controller']
+    if l3 and profile == 'proxy':
+        actions[2] = 'write the four Proxy lab requests into the run directory'
+    if l3 and profile == 'l5':
+        actions[2] = 'write the three L5 lab requests into the run directory'
+        limitations[-1] = 'the two packages are hashed and their magic read, never installed, on the controller'
+    if l3 and profile == 'l4':
+        actions[2] = 'write the three L4 requests into the run directory'
+        actions[9] = 'submit once (the job reboots the guest twice)'
+        actions[10] = ('wait for the job by reading its status, at most ' + str(wait_seconds(suite, config['timeouts']['job']))
+                       + ' seconds (three phases, two reboots); each planned guest reset is taken from QMP, then a new '
+                       'agent session and the new boot ID')
+        limitations += ['attach carries the run on after a reboot as well as before it; any other guest reset is an '
+                        'error', 'the guest has no network: the scenarios after preflight.baseline are expected to ERROR']
+    if lab:
+        actions = ['lease', 'create the test run and the lab run with their identities',
+                   'overlays of both machines', 'evidence disk of the lab machine (64 MiB, zeroed)',
+                   'write the six L3 lab requests into the test run', 'ISO of the test run',
+                   'start the lab machine paused, resume, observe boot',
+                   'lab setup: VPN node, HTTPS target, resolver, DoH, capture to the evidence disk',
+                   'start the test machine paused, resume, observe boot',
+                   'import once', 'verify receipt', 'submit run-l3.sh once (with LAB_MARKER_ADDRESS)',
+                   'wait for the job by reading its status, at most job timeout + 125 seconds', 'collect at most twice', 'finish the capture',
+                   'close both machines', 'read and verify the evidence disk',
+                   'split the capture into windows found from the markers',
+                   'cross-check the kill switch group against the windows', 'summary']
+        limitations = ['no controller restart recovery', 'no automatic file cleanup',
+                       'dry-run does not execute binary version checks',
+                       'only the kill switch group is judged; the other scenarios run and are reported',
+                       'some scenarios outside the group are expected to FAIL until stages 7c to 7e',
+                       'the sing-box binary is hashed, never executed, on the controller']
+        if profile == 'proxy':
+            actions[4] = 'write the four Proxy lab requests into the test run'
+            actions[11] = 'submit run-proxy.sh once (with LAB_MARKER_ADDRESS)'
+            actions[-2] = 'cross-check the Proxy group against the windows'
+            limitations[3:5] = ['every scenario but the two-hop exits is in the group; their windows are judged',
+                                'run-proxy.sh adds the private address 192.168.77.2/24 for sharing and removes it']
+        if profile == 'l4':
+            actions[1] = 'create the test run and the lab run with their identities and a one-time SSH key for the poller'
+            actions[4] = 'write the three L4 lab requests into the test run'
+            actions[7] = 'lab setup: VPN node, HTTPS target, resolver, DoH, SSH poller, capture to the evidence disk'
+            actions[11] = 'submit run-l4.sh once (with LAB_MARKER_ADDRESS and the poller\'s public key); the job reboots the guest twice'
+            actions[12] = ('wait for the job by reading its status, at most ' + str(wait_seconds(suite, config['timeouts']['job']))
+                           + ' seconds (three phases, two reboots); each planned guest reset is taken from QMP')
+            actions[-2] = 'cross-check the L4 group, its one window and the poller against the capture'
+            limitations[3:5] = ['all 27 scenarios are in the group; the one window, `lockdown`, is judged',
+                                'the test image has the user bus, sshd on the job\'s addresses and nftables.service '
+                                '(contract v7); the lab image needs an SSH client',
+                                'the poller\'s private key is made for this run, goes to the lab machine alone and is '
+                                'never written to a summary or a run directory']
+        if profile == 'l5':
+            actions[4] = 'write the three L5 lab requests into the test run'
+            actions[11] = 'submit run-l5.sh once (with LAB_MARKER_ADDRESS)'
+            actions[-2] = 'cross-check the L5 group and the counter of the upgrade against the windows'
+            limitations[3:6] = ['all 17 scenarios are in the group; the two windows are judged',
+                                'the test image has the dependencies of the package and no rosetun',
+                                'the two packages are hashed and their magic read, never installed, on the controller']
+    return dict(schema='rosetun.matrix.execution-plan.v1', dry_run=dry_run, suite=suite,
+                configuration=config, content_hashes=package['hashes'],
+                controller_checkout=str(controller), controller_source=controller_source,
+                source_check='deferred: Git status/diff requires external Git' if dry_run else 'matched',
+                host_platform=sys.platform, backend_qualified=False,
+                actions=actions,
+                dependencies=['prepared trusted image/helpers/accounts', 'qemu.qmp 0.0.6',
+                              'KVM', 'pinned QEMU/BIOS', 'xorriso 1.5.6', 'Git (execution only)'],
+                limitations=limitations,
+                security_invariants='UNVERIFIED', release_gate=False)

@@ -1,0 +1,7 @@
+schema = 1
+
+[profiles.exploratory]
+mode = "exploratory"
+
+[profiles.release]
+mode = "release"

@@ -1,0 +1,4 @@
+id	required	evidence	group	detail	title
+preflight.identity	yes	infrastructure	preflight	-	the guest is the designated test machine on the expected boot, x86_64, with systemd
+reboot.planned	yes	infrastructure	reboot	-	the guest rebooted once and the second boot has another boot ID
+reboot.continued	yes	infrastructure	reboot	-	the stand's own unit carried the job on after the reboot
