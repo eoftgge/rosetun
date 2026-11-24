@@ -557,10 +557,12 @@ class GuestControlTests(unittest.TestCase):
                 self.main(directory, dict(request, operation='finish'))
 
     def observer_process(self, lab_id='a' * 32, operation='serve'):
-        child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)',
-                                  json.dumps(dict(operation=operation, lab_id=lab_id))])
+        child = subprocess.Popen([sys.executable, '-c', 'import time; print("ready", flush=True); time.sleep(60)',
+                                  json.dumps(dict(operation=operation, lab_id=lab_id))], stdout=subprocess.PIPE)
         self.addCleanup(child.wait)
         self.addCleanup(child.kill)
+        with child.stdout:
+            self.assertEqual(b'ready\n', child.stdout.readline())
         return child
 
     @unittest.skipUnless(Path('/proc/self/stat').exists(), 'the observer is found through /proc')

@@ -102,6 +102,8 @@ def runtime(config):
         return config['proxy']
     if suite == 'windows-lan':
         return config['lan']
+    if suite == 'windows-upgrade':
+        return config['upgrade']
     return config['list']
 
 
@@ -196,6 +198,12 @@ def sources(config):
         return binaries + [(name, guest_directory / name, None) for name in ('lib.ps1', 'run-windows-lan.ps1')] + [
             ('RosetunListResults.psm1', WINDOWS_DIRECTORY / 'RosetunListResults.psm1', None),
             ('lan-core.tsv', WINDOWS_DIRECTORY / 'lan-core.tsv', None)]
+    if config['suite'] == 'windows-upgrade':
+        from .windows_upgrade import SCRIPTS, SETUPS
+        return binaries + [
+            (name, block[key], block[key + '_sha256']) for name, key in zip(SETUPS, ('old_setup', 'new_setup'))
+        ] + [(name, guest_directory / name, None) for name in SCRIPTS[:2]] + [
+            (name, WINDOWS_DIRECTORY / name, None) for name in SCRIPTS[2:]]
     return binaries + [('lib.ps1', guest_directory / 'lib.ps1', None),
             ('run-windows-list.ps1', guest_directory / 'run-windows-list.ps1', None),
             ('RosetunListResults.psm1', WINDOWS_DIRECTORY / 'RosetunListResults.psm1', None),
@@ -633,6 +641,8 @@ def run_guest_suite(config, *, profile=None, adapters=None, clock=time.monotonic
             pair_kwargs['proxy'] = True
         elif suite == 'windows-lan':
             pair_kwargs['lan'] = True
+        elif suite == 'windows-upgrade':
+            pair_kwargs['upgrade'] = True
         if reconnectable:
             pair_kwargs['reconnectable'] = True
         pair = step('evidence-disk', lambda: adapters.pair(lease, runs, lab_id, tunnel=True, evidence_disk=True,

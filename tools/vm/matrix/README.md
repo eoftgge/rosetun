@@ -5964,6 +5964,68 @@ All five runs: `accepted: true`, `findings: []`, `unverified: []`, `image_unchan
 - Nothing qualifies: `qualified: false`, diagnostic runs only, no release gate or Hyper-V parity table is touched.
 - Remaining Windows suite (Upgrade): stage 10e.
 
+## Stage 10e: Windows Upgrade (`windows-upgrade`)
+
+Run with the [Windows Upgrade execution example](execution-windows-upgrade.example.toml)
+as a template. Use a dedicated state directory and pin two distinct Inno Setup
+installers for the same application ID. The read-only ISO carries both installers,
+the recovery binaries, and the runner. The controller verifies the media and the
+runner checks the installer hashes before execution.
+
+```
+python3 -B -m tools.vm.matrix run windows-upgrade --config CONFIG [--dry-run]
+```
+
+The guest runs quiet setup and uninstall under SYSTEM. The
+[check catalog](../windows/upgrade-checks.json) describes the four scenarios
+ported from [the Hyper-V matrix](../windows/Invoke-UpgradeMatrix.ps1).
+
+| Scenario | Guest and wire evidence |
+| --- | --- |
+| Disconnected with Lockdown | Lockdown remains active across the upgrade, direct egress is blocked, and the upgrade hold provider is absent. |
+| Connected with the kill switch | The upgrade hold stays in force across service replacement, reconnect restores tunneled egress, and the hold provider is removed. |
+| Connected with the kill switch disabled | Setup places no hold, and the observer expects one direct HTTPS flow to the lab target. |
+| Interrupted setup | The runner interrupts setup after the hold appears and the old service stops. Direct egress remains blocked until the recovery CLI resets the firewall. |
+
+The observer judges the four scenario windows against explicit direct-flow
+expectations. Baseline and recovery calibrate HTTPS and DNS visibility.
+The controller checks for leftover services, installers, GUI and engine
+processes, registrations, scheduled tasks, and WFP objects after guest cleanup.
+Saved guest reports require the journal and independent wire evidence.
+The run is exploratory with `qualified: false` and `release_gate: false`.
+Interactive GUI behavior stays with the Hyper-V and manual checks.
+
+The [offline tests](tests/test_windows_upgrade.py) cover schema v8, both ISO
+pins, the 45-check catalog and runner order, the QGA limits, and synthetic
+acceptance, leak, calibration and cleanup outcomes. The guest script is
+about 36 KiB and passes the Windows PowerShell 5.1 argument scan.
+
+### Developer runs on the stand (2026-11-24)
+
+Debian 13 on WSL2, QEMU 10.0.13, `windows-11-26h2-pro-v1`, `lab-v5n`
+and a dedicated `state-10e-dev` directory. The old and new installers were
+`0.7.0-beta.1` and `0.7.0-beta.2` from their published releases. Their
+SHA-256 digests matched the signed release manifests. The checkout binaries
+provided the recovery CLI and helper, and the guest settled for 60 seconds
+before the runner started.
+
+| Run | Exit | Duration | Checks | Judged windows | Cleanup |
+| --- | --- | --- | --- | --- | --- |
+| `49a8d3ae8a034000b844d74577c7e864` | 0 | 356.5 s | 45 PASS | all four `EXPECTED` | `PASS`, `left: []` |
+| `6d411dc8e17b4562a4e36ba2dfc73026` | 0 | 339.6 s | 45 PASS | all four `EXPECTED` | `PASS`, `left: []` |
+
+Both runs recorded `accepted: true`, `findings: []`, `unverified: []`,
+`image_unchanged: true`, and verified completion for both VMs. The
+`lockdown`, `kill-switch` and `broken` windows recorded zero unexpected
+frames. The `no-kill-switch` window contained one answered direct HTTPS
+flow to the lab target, as expected.
+
+Bring-up required trimming Inno's padded product version, stopping the
+service before the uninstaller resets the firewall, and removing the empty
+directory the install helper had created. A five-second pause after each
+old installation gives its background traffic time to settle before the
+next window opens.
+
 ## Stage 12: release evidence pack
 
 `evidence` copies the records of chosen finished runs into one new directory and

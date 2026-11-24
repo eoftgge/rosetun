@@ -1,5 +1,6 @@
 """Small, versioned TOML profiles and self-contained plans."""
 
+import json
 from pathlib import Path
 import tomllib
 
@@ -12,6 +13,9 @@ LOCKDOWN_SUITE = "windows-lockdown"
 LOCKDOWN_CATALOG = LINUX_ROOT.parent / "windows" / "lockdown-core.tsv"
 LAN_SUITE = "windows-lan"
 LAN_CATALOG = LINUX_ROOT.parent / "windows" / "lan-core.tsv"
+UPGRADE_SUITE = "windows-upgrade"
+UPGRADE_CATALOG = LINUX_ROOT.parent / "windows" / "upgrade-checks.json"
+WIRE_SUITES = (FAILURE_SUITE, LOCKDOWN_SUITE, LAN_SUITE, UPGRADE_SUITE)
 # The guest resets a suite plans: any other reset of its run is an error.
 PLANNED_REBOOTS = {"linux-l4": 2, "linux-reboot-smoke": 1, "windows-reboot-smoke": 1}
 # The suites whose job runs in phases of the job timeout each, one more than its reboots (see `job_span`).
@@ -67,6 +71,10 @@ def load_profile(path, name):
     return profiles[name]
 
 
+def upgrade_catalog():
+    return validate_snapshot(json.loads(UPGRADE_CATALOG.read_text(encoding="utf-8-sig")))
+
+
 def make_plan(suite, profile_name, profile):
     validate_profile(profile)
     if suite == "windows-proxy":
@@ -75,12 +83,13 @@ def make_plan(suite, profile_name, profile):
     if suite == "windows-list":
         from .windows_list import make_plan as windows_plan
         return windows_plan(profile_name, profile)
-    if suite not in SUITES and suite not in (FAILURE_SUITE, LOCKDOWN_SUITE, LAN_SUITE):
+    if suite not in SUITES and suite not in WIRE_SUITES:
         raise ValueError("unknown suite")
     catalog_path = (FAILURE_CATALOG if suite == FAILURE_SUITE else
                     LOCKDOWN_CATALOG if suite == LOCKDOWN_SUITE else
-                    LAN_CATALOG if suite == LAN_SUITE else LINUX_ROOT / SUITES[suite])
-    rows = read_catalog(catalog_path)
+                    LAN_CATALOG if suite == LAN_SUITE else
+                    UPGRADE_CATALOG if suite == UPGRADE_SUITE else LINUX_ROOT / SUITES[suite])
+    rows = upgrade_catalog() if suite == UPGRADE_SUITE else read_catalog(catalog_path)
     return {
         "schema": PLAN_SCHEMA,
         "suite": suite,
@@ -102,7 +111,7 @@ def validate_plan(plan):
     fields = {"schema", "suite", "profile", "policy", "planned_reboots", "catalog", "catalog_digest"}
     if not isinstance(plan, dict) or set(plan) != fields or plan["schema"] != PLAN_SCHEMA:
         raise ValueError("unsupported plan schema or fields")
-    if not isinstance(plan["suite"], str) or (plan["suite"] not in SUITES and plan["suite"] not in (FAILURE_SUITE, LOCKDOWN_SUITE, LAN_SUITE)):
+    if not isinstance(plan["suite"], str) or (plan["suite"] not in SUITES and plan["suite"] not in WIRE_SUITES):
         raise ValueError("unknown plan suite")
     if not isinstance(plan["profile"], str) or not plan["profile"].strip():
         raise ValueError("invalid plan profile")

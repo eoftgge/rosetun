@@ -165,7 +165,7 @@ function Set-RosetunRunnerError {
         $script:RunnerStatus.error = [ordered]@{ place = (ConvertTo-RosetunSafeText $Place 32); text = $text }
     }
     else {
-        $joined = $script:RunnerStatus.error.text + ' | ' + (ConvertTo-RosetunSafeText $Place 32) + ': ' + $text
+        $joined = $script:RunnerStatus.error.text + ' - ' + (ConvertTo-RosetunSafeText $Place 32) + ': ' + $text
         $script:RunnerStatus.error.text = if ($joined.Length -gt 160) { $joined.Substring(0, 160) } else { $joined }
     }
     Save-RosetunStatus

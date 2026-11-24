@@ -72,6 +72,9 @@ PROXY_RESOURCES = {f'windows-proxy-{key}': f'windows-proxy/{leaf}' for key, leaf
 LAN_RESOURCES = {f'windows-lan-{key}': f'windows-lan/{leaf}' for key, leaf in (
     ('plan', 'plan.json'), ('events', 'events.jsonl'), ('report', 'report.json'), ('status', 'status.json'),
     ('runner', 'runner.json'), ('assessment', 'assessment.json'))}
+UPGRADE_RESOURCES = {f'windows-upgrade-{key}': f'windows-upgrade/{leaf}' for key, leaf in (
+    ('plan', 'plan.json'), ('events', 'events.jsonl'), ('report', 'report.json'), ('status', 'status.json'),
+    ('runner', 'runner.json'), ('assessment', 'assessment.json'))}
 # The IDE bus of the machine's own SATA controller that carries the drive (q35 has six, with or without `-nodefaults`).
 MEDIA_BUS = 'ide.2'
 # The guest facade lives this long beyond the capture it waits for: setup, finish and the reads.
@@ -323,7 +326,7 @@ class LabPair:
     """Capability for two particular runs under their original lease."""
     def __init__(self, lease, runs, lab_id, *, pair_factory=socket.socketpair, tunnel=False, evidence_disk=False,
                  dns=False, route_flows=False, journal_full=False, poller=False, media=False, failure=False,
-                 lockdown=False, proxy=False, lan=False, reconnectable=False):
+                 lockdown=False, proxy=False, lan=False, upgrade=False, reconnectable=False):
         lease._check_live()
         if set(runs) != set(MACS) or lease._active or runs['test'] is runs['lab']:
             raise ValueError('invalid-lab-members')
@@ -343,6 +346,7 @@ class LabPair:
         self.lockdown = lockdown is True
         self.proxy = proxy is True
         self.lan = lan is True
+        self.upgrade = upgrade is True
         self.reconnectable = reconnectable is True
         self._relay = None
         self.sockets = {}
@@ -387,7 +391,8 @@ class LabPair:
             files = {**files, **FAILURE_RESOURCES} if getattr(self, 'failure', False) else files
             files = {**files, **LOCKDOWN_RESOURCES} if getattr(self, 'lockdown', False) else files
             files = {**files, **PROXY_RESOURCES} if getattr(self, 'proxy', False) else files
-            return {**files, **LAN_RESOURCES} if getattr(self, 'lan', False) else files
+            files = {**files, **LAN_RESOURCES} if getattr(self, 'lan', False) else files
+            return {**files, **UPGRADE_RESOURCES} if getattr(self, 'upgrade', False) else files
         files = {**ARTIFACTS, **TUNNEL_ARTIFACTS} if self.tunnel else ARTIFACTS
         # Unbound calls with a stand-in object exist in older tests, which know no disk or DNS.
         if getattr(self, 'dns', False):

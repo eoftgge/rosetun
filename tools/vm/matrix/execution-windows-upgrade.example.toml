@@ -1,0 +1,79 @@
+schema = "rosetun.matrix.execution.windows.v8"
+suite = "windows-upgrade"
+mode = "exploratory"
+platform = "linux-x86_64-kvm"
+state_directory = "/srv/rosetun-state-windows-upgrade"
+stand_id = "windows-upgrade-example"
+image_descriptor = "/srv/rosetun-images/windows-11-26h2-pro-v1/image.json"
+
+[qemu]
+schema = "rosetun.matrix.qemu.v1"
+executable = "/opt/qemu-10.0.13/bin/qemu-system-x86_64"
+image_executable = "/opt/qemu-10.0.13/bin/qemu-img"
+bios = "/srv/rosetun-images/firmware/OVMF_CODE.fd"
+machine = "q35"
+accelerator = "kvm"
+cpu = "host"
+memory_mib = 4096
+vcpus = 4
+qga = true
+swtpm = "/usr/bin/swtpm"
+
+[upgrade]
+agent_wait_seconds = 180
+script_seconds = 120
+settle_seconds = 60
+runner_seconds = 1600
+setup_timeout_seconds = 180
+poll_seconds = 10
+shutdown_wait_seconds = 240
+xorriso = "/usr/bin/xorriso"
+# Both installers must have the same Inno Setup AppId and different payloads.
+old_setup = "/srv/rosetun-artifacts/rosetun-0.7.0-beta.1-setup.exe"
+old_setup_sha256 = "7d08b04139bc44fcbdd295bb29920eb22a34803b81a6da351eb379ae415d58a6"
+new_setup = "/srv/rosetun-artifacts/rosetun-0.7.0-beta.2-setup.exe"
+new_setup_sha256 = "757aff6184e6ae869e81e39260ba300d6dc7168b1667693316ecc318a7de2405"
+# The checkout build stays available for recovery if the interrupted installer leaves incomplete files.
+rosetun = "/srv/rosetun-artifacts/rosetun.exe"
+rosetun_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+helper = "/srv/rosetun-artifacts/rosetun-helper-privileged.exe"
+helper_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+sing_box = "/srv/rosetun-artifacts/sing-box.exe"
+sing_box_sha256 = "5c19bb3f8c12d4e85b3d47fe63123a7624b314b58dd7a8e32f51004f1c4d2faf"
+
+[deadlines]
+preparation = 1800
+boot = 300
+
+[lab]
+https_cert_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+doh_cert_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+ca_certificate = "/srv/rosetun-lab-pki/rosetun-lab-ca.crt"
+
+[lab.image]
+schema = "rosetun.matrix.image.v1"
+identifier = "prepared-lab-router-v5n"
+guest_os = "linux"
+architecture = "x86_64"
+path = "/srv/images/lab-v5n.qcow2"
+size_bytes = 1
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+format = "qcow2"
+profile = "bios-i440fx-v1"
+
+[lab.qemu]
+schema = "rosetun.matrix.qemu.v1"
+executable = "/opt/qemu-10.0.13/bin/qemu-system-x86_64"
+image_executable = "/opt/qemu-10.0.13/bin/qemu-img"
+bios = "/opt/qemu-10.0.13/share/qemu/bios.bin"
+machine = "pc-i440fx-10.0"
+accelerator = "kvm"
+cpu = "host"
+memory_mib = 2048
+vcpus = 2
+qga = true
+
+[lab.tunnel]
+sing_box_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+ca_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+node_port = 8388

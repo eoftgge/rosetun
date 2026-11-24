@@ -89,7 +89,7 @@ function New-RosetunListResults {
         [Parameter(Mandatory)][string]$Directory,
         [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$VmId,
         [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$BootId,
-        [ValidateSet('windows-list', 'windows-proxy', 'windows-failure', 'windows-lockdown', 'windows-lan')][string]$Suite = 'windows-list',
+        [ValidateSet('windows-list', 'windows-proxy', 'windows-failure', 'windows-lockdown', 'windows-lan', 'windows-upgrade')][string]$Suite = 'windows-list',
         [object[]]$Catalog, $Parameters
     )
     $rows = if ($Suite -ne 'windows-list') { $Catalog } else {

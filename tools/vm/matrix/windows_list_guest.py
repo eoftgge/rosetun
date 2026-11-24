@@ -357,6 +357,20 @@ _AFTER_PROXY_EXTRA = r'''    lockdown_wfp_provider = [bool]($raw -match '<provid
 _AFTER_LAN_EXTRA = r'''    extra_address = [bool](Get-NetIPAddress -IPAddress '198.51.100.10' -ErrorAction SilentlyContinue)
     lan_directory = (Test-Path -LiteralPath (Join-Path $root 'lan-matrix'))
 '''
+_AFTER_UPGRADE_EXTRA = r'''    lockdown_wfp_provider = [bool]($raw -match '<providerKey>\s*\{?f12dbedd-f3c7-4a72-b0f8-20559c88b112\}?\s*</providerKey>')
+    lockdown_wfp_sublayer = [bool]($raw -match '<subLayerKey>\s*\{?f829a64d-c373-4d92-9d66-e1c680f3794f\}?\s*</subLayerKey>')
+    upgrade_hold_wfp_provider = [bool]($raw -match '<providerKey>\s*\{?496d09fa-1d9a-451b-871f-35ba72197795\}?\s*</providerKey>')
+    installed_service = [bool](Get-Service -Name 'Rosetun' -ErrorAction SilentlyContinue)
+    install_directory = (Test-Path -LiteralPath (Join-Path $env:ProgramFiles 'Rosetun'))
+    uninstall_registration = (Test-Path -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{833B7718-C11A-4F97-9ABC-6967646F9DBB}_is1')
+    url_registration = (Test-Path -LiteralPath 'HKLM:\SOFTWARE\Classes\rosetun')
+    user_data = ((Test-Path -LiteralPath (Join-Path $env:APPDATA 'Rosetun')) -or (Test-Path -LiteralPath (Join-Path $env:LOCALAPPDATA 'Rosetun')))
+    upgrade_directory = (Test-Path -LiteralPath (Join-Path $root 'upgrade-matrix'))
+    installer_process = [bool](Get-Process -Name 'old-setup*', 'new-setup*', 'unins000*', '_unins*', 'rosetun-install-check' -ErrorAction SilentlyContinue)
+    gui_process = [bool](Get-Process -Name 'rosetun-gui' -ErrorAction SilentlyContinue)
+    xray_process = [bool](Get-Process -Name 'xray' -ErrorAction SilentlyContinue)
+    egress_probe = [bool](Get-CimInstance -ClassName Win32_Process -Filter "Name = 'curl.exe' OR Name = 'powershell.exe'" | Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -like '*rosetun-egress-probe=*' } | Select-Object -First 1)
+'''
 AFTER_FIELDS = ('runner_task', 'helper_task', 'helper_process', 'engine_process', 'tunnel_adapter', 'binaries',
                 'list_directory', 'wfp_provider', 'wfp_sublayer', 'root_removed')
 LOCKDOWN_AFTER_FIELDS = AFTER_FIELDS[:-1] + (
@@ -366,23 +380,27 @@ PROXY_AFTER_FIELDS = AFTER_FIELDS[:-1] + (
     'lockdown_wfp_provider', 'lockdown_wfp_sublayer', 'lockdown_service', 'egress_watch_task', 'proxy_user',
     'desktop_task', 'desktop_process', 'root_removed')
 LAN_AFTER_FIELDS = AFTER_FIELDS[:-1] + ('extra_address', 'lan_directory', 'root_removed')
+UPGRADE_AFTER_FIELDS = AFTER_FIELDS[:-1] + (
+    'lockdown_wfp_provider', 'lockdown_wfp_sublayer', 'upgrade_hold_wfp_provider', 'installed_service',
+    'install_directory', 'uninstall_registration', 'url_registration', 'user_data', 'upgrade_directory', 'installer_process',
+    'gui_process', 'xray_process', 'egress_probe', 'root_removed')
 
 
-def after_script(root=ROOT, task=RUNNER_TASK, *, lockdown=False, proxy=False, lan=False):
-    if sum((bool(lockdown), bool(proxy), bool(lan))) > 1:
+def after_script(root=ROOT, task=RUNNER_TASK, *, lockdown=False, proxy=False, lan=False, upgrade=False):
+    if sum((bool(lockdown), bool(proxy), bool(lan), bool(upgrade))) > 1:
         raise ValueError('conflicting-after-modes')
     extra = (_AFTER_LOCKDOWN_EXTRA if lockdown else _AFTER_PROXY_EXTRA if proxy
-             else _AFTER_LAN_EXTRA if lan else '')
+             else _AFTER_LAN_EXTRA if lan else _AFTER_UPGRADE_EXTRA if upgrade else '')
     return '\n'.join(line.strip() for line in (_AFTER % dict(
         root=_quoted(root), task=_quoted(task), alias=TUN_ALIAS, extra=extra)).splitlines() if line.strip())
 
 
-def after(text, *, lockdown=False, proxy=False, lan=False):
+def after(text, *, lockdown=False, proxy=False, lan=False, upgrade=False):
     """What is left in the guest, as the controller sees it: a leftover is True, except `root_removed`, which is the aim."""
-    if sum((bool(lockdown), bool(proxy), bool(lan))) > 1:
+    if sum((bool(lockdown), bool(proxy), bool(lan), bool(upgrade))) > 1:
         raise ValueError('conflicting-after-modes')
     fields = (LOCKDOWN_AFTER_FIELDS if lockdown else PROXY_AFTER_FIELDS if proxy
-              else LAN_AFTER_FIELDS if lan else AFTER_FIELDS)
+              else LAN_AFTER_FIELDS if lan else UPGRADE_AFTER_FIELDS if upgrade else AFTER_FIELDS)
     value = _object(text, fields)
     if any(type(value[name]) is not bool for name in fields):
         raise RunnerAnswerError('invalid-guest-answer')
