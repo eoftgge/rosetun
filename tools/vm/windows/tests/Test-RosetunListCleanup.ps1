@@ -95,6 +95,7 @@ function Get-RosetunTestNodePort { return 12345 }
 function Get-NetTCPConnection { [pscustomobject]@{ OwningProcess = 12345 } }
 function Get-NetUDPEndpoint { [pscustomobject]@{ OwningProcess = 12345 } }
 function Stop-Process { param($InputObject, [switch]$Force) $script:kills++ }
+function Wait-Process { param($InputObject, $Timeout, $ErrorAction) }
 # The extracted function's PSScriptRoot is the test directory.
 function Get-Content { param($Path, [switch]$Raw) '{"inbounds":[{"type":"hysteria2","listen_port":12345}]}' }
 foreach ($state in @('alive', 'reused')) {
