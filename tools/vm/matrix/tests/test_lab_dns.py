@@ -376,6 +376,7 @@ class RequestTests(Base):
             (directory / 'ready.json').write_text('{}')
             child = type('Child', (), {'poll': lambda self: None})()
             with patch.object(self.entry, 'command', lambda *args: commands.append(args)), \
+                    patch.object(self.entry, 'disable_offloads'), \
                     patch.object(self.entry, 'check_dns_fixtures'), \
                     patch.object(self.entry, 'check_lab_fixtures'), \
                     patch.object(self.entry.subprocess, 'Popen', return_value=child), \
@@ -392,6 +393,7 @@ class RequestTests(Base):
                 (directory / 'ready.json').write_text('{}')
                 child = type('Child', (), {'poll': lambda self: None})()
                 with patch.object(self.entry, 'command', lambda *args: commands.append(args)), \
+                        patch.object(self.entry, 'disable_offloads'), \
                         patch.object(self.entry, 'check_dns_fixtures'), \
                         patch.object(self.entry, 'check_lab_fixtures'), \
                         patch.object(self.entry.subprocess, 'Popen', return_value=child), \

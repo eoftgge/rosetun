@@ -642,6 +642,7 @@ class GuestControlTests(unittest.TestCase):
             (run / 'ready.json').write_text('{}')
             writes = []
             with self.subTest(control=control), patch.object(self.entry, 'command'), \
+                 patch.object(self.entry, 'disable_offloads'), \
                  patch.object(self.entry.subprocess, 'Popen', return_value=SimpleNamespace(pid=4242, poll=lambda: None)), \
                  patch.object(Path, 'write_text', lambda path, text: writes.append((path.name, text))):
                 self.entry.setup(dict(request, operation='setup'), 'enp7s0', run)
