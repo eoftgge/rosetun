@@ -282,6 +282,23 @@ impl SettingsCard<'_> {
         });
     }
 
+    /// Header content above the rows: keeps top and horizontal padding, leaving
+    /// the gap before the first row to the row's own top margin.
+    pub(crate) fn header(&mut self, add_contents: impl FnOnce(&mut egui::Ui)) {
+        let width = self.ui.available_width();
+        egui::Frame::new()
+            .inner_margin(egui::Margin {
+                left: theme::margin::side(theme::space::L),
+                right: theme::margin::side(theme::space::L),
+                top: theme::margin::side(theme::space::L),
+                bottom: 0,
+            })
+            .show(self.ui, |ui| {
+                ui.set_min_width((width - 2.0 * theme::space::L).max(0.0));
+                add_contents(ui);
+            });
+    }
+
     /// Free content under the rows, with the same padding (DNS cards, the
     /// custom form).
     pub(crate) fn body(&mut self, add_contents: impl FnOnce(&mut egui::Ui)) {

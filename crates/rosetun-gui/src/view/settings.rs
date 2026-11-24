@@ -1372,7 +1372,7 @@ fn about(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     });
     ui.add_space(theme::SECTION_GAP);
     widgets::settings_card(ui, |card| {
-        card.body(|ui| {
+        card.header(|ui| {
             ui.label(
                 RichText::new(tr!("updates-title"))
                     .font(theme::font::title())
@@ -2838,6 +2838,37 @@ mod pending_notice_tests {
                     );
                     output.textures_delta.clear();
                 }
+            });
+        }
+    }
+
+    #[test]
+    fn updates_heading_has_single_margin_before_status_row() {
+        for language in LANGUAGES {
+            i18n::in_language(language, || {
+                let mut state = State::default();
+                state.config.interface.last_update_check = Some(now_unix());
+                let (status_title, _) = update_status(&state, now_unix(), language);
+                let (size, nav) = WINDOWS[0];
+                let mut screen = TestScreen::new(size);
+                let texts = screen.settle(|ui| {
+                    page(ui, nav, |ui| about(ui, &state, &mut Vec::new()));
+                });
+                let heading = texts
+                    .iter()
+                    .find(|(text, _)| *text == tr!("updates-title"))
+                    .unwrap_or_else(|| panic!("{language:?}: updates-title missing"))
+                    .1;
+                let status = texts
+                    .iter()
+                    .find(|(text, _)| *text == status_title)
+                    .unwrap_or_else(|| panic!("{language:?}: status {status_title:?} missing"))
+                    .1;
+                let gap = status.top() - heading.bottom();
+                assert!(
+                    gap <= theme::space::L + 4.0,
+                    "{language:?}: double margin between Updates heading and status row: gap={gap}"
+                );
             });
         }
     }
