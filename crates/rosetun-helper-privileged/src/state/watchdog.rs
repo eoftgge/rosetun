@@ -377,12 +377,32 @@ mod tests {
     #[test]
     fn failing_dns_is_rechecked_at_the_retry_pace() {
         let mut timing = timing();
-        timing.interval = Duration::from_millis(400);
-        let watchdog = DnsWatchdog::start_with_probes(connected(), timing, |_| false, |_| true)
-            .expect("start watchdog");
-        let started = Instant::now();
+        timing.interval = Duration::from_millis(500);
+        let first_probe = Arc::new(Mutex::new(None));
+        let watchdog = DnsWatchdog::start_with_probes(
+            connected(),
+            timing,
+            {
+                let first_probe = Arc::clone(&first_probe);
+                move |_| {
+                    first_probe.lock().unwrap().get_or_insert_with(Instant::now);
+                    false
+                }
+            },
+            |_| true,
+        )
+        .expect("start watchdog");
         wait_for(|| watchdog.stalled.load(Ordering::Acquire));
-        assert!(started.elapsed() < Duration::from_millis(700));
+        let since_first_probe = first_probe
+            .lock()
+            .unwrap()
+            .expect("first DNS probe ran")
+            .elapsed();
+        assert!(
+            since_first_probe < timing.interval,
+            "retries took {since_first_probe:?}, expected well below {:?}",
+            timing.interval
+        );
         watchdog.stop();
     }
 

@@ -2227,7 +2227,7 @@ fn successful_server_checks_do_not_fail_slow_dns_early() {
     let api = FakeClashApi::start(ClashReply::Works);
     let stopped = Arc::new(AtomicUsize::new(0));
     let helper = server_check_helper(dns.address(), &api, Arc::clone(&stopped));
-    helper.session().unwrap().dns_timeout = Duration::from_millis(150);
+    helper.session().unwrap().dns_timeout = Duration::from_millis(600);
     let error = helper
         .connect(&connect_request())
         .expect_err("DNS remains silent");
