@@ -44,7 +44,7 @@ installed the packages listed below.
   used by the measurement boot, and are meant for the runs: Windows ties its network settings to
   the adapter, so another device list or MAC would create a second adapter and drop the first
   one's settings. The profile name for the descriptor is `windows-uefi-q35-v1`; the controller reads
-  it since stage 9b (`../matrix/README.md`, "Stage 9b"). It stays `v1` although the CPU string changed: the name stands for the device
+  it since stage 9b (`../matrix/docs/windows.md`, "Windows launch profile and smokes"). It stays `v1` although the CPU string changed: the name stands for the device
   list and the PCI slots Windows binds its settings to, which did not change, and only the
   diagnostic smoke of stage 9b has used the profile. An image built with the old CPU string boots with the new one (copies of one
   were booted that way).
@@ -430,4 +430,4 @@ All four are addressed by the changes described above, and all of that is UNRUN 
 - No Internet access from the laboratory; the build network is the user-mode one.
 - No attachment of the guest to the lab, and no change to the observer. The descriptor is read by the
   controller since stage 9b, which accepts it only with `qualified: false` and only for the diagnostic
-  `windows-boot-smoke` run (`../matrix/README.md`, "Stage 9b").
+  `windows-boot-smoke` run (`../matrix/docs/windows.md`, "Windows launch profile and smokes").
