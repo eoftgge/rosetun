@@ -540,7 +540,9 @@ class LeakTests(unittest.TestCase):
                                tha='00:00:00:00:00:00')
         extra = list(self.link_events().values()) + [lab_announcement]
         result = self.verdict(extra, allowances=wire_names())
-        self.assertEqual(dict(zip(sorted(wire_names()), (2, 1, 1, 1, 1))), result['categories']['allowed'])
+        expected = {**dict.fromkeys(wire_names(), 0), 'arp-announcement': 2, 'arp-probe': 1,
+                    'ipv6-dad': 1, 'ipv6-link-local-echo': 1, 'ipv6-unspecified-rs': 1}
+        self.assertEqual(expected, result['categories']['allowed'])
         self.assertEqual(('NONE', 0), (result['leak'], result['categories']['unexpected']))
 
     def test_a_frame_that_only_looks_like_an_allowance_stays_unexpected(self):

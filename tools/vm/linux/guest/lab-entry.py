@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import re
+import select
 import selectors
 import signal
 import socket
@@ -30,7 +31,9 @@ from lab_protocol import (MACS, CLIENTS, GATEWAYS, TARGETS, PORTS, SERVICES, CAP
                           WINDOW_LIMIT, ACK_PREFIX, parse_window_marker, DNS_CHECK_DOH, DOH_NAME,
                           dns_name, plain_reply_ok, REASON_LIMIT, REQUEST_TIMEOUT, RESPONSE_TIMEOUT, MARKER_TIMEOUT,
                           ROUTE_INTERFACE, ROUTE_FLOWS_LIMIT, RouteFlows, GUEST_CONTROLS, CONTROL_HOLD_SECONDS,
-                          LINK_LOCALS)
+                          LINK_LOCALS, LAN_PEER, ROUTED_NODE, LAN_LISTENER_PORT, LAN_ECHO_PORT, LAN_HOLD_PORT,
+                          LAN_BROADCAST_PORT, MDNS_GROUP, MDNS_PORT, SSDP_GROUP, SSDP_PORT, PRIVATE_BEHIND_ROUTER,
+                          parse)
 
 ROOT = Path('/run/rosetun-lab')
 ENTRY = '/usr/local/libexec/rosetun-lab/entry'
@@ -78,6 +81,13 @@ POLLER_KEYS = {'private_key'}
 POLLER_KEY_PATTERN = re.compile(r'-----BEGIN OPENSSH PRIVATE KEY-----\n[A-Za-z0-9+/=\n]{1,1024}'
                                 r'-----END OPENSSH PRIVATE KEY-----\n')
 HTTPS_KEYS = {'run_id', 'nonce', 'kind', 'family', 'protocol', 'source', 'target', 'port', 'path'}
+LAN_FIXTURE_TOKEN_LIMIT = 64
+LAN_FIXTURE_TOKEN = re.compile(rb'^rosetun-lan-matrix ([A-Za-z0-9._-]{1,64})$')
+LAN_FIXTURE_WORKERS = 16
+LAN_ECHO_IDLE_SECONDS = 90
+LAN_HOLD_SECONDS = 3.0
+PROXY_PROBE_KEYS = {'source', 'port', 'mode'}
+PROXY_PROBE_TARGET = 'listed.lab.test'
 lstat = os.lstat
 
 
@@ -133,6 +143,12 @@ def identity(request):
         raise ValueError('invalid-duration')
     if 'windows' in request and request['windows'] is not True:
         raise ValueError('invalid-windows')
+    if 'lan_fixtures' in request and (request['lan_fixtures'] is not True or request.get('windows') is not True
+                                      or 'tunnel' not in request):
+        raise ValueError('invalid-lan-fixtures')
+    if 'action' in request and (request.get('operation') not in ('probe_proxy', 'lan_state')
+                                or request.get('lan_fixtures') is not True):
+        raise ValueError('invalid-action')
     if 'control' in request and (request['control'] not in GUEST_CONTROLS or request['canary'] is not False
                                  or request.get('windows') is True or 'tunnel' in request):
         raise ValueError('invalid-control')
@@ -516,17 +532,26 @@ def probe_all(request):
                 **({'https': https} if https is not None else {}), **({'dns': dns} if dns is not None else {}))
 
 
-def node_config(tunnel):
-    """The node: one Shadowsocks inbound on the lab address, direct out, no DNS and no other inbound.
+def node_config(tunnel, *, lan_fixtures=False):
+    """The node: Shadowsocks inbound on the lab address (and routed node when LAN fixtures are active), direct out.
 
     Its log is at `info` so that it names every connection it takes and the destination it opens.
     """
-    return {'log': {'level': 'info', 'timestamp': False},
-            'inbounds': [{'type': 'shadowsocks', 'tag': 'node-in', 'listen': GATEWAYS[4],
-                          'listen_port': tunnel['port'], 'method': tunnel['method'],
-                          'password': tunnel['password']}],
-            'outbounds': [{'type': 'direct', 'tag': 'direct'}],
-            'route': {'final': 'direct'}}
+    inbounds = [{'type': 'shadowsocks', 'tag': 'node-in', 'listen': GATEWAYS[4],
+                 'listen_port': tunnel['port'], 'method': tunnel['method'],
+                 'password': tunnel['password']}]
+    if lan_fixtures:
+        inbounds.append({'type': 'shadowsocks', 'tag': 'node-routed-in', 'listen': ROUTED_NODE,
+                         'listen_port': tunnel['port'], 'method': tunnel['method'],
+                         'password': tunnel['password']})
+    config = {'log': {'level': 'info', 'timestamp': False},
+              'inbounds': inbounds,
+              'outbounds': [{'type': 'direct', 'tag': 'direct'}],
+              'route': {'final': 'direct'}}
+    if lan_fixtures:
+        config['dns'] = {'servers': [{'type': 'udp', 'tag': 'lab-dns', 'server': RESOLVER}]}
+        config['route']['default_domain_resolver'] = 'lab-dns'
+    return config
 
 
 def client_config(tunnel):
@@ -702,14 +727,15 @@ def stop_process(process):
     return alive, process.returncode
 
 
-def start_process(config, directory, name, address, port):
+def start_process(config, directory, name, address, port, *, extra_addresses=()):
     """Write the configuration, start sing-box and wait until it is alive and listening."""
     write(directory / (name + '.json'), config)
     process = spawn(directory / (name + '.json'), directory / (name + '.stderr'))
+    addresses = (address, *extra_addresses)
     for _ in range(50):
         if process.poll() is not None:
             raise Refused(name + '-exited')
-        if listening(address, port):
+        if all(listening(item, port) for item in addresses):
             return process
         time.sleep(.1)
     stop_process(process)
@@ -817,11 +843,18 @@ def setup(request, iface, directory):
         fixture(SSH, 'poller-ssh-missing')
     if tunnel is not None:
         check_lab_fixtures(tunnel, request.get('certificates'))
+    if request.get('lan_fixtures') is True:
+        fixture(CA_CERT, 'missing-ca-certificate', sha256=tunnel['ca_sha256'])
     if request.get('dns') is True:
         check_dns_fixtures(request.get('certificates'))
     if request.get('evidence_disk') is True:
         evidence_device()
     command('/usr/sbin/ip', 'addr', 'add', GATEWAYS[4] + '/24', 'dev', iface)
+    if request.get('lan_fixtures') is True:
+        # Secondary LAN peer IP stays non-primary so default router traffic keeps GATEWAYS[4].
+        command('/usr/sbin/ip', 'addr', 'add', LAN_PEER + '/24', 'dev', iface)
+        # Routed VPN node IP lives on lo so sing-box outbound to rtlab still sources from EGRESS.
+        command('/usr/sbin/ip', 'addr', 'add', ROUTED_NODE + '/32', 'dev', 'lo')
     command('/usr/sbin/ip', '-6', 'addr', 'add', GATEWAYS[6] + '/64', 'dev', iface, 'nodad')
     command('/usr/sbin/ip', 'link', 'set', iface, 'up')
     if l3_mode(request):
@@ -847,6 +880,10 @@ def setup(request, iface, directory):
     command(*ns, '/usr/sbin/ip', 'link', 'set', 'rt-target', 'up')
     command(*ns, '/usr/sbin/ip', 'route', 'add', '192.0.2.0/24', 'via', '203.0.113.1')
     command(*ns, '/usr/sbin/ip', '-6', 'route', 'add', '2001:db8:6a:1::/64', 'via', '2001:db8:6a:2::1')
+    if request.get('lan_fixtures') is True:
+        # Silently drop behind-router RFC 1918 TCP probes with zero ICMP noise so connection tables can observe them.
+        command('/usr/sbin/ip', 'route', 'add', PRIVATE_BEHIND_ROUTER + '/32', 'via', TARGETS[4], 'dev', 'rt-route')
+        command(*ns, '/usr/sbin/ip', 'route', 'add', 'blackhole', PRIVATE_BEHIND_ROUTER + '/32')
     Path('/proc/sys/net/ipv4/ip_forward').write_text('1')
     Path('/proc/sys/net/ipv6/conf/all/forwarding').write_text('1')
     # Capture stays in the router namespace; services run in the routed namespace.
@@ -1281,13 +1318,218 @@ def guarded(where, failure, target, *args):
 EXCHANGE_PLACES = {'http': 'http', 'udp': 'udp', 'dns-udp': 'udp', 'dns-tcp': 'dns-tcp'}
 
 
-def open_capture(interface):
+def open_capture(interface, *, allmulti=False):
     """The raw socket of the lab's ingress interface, non-blocking, with a 256 KiB receive buffer."""
     capture = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(3))
     capture.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 262144)
     capture.bind((interface, 0))
+    if allmulti:
+        # PACKET_ADD_MEMBERSHIP (1) with PACKET_MR_ALLMULTI (2) receives L2 multicast without emitting IGMP.
+        capture.setsockopt(263, 1, struct.pack('iHH8s', socket.if_nametoindex(interface), 2, 0, b''))
     capture.setblocking(False)
     return capture
+
+
+class LanFixtures:
+    """Router-namespace LAN peer/server TCP fixtures and live L2 multicast/broadcast token tracker."""
+
+    BANNERS = {'peer': b'ROSETUN-LAN-PEER\n', 'server': b'ROSETUN-LAN-SERVER\n'}
+
+    def __init__(self, state_path):
+        self.state_path = state_path
+        self.lock = threading.Lock()
+        self.stop = threading.Event()
+        self.sockets = []
+        self.threads = []
+        self.tokens = {'mdns': [], 'ssdp': [], 'broadcast': []}
+        self.tcp = {'peer': 0, 'server': 0, 'echo': 0, 'hold': 0}
+
+    def _snapshot(self):
+        return dict(mdns=list(self.tokens['mdns']), ssdp=list(self.tokens['ssdp']),
+                    broadcast=list(self.tokens['broadcast']), tcp=dict(self.tcp))
+
+    def flush(self):
+        with self.lock:
+            raw = json.dumps(self._snapshot()).encode('utf-8')
+        tmp = self.state_path.with_suffix('.tmp')
+        tmp.write_bytes(raw)
+        os.replace(tmp, self.state_path)
+
+    def bind(self, selector):
+        specs = (
+            ('peer', LAN_PEER, LAN_LISTENER_PORT),
+            ('server', GATEWAYS[4], LAN_LISTENER_PORT),
+            ('echo', LAN_PEER, LAN_ECHO_PORT),
+            ('hold', GATEWAYS[4], LAN_HOLD_PORT),
+        )
+        for kind, address, port in specs:
+            listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            listener.bind((address, port))
+            listener.listen(8)
+            listener.setblocking(False)
+            self.sockets.append(listener)
+            selector.register(listener, selectors.EVENT_READ, ('lan', kind))
+        self.flush()
+
+    def accept(self, listener, kind):
+        try:
+            connection, _ = listener.accept()
+        except (BlockingIOError, OSError):
+            return
+        with self.lock:
+            self.tcp[kind] += 1
+        try:
+            self.flush()
+        except OSError:
+            pass
+        self.threads = [thread for thread in self.threads if thread.is_alive()]
+        if len(self.threads) >= LAN_FIXTURE_WORKERS:
+            connection.close()
+            return
+        worker = threading.Thread(target=self._serve, args=(connection, kind), daemon=True)
+        self.threads.append(worker)
+        worker.start()
+
+    def _serve(self, connection, kind):
+        try:
+            if kind in self.BANNERS:
+                connection.settimeout(REQUEST_TIMEOUT)
+                connection.sendall(self.BANNERS[kind])
+                return
+            if kind == 'hold':
+                deadline = time.monotonic() + LAN_HOLD_SECONDS
+                while not self.stop.is_set() and time.monotonic() < deadline:
+                    ready, _, _ = select.select([connection], [], [], 0.2)
+                    if ready and not connection.recv(256):
+                        return
+                return
+            if kind == 'echo':
+                idle_until = time.monotonic() + LAN_ECHO_IDLE_SECONDS
+                while not self.stop.is_set() and time.monotonic() < idle_until:
+                    ready, _, _ = select.select([connection], [], [], 1.0)
+                    if not ready:
+                        continue
+                    data = connection.recv(4096)
+                    if not data:
+                        return
+                    connection.sendall(data)
+                    idle_until = time.monotonic() + LAN_ECHO_IDLE_SECONDS
+        except OSError:
+            pass
+        finally:
+            try:
+                connection.close()
+            except OSError:
+                pass
+
+    def inspect_frame(self, raw_frame):
+        """Record multicast/broadcast UDP tokens sent by the test machine without altering capture."""
+        try:
+            frame = parse(raw_frame)
+        except ValueError:
+            return
+        if frame.fragment or frame.family != 4 or frame.proto != 17 or frame.src != CLIENTS[4]:
+            return
+        if (frame.dst, frame.dport) == (MDNS_GROUP, MDNS_PORT):
+            channel = 'mdns'
+        elif (frame.dst, frame.dport) == (SSDP_GROUP, SSDP_PORT):
+            channel = 'ssdp'
+        elif (frame.dst, frame.dport) == ('255.255.255.255', LAN_BROADCAST_PORT):
+            channel = 'broadcast'
+        else:
+            return
+        match = LAN_FIXTURE_TOKEN.fullmatch(frame.payload)
+        if match is None:
+            return
+        value = match[1].decode('ascii')
+        changed = False
+        with self.lock:
+            bucket = self.tokens[channel]
+            if value not in bucket and len(bucket) < LAN_FIXTURE_TOKEN_LIMIT:
+                bucket.append(value)
+                changed = True
+        if changed:
+            try:
+                self.flush()
+            except OSError:
+                pass
+
+    def close(self):
+        self.stop.set()
+        for listener in self.sockets:
+            try:
+                listener.close()
+            except OSError:
+                pass
+        for thread in self.threads:
+            thread.join(2)
+        try:
+            self.flush()
+        except OSError:
+            pass
+
+
+def probe_proxy(action):
+    """Probe the Windows shared HTTP proxy from a lab LAN address; return structured pass/fail facts."""
+    if type(action) is not dict or set(action) != PROXY_PROBE_KEYS:
+        raise ValueError('invalid-proxy-probe')
+    source, port, mode = action['source'], action['port'], action['mode']
+    if source not in (LAN_PEER, GATEWAYS[4]) or type(port) is not int or not 1 <= port <= 65535:
+        raise ValueError('invalid-proxy-probe')
+    if mode not in ('connect', 'http_proxy'):
+        raise ValueError('invalid-proxy-probe')
+    started = time.monotonic()
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.settimeout(RESPONSE_TIMEOUT)
+            sock.bind((source, 0))
+            sock.connect((CLIENTS[4], port))
+            if mode == 'connect':
+                return dict(ok=True, reason='connected', elapsed_ms=int((time.monotonic() - started) * 1000))
+            sock.sendall(f'CONNECT {PROXY_PROBE_TARGET}:443 HTTP/1.1\r\nHost: {PROXY_PROBE_TARGET}:443\r\n\r\n'.encode('ascii'))
+            head = bytearray()
+            while b'\r\n\r\n' not in head:
+                block = sock.recv(1024)
+                if not block:
+                    raise ValueError('proxy-eof')
+                head.extend(block)
+                if len(head) > 2048:
+                    raise ValueError('proxy-head-limit')
+            first_line = bytes(head).split(b'\r\n', 1)[0]
+            if not first_line.startswith((b'HTTP/1.1 200', b'HTTP/1.0 200')):
+                raise ValueError('proxy-status')
+            context = ssl.create_default_context(cafile=str(CA_CERT))
+            with context.wrap_socket(sock, server_hostname=TARGETS[4]) as tls:
+                tls.sendall(f'GET / HTTP/1.1\r\nHost: {PROXY_PROBE_TARGET}\r\nConnection: close\r\n\r\n'.encode('ascii'))
+                response = bytearray()
+                while True:
+                    try:
+                        block = tls.recv(1024)
+                    except ssl.SSLEOFError:
+                        block = b''
+                    if not block:
+                        break
+                    response.extend(block)
+                    if len(response) > 4096:
+                        raise ValueError('http-response-limit')
+            resp_head, separator, body = bytes(response).partition(b'\r\n\r\n')
+            if not separator or not resp_head.startswith((b'HTTP/1.1 200 OK', b'HTTP/1.0 200 OK')):
+                raise ValueError('http-status')
+            if body != L3_BODY:
+                raise ValueError('unexpected-body')
+            return dict(ok=True, reason='ok', status=200, body_ok=True,
+                        elapsed_ms=int((time.monotonic() - started) * 1000))
+    except Exception as error:
+        return dict(ok=False, reason=short_code(error), elapsed_ms=int((time.monotonic() - started) * 1000))
+
+
+def lan_state(directory):
+    """Current live LAN fixture observations (multicast/broadcast tokens and TCP accept counts)."""
+    path = directory / 'lan-fixtures.json'
+    if not path.exists():
+        return dict(mdns=[], ssdp=[], broadcast=[], tcp=dict(peer=0, server=0, echo=0, hold=0))
+    return json.loads(path.read_bytes())
 
 
 def bind_targets(request, tunnel, selector, sockets, dns_sockets):
@@ -1417,6 +1659,8 @@ def serve(request, directory):
     https_workers = None
     dns = request.get('dns') is True
     dns_log, dns_stop, dns_threads, dns_sockets = DnsLog(), threading.Event(), [], []
+    lan_enabled = request.get('lan_fixtures') is True
+    lan_fixtures = LanFixtures(directory / 'lan-fixtures.json') if lan_enabled else None
     selector = selectors.DefaultSelector()
     capture = raw = None
     # The diagnostic count of the link behind the node: its own socket and thread, and nothing the observer needs.
@@ -1434,6 +1678,8 @@ def serve(request, directory):
         now = time.time()
         raw.write(struct.pack('<IIII', int(now), int(now % 1 * 1000000), len(frame), len(frame)) + frame)
         count += 16 + len(frame)
+        if lan_fixtures is not None:
+            lan_fixtures.inspect_frame(frame)
 
     def settle(operation):
         """Run a closing step; its failure is noted and the steps after it still run."""
@@ -1460,20 +1706,27 @@ def serve(request, directory):
 
     try:
         place = 'capture'
-        capture = open_capture(request['interface'])
+        capture = (open_capture(request['interface'], allmulti=True) if lan_enabled
+                   else open_capture(request['interface']))
         started = time.monotonic()
         selector.register(capture, selectors.EVENT_READ, 'capture')
         raw = EvidenceWriter(evidence_device(), request['lab_id']) if disk else (directory / 'capture.pcap').open('xb')
         raw.write(struct.pack('<IHHIIII', 0xa1b2c3d4, 2, 4, 0, 0, 2048, 1))
         place = 'setup'
         context, servers = bind_targets(request, tunnel, selector, sockets, dns_sockets)
+        if lan_fixtures is not None:
+            lan_fixtures.bind(selector)
         if https_requests is not None and context is not None:
             https_workers = HttpsWorkers(context, request, https_requests)
         if tunnel is not None:
             # Alive and listening, before the observer says it is ready.
             check_lab_fixtures(tunnel, request.get('certificates'))
             place = 'node'
-            node = start_process(node_config(tunnel), directory, 'node', GATEWAYS[4], tunnel['port'])
+            if lan_enabled:
+                node = start_process(node_config(tunnel, lan_fixtures=True), directory, 'node', GATEWAYS[4],
+                                     tunnel['port'], extra_addresses=(ROUTED_NODE,))
+            else:
+                node = start_process(node_config(tunnel), directory, 'node', GATEWAYS[4], tunnel['port'])
             place = 'setup'
         if dns:
             udp, tcp, doh, doh_tls = servers
@@ -1507,6 +1760,10 @@ def serve(request, directory):
                     record(capture.recv(2049))
                     continue
                 family, service = key.data
+                if family == 'lan':
+                    place = 'lan'
+                    lan_fixtures.accept(key.fileobj, service)
+                    continue
                 # A bad exchange is the exchange's failure: it is closed and logged as a refusal, and the
                 # capture goes on. Only what the observer itself does (capture, limits, deadline) stops it.
                 if service == 'https':
@@ -1579,6 +1836,8 @@ def serve(request, directory):
         selector.close()
         if capture is not None:
             capture.close()
+        if lan_fixtures is not None:
+            lan_fixtures.close()
         for stream in sockets:
             stream.close()
         dns_stop.set()
@@ -1667,13 +1926,17 @@ def main(request):
     shown = redacted(request)
     if any(saved.get(key) != shown.get(key) for key in ('tunnel', 'dns', 'dns_check', 'evidence_disk',
                                                      'duration_seconds', 'windows', 'certificates',
-                                                     'route_flows', 'control', 'poller')):
+                                                     'route_flows', 'control', 'poller', 'lan_fixtures')):
         raise ValueError('wrong-run')
     if request['role'] == 'lab' and operation == 'serve':
         if request.get('interface') != iface:
             raise ValueError('wrong-capture-interface')
         serve(request, directory)
         return {}
+    if request['role'] == 'lab' and operation == 'probe_proxy' and request.get('lan_fixtures') is True:
+        return probe_proxy(request.get('action'))
+    if request['role'] == 'lab' and operation == 'lan_state' and request.get('lan_fixtures') is True:
+        return lan_state(directory)
     if request['role'] == 'lab' and operation == 'window' and 'control' in request:
         return dict(exchanges_done=(directory / 'exchanges-done').exists())
     if request['role'] == 'lab' and operation == 'halt' and request.get('control') == 'observer-stopped':

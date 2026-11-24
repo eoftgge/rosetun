@@ -40,7 +40,7 @@ def _object(value):
 
 def assess(report, status, plan):
     validate_plan(plan)
-    if plan["suite"] in ("windows-failure", "windows-lockdown"):
+    if plan["suite"] in ("windows-failure", "windows-lockdown", "windows-lan"):
         raise ValueError(f"{plan['suite']} requires the guest journal and independent lab evidence")
     problems = []
     report = _object(report)

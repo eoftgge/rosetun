@@ -41,8 +41,8 @@ from .execution import exact
 from .images import ImageDescriptor, load_windows_descriptor
 from .l3_lab import LAB_FILES, ROLES, fixtures_block, read_disk
 from .l3_summary import TARGET_FLOW, expectation_verdict, expected_flows
-from .lab_protocol import (DURATION_MAX, EVIDENCE_PCAP_LIMIT, classify_windows, dns_checks, dns_name, https_exchanges,
-                           probes as lab_probes, window_marker)
+from .lab_protocol import (DURATION_MAX, EVIDENCE_PCAP_LIMIT, SOCKS_PORT, classify_windows, dns_checks, dns_name,
+                           https_exchanges, probes as lab_probes, window_marker)
 from .lifecycle import LifecycleError
 from .orchestrator import _RETAINED_LEASES, begin_state, failure, mark_step, save
 from .qemu import QemuConfig, WindowsQemuConfig
@@ -75,6 +75,8 @@ REQUIRED_FIXTURES = ('node', 'https', 'dns', 'doh')
 POLL_FAILURES = 3
 # A session has 128 calls: a new one is taken before the poll that would reach them (a status read is two or three).
 CALLS_BEFORE_NEW_SESSION = 110
+# Lab helper calls can use ~15-25 RPCs each (especially probe_proxy timeouts), so replace the lab session earlier.
+LAB_CALLS_BEFORE_NEW_SESSION = 80
 REST_POLL_SECONDS = windows_lab.REST_POLL_SECONDS
 CAPTURE_SLACK = windows_lab.CAPTURE_SLACK
 MEMORY_MARGIN_MIB = windows_lab.MEMORY_MARGIN_MIB
@@ -96,6 +98,10 @@ def runtime(config):
         return config['failure']
     if suite == 'windows-lockdown':
         return config['lockdown']
+    if suite == 'windows-proxy':
+        return config['proxy']
+    if suite == 'windows-lan':
+        return config['lan']
     return config['list']
 
 
@@ -181,6 +187,15 @@ def sources(config):
         return binaries + [(name, guest_directory / name, None) for name in
                            ('lib.ps1', 'run-windows-lockdown.ps1', 'failure-probes.ps1')] + [
                                ('RosetunListResults.psm1', WINDOWS_DIRECTORY / 'RosetunListResults.psm1', None)]
+    if config['suite'] == 'windows-proxy':
+        return binaries + [('desktop_proxy.exe', block['desktop_proxy'], block['desktop_proxy_sha256'])] + [
+            (name, guest_directory / name, None) for name in ('lib.ps1', 'run-windows-proxy.ps1')] + [
+                ('RosetunListResults.psm1', WINDOWS_DIRECTORY / 'RosetunListResults.psm1', None),
+                ('proxy-checks.json', WINDOWS_DIRECTORY / 'proxy-checks.json', None)]
+    if config['suite'] == 'windows-lan':
+        return binaries + [(name, guest_directory / name, None) for name in ('lib.ps1', 'run-windows-lan.ps1')] + [
+            ('RosetunListResults.psm1', WINDOWS_DIRECTORY / 'RosetunListResults.psm1', None),
+            ('lan-core.tsv', WINDOWS_DIRECTORY / 'lan-core.tsv', None)]
     return binaries + [('lib.ps1', guest_directory / 'lib.ps1', None),
             ('run-windows-list.ps1', guest_directory / 'run-windows-list.ps1', None),
             ('RosetunListResults.psm1', WINDOWS_DIRECTORY / 'RosetunListResults.psm1', None),
@@ -265,9 +280,11 @@ def media_sources(config):
 
 
 def digest_rows(config):
-    """(name, sha256, size) of the three binaries, read before the plan is made: the plan names them."""
+    """(name, sha256, size) of the pinned binaries, read before the plan is made: the plan names them."""
     rows = []
-    for name, path, pin in sources(config)[:3]:
+    for name, path, pin in sources(config):
+        if pin is None:
+            continue
         digest, size = windows_media._digest(path)
         if digest != pin:
             raise ValueError('windows-media-source-mismatch')
@@ -280,7 +297,8 @@ def check_cleanup(after_state, runner_cleanup):
     return dict(runner=runner_cleanup, left=after_state['left'] if after_state else None)
 
 
-def judge(config, lab_id, seen, plain, port=None, *, labels=LABELS, window_allowances=None):
+def judge(config, lab_id, seen, plain, port=None, *, labels=LABELS, window_allowances=None,
+          tunnel_addresses=None, proxy_port=SOCKS_PORT):
     """The windows of the capture, the listing of the baseline and the lab's account of its fixtures.
 
     Nothing here is a verdict of the run: the verdicts are in `judgement`, which reads these and the guest's own."""
@@ -290,6 +308,7 @@ def judge(config, lab_id, seen, plain, port=None, *, labels=LABELS, window_allow
     node_port = config['lab']['tunnel']['node_port']
     seen['health'] = health
     seen['verdict'] = classify_windows(capture, lab_id, None, health=health, ready=True, tunnel_port=node_port,
+                                       tunnel_addresses=tunnel_addresses, proxy_port=proxy_port,
                                        probes=[plain], limit=EVIDENCE_PCAP_LIMIT, required_labels=labels, flows=True,
                                        window_allowances=window_allowances)
     seen['noise'] = windows_noise.report(capture, lab_id, label=BASELINE, probes=[plain], limit=EVIDENCE_PCAP_LIMIT)
@@ -525,7 +544,7 @@ def run_guest_suite(config, *, profile=None, adapters=None, clock=time.monotonic
     measured = dict(network=None, certificate=None, settle=None, media=None, start=None, runner=None, runner_seconds=None,
                     polls=0, checks=None, assessment=None, markers=None, cleanup=None, identity=None, windows={},
                     shutdown=None, image_unchanged=None, host_memory_mib=None, helper_tail=None,
-                    boot_chain=[], guest_resets=0, power_cycles=0)
+                    boot_chain=[], guest_resets=0, power_cycles=0, lab_actions=0)
     planned_reboots = getattr(profile, 'planned_reboots', 0) if profile else 0
     planned_power_cuts = getattr(profile, 'planned_power_cuts', 0) if profile else 0
     reconnectable = planned_power_cuts > 0
@@ -610,6 +629,10 @@ def run_guest_suite(config, *, profile=None, adapters=None, clock=time.monotonic
             pair_kwargs['failure'] = True
         elif suite == 'windows-lockdown':
             pair_kwargs['lockdown'] = True
+        elif suite == 'windows-proxy':
+            pair_kwargs['proxy'] = True
+        elif suite == 'windows-lan':
+            pair_kwargs['lan'] = True
         if reconnectable:
             pair_kwargs['reconnectable'] = True
         pair = step('evidence-disk', lambda: adapters.pair(lease, runs, lab_id, tunnel=True, evidence_disk=True,
@@ -633,11 +656,18 @@ def run_guest_suite(config, *, profile=None, adapters=None, clock=time.monotonic
         options = dict(evidence_disk=True, duration_seconds=capture_seconds(config), dns=True, windows=True,
                        certificates=dict(https_sha256=lab_config['https_cert_sha256'],
                                          doh_sha256=lab_config['doh_cert_sha256']))
+        if getattr(profile, 'lan_fixtures', False):
+            options['lan_fixtures'] = True
 
-        def lab_call(operation):
+        def lab_call(operation, *, action=None):
             # A new facade each time: the capture's own deadline, not the facade's, bounds the run.
-            facade = adapters.guest(vms['lab'], 'lab', lab_id, clock=clock, sleep=sleep)
-            return facade, facade.call(operation, expected, (), tunnel=tunnel, options=options)
+            lab_vm = vms['lab']
+            qga = getattr(lab_vm, 'qga', None)
+            if qga is not None and (not qga.valid or getattr(qga, 'calls', 0) >= LAB_CALLS_BEFORE_NEW_SESSION):
+                lab_vm.recover_guest()
+            facade = adapters.guest(lab_vm, 'lab', lab_id, clock=clock, sleep=sleep)
+            call_options = {**options, 'action': action} if action is not None else options
+            return facade, facade.call(operation, expected, (), tunnel=tunnel, options=call_options)
 
         vms['lab'] = step('start-lab', lambda: adapters.start(runs['lab'], lab=pair))
         step('resume-lab', vms['lab'].resume)
@@ -713,11 +743,16 @@ def run_guest_suite(config, *, profile=None, adapters=None, clock=time.monotonic
 
         step('start-runner', start_runner)
 
+        def ensure_test_session(operation):
+            if not vm.qga.valid or vm.qga.calls >= CALLS_BEFORE_NEW_SESSION:
+                if vm.qga.calls >= CALLS_BEFORE_NEW_SESSION:
+                    vm.qga.valid = False
+                asks.ready(operation)
+
         def read_status():
             """The runner's status file, or None while there is none; the session is replaced before it is spent."""
             program, arguments = protocol.read_arguments()
-            if not vm.qga.valid or vm.qga.calls >= CALLS_BEFORE_NEW_SESSION:
-                asks.ready('guest-poll')
+            ensure_test_session('guest-poll')
             answered = vm.guest_program(program, arguments, seconds=30)
             if answered.exitcode != 0:
                 return None
@@ -735,7 +770,7 @@ def run_guest_suite(config, *, profile=None, adapters=None, clock=time.monotonic
                 waiting_resume = (handled_sequence > 0
                                   and (measured['runner'] is None
                                        or measured['runner']['sequence'] <= handled_sequence))
-                interval = min(block['poll_seconds'], 3) if waiting_resume else block['poll_seconds']
+                interval = min(block['poll_seconds'], 2) if waiting_resume else block['poll_seconds']
                 alone(min(interval, block['runner_seconds'] - waited))
                 try:
                     status = read_status()
@@ -751,6 +786,23 @@ def run_guest_suite(config, *, profile=None, adapters=None, clock=time.monotonic
                 if status is None:
                     continue
                 measured['runner'] = status
+                if status['state'] == 'lab-action-requested' and status['sequence'] > handled_sequence:
+                    handled_sequence = status['sequence']
+                    action = status.get('action')
+                    if not isinstance(action, dict):
+                        raise LifecycleError('missing-lab-action', vm)
+                    _, reply = lab_call(action['operation'], action=action['params'])
+                    root = getattr(profile, 'ROOT', guest.ROOT)
+                    ensure_test_session('guest-action')
+                    text = asks.run('guest-action-reply', guest.write_reply_script(root, action['id'], reply),
+                                    repeat=True)
+                    try:
+                        guest.reply_written(text, action['id'])
+                    except guest.RunnerAnswerError as error:
+                        raise LifecycleError(str(error), vm) from None
+                    measured['lab_actions'] += 1
+                    failures = 0
+                    continue
                 if status['state'] == 'reboot-requested' and status['sequence'] > handled_sequence:
                     handled_sequence = status['sequence']
                     reboot_index = vm.guest_resets + 1
@@ -792,6 +844,7 @@ def run_guest_suite(config, *, profile=None, adapters=None, clock=time.monotonic
         step('runner', run_runner)
 
         def collect():
+            ensure_test_session('guest-collect')
             text = asks.run('guest-collect', protocol.collect_script(), repeat=True)
             try:
                 value = (profile.collected if profile and hasattr(profile, 'collected') else guest.collected)(text)
@@ -855,6 +908,7 @@ def run_guest_suite(config, *, profile=None, adapters=None, clock=time.monotonic
                                                and recorded.get('boot_id') == initial_boot)
 
         def after():
+            ensure_test_session('guest-after')
             text = asks.run('guest-after', protocol.after_script(), repeat=False)
             try:
                 value = (profile.after if profile and hasattr(profile, 'after') else guest.after)(text)

@@ -47,7 +47,8 @@ def main(argv=None):
     run = commands.add_parser('run', help='execute exploratory Linux L2 or L3 on an explicitly selected stand')
     run.add_argument('suite', choices=['linux-l2', 'linux-l3', 'linux-proxy', 'linux-l5', 'linux-l4',
                                        'linux-reboot-smoke', 'windows-boot-smoke', 'windows-reboot-smoke',
-                                       'windows-lab-smoke', 'windows-list', 'windows-failure', 'windows-lockdown'])
+                                       'windows-lab-smoke', 'windows-list', 'windows-failure', 'windows-lockdown',
+                                       'windows-proxy', 'windows-lan'])
     run.add_argument('--config', required=True)
     run.add_argument('--dry-run', action='store_true')
     run.add_argument('--lab', action='store_true',
@@ -68,7 +69,8 @@ def main(argv=None):
                           help='a run as `runs` lists it, or the base identifier of a lab run (-lab and -test); repeatable')
     evidence.add_argument('--out', required=True, help='a directory that does not exist yet')
     plan = commands.add_parser("plan", help="write a deterministic catalog snapshot to stdout")
-    plan.add_argument("suite", choices=[*SUITES, "windows-list", "windows-proxy", "windows-failure", "windows-lockdown"])
+    plan.add_argument("suite", choices=[*SUITES, "windows-list", "windows-proxy", "windows-failure",
+                                        "windows-lockdown", "windows-lan"])
     plan.add_argument("--without-host-node", action="store_true", help="plan the limited Windows Proxy variant")
     plan.add_argument("--config", required=True)
     plan.add_argument("--profile", required=True)
@@ -100,11 +102,13 @@ def main(argv=None):
             result = plan_lab(config, **options) if args.dry_run else lab_smoke(config, canary=args.canary, **options)
             code = 0 if args.dry_run else result['exit_code']
         elif args.command == 'run' and args.suite in ('windows-boot-smoke', 'windows-reboot-smoke', 'windows-lab-smoke',
-                                                      'windows-list', 'windows-failure', 'windows-lockdown'):
+                                                      'windows-list', 'windows-failure', 'windows-lockdown',
+                                                      'windows-proxy', 'windows-lan'):
             # The Windows profile has its own configuration: no L2 content or accounts. `windows-lab-smoke`,
-            # `windows-list`, `windows-failure` and `windows-lockdown` are runs in the lab by their configuration,
-            # so `--lab` is refused for them too.
-            from . import windows_failure, windows_lab, windows_list_lab, windows_lockdown, windows_smoke
+            # `windows-list`, `windows-failure`, `windows-lockdown`, `windows-proxy` and `windows-lan` are runs in the
+            # lab by their configuration, so `--lab` is refused for them too.
+            from . import (windows_failure, windows_lab, windows_lan, windows_list_lab, windows_lockdown,
+                           windows_proxy_lab, windows_smoke)
             if args.lab or args.control or args.diagnostic:
                 raise ValueError('--lab, --control and --diagnostic are not for the Windows suites')
             config = windows_smoke.load(args.config)
@@ -118,7 +122,9 @@ def main(argv=None):
                        'windows-lab-smoke': windows_lab.run_windows_lab_smoke,
                        'windows-list': windows_list_lab.run_windows_list,
                        'windows-failure': windows_failure.run,
-                       'windows-lockdown': windows_lockdown.run}[args.suite]
+                       'windows-lockdown': windows_lockdown.run,
+                       'windows-proxy': windows_proxy_lab.run,
+                       'windows-lan': windows_lan.run}[args.suite]
                 result = run(config)
                 code = result['exit_code']
         elif args.command == 'run':

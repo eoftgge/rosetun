@@ -37,11 +37,14 @@ PLAN_FILE = 'plan.json'
 # The states of a runner, and the two that end it.
 STATES = ('starting', 'running', 'cleaning', 'finished', 'failed')
 LOCKDOWN_STATES = STATES + ('reboot-requested', 'power-cut-requested')
+ACTION_STATES = STATES + ('lab-action-requested',)
+ACTION_OPERATIONS = ('probe_proxy', 'lan_state')
 ENDED = ('finished', 'failed')
 CLEANUP_RESULTS = ('PASS', 'ERROR', 'UNVERIFIED')
 ANSWER_LIMIT = 16 * 1024
 _CODE = re.compile(r'[a-z0-9:._ -]{0,160}')
 _UTC = re.compile(r'20[0-9]{2}-[0-9]{2}-[0-9]{2}T[0-9:.]{8,16}Z')
+_ACTION_ID = re.compile(r'[0-9a-f]{16}')
 
 
 class RunnerAnswerError(ValueError):
@@ -71,7 +74,7 @@ def config_document(node_port):
     return config
 
 
-def plan_document(lab_id, windows, dns_check, node_port, files, *, labels=LABELS):
+def plan_document(lab_id, windows, dns_check, node_port, files, *, labels=LABELS, binaries=BINARIES):
     """The plan of one run. `windows` are the two (opening, closing) markers in the order of `LABELS`; `files` are the
     rows of the medium (`windows_media.stage`): the binaries are listed with their hashes, which the runner checks."""
     if len(windows) != len(labels):
@@ -80,13 +83,13 @@ def plan_document(lab_id, windows, dns_check, node_port, files, *, labels=LABELS
     for label, (opening, closing) in zip(labels, windows):
         markers[label] = dict(open=marker_query(opening).decode('ascii'), close=marker_query(closing).decode('ascii'))
     rows = {row['name']: row for row in files}
-    if any(name not in rows for name in BINARIES):
+    if any(name not in rows for name in binaries):
         raise ValueError('windows-list-binaries-missing')
     return dict(
         schema=PLAN_SCHEMA, run=lab_id,
         addresses=dict(client4=CLIENTS[4], target4=TARGETS[4], resolver=RESOLVER),
         markers=markers, names=dict(NAMES), baseline=dict(dns_name=dns_name(dns_check)), tun=dict(alias=TUN_ALIAS),
-        files=[dict(name=name, sha256=rows[name]['sha256'], size=rows[name]['size']) for name in BINARIES],
+        files=[dict(name=name, sha256=rows[name]['sha256'], size=rows[name]['size']) for name in binaries],
         config=config_document(node_port))
 
 
@@ -162,14 +165,15 @@ def _words(value, limit=170):
 
 
 def runner_status(text, lab_id, *, labels=LABELS, states=STATES, max_checks=32, max_notes=32,
-                  answer_limit=ANSWER_LIMIT):
+                  max_markers=16, allow_action=False, answer_limit=ANSWER_LIMIT):
     """The runner's status file, checked in shape: states, checks, markers, notes and the cleanup it reports."""
-    value = _object(text, ('schema', 'run', 'state', 'step', 'sequence', 'started_utc', 'updated_utc', 'checks',
-                           'markers', 'notes', 'cleanup', 'error'), limit=answer_limit)
+    expected = ('schema', 'run', 'state', 'step', 'sequence', 'started_utc', 'updated_utc', 'checks',
+                'markers', 'notes', 'cleanup', 'error') + (('action',) if allow_action else ())
+    value = _object(text, expected, limit=answer_limit)
     if (value['schema'] != STATUS_SCHEMA or value['run'] != lab_id or value['state'] not in states
             or type(value['sequence']) is not int or not 0 < value['sequence'] < 100000
             or type(value['checks']) is not list or len(value['checks']) > max_checks
-            or type(value['markers']) is not list or len(value['markers']) > 16
+            or type(value['markers']) is not list or len(value['markers']) > max_markers
             or type(value['notes']) is not list or len(value['notes']) > max_notes):
         raise RunnerAnswerError('invalid-runner-status')
     _words(value['step'], 48)
@@ -207,6 +211,39 @@ def runner_status(text, lab_id, *, labels=LABELS, states=STATES, max_checks=32, 
         if type(error) is not dict or set(error) != {'place', 'text'}:
             raise RunnerAnswerError('invalid-runner-status')
         _words(error['place'], 32), _words(error['text'])
+    if allow_action:
+        action = value['action']
+        if action is not None:
+            if (type(action) is not dict or set(action) != {'id', 'operation', 'params'}
+                    or type(action['id']) is not str or not _ACTION_ID.fullmatch(action['id'])
+                    or action['operation'] not in ACTION_OPERATIONS
+                    or type(action['params']) is not dict):
+                raise RunnerAnswerError('invalid-runner-status')
+    return value
+
+
+_WRITE_REPLY = r'''$dir = '%(root)s'
+$tmp = Join-Path $dir 'action-reply-%(id)s.json.tmp'
+$dst = Join-Path $dir 'action-reply-%(id)s.json'
+[IO.File]::WriteAllBytes($tmp, [Convert]::FromBase64String('%(b64)s'))
+if (Test-Path -LiteralPath $dst) { Remove-Item -LiteralPath $dst -Force }
+[IO.File]::Move($tmp, $dst)
+ConvertTo-Json -Compress -InputObject @{ wrote = $true; id = '%(id)s' }'''
+
+
+def write_reply_script(root, action_id, payload):
+    """Write a controller lab-action reply atomically for the autonomous guest runner."""
+    if type(action_id) is not str or not _ACTION_ID.fullmatch(action_id):
+        raise ValueError('invalid-action-id')
+    encoded = base64.b64encode(json.dumps(payload, sort_keys=True, separators=(',', ':')).encode('utf-8')).decode('ascii')
+    return '\n'.join(line.strip() for line in (_WRITE_REPLY % dict(
+        root=_quoted(root), id=action_id, b64=encoded)).splitlines() if line.strip())
+
+
+def reply_written(text, action_id):
+    value = _object(text, ('wrote', 'id'))
+    if value['wrote'] is not True or value['id'] != action_id:
+        raise RunnerAnswerError('invalid-guest-answer')
     return value
 
 
@@ -309,22 +346,43 @@ _AFTER_LOCKDOWN_EXTRA = r'''    lockdown_wfp_provider = [bool]($raw -match '<pro
     boot_check_task = ($null -ne (Get-ScheduledTask -TaskName 'RosetunLockdownBootCheck' -ErrorAction SilentlyContinue))
     matrix_user = ($null -ne (Get-LocalUser -Name 'RosetunMatrixUser' -ErrorAction SilentlyContinue))
 '''
+_AFTER_PROXY_EXTRA = r'''    lockdown_wfp_provider = [bool]($raw -match '<providerKey>\s*\{?f12dbedd-f3c7-4a72-b0f8-20559c88b112\}?\s*</providerKey>')
+    lockdown_wfp_sublayer = [bool]($raw -match '<subLayerKey>\s*\{?f829a64d-c373-4d92-9d66-e1c680f3794f\}?\s*</subLayerKey>')
+    lockdown_service = ($null -ne (Get-Service -Name 'Rosetun' -ErrorAction SilentlyContinue))
+    egress_watch_task = ($null -ne (Get-ScheduledTask -TaskName 'RosetunEgressWatch' -ErrorAction SilentlyContinue))
+    proxy_user = ($null -ne (Get-LocalUser -Name 'RosetunProxyUser' -ErrorAction SilentlyContinue))
+    desktop_task = ($null -ne (Get-ScheduledTask -TaskName 'RosetunProxyDesktop' -ErrorAction SilentlyContinue))
+    desktop_process = [bool](Get-Process -Name 'desktop_proxy' -ErrorAction SilentlyContinue)
+'''
+_AFTER_LAN_EXTRA = r'''    extra_address = [bool](Get-NetIPAddress -IPAddress '198.51.100.10' -ErrorAction SilentlyContinue)
+    lan_directory = (Test-Path -LiteralPath (Join-Path $root 'lan-matrix'))
+'''
 AFTER_FIELDS = ('runner_task', 'helper_task', 'helper_process', 'engine_process', 'tunnel_adapter', 'binaries',
                 'list_directory', 'wfp_provider', 'wfp_sublayer', 'root_removed')
 LOCKDOWN_AFTER_FIELDS = AFTER_FIELDS[:-1] + (
     'lockdown_wfp_provider', 'lockdown_wfp_sublayer', 'lockdown_service', 'resume_task', 'boot_check_task',
     'matrix_user', 'root_removed')
+PROXY_AFTER_FIELDS = AFTER_FIELDS[:-1] + (
+    'lockdown_wfp_provider', 'lockdown_wfp_sublayer', 'lockdown_service', 'egress_watch_task', 'proxy_user',
+    'desktop_task', 'desktop_process', 'root_removed')
+LAN_AFTER_FIELDS = AFTER_FIELDS[:-1] + ('extra_address', 'lan_directory', 'root_removed')
 
 
-def after_script(root=ROOT, task=RUNNER_TASK, *, lockdown=False):
-    extra = _AFTER_LOCKDOWN_EXTRA if lockdown else ''
+def after_script(root=ROOT, task=RUNNER_TASK, *, lockdown=False, proxy=False, lan=False):
+    if sum((bool(lockdown), bool(proxy), bool(lan))) > 1:
+        raise ValueError('conflicting-after-modes')
+    extra = (_AFTER_LOCKDOWN_EXTRA if lockdown else _AFTER_PROXY_EXTRA if proxy
+             else _AFTER_LAN_EXTRA if lan else '')
     return '\n'.join(line.strip() for line in (_AFTER % dict(
         root=_quoted(root), task=_quoted(task), alias=TUN_ALIAS, extra=extra)).splitlines() if line.strip())
 
 
-def after(text, *, lockdown=False):
+def after(text, *, lockdown=False, proxy=False, lan=False):
     """What is left in the guest, as the controller sees it: a leftover is True, except `root_removed`, which is the aim."""
-    fields = LOCKDOWN_AFTER_FIELDS if lockdown else AFTER_FIELDS
+    if sum((bool(lockdown), bool(proxy), bool(lan))) > 1:
+        raise ValueError('conflicting-after-modes')
+    fields = (LOCKDOWN_AFTER_FIELDS if lockdown else PROXY_AFTER_FIELDS if proxy
+              else LAN_AFTER_FIELDS if lan else AFTER_FIELDS)
     value = _object(text, fields)
     if any(type(value[name]) is not bool for name in fields):
         raise RunnerAnswerError('invalid-guest-answer')

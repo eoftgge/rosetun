@@ -85,6 +85,17 @@ HTTPS_KINDS = ('https-direct', 'https-tunnel')
 EGRESS = '203.0.113.1'
 # The throwaway client of the test machine listens here, on loopback only.
 SOCKS_PORT = 10808
+# Stage 10d: optional LAN/proxy fixtures in the lab router namespace (opt-in via `lan_fixtures: true`).
+LAN_PEER = '192.0.2.254'
+ROUTED_NODE = '203.0.113.10'
+LAN_LISTENER_PORT = 47902
+LAN_ECHO_PORT = 47903
+LAN_HOLD_PORT = 47904
+LAN_BROADCAST_PORT = 47901
+MDNS_GROUP, MDNS_PORT, MDNS_MAC = '224.0.0.251', 5353, '01:00:5e:00:00:fb'
+SSDP_GROUP, SSDP_PORT, SSDP_MAC = '239.255.255.250', 1900, '01:00:5e:7f:ff:fa'
+EXTRA_ADDRESS = '198.51.100.10'
+PRIVATE_BEHIND_ROUTER = '10.255.255.1'
 # Stage 7b2a: the lab's resolver and DoH target, both inside the routed namespace.
 RESOLVER = '203.0.113.53'
 DOH_ADDRESS = '203.0.113.3'
@@ -133,6 +144,13 @@ ALLOWANCES = (
     ('ipv6-unspecified-rs', 'icmpv6', 'router solicitation from :: to all routers'),
     ('ipv6-link-local-echo', 'icmpv6', "echo request (128, code 0) from the test machine's link-local address to "
                                        "the lab's, or the echo reply (129, code 0) back, between the two machines"),
+    ('lan-peer-arp', 'arp', 'ARP request, reply or neighbor poll between the test machine and the lab LAN peer address'),
+    ('extra-address-arp', 'arp', 'RFC 5227 ARP probe or announcement for the extra LAN address from the test machine'),
+    ('shared-proxy-peer', 'tcp', 'TCP between the lab LAN peer address and the test machine proxy port'),
+    ('shared-proxy-server', 'tcp', 'TCP between the lab gateway address and the test machine proxy port'),
+    ('lan-mdns', 'udp', 'IPv4 mDNS datagram from the test machine to 224.0.0.251:5353'),
+    ('lan-ssdp', 'udp', 'IPv4 SSDP datagram from the test machine to 239.255.255.250:1900'),
+    ('lan-broadcast', 'udp', 'IPv4 limited broadcast datagram from the test machine to 255.255.255.255:47901'),
 )
 
 BROADCAST = 'ff:ff:ff:ff:ff:ff'
@@ -700,7 +718,7 @@ def _infrastructure(frame):
     return False
 
 
-def _allowance(frame, names):
+def _allowance(frame, names, *, proxy_port=SOCKS_PORT):
     """Name of the declared allowance a frame matches, else None."""
     sender = next((role for role, mac in MACS.items() if mac == frame.src_mac), None)
     if sender is None:
@@ -715,12 +733,48 @@ def _allowance(frame, names):
             return 'ipv6-link-local-echo' if 'ipv6-link-local-echo' in names else None
     if frame.arp is not None:
         op, sha, spa, tha, tpa = frame.arp
-        if sha != frame.src_mac or frame.dst_mac != BROADCAST:
+        if sha != frame.src_mac:
+            return None
+        if 'lan-peer-arp' in names:
+            if (sender == 'test' and (spa, tpa) == (CLIENTS[4], LAN_PEER)
+                    and ((op == 1 and ((frame.dst_mac in (BROADCAST, MACS['lab']) and tha == ZERO_MAC)
+                                       or (frame.dst_mac == MACS['lab'] and tha == MACS['lab'])))
+                         or (op == 2 and frame.dst_mac == MACS['lab'] and tha == MACS['lab']))):
+                return 'lan-peer-arp'
+            if (sender == 'lab' and (spa, tpa) == (LAN_PEER, CLIENTS[4])
+                    and ((op == 1 and frame.dst_mac in (BROADCAST, MACS['test']) and tha in (ZERO_MAC, MACS['test']))
+                         or (op == 2 and frame.dst_mac == MACS['test'] and tha == MACS['test']))):
+                return 'lan-peer-arp'
+        if frame.dst_mac != BROADCAST:
             return None
         if op in (1, 2) and spa == tpa == own4 and tha in ('00:00:00:00:00:00', sha):
             return 'arp-announcement' if 'arp-announcement' in names else None
         if op == 1 and spa == '0.0.0.0' and tpa == own4 and tha == '00:00:00:00:00:00':
             return 'arp-probe' if 'arp-probe' in names else None
+        if sender == 'test' and 'extra-address-arp' in names:
+            if ((op in (1, 2) and spa == tpa == EXTRA_ADDRESS and tha in ('00:00:00:00:00:00', sha))
+                    or (op == 1 and spa == '0.0.0.0' and tpa == EXTRA_ADDRESS and tha == '00:00:00:00:00:00')):
+                return 'extra-address-arp'
+    elif frame.family == 4 and frame.proto == 6 and not frame.fragment:
+        for name, lab_ip in (('shared-proxy-peer', LAN_PEER), ('shared-proxy-server', GATEWAYS[4])):
+            if name not in names:
+                continue
+            if ((frame.src_mac, frame.dst_mac, frame.src, frame.dst, frame.dport)
+                    == (MACS['lab'], MACS['test'], lab_ip, CLIENTS[4], proxy_port)
+                    or (frame.src_mac, frame.dst_mac, frame.src, frame.dst, frame.sport)
+                    == (MACS['test'], MACS['lab'], CLIENTS[4], lab_ip, proxy_port)):
+                return name
+    elif frame.family == 4 and frame.proto == 17 and not frame.fragment and sender == 'test':
+        if ((frame.dst_mac, frame.src, frame.dst, frame.dport) == (MDNS_MAC, CLIENTS[4], MDNS_GROUP, MDNS_PORT)
+                and 'lan-mdns' in names):
+            return 'lan-mdns'
+        if ((frame.dst_mac, frame.src, frame.dst, frame.dport) == (SSDP_MAC, CLIENTS[4], SSDP_GROUP, SSDP_PORT)
+                and 'lan-ssdp' in names):
+            return 'lan-ssdp'
+        if ((frame.dst_mac, frame.src, frame.dst, frame.dport)
+                == (BROADCAST, CLIENTS[4], '255.255.255.255', LAN_BROADCAST_PORT)
+                and 'lan-broadcast' in names):
+            return 'lan-broadcast'
     elif frame.family == 6 and frame.icmp is not None and frame.src == '::':
         if frame.icmp[0] == 133 and frame.dst == 'ff02::2' and frame.dst_mac == '33:33:00:00:00:02':
             return 'ipv6-unspecified-rs' if 'ipv6-unspecified-rs' in names else None
@@ -740,14 +794,23 @@ def _tunnel_port(port):
     return port
 
 
-def _tunnel_frame(frame, port):
-    """TCP between the test machine and the lab's own address on the node port, either way."""
+def _tunnel_addresses(addresses):
+    if addresses is None:
+        return (GATEWAYS[4],)
+    if (type(addresses) not in (list, tuple) or not addresses
+            or not set(addresses) <= {GATEWAYS[4], ROUTED_NODE}):
+        raise ValueError('invalid-tunnel-addresses')
+    return tuple(dict.fromkeys(addresses))
+
+
+def _tunnel_frame(frame, port, addresses=(GATEWAYS[4],)):
+    """TCP between the test machine and a lab VPN node address on the node port, either way."""
     if frame.family != 4 or frame.proto != 6:
         return False
-    return ((frame.src_mac, frame.dst_mac, frame.src, frame.dst, frame.dport)
-            == (MACS['test'], MACS['lab'], CLIENTS[4], GATEWAYS[4], port)
-            or (frame.src_mac, frame.dst_mac, frame.src, frame.dst, frame.sport)
-            == (MACS['lab'], MACS['test'], GATEWAYS[4], CLIENTS[4], port))
+    return ((frame.src_mac, frame.dst_mac, frame.src, frame.dport) == (MACS['test'], MACS['lab'], CLIENTS[4], port)
+            and frame.dst in addresses
+            or (frame.src_mac, frame.dst_mac, frame.dst, frame.sport) == (MACS['lab'], MACS['test'], CLIENTS[4], port)
+            and frame.src in addresses)
 
 
 def direct_connection(https):
@@ -983,7 +1046,7 @@ def _phase_hit(frame, run):
     return (direction, *found) if found else None
 
 
-def _category(frame, is_probe, names, tunnel_port):
+def _category(frame, is_probe, names, tunnel_port, *, tunnel_addresses=(GATEWAYS[4],), proxy_port=SOCKS_PORT):
     """The category of a frame that is no marker; an allowance is ('allowed', name)."""
     if frame.fragment:
         return 'unexpected'
@@ -991,9 +1054,9 @@ def _category(frame, is_probe, names, tunnel_port):
         return 'probe'
     if _infrastructure(frame):
         return 'infrastructure'
-    if tunnel_port is not None and _tunnel_frame(frame, tunnel_port):
+    if tunnel_port is not None and _tunnel_frame(frame, tunnel_port, tunnel_addresses):
         return 'tunnel'
-    if allowed := _allowance(frame, names):
+    if allowed := _allowance(frame, names, proxy_port=proxy_port):
         return 'allowed', allowed
     return 'unexpected' if _involves_test(frame) else 'foreign'
 
@@ -1006,10 +1069,10 @@ def _endpoint(address, port):
     return f'[{address}]:{port}' if ':' in address else f'{address}:{port}'
 
 
-def _flow_kind(peer, tunnel_port):
+def _flow_kind(peer, tunnel_port, tunnel_addresses=(GATEWAYS[4],)):
     """`node` for the node's own port, `target` for the HTTPS target, else `other`."""
     address, port = peer
-    if tunnel_port is not None and port == tunnel_port and address in (GATEWAYS[4], GATEWAYS[6]):
+    if tunnel_port is not None and port == tunnel_port and address in (*tunnel_addresses, GATEWAYS[6]):
         return 'node'
     if port == HTTPS_PORT and address in (TARGETS[4], TARGETS[6]):
         return 'target'
@@ -1024,8 +1087,8 @@ class _Flows:
     seen, and for FIN and RST from which side. At most `FLOW_LIMIT` connections are kept; the rest are counted.
     """
 
-    def __init__(self, tunnel_port):
-        self.tunnel_port, self.start = tunnel_port, None
+    def __init__(self, tunnel_port, tunnel_addresses=(GATEWAYS[4],)):
+        self.tunnel_port, self.tunnel_addresses, self.start = tunnel_port, tunnel_addresses, None
         self.table, self.omitted = {}, set()
 
     def add(self, frame, seconds):
@@ -1043,9 +1106,9 @@ class _Flows:
                 self.omitted.add(key)
                 return
             row = self.table[key] = dict(
-                kind=_flow_kind(peer, self.tunnel_port), client=_endpoint(*client), server=_endpoint(*peer),
-                frames_out=0, frames_back=0, bytes_out=0, bytes_back=0, first_ms=None, last_ms=None,
-                syn=False, syn_ack=False, fin=[], rst=[])
+                kind=_flow_kind(peer, self.tunnel_port, self.tunnel_addresses), client=_endpoint(*client),
+                server=_endpoint(*peer), frames_out=0, frames_back=0, bytes_out=0, bytes_back=0, first_ms=None,
+                last_ms=None, syn=False, syn_ack=False, fin=[], rst=[])
         side = 'out' if outbound else 'back'
         row['frames_' + side] += 1
         row['bytes_' + side] += len(frame.payload)
@@ -1384,6 +1447,7 @@ def _window_allowances(window_allowances, found_mode):
 
 
 def classify_windows(raw, run, windows_expected, *, health, ready, allowances=(), tunnel_port=None,
+                     tunnel_addresses=None, proxy_port=SOCKS_PORT,
                      https=None, probes=(), limit=CAPTURE_LIMIT, required_labels=(), flows=False,
                      window_allowances=None, inbound_poll=None):
     """Split one capture into phase windows and give every expected window its own leak verdict.
@@ -1435,6 +1499,9 @@ def classify_windows(raw, run, windows_expected, *, health, ready, allowances=()
     by_label = _window_allowances(window_allowances, found_mode)
     if tunnel_port is not None:
         _tunnel_port(tunnel_port)
+    addresses = _tunnel_addresses(tunnel_addresses)
+    if type(proxy_port) is not int or not 1 <= proxy_port <= 65535:
+        raise ValueError('invalid-proxy-port')
     parsed, unparsed, problem = _parse_capture(raw, limit)
     is_probe = _probe_matcher([frame for _, frame in parsed], probes, direct_connection(https))
     poll = inbound_poll is not None
@@ -1454,7 +1521,8 @@ def classify_windows(raw, run, windows_expected, *, health, ready, allowances=()
         if index not in windows:
             own = names | by_label.get(label, frozenset())
             windows[index] = dict(categories=_window_counts(own, tunnel_port, poll), names=own, unexpected=[], reasons=[],
-                                  labels=[], first=None, last=None, flows=_Flows(tunnel_port) if flows else None,
+                                  labels=[], first=None, last=None,
+                                  flows=_Flows(tunnel_port, addresses) if flows else None,
                                   direct=_Direct() if flows else None,
                                   seen={(word, kind): [] for word in WINDOW_WORDS for kind in ('request', 'response')})
         return windows[index]
@@ -1505,7 +1573,7 @@ def classify_windows(raw, run, windows_expected, *, health, ready, allowances=()
             category = POLL_CATEGORY
         else:
             category = _category(item, is_probe, names if current is None else windows[current]['names'],
-                                 tunnel_port)
+                                 tunnel_port, tunnel_addresses=addresses, proxy_port=proxy_port)
         if current is None:
             _count(outside, category, item, outside_frames, 'outside-window')
         else:
@@ -1568,7 +1636,8 @@ def classify_windows(raw, run, windows_expected, *, health, ready, allowances=()
     return answer
 
 
-def classified_frames(raw, run, *, probes=(), https=None, tunnel_port=None, allowances=(), limit=CAPTURE_LIMIT):
+def classified_frames(raw, run, *, probes=(), https=None, tunnel_port=None, tunnel_addresses=None,
+                      proxy_port=SOCKS_PORT, allowances=(), limit=CAPTURE_LIMIT):
     """Every frame of a capture with its time, the window it fell in and the category the classifier gives it.
 
     Returns `(rows, unparsed, problem, labels)`: `labels` maps the index of each window the markers name to its label (the
@@ -1581,6 +1650,9 @@ def classified_frames(raw, run, *, probes=(), https=None, tunnel_port=None, allo
     names = _declared(allowances)
     if tunnel_port is not None:
         _tunnel_port(tunnel_port)
+    addresses = _tunnel_addresses(tunnel_addresses)
+    if type(proxy_port) is not int or not 1 <= proxy_port <= 65535:
+        raise ValueError('invalid-proxy-port')
     parsed, unparsed, problem = _parse_capture(raw, limit)
     is_probe = _probe_matcher([frame for _, frame in parsed], probes, direct_connection(https))
     times = _record_times(raw, limit)
@@ -1595,7 +1667,7 @@ def classified_frames(raw, run, *, probes=(), https=None, tunnel_port=None, allo
                 current = index if word == 'open' else None
             rows.append((position, at, frame, index, 'marker'))
             continue
-        category = _category(frame, is_probe, names, tunnel_port)
+        category = _category(frame, is_probe, names, tunnel_port, tunnel_addresses=addresses, proxy_port=proxy_port)
         if type(category) is tuple:
             category = category[0] + ':' + category[1]
         rows.append((position, at, frame, current, category))

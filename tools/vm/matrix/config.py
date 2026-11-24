@@ -10,6 +10,8 @@ FAILURE_SUITE = "windows-failure"
 FAILURE_CATALOG = LINUX_ROOT.parent / "windows" / "failure-core.tsv"
 LOCKDOWN_SUITE = "windows-lockdown"
 LOCKDOWN_CATALOG = LINUX_ROOT.parent / "windows" / "lockdown-core.tsv"
+LAN_SUITE = "windows-lan"
+LAN_CATALOG = LINUX_ROOT.parent / "windows" / "lan-core.tsv"
 # The guest resets a suite plans: any other reset of its run is an error.
 PLANNED_REBOOTS = {"linux-l4": 2, "linux-reboot-smoke": 1, "windows-reboot-smoke": 1}
 # The suites whose job runs in phases of the job timeout each, one more than its reboots (see `job_span`).
@@ -73,10 +75,11 @@ def make_plan(suite, profile_name, profile):
     if suite == "windows-list":
         from .windows_list import make_plan as windows_plan
         return windows_plan(profile_name, profile)
-    if suite not in SUITES and suite not in (FAILURE_SUITE, LOCKDOWN_SUITE):
+    if suite not in SUITES and suite not in (FAILURE_SUITE, LOCKDOWN_SUITE, LAN_SUITE):
         raise ValueError("unknown suite")
     catalog_path = (FAILURE_CATALOG if suite == FAILURE_SUITE else
-                    LOCKDOWN_CATALOG if suite == LOCKDOWN_SUITE else LINUX_ROOT / SUITES[suite])
+                    LOCKDOWN_CATALOG if suite == LOCKDOWN_SUITE else
+                    LAN_CATALOG if suite == LAN_SUITE else LINUX_ROOT / SUITES[suite])
     rows = read_catalog(catalog_path)
     return {
         "schema": PLAN_SCHEMA,
@@ -99,7 +102,7 @@ def validate_plan(plan):
     fields = {"schema", "suite", "profile", "policy", "planned_reboots", "catalog", "catalog_digest"}
     if not isinstance(plan, dict) or set(plan) != fields or plan["schema"] != PLAN_SCHEMA:
         raise ValueError("unsupported plan schema or fields")
-    if not isinstance(plan["suite"], str) or (plan["suite"] not in SUITES and plan["suite"] not in (FAILURE_SUITE, LOCKDOWN_SUITE)):
+    if not isinstance(plan["suite"], str) or (plan["suite"] not in SUITES and plan["suite"] not in (FAILURE_SUITE, LOCKDOWN_SUITE, LAN_SUITE)):
         raise ValueError("unknown plan suite")
     if not isinstance(plan["profile"], str) or not plan["profile"].strip():
         raise ValueError("invalid plan profile")

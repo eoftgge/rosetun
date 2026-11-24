@@ -5854,7 +5854,115 @@ after restoring the helper at the end of Scenario 5 so OS background retries wok
 
 - Nothing qualifies: `qualified: false`, diagnostic runs only, no release gate or Hyper-V parity table is touched.
 - Scenario 3 (LAN / inbound listener), DHCP renewal, sleep/resume, and real hardware power loss are out of scope here.
-- Remaining Windows suites (Proxy, LAN, Upgrade): stages 10d and 10e.
+- Remaining Windows suite (Upgrade): stage 10e.
+
+## Stage 10d: Windows Proxy (`windows-proxy`) and Local Network (`windows-lan`)
+
+`run windows-proxy` and `run windows-lan` run the Windows Proxy and Windows Local Network (LAN) suites on the isolated
+two-machine wire (`lab-v5n` + `windows-11-26h2-pro-v1`), keeping `qualified: false` and diagnostic-only status.
+
+### Lab image `lab-v5n` and controller `lab-action-requested` protocol
+
+Built from untouched `lab-v5m` with updated `lab-entry.py`, `lab_protocol.py`, and the lab CA certificate at
+`/usr/local/share/ca-certificates/rosetun-lab-ca.crt`:
+
+- **LAN & Proxy fixtures (`lan_fixtures = true`):**
+  - Second peer address `192.0.2.20` (`LAN_PEER`) on the lab wire interface, plus a routed VPN node `203.0.113.10`
+    (`ROUTED_NODE`) and a blackholed private-behind-router IP `10.255.255.1` (`PRIVATE_BEHIND_ROUTER`) with a TCP
+    listener on `:80` inside the lab router.
+  - Peer TCP fixtures on `192.0.2.20` and `192.0.2.1`: listener (`:19080`), echo (`:19081`, used for the 600 s long
+    session), hold-open (`:19082`), and UDP/multicast capture for mDNS (`224.0.0.251:5353`), SSDP
+    (`239.255.255.250:1900`), and limited broadcast (`255.255.255.255:19083`).
+  - Lab `sing-box` node configuration adds UDP DNS server `lab-dns` (`203.0.113.53`, replying `203.0.113.2` for
+    `listed.lab.test`) with `route.default_domain_resolver = "lab-dns"` so domain-targeted proxy probes resolve inside
+    the isolated lab.
+- **Controller-mediated lab actions (`lab-action-requested`):**
+  - Both runners stay on the guest side of the wire and request out-of-band lab probes through `status.json`
+    (`state: "lab-action-requested"`, `action: {id, kind, ...}`), which the host controller dispatches to `lab-entry.py`
+    via QGA and writes back to `<ROOT>\lab-action-result.json`.
+  - Supported actions: `probe_proxy` (from `192.0.2.20` or `192.0.2.1` to the guest's shared HTTP/SOCKS5 proxy port,
+    verifying direct, tunneled, auth, and blocked behavior) and `lan_state` (reading observed peer tokens/connections
+    and starting/stopping the hold-open listener).
+
+### Windows Proxy (`windows-proxy`)
+
+- Catalog: `tools/vm/windows/proxy-checks.json` (46 checks covering strict proxy, auth, rules, desktop WinINet
+  apply/restore/crash-restore under a temporary `RosetunProxyUser` profile, LAN sharing, and Lockdown + shared proxy).
+- Guest runner: `tools/vm/windows/guest/run-windows-proxy.ps1` (46,083 bytes, below the 65,536-byte QGA limit);
+  uses a pinned `desktop_proxy.exe` binary alongside `rosetun.exe`, `rosetun-helper-privileged.exe`, and `sing-box.exe`.
+- Five wire windows: `baseline` and `recovery` (calibration only, `verdict: null`), plus three judged windows:
+  - `strict`: expects zero direct flows (`leak: NONE`), tunnel traffic present.
+  - `sharing-strict`: expects zero unexpected flows (`leak: NONE`), tunnel traffic present, allowances
+    `('lan-peer-arp', 'shared-proxy-peer', 'shared-proxy-server')`.
+  - `lockdown`: expects zero unexpected flows (`leak: NONE`), tunnel traffic present, allowances
+    `('lan-peer-arp', 'shared-proxy-peer')`.
+- Post-cleanup `_AFTER` (`proxy=True`) additionally verifies Lockdown WFP provider/sublayer absence, no leftover
+  `RosetunProxyUser` account/profile, and no lingering `desktop_proxy.exe` processes.
+
+### Windows Local Network (`windows-lan`)
+
+- Catalog: `tools/vm/windows/lan-core.tsv` (72 checks covering `allow_lan` on/off, peer TCP, mDNS/SSDP/limited
+  broadcast, 600 s long-lived peer echo session, live IPv4 address add/remove with disjoint `/26` `198.51.100.10/26`,
+  explicit LAN rules, `allow_private_behind_router` against `10.255.255.1:80`, refused live `apply` and disconnect/switch,
+  in-network VPN server exclusion on `192.0.2.1`, and `lan-reopen`).
+- Guest runner: `tools/vm/windows/guest/run-windows-lan.ps1` (46,416 bytes, below the 65,536-byte QGA limit).
+- Eleven wire windows: `baseline` and `recovery` (calibration only), plus nine judged windows: `lan-on`,
+  `address-change`, `lan-rule`, `lan-private`, `lan-off`, `switch`, `lan-server`, `lan-server-private`, and
+  `lan-reopen`. Each judged window is checked against exact expected direct flows and narrow per-window allowances
+  (`lan-peer-arp`, `lan-mdns`, `lan-ssdp`, `lan-broadcast`, `extra-address-arp`), plus cross-checks between guest
+  check verdicts and pcap-observed flows/allowances.
+- Post-cleanup `_AFTER` (`lan=True`) additionally verifies the temporary `198.51.100.10` address is removed from the
+  physical adapter and session WFP state is clean.
+
+### Commands and configurations
+
+    python3 -B -m tools.vm.matrix run windows-proxy --config CONFIG [--dry-run]
+    python3 -B -m tools.vm.matrix run windows-lan   --config CONFIG [--dry-run]
+
+Configurations:
+- `execution-windows-proxy.example.toml`, schema `rosetun.matrix.execution.windows.v6`, with `[proxy]` (`proxy_port`,
+  `desktop_proxy`, `desktop_proxy_sha256`, plus timing, `xorriso`, and pinned binary hashes).
+- `execution-windows-lan.example.toml`, schema `rosetun.matrix.execution.windows.v7`, with `[lan]`
+  (`long_session_seconds` in `10..900`, canonical `600`, plus timing, `xorriso`, and pinned binary hashes).
+`report` refuses both `windows-proxy` and `windows-lan` without wire evidence.
+
+### Offline tests
+
+- `tests/test_windows_proxy_lab.py`: 46-check catalog and `run-windows-proxy.ps1` parity, QGA payload ceiling,
+  `windows.v6` validation and `execution-windows-proxy.example.toml`, CLI `plan`/`report` refusal, `probe_proxy` lab
+  action dispatch, `sharing-strict`/`lockdown` window allowances, and synthetic full/leak/cleanup runs.
+- `tests/test_windows_lan.py`: 72-check `lan-core.tsv` and `run-windows-lan.ps1` parity, QGA payload ceiling,
+  `windows.v7` validation and `execution-windows-lan.example.toml`, `lab-entry.py` DNS resolver & LAN fixtures config,
+  `lan_state` action dispatch, all 9 judged windows and cross-checks, and synthetic full/leak/cleanup runs.
+- `tests/test_lab.py` and `tools/vm/windows/tests/Test-RosetunScriptArguments.ps1` cover the new packet allowances and
+  PowerShell syntax/argument rules across `run-windows-proxy.ps1` and `run-windows-lan.ps1`.
+
+### Checked on the stand (2026-11-24, developer runs, not a qualification)
+
+Debian 13 on WSL2, QEMU 10.0.13, `windows-11-26h2-pro-v1`, `lab-v5n` (`sha256=7422229d...`, built from untouched
+`lab-v5m` `sha256=5139fb9a...`), dedicated state directory `state-10d-dev`, Windows release build of the checkout
+(`rosetun.exe`, `rosetun-helper-privileged.exe`, `desktop_proxy.exe`) and pinned `sing-box` 1.14.3, `settle_seconds = 60`
+(working tree dirty with this stage's changes):
+
+| suite | run | exit | duration | checks | lab actions | judged windows | cleanup |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `windows-proxy` (run 1) | `1eb8a01f...` | 0 | 289.5 s | 46 PASS | 9 | `strict: EXPECTED` (tunnel 389); `sharing-strict: EXPECTED` (tunnel 97, allowed `peer: 22, server: 5`); `lockdown: EXPECTED` (tunnel 157, allowed `peer: 27`) | runner `PASS`, `left: []` |
+| `windows-proxy` (run 2) | `df62b71c...` | 0 | 300.8 s | 46 PASS | 9 | `strict: EXPECTED` (tunnel 392); `sharing-strict: EXPECTED` (tunnel 98, allowed `peer: 22, server: 5`); `lockdown: EXPECTED` (tunnel 156, allowed `peer: 27`) | runner `PASS`, `left: []` |
+| `windows-lan` (smoke, `30 s`) | `6d2c9733...` | 0 | 356.1 s | 72 PASS | 9 | all 9 judged windows `EXPECTED` | runner `PASS`, `left: []` |
+| `windows-lan` (canonical `600 s`, run 1) | `bd26a257...` | 0 | 925.9 s | 72 PASS (`120` echoes) | 9 | all 9 judged windows `EXPECTED` (`lan-on` tunnel 1382, `address-change` 205, `lan-rule` 62, `lan-private` 81, `lan-off` 237, `switch` 82, `lan-server` 109, `lan-server-private` 138, `lan-reopen` 60) | runner `PASS`, `left: []` |
+| `windows-lan` (canonical `600 s`, run 2) | `044b4d31...` | 0 | 920.3 s | 72 PASS (`120` echoes) | 9 | all 9 judged windows `EXPECTED` (`lan-on` tunnel 1418, `address-change` 257, `lan-rule` 61, `lan-private` 63, `lan-off` 123, `switch` 63, `lan-server` 111, `lan-server-private` 216, `lan-reopen` 62) | runner `PASS`, `left: []` |
+
+All five runs: `accepted: true`, `findings: []`, `unverified: []`, `image_unchanged: true`, both `-lab` and `-test`
+`completion_verified: true`, zero leftover WFP/user/task/address state. Live bring-up caught and fixed:
+- Lab `sing-box` DNS resolver (`lab-dns` -> `203.0.113.53` + `route.default_domain_resolver`) for `listed.lab.test` proxy checks.
+- Setting WinINet `AutoConfigURL` via `wininet.dll` `InternetSetOptionW` instead of raw registry writes under fresh `RosetunProxyUser` profiles, plus `@(...)` array wrapping in `strict.restart` under PowerShell 5.1 StrictMode.
+- Deriving `$tunAddress` from `plan.request.settings.tun.ipv4` (`198.51.100.65`) and using disjoint `/26` (`198.51.100.10/26`) so the added address does not overlap TUN `198.51.100.65/30`.
+- Eliminating unprotected OS background-probe gaps inside judged LAN windows (`Clear-PeerNeighbor` sleep, redundant disconnects in `Connect-LanVariant`, and opening the `switch` judged window right before the reconnected `lan-on` session).
+
+### Not done here, UNRUN
+
+- Nothing qualifies: `qualified: false`, diagnostic runs only, no release gate or Hyper-V parity table is touched.
+- Remaining Windows suite (Upgrade): stage 10e.
 
 ## Stage 12: release evidence pack
 

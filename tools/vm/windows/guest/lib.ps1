@@ -26,7 +26,7 @@ function ConvertTo-RosetunSafeText {
 }
 
 function Initialize-RosetunRunner {
-    param([Parameter(Mandatory)][string]$StatusPath, [Parameter(Mandatory)][string]$RunId)
+    param([Parameter(Mandatory)][string]$StatusPath, [Parameter(Mandatory)][string]$RunId, [switch]$WithAction)
     $script:RunnerStatusPath = $StatusPath
     $script:RunnerStatus = [ordered]@{
         schema = 'rosetun.matrix.windows-runner-status.v1'
@@ -42,6 +42,7 @@ function Initialize-RosetunRunner {
         cleanup = $null
         error = $null
     }
+    if ($WithAction) { $script:RunnerStatus['action'] = $null }
     Save-RosetunStatus
 }
 
@@ -73,6 +74,7 @@ function Resume-RosetunRunner {
         cleanup = $loaded.cleanup
         error = $loaded.error
     }
+    if ($loaded.PSObject.Properties.Name -contains 'action') { $script:RunnerStatus['action'] = $loaded.action }
 }
 
 function Save-RosetunStatus {
@@ -107,7 +109,7 @@ function Save-RosetunStatus {
 }
 
 function Set-RosetunRunnerState {
-    param([Parameter(Mandatory)][ValidateSet('starting', 'running', 'reboot-requested', 'power-cut-requested', 'cleaning', 'finished', 'failed')][string]$State,
+    param([Parameter(Mandatory)][ValidateSet('starting', 'running', 'reboot-requested', 'power-cut-requested', 'lab-action-requested', 'cleaning', 'finished', 'failed')][string]$State,
         [string]$Step)
     $script:RunnerStatus.state = $State
     if ($Step) { $script:RunnerStatus.step = $Step }
@@ -118,6 +120,33 @@ function Set-RosetunRunnerStep {
     param([Parameter(Mandatory)][string]$Step)
     $script:RunnerStatus.step = $Step
     Save-RosetunStatus
+}
+
+function Invoke-RosetunLabAction {
+    param(
+        [Parameter(Mandatory)][string]$Root,
+        [Parameter(Mandatory)][ValidateSet('probe_proxy', 'lan_state')][string]$Operation,
+        [hashtable]$Parameters = @{},
+        [int]$TimeoutSeconds = 90
+    )
+    $id = [guid]::NewGuid().ToString('N').Substring(0, 16)
+    $replyPath = Join-Path $Root ('action-reply-' + $id + '.json')
+    if (Test-Path -LiteralPath $replyPath) { Remove-Item -LiteralPath $replyPath -Force -ErrorAction SilentlyContinue }
+    $script:RunnerStatus['action'] = [ordered]@{ id = $id; operation = $Operation; params = $Parameters }
+    Set-RosetunRunnerState -State 'lab-action-requested' -Step ('lab-' + $Operation)
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    while ([DateTime]::UtcNow -lt $deadline) {
+        if (Test-Path -LiteralPath $replyPath) {
+            $raw = [IO.File]::ReadAllText($replyPath, [Text.Encoding]::UTF8)
+            Remove-Item -LiteralPath $replyPath -Force -ErrorAction SilentlyContinue
+            $script:RunnerStatus['action'] = $null
+            Set-RosetunRunnerState -State 'running' -Step ('after-' + $Operation)
+            return ($raw | ConvertFrom-Json)
+        }
+        Start-Sleep -Milliseconds 200
+    }
+    $script:RunnerStatus['action'] = $null
+    throw ('lab-action-timeout:' + $Operation)
 }
 
 function Add-RosetunRunnerNote {
