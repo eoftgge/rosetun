@@ -1,6 +1,6 @@
 # Linux stand
 
-The opt-in [owner-prepared Python/QGA L2 path](../matrix/docs/linux.md#owner-prepared-linux-l2-execution-stage-5a)
+The opt-in [owner-prepared Python/QGA L2 path](../matrix/docs/LINUX.md#owner-prepared-linux-l2-execution-stage-5a)
 runs the same `run-l2.sh` and all 34 catalog IDs through the installed launcher.
 It requires owner-built artifacts with matching provenance and a complete package
 manually placed in the guest, bound to its stand, VM UUID and observed boot.
@@ -10,7 +10,7 @@ real L2 qualification and limits of its legacy comparison; full Hyper-V/SSH
 orchestration parity remains unverified. The API performs no build and requires
 no Windows, Hyper-V, SSH or WSL.
 
-The separate opt-in [QGA infrastructure smoke delivery](../matrix/docs/linux.md#bounded-smoke-delivery-over-qga-stage-4b3)
+The separate opt-in [QGA infrastructure smoke delivery](../matrix/docs/LINUX.md#bounded-smoke-delivery-over-qga-stage-4b3)
 reuses the verified guest launcher and start dispatcher with its own exact package
 and result schema. It does not use the SSH matrix commands below or qualify VPN
 protection. Package preparation and real-guest qualification are owner tasks.

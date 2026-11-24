@@ -15,11 +15,11 @@ and [../windows/README.md](../windows/README.md) remain supported.
 
 | Document | Contents |
 | --- | --- |
-| [docs/controller.md](docs/controller.md) | Stand leases, resource ledgers, blocked-stand recovery, Stage W run-state & `attach`, QEMU/QGA lifecycle, planned reboots & `power_cycle`, image digest cache, offline `plan`/`report` schemas & limits |
-| [docs/lab.md](docs/lab.md) | Isolated two-VM wire topology, `lab-smoke` & observer controls, frame classification & window verdicts, lab images (`lab-v5m`, `lab-v5n`, `lab-v5o`) & `lab-action-requested` protocol |
-| [docs/linux.md](docs/linux.md) | Read-only ISO media delivery (`l2_media`), owner-prepared L2 execution, QGA smoke delivery, and Linux lab suites (`linux-l2`, `linux-l3`, `linux-proxy`, `linux-l5`, `linux-l4`, `linux-reboot-smoke`) |
-| [docs/windows.md](docs/windows.md) | Windows launch profile (`windows-uefi-q35-v1`) & smokes (`9b`–`9d`), autonomous Windows lab matrices (`10a`–`10f`), and structured Hyper-V List & Proxy artifact contracts |
-| [docs/evidence.md](docs/evidence.md) | Release evidence packs (`evidence` command, `--include-archive`, Linux + all 8 Windows suites, `manifest.json` counters, refusal codes, owner parity/signing workflow) |
+| [docs/CONTROLLER.md](docs/CONTROLLER.md) | Stand leases, resource ledgers, blocked-stand recovery, Stage W run-state & `attach`, QEMU/QGA lifecycle, planned reboots & `power_cycle`, image digest cache, offline `plan`/`report` schemas & limits |
+| [docs/LAB.md](docs/LAB.md) | Isolated two-VM wire topology, `lab-smoke` & observer controls, frame classification & window verdicts, lab images (`lab-v5m`, `lab-v5n`, `lab-v5o`) & `lab-action-requested` protocol |
+| [docs/LINUX.md](docs/LINUX.md) | Read-only ISO media delivery (`l2_media`), owner-prepared L2 execution, QGA smoke delivery, and Linux lab suites (`linux-l2`, `linux-l3`, `linux-proxy`, `linux-l5`, `linux-l4`, `linux-reboot-smoke`) |
+| [docs/WINDOWS.md](docs/WINDOWS.md) | Windows launch profile (`windows-uefi-q35-v1`) & smokes (`9b`–`9d`), autonomous Windows lab matrices (`10a`–`10f`), and structured Hyper-V List & Proxy artifact contracts |
+| [docs/EVIDENCE.md](docs/EVIDENCE.md) | Release evidence packs (`evidence` command, `--include-archive`, Linux + all 8 Windows suites, `manifest.json` counters, refusal codes, owner parity/signing workflow) |
 
 ## Suite catalog
 
@@ -95,7 +95,7 @@ An unfinished run keeps its stand locked (`stand has unresolved runs`). Inspect 
    `root.qcow2` path, stop only a verified match, and move manually. Never delete lock files under
    `locks/`.
 
-See [docs/controller.md#blocked-stands-and-recovery](docs/controller.md#blocked-stands-and-recovery)
+See [docs/CONTROLLER.md#blocked-stands-and-recovery](docs/CONTROLLER.md#blocked-stands-and-recovery)
 for full details.
 
 ## Offline tests in CI

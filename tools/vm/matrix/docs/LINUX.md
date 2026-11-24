@@ -6,8 +6,8 @@ Linux lab wire windows. Existing Hyper-V/SSH workflows remain in
 [../../linux/README.md](../../linux/README.md).
 
 For the suite catalog and CLI overview, see [../README.md](../README.md). For controller leases
-and lifecycle, see [controller.md](controller.md); for the two-VM wire observer, see
-[lab.md](lab.md).
+and lifecycle, see [CONTROLLER.md](CONTROLLER.md); for the two-VM wire observer, see
+[LAB.md](LAB.md).
 
 ## Read-only media delivery (`l2_media`)
 
@@ -45,7 +45,7 @@ python3 -B -m tools.vm.matrix run linux-l2 --config /srv/execution-l2.toml
   waits by polling job status (Stage 8c), collects `report.json` + `status.json`, runs the offline
   assessor (`rosetun.matrix.assessment.v1`), and closes the VM cleanly.
 - **Reattach:** non-lab `linux-l2` (and non-lab `linux-l3`) runs can be resumed after step `submit`
-  with `attach` (see [controller.md](controller.md#run-state-on-disk-and-reattach-stage-w)).
+  with `attach` (see [CONTROLLER.md](CONTROLLER.md#run-state-on-disk-and-reattach-stage-w)).
   Qualifying runs require `attached: false`.
 - **Scope:** validates the IPC transport (`SO_PEERCRED`), helper policy/server unit tests, and
   stand preflight/cleanup. Makes no claim about network protection, kill switch, or Lockdown.
@@ -63,7 +63,7 @@ verifies the guest launcher and start dispatcher independently of Rosetun scenar
 ## Linux suites in the two-VM lab
 
 Adding `--lab` with a `rosetun.matrix.execution.v3` configuration attaches the `test` VM to the
-isolated `lab` VM wire ([lab.md](lab.md)), enables UDP `:9100` window markers (`LAB_MARKER_ADDRESS`),
+isolated `lab` VM wire ([LAB.md](LAB.md)), enables UDP `:9100` window markers (`LAB_MARKER_ADDRESS`),
 collects `capture.pcap` on the lab evidence disk, and cross-checks guest verdicts against observed
 wire frames. Without `--lab` (`execution.v2`, `-nic none`), delivery and guest failure reporting are
 tested without a network.

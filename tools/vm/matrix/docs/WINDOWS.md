@@ -11,7 +11,7 @@ see [../../windows/README.md](../../windows/README.md). For building the base Wi
 > **Diagnostic status:** Windows base images carry `qualified: false` and `activated: false`. Every
 > Windows run records `release_gate: false` and `security_invariants: "UNVERIFIED"`. Release
 > acceptance and Hyper-V parity decisions belong strictly to the owner (see
-> [evidence.md](evidence.md)).
+> [EVIDENCE.md](EVIDENCE.md)).
 
 ## Windows launch profile and smokes
 
@@ -28,7 +28,7 @@ Windows runs use `WindowsQemuConfig` and `images.WindowsImageDescriptor` (schema
 - **Per-run state copies:** `prepare` copies `OVMF_VARS.fd` and every TPM state file into the run
   directory, verifying SHA-256 against the descriptor before and after copy. Base image files are
   never mutated and are re-verified after shutdown (`image-unchanged`) using the cross-process
-  digest cache ([controller.md](controller.md#image-descriptors-and-disk-digest-cache)).
+  digest cache ([CONTROLLER.md](CONTROLLER.md#image-descriptors-and-disk-digest-cache)).
 - **`swtpm` lifecycle:** `swtpm socket --tpm2 --terminate` starts before QEMU with `mode=0600` on
   `swtpm.sock`, is registered in `manifest.json` (`id: "swtpm"`), and is reaped after QEMU exits.
   `completion_verified` requires confirmed exit of both `swtpm` and `qemu`.
