@@ -2,7 +2,7 @@ name: VM matrix tests
 
 on:
   push:
-    branches: [master, dev, feat/qemu-vm]
+    branches: [master, dev]
     paths:
       - 'tools/vm/**'
       - 'packaging/linux/**'
