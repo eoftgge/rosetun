@@ -1,0 +1,78 @@
+schema = "rosetun.matrix.execution.windows.v9"
+suite = "windows-protocols"
+mode = "exploratory"
+platform = "linux-x86_64-kvm"
+# A state directory of its own: a diagnostic run is not a qualification and shares no stand with one.
+state_directory = "/srv/rosetun-state-windows-protocols"
+stand_id = "windows-protocols-example"
+# The image.json the image build of stage 9a wrote; its `qualified` must be false, and it is.
+image_descriptor = "/srv/rosetun-images/windows-11-26h2-pro-v1/image.json"
+
+[qemu]
+schema = "rosetun.matrix.qemu.v1"
+executable = "/opt/qemu-10.0.13/bin/qemu-system-x86_64"
+image_executable = "/opt/qemu-10.0.13/bin/qemu-img"
+bios = "/srv/rosetun-images/firmware/OVMF_CODE.fd"
+machine = "q35"
+accelerator = "kvm"
+cpu = "host"
+memory_mib = 4096
+vcpus = 4
+qga = true
+swtpm = "/usr/bin/swtpm"
+
+[protocols]
+agent_wait_seconds = 180
+script_seconds = 120
+settle_seconds = 60
+runner_seconds = 1200
+poll_seconds = 10
+shutdown_wait_seconds = 240
+xorriso = "/usr/bin/xorriso"
+rosetun = "/mnt/e/rosetun-target-win/release/rosetun.exe"
+rosetun_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+helper = "/mnt/e/rosetun-target-win/release/rosetun-helper-privileged.exe"
+helper_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+sing_box = "/mnt/d/Repositories/rosetun/tools/sing-box.exe"
+sing_box_sha256 = "5c19bb3f8c12d4e85b3d47fe63123a7624b314b58dd7a8e32f51004f1c4d2faf"
+xray = "/srv/rosetun-bin/xray.exe"
+xray_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+
+[deadlines]
+preparation = 1800
+boot = 300
+
+[lab]
+https_cert_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+doh_cert_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+xray_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+proto_cert_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+ca_certificate = "/srv/rosetun-lab-pki/rosetun-lab-ca.crt"
+
+[lab.image]
+schema = "rosetun.matrix.image.v1"
+identifier = "prepared-lab-router-v5o"
+guest_os = "linux"
+architecture = "x86_64"
+path = "/srv/images/lab-v5o.qcow2"
+size_bytes = 1
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+format = "qcow2"
+profile = "bios-i440fx-v1"
+
+[lab.qemu]
+schema = "rosetun.matrix.qemu.v1"
+executable = "/opt/qemu-10.0.13/bin/qemu-system-x86_64"
+image_executable = "/opt/qemu-10.0.13/bin/qemu-img"
+bios = "/opt/qemu-10.0.13/share/qemu/bios.bin"
+machine = "pc-i440fx-10.0"
+accelerator = "kvm"
+cpu = "host"
+memory_mib = 2048
+vcpus = 2
+qga = true
+
+[lab.tunnel]
+sing_box_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+ca_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+node_port = 8388

@@ -15,7 +15,11 @@ LAN_SUITE = "windows-lan"
 LAN_CATALOG = LINUX_ROOT.parent / "windows" / "lan-core.tsv"
 UPGRADE_SUITE = "windows-upgrade"
 UPGRADE_CATALOG = LINUX_ROOT.parent / "windows" / "upgrade-checks.json"
-WIRE_SUITES = (FAILURE_SUITE, LOCKDOWN_SUITE, LAN_SUITE, UPGRADE_SUITE)
+PROTOCOLS_SUITE = "windows-protocols"
+PROTOCOLS_CATALOG = LINUX_ROOT.parent / "windows" / "protocols-checks.tsv"
+TWOHOP_SUITE = "windows-twohop"
+TWOHOP_CATALOG = LINUX_ROOT.parent / "windows" / "two-hop-scenarios.tsv"
+WIRE_SUITES = (FAILURE_SUITE, LOCKDOWN_SUITE, LAN_SUITE, UPGRADE_SUITE, PROTOCOLS_SUITE, TWOHOP_SUITE)
 # The guest resets a suite plans: any other reset of its run is an error.
 PLANNED_REBOOTS = {"linux-l4": 2, "linux-reboot-smoke": 1, "windows-reboot-smoke": 1}
 # The suites whose job runs in phases of the job timeout each, one more than its reboots (see `job_span`).
@@ -75,6 +79,28 @@ def upgrade_catalog():
     return validate_snapshot(json.loads(UPGRADE_CATALOG.read_text(encoding="utf-8-sig")))
 
 
+def twohop_catalog(path=TWOHOP_CATALOG):
+    """Parse two-hop-scenarios.tsv (`id`, `mode`, `expectation`) into the standard 6-field catalog snapshot."""
+    lines = [line for line in Path(path).read_text(encoding="utf-8-sig").splitlines() if line.strip()]
+    if not lines or lines[0].split("\t") != ["id", "mode", "expectation"]:
+        raise ValueError("unexpected two-hop catalog header")
+    rows = []
+    for line in lines[1:]:
+        parts = line.split("\t")
+        if len(parts) != 3 or parts[1] not in ("tun", "system-proxy"):
+            raise ValueError("malformed two-hop catalog row")
+        scenario_id, mode, expectation = parts
+        rows.append({
+            "id": f"{scenario_id}:{mode}",
+            "required": True,
+            "evidence": "wire",
+            "group": f"twohop-{mode}",
+            "detail": mode,
+            "title": expectation,
+        })
+    return validate_snapshot(rows)
+
+
 def make_plan(suite, profile_name, profile):
     validate_profile(profile)
     if suite == "windows-proxy":
@@ -85,11 +111,16 @@ def make_plan(suite, profile_name, profile):
         return windows_plan(profile_name, profile)
     if suite not in SUITES and suite not in WIRE_SUITES:
         raise ValueError("unknown suite")
-    catalog_path = (FAILURE_CATALOG if suite == FAILURE_SUITE else
-                    LOCKDOWN_CATALOG if suite == LOCKDOWN_SUITE else
-                    LAN_CATALOG if suite == LAN_SUITE else
-                    UPGRADE_CATALOG if suite == UPGRADE_SUITE else LINUX_ROOT / SUITES[suite])
-    rows = upgrade_catalog() if suite == UPGRADE_SUITE else read_catalog(catalog_path)
+    if suite == UPGRADE_SUITE:
+        rows = upgrade_catalog()
+    elif suite == TWOHOP_SUITE:
+        rows = twohop_catalog()
+    else:
+        catalog_path = (FAILURE_CATALOG if suite == FAILURE_SUITE else
+                        LOCKDOWN_CATALOG if suite == LOCKDOWN_SUITE else
+                        LAN_CATALOG if suite == LAN_SUITE else
+                        PROTOCOLS_CATALOG if suite == PROTOCOLS_SUITE else LINUX_ROOT / SUITES[suite])
+        rows = read_catalog(catalog_path)
     return {
         "schema": PLAN_SCHEMA,
         "suite": suite,

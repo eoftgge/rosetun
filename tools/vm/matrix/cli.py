@@ -9,7 +9,7 @@ import sys
 from .catalog import LINUX_ROOT, SUITES
 from .lab_protocol import CONTROLS
 from .l3_summary import CONTROLS as L3_CONTROLS
-from .config import UPGRADE_SUITE, load_profile, make_plan
+from .config import PROTOCOLS_SUITE, TWOHOP_SUITE, UPGRADE_SUITE, load_profile, make_plan
 from .report import ASSESSMENT_SCHEMA, assess_files
 from .resources import ArchiveRefused, archive_run, inspect_runs, recovery_plan
 
@@ -48,7 +48,7 @@ def main(argv=None):
     run.add_argument('suite', choices=['linux-l2', 'linux-l3', 'linux-proxy', 'linux-l5', 'linux-l4',
                                        'linux-reboot-smoke', 'windows-boot-smoke', 'windows-reboot-smoke',
                                        'windows-lab-smoke', 'windows-list', 'windows-failure', 'windows-lockdown',
-                                       'windows-proxy', 'windows-lan', UPGRADE_SUITE])
+                                       'windows-proxy', 'windows-lan', UPGRADE_SUITE, PROTOCOLS_SUITE, TWOHOP_SUITE])
     run.add_argument('--config', required=True)
     run.add_argument('--dry-run', action='store_true')
     run.add_argument('--lab', action='store_true',
@@ -70,7 +70,8 @@ def main(argv=None):
     evidence.add_argument('--out', required=True, help='a directory that does not exist yet')
     plan = commands.add_parser("plan", help="write a deterministic catalog snapshot to stdout")
     plan.add_argument("suite", choices=[*SUITES, "windows-list", "windows-proxy", "windows-failure",
-                                        "windows-lockdown", "windows-lan", UPGRADE_SUITE])
+                                        "windows-lockdown", "windows-lan", UPGRADE_SUITE, PROTOCOLS_SUITE,
+                                        TWOHOP_SUITE])
     plan.add_argument("--without-host-node", action="store_true", help="plan the limited Windows Proxy variant")
     plan.add_argument("--config", required=True)
     plan.add_argument("--profile", required=True)
@@ -103,10 +104,11 @@ def main(argv=None):
             code = 0 if args.dry_run else result['exit_code']
         elif args.command == 'run' and args.suite in ('windows-boot-smoke', 'windows-reboot-smoke', 'windows-lab-smoke',
                                                       'windows-list', 'windows-failure', 'windows-lockdown',
-                                                      'windows-proxy', 'windows-lan', UPGRADE_SUITE):
+                                                      'windows-proxy', 'windows-lan', UPGRADE_SUITE,
+                                                      PROTOCOLS_SUITE, TWOHOP_SUITE):
             # Windows execution configs already select whether the suite needs a lab.
             from . import (windows_failure, windows_lab, windows_lan, windows_list_lab, windows_lockdown,
-                           windows_proxy_lab, windows_smoke, windows_upgrade)
+                           windows_protocols, windows_proxy_lab, windows_smoke, windows_twohop, windows_upgrade)
             if args.lab or args.control or args.diagnostic:
                 raise ValueError('--lab, --control and --diagnostic are not for the Windows suites')
             config = windows_smoke.load(args.config)
@@ -123,7 +125,9 @@ def main(argv=None):
                        'windows-lockdown': windows_lockdown.run,
                        'windows-proxy': windows_proxy_lab.run,
                        'windows-lan': windows_lan.run,
-                       UPGRADE_SUITE: windows_upgrade.run}[args.suite]
+                       UPGRADE_SUITE: windows_upgrade.run,
+                       PROTOCOLS_SUITE: windows_protocols.run,
+                       TWOHOP_SUITE: windows_twohop.run}[args.suite]
                 result = run(config)
                 code = result['exit_code']
         elif args.command == 'run':

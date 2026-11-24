@@ -6030,6 +6030,111 @@ directory the install helper had created. A five-second pause after each
 old installation gives its background traffic time to settle before the
 next window opens.
 
+## Stage 10f: Extended lab fixtures, Windows Protocols (`windows-protocols`), and Two-Hop Proxy Chain (`windows-twohop`)
+
+Stage 10f extends the isolated lab guest (`lab-v5o`, built from untouched `lab-v5n`) and adds two exploratory
+Windows lab suites covering multi-protocol transports, second-node switching, DHCP renewal, and the full
+40-scenario Two-Hop Proxy Chain matrix. The release gate stays false, security invariants stay UNVERIFIED, and
+Hyper-V parity tables are untouched.
+
+### Extended lab fixtures (`lab-v5o`)
+
+Opt-in via `extended_fixtures` in the lab `setup` request (`lab_protocol.py` + `tools/vm/linux/guest/lab-entry.py`):
+
+- Multi-protocol primary-node listeners on `192.0.2.1`: Shadowsocks (`8388`), Hysteria2 (`8389/udp`), TUIC
+  (`8392/udp`), and AnyTLS (`8393/tcp`) backed by pinned `proto-cert.pem` (`proto_cert_sha256`).
+- Second-node Shadowsocks instance on `192.0.2.1:8391` egressing via `203.0.113.10` / `2001:db8:6a:2::10`.
+- Pinned Xray-core (`xray_sha256`) serving VLESS+REALITY on `192.0.2.1:8390` (with local TLS 1.3 cover server on
+  `127.0.0.1:8443`, `num_tickets = 0`) and VLESS+REALITY+XHTTP on `192.0.2.1:8394`, with `freedom` outbound
+  explicitly allowing RFC 5737 / RFC 3849 lab target ranges.
+- Isolated Two-Hop B-hop proxy set (`TwoHopProxy`) on `203.0.113.20` / `2001:db8:6a:2::20` (`proxy-b.lab.test`,
+  HTTP `3128`, HTTP Basic auth `3129`, HTTPS `3130` with pinned `twohop-b-cert.pem`, untrusted HTTPS `3131` with
+  pinned `twohop-b-untrusted-cert.pem`, SOCKS5 `1080`, SOCKS5 auth `1081`) plus LAN B-hop listener on `192.0.2.10`.
+- Isolated RFC 2131 DHCPv4 server (`DhcpServer`) bound strictly to the lab wire interface for lease renew checks.
+- Two controller-mediated lab actions (`fixture_state`, `fixture_control`) for mid-run service start/stop
+  (`primary_node`, `second_node`, `xray`, `twohop_b`) and live HTTPS/TwoHop/DHCP counter snapshots, with chunked
+  atomic reply writes (`write_reply_scripts`) and bounded `planned_session_rotations` QGA headroom for long runs.
+- Extended runs enable deduplicating `DnsLog(aggregate=True)` so repeated resolver/DoH queries across 40
+  scenarios stay bounded under `DNS_LOG_ENTRIES` / `LOG_LIMIT`, and classify lab-to-test ICMPv4 Port Unreachable
+  referencing an authorized UDP tunnel endpoint as tunnel traffic during node outage tests.
+
+### Windows Protocols and Extensions (`windows-protocols`)
+
+- Catalog: `tools/vm/windows/protocols-checks.tsv` (17 checks covering Hysteria2, TUIC + `primary_node` stop/start
+  outage, AnyTLS, Xray VLESS+REALITY + forced helper kill outside judged windows, Xray VLESS+REALITY+XHTTP +
+  `xray=off` refusal under Lockdown, second-node live switch to `203.0.113.10`, and DHCPv4 lease renewal while
+  connected).
+- Guest runner: `tools/vm/windows/guest/run-windows-protocols.ps1` (37,367 bytes, below the 65,536-byte QGA limit).
+- Nine wire windows: `baseline` and `recovery` (calibration), plus seven judged windows (`hysteria2`, `tuic`,
+  `anytls`, `xray-reality`, `xray-xhttp`, `second-node`, `dhcp`). Each judged window expects zero unexpected
+  frames (`leak: NONE`), protocol-scoped tunnel endpoints, and narrow DHCP/ARP allowances in `dhcp` only.
+- Post-cleanup `_AFTER` (`protocols=True`) verifies Lockdown WFP provider/sublayer absence, no leftover
+  `xray.exe` / `sing-box.exe` / helper processes, and clean runner directory removal.
+
+### Windows Two-Hop Proxy Chain (`windows-twohop`)
+
+- Catalog: `tools/vm/windows/two-hop-scenarios.tsv` (20 scenarios × 2 modes = 40 checks across `tun` and
+  `system-proxy`: positive HTTP/HTTPS/SOCKS5 IPv4/IPv6/auth/domain-B, LAN B-hop, untrusted HTTPS cert refusal,
+  UDP/QUIC block, B-hop unreachable/timeout/auth-error, live apply/switch, Lockdown + B-hop outage, mixed-engine
+  and Xray-first-hop chains).
+- Guest runner: `tools/vm/windows/guest/run-windows-twohop.ps1` (46,548 bytes, below the 65,536-byte QGA limit).
+- Four wire windows: `baseline` and `recovery` (calibration), plus two judged windows (`twohop-tun` and
+  `twohop-proxy`), both expecting `leak: NONE` (`unexpected: 0`), tunnel traffic to authorized hop-A endpoints only,
+  zero direct B-hop traffic, zero guest DNS queries for `proxy-b.lab.test`, and lab HTTPS evidence from
+  `203.0.113.20`.
+- Post-cleanup `_AFTER` (`twohop=True`) additionally verifies no lingering `xray.exe` or Lockdown WFP objects.
+
+### Commands and configurations
+
+    python3 -B -m tools.vm.matrix run windows-protocols --config CONFIG [--dry-run]
+    python3 -B -m tools.vm.matrix run windows-twohop    --config CONFIG [--dry-run]
+
+Configurations:
+- `execution-windows-protocols.example.toml`, schema `rosetun.matrix.execution.windows.v9`, with `[protocols]`
+  (`xray`, `xray_sha256`, plus timing, `xorriso`, and pinned binary hashes) and `[lab]` (`xray_sha256`,
+  `proto_cert_sha256`).
+- `execution-windows-twohop.example.toml`, schema `rosetun.matrix.execution.windows.v10`, with `[twohop]`
+  (`proxy_port`, `xray`, `xray_sha256`, plus timing, `xorriso`, and pinned binary hashes) and `[lab]`
+  (`xray_sha256`, `proto_cert_sha256`, `twohop_cert_sha256`, `twohop_untrusted_cert_sha256`).
+`report` refuses both suites without wire evidence.
+
+### Offline tests
+
+- `tests/test_lab_extended.py`: extended fixture option validation, multi-protocol/Xray configs, `TwoHopProxy`
+  HTTP/HTTPS/SOCKS5/auth/stop-start tests, `DhcpServer` RFC 2131 reply tests, `DnsLog(aggregate=True)`, and
+  ICMPv4 Port Unreachable UDP tunnel classification.
+- `tests/test_windows_protocols.py`: 17-check catalog and runner parity, `windows.v9` validation and example TOML,
+  per-window tunnel endpoints and DHCP allowances, synthetic clean/leak/disagreement/cleanup runs.
+- `tests/test_windows_twohop.py`: 40-check catalog and runner parity, `windows.v10` validation and example TOML,
+  chunked lab-action reply scripts under `SCRIPT_LIMIT`, `planned_session_rotations` QGA budget bounds, and
+  synthetic clean/direct-B-leak/domain-B-DNS/target-B/cleanup runs.
+- `tools/vm/windows/tests/Test-RosetunScriptArguments.ps1` covers both guest runners under PowerShell AST checks.
+
+### Checked on the stand (2026-11-24, developer runs, not a qualification)
+
+Debian 13 on WSL2, QEMU 10.0.13, untouched `windows-11-26h2-pro-v1`, `lab-v5o` (built from untouched `lab-v5n`),
+dedicated state directory `state-10f-dev`, Windows release binaries (`rosetun.exe`, `rosetun-helper-privileged.exe`),
+pinned `sing-box` 1.14.3 and `xray` 26.11.9, `settle_seconds = 60` (working tree dirty with this stage's changes):
+
+| suite | run | `lab-v5o` | exit | runner | checks | lab actions | judged windows | cleanup |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `windows-protocols` (run 1) | `444e8101...` | `e2af8e0e...` | 0 | 177.7 s | 17 PASS (`dhcp-acks: 2`) | 17 | all 7 `EXPECTED` / `NONE` (`unexpected: 0`) | `PASS`, `left: []` |
+| `windows-protocols` (run 2) | `3302dfe2...` | `e2af8e0e...` | 0 | 176.8 s | 17 PASS (`dhcp-acks: 2`) | 17 | all 7 `EXPECTED` / `NONE` (`unexpected: 0`) | `PASS`, `left: []` |
+| `windows-protocols` (final image confirm) | `41fb76d0...` | `ccd8cceb...` | 0 | 177.1 s | 17 PASS (`dhcp-acks: 2`) | 17 | all 7 `EXPECTED` / `NONE` (`unexpected: 0`) | `PASS`, `left: []` |
+| `windows-twohop` (run 1) | `605fc391...` | `ccd8cceb...` | 0 | 752.2 s | 40 PASS | 137 | `twohop-tun: EXPECTED` (tunnel 3630), `twohop-proxy: EXPECTED` (tunnel 2620), both `unexpected: 0` | `PASS`, `left: []` |
+| `windows-twohop` (run 2) | `c507a5b8...` | `ccd8cceb...` | 0 | 752.9 s | 40 PASS | 137 | `twohop-tun: EXPECTED` (tunnel 4082), `twohop-proxy: EXPECTED` (tunnel 2602), both `unexpected: 0` | `PASS`, `left: []` |
+
+All five runs: `accepted: true`, `findings: []`, `unverified: []`, `image_unchanged: true`, both `-lab` and `-test`
+`completion_verified: true`, zero leftover WFP/process/task/directory state. Live bring-up caught and fixed:
+- Xray 26.x `freedom` outbound `finalRules` allowing RFC 5737/3849 targets, plus `RealityCoverServer` TLS 1.3
+  `num_tickets = 0` and `select(..., COVER_READ_TIMEOUT)` to eliminate 5 s cover-handshake stalls.
+- Classifying lab-to-test ICMPv4 Port Unreachable for authorized UDP tunnel endpoints during `primary_node` stop.
+- Zero-leak judged-window bracketing on Windows 11 (`Close-ProtoWindow` holding Lockdown across TUN teardown +
+  post-close settle outside judged windows, and running forced Xray helper kill outside judged windows without
+  Lockdown so guest TCP RSTs prevent orphan server `FIN_WAIT_1` retries).
+- Chunked atomic lab-action replies (`write_reply_scripts`), `planned_session_rotations` QGA headroom, and
+  deduplicating `DnsLog(aggregate=True)` for the 40-scenario Two-Hop run.
+
 ## Stage 12: release evidence pack
 
 `evidence` copies the records of chosen finished runs into one new directory and

@@ -1,0 +1,18 @@
+id	required	evidence	group	detail	title
+baseline.egress	yes	wire	baseline	direct	Direct HTTPS to the lab target succeeds before the tunnel starts
+baseline.dns	yes	wire	baseline	direct	Direct UDP DNS to the lab resolver succeeds before the tunnel starts
+proto.hysteria2	yes	wire	protocols	hysteria2	Hysteria2 UDP outbound connects, carries HTTPS through the VPN exit and blocks direct egress
+proto.tuic	yes	wire	protocols	tuic	TUIC v5 UDP outbound connects, carries HTTPS, fails closed on node outage and recovers
+proto.anytls	yes	wire	protocols	anytls	AnyTLS TCP outbound connects, carries HTTPS through the VPN exit and blocks direct egress
+xray.reality.off	yes	wire	xray-reality	xray-off	VLESS REALITY with xray off never starts xray.exe and never leaks directly
+xray.reality.auto	yes	wire	xray-reality	xray-auto	VLESS REALITY + Vision with xray auto starts xray.exe, carries HTTPS and blocks direct egress
+xray.reality.child-killed	yes	wire	xray-reality	child-killed	Killing xray.exe keeps protection active without direct leak and reconnect restores Xray
+xray.reality.apply	yes	wire	xray-reality	apply	Apply transitions cleanly from Shadowsocks to VLESS REALITY + Vision and back, starting and stopping xray.exe
+xray.reality.helper-killed	yes	wire	xray-reality	helper-killed	Killing the privileged helper terminates both sing-box.exe and xray.exe via the process job
+xray.xhttp.off	yes	wire	xray-xhttp	xray-off	VLESS XHTTP + REALITY with xray off is refused cleanly without starting xray.exe
+xray.xhttp.auto	yes	wire	xray-xhttp	xray-auto	VLESS XHTTP + REALITY with xray auto starts xray.exe, carries HTTPS and blocks direct egress
+xray.xhttp.apply	yes	wire	xray-xhttp	apply	Apply transitions cleanly from Shadowsocks to VLESS XHTTP + REALITY and back, starting and stopping xray.exe
+second-node.rule-exit	yes	wire	second-node	rule-exit	Rule targeting a second node routes selected HTTPS through the second node exit while default traffic uses the primary exit
+second-node.outage	yes	wire	second-node	outage	Stopping the second node fails its rule without falling back to the primary node or direct egress while primary traffic continues
+second-node.apply-node	yes	wire	second-node	apply-node	Apply moves the rule between the second node and the primary node without reconnecting
+dhcp.renew-under-kill-switch	yes	wire	dhcp	dhcpv4	DHCPv4 lease acquisition and renewal succeed under the kill switch while direct egress stays blocked

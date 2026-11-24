@@ -177,6 +177,9 @@ def assess_files(report_path, plan_path):
     plan, plan_hash = read_json(plan_path)
     if isinstance(plan, dict) and plan.get("schema") == "rosetun.windows-upgrade.plan.v1":
         raise ValueError(f"{UPGRADE_SUITE} requires the guest journal and independent lab evidence")
+    if isinstance(plan, dict) and plan.get("schema") in (
+            "rosetun.windows-protocols.plan.v1", "rosetun.windows-twohop.plan.v1"):
+        raise ValueError(f"{plan.get('suite', 'wire suite')} requires the guest journal and independent lab evidence")
     if isinstance(plan, dict) and plan.get("schema") in ("rosetun.windows-list.plan.v1", "rosetun.windows-list.plan.v2"):
         from .windows_list import assess_files as assess_windows_files
         return assess_windows_files(report_path, plan_path)
