@@ -1,129 +1,83 @@
-# Hyper-V test nodes
+# Windows VM Runners, Catalogs, and Legacy Hyper-V Harnesses
 
-Run PowerShell as Administrator on the host. A Rosetun tunnel on the host may stay up: the nodes resolve names over DNS-over-TLS on port 853, which a DNS lock and sing-box's own filter on port 53 leave alone. Lockdown on the host must be off, as Hyper-V guests get no network under it, and the matrix stops if it is on. Once, allow the test nodes only on the Hyper-V Default Switch; the main node serves Shadowsocks on TCP 8388, Hysteria2 on UDP 8443, TUIC v5 on UDP 8444 and AnyTLS on TCP 8445. The second Shadowsocks node on TCP 8389 blocks Cloudflare at its exit; Xray serves VLESS + REALITY + Vision on TCP 8390 and VLESS + XHTTP + REALITY on TCP 8392:
+> **Primary VM test path:** Autonomous Windows matrices with independent wire-level leak observation
+> run in the isolated QEMU/KVM lab — see
+> [../matrix/docs/WINDOWS.md](../matrix/docs/WINDOWS.md) (`windows-list`, `windows-failure`,
+> `windows-lockdown`, `windows-proxy`, `windows-lan`, `windows-upgrade`, `windows-protocols`,
+> `windows-twohop`).
+>
+> The Hyper-V PowerShell Direct scripts below are **legacy harnesses** retained for manual checks,
+> GUI-interactive upgrade inspection, and owner parity comparison.
+
+## Directory contents
+
+- **`guest/`** — autonomous PowerShell 5.1 runners (`run-windows-*.ps1`, `lib.ps1`,
+  `failure-probes.ps1`) executed inside the QEMU lab VM via read-only ISO delivery.
+- **Check catalogs** — `list-checks.json` (11), `failure-core.tsv` (132), `lockdown-core.tsv` (72),
+  `proxy-checks.json` (46), `lan-core.tsv` (72), `upgrade-checks.json` (45),
+  `protocols-checks.tsv` (17), `two-hop-scenarios.tsv` (40).
+- **`tests/`** — offline PowerShell unit, AST, finalization, and cleanup tests (no VM required).
+- **`Invoke-*Matrix.ps1`, `RosetunVm.psm1`, `Rosetun{List,Proxy}Results.psm1`** — legacy Hyper-V
+  PowerShell Direct harnesses, host test-node helpers, and diagnostic probes.
+
+## Offline PowerShell tests (no VM required)
 
 ```powershell
-New-NetFirewallRule -DisplayName 'Rosetun VM test node TCP' -Direction Inbound -Action Allow -Protocol TCP -LocalPort 8388,8445 -InterfaceAlias 'vEthernet (Default Switch)'
+pwsh -NoProfile -File tools/vm/windows/tests/Test-RosetunScriptArguments.ps1
+pwsh -NoProfile -File tools/vm/windows/tests/Test-RosetunListResults.ps1 -Directory target/synthetic-list-001
+pwsh -NoProfile -File tools/vm/windows/tests/Test-RosetunListCleanup.ps1
+pwsh -NoProfile -File tools/vm/windows/tests/Test-RosetunProxyFinalization.ps1 -Directory target/synthetic-proxy-finalize-001
+pwsh -NoProfile -File tools/vm/windows/tests/Test-RosetunFailureChecks.ps1
+pwsh -NoProfile -File tools/vm/windows/tests/Test-RosetunUpgradeRequests.ps1
+pwsh -NoProfile -File tools/vm/windows/tests/Test-RosetunWfpSublayer.ps1
+```
+
+## Legacy Hyper-V harnesses
+
+Run from an elevated PowerShell 7 on the Windows host with host Lockdown **off** and a prepared
+Windows 11 Gen 2 Hyper-V VM (`rosetun-test`, 4 vCPU, 4 GB RAM, `Default Switch`, `clean` checkpoint,
+credential stored via `Get-Credential | Export-Clixml "$env:USERPROFILE\.rosetun-vm-credential.xml"`).
+
+One-time host firewall rules on `vEthernet (Default Switch)` for `-UseHostNode`:
+
+```powershell
+New-NetFirewallRule -DisplayName 'Rosetun VM test node TCP' -Direction Inbound -Action Allow -Protocol TCP -LocalPort 8388,8389,8390,8391,8392,8445 -InterfaceAlias 'vEthernet (Default Switch)'
 New-NetFirewallRule -DisplayName 'Rosetun VM test node UDP' -Direction Inbound -Action Allow -Protocol UDP -LocalPort 8443,8444 -InterfaceAlias 'vEthernet (Default Switch)'
-New-NetFirewallRule -DisplayName 'Rosetun VM Cloudflare-blocked node TCP' -Direction Inbound -Action Allow -Protocol TCP -LocalPort 8389 -InterfaceAlias 'vEthernet (Default Switch)'
-New-NetFirewallRule -DisplayName 'Rosetun VM REALITY node TCP' -Direction Inbound -Action Allow -Protocol TCP -LocalPort 8390 -InterfaceAlias 'vEthernet (Default Switch)'
-New-NetFirewallRule -DisplayName 'Rosetun VM exit node TCP' -Direction Inbound -Action Allow -Protocol TCP -LocalPort 8391 -InterfaceAlias 'vEthernet (Default Switch)'
-New-NetFirewallRule -DisplayName 'Rosetun VM XHTTP node TCP' -Direction Inbound -Action Allow -Protocol TCP -LocalPort 8392 -InterfaceAlias 'vEthernet (Default Switch)'
 ```
 
-Run the failure matrix directly; `-UseHostNode` starts the host test nodes. Pass a reachable REALITY cover site's DNS name (no scheme or port) as `-RealityCoverSite`; do not use a personal domain in files committed to git:
+| Script | Purpose |
+| --- | --- |
+| `Invoke-FailureMatrix.ps1` | Core failure, kill switch, DNS lock, REALITY/XHTTP, connections list, delay, exit rule |
+| `Invoke-ListMatrix.ps1` | Text & compiled SRS rule-set list checks (supports `-ResultDirectory`; see [Stage 10a](../matrix/docs/WINDOWS.md#stage-10a-windows-list-windows-list)) |
+| `Invoke-LanMatrix.ps1` | Local network, mDNS/SSDP/broadcast, 10 min long session, live IP change (`-MulticastTraceOnly` invokes `Trace-RosetunGuestMulticast.ps1`) |
+| `Invoke-ProxyMatrix.ps1` | System proxy, WinINet `desktop_proxy.exe`, LAN sharing, Lockdown (supports `-ResultDirectory`) |
+| `Invoke-LockdownMatrix.ps1` | Lockdown across helper kill, sleep/resume, reboot, and power cuts |
+| `Invoke-UpgradeMatrix.ps1` | Silent Inno Setup upgrade (`-PreviousSetup`, `-CurrentSetup`, `-RestoreCheckpoint`) |
+| `Invoke-LockdownProbe.ps1`, `Invoke-PowerCutConnectProbe.ps1` | Standalone WFP/Lockdown and post-power-cut readiness probes |
+
+Common invocation pattern:
 
 ```powershell
-.\tools\vm\windows\Invoke-FailureMatrix.ps1 -SingBoxPath .\tools\sing-box.exe -RequestPath .\tools\vm\windows\request-local.json -UseHostNode -RealityCoverSite 'example.com' -Build *>&1 | Tee-Object -FilePath .\target\matrix.txt
+.\tools\vm\windows\Invoke-FailureMatrix.ps1 -SingBoxPath .\tools\sing-box.exe -RequestPath .\tools\vm\windows\request-local.json -UseHostNode -RealityCoverSite 'example.com' -Build
 ```
 
-Replace `example.com` with a suitable real cover site before running. The matrix imports `RosetunVm.psm1` itself. With `-UseHostNode`, it starts both sing-box host nodes and a fresh Xray v26.11.9 node. It downloads the **same `Xray-windows-64.zip`** pinned in `installer/build.ps1`, checks the archive SHA-256 before extracting `xray.exe`, and copies the binary into the guest. The verified archive is cached under the git-ignored `tools/vm/logs/` directory. Xray generates fresh X25519 keys and a short ID at startup; the server config containing the private key is deleted after startup, and the server and extracted binary are removed in `finally` even with `-KeepNode`. Do not commit or paste any generated keys or logs. On first start, `Start-RosetunTestNode` generates a self-signed certificate for `rosetun-test.invalid`; its key, certificate and separate node logs also stay under `tools/vm/logs/`. The matrix derives its Hysteria2, TUIC, AnyTLS and REALITY requests using the host's current Default Switch address (the TUIC and AnyTLS scenarios verify connect, tunnel traffic, tunnel DNS, blocked direct/IPv6 egress, server check, delay and node loss under the kill switch). Before deploying, both matrices make sure the guest has an address in the host's current Default Switch subnet (the host picks a new one after a reboot; a restored checkpoint keeps the old lease), running `ipconfig /renew` in the guest if not, and stop if it gets none within 90 s; the failure matrix then runs `--reset-firewall`, as the Lockdown matrix does, in case an interrupted Lockdown run left Lockdown on. Check the matrix exit status and every PASS/FAIL result in `target/matrix.txt`. It tests the new REALITY connection, tunneled UDP datagrams to a temporary host listener, rejection without Xray, child/helper death and protected node switching alongside all previous scenarios. The same Xray process serves XHTTP + REALITY (mode `auto`, no Vision flow) with the same keys: `XHTTP auto` connects through Xray and checks traffic, DNS, the blocked direct exit, the server check and the delay; `XHTTP off` checks that with `xray off` the connect is refused within 10 s naming XHTTP, with no tunnel and the direct exit open; `XHTTP apply` switches Shadowsocks → XHTTP → Shadowsocks under protection with an egress watch. Both REALITY ports must be free at matrix startup. The UDP listener's Default Switch firewall rule is created only for the check and removed afterwards. The "no network" scenario disables the guest's physical adapter before connect (checking fast failure without WFP filters or TUN), then verifies protected network loss, continuous leak prevention and automatic recovery after the adapter returns; adapter restoration runs in `finally`. The guest resolves `example.com` with the system resolver before connect and again through the tunnel before the graceful disconnect; its `Get-DnsClientCache` entry must be gone within 5 s of `Connected` and of the disconnect (nothing else in the matrix resolves bare `example.com` through the cache, so absence is the sign of a flush). The connections list (`rosetun connections`) is read by a poller in the guest while `curl` runs: a request through the tunnel must be listed through the VPN with the rule `default` (the RULE column, explained with an isolated `rule-column\config.json` that mirrors the running request), a rate-limited download of `LongTransferUrl` (`ROSETUN_LONG_TRANSFER_URL` replaces it) must receive data, then closed with `rosetun connections close <id>` must end within 10 s and move to the closed list, a connection to `192.0.2.1`, which never answers, closed while it waits must end within 3 s, the temporary rule's domain must be listed as direct with the rule `temporary`, the list must be empty after a disconnect, another account (a standard one, and the administrator for the standard account's tunnel) is refused both the list and closing, and no service log may name the probed hosts, the addresses the probe host resolves to in the guest, or the closed connection's id. The delay is checked in both modes (`rosetun delay --mode full|repeated`), and the session's loopback delay entry, whose port and accounts the matrix reads from the rendered `config.json`, refuses a standard account with no account, with a wrong password and with another outbound's password, and accepts its own account.
+Pinned `sing-box.exe` is fetched and SHA-256 verified by `Install-RosetunSingBox` (from
+`RosetunVm.psm1`). Pass `-NodeBindInterface '<Adapter>'` if a host TUN VPN interferes with host
+node egress. Logs from failed runs are collected under `tools/vm/logs/` (git-ignored).
 
-`dns lock unavailable` and `kill switch unavailable` take the key of the service's WFP sublayer with an empty persistent sublayer of the same GUID (`Add-RosetunSublayerBlock`), so preflight fails with `FWP_E_ALREADY_EXISTS`: the DNS lock is dropped and the session connects without it, the kill switch refuses the connect. BFE cannot be stopped on Windows 10 and 11. The sublayer is removed in the scenario's `finally` and by `Publish-Rosetun`, which every matrix but the upgrade one calls first; `reset-firewall` does not remove it. After an interrupted run, every connect with protection fails until it is gone. `tests\Test-RosetunWfpSublayer.ps1` checks the code without a VM: the key against the Rust source, the entry points, and, run as administrator, the whole cycle with a random key.
+### Structured Windows List and Proxy results
 
-`no network session` uses the derived `request-auto-reconnect.json`; `network change` uses the base `request.json` with auto-reconnect off.
+`Invoke-ListMatrix.ps1` and `Invoke-ProxyMatrix.ps1` accept opt-in `-ResultDirectory <new-directory>`
+to emit deterministic `plan.json`, `events.jsonl`, `report.json`, and `status.json` artifacts
+assessable with `python -B -m tools.vm.matrix report <report.json> --plan <plan.json>`:
 
-`reconnect` runs `rosetun reconnect` under the kill switch with the egress watch on: no probe may leave directly during the restart, the WFP filters stay, the node stays and the tunnel carries traffic afterwards.
-
-`apply series` connects with an isolated config built from `request.json` (`apply-series\config.json`) and runs 20 CLI applies in a row (`-ApplySeriesCount <n>` changes the count), each with a changed rule: every apply must succeed and stay Connected, direct egress must stay blocked when the kill switch is on, and the note counts engine start retries and `already exists` lines in `helper.log`.
-
-`Rule through another server` (with `-UseHostNode`) starts a second plain node on TCP 8391 (`Start-RosetunTestNode -ExitNode`, stopped in `finally`), connects with `request-rule-exit.json` whose Exit rule sends `yandex.ru` (`ExitRuleUrl`) through it, counts each node's logged connections to check which node carried the rule and the rest, checks that `rosetun delay` reports the second node, applies an isolated config (`exit-matrix\config.json`) whose country exit lists an unreachable decoy first and checks that the exit stays on the session's node (`rosetun exits` names it, the rule still reaches the second node), then stops the second node and checks that `rosetun delay` reports it not answering, only the rule fails, the session stays Connected and direct egress stays blocked.
-
-Run the separate list rule-set scenario after the same guest/network prerequisites are satisfied (the owner runs this, not the agent):
-
-```powershell
-.\tools\vm\windows\Invoke-ListMatrix.ps1 -SingBoxPath .\tools\sing-box.exe -RequestPath .\tools\vm\windows\request-local.json -UseHostNode -Build *>&1 | Tee-Object -FilePath .\target\list-matrix.txt
-```
-
-It uses an isolated guest configuration, uploads a text list with `example.com` through CLI `connect`, checks Block against reachable `example.org`, compiles the same rule to SRS with `sing-box rule-set compile`, and uploads it with CLI `apply` before checking Direct with a blocked default. It disconnects and removes its guest-side list fixture afterwards. Check every PASS/FAIL result and the command exit status; do not commit the generated guest configuration or helper logs. The same eleven checks, with the same ids, also run as an autonomous runner (`guest/run-windows-list.ps1`) of the exploratory QEMU lab, against the lab's targets instead of the Internet: see [Stage 10a in the Windows matrix guide](../matrix/docs/WINDOWS.md#stage-10a-windows-list-windows-list).
-
-`Invoke-LanMatrix.ps1` is the "Local network" matrix (the owner runs it; about 15 minutes, 10 of them the long session, `-LongSessionSeconds` changes it). The host is the device on the guest's network: the Default Switch puts both in one segment. A VPN server's own address is left out of the guest's network (the service logs it), so the matrix gives the host a second Default Switch address, `-NodeAddress` (default `203.0.113.1/24`, skipped as a source, removed in `finally`), and points the guest's `request.json` at the node there. It writes six requests next to `request.json` in the guest, all with the kill switch and auto-reconnect: `lan-off.json`, `lan-on.json`, `lan-private.json` (with private networks behind the router), `lan-rule.json` (with a first rule that sends the host's address through the VPN) and `lan-server.json` (with the node on the host's own address, with `-UseHostNode` only: another device of the network, a temporary last address of the subnet on the host, answers from the guest's address; the node's address routes into `rosetun0`, answers through the tunnel and stays closed to a connect bound to the physical adapter), and `lan-server-private.json` (the same with private networks, whose rule sends other private addresses direct but not the node's), and removes them in `finally`. With `lan-on`: the helper log names the opened networks and no VPN server among them; `Find-NetRoute` to the host names the guest's physical adapter and its address; a TCP connect without a bound source reaches the host's listener from the guest's address, not 172.19.0.1; TCP to the host's port 53 fails with `AccessDenied`; datagrams to `224.0.0.251:5353` and `239.255.255.250:1900`, sent on the physical adapter, reach host listeners on the Default Switch (they share the ports with the host's own mDNS and SSDP services and have temporary firewall rules); the same sent with Windows choosing the route is recorded as INFO, a known limit of Windows that `-MulticastTraceOnly` measures; `rosetun0` keeps `224.0.0.0/4` and does not have `255.255.255.255/32`, `Find-NetRoute` for the limited broadcast names the physical adapter, a datagram socket connected to it takes the physical adapter's address (connecting sends nothing; the same for the multicast groups is recorded), and a datagram to `255.255.255.255:47901` (`-BroadcastPort`) with Windows choosing the route reaches the host; `-PrivateBehindRouter` (default `10.255.255.1`, outside the segment) is listed by `rosetun connections` as going through the VPN; a TCP session to a host echo job lasts `-LongSessionSeconds` with a byte every 5 s; the guest's lease becomes the same static configuration (an address added to a DHCP adapter switches DHCP off and drops the lease and the gateway), then the service must stop following network changes for 10 s, then the guest gets `-ExtraAddress` (`198.51.100.10/24`, skipped as a source) on its adapter and the service must log the new network, stay Connected and route `-ExtraPeer` through the adapter, then the same after the address is removed, with the peer back in `rosetun0` and the broadcast route still off it. With `lan-rule` the host is still reached directly. With `lan-private` the private address behind the router is listed as direct. With `lan-off` the host's route is recorded (INFO), TCP to the host and both multicast groups do not reach it, direct internet stays blocked, `rosetun0` has both routes, a socket for the limited broadcast takes the tunnel's address, and neither group nor the broadcast reaches the host with Windows choosing the route. Then the switch: `lan-on` removes the broadcast route, `rosetun apply` of `lan-off` to the running session is refused and changes nothing, connecting `lan-off` brings it back, connecting `lan-on` removes it again and the broadcast arrives. `finally` removes the static addresses, turns DHCP back on, resets the DNS servers and renews the lease; start from the `clean` checkpoint if a killed run left it static. `-MulticastTraceOnly` runs none of this: `Trace-RosetunGuestMulticast.ps1` in the guest records once a second, starting before a `lan-on` connect and for `-TraceSeconds` (default 180) after it, what `Find-NetRoute` and `GetBestRoute` choose for `239.255.255.250`, the sockets' source addresses, the routes on `rosetun0` and the physical adapter, and the cached paths, and sends a datagram each to mDNS, SSDP and the limited broadcast; every IPv4 route change comes from `NotifyRouteChange2`. It prints a line per change of state, `rosetun0`'s whole route list each time it changes with VPN servers' host routes masked, and how many datagrams arrived after the connect, and leaves `samples.csv`, `routes.csv`, `tunnel-routes.txt`, `interfaces.csv` and `discovery-log.txt` in `tools/vm/logs/multicast-trace-*`. It takes the failure matrix's `-SingBoxPath`, `-RequestPath`, `-UseHostNode` and `-Build`:
-
-```powershell
-.\tools\vm\windows\Invoke-LanMatrix.ps1 -SingBoxPath .\tools\sing-box.exe -RequestPath .\tools\vm\windows\request-local.json -UseHostNode -Build *>&1 | Tee-Object -FilePath .\target\lan-matrix.txt
-```
-
-Both matrices stop sing-box host nodes on completion or error only if that invocation started them; the failure matrix also cleans up the Cloudflare-blocked node. An already-running sing-box node is reused and left alone. Add `-KeepNode` to keep newly started sing-box nodes for consecutive runs; it **never** keeps the REALITY server or its ephemeral keys. The REALITY port must be free at matrix startup. Add `-NodeBindInterface 'Ethernet'` to bind node outbounds to a physical adapter when a host TUN VPN would otherwise capture their traffic; this takes effect only when the matrix starts a node. To start or stop a sing-box node manually for debugging, import `./tools/vm/windows/RosetunVm.psm1` and call `Start-RosetunTestNode -SingBoxPath ./tools/sing-box.exe` or `Stop-RosetunTestNode`; add `-CloudflareBlocked` for the second node. The stop command warns rather than terminating a foreign or partial listener.
-
-Before running, the guest must have a DHCP-assigned IPv4 address with a default route and be able to connect to the host's link-local IPv6 address on TCP 8388. The failure matrix verifies both baselines; the list scenario checks direct egress and DNS before connecting. A temporary static IPv4 address can restore connectivity for diagnosis, but it cannot pass the DHCP recovery check after the guest adapter restarts. The Default Switch does not pass IPv6 neighbor discovery, so the matrix pins each side's link-local neighbor on the other (the host in the guest, the guest's current MAC on the host) in ActiveStore only, and removes the entries it created in `finally`, also after an interrupted run. A failed IPv6 baseline would make every "IPv6 blocked" result meaningless, so the matrix stops there and prints both neighbor entries; fix guest-to-host IPv6 reachability before running it again.
-
-`Invoke-ProxyMatrix.ps1` is the system proxy matrix (the owner runs it). The host is another device on the guest's network. It writes `proxy-plain.json`, `proxy-strict.json`, `proxy-share.json`, `proxy-share-strict.json` and `tun-strict.json` next to `request.json` in the guest and removes them in `finally`. Without the kill switch a request through `curl --proxy` is counted by the test node (with `-UseHostNode`) and one around the proxy goes out by itself; with it the one around is blocked, DNS around is blocked, and an egress watch sees no leak through an engine kill. A port held by another process fails the connect naming the port, with no engine and an open network. `rosetun apply` changes TUN to the proxy and back under the same kill switch with the egress watch on. The host reaches the guest's proxy only with sharing on, and not after a disconnect. Under Lockdown without its "Local network" the proxy stays closed to the host and works on loopback; with it the host gets in; `finally` turns Lockdown off. The desktop's settings are checked through `desktop_proxy.exe` (`crates/rosetun-shell/examples/desktop_proxy.rs`), which uses the GUI's module, because the guest cannot run the GUI: a set, a restore that brings an automatic script back, a process that exits without restoring and the next start restoring, and settings changed by hand left alone. `-Build` also builds the tool; without it, build it with `cargo build --release -p rosetun-shell --example desktop_proxy`. The guest's own settings are put back in `finally`. It takes the failure matrix's `-SingBoxPath`, `-RequestPath`, `-UseHostNode` and `-Build`, and `-ProxyPort`, `-ProbeUrl`:
-
-```powershell
-.\tools\vm\windows\Invoke-ProxyMatrix.ps1 -SingBoxPath .\tools\sing-box.exe -RequestPath .\tools\vm\windows\request-local.json -UseHostNode -Build *>&1 | Tee-Object -FilePath .\target\proxy-matrix.txt
-```
-
-`Invoke-LockdownMatrix.ps1` is the Lockdown matrix (the owner runs it; about 32 minutes, it reboots the guest once and cuts its power six times unless `-SkipReboot`): off, on while disconnected (the CLI's path gets out, curl does not, server checks work), a standard local account created for the run (Rosetun's `sing-box.exe tools fetch` of `https://1.1.1.1/cdn-cgi/trace`, plain and bound to the physical adapter, fails without a session and, bound, during one; it runs through a one-off scheduled task, so the account joins Performance Log Users for the batch logon right, and is removed in `finally`), names (see below), inbound and `lan on`, connect and disconnect (the CLI's Lockdown permits are gone during the session and back after it, and after a killed helper restarts), a killed helper, sleep and resume with Lockdown on (a saved VM, disconnected and connected, with an egress watch), a reboot checked by a startup task, power cuts `-PowerCutDelaySeconds` (default 2) after `lockdown on` and after `lockdown off` (`-PowerCutRepeats`, default 3), `lockdown off` connected and disconnected, `rosetun lockdown off` from the standard account refused by the real service, disconnected and connected (without the service the CLI checks the pipe server by its token, which a standard account cannot open), `--reset-firewall` with the real service running and stopped, and the uninstaller's steps. The helper runs sing-box from its copy `data\engines\sing-box.exe` (the console helper on the guest makes it too): its ACL must be exactly SYSTEM and Administrators, explicit, owned by Administrators, and the standard account must be refused starting it (Win32 error 5) both without a session and during one. It takes the failure matrix's `-SingBoxPath`, `-RequestPath`, `-UseHostNode` and `-Build`:
-
-```powershell
-.\tools\vm\windows\Invoke-LockdownMatrix.ps1 -SingBoxPath .\tools\sing-box.exe -RequestPath .\tools\vm\windows\request-local.json -UseHostNode -Build *>&1 | Tee-Object -FilePath .\target\lockdown-matrix.txt
-```
-
-Names: Lockdown blocks the system resolver (Dnscache), so Rosetun resolves names itself. For scenarios 1 to 3 the matrix runs a DNS responder for `rosetun.test` (`.test` is reserved, RFC 2606) and an HTTP server with one subscription on the host, as a background job: `node.rosetun.test` and `sub.rosetun.test` point to the host's Default Switch address, with TTL 0. Internet Connection Sharing usually holds port 53 on that address, so the responder then gets a second address on `vEthernet (Default Switch)` near the top of its subnet (`-SkipAsSource`), removed in `finally` with the job and its firewall rules. The guest's adapter points at the responder until the end of scenario 3 and gets its DNS servers back afterwards (and in `finally`). Without Lockdown, with Lockdown and `lan off`, and with `lan on` (the responder's address is private like a router's), a connect to `node.rosetun.test`, a server check of it and `rosetun sub update` of the subscription at `http://sub.rosetun.test:<port>/sub` must work; under Lockdown `Resolve-DnsName` (Dnscache) and `nslookup` must get no answer, and `helper.log` must not say `failed to resolve the VPN endpoint`. The subscription is added in scenario 1 and removed in `finally`.
-
-Its `finally` runs `--reset-firewall`. If a run was killed and the guest has no network, run in the guest as administrator `C:\rosetun\rosetun-helper-privileged.exe --reset-firewall` (it stops the Rosetun service if one runs; stop a console helper with `Stop-Process -Name rosetun-helper-privileged` first, or the removal reports that the sublayer is in use), then `Unregister-ScheduledTask RosetunLockdownMatrixBootCheck -Confirm:$false`. Without the binary, `netsh wfp show filters` lists the filters of provider `f12dbedd-f3c7-4a72-b0f8-20559c88b112`, and restoring the `clean` checkpoint removes everything. A killed run may also leave the name zone: in the guest `Set-DnsClientServerAddress -InterfaceIndex <index> -ResetServerAddresses` gives the adapter its DHCP DNS servers back; on the host `Get-Job | Stop-Job`, `Get-NetFirewallRule -Name 'Rosetun-name-zone-*' | Remove-NetFirewallRule` and `Remove-NetIPAddress` for the second Default Switch address the run printed.
-
-`Invoke-UpgradeMatrix.ps1` is the upgrade matrix (the owner runs it; it installs into Program Files of the guest, so start from the `clean` checkpoint with `-RestoreCheckpoint`). It takes two setups built by `../../../installer/build.ps1`: `-PreviousSetup`, the previous release (build it from its tag in a separate worktree), and `-CurrentSetup`, HEAD; and the failure matrix's `-SingBoxPath`, `-RequestPath`, `-UseHostNode` and `-Build`. The working folder `C:\rosetun` gets HEAD's CLI and helper and the requests, as for the other matrices, but no console helper: the installed service owns the pipe. Each scenario installs the previous build with `/VERYSILENT`, sets up its state with that build's own CLI from Program Files, starts the egress watch (as in the failure matrix: one curl in a SYSTEM task, bound to the physical adapter, probing up to five times a second; any answer is a leak; no PowerShell runs in the task, since its start stalled for minutes in this matrix), which the baseline first checks counts leaks with the network open, runs the current setup with `/VERYSILENT` over it and checks the result, then uninstalls:
-
-1. Lockdown on, disconnected: no packet gets out during the upgrade, setup logs that Lockdown holds the network and places no hold, Lockdown is still on afterwards and direct egress still blocked.
-2. Connected with the kill switch, no Lockdown: no packet gets out during the upgrade, setup logs `upgrade hold placed` and starts the GUI with `--after-upgrade`, the new service reports `upgrade_hold` (not `lockdown`) and the hold's marker (provider `496d09fa-1d9a-451b-871f-35ba72197795`) exists, direct egress is blocked; a connect with the CLI comes up, traffic goes through the tunnel, no packet gets out while the hold is lifted, and the marker and Lockdown's objects are gone.
-3. Connected without the kill switch: setup places no hold and starts no `--after-upgrade` GUI. Direct egress during the upgrade is recorded as INFO: it is the expected leak of the upgrade's window without the kill switch.
-4. Connected with the kill switch, and the upgrade breaks off: the matrix stops the current setup and its wizard once the hold's marker exists and the service has stopped. No packet gets out then or in the 20 s after, direct egress is blocked, and `rosetun reset-firewall` (HEAD's CLI in `C:\rosetun`) removes the hold and opens the network.
-
-The GUI that setup starts after an upgrade runs as the guest's user; the matrix only records its command line and stops it, and reconnects with the CLI. The guest user must have no GUI configuration (as in the `clean` checkpoint), or that GUI could connect and lift the hold before the checks. The request must suit both builds: the previous CLI reads it too. `tests\Test-RosetunUpgradeRequests.ps1` builds the matrix's requests on the host without a VM, from `-RequestPath` (default `request-local.json`) and from copies of it without `kill_switch` or `allow_lan`; run it after changing the request or the way the matrix derives it. `tests\Test-RosetunScriptArguments.ps1` parses every script under `tools/vm` and fails on a command argument written as a cast, such as `-ArgumentList $a, [bool]$Flag`: in argument mode that is the string `[bool]False`, true in the guest, so write `([bool]$Flag)`; run it after changing any of them. When an installed service does not come up, and once more before `finally` uninstalls after any failure, the matrix saves the setup logs, the service's logs and `state.txt` (the service, its pipe, Rosetun and setup processes, the last 15 minutes of Service Control Manager events) to `tools/vm/logs/upgrade-<time>-<scenario>/`; a helper that does not start leaves `helper-start.txt` with every helper log in `tools/vm/logs/<time>/`.
-
-```powershell
-.\tools\vm\windows\Invoke-UpgradeMatrix.ps1 -PreviousSetup .\target\previous\rosetun-0.4.0-setup.exe -CurrentSetup .\target\installer\rosetun-0.5.0-setup.exe -SingBoxPath .\tools\sing-box.exe -RequestPath .\tools\vm\windows\request-local.json -UseHostNode -RestoreCheckpoint -Build *>&1 | Tee-Object -FilePath .\target\upgrade-matrix.txt
-```
-
-Its `finally` uninstalls Rosetun and runs `--reset-firewall` from `C:\rosetun`, then starts the console helper again. If a run was killed and the guest has no network, run in the guest as administrator `C:\rosetun\rosetun-helper-privileged.exe --reset-firewall`: it removes the hold with Lockdown. Without the binary, `netsh wfp show state` lists provider `496d09fa-1d9a-451b-871f-35ba72197795` while a hold is left, and restoring the `clean` checkpoint removes everything.
-
-`Invoke-LockdownProbe.ps1` is a study for the 0.3 Lockdown, not a matrix: it checks which WFP permits from a dynamic session beat a persistent block in another sublayer, and whether the block holds across reboots. Run it with Rosetun disconnected in the guest (the owner runs it); it reboots the guest unless `-SkipReboot` is given:
-
-```powershell
-.\tools\vm\windows\Invoke-LockdownProbe.ps1 -Build *>&1 | Tee-Object -FilePath .\target\lockdown-probe.txt
-```
-
-The Lockdown sublayer sits at `-LockdownWeight` (default `0xC000`) and its persistent and boot-time sets also permit loopback and DHCPv4. Unless `-SkipIpv6`, it starts the host test node (`-SingBoxPath`, default `tools\sing-box.exe`) and pins the IPv6 neighbors as the matrix does. `-PowerCut` adds one power cut per delay in `-PowerCutDelaySeconds` (default `5,15,30,60`, after a `-PowerCutSettleSeconds` wait that lets the boot task reach the disk) and one after `install --flush` (`-PowerCutFlushDelaySeconds`, default 2), each reported as INFO. It copies `lockdown_probe.exe` and a renamed curl into `C:\rosetun\lockdown-probe` and registers the startup task `RosetunLockdownBootCheck`; `finally` removes the persistent objects, the task and the folder, so nothing is left after cleanup. If the run was interrupted and the guest has no network, run in the guest as administrator `C:\rosetun\lockdown-probe\lockdown_probe.exe persistent remove` (safe to repeat; `persistent status` shows what is left), then `Unregister-ScheduledTask RosetunLockdownBootCheck -Confirm:$false`. Without the binary, `netsh wfp show filters` lists the filters of provider `681cc7b8-4f59-4eac-8c10-06bf2aa25d17`, and restoring the `clean` checkpoint removes everything.
-
-`Invoke-PowerCutConnectProbe.ps1` is a probe, not a matrix (the owner runs it): it looks for the first connect after a power cut that times out on sing-box readiness, seen in the Lockdown matrix's scenario 8 with sing-box 1.14.3. Each pass turns Lockdown on (unless the mode is `Off`), waits `-PowerCutDelaySeconds` (default 2), cuts the guest's power, renews the DHCP lease, starts the helper and connects at once, then disconnects and turns Lockdown off. `-Repeats` (default 8) passes per mode, `-Lockdown On|Off|Both` (default `Both`); the other parameters are the Lockdown matrix's. Each row shows the time to `Connected`, the readiness time from `helper.log` (first `spawning tunnel engine` to `engine startup readiness confirmed`), the spawn attempts and the Lockdown state after the boot; a failed pass keeps the helper log since the connect in `tools/vm/logs/power-cut-probe-<time>-<pass>.log` and puts its first 20 `engine_output` lines (sing-box's own output) in the note. The summary gives failures, median and maximum readiness per mode. `finally` runs `--reset-firewall`, restores the boot recovery settings and leaves the guest running.
-
-```powershell
-.\tools\vm\windows\Invoke-PowerCutConnectProbe.ps1 -SingBoxPath .\tools\sing-box.exe -RequestPath .\tools\vm\windows\request-local.json -UseHostNode -Build *>&1 | Tee-Object -FilePath .\target\power-cut-probe-1.14.3.txt
-```
-
-To compare with another sing-box version, download its `sing-box-<version>-windows-amd64.zip` from the SagerNet releases by hand and check `sing-box.exe` against the hash pinned for that version in the history of `../../../installer/build.ps1` (`git log -p -- installer/build.ps1`; 1.14.1 is `B838DE45BD0B2E6DDBED1977E4745622F7DFFAB3B293807FF4C6B1B640FED909`). The service accepts only `SUPPORTED_SING_BOX_VERSION`, and the probe refuses to start on a mismatch: set it in `crates/rosetun-engine-singbox/src/version.rs` to the other version locally, run with `-Build`, and revert it afterwards (never commit it). With `-UseHostNode` the host node runs the same binary.
-
-```powershell
-(Get-FileHash .\tools\sing-box-1.14.1.exe -Algorithm SHA256).Hash
-.\tools\vm\windows\Invoke-PowerCutConnectProbe.ps1 -SingBoxPath .\tools\sing-box-1.14.1.exe -RequestPath .\tools\vm\windows\request-local.json -UseHostNode -Build *>&1 | Tee-Object -FilePath .\target\power-cut-probe-1.14.1.txt
-```
-
-
-List Matrix optionally saves structured results with `-ResultDirectory <new-directory>`.
-The default invocation remains unchanged. See the [format, offline validation,
-autonomous tests and owner checks](../matrix/docs/WINDOWS.md#windows-list-artifacts).
-
-The opt-in List recorder (`Invoke-ListMatrix.ps1 -ResultDirectory <new-directory>`)
-uses Windows `rosetun.windows-list.plan.v2` with an ordered catalog snapshot and
-required `catalog_digest`. The Python reader rejects old Windows plan.v1; Linux
-plan.v1 remains supported. The SHA-256 canonical encoding and artifact contracts
-are documented in [the Windows matrix guide](../matrix/docs/WINDOWS.md#windows-list-artifacts).
-The digest detects accidental snapshot changes, not trusted provenance.
-
-With `-UseHostNode`, List cleanup checks termination using the created process's
-PID and creation time after its usual guarded stop. Missing listeners and the
-stop helper's return do not prove exit. Unknown state is UNVERIFIED; a surviving
-original process is ERROR. PASS requires confirmed guest cleanup and termination
-of the owned node. Reused nodes and nodes explicitly retained by `-KeepNode`
-remain outside this run's cleanup scope. `-KeepNode` is for deliberate retention;
-it is no longer necessary to bypass unverified stopping.
+- **List (`rosetun.windows-list.plan.v2`):** 11 required checks, canonical SHA-256 `catalog_digest`,
+  PID + creation-time node cleanup verification. Full contract in
+  [../matrix/docs/WINDOWS.md#windows-list-artifacts](../matrix/docs/WINDOWS.md#windows-list-artifacts).
+- **Proxy (`rosetun.windows-proxy.plan.v1`):** see the section below and
+  [../matrix/docs/WINDOWS.md#structured-windows-proxy-contract](../matrix/docs/WINDOWS.md#structured-windows-proxy-contract).
 
 ### Structured Windows Proxy results
-
-Reporting is opt-in. Without `-ResultDirectory` the legacy checks, ordering, table
-and exit behavior remain available. The owner runs these commands on Hyper-V
-with prebuilt artifacts and host Lockdown disabled:
 
 ```powershell
 .\tools\vm\windows\Invoke-ProxyMatrix.ps1 -SingBoxPath .\tools\sing-box.exe -RequestPath .\tools\vm\windows\request-local.json -UseHostNode -ResultDirectory .\target\proxy-with-node
@@ -131,164 +85,42 @@ with prebuilt artifacts and host Lockdown disabled:
 python -B -m tools.vm.matrix report target/proxy-with-node/report.json --plan target/proxy-with-node/plan.json
 ```
 
-Use a new result directory for each run; an existing directory is refused.
-Relative paths use the PowerShell location, including when it differs from the
-process working directory. The plan is saved before the first guest mutation.
-See [the foundation contract](../matrix/docs/WINDOWS.md#structured-windows-proxy-contract)
-for schemas and read-only planning commands.
+- **Catalog & coverage:** 46 assertions (`proxy-checks.json`). `-UseHostNode` requires both
+  `sharing.*.server` checks; without it they record `SKIP` (`host-node-disabled`) and acceptance
+  reports `selected-variant`. An interruption records `interrupted`.
+- **Cleanup components:** `node`, `lan`, `watch`, `listener`, `connection`, `lockdown`, `desktop`,
+  and `files` are reported independently (`ERROR` > `UNVERIFIED` > `PASS`; `NOT_CREATED` when
+  unacquired; `RETAINED` allowed only for owned `node` with `-KeepNode`). Owned node stop checks
+  PID + UTC creation ticks; desktop WinINet settings are compared in memory and never overwrite
+  foreign user edits.
+- **Lockdown WFP read-back & evidence boundary:** requires CLI `lockdown: off` and parsed
+  `netsh wfp show state` XML (`<wfpstate>` plus optional empty `<firewallState>` trailer, DTDs
+  disabled) with zero Lockdown objects. Active WFP dumps do not expose inactive boot-time filters
+  after BFE startup; invariants remain `UNVERIFIED` and `release_gate` stays `false`.
 
-The catalog has 46 assertions in execution order. `UseHostNode` requires both
-`sharing.*.server` assertions and corroborates proxy requests with node connection
-counts. Without it those two assertions remain in the report with
-`host-node-disabled` SKIP; proxy requests then supply curl evidence alone.
-Acceptance for that variant reports `selected-variant` coverage. It never claims
-coverage of every Proxy variant. Required flags are frozen before execution;
-an interruption uses `interrupted`, including between sharing iterations.
+## Recovery after an interrupted Hyper-V run
 
-Cleanup reports `node`, `lan`, `watch`, `listener`, `connection`, `lockdown`,
-`desktop`, and `files` separately. Errors dominate unknown states, which dominate
-PASS. `NOT_CREATED` means no resource was acquired; `RETAINED` is allowed only
-for the owned node with `KeepNode`. Reused nodes are outside ownership. Owned
-node cleanup uses PID plus creation time. Read-back checks LAN address, firewall
-rule and listener; watch task, probe file and curl/cmd processes; occupied-port process;
-disconnected state; and absence of request variants, record and desktop tool.
-Read-back failures leave UNVERIFIED. Partial acquisition without a returned
-resource identity also remains UNVERIFIED. No broader cleanup is attempted.
+If a Lockdown, Upgrade, or Lockdown Probe run is killed mid-flight and leaves the guest without
+network:
 
-Desktop values are compared only in memory. Restoration requires equality with
-the last known settings written by the matrix, then equality with the original
-snapshot after restoration. Read denial or foreign changes leave UNVERIFIED and
-never authorize overwriting those changes. Interrupted desktop operations may
-therefore need owner recovery. Cleanup does not publish the settings or errors.
+1. **Reset Rosetun Lockdown / upgrade hold** (in the guest, elevated):
+   ```powershell
+   Stop-Process -Name rosetun-helper-privileged -ErrorAction SilentlyContinue
+   C:\rosetun\rosetun-helper-privileged.exe --reset-firewall
+   Unregister-ScheduledTask RosetunLockdownMatrixBootCheck -Confirm:$false -ErrorAction SilentlyContinue
+   ```
+2. **Reset standalone Lockdown probe** (if `Invoke-LockdownProbe.ps1` was interrupted):
+   ```powershell
+   C:\rosetun\lockdown-probe\lockdown_probe.exe persistent remove
+   Unregister-ScheduledTask RosetunLockdownBootCheck -Confirm:$false -ErrorAction SilentlyContinue
+   ```
+3. **Reset guest DNS / static IP** (if interrupted during LAN or Lockdown name-zone checks):
+   ```powershell
+   Set-DnsClientServerAddress -InterfaceIndex <idx> -ResetServerAddresses
+   ```
+4. **Full clean reset:** restore the Hyper-V `clean` checkpoint (`Restore-VMSnapshot -VMName rosetun-test -Name clean`).
 
-Lockdown cleanup PASS requires a successful CLI status response containing one
-unambiguous `lockdown: off` line and a successful, structurally valid active WFP
-state dump without Lockdown provider/sublayer/filter keys or their references.
-Filters are inspected in every reported layer. `netsh wfp show state` can emit
-XML fragments: `wfpstate` followed by `firewallState`. The reader parses the
-entire stream and validates the order; it does not truncate at `</wfpstate>`.
-The supported metadata trailer contains exactly one empty
-`dynamicKeywordAddresses` collection without attributes. Populated or unfamiliar
-metadata remains UNVERIFIED. Duplicate WFP roots, unknown trailers, extra roots,
-non-whitespace text, misplaced declarations, DTDs and malformed fragments are
-rejected. Missing collections, invalid XML,
-inconsistent declared item counts, failed commands or ambiguous responses leave
-UNVERIFIED. A confirmed on state or remaining object is ERROR; an earlier ERROR
-cannot become PASS. If the phase did not start, it remains NOT_CREATED. The
-read-back observes the result of the existing `lockdown off`; it adds no firewall
-reset or object deletion.
-
-**Evidence boundary:** the current WFP dump does not expose boot-time filters
-that are inactive after BFE startup. Cleanup PASS certifies only the CLI/off and
-active-object conditions above. It is not complete security verification.
-[Microsoft documents current state and boot-time policy as separate netsh views](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/netsh-wfp).
-Curl and egress watch are not independent packet capture; invariants remain
-UNVERIFIED and release acceptance is always false.
-
-`Test-RosetunProxyResults.ps1` remains a serialization fixture. The additional
-`Test-RosetunProxyFinalization.ps1` extracts and runs the actual nested and outer
-finally blocks, using synthetic acquisitions and replacing external operations.
-Components begin UNVERIFIED; real cleanup aggregation, the XML parser and recorder
-produce the final report and completion marker. The matrix body and VM module
-are never executed in these tests.
-
-Owner verification: compare both runs' 46 rows and the two conditional SKIPs;
-inspect every cleanup component, desktop restoration, Lockdown off, node
-ownership/reuse and KeepNode; interrupt a disposable run between sharing
-iterations and inspect the finalized journal. Send back the four structured
-artifacts and sanitized discrepancies. Independent packet evidence and manual
-Hyper-V verification remain necessary for security acceptance.
-
-The table maps each existing assertion to its explicit ID. Sharing expands in
-request order: `plain` means `proxy-share.json`, `strict` means
-`proxy-share-strict.json`. Probe counts only affect display text.
-
-| Stable ID | Existing expectation |
-|---|---|
-| `plain.connect` | the proxy mode connects without a kill switch |
-| `plain.adapter` | no adapter comes up |
-| `plain.proxy` | a request through the proxy goes through the VPN |
-| `plain.direct` | a request around the proxy goes out by itself |
-| `plain.unshared` | other devices do not reach an unshared proxy |
-| `busy.reject` | the connect fails naming the port |
-| `busy.engine` | no engine started and no filter stayed |
-| `busy.direct` | the network stays open |
-| `strict.connect` | the proxy mode connects with the kill switch |
-| `strict.proxy` | a request through the proxy goes through the VPN |
-| `strict.direct` | a request around the proxy is blocked |
-| `strict.dns` | DNS around the proxy is blocked |
-| `strict.restart` | a killed engine comes back |
-| `strict.watch` | nothing leaves directly while it restarts (<probe count> probes) |
-| `mode.tun` | TUN with the kill switch connects |
-| `mode.to-proxy` | TUN to the proxy applies |
-| `mode.adapter-gone` | the adapter is gone |
-| `mode.proxy` | the proxy carries traffic |
-| `mode.to-tun` | the proxy back to TUN applies |
-| `mode.tunnel` | the adapter is back and carries traffic |
-| `mode.watch` | nothing leaves directly during the changes (<probe count> probes) |
-| `sharing.plain.connect` | proxy-share.json connects |
-| `sharing.strict.connect` | proxy-share-strict.json connects |
-| `sharing.plain.host` | proxy-share.json: the host on the guest's network uses the proxy |
-| `sharing.strict.host` | proxy-share-strict.json: the host on the guest's network uses the proxy |
-| `sharing.plain.server` | proxy-share.json: the VPN server's own address does not get in |
-| `sharing.strict.server` | proxy-share-strict.json: the VPN server's own address does not get in |
-| `sharing.plain.loopback` | proxy-share.json: the proxy still answers on loopback |
-| `sharing.strict.loopback` | proxy-share-strict.json: the proxy still answers on loopback |
-| `sharing.off` | with the switch off the host does not get in |
-| `sharing.disconnected` | after a disconnect the host does not get in |
-| `desktop.set` | the settings point at the local proxy |
-| `desktop.record` | the record of the user's settings is there |
-| `desktop.restore` | after a disconnect the settings are back, script included |
-| `desktop.record-gone` | the record is gone |
-| `crash.persist` | the proxy and the record outlive the process |
-| `crash.restore` | the next start restores them |
-| `foreign.preserve` | settings changed since stay as they are |
-| `lockdown.on` | Lockdown goes on without its local network |
-| `lockdown.connect` | a shared proxy connects under it |
-| `lockdown.proxy` | the proxy carries traffic |
-| `lockdown.direct` | a request around the proxy is blocked |
-| `lockdown.host-blocked` | the host does not get in |
-| `lockdown.lan-on` | Lockdown takes its local network |
-| `lockdown.lan-connect` | a shared proxy connects |
-| `lockdown.host-allowed` | with its local network the host gets in |
-
-## Failure diagnostics
-
-The failure matrix writes full notes to `target/failure-matrix-results.json`.
-Its NTP rows include each attempt's send/receive phase, elapsed time, byte
-counts, response source, NTP mode/stratum and socket/native error codes.
-The boolean pass condition remains an NTP response of at least 48 bytes.
-The host Xray node's warning output is saved as `test-node-xray-*.stdout.log`
-and `*.stderr.log` under `tools/vm/logs/`; their paths are printed at startup.
-
-For Repeated delay, the helper debug log has a `check` id and `provider` index
-(0: Cloudflare, 1: Google), with request 1/2, headers/body phase, timing,
-HTTP status and a safe error category. A shared deadline message does not
-claim that either provider finished its first request. URL and credential
-values and raw HTTP/TLS error payloads are not logged. Compare both providers
-using the same `check` id; a losing worker may finish after the result returns.
-
-Run the diagnostic regression checks without a VM:
-
-```powershell
-pwsh -NoProfile -File tools/vm/windows/tests/Test-RosetunFailureChecks.ps1
-powershell.exe -NoProfile -File tools/vm/windows/tests/Test-RosetunFailureChecks.ps1
-```
-
-## Two-hop exits
-
-The owner runs qualification. Before Hyper-V, turn off Lockdown on the Windows host. The Linux VM needs a working recovery console.
-
-The two-hop catalog covers HTTP/HTTPS/SOCKS5, IPv4/IPv6, TUN and System proxy; A/B failures, authentication, TLS certificates, UDP/QUIC, Apply/rollback/reconnect, engine restart, missing dependencies, subscription/fallback changes, Lockdown and allow_lan. A through Xray (VLESS REALITY with Xray Auto, `two-hop.positive.xray-first-hop`) is a positive case: sing-box reaches A through Xray's local SOCKS inbound. Domain B, B through Xray, the Xray-only engine and fragmentation are refusal cases.
-
-**UNRUN:** this stand does not provision independently identifiable A, B and a target with synchronized server observations and physical client packet capture. The existing host node connection count or external-IP probe cannot prove the required transitions. The catalog records pending observations, not executable network qualification. Windows adds UNRUN rows from `two-hop-scenarios.tsv` to the failure matrix report. Linux L3 and Proxy list optional `not-run` scenarios, reported as SKIP with an explicit UNRUN reason and partial coverage. Existing independent traffic tests continue unchanged.
-
-To qualify a scenario, retain all of the following for the same marked request and observation interval:
-
-1. A target server log showing B's source address, B's inbound log showing A's source address, and A's inbound log showing the client. Use distinct addresses and a target controlled by the stand.
-2. A capture on the client's physical interface showing the connection to A, no direct connection to B, and no DNS query for B. First prove each observer sees a deliberately sent baseline, and capture before connect through disconnect, including Apply, engine restart and reconnect. Zero packets without a positive observer baseline is not evidence.
-3. For each refusal or outage, failed selected traffic and no target request from A or the client. Exercise new connections so a cached response or surviving stream cannot mask a failure. Check independent Direct/Proxy/Block rules against their existing baseline.
-4. For HTTPS, use a trusted test CA for the positive case, then a wrong name and an untrusted certificate for refusal. Use incorrect B credentials separately. Test a domain B as a refusal without a physical DNS query, including after subscription and fallback changes.
-5. Raw CLI output, request/configuration with secrets removed, engine/helper versions and commit, timestamped A/B/target logs, interface names, captures, and the matrix report. Return these artifacts if any observation differs. Keep raw secrets and personal network data out of commits.
-
-A matrix run whose two-hop rows remain UNRUN does not accept the feature.
+Relevant WFP provider GUIDs for manual inspection (`netsh wfp show filters` / `show state`):
+- Rosetun Lockdown: `f12dbedd-f3c7-4a72-b0f8-20559c88b112`
+- Rosetun Upgrade Hold: `496d09fa-1d9a-451b-871f-35ba72197795`
+- Standalone Lockdown Probe: `681cc7b8-4f59-4eac-8c10-06bf2aa25d17`
