@@ -105,10 +105,10 @@ function Install-RosetunSingBox {
 function Install-RosetunXray {
     $version = '26.11.9'
     $expectedHash = '1262522266337B824F07BEB8E1375786B437683B3890105469088F8E17E0A69D'
-    $installer = Get-Content -LiteralPath (Join-Path $script:RepoRoot 'installer\build.ps1') -Raw
+    $installer = Get-Content -LiteralPath (Join-Path $script:RepoRoot 'installer\windows\build.ps1') -Raw
     if ($installer -notmatch ('(?m)^\$xrayVersion = ''{0}''\r?$' -f $version) -or
         $installer -notmatch ('(?m)^\$xrayArchiveHash = ''{0}''\r?$' -f $expectedHash)) {
-        throw 'The VM Xray archive pin differs from installer/build.ps1.'
+        throw 'The VM Xray archive pin differs from installer/windows/build.ps1.'
     }
 
     $logDir = $script:LogRoot

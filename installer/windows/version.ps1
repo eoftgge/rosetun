@@ -1,5 +1,5 @@
 function Get-RosetunVersion {
-    $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+    $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
     $manifest = Get-Content -LiteralPath (Join-Path $root 'Cargo.toml') -Raw
     $workspacePackage = [regex]::Match($manifest, '(?ms)^\[workspace\.package\]\r?\n(?<section>.*?)(?=^\[|\z)')
     if (-not $workspacePackage.Success) {

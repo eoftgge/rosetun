@@ -160,7 +160,7 @@ class ReleaseAssemblyTests(unittest.TestCase):
     def test_real_release_notes_template_has_no_unhandled_placeholders(self):
         repo_root = Path(__file__).resolve().parents[2]
         template = (repo_root / 'installer' / 'release-notes.md').read_text(encoding='utf-8')
-        # Simulate the substitutions performed by installer/build.ps1 -Release.
+        # Simulate the substitutions performed by installer/windows/build.ps1 -Release.
         simulated = (
             template.replace('{{version}}', '0.7.0')
             .replace('{{setup}}', 'rosetun-0.7.0-setup.exe')

@@ -11,7 +11,7 @@
 # `--reset-firewall`; if the run is killed before that, see README.md.
 
 param(
-    # Setups built by installer\build.ps1: the previous release and HEAD.
+    # Setups built by installer\windows\build.ps1: the previous release and HEAD.
     [Parameter(Mandatory)][string]$PreviousSetup,
     [Parameter(Mandatory)][string]$CurrentSetup,
     [Parameter(Mandatory)][string]$SingBoxPath,

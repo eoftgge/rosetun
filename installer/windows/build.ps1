@@ -3,7 +3,7 @@ param([switch]$Release)
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+$root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 . (Join-Path $PSScriptRoot 'version.ps1')
 $releaseVersion = Get-RosetunVersion
 $version = $releaseVersion.Version
@@ -172,7 +172,7 @@ if (-not $wintunFound) {
 
 Copy-Item -LiteralPath (Join-Path $root 'LICENSE') -Destination (Join-Path $licensesDir 'rosetun.txt')
 Copy-Item -LiteralPath $license -Destination (Join-Path $licensesDir 'sing-box.txt')
-Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'third-party/xray-mpl-2.0.txt') -Destination $licensesDir
+Copy-Item -LiteralPath (Join-Path $root 'installer/third-party/xray-mpl-2.0.txt') -Destination $licensesDir
 $xrayNotice = @"
 Rosetun ships the unmodified official Xray-core $xrayVersion executable,
 Xray-windows-64.zip SHA-256 $xrayArchiveHash, under the Mozilla Public License 2.0
@@ -185,7 +185,7 @@ https://github.com/XTLS/Xray-core/archive/refs/tags/v$xrayVersion.tar.gz
 Every Rosetun release on GitHub also carries a copy of that source archive.
 "@
 Set-Content -LiteralPath (Join-Path $licensesDir 'xray-source.txt') -Value $xrayNotice -Encoding utf8
-Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'third-party/wintun-prebuilt-binaries-license.txt') -Destination $licensesDir
+Copy-Item -LiteralPath (Join-Path $root 'installer/third-party/wintun-prebuilt-binaries-license.txt') -Destination $licensesDir
 $wintunNotice = @"
 The unmodified official sing-box $singBoxVersion executable embeds Wintun $wintunVersion.
 The prebuilt Wintun DLL is copyrighted by WireGuard LLC and is distributed
@@ -319,7 +319,7 @@ if ($Release) {
     $utf8 = [Text.UTF8Encoding]::new($false)
     [IO.File]::WriteAllText((Join-Path $outputDir 'SHA256SUMS.txt'), ($checksums -join "`n") + "`n", $utf8)
 
-    $notes = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'release-notes.md'), [Text.Encoding]::UTF8)
+    $notes = [IO.File]::ReadAllText((Join-Path $root 'installer/release-notes.md'), [Text.Encoding]::UTF8)
     $notes = $notes.Replace('{{version}}', $version)
     $notes = $notes.Replace('{{setup}}', [IO.Path]::GetFileName($setup))
     $notes = $notes.Replace('{{sha256}}', $setupHash)

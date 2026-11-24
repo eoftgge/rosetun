@@ -9,7 +9,7 @@ overview = "Build from source"
 
 Use Rust 1.99 or newer, with the MSVC toolchain on Windows. Run `cargo build --release` to build the binaries and `cargo test --workspace` to run tests.
 
-- **Windows installer:** `./installer/build.ps1` builds `target/installer/rosetun-<version>-setup.exe`. See the [installer instructions](https://github.com/eoftgge/rosetun/blob/master/installer/README.md).
+- **Windows installer:** `./installer/windows/build.ps1` builds `target/installer/rosetun-<version>-setup.exe`. See the [installer instructions](https://github.com/eoftgge/rosetun/blob/master/installer/README.md).
 - **Linux release assets:** `installer/linux/build-deb.sh --release` builds the Debian package and Linux archive from the same binaries. The release build runs as a regular user in the pinned Debian 12 container. Tests on the local Debian 13 stand use a separate build. [Packaging instructions](https://github.com/eoftgge/rosetun/blob/master/installer/README.md#debian-package)
 - **macOS package (Apple Silicon, experimental):** `installer/macos/build-pkg.sh --release --allow-unsigned` builds `target/macos/rosetun-<version>-macos-arm64-experimental.pkg` on an Apple Silicon Mac; with Developer ID variables set, it also signs and notarizes the package. [macOS packaging instructions](https://github.com/eoftgge/rosetun/blob/master/installer/README.md#macos-package-apple-silicon-experimental)
 - **Failure testing** on virtual machines: the [VM test rig](https://github.com/eoftgge/rosetun/blob/master/tools/README.md).

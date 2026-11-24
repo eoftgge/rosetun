@@ -17,7 +17,7 @@ trim_trailing_whitespace = false
 
 # The installer script is kept without a BOM. Inno Setup reads a script without
 # a BOM as ANSI, which would turn the Russian messages into mojibake, so
-# installer/build.ps1 gives ISCC a copy with a BOM.
+# installer/windows/build.ps1 gives ISCC a copy with a BOM.
 [*.iss]
 charset = utf-8
 

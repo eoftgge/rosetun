@@ -19,7 +19,7 @@ set -euo pipefail
 export LC_ALL=C TZ=UTC
 umask 022
 
-# Update these together with installer/build.ps1, SUPPORTED_SING_BOX_VERSION
+# Update these together with installer/windows/build.ps1, SUPPORTED_SING_BOX_VERSION
 # and SUPPORTED_XRAY_VERSION.
 SING_BOX_VERSION=1.14.3
 SING_BOX_ARCHIVE_SHA256=e2bdf179c15a3652955dc44867e33ca0965c9c9b91b34267dcc5a5d639a5feee

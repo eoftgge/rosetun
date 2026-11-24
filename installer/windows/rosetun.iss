@@ -1,12 +1,12 @@
-; Compiled by installer\build.ps1, which passes AppVersion, BuildDir, SingBoxDir, XrayDir and LicensesDir.
+; Compiled by installer\windows\build.ps1, which passes AppVersion, BuildDir, SingBoxDir, XrayDir and LicensesDir.
 #ifndef AppVersion
-  #error Run installer\build.ps1 instead of compiling this script directly
+  #error Run installer\windows\build.ps1 instead of compiling this script directly
 #endif
 #ifndef FileVersion
-  #error Run installer\build.ps1 to provide the numeric file version
+  #error Run installer\windows\build.ps1 to provide the numeric file version
 #endif
 #ifndef LicensesDir
-  #error Run installer\build.ps1 to provide the licenses directory
+  #error Run installer\windows\build.ps1 to provide the licenses directory
 #endif
 
 #define AppName "Rosetun"
@@ -42,7 +42,7 @@ ShowLanguageDialog=auto
 CloseApplications=no
 UninstallDisplayName={#AppName}
 UninstallDisplayIcon={app}\{#GuiExe}
-SetupIconFile=..\crates\rosetun-gui\assets\rosetun.ico
+SetupIconFile=..\..\crates\rosetun-gui\assets\rosetun.ico
 SetupLogging=yes
 ; The uninstaller logs what it could not remove, such as another user's sign-in task.
 UninstallLogging=yes

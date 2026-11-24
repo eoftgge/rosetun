@@ -23,7 +23,7 @@ set -euo pipefail
 export LC_ALL=C TZ=UTC
 umask 022
 
-# Update these together with installer/build.ps1, installer/linux/build-deb.sh,
+# Update these together with installer/windows/build.ps1, installer/linux/build-deb.sh,
 # SUPPORTED_SING_BOX_VERSION and SUPPORTED_XRAY_VERSION.
 SING_BOX_VERSION=1.14.3
 SING_BOX_ARCHIVE_SHA256=0360ce634a04c26a6b4fd957517987bb4f6c8950f63435ce3c5af2fcae5860c5
