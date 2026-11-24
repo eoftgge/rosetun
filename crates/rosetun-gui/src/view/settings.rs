@@ -655,9 +655,21 @@ fn dns(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
             let editable = state.can_edit_settings();
             let saved = DnsPreset::matching(&state.config.settings.dns);
             let custom = state.settings.screen.custom_dns;
+            let custom_title = tr!("dns-custom");
+            let custom_detail = tr!("dns-custom-detail");
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = theme::space::S;
-                let width = (ui.available_width() - 3.0 * 8.0) / 4.0;
+                let width = (ui.available_width() - 3.0 * theme::space::S) / 4.0;
+                let inner_width = (width - 2.0 * theme::space::M).max(0.0);
+                let row_height = constants::DNS_PRESETS
+                    .into_iter()
+                    .chain(std::iter::once((
+                        custom_title.as_str(),
+                        custom_detail.as_str(),
+                    )))
+                    .map(|(title, detail)| dns_choice_height(ui, inner_width, title, detail))
+                    .fold(0.0_f32, f32::max);
+                let size = egui::vec2(width, row_height);
                 for (index, (preset, (name, address))) in DnsPreset::ALL
                     .into_iter()
                     .zip(constants::DNS_PRESETS)
@@ -666,7 +678,7 @@ fn dns(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
                     if dns_choice(
                         ui,
                         index,
-                        width,
+                        size,
                         saved == Some(preset) && !custom,
                         editable,
                         name,
@@ -680,11 +692,11 @@ fn dns(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
                 if dns_choice(
                     ui,
                     "custom",
-                    width,
+                    size,
                     custom,
                     editable,
-                    &tr!("dns-custom"),
-                    &tr!("dns-custom-detail"),
+                    &custom_title,
+                    &custom_detail,
                 )
                 .clicked()
                 {
@@ -725,18 +737,47 @@ fn apply_note(ui: &mut egui::Ui, state: &State, part: SessionPart, actions: &mut
     });
 }
 
+fn dns_choice_height(ui: &egui::Ui, inner_width: f32, title: &str, detail: &str) -> f32 {
+    let title_height = ui
+        .painter()
+        .layout(
+            title.to_owned(),
+            theme::font::semibold(theme::font::CAPTION),
+            theme::palette().text,
+            inner_width,
+        )
+        .size()
+        .y;
+    let detail_height = ui
+        .painter()
+        .layout(
+            detail.to_owned(),
+            egui::TextStyle::Small.resolve(ui.style()),
+            theme::palette().text_dim,
+            inner_width,
+        )
+        .size()
+        .y;
+    title_height + ui.spacing().item_spacing.y + detail_height
+}
+
 fn dns_choice(
     ui: &mut egui::Ui,
     id: impl std::hash::Hash,
-    width: f32,
+    size: egui::Vec2,
     selected: bool,
     enabled: bool,
     title: &str,
     detail: &str,
 ) -> egui::Response {
-    widgets::choice_card(ui, id, width, selected, enabled, title, |ui| {
-        ui.set_min_height(44.0);
+    widgets::choice_card(ui, id, size.x, selected, enabled, title, |ui| {
+        let content_height = dns_choice_height(ui, ui.available_width(), title, detail);
+        let top_pad = ((size.y - content_height) / 2.0).max(0.0);
+        ui.set_min_height(size.y);
         ui.vertical_centered(|ui| {
+            if top_pad > 0.0 {
+                ui.add_space(top_pad);
+            }
             ui.label(
                 RichText::new(title)
                     .font(theme::font::semibold(theme::font::CAPTION))
@@ -2705,6 +2746,98 @@ mod pending_notice_tests {
                 assert!(dot.x < label.left(), "dot stands left of the title");
                 let offset = (dot.y - label.center().y).abs();
                 assert!(offset <= 0.5, "{language:?}: dot offset {offset}");
+            });
+        }
+    }
+
+    #[test]
+    fn dns_choice_cards_share_height_and_center_text_vertically() {
+        for language in LANGUAGES {
+            i18n::in_language(language, || {
+                for &(size, nav) in &[WINDOWS[0], WINDOWS[1], (egui::vec2(760.0, 640.0), 200.0)] {
+                    let mut state = State::default();
+                    let ctx = egui::Context::default();
+                    theme::apply(&ctx);
+                    let mut output = egui::FullOutput::default();
+                    for _ in 0..3 {
+                        output.textures_delta.clear();
+                        output = ctx.run_ui(
+                            egui::RawInput {
+                                screen_rect: Some(egui::Rect::from_min_size(
+                                    egui::Pos2::ZERO,
+                                    size,
+                                )),
+                                ..Default::default()
+                            },
+                            |ctx| {
+                                egui::CentralPanel::default().show(ctx, |ui| {
+                                    page(ui, nav, |ui| dns(ui, &mut state, &mut Vec::new()));
+                                });
+                            },
+                        );
+                    }
+                    let mut texts = Vec::new();
+                    let mut stroked_rects = Vec::new();
+                    for clipped in &output.shapes {
+                        match &clipped.shape {
+                            egui::Shape::Text(text) => {
+                                texts.push((
+                                    text.galley.text().to_owned(),
+                                    text.galley.rect.translate(text.pos.to_vec2()),
+                                ));
+                            }
+                            egui::Shape::Rect(rect)
+                                if rect.fill == egui::Color32::TRANSPARENT
+                                    && rect.stroke.width > 0.0 =>
+                            {
+                                stroked_rects.push(rect.rect);
+                            }
+                            _ => {}
+                        }
+                    }
+                    let custom_title = tr!("dns-custom");
+                    let custom_detail = tr!("dns-custom-detail");
+                    let mut heights = Vec::new();
+                    for (title, detail) in constants::DNS_PRESETS.into_iter().chain(
+                        std::iter::once((custom_title.as_str(), custom_detail.as_str())),
+                    ) {
+                        let title_rect = texts
+                            .iter()
+                            .find(|(text, _)| text == title)
+                            .unwrap_or_else(|| panic!("{language:?} {size:?}: missing {title:?}"))
+                            .1;
+                        let detail_rect = texts
+                            .iter()
+                            .find(|(text, _)| text == detail)
+                            .unwrap_or_else(|| panic!("{language:?} {size:?}: missing {detail:?}"))
+                            .1;
+                        let text_rect = title_rect.union(detail_rect);
+                        let card_rect = stroked_rects
+                            .iter()
+                            .copied()
+                            .filter(|rect| rect.contains_rect(text_rect))
+                            .min_by(|a, b| a.area().total_cmp(&b.area()))
+                            .unwrap_or_else(|| {
+                                panic!(
+                                    "{language:?} {size:?}: missing card rect for {title:?}; text={text_rect:?}, rects={stroked_rects:?}"
+                                )
+                            });
+                        heights.push(card_rect.height());
+                        let top_gap = text_rect.top() - card_rect.top();
+                        let bottom_gap = card_rect.bottom() - text_rect.bottom();
+                        assert!(
+                            (top_gap - bottom_gap).abs() <= 1.0,
+                            "{language:?} {size:?} {title:?}: top_gap={top_gap}, bottom_gap={bottom_gap}"
+                        );
+                    }
+                    let min_h = heights.iter().copied().fold(f32::INFINITY, f32::min);
+                    let max_h = heights.iter().copied().fold(0.0_f32, f32::max);
+                    assert!(
+                        (max_h - min_h).abs() <= 0.5,
+                        "{language:?} {size:?}: card heights differ: {heights:?}"
+                    );
+                    output.textures_delta.clear();
+                }
             });
         }
     }
