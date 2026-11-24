@@ -96,6 +96,36 @@ MDNS_GROUP, MDNS_PORT, MDNS_MAC = '224.0.0.251', 5353, '01:00:5e:00:00:fb'
 SSDP_GROUP, SSDP_PORT, SSDP_MAC = '239.255.255.250', 1900, '01:00:5e:7f:ff:fa'
 EXTRA_ADDRESS = '198.51.100.10'
 PRIVATE_BEHIND_ROUTER = '10.255.255.1'
+# Stage 10f: opt-in extended lab fixtures (multi-protocol nodes, Xray, second node, two-hop B-hop proxies, DHCPv4).
+REALITY_PORT = 8390
+SECOND_NODE_PORT = 8391
+XHTTP_PORT = 8392
+HYSTERIA2_PORT = 8443
+TUIC_PORT = 8444
+ANYTLS_PORT = 8445
+REALITY_COVER_PORT = 8449
+SECOND_NODE_EGRESS = '203.0.113.11'
+SECOND_NODE_EGRESS6 = '2001:db8:6a:2::11'
+TWOHOP_B = {4: '203.0.113.20', 6: '2001:db8:6a:2::20'}
+TWOHOP_PORTS = {
+    'http': 3128,
+    'http-auth': 3129,
+    'https': 3443,
+    'https-untrusted': 3444,
+    'socks5': 1080,
+    'socks5-auth': 1081,
+}
+TWOHOP_USER = 'rosetun-b'
+TWOHOP_PASSWORD = 'rosetun-b-password'
+PROTO_PASSWORD = 'rosetun-test'
+PROTO_SNI = 'rosetun-test.invalid'
+TUIC_UUID = '00000000-0000-4000-8000-000000000001'
+REALITY_UUID = 'dd963d73-4229-4d4b-86af-c21d38dc3c25'
+REALITY_SHORT_ID = '0102030405060708'
+REALITY_SNI = 'target.lab.test'
+XHTTP_PATH = '/rosetun-xhttp'
+DHCP_SERVER_PORT = 67
+DHCP_CLIENT_PORT = 68
 # Stage 7b2a: the lab's resolver and DoH target, both inside the routed namespace.
 RESOLVER = '203.0.113.53'
 DOH_ADDRESS = '203.0.113.3'
@@ -151,6 +181,7 @@ ALLOWANCES = (
     ('lan-mdns', 'udp', 'IPv4 mDNS datagram from the test machine to 224.0.0.251:5353'),
     ('lan-ssdp', 'udp', 'IPv4 SSDP datagram from the test machine to 239.255.255.250:1900'),
     ('lan-broadcast', 'udp', 'IPv4 limited broadcast datagram from the test machine to 255.255.255.255:47901'),
+    ('dhcpv4', 'udp', 'DHCPv4 client/server datagrams (UDP 68<->67) between the test machine and the lab gateway or broadcast'),
 )
 
 BROADCAST = 'ff:ff:ff:ff:ff:ff'
@@ -764,17 +795,27 @@ def _allowance(frame, names, *, proxy_port=SOCKS_PORT):
                     or (frame.src_mac, frame.dst_mac, frame.src, frame.dst, frame.sport)
                     == (MACS['test'], MACS['lab'], CLIENTS[4], lab_ip, proxy_port)):
                 return name
-    elif frame.family == 4 and frame.proto == 17 and not frame.fragment and sender == 'test':
-        if ((frame.dst_mac, frame.src, frame.dst, frame.dport) == (MDNS_MAC, CLIENTS[4], MDNS_GROUP, MDNS_PORT)
-                and 'lan-mdns' in names):
-            return 'lan-mdns'
-        if ((frame.dst_mac, frame.src, frame.dst, frame.dport) == (SSDP_MAC, CLIENTS[4], SSDP_GROUP, SSDP_PORT)
-                and 'lan-ssdp' in names):
-            return 'lan-ssdp'
-        if ((frame.dst_mac, frame.src, frame.dst, frame.dport)
-                == (BROADCAST, CLIENTS[4], '255.255.255.255', LAN_BROADCAST_PORT)
-                and 'lan-broadcast' in names):
-            return 'lan-broadcast'
+    elif frame.family == 4 and frame.proto == 17 and not frame.fragment:
+        if 'dhcpv4' in names:
+            if (sender == 'test' and (frame.sport, frame.dport) == (DHCP_CLIENT_PORT, DHCP_SERVER_PORT)
+                    and frame.src in ('0.0.0.0', CLIENTS[4])
+                    and (frame.dst, frame.dst_mac) in (('255.255.255.255', BROADCAST), (GATEWAYS[4], MACS['lab']))):
+                return 'dhcpv4'
+            if (sender == 'lab' and (frame.sport, frame.dport) == (DHCP_SERVER_PORT, DHCP_CLIENT_PORT)
+                    and frame.src == GATEWAYS[4]
+                    and (frame.dst, frame.dst_mac) in (('255.255.255.255', BROADCAST), (CLIENTS[4], MACS['test']))):
+                return 'dhcpv4'
+        if sender == 'test':
+            if ((frame.dst_mac, frame.src, frame.dst, frame.dport) == (MDNS_MAC, CLIENTS[4], MDNS_GROUP, MDNS_PORT)
+                    and 'lan-mdns' in names):
+                return 'lan-mdns'
+            if ((frame.dst_mac, frame.src, frame.dst, frame.dport) == (SSDP_MAC, CLIENTS[4], SSDP_GROUP, SSDP_PORT)
+                    and 'lan-ssdp' in names):
+                return 'lan-ssdp'
+            if ((frame.dst_mac, frame.src, frame.dst, frame.dport)
+                    == (BROADCAST, CLIENTS[4], '255.255.255.255', LAN_BROADCAST_PORT)
+                    and 'lan-broadcast' in names):
+                return 'lan-broadcast'
     elif frame.family == 6 and frame.icmp is not None and frame.src == '::':
         if frame.icmp[0] == 133 and frame.dst == 'ff02::2' and frame.dst_mac == '33:33:00:00:00:02':
             return 'ipv6-unspecified-rs' if 'ipv6-unspecified-rs' in names else None
@@ -803,9 +844,42 @@ def _tunnel_addresses(addresses):
     return tuple(dict.fromkeys(addresses))
 
 
-def _tunnel_frame(frame, port, addresses=(GATEWAYS[4],)):
-    """TCP between the test machine and a lab VPN node address on the node port, either way."""
-    if frame.family != 4 or frame.proto != 6:
+def _tunnel_endpoints(tunnel_port, addresses, endpoints):
+    """Normalized frozenset of `(address, ip_proto_num, port)` tunnel endpoints, or None when none configured."""
+    result = set()
+    if tunnel_port is not None:
+        for address in addresses:
+            result.add((address, 6, tunnel_port))
+    if endpoints is not None:
+        if type(endpoints) not in (list, tuple, set, frozenset):
+            raise ValueError('invalid-tunnel-endpoints')
+        for item in endpoints:
+            if type(item) not in (list, tuple) or len(item) != 3:
+                raise ValueError('invalid-tunnel-endpoints')
+            address, proto, port = item
+            if address not in (GATEWAYS[4], ROUTED_NODE) or proto not in IP_PROTOCOLS:
+                raise ValueError('invalid-tunnel-endpoints')
+            result.add((address, IP_PROTOCOLS[proto], _tunnel_port(port)))
+    return frozenset(result) if result else None
+
+
+def _tunnel_frame(frame, port, addresses=(GATEWAYS[4],), endpoints=None):
+    """TCP/UDP between the test machine and a lab VPN node endpoint, either way."""
+    if frame.family != 4:
+        return False
+    if endpoints is not None:
+        if ((frame.src_mac, frame.dst_mac, frame.src) == (MACS['test'], MACS['lab'], CLIENTS[4])
+                and (frame.dst, frame.proto, frame.dport) in endpoints
+                or (frame.src_mac, frame.dst_mac, frame.dst) == (MACS['lab'], MACS['test'], CLIENTS[4])
+                and (frame.src, frame.proto, frame.sport) in endpoints):
+            return True
+        if ((frame.src_mac, frame.dst_mac, frame.dst) == (MACS['lab'], MACS['test'], CLIENTS[4])
+                and frame.proto == 1 and frame.icmp == (3, 3) and frame.inner is not None):
+            source, target, proto, _, dport = frame.inner
+            return (source == CLIENTS[4] and proto == 17 and frame.src == target
+                    and (target, proto, dport) in endpoints)
+        return False
+    if frame.proto != 6:
         return False
     return ((frame.src_mac, frame.dst_mac, frame.src, frame.dport) == (MACS['test'], MACS['lab'], CLIENTS[4], port)
             and frame.dst in addresses
@@ -1046,7 +1120,8 @@ def _phase_hit(frame, run):
     return (direction, *found) if found else None
 
 
-def _category(frame, is_probe, names, tunnel_port, *, tunnel_addresses=(GATEWAYS[4],), proxy_port=SOCKS_PORT):
+def _category(frame, is_probe, names, tunnel_port, *, tunnel_addresses=(GATEWAYS[4],), tunnel_endpoints=None,
+              proxy_port=SOCKS_PORT):
     """The category of a frame that is no marker; an allowance is ('allowed', name)."""
     if frame.fragment:
         return 'unexpected'
@@ -1054,7 +1129,8 @@ def _category(frame, is_probe, names, tunnel_port, *, tunnel_addresses=(GATEWAYS
         return 'probe'
     if _infrastructure(frame):
         return 'infrastructure'
-    if tunnel_port is not None and _tunnel_frame(frame, tunnel_port, tunnel_addresses):
+    if ((tunnel_endpoints is not None or tunnel_port is not None)
+            and _tunnel_frame(frame, tunnel_port, tunnel_addresses, endpoints=tunnel_endpoints)):
         return 'tunnel'
     if allowed := _allowance(frame, names, proxy_port=proxy_port):
         return 'allowed', allowed
@@ -1069,9 +1145,11 @@ def _endpoint(address, port):
     return f'[{address}]:{port}' if ':' in address else f'{address}:{port}'
 
 
-def _flow_kind(peer, tunnel_port, tunnel_addresses=(GATEWAYS[4],)):
+def _flow_kind(peer, tunnel_port, tunnel_addresses=(GATEWAYS[4],), tunnel_endpoints=None):
     """`node` for the node's own port, `target` for the HTTPS target, else `other`."""
     address, port = peer
+    if tunnel_endpoints is not None and (address, 6, port) in tunnel_endpoints:
+        return 'node'
     if tunnel_port is not None and port == tunnel_port and address in (*tunnel_addresses, GATEWAYS[6]):
         return 'node'
     if port == HTTPS_PORT and address in (TARGETS[4], TARGETS[6]):
@@ -1087,8 +1165,9 @@ class _Flows:
     seen, and for FIN and RST from which side. At most `FLOW_LIMIT` connections are kept; the rest are counted.
     """
 
-    def __init__(self, tunnel_port, tunnel_addresses=(GATEWAYS[4],)):
-        self.tunnel_port, self.tunnel_addresses, self.start = tunnel_port, tunnel_addresses, None
+    def __init__(self, tunnel_port, tunnel_addresses=(GATEWAYS[4],), tunnel_endpoints=None):
+        self.tunnel_port, self.tunnel_addresses, self.tunnel_endpoints = tunnel_port, tunnel_addresses, tunnel_endpoints
+        self.start = None
         self.table, self.omitted = {}, set()
 
     def add(self, frame, seconds):
@@ -1106,7 +1185,8 @@ class _Flows:
                 self.omitted.add(key)
                 return
             row = self.table[key] = dict(
-                kind=_flow_kind(peer, self.tunnel_port, self.tunnel_addresses), client=_endpoint(*client),
+                kind=_flow_kind(peer, self.tunnel_port, self.tunnel_addresses, self.tunnel_endpoints),
+                client=_endpoint(*client),
                 server=_endpoint(*peer), frames_out=0, frames_back=0, bytes_out=0, bytes_back=0, first_ms=None,
                 last_ms=None, syn=False, syn_ack=False, fin=[], rst=[])
         side = 'out' if outbound else 'back'
@@ -1446,10 +1526,24 @@ def _window_allowances(window_allowances, found_mode):
     return declared
 
 
+def _window_tunnel_endpoints(window_endpoints, found_mode):
+    """{label: frozenset((address, proto_num, port))}: per-window tunnel endpoints in found mode."""
+    if not window_endpoints:
+        return {}
+    if not found_mode or type(window_endpoints) is not dict:
+        raise ValueError('invalid-windows')
+    declared = {}
+    for label, items in window_endpoints.items():
+        if type(label) is not str or not WINDOW_LABEL.fullmatch(label):
+            raise ValueError('invalid-windows')
+        declared[label] = _tunnel_endpoints(None, (), items) or frozenset()
+    return declared
+
+
 def classify_windows(raw, run, windows_expected, *, health, ready, allowances=(), tunnel_port=None,
-                     tunnel_addresses=None, proxy_port=SOCKS_PORT,
-                     https=None, probes=(), limit=CAPTURE_LIMIT, required_labels=(), flows=False,
-                     window_allowances=None, inbound_poll=None):
+                     tunnel_addresses=None, tunnel_endpoints=None, window_tunnel_endpoints=None,
+                     proxy_port=SOCKS_PORT, https=None, probes=(), limit=CAPTURE_LIMIT, required_labels=(),
+                     flows=False, window_allowances=None, inbound_poll=None):
     """Split one capture into phase windows and give every expected window its own leak verdict.
 
     `windows_expected` lists, in order, the windows the controller expects: dicts with the
@@ -1497,9 +1591,12 @@ def classify_windows(raw, run, windows_expected, *, health, ready, allowances=()
         labels = _window_specs(windows_expected)
     names = _declared(allowances)
     by_label = _window_allowances(window_allowances, found_mode)
+    endpoints_by_label = _window_tunnel_endpoints(window_tunnel_endpoints, found_mode)
     if tunnel_port is not None:
         _tunnel_port(tunnel_port)
     addresses = _tunnel_addresses(tunnel_addresses)
+    endpoints = _tunnel_endpoints(tunnel_port, addresses, tunnel_endpoints)
+    has_tunnel = endpoints is not None or bool(endpoints_by_label)
     if type(proxy_port) is not int or not 1 <= proxy_port <= 65535:
         raise ValueError('invalid-proxy-port')
     parsed, unparsed, problem = _parse_capture(raw, limit)
@@ -1512,7 +1609,7 @@ def classify_windows(raw, run, windows_expected, *, health, ready, allowances=()
     times = _record_times(raw, limit) if flows or poll else []
     polled = _poll_ports(frame for _, frame in parsed) if poll else set()
     windows, requests = {}, []
-    outside = _window_counts(names, tunnel_port, poll)
+    outside = _window_counts(names, 1 if has_tunnel else None, poll)
     outside['outside-window'] = outside.pop('unexpected')
     outside_frames = []
     current, broken, next_index = None, None, 0
@@ -1520,9 +1617,11 @@ def classify_windows(raw, run, windows_expected, *, health, ready, allowances=()
     def window(index, label):
         if index not in windows:
             own = names | by_label.get(label, frozenset())
-            windows[index] = dict(categories=_window_counts(own, tunnel_port, poll), names=own, unexpected=[], reasons=[],
+            own_endpoints = endpoints_by_label[label] if label in endpoints_by_label else endpoints
+            windows[index] = dict(categories=_window_counts(own, 1 if (own_endpoints is not None or has_tunnel) else None, poll),
+                                  names=own, endpoints=own_endpoints, unexpected=[], reasons=[],
                                   labels=[], first=None, last=None,
-                                  flows=_Flows(tunnel_port, addresses) if flows else None,
+                                  flows=_Flows(tunnel_port, addresses, own_endpoints) if flows else None,
                                   direct=_Direct() if flows else None,
                                   seen={(word, kind): [] for word in WINDOW_WORDS for kind in ('request', 'response')})
         return windows[index]
@@ -1572,8 +1671,11 @@ def classify_windows(raw, run, windows_expected, *, health, ready, allowances=()
                                       and times[position] >= inbound_poll['replies_from']):
             category = POLL_CATEGORY
         else:
+            active_endpoints = endpoints if current is None else windows[current]['endpoints']
+            active_port = tunnel_port if active_endpoints is None else None
             category = _category(item, is_probe, names if current is None else windows[current]['names'],
-                                 tunnel_port, tunnel_addresses=addresses, proxy_port=proxy_port)
+                                 active_port, tunnel_addresses=addresses, tunnel_endpoints=active_endpoints,
+                                 proxy_port=proxy_port)
         if current is None:
             _count(outside, category, item, outside_frames, 'outside-window')
         else:
@@ -1602,7 +1704,7 @@ def classify_windows(raw, run, windows_expected, *, health, ready, allowances=()
         row, reasons = windows.get(index), []
         if row is None:
             reasons.append('window-missing')
-            row = dict(categories=_window_counts(names, tunnel_port, poll), unexpected=[], reasons=[])
+            row = dict(categories=_window_counts(names, 1 if has_tunnel else None, poll), unexpected=[], reasons=[])
         else:
             seen = row['seen']
             if any(len(positions) != 1 for positions in seen.values()):
@@ -1637,7 +1739,7 @@ def classify_windows(raw, run, windows_expected, *, health, ready, allowances=()
 
 
 def classified_frames(raw, run, *, probes=(), https=None, tunnel_port=None, tunnel_addresses=None,
-                      proxy_port=SOCKS_PORT, allowances=(), limit=CAPTURE_LIMIT):
+                      tunnel_endpoints=None, proxy_port=SOCKS_PORT, allowances=(), limit=CAPTURE_LIMIT):
     """Every frame of a capture with its time, the window it fell in and the category the classifier gives it.
 
     Returns `(rows, unparsed, problem, labels)`: `labels` maps the index of each window the markers name to its label (the
@@ -1651,6 +1753,7 @@ def classified_frames(raw, run, *, probes=(), https=None, tunnel_port=None, tunn
     if tunnel_port is not None:
         _tunnel_port(tunnel_port)
     addresses = _tunnel_addresses(tunnel_addresses)
+    endpoints = _tunnel_endpoints(tunnel_port, addresses, tunnel_endpoints)
     if type(proxy_port) is not int or not 1 <= proxy_port <= 65535:
         raise ValueError('invalid-proxy-port')
     parsed, unparsed, problem = _parse_capture(raw, limit)
@@ -1667,7 +1770,8 @@ def classified_frames(raw, run, *, probes=(), https=None, tunnel_port=None, tunn
                 current = index if word == 'open' else None
             rows.append((position, at, frame, index, 'marker'))
             continue
-        category = _category(frame, is_probe, names, tunnel_port, tunnel_addresses=addresses, proxy_port=proxy_port)
+        category = _category(frame, is_probe, names, tunnel_port if endpoints is None else None,
+                             tunnel_addresses=addresses, tunnel_endpoints=endpoints, proxy_port=proxy_port)
         if type(category) is tuple:
             category = category[0] + ':' + category[1]
         rows.append((position, at, frame, current, category))

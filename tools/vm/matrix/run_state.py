@@ -44,6 +44,8 @@ BUDGETS = {'qmp_calls': 128, 'qmp_events': 128, 'qmp_bytes_o': 1024 * 1024, 'qmp
 MAX_PLANNED_REBOOTS = 2
 # The most abrupt power cuts a run may plan; each cut spawns a fresh QEMU process and boot.
 MAX_PLANNED_POWER_CUTS = 8
+# The most planned QGA session rotations a long multi-action run may plan (each session is bounded to 128 RPCs).
+MAX_PLANNED_SESSION_ROTATIONS = 24
 IDENTITIES = ('host_run_id', 'guest_run_id', 'import_id', 'lab_id', 'vm_uuid', 'boot_id')
 JOB_FIELDS = ('submission', 'launcher', 'job', 'pid', 'session')
 TRANSITION_LIMIT = 256
@@ -70,15 +72,20 @@ def owner_digest(token):
     return hashlib.sha256(token.encode()).hexdigest()
 
 
-def limit(name, planned_reboots=0, planned_power_cuts=0):
-    """What one run may spend of a budget; planned resets and power cuts add bounded headroom."""
+def limit(name, planned_reboots=0, planned_power_cuts=0, planned_session_rotations=0):
+    """What one run may spend of a budget; planned resets, power cuts and session rotations add bounded headroom."""
     if type(planned_power_cuts) is not int or not 0 <= planned_power_cuts <= MAX_PLANNED_POWER_CUTS:
         raise ValueError('planned_power_cuts out of range')
+    if (type(planned_session_rotations) is not int
+            or not 0 <= planned_session_rotations <= MAX_PLANNED_SESSION_ROTATIONS):
+        raise ValueError('planned_session_rotations out of range')
     base = BUDGETS[name]
     if name == 'qga_recoveries':
-        return base + planned_reboots + planned_power_cuts
+        return base + planned_reboots + planned_power_cuts + planned_session_rotations
+    if name == 'qga_observations':
+        return base + (16 * planned_power_cuts if planned_power_cuts else 0) + planned_session_rotations
     if planned_power_cuts:
-        extra = {'qmp_calls': 16, 'qmp_events': 8, 'qga_observations': 16}.get(name, 0)
+        extra = {'qmp_calls': 16, 'qmp_events': 8}.get(name, 0)
         return base + extra * planned_power_cuts
     return base
 
@@ -141,9 +148,12 @@ def validate(document, *, run_id, stand_id, token):
     cuts = collected.get('planned_power_cuts', 0)
     if type(cuts) is not int or not 0 <= cuts <= MAX_PLANNED_POWER_CUTS:
         raise RunStateError('run-state-collected')
+    rotations = collected.get('planned_session_rotations', 0)
+    if type(rotations) is not int or not 0 <= rotations <= MAX_PLANNED_SESSION_ROTATIONS:
+        raise RunStateError('run-state-collected')
     budgets = document['budgets']
     if (type(budgets) is not dict or set(budgets) != set(BUDGETS)
-            or any(type(v) is not int or not 0 <= v <= limit(k, MAX_PLANNED_REBOOTS, cuts)
+            or any(type(v) is not int or not 0 <= v <= limit(k, MAX_PLANNED_REBOOTS, cuts, rotations)
                    for k, v in budgets.items())):
         raise RunStateError('run-state-budgets')
     chain = document['boot_chain']
@@ -174,10 +184,13 @@ class RunState:
     def __init__(self, run, document):
         self.run = run
         self.document = document
-        # How many guest resets and power cuts this run plans: set once by whoever starts or attaches it.
+        # How many guest resets, power cuts and session rotations this run plans: set once by who starts/attaches it.
         self.planned_reboots = 0
         cuts = document.get('collected', {}).get('planned_power_cuts', 0)
         self.planned_power_cuts = cuts if type(cuts) is int and 0 <= cuts <= MAX_PLANNED_POWER_CUTS else 0
+        rotations = document.get('collected', {}).get('planned_session_rotations', 0)
+        self.planned_session_rotations = (
+            rotations if type(rotations) is int and 0 <= rotations <= MAX_PLANNED_SESSION_ROTATIONS else 0)
         # The QMP relay records its byte ceiling from its own thread.
         self._lock = threading.RLock()
 
@@ -303,7 +316,7 @@ class RunState:
         with self._lock:
             if name not in BUDGETS or type(value) is not int:
                 raise RunStateError('run-state-budget-exhausted')
-            bound = limit(name, self.planned_reboots, self.planned_power_cuts)
+            bound = limit(name, self.planned_reboots, self.planned_power_cuts, self.planned_session_rotations)
             if not 0 <= value <= bound:
                 raise RunStateError('run-state-budget-exhausted')
             if value > self.document['budgets'][name]:

@@ -104,6 +104,10 @@ def runtime(config):
         return config['lan']
     if suite == 'windows-upgrade':
         return config['upgrade']
+    if suite == 'windows-protocols':
+        return config['protocols']
+    if suite == 'windows-twohop':
+        return config['twohop']
     return config['list']
 
 
@@ -204,6 +208,16 @@ def sources(config):
             (name, block[key], block[key + '_sha256']) for name, key in zip(SETUPS, ('old_setup', 'new_setup'))
         ] + [(name, guest_directory / name, None) for name in SCRIPTS[:2]] + [
             (name, WINDOWS_DIRECTORY / name, None) for name in SCRIPTS[2:]]
+    if config['suite'] == 'windows-protocols':
+        return binaries + [('xray.exe', block['xray'], block['xray_sha256'])] + [
+            (name, guest_directory / name, None) for name in ('lib.ps1', 'run-windows-protocols.ps1')] + [
+                ('RosetunListResults.psm1', WINDOWS_DIRECTORY / 'RosetunListResults.psm1', None),
+                ('protocols-checks.tsv', WINDOWS_DIRECTORY / 'protocols-checks.tsv', None)]
+    if config['suite'] == 'windows-twohop':
+        return binaries + [('xray.exe', block['xray'], block['xray_sha256'])] + [
+            (name, guest_directory / name, None) for name in ('lib.ps1', 'run-windows-twohop.ps1')] + [
+                ('RosetunListResults.psm1', WINDOWS_DIRECTORY / 'RosetunListResults.psm1', None),
+                ('two-hop-scenarios.tsv', WINDOWS_DIRECTORY / 'two-hop-scenarios.tsv', None)]
     return binaries + [('lib.ps1', guest_directory / 'lib.ps1', None),
             ('run-windows-list.ps1', guest_directory / 'run-windows-list.ps1', None),
             ('RosetunListResults.psm1', WINDOWS_DIRECTORY / 'RosetunListResults.psm1', None),
@@ -306,7 +320,7 @@ def check_cleanup(after_state, runner_cleanup):
 
 
 def judge(config, lab_id, seen, plain, port=None, *, labels=LABELS, window_allowances=None,
-          tunnel_addresses=None, proxy_port=SOCKS_PORT):
+          tunnel_addresses=None, tunnel_endpoints=None, window_tunnel_endpoints=None, proxy_port=SOCKS_PORT):
     """The windows of the capture, the listing of the baseline and the lab's account of its fixtures.
 
     Nothing here is a verdict of the run: the verdicts are in `judgement`, which reads these and the guest's own."""
@@ -316,11 +330,13 @@ def judge(config, lab_id, seen, plain, port=None, *, labels=LABELS, window_allow
     node_port = config['lab']['tunnel']['node_port']
     seen['health'] = health
     seen['verdict'] = classify_windows(capture, lab_id, None, health=health, ready=True, tunnel_port=node_port,
-                                       tunnel_addresses=tunnel_addresses, proxy_port=proxy_port,
+                                       tunnel_addresses=tunnel_addresses, tunnel_endpoints=tunnel_endpoints,
+                                       window_tunnel_endpoints=window_tunnel_endpoints, proxy_port=proxy_port,
                                        probes=[plain], limit=EVIDENCE_PCAP_LIMIT, required_labels=labels, flows=True,
                                        window_allowances=window_allowances)
     seen['noise'] = windows_noise.report(capture, lab_id, label=BASELINE, probes=[plain], limit=EVIDENCE_PCAP_LIMIT)
     seen['fixtures'] = fixtures_block(health, parsed)
+    seen['https'] = parsed['https.json']
     seen['dns_rows'] = parsed['dns.json']
     seen['dns_logged'] = sum(1 for row in parsed['dns.json'] if type(row) is dict and row.get('name') == dns_name(plain)
                              and row.get('transport') == 'udp' and row.get('type') == 'A')
@@ -555,6 +571,7 @@ def run_guest_suite(config, *, profile=None, adapters=None, clock=time.monotonic
                     boot_chain=[], guest_resets=0, power_cycles=0, lab_actions=0)
     planned_reboots = getattr(profile, 'planned_reboots', 0) if profile else 0
     planned_power_cuts = getattr(profile, 'planned_power_cuts', 0) if profile else 0
+    planned_session_rotations = getattr(profile, 'planned_session_rotations', 0) if profile else 0
     reconnectable = planned_power_cuts > 0
 
     def step(name, operation):
@@ -643,6 +660,10 @@ def run_guest_suite(config, *, profile=None, adapters=None, clock=time.monotonic
             pair_kwargs['lan'] = True
         elif suite == 'windows-upgrade':
             pair_kwargs['upgrade'] = True
+        elif suite == 'windows-protocols':
+            pair_kwargs['protocols'] = True
+        elif suite == 'windows-twohop':
+            pair_kwargs['twohop'] = True
         if reconnectable:
             pair_kwargs['reconnectable'] = True
         pair = step('evidence-disk', lambda: adapters.pair(lease, runs, lab_id, tunnel=True, evidence_disk=True,
@@ -668,6 +689,10 @@ def run_guest_suite(config, *, profile=None, adapters=None, clock=time.monotonic
                                          doh_sha256=lab_config['doh_cert_sha256']))
         if getattr(profile, 'lan_fixtures', False):
             options['lan_fixtures'] = True
+        if profile and hasattr(profile, 'extended_fixtures'):
+            extended = profile.extended_fixtures(config)
+            if extended:
+                options['extended_fixtures'] = extended
 
         def lab_call(operation, *, action=None):
             # A new facade each time: the capture's own deadline, not the facade's, bounds the run.
@@ -680,6 +705,8 @@ def run_guest_suite(config, *, profile=None, adapters=None, clock=time.monotonic
             return facade, facade.call(operation, expected, (), tunnel=tunnel, options=call_options)
 
         vms['lab'] = step('start-lab', lambda: adapters.start(runs['lab'], lab=pair))
+        if planned_session_rotations > 0:
+            vms['lab'].planned_session_rotations = planned_session_rotations
         step('resume-lab', vms['lab'].resume)
         step('boot-lab', lambda: vms['lab'].wait_initial_guest(timeout=config['deadlines']['boot'], clock=clock,
                                                               sleep=sleep))
@@ -692,6 +719,8 @@ def run_guest_suite(config, *, profile=None, adapters=None, clock=time.monotonic
             vm.planned_reboots = planned_reboots
         if planned_power_cuts > 0:
             vm.planned_power_cuts = planned_power_cuts
+        if planned_session_rotations > 0:
+            vm.planned_session_rotations = planned_session_rotations
         step('resume-test', vm.resume)
         step('boot-test', lambda: vm.wait_initial_guest(timeout=block['agent_wait_seconds'], clock=clock, sleep=sleep,
                                                        try_seconds=windows_reboot.TRY_SECONDS))
@@ -803,13 +832,15 @@ def run_guest_suite(config, *, profile=None, adapters=None, clock=time.monotonic
                         raise LifecycleError('missing-lab-action', vm)
                     _, reply = lab_call(action['operation'], action=action['params'])
                     root = getattr(profile, 'ROOT', guest.ROOT)
-                    ensure_test_session('guest-action')
-                    text = asks.run('guest-action-reply', guest.write_reply_script(root, action['id'], reply),
-                                    repeat=True)
-                    try:
-                        guest.reply_written(text, action['id'])
-                    except guest.RunnerAnswerError as error:
-                        raise LifecycleError(str(error), vm) from None
+                    scripts = guest.write_reply_scripts(root, action['id'], reply)
+                    for index, script in enumerate(scripts):
+                        ensure_test_session('guest-action')
+                        repeatable = len(scripts) == 1 or index < len(scripts) - 1
+                        text = asks.run('guest-action-reply', script, repeat=repeatable)
+                        try:
+                            guest.reply_written(text, action['id'])
+                        except guest.RunnerAnswerError as error:
+                            raise LifecycleError(str(error), vm) from None
                     measured['lab_actions'] += 1
                     failures = 0
                     continue

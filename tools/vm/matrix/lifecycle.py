@@ -319,6 +319,7 @@ class Vm:
         self.unplanned_reset = None
         self._planned_reboots = 0
         self._planned_power_cuts = 0
+        self._planned_session_rotations = 0
         self.power_cycles = 0
         self._processes = {}
         self._launch = None
@@ -377,18 +378,36 @@ class Vm:
                 self.state.update('collected', planned_power_cuts=value)
 
     @property
+    def planned_session_rotations(self):
+        return self._planned_session_rotations
+
+    @planned_session_rotations.setter
+    def planned_session_rotations(self, value):
+        """How many QGA session rotations a long multi-action run plans: each earns one recovery and observation."""
+        if type(value) is not int or not 0 <= value <= run_state.MAX_PLANNED_SESSION_ROTATIONS:
+            raise ValueError('invalid-planned-session-rotations')
+        self._planned_session_rotations = value
+        if self.state is not None:
+            self.state.planned_session_rotations = value
+            if value > 0:
+                self.state.update('collected', planned_session_rotations=value)
+
+    @property
     def qga_recovery_limit(self):
-        return run_state.limit('qga_recoveries', self._planned_reboots, self._planned_power_cuts)
+        return run_state.limit('qga_recoveries', self._planned_reboots, self._planned_power_cuts,
+                               self._planned_session_rotations)
 
     @property
     def qga_observation_limit(self):
-        return run_state.limit('qga_observations', self._planned_reboots, self._planned_power_cuts)
+        return run_state.limit('qga_observations', self._planned_reboots, self._planned_power_cuts,
+                               self._planned_session_rotations)
 
     def _spend(self, name):
         """Record one more of a per-run budget before it is used; no record, no use."""
         if self.state is not None:
             self.state.planned_reboots = self._planned_reboots
             self.state.planned_power_cuts = self._planned_power_cuts
+            self.state.planned_session_rotations = self._planned_session_rotations
             try:
                 self.state.spend(name)
             except (OSError, ValueError):
@@ -848,6 +867,7 @@ class Vm:
             try:
                 self.state.planned_reboots = self._planned_reboots
                 self.state.planned_power_cuts = self._planned_power_cuts
+                self.state.planned_session_rotations = self._planned_session_rotations
                 if not self.state.boot_chain:
                     # The run that never wrote its first boot into the state starts the chain here.
                     self.state.update('identities', boot_id=self.boot_chain[0])

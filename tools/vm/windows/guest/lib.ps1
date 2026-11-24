@@ -125,7 +125,7 @@ function Set-RosetunRunnerStep {
 function Invoke-RosetunLabAction {
     param(
         [Parameter(Mandatory)][string]$Root,
-        [Parameter(Mandatory)][ValidateSet('probe_proxy', 'lan_state')][string]$Operation,
+        [Parameter(Mandatory)][ValidateSet('probe_proxy', 'lan_state', 'fixture_state', 'fixture_control')][string]$Operation,
         [hashtable]$Parameters = @{},
         [int]$TimeoutSeconds = 90
     )

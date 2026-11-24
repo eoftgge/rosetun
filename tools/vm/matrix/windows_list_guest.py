@@ -38,7 +38,7 @@ PLAN_FILE = 'plan.json'
 STATES = ('starting', 'running', 'cleaning', 'finished', 'failed')
 LOCKDOWN_STATES = STATES + ('reboot-requested', 'power-cut-requested')
 ACTION_STATES = STATES + ('lab-action-requested',)
-ACTION_OPERATIONS = ('probe_proxy', 'lan_state')
+ACTION_OPERATIONS = ('probe_proxy', 'lan_state', 'fixture_state', 'fixture_control')
 ENDED = ('finished', 'failed')
 CLEANUP_RESULTS = ('PASS', 'ERROR', 'UNVERIFIED')
 ANSWER_LIMIT = 16 * 1024
@@ -230,6 +230,24 @@ if (Test-Path -LiteralPath $dst) { Remove-Item -LiteralPath $dst -Force }
 [IO.File]::Move($tmp, $dst)
 ConvertTo-Json -Compress -InputObject @{ wrote = $true; id = '%(id)s' }'''
 
+_WRITE_REPLY_PART = r'''$dir = '%(root)s'
+$part = Join-Path $dir 'action-reply-%(id)s.part-%(index)d'
+[IO.File]::WriteAllBytes($part, [Convert]::FromBase64String('%(b64)s'))
+ConvertTo-Json -Compress -InputObject @{ wrote = $true; id = '%(id)s' }'''
+
+_WRITE_REPLY_COMMIT = r'''$dir = '%(root)s'
+$tmp = Join-Path $dir 'action-reply-%(id)s.json.tmp'
+$dst = Join-Path $dir 'action-reply-%(id)s.json'
+$out = [IO.File]::Create($tmp)
+try { for ($i = 0; $i -lt %(count)d; $i++) { $b = [IO.File]::ReadAllBytes((Join-Path $dir ("action-reply-%(id)s.part-$i"))); $out.Write($b, 0, $b.Length) } } finally { $out.Dispose() }
+if (Test-Path -LiteralPath $dst) { Remove-Item -LiteralPath $dst -Force }
+[IO.File]::Move($tmp, $dst)
+for ($i = 0; $i -lt %(count)d; $i++) { Remove-Item -LiteralPath (Join-Path $dir ("action-reply-%(id)s.part-$i")) -Force -ErrorAction SilentlyContinue }
+ConvertTo-Json -Compress -InputObject @{ wrote = $true; id = '%(id)s' }'''
+
+# 3600 raw bytes = 4800 base64 characters, keeping each script safely under SCRIPT_LIMIT (6000).
+REPLY_CHUNK_BYTES = 3600
+
 
 def write_reply_script(root, action_id, payload):
     """Write a controller lab-action reply atomically for the autonomous guest runner."""
@@ -238,6 +256,25 @@ def write_reply_script(root, action_id, payload):
     encoded = base64.b64encode(json.dumps(payload, sort_keys=True, separators=(',', ':')).encode('utf-8')).decode('ascii')
     return '\n'.join(line.strip() for line in (_WRITE_REPLY % dict(
         root=_quoted(root), id=action_id, b64=encoded)).splitlines() if line.strip())
+
+
+def write_reply_scripts(root, action_id, payload, *, chunk_bytes=REPLY_CHUNK_BYTES):
+    """One atomic script for small replies, or idempotent part writes + atomic commit for large replies."""
+    if type(action_id) is not str or not _ACTION_ID.fullmatch(action_id):
+        raise ValueError('invalid-action-id')
+    raw = json.dumps(payload, sort_keys=True, separators=(',', ':')).encode('utf-8')
+    if len(raw) <= chunk_bytes:
+        return [write_reply_script(root, action_id, payload)]
+    quoted_root = _quoted(root)
+    chunks = [raw[i:i + chunk_bytes] for i in range(0, len(raw), chunk_bytes)]
+    scripts = []
+    for index, chunk in enumerate(chunks):
+        encoded = base64.b64encode(chunk).decode('ascii')
+        scripts.append('\n'.join(line.strip() for line in (_WRITE_REPLY_PART % dict(
+            root=quoted_root, id=action_id, index=index, b64=encoded)).splitlines() if line.strip()))
+    scripts.append('\n'.join(line.strip() for line in (_WRITE_REPLY_COMMIT % dict(
+        root=quoted_root, id=action_id, count=len(chunks))).splitlines() if line.strip()))
+    return scripts
 
 
 def reply_written(text, action_id):
@@ -371,6 +408,15 @@ _AFTER_UPGRADE_EXTRA = r'''    lockdown_wfp_provider = [bool]($raw -match '<prov
     xray_process = [bool](Get-Process -Name 'xray' -ErrorAction SilentlyContinue)
     egress_probe = [bool](Get-CimInstance -ClassName Win32_Process -Filter "Name = 'curl.exe' OR Name = 'powershell.exe'" | Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -like '*rosetun-egress-probe=*' } | Select-Object -First 1)
 '''
+_AFTER_PROTOCOLS_EXTRA = r'''    xray_process = [bool](Get-Process -Name 'xray' -ErrorAction SilentlyContinue)
+    protocols_directory = (Test-Path -LiteralPath (Join-Path $root 'protocols-matrix'))
+'''
+_AFTER_TWOHOP_EXTRA = r'''    lockdown_wfp_provider = [bool]($raw -match '<providerKey>\s*\{?f12dbedd-f3c7-4a72-b0f8-20559c88b112\}?\s*</providerKey>')
+    lockdown_wfp_sublayer = [bool]($raw -match '<subLayerKey>\s*\{?f829a64d-c373-4d92-9d66-e1c680f3794f\}?\s*</subLayerKey>')
+    lockdown_service = ($null -ne (Get-Service -Name 'Rosetun' -ErrorAction SilentlyContinue))
+    xray_process = [bool](Get-Process -Name 'xray' -ErrorAction SilentlyContinue)
+    twohop_directory = (Test-Path -LiteralPath (Join-Path $root 'twohop-matrix'))
+'''
 AFTER_FIELDS = ('runner_task', 'helper_task', 'helper_process', 'engine_process', 'tunnel_adapter', 'binaries',
                 'list_directory', 'wfp_provider', 'wfp_sublayer', 'root_removed')
 LOCKDOWN_AFTER_FIELDS = AFTER_FIELDS[:-1] + (
@@ -384,23 +430,30 @@ UPGRADE_AFTER_FIELDS = AFTER_FIELDS[:-1] + (
     'lockdown_wfp_provider', 'lockdown_wfp_sublayer', 'upgrade_hold_wfp_provider', 'installed_service',
     'install_directory', 'uninstall_registration', 'url_registration', 'user_data', 'upgrade_directory', 'installer_process',
     'gui_process', 'xray_process', 'egress_probe', 'root_removed')
+PROTOCOLS_AFTER_FIELDS = AFTER_FIELDS[:-1] + ('xray_process', 'protocols_directory', 'root_removed')
+TWOHOP_AFTER_FIELDS = AFTER_FIELDS[:-1] + (
+    'lockdown_wfp_provider', 'lockdown_wfp_sublayer', 'lockdown_service', 'xray_process', 'twohop_directory',
+    'root_removed')
 
 
-def after_script(root=ROOT, task=RUNNER_TASK, *, lockdown=False, proxy=False, lan=False, upgrade=False):
-    if sum((bool(lockdown), bool(proxy), bool(lan), bool(upgrade))) > 1:
+def after_script(root=ROOT, task=RUNNER_TASK, *, lockdown=False, proxy=False, lan=False, upgrade=False,
+                 protocols=False, twohop=False):
+    if sum((bool(lockdown), bool(proxy), bool(lan), bool(upgrade), bool(protocols), bool(twohop))) > 1:
         raise ValueError('conflicting-after-modes')
     extra = (_AFTER_LOCKDOWN_EXTRA if lockdown else _AFTER_PROXY_EXTRA if proxy
-             else _AFTER_LAN_EXTRA if lan else _AFTER_UPGRADE_EXTRA if upgrade else '')
+             else _AFTER_LAN_EXTRA if lan else _AFTER_UPGRADE_EXTRA if upgrade
+             else _AFTER_PROTOCOLS_EXTRA if protocols else _AFTER_TWOHOP_EXTRA if twohop else '')
     return '\n'.join(line.strip() for line in (_AFTER % dict(
         root=_quoted(root), task=_quoted(task), alias=TUN_ALIAS, extra=extra)).splitlines() if line.strip())
 
 
-def after(text, *, lockdown=False, proxy=False, lan=False, upgrade=False):
+def after(text, *, lockdown=False, proxy=False, lan=False, upgrade=False, protocols=False, twohop=False):
     """What is left in the guest, as the controller sees it: a leftover is True, except `root_removed`, which is the aim."""
-    if sum((bool(lockdown), bool(proxy), bool(lan), bool(upgrade))) > 1:
+    if sum((bool(lockdown), bool(proxy), bool(lan), bool(upgrade), bool(protocols), bool(twohop))) > 1:
         raise ValueError('conflicting-after-modes')
     fields = (LOCKDOWN_AFTER_FIELDS if lockdown else PROXY_AFTER_FIELDS if proxy
-              else LAN_AFTER_FIELDS if lan else UPGRADE_AFTER_FIELDS if upgrade else AFTER_FIELDS)
+              else LAN_AFTER_FIELDS if lan else UPGRADE_AFTER_FIELDS if upgrade
+              else PROTOCOLS_AFTER_FIELDS if protocols else TWOHOP_AFTER_FIELDS if twohop else AFTER_FIELDS)
     value = _object(text, fields)
     if any(type(value[name]) is not bool for name in fields):
         raise RunnerAnswerError('invalid-guest-answer')

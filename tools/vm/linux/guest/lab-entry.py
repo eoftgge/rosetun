@@ -1,5 +1,6 @@
 #!/usr/bin/python3
 """Owner-installed root-only lab entry. Never invoked on the controller host."""
+import base64
 import ctypes
 import errno
 import hashlib
@@ -33,6 +34,10 @@ from lab_protocol import (MACS, CLIENTS, GATEWAYS, TARGETS, PORTS, SERVICES, CAP
                           ROUTE_INTERFACE, ROUTE_FLOWS_LIMIT, RouteFlows, GUEST_CONTROLS, CONTROL_HOLD_SECONDS,
                           LINK_LOCALS, LAN_PEER, ROUTED_NODE, LAN_LISTENER_PORT, LAN_ECHO_PORT, LAN_HOLD_PORT,
                           LAN_BROADCAST_PORT, MDNS_GROUP, MDNS_PORT, SSDP_GROUP, SSDP_PORT, PRIVATE_BEHIND_ROUTER,
+                          REALITY_PORT, SECOND_NODE_PORT, XHTTP_PORT, HYSTERIA2_PORT, TUIC_PORT, ANYTLS_PORT,
+                          REALITY_COVER_PORT, SECOND_NODE_EGRESS, SECOND_NODE_EGRESS6, TWOHOP_B, TWOHOP_PORTS,
+                          TWOHOP_USER, TWOHOP_PASSWORD, PROTO_PASSWORD, TUIC_UUID, REALITY_UUID,
+                          REALITY_SHORT_ID, REALITY_SNI, XHTTP_PATH, DHCP_SERVER_PORT, DHCP_CLIENT_PORT,
                           parse)
 
 ROOT = Path('/run/rosetun-lab')
@@ -40,12 +45,20 @@ ENTRY = '/usr/local/libexec/rosetun-lab/entry'
 # Stage 7b1 fixtures. The paths are fixed here; a missing or different file is a refusal.
 LIBEXEC = Path('/usr/local/libexec/rosetun-lab')
 NODE_BINARY = LIBEXEC / 'sing-box'
+XRAY_BINARY = LIBEXEC / 'xray'
 HTTPS_CERT = LIBEXEC / 'https-cert.pem'
 HTTPS_KEY = LIBEXEC / 'https-key.pem'
 CA_CERT = Path('/usr/local/share/ca-certificates/rosetun-lab-ca.crt')
 # Stage 7b2a: the DoH target's certificate (SAN doh.lab.test and 203.0.113.3), signed by the same lab CA.
 DOH_CERT = LIBEXEC / 'doh-cert.pem'
 DOH_KEY = LIBEXEC / 'doh-key.pem'
+# Stage 10f: multi-protocol, Xray REALITY cover, and Two-Hop B-hop certificates.
+PROTO_CERT = LIBEXEC / 'proto-cert.pem'
+PROTO_KEY = LIBEXEC / 'proto-key.pem'
+TWOHOP_CERT = LIBEXEC / 'twohop-b-cert.pem'
+TWOHOP_KEY = LIBEXEC / 'twohop-b-key.pem'
+TWOHOP_UNTRUSTED_CERT = LIBEXEC / 'twohop-b-untrusted-cert.pem'
+TWOHOP_UNTRUSTED_KEY = LIBEXEC / 'twohop-b-untrusted-key.pem'
 # Stage 7b2a: the evidence disk is found by its serial and by nothing else.
 EVIDENCE_DEVICE = Path('/dev/disk/by-id/virtio-rosetun-lab-evidence')
 DOH_REQUESTS = 16
@@ -85,9 +98,20 @@ LAN_FIXTURE_TOKEN_LIMIT = 64
 LAN_FIXTURE_TOKEN = re.compile(rb'^rosetun-lan-matrix ([A-Za-z0-9._-]{1,64})$')
 LAN_FIXTURE_WORKERS = 16
 LAN_ECHO_IDLE_SECONDS = 90
+COVER_READ_TIMEOUT = 0.2
 LAN_HOLD_SECONDS = 3.0
 PROXY_PROBE_KEYS = {'source', 'port', 'mode'}
 PROXY_PROBE_TARGET = 'listed.lab.test'
+EXTENDED_BOOL_KEYS = ('protocols', 'second_node', 'xray', 'two_hop', 'dhcp')
+EXTENDED_HASH_KEYS = ('xray_sha256', 'proto_cert_sha256', 'twohop_cert_sha256', 'twohop_untrusted_cert_sha256')
+EXTENDED_KEYS = frozenset((*EXTENDED_BOOL_KEYS, *EXTENDED_HASH_KEYS))
+CONTROL_SERVICES = ('primary_node', 'second_node', 'xray', 'twohop_b')
+CONTROL_STATES = ('stop', 'start')
+TWOHOP_EVENT_LIMIT = 256
+TWOHOP_RELAY_IDLE = 30.0
+DHCP_EVENT_LIMIT = 128
+DHCP_LEASE_SECONDS = 300
+DHCP_MAGIC = b'\x63\x82\x53\x63'
 lstat = os.lstat
 
 
@@ -146,9 +170,17 @@ def identity(request):
     if 'lan_fixtures' in request and (request['lan_fixtures'] is not True or request.get('windows') is not True
                                       or 'tunnel' not in request):
         raise ValueError('invalid-lan-fixtures')
-    if 'action' in request and (request.get('operation') not in ('probe_proxy', 'lan_state')
-                                or request.get('lan_fixtures') is not True):
-        raise ValueError('invalid-action')
+    extended = extended_fixtures_of(request)
+    if 'action' in request:
+        op = request.get('operation')
+        if op in ('probe_proxy', 'lan_state'):
+            if request.get('lan_fixtures') is not True:
+                raise ValueError('invalid-action')
+        elif op in ('fixture_state', 'fixture_control'):
+            if extended is None:
+                raise ValueError('invalid-action')
+        else:
+            raise ValueError('invalid-action')
     if 'control' in request and (request['control'] not in GUEST_CONTROLS or request['canary'] is not False
                                  or request.get('windows') is True or 'tunnel' in request):
         raise ValueError('invalid-control')
@@ -182,6 +214,25 @@ def identity(request):
             len(window) + 10 + len(extra)):
         raise ValueError('invalid-tunnel')
     return iface
+
+
+def extended_fixtures_of(request):
+    """The validated opt-in `extended_fixtures` block of Stage 10f, or None."""
+    if 'extended_fixtures' not in request:
+        return None
+    block = request['extended_fixtures']
+    if (request.get('windows') is not True or 'tunnel' not in request or type(block) is not dict
+            or not set(block) <= EXTENDED_KEYS or not any(block.get(k) is True for k in EXTENDED_BOOL_KEYS)):
+        raise ValueError('invalid-extended-fixtures')
+    for key in EXTENDED_BOOL_KEYS:
+        if key in block and type(block[key]) is not bool:
+            raise ValueError('invalid-extended-fixtures')
+    for key in EXTENDED_HASH_KEYS:
+        if key in block and (type(block[key]) is not str or not re.fullmatch('[0-9a-f]{64}', block[key])):
+            raise ValueError('invalid-extended-fixtures')
+    if block.get('xray') is True and 'xray_sha256' not in block:
+        raise ValueError('invalid-extended-fixtures')
+    return block
 
 
 def dns_check_of(request):
@@ -532,8 +583,8 @@ def probe_all(request):
                 **({'https': https} if https is not None else {}), **({'dns': dns} if dns is not None else {}))
 
 
-def node_config(tunnel, *, lan_fixtures=False):
-    """The node: Shadowsocks inbound on the lab address (and routed node when LAN fixtures are active), direct out.
+def node_config(tunnel, *, lan_fixtures=False, protocols=False, dns_resolver=False):
+    """The node: Shadowsocks inbound on the lab address (plus routed/multi-protocol inbounds when enabled), direct out.
 
     Its log is at `info` so that it names every connection it takes and the destination it opens.
     """
@@ -544,14 +595,119 @@ def node_config(tunnel, *, lan_fixtures=False):
         inbounds.append({'type': 'shadowsocks', 'tag': 'node-routed-in', 'listen': ROUTED_NODE,
                          'listen_port': tunnel['port'], 'method': tunnel['method'],
                          'password': tunnel['password']})
+    if protocols:
+        inbounds.extend([
+            {'type': 'hysteria2', 'tag': 'hysteria2-in', 'listen': GATEWAYS[4],
+             'listen_port': HYSTERIA2_PORT, 'users': [{'password': PROTO_PASSWORD}],
+             'tls': {'enabled': True, 'certificate_path': str(PROTO_CERT), 'key_path': str(PROTO_KEY)}},
+            {'type': 'tuic', 'tag': 'tuic-in', 'listen': GATEWAYS[4],
+             'listen_port': TUIC_PORT, 'users': [{'uuid': TUIC_UUID, 'password': PROTO_PASSWORD}],
+             'congestion_control': 'bbr',
+             'tls': {'enabled': True, 'alpn': ['h3'], 'certificate_path': str(PROTO_CERT),
+                     'key_path': str(PROTO_KEY)}},
+            {'type': 'anytls', 'tag': 'anytls-in', 'listen': GATEWAYS[4],
+             'listen_port': ANYTLS_PORT, 'users': [{'password': PROTO_PASSWORD}],
+             'tls': {'enabled': True, 'certificate_path': str(PROTO_CERT), 'key_path': str(PROTO_KEY)}},
+        ])
     config = {'log': {'level': 'info', 'timestamp': False},
               'inbounds': inbounds,
               'outbounds': [{'type': 'direct', 'tag': 'direct'}],
               'route': {'final': 'direct'}}
-    if lan_fixtures:
+    if lan_fixtures or protocols or dns_resolver:
         config['dns'] = {'servers': [{'type': 'udp', 'tag': 'lab-dns', 'server': RESOLVER}]}
         config['route']['default_domain_resolver'] = 'lab-dns'
     return config
+
+
+def second_node_config(tunnel):
+    """Second VPN node on port 8391 binding outbound traffic to distinct egress addresses."""
+    return {
+        'log': {'level': 'info', 'timestamp': False},
+        'dns': {'servers': [{'type': 'udp', 'tag': 'lab-dns', 'server': RESOLVER}]},
+        'inbounds': [{'type': 'shadowsocks', 'tag': 'second-node-in', 'listen': GATEWAYS[4],
+                      'listen_port': SECOND_NODE_PORT, 'method': tunnel['method'],
+                      'password': tunnel['password']}],
+        'outbounds': [{'type': 'direct', 'tag': 'direct',
+                       'inet4_bind_address': SECOND_NODE_EGRESS,
+                       'inet6_bind_address': SECOND_NODE_EGRESS6}],
+        'route': {'final': 'direct', 'default_domain_resolver': 'lab-dns'},
+    }
+
+
+def xray_config(private_key):
+    """Xray server with VLESS REALITY + Vision (8390) and VLESS XHTTP + REALITY (8392)."""
+    reality_settings = {
+        'target': f'127.0.0.1:{REALITY_COVER_PORT}',
+        'serverNames': [REALITY_SNI],
+        'privateKey': private_key,
+        'shortIds': [REALITY_SHORT_ID],
+    }
+    return {
+        'log': {'loglevel': 'warning'},
+        'dns': {'servers': [RESOLVER]},
+        'inbounds': [
+            {
+                'tag': 'reality-in',
+                'listen': GATEWAYS[4],
+                'port': REALITY_PORT,
+                'protocol': 'vless',
+                'settings': {
+                    'clients': [{'id': REALITY_UUID, 'flow': 'xtls-rprx-vision'}],
+                    'decryption': 'none',
+                },
+                'streamSettings': {
+                    'network': 'tcp',
+                    'security': 'reality',
+                    'realitySettings': dict(reality_settings),
+                },
+            },
+            {
+                'tag': 'xhttp-in',
+                'listen': GATEWAYS[4],
+                'port': XHTTP_PORT,
+                'protocol': 'vless',
+                'settings': {
+                    'clients': [{'id': REALITY_UUID}],
+                    'decryption': 'none',
+                },
+                'streamSettings': {
+                    'network': 'xhttp',
+                    'xhttpSettings': {'path': XHTTP_PATH, 'mode': 'auto'},
+                    'security': 'reality',
+                    'realitySettings': dict(reality_settings),
+                },
+            },
+        ],
+        'outbounds': [{
+            'protocol': 'freedom',
+            'tag': 'direct',
+            'settings': {'finalRules': [{'action': 'allow', 'ip': ['0.0.0.0/0', '::/0']}]},
+        }],
+    }
+
+
+def parse_x25519_output(text):
+    """Parse `(private_key, public_key)` from `xray x25519` output (supports Xray 25.x and 26.x labels)."""
+    private_key = public_key = None
+    for line in text.splitlines():
+        key, sep, value = line.partition(':')
+        if not sep:
+            continue
+        label, val = key.strip().lower(), value.strip()
+        if label in ('privatekey', 'private key'):
+            private_key = val
+        elif label in ('password (publickey)', 'publickey', 'public key', 'password'):
+            public_key = val
+    if not private_key or not public_key:
+        raise Refused('xray-x25519-parse')
+    return private_key, public_key
+
+
+def generate_reality_keys():
+    """Generate a per-run ephemeral X25519 keypair using the pinned Xray binary."""
+    out = subprocess.run([str(XRAY_BINARY), 'x25519'], check=True, timeout=5,
+                         stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    return parse_x25519_output(out.stdout.decode('utf-8', 'replace'))
 
 
 def client_config(tunnel):
@@ -706,10 +862,30 @@ def listening(address, port, table='/proc/net/tcp'):
     return False
 
 
-def spawn(config_path, log_path):
-    """sing-box in its own session; its stderr goes to a file this helper reads back, bounded."""
-    with log_path.open('xb') as log:
-        return subprocess.Popen([str(NODE_BINARY), 'run', '-c', str(config_path)],
+def listening_udp(address, port, table='/proc/net/udp', table6='/proc/net/udp6'):
+    """True when `address:port` is bound as a UDP listener in IPv4 or v4-mapped IPv6."""
+    ipv4 = socket.inet_aton(address)[::-1].hex().upper()
+    key = '%s:%04X' % (ipv4, port)
+    for line in Path(table).read_text().splitlines()[1:]:
+        fields = line.split()
+        if len(fields) > 3 and fields[1] == key and fields[3] == '07':
+            return True
+    mapped = '0000000000000000FFFF0000%s:%04X' % (ipv4, port)
+    path6 = Path(table6)
+    if path6.exists():
+        for line in path6.read_text().splitlines()[1:]:
+            fields = line.split()
+            if len(fields) > 3 and fields[1] == mapped and fields[3] == '07':
+                return True
+    return False
+
+
+def spawn(config_path, log_path, *, binary=None, append_log=False):
+    """Run sing-box or xray in its own session; stderr goes to a file this helper reads back, bounded."""
+    mode = 'ab' if append_log else 'xb'
+    executable = NODE_BINARY if binary is None else binary
+    with log_path.open(mode) as log:
+        return subprocess.Popen([str(executable), 'run', '-c', str(config_path)],
                                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=log,
                                 start_new_session=True, close_fds=True)
 
@@ -727,15 +903,24 @@ def stop_process(process):
     return alive, process.returncode
 
 
-def start_process(config, directory, name, address, port, *, extra_addresses=()):
-    """Write the configuration, start sing-box and wait until it is alive and listening."""
-    write(directory / (name + '.json'), config)
-    process = spawn(directory / (name + '.json'), directory / (name + '.stderr'))
-    addresses = (address, *extra_addresses)
+def start_process(config, directory, name, address, port, *, extra_addresses=(), extra_tcp_ports=(),
+                  udp_ports=(), binary=None, reuse_config=False):
+    """Write the configuration (unless reusing on restart), start the engine and wait until all ports listen."""
+    config_path = directory / (name + '.json')
+    if not reuse_config:
+        write(config_path, config)
+    stderr_path = directory / (name + '.stderr')
+    if binary is None and not reuse_config:
+        process = spawn(config_path, stderr_path)
+    else:
+        process = spawn(config_path, stderr_path, binary=binary, append_log=reuse_config)
+    tcp_checks = [(item, port) for item in (address, *extra_addresses)] + [(address, item) for item in extra_tcp_ports]
+    udp_checks = [(address, item) for item in udp_ports]
     for _ in range(50):
         if process.poll() is not None:
             raise Refused(name + '-exited')
-        if all(listening(item, port) for item in addresses):
+        if (all(listening(item, tcp_port) for item, tcp_port in tcp_checks)
+                and all(listening_udp(item, udp_port) for item, udp_port in udp_checks)):
             return process
         time.sleep(.1)
     stop_process(process)
@@ -752,6 +937,21 @@ def check_lab_fixtures(tunnel, certificates=None):
     fixture(NODE_BINARY, 'missing-sing-box', sha256=tunnel['sing_box_sha256'])
     fixture(HTTPS_CERT, 'missing-https-certificate', **pinned(certificates, 'https_sha256'))
     fixture(HTTPS_KEY, 'missing-https-key', private=True)
+
+
+def check_extended_fixtures(extended):
+    """Verify pinned binaries and certificates required by opt-in Stage 10f fixtures before any mutation."""
+    if extended.get('protocols') is True or extended.get('xray') is True:
+        fixture(PROTO_CERT, 'missing-proto-certificate', **pinned(extended, 'proto_cert_sha256'))
+        fixture(PROTO_KEY, 'missing-proto-key', private=True)
+    if extended.get('xray') is True:
+        fixture(XRAY_BINARY, 'missing-xray', sha256=extended['xray_sha256'])
+    if extended.get('two_hop') is True:
+        fixture(TWOHOP_CERT, 'missing-twohop-certificate', **pinned(extended, 'twohop_cert_sha256'))
+        fixture(TWOHOP_KEY, 'missing-twohop-key', private=True)
+        fixture(TWOHOP_UNTRUSTED_CERT, 'missing-twohop-untrusted-certificate',
+                **pinned(extended, 'twohop_untrusted_cert_sha256'))
+        fixture(TWOHOP_UNTRUSTED_KEY, 'missing-twohop-untrusted-key', private=True)
 
 
 def evidence_device(path=EVIDENCE_DEVICE):
@@ -836,13 +1036,29 @@ def poller_loop(key_path, log, stop):
             return
 
 
+def disable_offloads(iface):
+    """Disable NIC coalescing/segmentation offloads so raw packet capture never sees >MTU super-frames."""
+    ethtool = '/sbin/ethtool' if Path('/sbin/ethtool').is_file() else '/usr/sbin/ethtool'
+    if not Path(ethtool).is_file():
+        return
+    for feature in ('gro', 'gso', 'tso', 'lro'):
+        try:
+            subprocess.run([ethtool, '-K', iface, feature, 'off'], check=False, timeout=5,
+                           stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except OSError:
+            pass
+
+
 def setup(request, iface, directory):
     # The role, VM, boot and one-shot run claim are checked before any mutation.
     tunnel = tunnel_of(request)
+    extended = extended_fixtures_of(request)
     if poller_of(request) is not None:
         fixture(SSH, 'poller-ssh-missing')
     if tunnel is not None:
         check_lab_fixtures(tunnel, request.get('certificates'))
+    if extended is not None:
+        check_extended_fixtures(extended)
     if request.get('lan_fixtures') is True:
         fixture(CA_CERT, 'missing-ca-certificate', sha256=tunnel['ca_sha256'])
     if request.get('dns') is True:
@@ -850,13 +1066,15 @@ def setup(request, iface, directory):
     if request.get('evidence_disk') is True:
         evidence_device()
     command('/usr/sbin/ip', 'addr', 'add', GATEWAYS[4] + '/24', 'dev', iface)
-    if request.get('lan_fixtures') is True:
+    if request.get('lan_fixtures') is True or (extended is not None and extended.get('two_hop') is True):
         # Secondary LAN peer IP stays non-primary so default router traffic keeps GATEWAYS[4].
         command('/usr/sbin/ip', 'addr', 'add', LAN_PEER + '/24', 'dev', iface)
+    if request.get('lan_fixtures') is True:
         # Routed VPN node IP lives on lo so sing-box outbound to rtlab still sources from EGRESS.
         command('/usr/sbin/ip', 'addr', 'add', ROUTED_NODE + '/32', 'dev', 'lo')
     command('/usr/sbin/ip', '-6', 'addr', 'add', GATEWAYS[6] + '/64', 'dev', iface, 'nodad')
     command('/usr/sbin/ip', 'link', 'set', iface, 'up')
+    disable_offloads(iface)
     if l3_mode(request):
         # The IPv6 router of an L3 run is this link-local address (`ipv6.neighbor`, test image v6b). The kernel
         # usually makes it itself when the link comes up; `replace` leaves one address either way, and an echo
@@ -869,6 +1087,9 @@ def setup(request, iface, directory):
     for flag, gateway in (('', '203.0.113.1/24'), ('-6', '2001:db8:6a:2::1/64')):
         prefix = ['/usr/sbin/ip'] + ([flag] if flag else [])
         command(*prefix, 'addr', 'add', gateway, 'dev', 'rt-route', *(['nodad'] if flag else []))
+    if extended is not None and extended.get('second_node') is True:
+        command('/usr/sbin/ip', 'addr', 'add', SECOND_NODE_EGRESS + '/24', 'dev', 'rt-route')
+        command('/usr/sbin/ip', '-6', 'addr', 'add', SECOND_NODE_EGRESS6 + '/64', 'dev', 'rt-route', 'nodad')
     command('/usr/sbin/ip', 'link', 'set', 'rt-route', 'up')
     ns = ['/usr/sbin/ip', 'netns', 'exec', 'rtlab']
     command(*ns, '/usr/sbin/ip', 'link', 'set', 'lo', 'up')
@@ -877,6 +1098,9 @@ def setup(request, iface, directory):
     if request.get('dns') is True:
         for address in (RESOLVER, DOH_ADDRESS):
             command(*ns, '/usr/sbin/ip', 'addr', 'add', address + '/24', 'dev', 'rt-target')
+    if extended is not None and extended.get('two_hop') is True:
+        command(*ns, '/usr/sbin/ip', 'addr', 'add', TWOHOP_B[4] + '/24', 'dev', 'rt-target')
+        command(*ns, '/usr/sbin/ip', '-6', 'addr', 'add', TWOHOP_B[6] + '/64', 'dev', 'rt-target', 'nodad')
     command(*ns, '/usr/sbin/ip', 'link', 'set', 'rt-target', 'up')
     command(*ns, '/usr/sbin/ip', 'route', 'add', '192.0.2.0/24', 'via', '203.0.113.1')
     command(*ns, '/usr/sbin/ip', '-6', 'route', 'add', '2001:db8:6a:1::/64', 'via', '2001:db8:6a:2::1')
@@ -893,8 +1117,9 @@ def setup(request, iface, directory):
     if request.get('control') == 'observer-killed':
         # The lab machine knows its own observer; the controller never names a process.
         (directory / 'observer.pid').write_text(str(child.pid))
-    # The node and its listener start inside the observer, so they get a little longer.
-    for _ in range(100 if tunnel is not None else 50):
+    # The node and its listeners start inside the observer, so they get a little longer.
+    wait_ticks = 150 if extended is not None else (100 if tunnel is not None else 50)
+    for _ in range(wait_ticks):
         if child.poll() is not None:
             raise ValueError('observer-start-failed')
         if (directory / 'ready.json').exists():
@@ -906,17 +1131,26 @@ def setup(request, iface, directory):
 class DnsLog:
     """The rows of dns.json: source, transport, name and type, bounded by count and size."""
 
-    def __init__(self):
+    def __init__(self, *, aggregate=False):
         self.rows, self.lock, self.overflow, self.overflow_in = [], threading.Lock(), False, None
+        self.aggregate = aggregate
+        self._index = {}
 
     def record(self, source, transport, entry):
         with self.lock:
+            key = (source, transport, entry[0], entry[1])
+            if self.aggregate and key in self._index:
+                row = self.rows[self._index[key]]
+                row['count'] = row.get('count', 1) + 1
+                return
             self.rows.append(dict(source=source, transport=transport, name=entry[0], type=entry[1]))
             if len(self.rows) > DNS_LOG_ENTRIES or len(json.dumps(self.rows)) > LOG_LIMIT:
                 self.rows.pop()
                 # The first overflow names the server that was asked; DoH has its own place.
                 self.overflow_in = self.overflow_in or ('doh' if transport == 'doh' else 'dns')
                 self.overflow = True
+            elif self.aggregate:
+                self._index[key] = len(self.rows) - 1
 
 
 def dns_datagram(sock, log):
@@ -1164,13 +1398,25 @@ def l3_request_line(head):
     return parts[0], parts[2], 'root' if parts[1].partition('?')[0] == '/' else 'other'
 
 
+def l3_allowed_peers(request):
+    """Allowed IPv4 client/egress sources for the L3 HTTPS target."""
+    peers = [CLIENTS[4], EGRESS]
+    extended = extended_fixtures_of(request)
+    if extended is not None:
+        if extended.get('second_node') is True:
+            peers.append(SECOND_NODE_EGRESS)
+        if extended.get('two_hop') is True:
+            peers.extend((TWOHOP_B[4], LAN_PEER))
+    return tuple(peers)
+
+
 def l3_exchange(connection, peer, context, request):
     """One request to the HTTPS target of an L3 run: (row, method, path class) of what was answered.
 
     An exchange of stage 7b1 is still known by its exact request and answered with its nonce. Any other GET
     or HEAD gets a short fixed body without one, and the connection is closed after it.
     """
-    if peer[0] not in (CLIENTS[4], EGRESS):
+    if peer[0] not in l3_allowed_peers(request):
         raise ValueError('unexpected-request')
     connection.settimeout(REQUEST_TIMEOUT)
     deadline = time.monotonic() + 2 * REQUEST_TIMEOUT
@@ -1204,9 +1450,28 @@ class HttpsLog:
     `document()`; it is never an error of the observer.
     """
 
-    def __init__(self):
+    def __init__(self, state_path=None):
         self.lock, self.rows, self.counts = threading.Lock(), [], {}
         self.rows_dropped = self.counts_dropped = 0
+        self.state_path = state_path
+        if self.state_path is not None:
+            self._flush_locked()
+
+    def _flush_locked(self):
+        by_source = {}
+        for (source, _, _), count in self.counts.items():
+            by_source[source] = by_source.get(source, 0) + count
+        payload = dict(
+            by_source=dict(sorted(by_source.items())),
+            counts=[dict(source=source, method=method, path_class=path_class, count=count)
+                    for (source, method, path_class), count in sorted(self.counts.items())],
+            total=sum(by_source.values()))
+        try:
+            tmp = self.state_path.with_suffix('.tmp')
+            tmp.write_bytes(json.dumps(payload).encode('utf-8'))
+            os.replace(tmp, self.state_path)
+        except OSError:
+            pass
 
     def served(self, row, method, path_class):
         with self.lock:
@@ -1219,6 +1484,8 @@ class HttpsLog:
                 self.rows.append(row)
             else:
                 self.rows_dropped += 1
+            if self.state_path is not None:
+                self._flush_locked()
 
     def refused(self, error):
         with self.lock:
@@ -1532,6 +1799,712 @@ def lan_state(directory):
     return json.loads(path.read_bytes())
 
 
+def atomic_json(path, value):
+    """Write a small JSON state file atomically via sibling `.tmp`."""
+    tmp = path.with_suffix(path.suffix + '.tmp')
+    tmp.write_bytes(json.dumps(value).encode('utf-8'))
+    os.replace(tmp, path)
+
+
+class RealityCoverServer:
+    """Minimal local TLS 1.3 cover target for Xray REALITY fallback on 127.0.0.1."""
+
+    def __init__(self, *, address='127.0.0.1', port=REALITY_COVER_PORT, cert_path=PROTO_CERT, key_path=PROTO_KEY):
+        self.address, self.port = address, port
+        self.cert_path, self.key_path = cert_path, key_path
+        self.stop = threading.Event()
+        self.listener = None
+        self.thread = None
+        self.workers = []
+
+    def start(self):
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.minimum_version = ssl.TLSVersion.TLSv1_3
+        context.num_tickets = 0
+        context.set_alpn_protocols(['h2', 'http/1.1'])
+        context.load_cert_chain(str(self.cert_path), str(self.key_path))
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind((self.address, self.port))
+        sock.listen(16)
+        sock.setblocking(False)
+        self.listener = sock
+        self.thread = threading.Thread(target=self._accept_loop, args=(context,), daemon=True)
+        self.thread.start()
+
+    def _accept_loop(self, context):
+        while not self.stop.is_set():
+            try:
+                ready, _, _ = select.select([self.listener], [], [], 0.2)
+            except (OSError, ValueError):
+                return
+            if not ready:
+                continue
+            try:
+                conn, _ = self.listener.accept()
+            except (BlockingIOError, OSError):
+                continue
+            self.workers = [worker for worker in self.workers if worker.is_alive()]
+            if len(self.workers) >= 32:
+                conn.close()
+                continue
+            worker = threading.Thread(target=self._serve, args=(conn, context), daemon=True)
+            self.workers.append(worker)
+            worker.start()
+
+    def _serve(self, conn, context):
+        try:
+            conn.settimeout(REQUEST_TIMEOUT)
+            with context.wrap_socket(conn, server_side=True) as tls:
+                ready, _, _ = select.select([tls], [], [], COVER_READ_TIMEOUT)
+                data = tls.recv(1024) if ready else b''
+                if data:
+                    body = b'ok\n'
+                    tls.sendall(b'HTTP/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\n\r\n' + body)
+        except (OSError, ssl.SSLError):
+            pass
+        finally:
+            try:
+                conn.close()
+            except OSError:
+                pass
+
+    def close(self):
+        self.stop.set()
+        if self.listener is not None:
+            try:
+                self.listener.close()
+            except OSError:
+                pass
+            self.listener = None
+        if self.thread is not None:
+            self.thread.join(2)
+            self.thread = None
+        for worker in self.workers:
+            worker.join(1)
+        self.workers = []
+
+
+def _parse_host_port(authority, default_port=80):
+    """Parse `host:port` or `[ipv6]:port` authority string."""
+    if authority.startswith('['):
+        host, sep, rest = authority[1:].partition(']')
+        if not sep:
+            raise ValueError('bad-authority')
+        port = int(rest[1:]) if rest.startswith(':') else default_port
+    else:
+        host, sep, port_text = authority.rpartition(':')
+        if not sep:
+            host, port = authority, default_port
+        else:
+            port = int(port_text)
+    if not host or not 1 <= port <= 65535:
+        raise ValueError('bad-authority')
+    return host, port
+
+
+def _resolve_lab_host(host, resolver=RESOLVER):
+    """Resolve an IP literal or query the lab UDP DNS resolver for an A record."""
+    try:
+        addr = ipaddress.ip_address(host)
+        return str(addr), addr.version
+    except ValueError:
+        pass
+    labels = [part.encode('ascii') for part in host.rstrip('.').split('.') if part]
+    if not labels or any(len(part) > 63 for part in labels):
+        raise ValueError('bad-hostname')
+    qname = b''.join(bytes([len(part)]) + part for part in labels) + b'\x00'
+    packet = struct.pack('!HHHHHH', 0x4242, 0x0100, 1, 0, 0, 0) + qname + struct.pack('!HH', 1, 1)
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        sock.settimeout(RESPONSE_TIMEOUT)
+        sock.sendto(packet, (resolver, 53))
+        reply = sock.recv(512)
+    if len(reply) < 12:
+        raise ValueError('dns-short-reply')
+    _, _, qdcount, ancount, _, _ = struct.unpack_from('!HHHHHH', reply, 0)
+    if ancount < 1:
+        raise ValueError('dns-no-answer')
+    offset = 12
+    for _ in range(qdcount):
+        while offset < len(reply):
+            length = reply[offset]
+            if length == 0:
+                offset += 1
+                break
+            if length & 0xc0 == 0xc0:
+                offset += 2
+                break
+            offset += 1 + length
+        offset += 4
+    for _ in range(ancount):
+        if offset >= len(reply):
+            break
+        if reply[offset] & 0xc0 == 0xc0:
+            offset += 2
+        else:
+            while offset < len(reply) and reply[offset] != 0:
+                offset += 1 + reply[offset]
+            offset += 1
+        if offset + 10 > len(reply):
+            break
+        rtype, rclass, _, rdlength = struct.unpack_from('!HHIH', reply, offset)
+        offset += 10
+        if rtype == 1 and rclass == 1 and rdlength == 4 and offset + 4 <= len(reply):
+            return socket.inet_ntoa(reply[offset:offset + 4]), 4
+        offset += rdlength
+    raise ValueError('dns-no-a-record')
+
+
+def _relay_pair(left, right, stop_event, idle=TWOHOP_RELAY_IDLE):
+    """Bidirectional TCP/TLS relay honoring SSLSocket buffered bytes."""
+    left.settimeout(REQUEST_TIMEOUT)
+    right.settimeout(REQUEST_TIMEOUT)
+    last = time.monotonic()
+
+    def forward(src, dst):
+        data = src.recv(16384)
+        if not data:
+            return False
+        dst.sendall(data)
+        return True
+
+    while not stop_event.is_set() and time.monotonic() - last < idle:
+        progressed = False
+        for src, dst in ((left, right), (right, left)):
+            if isinstance(src, ssl.SSLSocket) and src.pending() > 0:
+                if not forward(src, dst):
+                    return
+                last = time.monotonic()
+                progressed = True
+        if progressed:
+            continue
+        ready, _, _ = select.select([left, right], [], [], 0.5)
+        if not ready:
+            continue
+        for src in ready:
+            dst = right if src is left else left
+            try:
+                if not forward(src, dst):
+                    return
+                last = time.monotonic()
+            except (ssl.SSLWantReadError, ssl.SSLWantWriteError):
+                continue
+
+
+class TwoHopProxy:
+    """Two-Hop B-hop HTTP/HTTPS/SOCKS5 proxies in rtlab (plus optional LAN B-hop in router ns)."""
+
+    def __init__(self, state_path, *, cert_path=TWOHOP_CERT, key_path=TWOHOP_KEY,
+                 untrusted_cert_path=TWOHOP_UNTRUSTED_CERT, untrusted_key_path=TWOHOP_UNTRUSTED_KEY,
+                 bind_v4=TWOHOP_B[4], bind_v6=TWOHOP_B[6], lan_bind=LAN_PEER, ports=None,
+                 resolver=RESOLVER, use_netns=True):
+        self.state_path = state_path
+        self.cert_path, self.key_path = cert_path, key_path
+        self.untrusted_cert_path, self.untrusted_key_path = untrusted_cert_path, untrusted_key_path
+        self.bind_v4, self.bind_v6, self.lan_bind = bind_v4, bind_v6, lan_bind
+        self.ports = dict(TWOHOP_PORTS if ports is None else ports)
+        self.resolver = resolver
+        self.use_netns = use_netns
+        self.lock = threading.Lock()
+        self.events = []
+        self.dropped = 0
+        self.running = False
+        self._stop = threading.Event()
+        self._listeners = []
+        self._selector = None
+        self._accept_thread = None
+        self._workers = []
+        self._trusted_ctx = None
+        self._untrusted_ctx = None
+        self._auth_header = 'Basic ' + base64.b64encode(
+            f'{TWOHOP_USER}:{TWOHOP_PASSWORD}'.encode('ascii')).decode('ascii')
+
+    def _snapshot(self):
+        return dict(running=self.running, events=list(self.events), dropped=self.dropped)
+
+    def _flush_locked(self):
+        try:
+            atomic_json(self.state_path, self._snapshot())
+        except OSError:
+            pass
+
+    def _record(self, **event):
+        with self.lock:
+            if len(self.events) < TWOHOP_EVENT_LIMIT:
+                self.events.append(event)
+            else:
+                self.dropped += 1
+            self._flush_locked()
+
+    def _make_context(self, cert_path, key_path):
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
+        context.set_alpn_protocols(['http/1.1'])
+        context.load_cert_chain(str(cert_path), str(key_path))
+        return context
+
+    def _bind_one(self, selector, kind, address, port, family, in_rtlab):
+        sock = socket.socket(socket.AF_INET if family == 4 else socket.AF_INET6, socket.SOCK_STREAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        if family == 6:
+            sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+        sock.bind((address, port))
+        sock.listen(16)
+        sock.setblocking(False)
+        self._listeners.append(sock)
+        selector.register(sock, selectors.EVENT_READ, (kind, address, port, in_rtlab))
+
+    def start_listeners(self):
+        if self.running:
+            return
+        self._stop = threading.Event()
+        self._trusted_ctx = self._make_context(self.cert_path, self.key_path)
+        self._untrusted_ctx = self._make_context(self.untrusted_cert_path, self.untrusted_key_path)
+        selector = selectors.DefaultSelector()
+        try:
+            if self.use_netns:
+                with open('/proc/self/ns/net', 'rb') as original, open('/run/netns/rtlab', 'rb') as target:
+                    libc = ctypes.CDLL(None, use_errno=True)
+                    if libc.setns(target.fileno(), 0) != 0:
+                        raise OSError('twohop-setns')
+                    try:
+                        self._bind_rtlab(selector)
+                    finally:
+                        if libc.setns(original.fileno(), 0) != 0:
+                            raise OSError('twohop-router-setns')
+            else:
+                self._bind_rtlab(selector)
+            if self.lan_bind is not None:
+                self._bind_one(selector, 'lan_http', self.lan_bind, self.ports['http'], 4, False)
+        except Exception:
+            for sock in self._listeners:
+                try:
+                    sock.close()
+                except OSError:
+                    pass
+            self._listeners = []
+            selector.close()
+            raise
+        self._selector = selector
+        self._accept_thread = threading.Thread(target=self._accept_loop, args=(selector, self._stop), daemon=True)
+        self._accept_thread.start()
+        with self.lock:
+            self.running = True
+            self._flush_locked()
+
+    def _bind_rtlab(self, selector):
+        for kind, port in self.ports.items():
+            if self.bind_v4 is not None:
+                self._bind_one(selector, kind, self.bind_v4, port, 4, True)
+            if self.bind_v6 is not None:
+                self._bind_one(selector, kind, self.bind_v6, port, 6, True)
+
+    def stop_listeners(self):
+        self._stop.set()
+        if self._accept_thread is not None:
+            self._accept_thread.join(2)
+            self._accept_thread = None
+        if self._selector is not None:
+            try:
+                self._selector.close()
+            except OSError:
+                pass
+            self._selector = None
+        for sock in self._listeners:
+            try:
+                sock.close()
+            except OSError:
+                pass
+        self._listeners = []
+        for worker in self._workers:
+            worker.join(1)
+        self._workers = []
+        with self.lock:
+            self.running = False
+            self._flush_locked()
+
+    def _accept_loop(self, selector, stop_event):
+        while not stop_event.is_set():
+            try:
+                ready = selector.select(0.1)
+            except (OSError, ValueError):
+                return
+            for key, _ in ready:
+                try:
+                    conn, peer = key.fileobj.accept()
+                except (BlockingIOError, OSError):
+                    continue
+                self._workers = [worker for worker in self._workers if worker.is_alive()]
+                if len(self._workers) >= 32:
+                    conn.close()
+                    continue
+                worker = threading.Thread(target=self._handle_client, args=(conn, peer, key.data, stop_event),
+                                          daemon=True)
+                self._workers.append(worker)
+                worker.start()
+
+    def _dial_outbound(self, host, port, in_rtlab):
+        dst_ip, family = _resolve_lab_host(host, self.resolver)
+        bind_addr = (self.bind_v4 if family == 4 else self.bind_v6) if in_rtlab else (
+            self.lan_bind if family == 4 else None)
+        out = socket.socket(socket.AF_INET if family == 4 else socket.AF_INET6, socket.SOCK_STREAM)
+        out.settimeout(REQUEST_TIMEOUT)
+        try:
+            if bind_addr is not None:
+                out.bind((bind_addr, 0))
+            out.connect((dst_ip, port))
+            return out, dst_ip, family, bind_addr
+        except Exception:
+            out.close()
+            raise
+
+    def _handle_client(self, conn, peer, spec, stop_event):
+        kind, listen_addr, listen_port, in_rtlab = spec
+        client_ip = peer[0]
+        stream = conn
+        try:
+            if in_rtlab and self.use_netns:
+                with open('/run/netns/rtlab', 'rb') as target:
+                    libc = ctypes.CDLL(None, use_errno=True)
+                    if libc.setns(target.fileno(), 0) != 0:
+                        raise OSError('twohop-worker-setns')
+            conn.settimeout(REQUEST_TIMEOUT)
+            if kind in ('https', 'https-untrusted'):
+                ctx = self._trusted_ctx if kind == 'https' else self._untrusted_ctx
+                try:
+                    stream = ctx.wrap_socket(conn, server_side=True)
+                except (OSError, ssl.SSLError):
+                    self._record(kind=kind, listen=listen_addr, port=listen_port, client=client_ip,
+                                 status='tls_error')
+                    return
+            if kind in ('socks5', 'socks5-auth'):
+                self._serve_socks5(stream, kind, listen_addr, listen_port, client_ip, in_rtlab, stop_event)
+            else:
+                self._serve_http(stream, kind, listen_addr, listen_port, client_ip, in_rtlab, stop_event)
+        except (OSError, ssl.SSLError, ValueError):
+            pass
+        finally:
+            try:
+                stream.close()
+            except OSError:
+                pass
+
+    def _serve_http(self, stream, kind, listen_addr, listen_port, client_ip, in_rtlab, stop_event):
+        buf = bytearray()
+        while b'\r\n\r\n' not in buf:
+            chunk = stream.recv(4096)
+            if not chunk:
+                return
+            buf.extend(chunk)
+            if len(buf) > 4096:
+                return
+        head_bytes, _, tail = bytes(buf).partition(b'\r\n\r\n')
+        lines = head_bytes.decode('ascii', 'replace').split('\r\n')
+        parts = lines[0].split(' ')
+        if len(parts) != 3:
+            return
+        method, target, version = parts
+        headers = {}
+        raw_headers = []
+        for line in lines[1:]:
+            name, sep, value = line.partition(':')
+            if sep:
+                key = name.strip().lower()
+                headers[key] = value.strip()
+                if key not in ('proxy-authorization', 'proxy-connection'):
+                    raw_headers.append(line)
+        if kind == 'http-auth' and headers.get('proxy-authorization') != self._auth_header:
+            stream.sendall(b'HTTP/1.1 407 Proxy Authentication Required\r\n'
+                           b'Proxy-Authenticate: Basic realm="rosetun-lab"\r\n'
+                           b'Content-Length: 0\r\nConnection: close\r\n\r\n')
+            self._record(kind=kind, listen=listen_addr, port=listen_port, client=client_ip, status='auth_failed')
+            return
+        if method == 'CONNECT':
+            host, port = _parse_host_port(target, 443)
+            out, dst_ip, _, bind_addr = self._dial_outbound(host, port, in_rtlab)
+            try:
+                stream.sendall(b'HTTP/1.1 200 Connection Established\r\n\r\n')
+                if tail:
+                    out.sendall(tail)
+                self._record(kind=kind, listen=listen_addr, port=listen_port, client=client_ip,
+                             target=f'{dst_ip}:{port}', out_source=bind_addr, status='ok')
+                _relay_pair(stream, out, stop_event)
+            finally:
+                out.close()
+            return
+        if target.startswith('http://'):
+            rest = target[7:]
+            authority, slash, path = rest.partition('/')
+            path = '/' + path if slash else '/'
+            host, port = _parse_host_port(authority, 80)
+        elif 'host' in headers:
+            host, port = _parse_host_port(headers['host'], 80)
+            path = target if target.startswith('/') else '/'
+        else:
+            return
+        out, dst_ip, _, bind_addr = self._dial_outbound(host, port, in_rtlab)
+        try:
+            forwarded = (f'{method} {path} {version}\r\n' + '\r\n'.join(raw_headers) + '\r\n\r\n').encode('ascii')
+            out.sendall(forwarded + tail)
+            self._record(kind=kind, listen=listen_addr, port=listen_port, client=client_ip,
+                         target=f'{dst_ip}:{port}', out_source=bind_addr, status='ok')
+            _relay_pair(stream, out, stop_event)
+        finally:
+            out.close()
+
+    def _serve_socks5(self, stream, kind, listen_addr, listen_port, client_ip, in_rtlab, stop_event):
+        head = receive(stream, 2)
+        if head[0] != 5:
+            return
+        methods = receive(stream, head[1])
+        if kind == 'socks5-auth':
+            if 2 not in methods:
+                stream.sendall(b'\x05\xff')
+                self._record(kind=kind, listen=listen_addr, port=listen_port, client=client_ip,
+                             status='auth_method_rejected')
+                return
+            stream.sendall(b'\x05\x02')
+            sub = receive(stream, 2)
+            if sub[0] != 1:
+                stream.sendall(b'\x01\x01')
+                self._record(kind=kind, listen=listen_addr, port=listen_port, client=client_ip, status='auth_failed')
+                return
+            user = receive(stream, sub[1]).decode('utf-8', 'replace')
+            plen = receive(stream, 1)[0]
+            passwd = receive(stream, plen).decode('utf-8', 'replace')
+            if (user, passwd) != (TWOHOP_USER, TWOHOP_PASSWORD):
+                stream.sendall(b'\x01\x01')
+                self._record(kind=kind, listen=listen_addr, port=listen_port, client=client_ip, status='auth_failed')
+                return
+            stream.sendall(b'\x01\x00')
+        else:
+            if 0 not in methods:
+                stream.sendall(b'\x05\xff')
+                return
+            stream.sendall(b'\x05\x00')
+        req = receive(stream, 4)
+        ver, cmd, _, atyp = req
+        if ver != 5:
+            return
+        if atyp == 1:
+            host = socket.inet_ntoa(receive(stream, 4))
+        elif atyp == 3:
+            dlen = receive(stream, 1)[0]
+            host = receive(stream, dlen).decode('ascii')
+        elif atyp == 4:
+            host = socket.inet_ntop(socket.AF_INET6, receive(stream, 16))
+        else:
+            stream.sendall(b'\x05\x08\x00\x01\x00\x00\x00\x00\x00\x00')
+            return
+        port = int.from_bytes(receive(stream, 2), 'big')
+        if cmd != 1:
+            stream.sendall(b'\x05\x07\x00\x01\x00\x00\x00\x00\x00\x00')
+            self._record(kind=kind, listen=listen_addr, port=listen_port, client=client_ip,
+                         target=f'{host}:{port}', status='cmd_unsupported')
+            return
+        out, dst_ip, family, bind_addr = self._dial_outbound(host, port, in_rtlab)
+        try:
+            local_ip, local_port = out.getsockname()[:2]
+            if family == 4:
+                reply = b'\x05\x00\x00\x01' + socket.inet_aton(local_ip) + struct.pack('!H', local_port)
+            else:
+                reply = b'\x05\x00\x00\x04' + socket.inet_pton(socket.AF_INET6, local_ip) + struct.pack('!H', local_port)
+            stream.sendall(reply)
+            self._record(kind=kind, listen=listen_addr, port=listen_port, client=client_ip,
+                         target=f'{dst_ip}:{port}', out_source=bind_addr, status='ok')
+            _relay_pair(stream, out, stop_event)
+        finally:
+            out.close()
+
+
+_DHCP_TYPES = {1: 'discover', 2: 'offer', 3: 'request', 5: 'ack', 6: 'nak', 7: 'release', 8: 'inform'}
+
+
+def dhcp_reply(packet, *, server_ip=GATEWAYS[4], client_ip=CLIENTS[4], dns_ip=RESOLVER,
+               client_mac=MACS['test'], lease_seconds=DHCP_LEASE_SECONDS):
+    """Build a deterministic RFC 2131 DHCPv4 reply for the lab test MAC; returns `(reply, event, broadcast)`."""
+    if len(packet) < 240 or packet[0] != 1 or packet[1] != 1 or packet[2] != 6 or packet[236:240] != DHCP_MAGIC:
+        return None, None, False
+    expected_mac = bytes.fromhex(client_mac.replace(':', ''))
+    if packet[28:34] != expected_mac:
+        return None, None, False
+    xid = packet[4:8]
+    flags = int.from_bytes(packet[10:12], 'big')
+    ciaddr = socket.inet_ntoa(packet[12:16])
+    chaddr = packet[28:44]
+    msg_type = requested_ip = server_id = None
+    index = 240
+    while index < len(packet):
+        code = packet[index]
+        index += 1
+        if code == 0:
+            continue
+        if code == 255:
+            break
+        if index >= len(packet):
+            break
+        length = packet[index]
+        index += 1
+        value = packet[index:index + length]
+        index += length
+        if len(value) != length:
+            break
+        if code == 53 and length == 1:
+            msg_type = value[0]
+        elif code == 50 and length == 4:
+            requested_ip = socket.inet_ntoa(value)
+        elif code == 54 and length == 4:
+            server_id = socket.inet_ntoa(value)
+    if msg_type not in (1, 3, 7, 8):
+        return None, None, False
+    if msg_type == 3 and server_id is not None and server_id != server_ip:
+        return None, None, False
+    kind = _DHCP_TYPES[msg_type]
+    if msg_type == 7:
+        return None, dict(kind=kind, xid=xid.hex(), ciaddr=ciaddr, reply='none'), False
+    if msg_type == 1:
+        reply_type = 2
+        yiaddr = client_ip
+    elif msg_type == 8:
+        reply_type = 5
+        yiaddr = '0.0.0.0'
+    else:
+        wanted = requested_ip if requested_ip is not None else (ciaddr if ciaddr != '0.0.0.0' else client_ip)
+        if wanted == client_ip:
+            reply_type = 5
+            yiaddr = client_ip
+        else:
+            reply_type = 6
+            yiaddr = '0.0.0.0'
+    reply_ciaddr = socket.inet_aton(ciaddr if msg_type == 8 else '0.0.0.0')
+    header = (struct.pack('!BBBB4sHH', 2, 1, 6, 0, xid, 0, flags)
+              + reply_ciaddr + socket.inet_aton(yiaddr) + socket.inet_aton(server_ip)
+              + b'\x00\x00\x00\x00' + chaddr + bytes(192) + DHCP_MAGIC)
+    options = bytearray()
+    options += bytes([53, 1, reply_type])
+    options += bytes([54, 4]) + socket.inet_aton(server_ip)
+    if reply_type != 6:
+        if msg_type != 8:
+            options += bytes([51, 4]) + struct.pack('!I', lease_seconds)
+            options += bytes([58, 4]) + struct.pack('!I', lease_seconds // 2)
+            options += bytes([59, 4]) + struct.pack('!I', (lease_seconds * 7) // 8)
+        options += bytes([1, 4]) + socket.inet_aton('255.255.255.0')
+        options += bytes([3, 4]) + socket.inet_aton(server_ip)
+        options += bytes([6, 4]) + socket.inet_aton(dns_ip)
+    options.append(255)
+    body = header + bytes(options)
+    if len(body) < 300:
+        body += bytes(300 - len(body))
+    broadcast = (msg_type == 1 or ciaddr == '0.0.0.0' or bool(flags & 0x8000) or reply_type == 6)
+    event = dict(kind=kind, xid=xid.hex(), ciaddr=ciaddr, requested=requested_ip,
+                 reply=_DHCP_TYPES[reply_type], broadcast=broadcast)
+    return body, event, broadcast
+
+
+class DhcpServer:
+    """Isolated RFC 2131 DHCPv4 server bound strictly to the lab wire interface."""
+
+    def __init__(self, iface, state_path):
+        self.iface = iface
+        self.state_path = state_path
+        self.stop = threading.Event()
+        self.sock = None
+        self.thread = None
+        self.lock = threading.Lock()
+        self.events = []
+        self.dropped = 0
+
+    def _flush_locked(self):
+        try:
+            atomic_json(self.state_path, dict(events=list(self.events), dropped=self.dropped))
+        except OSError:
+            pass
+
+    def start(self):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, self.iface.encode('ascii') + b'\x00')
+        sock.bind(('0.0.0.0', DHCP_SERVER_PORT))
+        sock.setblocking(False)
+        self.sock = sock
+        with self.lock:
+            self._flush_locked()
+        self.thread = threading.Thread(target=self._loop, daemon=True)
+        self.thread.start()
+
+    def _loop(self):
+        while not self.stop.is_set():
+            ready, _, _ = select.select([self.sock], [], [], 0.1)
+            if not ready:
+                continue
+            try:
+                packet, peer = self.sock.recvfrom(2048)
+            except OSError:
+                return
+            reply, event, broadcast = dhcp_reply(packet)
+            if reply is not None:
+                target = ('255.255.255.255', DHCP_CLIENT_PORT) if broadcast else (peer[0], DHCP_CLIENT_PORT)
+                try:
+                    self.sock.sendto(reply, target)
+                except OSError:
+                    pass
+            if event is not None:
+                with self.lock:
+                    if len(self.events) < DHCP_EVENT_LIMIT:
+                        self.events.append({**event, 'peer': peer[0], 'at': round(time.time(), 3)})
+                    else:
+                        self.dropped += 1
+                    self._flush_locked()
+
+    def close(self):
+        self.stop.set()
+        if self.thread is not None:
+            self.thread.join(2)
+            self.thread = None
+        if self.sock is not None:
+            try:
+                self.sock.close()
+            except OSError:
+                pass
+            self.sock = None
+
+
+def fixture_state(directory):
+    """Live extended-fixture state snapshot (public key, service statuses, HTTPS/TwoHop/DHCP counts)."""
+    state = {}
+    base = directory / 'fixture-state.json'
+    if base.exists():
+        state.update(json.loads(base.read_bytes()))
+    for key, filename in (('https', 'https-state.json'), ('twohop', 'twohop-state.json'), ('dhcp', 'dhcp-state.json')):
+        path = directory / filename
+        if path.exists():
+            state[key] = json.loads(path.read_bytes())
+    return state
+
+
+def fixture_control(directory, action):
+    """Request the running observer to stop or start a named lab fixture service mid-run."""
+    if (type(action) is not dict or set(action) != {'service', 'state'}
+            or action['service'] not in CONTROL_SERVICES or action['state'] not in CONTROL_STATES):
+        raise ValueError('invalid-fixture-control')
+    req_id = uuid.uuid4().hex[:16]
+    req_path = directory / 'control-req.json'
+    rep_path = directory / 'control-rep.json'
+    atomic_json(req_path, dict(id=req_id, service=action['service'], state=action['state']))
+    deadline = time.monotonic() + 10.0
+    while time.monotonic() < deadline:
+        if rep_path.exists():
+            try:
+                reply = json.loads(rep_path.read_bytes())
+            except (OSError, ValueError):
+                reply = None
+            if type(reply) is dict and reply.get('id') == req_id:
+                return reply
+        time.sleep(0.05)
+    raise ValueError('fixture-control-timeout')
+
+
 def bind_targets(request, tunnel, selector, sockets, dns_sockets):
     """Bind every service of the routed namespace and register the ones the loop reads.
 
@@ -1651,16 +2624,28 @@ def serve(request, directory):
     logs, dropped, marks, ended, started = [], 0, [], None, None
     failure, place = Failure(), 'setup'
     tunnel = tunnel_of(request)
+    extended = extended_fixtures_of(request)
+    protocols_enabled = bool(extended and extended.get('protocols') is True)
+    second_node_enabled = bool(extended and extended.get('second_node') is True)
+    xray_enabled = bool(extended and extended.get('xray') is True)
+    two_hop_enabled = bool(extended and extended.get('two_hop') is True)
+    dhcp_enabled = bool(extended and extended.get('dhcp') is True)
     poller = poller_of(request)
     poller_log, poller_stop, poller_thread, poller_key = PollerLog(), threading.Event(), None, directory / 'poller.key'
     https_log, node, node_state, context, servers = [], None, None, None, None
+    second_node = xray_proc = reality_cover = twohop = dhcp_server = None
+    reality_public_key = None
     # An L3 run counts what the script asks of the HTTPS target; its connections run on threads.
-    https_requests = HttpsLog() if l3_mode(request) else None
+    https_state_path = directory / 'https-state.json' if extended is not None else None
+    https_requests = HttpsLog(state_path=https_state_path) if l3_mode(request) else None
     https_workers = None
     dns = request.get('dns') is True
-    dns_log, dns_stop, dns_threads, dns_sockets = DnsLog(), threading.Event(), [], []
+    dns_log, dns_stop, dns_threads, dns_sockets = DnsLog(aggregate=extended is not None), threading.Event(), [], []
     lan_enabled = request.get('lan_fixtures') is True
     lan_fixtures = LanFixtures(directory / 'lan-fixtures.json') if lan_enabled else None
+    node_extra_addresses = (ROUTED_NODE,) if lan_enabled else ()
+    node_extra_tcp = (ANYTLS_PORT,) if protocols_enabled else ()
+    node_udp_ports = (HYSTERIA2_PORT, TUIC_PORT) if protocols_enabled else ()
     selector = selectors.DefaultSelector()
     capture = raw = None
     # The diagnostic count of the link behind the node: its own socket and thread, and nothing the observer needs.
@@ -1670,6 +2655,93 @@ def serve(request, directory):
     limit = EVIDENCE_PCAP_LIMIT if disk else CAPTURE_LIMIT
     count = 24
     sockets = []
+
+    def write_fixture_state():
+        if extended is None:
+            return
+        services = dict(
+            primary_node=node is not None and node.poll() is None,
+            second_node=second_node is not None and second_node.poll() is None,
+            xray=xray_proc is not None and xray_proc.poll() is None,
+            twohop_b=bool(twohop is not None and twohop.running),
+        )
+        payload = dict(services=services)
+        if reality_public_key is not None:
+            payload['reality_public_key'] = reality_public_key
+        atomic_json(directory / 'fixture-state.json', payload)
+
+    def handle_control_request():
+        nonlocal node, second_node, xray_proc
+        req_path = directory / 'control-req.json'
+        if not req_path.exists():
+            return
+        try:
+            req = json.loads(req_path.read_bytes())
+        except (OSError, ValueError):
+            return
+        try:
+            req_path.unlink()
+        except OSError:
+            pass
+        req_id = req.get('id')
+        service = req.get('service')
+        state = req.get('state')
+        reply = dict(id=req_id, ok=True, service=service, state=state, running=False, reason='ok')
+        try:
+            if service == 'primary_node':
+                if state == 'stop':
+                    if node is not None:
+                        stop_process(node)
+                        node = None
+                    reply['running'] = False
+                else:
+                    if node is None or node.poll() is not None:
+                        node = start_process(None, directory, 'node', GATEWAYS[4], tunnel['port'],
+                                             extra_addresses=node_extra_addresses, extra_tcp_ports=node_extra_tcp,
+                                             udp_ports=node_udp_ports, reuse_config=True)
+                    reply['running'] = True
+            elif service == 'second_node':
+                if not second_node_enabled:
+                    reply.update(ok=False, reason='service-not-enabled')
+                elif state == 'stop':
+                    if second_node is not None:
+                        stop_process(second_node)
+                        second_node = None
+                    reply['running'] = False
+                else:
+                    if second_node is None or second_node.poll() is not None:
+                        second_node = start_process(None, directory, 'second-node', GATEWAYS[4],
+                                                    SECOND_NODE_PORT, reuse_config=True)
+                    reply['running'] = True
+            elif service == 'xray':
+                if not xray_enabled:
+                    reply.update(ok=False, reason='service-not-enabled')
+                elif state == 'stop':
+                    if xray_proc is not None:
+                        stop_process(xray_proc)
+                        xray_proc = None
+                    reply['running'] = False
+                else:
+                    if xray_proc is None or xray_proc.poll() is not None:
+                        xray_proc = start_process(None, directory, 'xray', GATEWAYS[4], REALITY_PORT,
+                                                  extra_tcp_ports=(XHTTP_PORT,), binary=XRAY_BINARY,
+                                                  reuse_config=True)
+                    reply['running'] = True
+            elif service == 'twohop_b':
+                if not two_hop_enabled or twohop is None:
+                    reply.update(ok=False, reason='service-not-enabled')
+                elif state == 'stop':
+                    twohop.stop_listeners()
+                    reply['running'] = False
+                else:
+                    twohop.start_listeners()
+                    reply['running'] = True
+            else:
+                reply.update(ok=False, reason='unsupported-service')
+        except Exception as error:
+            reply.update(ok=False, reason=short_code(error))
+        write_fixture_state()
+        atomic_json(directory / 'control-rep.json', reply)
 
     def record(frame):
         nonlocal count
@@ -1718,16 +2790,40 @@ def serve(request, directory):
             lan_fixtures.bind(selector)
         if https_requests is not None and context is not None:
             https_workers = HttpsWorkers(context, request, https_requests)
+        if extended is not None:
+            check_extended_fixtures(extended)
         if tunnel is not None:
             # Alive and listening, before the observer says it is ready.
             check_lab_fixtures(tunnel, request.get('certificates'))
             place = 'node'
-            if lan_enabled:
-                node = start_process(node_config(tunnel, lan_fixtures=True), directory, 'node', GATEWAYS[4],
-                                     tunnel['port'], extra_addresses=(ROUTED_NODE,))
+            if lan_enabled or protocols_enabled or two_hop_enabled:
+                node = start_process(node_config(tunnel, lan_fixtures=lan_enabled, protocols=protocols_enabled,
+                                                 dns_resolver=two_hop_enabled),
+                                     directory, 'node', GATEWAYS[4], tunnel['port'],
+                                     extra_addresses=node_extra_addresses, extra_tcp_ports=node_extra_tcp,
+                                     udp_ports=node_udp_ports)
             else:
                 node = start_process(node_config(tunnel), directory, 'node', GATEWAYS[4], tunnel['port'])
             place = 'setup'
+        if second_node_enabled:
+            place = 'node'
+            second_node = start_process(second_node_config(tunnel), directory, 'second-node', GATEWAYS[4],
+                                        SECOND_NODE_PORT)
+            place = 'setup'
+        if xray_enabled:
+            place = 'node'
+            reality_cover = RealityCoverServer()
+            reality_cover.start()
+            reality_private_key, reality_public_key = generate_reality_keys()
+            xray_proc = start_process(xray_config(reality_private_key), directory, 'xray', GATEWAYS[4],
+                                      REALITY_PORT, extra_tcp_ports=(XHTTP_PORT,), binary=XRAY_BINARY)
+            place = 'setup'
+        if two_hop_enabled:
+            twohop = TwoHopProxy(directory / 'twohop-state.json')
+            twohop.start_listeners()
+        if dhcp_enabled:
+            dhcp_server = DhcpServer(request['interface'], directory / 'dhcp-state.json')
+            dhcp_server.start()
         if dns:
             udp, tcp, doh, doh_tls = servers
             dns_threads = [threading.Thread(target=guarded, args=('dns', failure, dns_loop, udp, tcp, dns_log, dns_stop),
@@ -1752,8 +2848,11 @@ def serve(request, directory):
             poller_thread = threading.Thread(target=guarded, args=('poller', failure, poller_loop, poller_key,
                                                                    poller_log, poller_stop), daemon=True)
             poller_thread.start()
+        write_fixture_state()
         write(directory / 'ready.json', {'capture_ready': True})
         while time.monotonic() < deadline and not (directory / 'stop').exists():
+            if extended is not None:
+                handle_control_request()
             for key, _ in selector.select(.1):
                 if key.data == 'capture':
                     place = 'capture'
@@ -1836,6 +2935,22 @@ def serve(request, directory):
         selector.close()
         if capture is not None:
             capture.close()
+        if dhcp_server is not None:
+            dhcp_server.close()
+        if twohop is not None:
+            twohop.stop_listeners()
+        if second_node is not None:
+            try:
+                stop_process(second_node)
+            except Exception as error:
+                failure.note('node', error)
+        if xray_proc is not None:
+            try:
+                stop_process(xray_proc)
+            except Exception as error:
+                failure.note('node', error)
+        if reality_cover is not None:
+            reality_cover.close()
         if lan_fixtures is not None:
             lan_fixtures.close()
         for stream in sockets:
@@ -1926,7 +3041,8 @@ def main(request):
     shown = redacted(request)
     if any(saved.get(key) != shown.get(key) for key in ('tunnel', 'dns', 'dns_check', 'evidence_disk',
                                                      'duration_seconds', 'windows', 'certificates',
-                                                     'route_flows', 'control', 'poller', 'lan_fixtures')):
+                                                     'route_flows', 'control', 'poller', 'lan_fixtures',
+                                                     'extended_fixtures')):
         raise ValueError('wrong-run')
     if request['role'] == 'lab' and operation == 'serve':
         if request.get('interface') != iface:
@@ -1937,6 +3053,10 @@ def main(request):
         return probe_proxy(request.get('action'))
     if request['role'] == 'lab' and operation == 'lan_state' and request.get('lan_fixtures') is True:
         return lan_state(directory)
+    if request['role'] == 'lab' and operation == 'fixture_state' and extended_fixtures_of(request) is not None:
+        return fixture_state(directory)
+    if request['role'] == 'lab' and operation == 'fixture_control' and extended_fixtures_of(request) is not None:
+        return fixture_control(directory, request.get('action'))
     if request['role'] == 'lab' and operation == 'window' and 'control' in request:
         return dict(exchanges_done=(directory / 'exchanges-done').exists())
     if request['role'] == 'lab' and operation == 'halt' and request.get('control') == 'observer-stopped':
