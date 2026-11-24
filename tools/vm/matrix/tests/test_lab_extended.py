@@ -11,6 +11,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 
 from tools.vm.matrix import lab as labmod, lab_protocol as lp, windows_list_guest as guest
 
@@ -19,12 +20,10 @@ _LAB_ENTRY_PATH = _REPO / 'tools' / 'vm' / 'linux' / 'guest' / 'lab-entry.py'
 
 
 def _load_lab_entry():
-    matrix_dir = str(_REPO / 'tools' / 'vm' / 'matrix')
-    if matrix_dir not in sys.path:
-        sys.path.insert(0, matrix_dir)
     spec = importlib.util.spec_from_file_location('rosetun_lab_entry_stage10f', _LAB_ENTRY_PATH)
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    with patch.dict(sys.modules, {'lab_protocol': lp}):
+        spec.loader.exec_module(module)
     return module
 
 
