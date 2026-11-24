@@ -1,0 +1,22 @@
+{
+  "idle_session_check_interval": "30s",
+  "idle_session_timeout": "60s",
+  "min_idle_session": 2,
+  "password": "test-secret",
+  "server": "192.0.2.2",
+  "server_port": 8445,
+  "tag": "proxy",
+  "tls": {
+    "alpn": [
+      "h2",
+      "http/1.1"
+    ],
+    "enabled": true,
+    "server_name": "anytls.example.com",
+    "utls": {
+      "enabled": true,
+      "fingerprint": "firefox"
+    }
+  },
+  "type": "anytls"
+}

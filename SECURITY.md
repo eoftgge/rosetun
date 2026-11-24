@@ -16,7 +16,7 @@ Submit the report privately through GitHub. Include your Rosetun version, operat
 
 Report traffic outside the tunnel when the kill switch, DNS lock or Lockdown should have blocked it. Also report exposed credentials or private traffic data, actions on external input before confirmation, and unauthorized access to the service, its pipe or socket, or its files. This includes rule imports that take effect before confirmation and subscription updates that retry directly after a failed VPN request while **Update subscriptions through VPN** is enabled.
 
-The security model describes the scope on Windows and Linux, including what the VPN provider can see and where to report bugs in bundled components. [Security model](https://eoftgge.github.io/rosetun/en/docs/security/)
+The security model describes the scope on Windows, Linux and the experimental Apple Silicon macOS build (where kill switch and Lockdown are unavailable, so traffic may go direct if the tunnel drops), including what the VPN provider can see and where to report bugs in bundled components. [Security model](https://eoftgge.github.io/rosetun/en/docs/security/)
 
 ## How reports are handled
 
@@ -28,6 +28,6 @@ The maintainer reviews reports privately and publishes an advisory for confirmed
 
 **Как сообщить.** Отправьте приватный отчёт через GitHub. Укажите версию Rosetun, систему, режим подключения, настройки защиты и шаги воспроизведения. **Собрать отчёт** (Настройки → Служба и журнал) готовит отчёт со скрытыми чувствительными данными. Просмотрите его перед отправкой. Исключите ссылки подписок и серверов, пароли и исходные журналы. [Сообщить об уязвимости](https://github.com/eoftgge/rosetun/security/advisories/new)
 
-**Что входит.** Сообщайте о трафике мимо туннеля, когда его должен блокировать kill switch, замок DNS или Lockdown, об утечках паролей и данных о трафике, о действиях с внешними данными до подтверждения и о доступе к службе, её каналу, сокету или файлам без нужных прав. Сюда относятся импорт правил до подтверждения и прямой повтор запроса после сбоя при включённом **Обновлении подписок через VPN**. Границы защиты на Windows и Linux, видимость данных для провайдера и порядок сообщений об ошибках компонентов описаны в [модели безопасности](https://eoftgge.github.io/rosetun/docs/security/).
+**Что входит.** Сообщайте о трафике мимо туннеля, когда его должен блокировать kill switch, замок DNS или Lockdown, об утечках паролей и данных о трафике, о действиях с внешними данными до подтверждения и о доступе к службе, её каналу, сокету или файлам без нужных прав. Сюда относятся импорт правил до подтверждения и прямой повтор запроса после сбоя при включённом **Обновлении подписок через VPN**. Границы защиты на Windows, Linux и в экспериментальной сборке для macOS на Apple Silicon (где kill switch и Lockdown недоступны, и при обрыве туннеля трафик может пойти напрямую), видимость данных для провайдера и порядок сообщений об ошибках компонентов описаны в [модели безопасности](https://eoftgge.github.io/rosetun/docs/security/).
 
 **Как обрабатываются сообщения.** Разработчик рассматривает отчёты приватно. Для подтверждённой уязвимости он публикует уведомление после выхода исправления и указывает автора отчёта по его желанию. Rosetun ведёт один разработчик. Внешнего аудита безопасности не было, сроки ответа и исправления не гарантируются.

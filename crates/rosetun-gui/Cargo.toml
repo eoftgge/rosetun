@@ -13,6 +13,8 @@ workspace = true
 [dependencies]
 arboard.workspace = true
 eframe.workspace = true
+epaint.workspace = true
+flate2.workspace = true
 fluent-bundle.workspace = true
 image.workspace = true
 unic-langid.workspace = true
@@ -29,8 +31,12 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 url.workspace = true
 
+[build-dependencies]
+flate2.workspace = true
+
 [dev-dependencies]
 fluent-syntax.workspace = true
+rosetun-core = { workspace = true, features = ["system-checks", "test-support"] }
 qrcode.workspace = true
 serde_json.workspace = true
 

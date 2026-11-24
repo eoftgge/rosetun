@@ -60,7 +60,7 @@ fn request() -> ConnectRequest {
         temporary_rules: Vec::new(),
         lists: Vec::new(),
         settings: Settings::default(),
-        rule_templates: Vec::new(),
+        rule_groups: Vec::new(),
     }
 }
 

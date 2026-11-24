@@ -179,9 +179,9 @@ fn run(binary: &Path) -> Result<(), CheckFailure> {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     let spawned = rosetun_engine::process::spawn(command);
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     let spawned = command.spawn();
     let mut child = spawned.map_err(|error| failure(binary, error))?;
 

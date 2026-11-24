@@ -1,12 +1,15 @@
 mod support;
 
 use rosetun_config::{
-    AccentPreset, AppConfig, CONFIG_VERSION, ConfigError, ConnectionMode, CountryCode, DelayMode,
-    EngineKind, Exit, ExitId, ExitTarget, FormatError, HwidScope, Hysteria2Params, List,
-    ListFormat, ListId, ListSource, LocalProxySettings, Node, NodeId, Outbound, QuitAction,
-    RealityParams, Rule, RuleId, RuleMatcher, RuleTarget, Selection, StreamSettings,
-    SubscriptionId, TlsFragment, TlsMode, TlsParams, Transport, VlessParams, XhttpExtra, XhttpMode,
-    XhttpRange, XhttpXmux, from_json,
+    AccentPreset, AnyTlsParams, AppConfig, BalancerMember, BalancerStrategy, BurstObservatory,
+    CONFIG_VERSION, ConfigError, ConnectionMode, CountryCode, DelayMode, DomainMatch, EngineKind,
+    Exit, ExitId, ExitTarget, FinalMask, FormatError, HeaderCustomItem, HeaderCustomPacket,
+    HeaderCustomPacketType, HeaderCustomTcp, HwidScope, Hysteria2Params, LeastLoadSettings, List,
+    ListFormat, ListId, ListSource, LocalProxySettings, Node, NodeId, Outbound, ProcessMatch,
+    QuitAction, RealityParams, Rule, RuleId, RuleMatcher, RuleTarget, RuleTemplate, Selection,
+    StreamSettings, SubscriptionId, TcpFinalMask, TlsFragment, TlsMode, TlsParams, Transport,
+    TuicCongestionControl, TuicParams, TuicUdpRelayMode, VlessParams, WireGuardParams, XhttpExtra,
+    XhttpMode, XhttpRange, XhttpXmux, XrayBalancer, XrayObservatory, from_json,
 };
 use serde_json::{Value, json};
 
@@ -19,8 +22,12 @@ const V4: &[u8] = include_bytes!("fixtures/v4.json");
 const V5: &[u8] = include_bytes!("fixtures/v5.json");
 const V6: &[u8] = include_bytes!("fixtures/v6.json");
 const V7: &[u8] = include_bytes!("fixtures/v7.json");
-const V9: &[u8] = include_bytes!("fixtures/v9.json");
 const V8: &[u8] = include_bytes!("fixtures/v8.json");
+const V9: &[u8] = include_bytes!("fixtures/v9.json");
+const V10: &[u8] = include_bytes!("fixtures/v10.json");
+const V11: &[u8] = include_bytes!("fixtures/v11.json");
+const V12: &[u8] = include_bytes!("fixtures/v12.json");
+const V13: &[u8] = include_bytes!("fixtures/v13.json");
 
 #[test]
 fn subscription_vpn_updates_are_enabled_when_migrating_released_settings() {
@@ -58,7 +65,9 @@ fn current_config() -> AppConfig {
                 alpn: vec!["h3".to_owned()],
                 allow_insecure: false,
                 fingerprint: Some("chrome".to_owned()),
+                enable_session_resumption: None,
             }),
+            finalmask: None,
         },
         raw: None,
     });
@@ -173,6 +182,7 @@ fn format_six_config() -> AppConfig {
                 short_id: Some("0123abcd".to_owned()),
                 fingerprint: Some("chrome".to_owned()),
             }),
+            finalmask: None,
         },
         raw: None,
     });
@@ -214,8 +224,8 @@ fn value(bytes: &[u8]) -> Value {
 #[test]
 fn released_configurations_migrate_to_the_expected_configuration() {
     assert_eq!(
-        CONFIG_VERSION, 9,
-        "released fixtures require format version seven"
+        CONFIG_VERSION, 13,
+        "update the current fixture when bumping the settings format"
     );
     let expected = expected_migrated_legacy_config();
 
@@ -265,6 +275,155 @@ fn current_configuration_fixture_guards_the_serialized_format() {
             raw: None,
         });
     }
+    expected.subscriptions[1].nodes.push(Node {
+        id: NodeId::new("tuic"),
+        name: "TUIC".into(),
+        server: "192.0.2.40".into(),
+        port: 8444,
+        outbound: Outbound::Tuic(TuicParams {
+            uuid: "00000000-0000-4000-8000-000000000040".into(),
+            password: "test-secret".into(),
+            congestion_control: Some(TuicCongestionControl::Bbr),
+            udp_relay_mode: Some(TuicUdpRelayMode::Native),
+            zero_rtt_handshake: true,
+            heartbeat: Some("10s".into()),
+            disable_sni: false,
+        }),
+        stream: StreamSettings {
+            transport: Transport::Tcp,
+            tls: TlsMode::Tls(TlsParams {
+                sni: Some("tuic.example.com".into()),
+                alpn: vec!["h3".into()],
+                allow_insecure: false,
+                fingerprint: None,
+                enable_session_resumption: None,
+            }),
+            finalmask: None,
+        },
+        raw: None,
+    });
+    expected.subscriptions[1].nodes.push(Node {
+        id: NodeId::new("anytls"),
+        name: "AnyTLS".into(),
+        server: "192.0.2.41".into(),
+        port: 8445,
+        outbound: Outbound::AnyTls(AnyTlsParams {
+            password: "test-secret".into(),
+            idle_session_check_interval: Some("30s".into()),
+            idle_session_timeout: Some("1m".into()),
+            min_idle_session: Some(2),
+        }),
+        stream: StreamSettings {
+            transport: Transport::Tcp,
+            tls: TlsMode::Tls(TlsParams {
+                sni: Some("anytls.example.com".into()),
+                alpn: vec!["h2".into(), "http/1.1".into()],
+                allow_insecure: false,
+                fingerprint: Some("chrome".into()),
+                enable_session_resumption: None,
+            }),
+            finalmask: None,
+        },
+        raw: None,
+    });
+    expected.subscriptions[1].nodes.push(Node {
+        id: NodeId::new("wireguard"),
+        name: "WireGuard".into(),
+        server: "192.0.2.42".into(),
+        port: 51820,
+        outbound: Outbound::WireGuard(WireGuardParams {
+            private_key: "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=".into(),
+            public_key: "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=".into(),
+            pre_shared_key: Some("AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM=".into()),
+            address: vec!["10.0.0.2/32".into(), "fd00::2/128".into()],
+            reserved: Some([1, 2, 3]),
+            mtu: Some(1280),
+            persistent_keepalive: Some(25),
+        }),
+        stream: StreamSettings::default(),
+        raw: None,
+    });
+    expected.subscriptions[1].nodes.push(Node {
+        id: NodeId::new("xray-balancer"),
+        name: "Balanced NL".into(),
+        server: "192.0.2.43".into(),
+        port: 443,
+        outbound: Outbound::XrayBalancer(Box::new(XrayBalancer {
+            members: vec![
+                BalancerMember {
+                    tag: "proxy".into(),
+                    server: "192.0.2.43".into(),
+                    port: 443,
+                    outbound: Outbound::Vless(VlessParams {
+                        uuid: "00000000-0000-4000-8000-000000000043".into(),
+                        flow: Some("xtls-rprx-vision".into()),
+                    }),
+                    stream: StreamSettings {
+                        transport: Transport::Tcp,
+                        tls: TlsMode::Reality(RealityParams {
+                            sni: Some("reality.example.com".into()),
+                            public_key: "test-public-key".into(),
+                            short_id: None,
+                            fingerprint: Some("firefox".into()),
+                        }),
+                        finalmask: None,
+                    },
+                },
+                BalancerMember {
+                    tag: "mask".into(),
+                    server: "192.0.2.44".into(),
+                    port: 443,
+                    outbound: Outbound::Vless(VlessParams {
+                        uuid: "00000000-0000-4000-8000-000000000043".into(),
+                        flow: Some("xtls-rprx-vision".into()),
+                    }),
+                    stream: StreamSettings {
+                        transport: Transport::Tcp,
+                        tls: TlsMode::Tls(TlsParams {
+                            sni: Some("mask.example.com".into()),
+                            alpn: vec!["http/1.1".into()],
+                            allow_insecure: false,
+                            fingerprint: Some("firefox".into()),
+                            enable_session_resumption: Some(false),
+                        }),
+                        finalmask: Some(FinalMask {
+                            tcp: vec![TcpFinalMask::HeaderCustom(HeaderCustomTcp {
+                                clients: Vec::new(),
+                                servers: vec![vec![HeaderCustomItem {
+                                    delay: None,
+                                    rand: None,
+                                    rand_range: None,
+                                    packet_type: Some(HeaderCustomPacketType::Str),
+                                    packet: Some(HeaderCustomPacket::Text(
+                                        "SSH-2.0-OpenSSH_9.6p1\r\n".into(),
+                                    )),
+                                }]],
+                                errors: Vec::new(),
+                            })],
+                        }),
+                    },
+                },
+            ],
+            selector: vec!["proxy".into()],
+            fallback_tag: Some("mask".into()),
+            strategy: BalancerStrategy::LeastLoad(LeastLoadSettings {
+                expected: None,
+                max_rtt: Some("3000ms".into()),
+                tolerance_bp: Some(5000),
+                baselines: Vec::new(),
+            }),
+            observatory: Some(XrayObservatory::Burst(BurstObservatory {
+                subject_selector: vec!["proxy".into()],
+                destination: Some("https://connectivitycheck.gstatic.com/generate_204".into()),
+                interval: Some("15s".into()),
+                timeout: Some("5s".into()),
+                sampling: Some(2),
+                http_method: Some("GET".into()),
+            })),
+        })),
+        stream: StreamSettings::default(),
+        raw: None,
+    });
     expected.settings.tls_fragment = TlsFragment {
         enabled: true,
         packets: "1-3".parse().unwrap(),
@@ -277,7 +436,28 @@ fn current_configuration_fixture_guards_the_serialized_format() {
         share_on_lan: true,
     };
     expected.interface.delay_mode = DelayMode::Full;
-    let (loaded, migrated_from) = from_json(V9).expect("current fixture should load");
+    expected.interface.show_country_flags = false;
+    // Keep the v13 serialized fixture OS-independent by replacing the 4 migrated
+    // template rules (some of which contain OS-specific process names) with
+    // deterministic group rules.
+    expected.rule_sets[0]
+        .rules
+        .retain(|rule| !rule.id.as_str().starts_with("template-"));
+    expected.rule_sets[0].rules.push(Rule {
+        id: RuleId::new("group-example"),
+        enabled: true,
+        matcher: RuleMatcher::Group {
+            name: "Example group".into(),
+            items: vec![
+                RuleMatcher::Domain(DomainMatch::Suffix("youtube.com".into())),
+                RuleMatcher::Process(ProcessMatch::Name("example.exe".into())),
+                RuleMatcher::IpCidr("198.51.100.0/24".into()),
+            ],
+        },
+        target: RuleTarget::Proxy,
+        exit: None,
+    });
+    let (loaded, migrated_from) = from_json(V13).expect("current fixture should load");
 
     assert_eq!(migrated_from, None);
     assert_eq!(loaded, expected);
@@ -302,15 +482,89 @@ fn current_configuration_fixture_guards_the_serialized_format() {
     let (round_trip, migrated_from) = from_json(&encoded).expect("current fixture round trip");
     assert_eq!(migrated_from, None);
     assert_eq!(round_trip.exits, loaded.exits);
+    assert!(!round_trip.interface.show_country_flags);
     assert_eq!(
         round_trip.rule_sets[0].rules[0],
         loaded.rule_sets[0].rules[0]
     );
     assert_eq!(
         serde_json::to_value(&expected).expect("serialize expected configuration"),
-        value(V9),
-        "the serialized configuration shape changed; bump CONFIG_VERSION, add a migration, and add a new fixture instead of changing v9.json"
+        value(V13),
+        "the serialized configuration shape changed; keep the current fixture in sync"
     );
+}
+
+#[test]
+fn migration_from_twelve_preserves_saved_settings() {
+    let (config, migrated_from) = from_json(V12).unwrap();
+    assert_eq!(migrated_from, Some(12));
+    let mut expected = value(V12);
+    expected["version"] = json!(CONFIG_VERSION);
+    assert_eq!(serde_json::to_value(config).unwrap(), expected);
+}
+
+fn with_migrated_templates(mut config: Value) -> Value {
+    let russian = config
+        .get("interface")
+        .and_then(|interface| interface.get("language"))
+        .and_then(Value::as_str)
+        == Some("russian");
+    if let Some(rule_sets) = config.get_mut("rule_sets").and_then(Value::as_array_mut) {
+        for set in rule_sets {
+            if let Some(rules) = set.get_mut("rules").and_then(Value::as_array_mut) {
+                for rule in rules {
+                    if let Some(key) = rule
+                        .get("matcher")
+                        .and_then(|matcher| matcher.get("template"))
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                        && let Some(template) = RuleTemplate::from_key(&key)
+                    {
+                        rule["matcher"] =
+                            serde_json::to_value(template.to_group(template.default_name(russian)))
+                                .unwrap();
+                    }
+                }
+            }
+        }
+    }
+    config
+}
+
+#[test]
+fn migration_from_eleven_converts_templates_to_editable_groups() {
+    let (config, migrated_from) = from_json(V11).unwrap();
+    assert_eq!(migrated_from, Some(11));
+    let mut expected = with_migrated_templates(value(V11));
+    expected["version"] = json!(CONFIG_VERSION);
+    assert_eq!(serde_json::to_value(&config).unwrap(), expected);
+
+    let mut ru = value(V11);
+    ru["interface"]["language"] = json!("russian");
+    let (ru_config, migrated_from) = from_json(&serde_json::to_vec(&ru).unwrap()).unwrap();
+    assert_eq!(migrated_from, Some(11));
+    assert!(ru_config.rule_sets[0].rules.iter().any(|rule| {
+        matches!(&rule.matcher, RuleMatcher::Group { name, .. } if name == "Российские сайты")
+    }));
+}
+
+#[test]
+fn migration_from_ten_preserves_saved_settings() {
+    let (config, migrated_from) = from_json(V10).unwrap();
+    assert_eq!(migrated_from, Some(10));
+    let mut expected = with_migrated_templates(value(V10));
+    expected["version"] = json!(CONFIG_VERSION);
+    assert_eq!(serde_json::to_value(config).unwrap(), expected);
+}
+
+#[test]
+fn migration_from_nine_enables_flags_and_preserves_saved_settings() {
+    let (config, migrated_from) = from_json(V9).unwrap();
+    assert_eq!(migrated_from, Some(9));
+    let mut expected = with_migrated_templates(value(V9));
+    expected["version"] = json!(CONFIG_VERSION);
+    expected["interface"]["show_country_flags"] = json!(true);
+    assert_eq!(serde_json::to_value(config).unwrap(), expected);
 }
 
 /// Settings saved by an older release have no fragmentation; loading adds it switched off.
@@ -318,12 +572,13 @@ fn current_configuration_fixture_guards_the_serialized_format() {
 fn with_default_fragmentation(mut config: Value) -> Value {
     config["interface"]["delay_mode"] = json!("repeated");
     config["interface"]["subscriptions_via_vpn"] = json!(true);
+    config["interface"]["show_country_flags"] = json!(true);
     config["settings"]["tls_fragment"] = serde_json::to_value(TlsFragment::default()).unwrap();
     config["settings"]["private_networks"] = json!(false);
     config["settings"]["connection_mode"] = json!("tun");
     config["settings"]["local_proxy"] =
         serde_json::to_value(LocalProxySettings::default()).unwrap();
-    config
+    with_migrated_templates(config)
 }
 
 #[test]
@@ -495,6 +750,8 @@ fn every_accent_keeps_its_stored_name() {
         (AccentPreset::Lilac, "lilac"),
         (AccentPreset::Teal, "teal"),
         (AccentPreset::Amber, "amber"),
+        (AccentPreset::Black, "black"),
+        (AccentPreset::White, "white"),
     ] {
         assert_eq!(serde_json::to_value(accent).unwrap(), json!(name));
     }
@@ -891,4 +1148,39 @@ fn dependencies_require_a_distinct_standalone_parent() {
         config.validate(),
         Err(ConfigError::InvalidExitDependency)
     ));
+}
+
+#[test]
+fn invalid_rule_groups_are_refused() {
+    let cases = [
+        RuleMatcher::Group {
+            name: "   ".into(),
+            items: vec![RuleMatcher::IpCidr("192.0.2.0/24".into())],
+        },
+        RuleMatcher::Group {
+            name: "Empty".into(),
+            items: Vec::new(),
+        },
+        RuleMatcher::Group {
+            name: "Nested".into(),
+            items: vec![RuleMatcher::Group {
+                name: "Inner".into(),
+                items: vec![RuleMatcher::IpCidr("192.0.2.0/24".into())],
+            }],
+        },
+    ];
+    for matcher in cases {
+        let (mut config, _) = from_json(V12).unwrap();
+        config.rule_sets[0].rules.push(Rule {
+            id: RuleId::new("bad-group"),
+            enabled: true,
+            matcher,
+            target: RuleTarget::Proxy,
+            exit: None,
+        });
+        assert!(matches!(
+            config.validate(),
+            Err(ConfigError::InvalidRuleGroup)
+        ));
+    }
 }

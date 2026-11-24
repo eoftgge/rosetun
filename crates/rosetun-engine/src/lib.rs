@@ -10,13 +10,20 @@
 #![deny(unsafe_code)]
 
 pub mod errors;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod installed;
 #[cfg(target_os = "linux")]
 #[expect(
     unsafe_code,
     reason = "Linux process groups and parent-death signals; every unsafe block carries a SAFETY comment"
 )]
+pub mod process;
+#[cfg(target_os = "macos")]
+#[expect(
+    unsafe_code,
+    reason = "macOS process groups and graceful SIGTERM signaling; every unsafe block carries a SAFETY comment"
+)]
+#[path = "process_macos.rs"]
 pub mod process;
 
 /// Tracing target for lines an engine writes to its own output. The helper's
@@ -309,7 +316,7 @@ impl RuleCapabilities {
             }
             rosetun_config::RuleMatcher::IpCidr(_) => self.ip_cidr,
             rosetun_config::RuleMatcher::List { .. } => self.lists,
-            rosetun_config::RuleMatcher::Template(_) => false,
+            rosetun_config::RuleMatcher::Group { .. } => false,
         }
     }
 }
@@ -673,6 +680,12 @@ pub trait EngineProcess: Send + std::fmt::Debug {
 
     fn outbound_failures(&self) -> OutboundFailures {
         OutboundFailures::default()
+    }
+
+    /// Actual kernel tunnel interface name when the engine assigns one
+    /// dynamically (for example `utun6` on macOS).
+    fn tunnel_interface(&self) -> Option<String> {
+        None
     }
 }
 

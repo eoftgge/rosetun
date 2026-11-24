@@ -56,6 +56,7 @@ pub enum SettingChange {
     TlsFragment(TlsFragment),
     CloseToTray(bool),
     ReduceMotion(bool),
+    ShowCountryFlags(bool),
     ConnectOnStart(bool),
     Notifications(bool),
     AutoReconnect(bool),
@@ -79,6 +80,9 @@ pub fn change_setting(store: &Store, change: SettingChange) -> Result<(), Settin
             SettingChange::TlsFragment(fragment) => config.settings.tls_fragment = fragment,
             SettingChange::CloseToTray(enabled) => config.interface.close_to_tray = enabled,
             SettingChange::ReduceMotion(enabled) => config.interface.reduce_motion = enabled,
+            SettingChange::ShowCountryFlags(enabled) => {
+                config.interface.show_country_flags = enabled;
+            }
             SettingChange::ConnectOnStart(enabled) => config.interface.connect_on_start = enabled,
             SettingChange::Notifications(enabled) => config.interface.notifications = enabled,
             SettingChange::AutoReconnect(enabled) => config.settings.auto_reconnect = enabled,

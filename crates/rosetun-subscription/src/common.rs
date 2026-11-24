@@ -4,8 +4,9 @@ use std::net::IpAddr;
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, STANDARD_NO_PAD, URL_SAFE, URL_SAFE_NO_PAD};
 use rosetun_config::{
-    Hysteria2Params, Node, NodeId, Outbound, RealityParams, ShadowsocksParams, StreamSettings,
-    TlsMode, TlsParams, Transport, TrojanParams, VlessParams, VmessParams, XhttpMode,
+    AnyTlsParams, Hysteria2Params, Node, NodeId, Outbound, RealityParams, ShadowsocksParams,
+    StreamSettings, TlsMode, TlsParams, Transport, TrojanParams, TuicCongestionControl, TuicParams,
+    TuicUdpRelayMode, VlessParams, VmessParams, XhttpMode, is_valid_duration, is_valid_uuid,
 };
 
 use crate::{SkipReason, UnsupportedTransport, xhttp};
@@ -51,6 +52,29 @@ pub(crate) fn optional(fields: &Fields, key: &str) -> Option<String> {
 
 pub(crate) fn truth(value: &str) -> bool {
     value == "1" || value.eq_ignore_ascii_case("true")
+}
+
+pub(crate) fn parse_bool(value: &str) -> Result<bool, SkipReason> {
+    if value.is_empty() || value == "0" || value.eq_ignore_ascii_case("false") {
+        Ok(false)
+    } else if value == "1" || value.eq_ignore_ascii_case("true") {
+        Ok(true)
+    } else {
+        Err(SkipReason::InvalidRecord)
+    }
+}
+
+pub(crate) fn parse_duration(value: &str) -> Result<String, SkipReason> {
+    if is_valid_duration(value) {
+        return Ok(value.to_owned());
+    }
+    if value.bytes().all(|byte| byte.is_ascii_digit()) {
+        let seconds: u32 = value.parse().map_err(|_| SkipReason::InvalidRecord)?;
+        if (1..=86_400).contains(&seconds) {
+            return Ok(format!("{seconds}s"));
+        }
+    }
+    Err(SkipReason::InvalidRecord)
 }
 
 pub(crate) fn hysteria_ports(value: &str) -> Result<(u16, Vec<String>), SkipReason> {
@@ -183,17 +207,81 @@ pub(crate) fn build(protocol: &str, fields: &Fields) -> Result<Node, SkipReason>
                 down_mbps: bandwidth("down_mbps")?,
             })
         }
+        "tuic" => {
+            if fields.contains_key("pin") {
+                return Err(SkipReason::UnsupportedPin);
+            }
+            let uuid = required(fields, "uuid")?;
+            if !is_valid_uuid(&uuid) {
+                return Err(SkipReason::InvalidRecord);
+            }
+            let congestion_control = optional(fields, "congestion_control")
+                .map(|value| {
+                    let normalized = value.to_ascii_lowercase().replace('-', "_");
+                    TuicCongestionControl::parse(&normalized).ok_or(SkipReason::UnsupportedOption)
+                })
+                .transpose()?;
+            let udp_relay_mode = optional(fields, "udp_relay_mode")
+                .map(|value| {
+                    let normalized = value.to_ascii_lowercase();
+                    TuicUdpRelayMode::parse(&normalized).ok_or(SkipReason::UnsupportedOption)
+                })
+                .transpose()?;
+            let zero_rtt_handshake = parse_bool(field(fields, "zero_rtt_handshake"))?;
+            let heartbeat = optional(fields, "heartbeat")
+                .map(|value| parse_duration(&value))
+                .transpose()?;
+            let disable_sni = parse_bool(field(fields, "disable_sni"))?;
+            Outbound::Tuic(TuicParams {
+                uuid,
+                password: field(fields, "password").to_owned(),
+                congestion_control,
+                udp_relay_mode,
+                zero_rtt_handshake,
+                heartbeat,
+                disable_sni,
+            })
+        }
+        "anytls" => {
+            if fields.contains_key("pin") {
+                return Err(SkipReason::UnsupportedPin);
+            }
+            let idle_session_check_interval = optional(fields, "idle_session_check_interval")
+                .map(|value| parse_duration(&value))
+                .transpose()?;
+            let idle_session_timeout = optional(fields, "idle_session_timeout")
+                .map(|value| parse_duration(&value))
+                .transpose()?;
+            let min_idle_session = optional(fields, "min_idle_session")
+                .map(|value| {
+                    value
+                        .parse::<u32>()
+                        .ok()
+                        .filter(|count| i32::try_from(*count).is_ok())
+                        .ok_or(SkipReason::InvalidRecord)
+                })
+                .transpose()?;
+            Outbound::AnyTls(AnyTlsParams {
+                password: required(fields, "password")?,
+                idle_session_check_interval,
+                idle_session_timeout,
+                min_idle_session,
+            })
+        }
         _ => return Err(SkipReason::UnsupportedProtocol),
     };
 
     let transport = transport(fields)?;
-    if protocol == "hysteria2" && transport != Transport::Tcp {
+    if matches!(protocol, "hysteria2" | "tuic" | "anytls") && transport != Transport::Tcp {
         return Err(SkipReason::UnsupportedTransport(
             UnsupportedTransport::Other,
         ));
     }
     let tls = tls(protocol, fields)?;
-    if protocol == "hysteria2" && !matches!(tls, TlsMode::Tls(_)) {
+    if matches!(protocol, "hysteria2" | "tuic") && !matches!(tls, TlsMode::Tls(_)) {
+        return Err(SkipReason::UnsupportedSecurity);
+    }
+    if protocol == "anytls" && !matches!(tls, TlsMode::Tls(_) | TlsMode::Reality(_)) {
         return Err(SkipReason::UnsupportedSecurity);
     }
     let mut name = clean(field(fields, "name"), 128);
@@ -201,15 +289,24 @@ pub(crate) fn build(protocol: &str, fields: &Fields) -> Result<Node, SkipReason>
         name = clean(&endpoint(server, port), 128);
     }
 
-    Ok(Node {
+    let node = Node {
         id: NodeId::new(""),
         name,
         server: server.to_owned(),
         port,
         outbound,
-        stream: StreamSettings { transport, tls },
+        stream: StreamSettings {
+            transport,
+            tls,
+            finalmask: None,
+        },
         raw: None,
-    })
+    };
+    if matches!(node.outbound, Outbound::Tuic(_) | Outbound::AnyTls(_)) {
+        node.validate_proxy()
+            .map_err(|_| SkipReason::InvalidRecord)?;
+    }
+    Ok(node)
 }
 
 fn required(fields: &Fields, key: &str) -> Result<String, SkipReason> {
@@ -260,7 +357,7 @@ fn transport(fields: &Fields) -> Result<Transport, SkipReason> {
 
 fn tls(protocol: &str, fields: &Fields) -> Result<TlsMode, SkipReason> {
     let security = fields.get("security").map_or(
-        if matches!(protocol, "trojan" | "hysteria2") {
+        if matches!(protocol, "trojan" | "hysteria2" | "tuic" | "anytls") {
             "tls"
         } else {
             ""
@@ -269,19 +366,32 @@ fn tls(protocol: &str, fields: &Fields) -> Result<TlsMode, SkipReason> {
     );
 
     match security {
-        "" | "none" if protocol == "hysteria2" => Err(SkipReason::UnsupportedSecurity),
+        "" | "none" if matches!(protocol, "hysteria2" | "tuic" | "anytls") => {
+            Err(SkipReason::UnsupportedSecurity)
+        }
         "" | "none" => Ok(TlsMode::Plain),
-        "tls" => Ok(TlsMode::Tls(TlsParams {
-            sni: optional(fields, "sni"),
-            alpn: field(fields, "alpn")
-                .split(',')
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(str::to_owned)
-                .collect(),
-            allow_insecure: truth(field(fields, "insecure")),
-            fingerprint: optional(fields, "fingerprint"),
-        })),
+        "tls" => {
+            let enable_session_resumption = match field(fields, "enable_session_resumption") {
+                "" => None,
+                value => Some(parse_bool(value)?),
+            };
+            Ok(TlsMode::Tls(TlsParams {
+                sni: optional(fields, "sni"),
+                alpn: field(fields, "alpn")
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_owned)
+                    .collect(),
+                allow_insecure: if matches!(protocol, "tuic" | "anytls") {
+                    parse_bool(field(fields, "insecure"))?
+                } else {
+                    truth(field(fields, "insecure"))
+                },
+                fingerprint: optional(fields, "fingerprint"),
+                enable_session_resumption,
+            }))
+        }
         "reality" => Ok(TlsMode::Reality(RealityParams {
             sni: optional(fields, "sni"),
             public_key: optional(fields, "public_key")
@@ -293,7 +403,7 @@ fn tls(protocol: &str, fields: &Fields) -> Result<TlsMode, SkipReason> {
     }
 }
 
-fn endpoint(server: &str, port: u16) -> String {
+pub(crate) fn endpoint(server: &str, port: u16) -> String {
     if server.contains(':') && !server.starts_with('[') {
         format!("[{server}]:{port}")
     } else {
@@ -309,20 +419,36 @@ pub(crate) fn is_service_address(host: &str) -> bool {
         .is_ok_and(|address| address.is_unspecified() || address.is_loopback())
 }
 
-pub(crate) fn is_service(node: &Node) -> bool {
-    let uuid = match &node.outbound {
+fn is_service_parts(server: &str, outbound: &Outbound) -> bool {
+    let uuid = match outbound {
         Outbound::Vless(params) => Some(params.uuid.as_str()),
         Outbound::Vmess(params) => Some(params.uuid.as_str()),
+        Outbound::Tuic(params) => Some(params.uuid.as_str()),
         _ => None,
     };
     let zero_uuid = uuid.is_some_and(|uuid| {
         uuid == "00000000-0000-0000-0000-000000000000" || uuid == "00000000000000000000000000000000"
     });
-    is_service_address(&node.server) || zero_uuid
+    is_service_address(server) || zero_uuid
 }
 
-pub(crate) fn stable_id(node: &Node) -> String {
-    let protocol = match &node.outbound {
+pub(crate) fn is_service(node: &Node) -> bool {
+    match &node.outbound {
+        Outbound::XrayBalancer(balancer) => balancer
+            .members
+            .iter()
+            .all(|member| is_service_parts(&member.server, &member.outbound)),
+        _ => is_service_parts(&node.server, &node.outbound),
+    }
+}
+
+fn canonical_parts(
+    server: &str,
+    port: u16,
+    outbound: &Outbound,
+    stream: &StreamSettings,
+) -> String {
+    let protocol = match outbound {
         Outbound::Http(_) => "http",
         Outbound::Socks5(_) => "socks5",
         Outbound::Vless(_) => "vless",
@@ -330,9 +456,13 @@ pub(crate) fn stable_id(node: &Node) -> String {
         Outbound::Trojan(_) => "trojan",
         Outbound::Shadowsocks(_) => "ss",
         Outbound::Hysteria2(_) => "hysteria2",
+        Outbound::Tuic(_) => "tuic",
+        Outbound::AnyTls(_) => "anytls",
+        Outbound::WireGuard(_) => "wireguard",
+        Outbound::XrayBalancer(_) => "xray_balancer",
         Outbound::Unknown { .. } => "unknown",
     };
-    let (transport, path, host, service) = match &node.stream.transport {
+    let (transport, path, host, service) = match &stream.transport {
         Transport::Tcp => ("tcp", "", "", ""),
         Transport::Ws { path, host } => ("ws", path.as_str(), host.as_deref().unwrap_or(""), ""),
         Transport::Grpc { service_name } => ("grpc", "", "", service_name.as_str()),
@@ -346,16 +476,47 @@ pub(crate) fn stable_id(node: &Node) -> String {
             ("xhttp", path.as_str(), host.as_deref().unwrap_or(""), "")
         }
     };
-    let (security, sni) = match &node.stream.tls {
+    let (security, sni) = match &stream.tls {
         TlsMode::Plain => ("none", ""),
         TlsMode::Tls(params) => ("tls", params.sni.as_deref().unwrap_or("")),
         TlsMode::Reality(params) => ("reality", params.sni.as_deref().unwrap_or("")),
     };
-    let canonical = format!(
+    format!(
         "{protocol}|{}|{}|{transport}|{path}|{host}|{service}|{security}|{sni}",
-        node.server.to_lowercase(),
-        node.port,
-    );
+        server.to_lowercase(),
+        port,
+    )
+}
+
+pub(crate) fn stable_id(node: &Node) -> String {
+    let canonical = match &node.outbound {
+        Outbound::XrayBalancer(balancer) => {
+            let members = balancer
+                .members
+                .iter()
+                .map(|member| {
+                    format!(
+                        "{}:{}",
+                        member.tag,
+                        canonical_parts(
+                            &member.server,
+                            member.port,
+                            &member.outbound,
+                            &member.stream
+                        )
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(",");
+            format!(
+                "xray_balancer|{}|{}|{}",
+                balancer.selector.join(","),
+                balancer.fallback_tag.as_deref().unwrap_or(""),
+                members
+            )
+        }
+        _ => canonical_parts(&node.server, node.port, &node.outbound, &node.stream),
+    };
 
     // DefaultHasher does not guarantee a stable algorithm across Rust versions.
     let mut hash = 0xcbf29ce484222325_u64;

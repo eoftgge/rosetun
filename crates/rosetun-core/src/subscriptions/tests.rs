@@ -222,6 +222,45 @@ fn renaming_subscription_limits_unicode_characters() {
     assert_eq!(store.load().unwrap().subscriptions[0].name, "я".repeat(128));
 }
 
+#[test]
+fn updating_subscription_settings_validates_and_saves_user_agent() {
+    let directory = TestDirectory::new();
+    let store = Store::at(directory.config_path());
+    save_config(store.path(), &test_config()).unwrap();
+
+    update_subscription_settings(
+        &store,
+        &SubscriptionId::new("1"),
+        "  Provider  ",
+        Some("  Happ/2.0.0  "),
+    )
+    .unwrap();
+    let saved = store.load().unwrap();
+    assert_eq!(saved.subscriptions[0].name, "Provider");
+    assert_eq!(
+        saved.subscriptions[0].user_agent.as_deref(),
+        Some("Happ/2.0.0")
+    );
+
+    assert!(matches!(
+        update_subscription_settings(
+            &store,
+            &SubscriptionId::new("1"),
+            "Provider",
+            Some("Happ/2.0\nEvil"),
+        ),
+        Err(RenameSubscriptionError::InvalidUserAgent)
+    ));
+    assert_eq!(
+        store.load().unwrap().subscriptions[0].user_agent.as_deref(),
+        Some("Happ/2.0.0")
+    );
+
+    update_subscription_settings(&store, &SubscriptionId::new("1"), "Provider", Some("   "))
+        .unwrap();
+    assert_eq!(store.load().unwrap().subscriptions[0].user_agent, None);
+}
+
 fn successful_update() -> rosetun_subscription::Parsed {
     rosetun_subscription::parse(
         b"trojan://new-secret@new.example.com:443#New",

@@ -70,7 +70,7 @@ pub(crate) fn checkbox(
             let color = if enabled {
                 theme::palette().text
             } else {
-                theme::DISABLED
+                theme::disabled()
             };
             let position = egui::pos2(
                 box_rect.right() + theme::space::S,
@@ -119,13 +119,16 @@ fn paint_box(ui: &egui::Ui, rect: egui::Rect, progress: f32, enabled: bool, lit:
     };
     ui.painter()
         .rect_filled(rect, corner, faded(fill).gamma_multiply(progress));
+    let palette = theme::palette();
+    let tick = if palette.on_accent == palette.text {
+        Color32::WHITE
+    } else {
+        palette.on_accent
+    };
     let at = |x: f32, y: f32| rect.min + egui::vec2(rect.width() * x, rect.height() * y);
     ui.painter().add(egui::Shape::line(
         vec![at(0.26, 0.52), at(0.43, 0.68), at(0.75, 0.34)],
-        Stroke::new(
-            theme::stroke::MARK,
-            faded(Color32::WHITE).gamma_multiply(progress),
-        ),
+        Stroke::new(theme::stroke::MARK, faded(tick).gamma_multiply(progress)),
     ));
 }
 

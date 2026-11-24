@@ -100,7 +100,7 @@ fn subscription_body(
     qr_status(ui, dialog, actions);
     if dialog.link_error {
         ui.add(
-            egui::Label::new(RichText::new(tr!("error-open-link-invalid")).color(theme::ERROR))
+            egui::Label::new(RichText::new(tr!("error-open-link-invalid")).color(theme::error()))
                 .wrap(),
         );
     }
@@ -109,7 +109,8 @@ fn subscription_body(
         match &normalized {
             Ok(url) if uses_plain_http(url) => {
                 ui.add(
-                    egui::Label::new(RichText::new(tr!("http-warning")).color(theme::ERROR)).wrap(),
+                    egui::Label::new(RichText::new(tr!("http-warning")).color(theme::error()))
+                        .wrap(),
                 );
             }
             Err(error) => {
@@ -120,7 +121,7 @@ fn subscription_body(
                             dialog,
                             &errors::subscription_url(crate::i18n::language(), error),
                         ))
-                        .color(theme::ERROR),
+                        .color(theme::error()),
                     )
                     .wrap(),
                 );
@@ -149,6 +150,17 @@ fn subscription_body(
         dialog.error = None;
     }
     ui.add_space(theme::space::L);
+    let (ua_changed, _) = super::subscriptions::user_agent_field(
+        ui,
+        "add_subscription_user_agent",
+        &mut dialog.user_agent,
+        !dialog.busy,
+    );
+    if ua_changed {
+        dialog.error = None;
+    }
+    let user_agent_valid = dialog.user_agent_valid();
+    ui.add_space(theme::space::L);
     ui.horizontal(|ui| {
         widgets::toggle(ui, &mut dialog.send_hwid, !dialog.busy);
         ui.label(tr!("send-device-id"));
@@ -168,7 +180,7 @@ fn subscription_body(
                     dialog,
                     &errors::add_subscription(crate::i18n::language(), error),
                 ))
-                .color(theme::ERROR),
+                .color(theme::error()),
             )
             .wrap(),
         );
@@ -181,7 +193,7 @@ fn subscription_body(
         },
         tr!("cancel"),
     )
-    .primary_enabled(editable && normalized.is_ok())
+    .primary_enabled(editable && normalized.is_ok() && user_agent_valid)
     .busy(dialog.busy);
     submit_or_cancel(ui, footer, actions);
 }
@@ -294,7 +306,7 @@ fn proxy_body(ui: &mut egui::Ui, dialog: &mut AddDialog, actions: &mut Vec<Actio
         ui.add(
             egui::Label::new(
                 RichText::new(errors::add_subscription(crate::i18n::language(), error))
-                    .color(theme::ERROR),
+                    .color(theme::error()),
             )
             .wrap(),
         );
@@ -534,7 +546,7 @@ fn qr_status(ui: &mut egui::Ui, dialog: &AddDialog, actions: &mut Vec<Action>) {
     if let Some(error) = dialog.qr.error {
         ui.add(
             egui::Label::new(
-                RichText::new(errors::qr(crate::i18n::language(), error)).color(theme::ERROR),
+                RichText::new(errors::qr(crate::i18n::language(), error)).color(theme::error()),
             )
             .wrap(),
         );

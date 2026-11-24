@@ -1,11 +1,8 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use rosetun_config::{ExitId, ProcessMatch, Rule, RuleMatcher, RuleSet, RuleTarget, RuleTemplate};
+use rosetun_config::{ExitId, ProcessMatch, Rule, RuleMatcher, RuleSet, RuleTarget};
 use rosetun_processes::RunningProcess;
-
-use crate::i18n::{self, Language, tr_in};
-use fluent_bundle::FluentArgs;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ProcessGroup {
@@ -100,6 +97,7 @@ pub(crate) fn editable(matcher: &RuleMatcher) -> bool {
         ) | RuleMatcher::Process(_)
             | RuleMatcher::List { .. }
             | RuleMatcher::IpCidr(_)
+            | RuleMatcher::Group { .. }
     )
 }
 
@@ -156,15 +154,29 @@ pub(crate) enum RuleCaption {
     /// The full path of a process rule.
     Path(String),
     Addresses,
-    Template,
+    List,
+    Group {
+        count: usize,
+        preview: String,
+    },
+}
+
+/// Short preview of the first few conditions in a group.
+pub(crate) fn group_preview(items: &[RuleMatcher]) -> String {
+    const MAX_PREVIEW_ITEMS: usize = 3;
+    let mut parts: Vec<String> = items
+        .iter()
+        .take(MAX_PREVIEW_ITEMS)
+        .map(|item| rule_lines(item).0)
+        .collect();
+    if items.len() > MAX_PREVIEW_ITEMS {
+        parts.push("…".to_owned());
+    }
+    parts.join(", ")
 }
 
 /// What a rule row shows: the value in bold and the caption under it.
 pub(crate) fn rule_lines(matcher: &RuleMatcher) -> (String, RuleCaption) {
-    rule_lines_in(matcher, i18n::language())
-}
-
-fn rule_lines_in(matcher: &RuleMatcher, language: Language) -> (String, RuleCaption) {
     let value = rosetun_core::rule_value_text(matcher);
     match matcher {
         RuleMatcher::Domain(rosetun_config::DomainMatch::Exact(_)) => {
@@ -188,17 +200,13 @@ fn rule_lines_in(matcher: &RuleMatcher, language: Language) -> (String, RuleCapt
             (name, RuleCaption::Path(value))
         }
         RuleMatcher::IpCidr(_) => (value, RuleCaption::Addresses),
-        RuleMatcher::List { .. } => (value, RuleCaption::Template),
-        RuleMatcher::Template(template) => (
-            match template {
-                RuleTemplate::RussianSites => {
-                    tr_in(language, "russian-sites-name", &FluentArgs::new())
-                }
-                RuleTemplate::Messengers => tr_in(language, "messengers-name", &FluentArgs::new()),
-                RuleTemplate::Youtube => tr_in(language, "youtube-name", &FluentArgs::new()),
-                RuleTemplate::Torrents => tr_in(language, "torrents-name", &FluentArgs::new()),
+        RuleMatcher::List { .. } => (value, RuleCaption::List),
+        RuleMatcher::Group { name, items } => (
+            name.clone(),
+            RuleCaption::Group {
+                count: items.len(),
+                preview: group_preview(items),
             },
-            RuleCaption::Template,
         ),
     }
 }
@@ -221,11 +229,22 @@ fn kind(rule: &Rule) -> TypeFilter {
         RuleMatcher::Domain(_) => TypeFilter::Domains,
         RuleMatcher::Process(_) => TypeFilter::Processes,
         RuleMatcher::IpCidr(_) | RuleMatcher::List { .. } => TypeFilter::Other,
-        RuleMatcher::Template(RuleTemplate::RussianSites | RuleTemplate::Youtube) => {
-            TypeFilter::Domains
-        }
-        RuleMatcher::Template(RuleTemplate::Messengers | RuleTemplate::Torrents) => {
-            TypeFilter::Processes
+        RuleMatcher::Group { items, .. } => {
+            if !items.is_empty()
+                && items
+                    .iter()
+                    .all(|item| matches!(item, RuleMatcher::Domain(_)))
+            {
+                TypeFilter::Domains
+            } else if !items.is_empty()
+                && items
+                    .iter()
+                    .all(|item| matches!(item, RuleMatcher::Process(_)))
+            {
+                TypeFilter::Processes
+            } else {
+                TypeFilter::Other
+            }
         }
     }
 }
@@ -248,20 +267,27 @@ pub(crate) fn rule_counts_slice(rules: &[Rule]) -> RuleCounts {
 }
 
 pub(crate) fn visible_rules<'a>(set: &'a RuleSet, filter: &RuleFilter) -> Vec<(usize, &'a Rule)> {
-    visible_rules_in(&set.rules, filter, i18n::language())
+    visible_rules_slice(&set.rules, filter)
+}
+
+fn matcher_matches_search(matcher: &RuleMatcher, search: &str) -> bool {
+    if let RuleMatcher::Group { name, items } = matcher {
+        return name.to_lowercase().contains(search)
+            || items
+                .iter()
+                .any(|item| matcher_matches_search(item, search));
+    }
+    rosetun_core::rule_value_text(matcher)
+        .to_lowercase()
+        .contains(search)
+        || rule_lines(matcher).0.to_lowercase().contains(search)
+        || rosetun_core::rule_value_ascii(matcher)
+            .is_some_and(|ascii| ascii.to_lowercase().contains(search))
 }
 
 pub(crate) fn visible_rules_slice<'a>(
     rules: &'a [Rule],
     filter: &RuleFilter,
-) -> Vec<(usize, &'a Rule)> {
-    visible_rules_in(rules, filter, i18n::language())
-}
-
-fn visible_rules_in<'a>(
-    rules: &'a [Rule],
-    filter: &RuleFilter,
-    language: Language,
 ) -> Vec<(usize, &'a Rule)> {
     let search = filter.search.to_lowercase();
     rules
@@ -274,14 +300,7 @@ fn visible_rules_in<'a>(
                     .exit
                     .as_ref()
                     .is_none_or(|exit| rule.exit.as_ref() == Some(exit))
-                && (search.is_empty()
-                    || rosetun_core::rule_value_text(&rule.matcher)
-                        .to_lowercase()
-                        .contains(&search)
-                    || rule_lines_in(&rule.matcher, language)
-                        .0
-                        .to_lowercase()
-                        .contains(&search))
+                && (search.is_empty() || matcher_matches_search(&rule.matcher, &search))
         })
         .collect()
 }
@@ -337,22 +356,20 @@ mod tests {
     }
 
     #[test]
-    fn edit_dialog_supports_exact_suffix_process_and_ip_matchers() {
+    fn edit_dialog_supports_exact_suffix_process_ip_and_group_matchers() {
         for matcher in [
             RuleMatcher::Domain(DomainMatch::Exact("example.com".into())),
             RuleMatcher::Domain(DomainMatch::Suffix("example.com".into())),
             RuleMatcher::Process(ProcessMatch::Name("App.exe".into())),
             RuleMatcher::Process(ProcessMatch::Path(PathBuf::from("C:\\Apps\\App.exe"))),
             RuleMatcher::IpCidr("192.0.2.0/24".into()),
+            rosetun_config::RuleTemplate::Youtube.to_group("YouTube"),
         ] {
             assert!(editable(&matcher));
         }
-        for matcher in [
-            RuleMatcher::Domain(DomainMatch::Keyword("news".into())),
-            RuleMatcher::Template(rosetun_config::RuleTemplate::Youtube),
-        ] {
-            assert!(!editable(&matcher));
-        }
+        assert!(!editable(&RuleMatcher::Domain(DomainMatch::Keyword(
+            "news".into()
+        ))));
     }
 
     #[cfg(not(windows))]
@@ -476,48 +493,46 @@ mod tests {
     }
 
     #[test]
-    fn templates_are_counted_as_websites_or_apps_and_searchable_in_russian() {
+    fn groups_are_classified_by_items_and_searchable_by_name_and_items() {
+        use rosetun_config::RuleTemplate;
         let mut set = RuleSet::new(RuleSetId::new("set"), "Test", RuleTarget::Proxy);
-        set.rules = RuleTemplate::ALL
+        set.rules = RuleTemplate::STARTER
             .into_iter()
             .enumerate()
             .map(|(index, template)| Rule {
                 id: RuleId::new(index.to_string()),
                 enabled: true,
-                matcher: RuleMatcher::Template(template),
+                matcher: template.to_group(template.default_name(true)),
                 target: template.default_target(),
                 exit: None,
             })
             .collect();
+        // RussianSites (domains), Messengers (mixed -> other), Youtube (domains), Torrents (processes).
         assert_eq!(rule_counts(&set).domains, 2);
-        assert_eq!(rule_counts(&set).processes, 2);
+        assert_eq!(rule_counts(&set).processes, 1);
+        assert_eq!(rule_counts(&set).other, 1);
         let mut filter = RuleFilter {
             kind: TypeFilter::Domains,
             ..RuleFilter::default()
         };
         assert_eq!(indices(&set, &filter), vec![0, 2]);
         filter.kind = TypeFilter::Processes;
-        assert_eq!(indices(&set, &filter), vec![1, 3]);
-        assert_eq!(
-            rule_lines_in(&set.rules[3].matcher, Language::Russian),
-            ("Торренты".to_owned(), RuleCaption::Template)
-        );
+        assert_eq!(indices(&set, &filter), vec![3]);
+        filter.kind = TypeFilter::Other;
+        assert_eq!(indices(&set, &filter), vec![1]);
+        let (title, caption) = rule_lines(&set.rules[3].matcher);
+        assert_eq!(title, "Торренты");
+        assert!(matches!(caption, RuleCaption::Group { count, .. } if count > 0));
+        // Search by group name.
+        filter.kind = TypeFilter::All;
         filter.search = "торр".into();
-        assert_eq!(
-            visible_rules_in(&set.rules, &filter, Language::Russian)
-                .into_iter()
-                .map(|(index, _)| index)
-                .collect::<Vec<_>>(),
-            vec![3]
-        );
-        filter.search = "template:torrents".into();
-        assert_eq!(
-            visible_rules_in(&set.rules, &filter, Language::Russian)
-                .into_iter()
-                .map(|(index, _)| index)
-                .collect::<Vec<_>>(),
-            vec![3]
-        );
+        assert_eq!(indices(&set, &filter), vec![3]);
+        // Search by condition inside a group.
+        filter.search = "youtu.be".into();
+        assert_eq!(indices(&set, &filter), vec![2]);
+        // Search by process condition inside a mixed group.
+        filter.search = "discord".into();
+        assert_eq!(indices(&set, &filter), vec![1]);
     }
 
     #[test]

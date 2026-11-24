@@ -10,6 +10,7 @@ pub(crate) mod rules;
 pub(crate) mod settings;
 pub(crate) mod subscriptions;
 pub(crate) mod traffic;
+pub(crate) mod update_offer;
 mod window_frame;
 
 #[cfg(test)]
@@ -168,6 +169,9 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
     if state.subscriptions.rename.is_some() {
         subscriptions::rename_dialog(ctx, state, &mut actions);
     }
+    if state.updates.confirm_install {
+        update_offer::install_dialog(ctx, &mut actions);
+    }
     if state.proxy_kill_switch_confirmation {
         connection::proxy_kill_switch_dialog(ctx, state, &mut actions);
     }
@@ -181,6 +185,9 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
         rules::exchange::show(ctx, state, &mut actions);
         rules::name_dialog(ctx, state, &mut actions);
         rules::delete_dialog(ctx, state, &mut actions);
+        rules::templates_catalog_dialog(ctx, state, &mut actions);
+        rules::group_selection_dialog(ctx, state, &mut actions);
+        rules::group_editor_dialog(ctx, state, &mut actions);
         exits::exit_dialog(ctx, state, &mut actions);
         exits::rename_dialog(ctx, state, &mut actions);
         exits::delete_dialog(ctx, state, &mut actions);
@@ -244,7 +251,15 @@ fn config_unreadable_banner(ui: &mut egui::Ui, state: &State, actions: &mut Vec<
             None => {}
         }
     }
-    #[cfg(not(any(windows, target_os = "linux")))]
+    #[cfg(target_os = "macos")]
+    {
+        let label = tr!("open-settings-folder");
+        let buttons = [(label.as_str(), state.can_open_folders())];
+        if widgets::error_with_actions(ui, &state.text(&message), &buttons) == Some(0) {
+            actions.push(Action::OpenFolder(crate::state::AboutFolder::Config));
+        }
+    }
+    #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
     {
         let _ = actions;
         widgets::error_with_actions(ui, &state.text(&message), &[]);
@@ -348,7 +363,7 @@ fn settings_nav_item(
             egui::Align2::RIGHT_CENTER,
             crate::constants::ERROR_MARK,
             egui::TextStyle::Body.resolve(ui.style()),
-            theme::ERROR,
+            theme::error(),
         );
     }
     if update {

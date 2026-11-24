@@ -58,6 +58,7 @@ pub(crate) fn legacy_config() -> AppConfig {
                 short_id: Some("01234567".to_owned()),
                 fingerprint: Some("chrome".to_owned()),
             }),
+            finalmask: None,
         },
     );
     let vmess = node(
@@ -80,7 +81,9 @@ pub(crate) fn legacy_config() -> AppConfig {
                 alpn: vec!["h2".to_owned(), "http/1.1".to_owned()],
                 allow_insecure: true,
                 fingerprint: Some("firefox".to_owned()),
+                enable_session_resumption: None,
             }),
+            finalmask: None,
         },
     );
     let trojan = node(
@@ -100,7 +103,9 @@ pub(crate) fn legacy_config() -> AppConfig {
                 alpn: vec!["h2".to_owned()],
                 allow_insecure: false,
                 fingerprint: None,
+                enable_session_resumption: None,
             }),
+            finalmask: None,
         },
     );
     let shadowsocks = node(
@@ -257,25 +262,27 @@ pub(crate) fn legacy_config() -> AppConfig {
                     rule(
                         "template-russian-sites",
                         true,
-                        RuleMatcher::Template(RuleTemplate::RussianSites),
+                        RuleTemplate::RussianSites
+                            .to_group(RuleTemplate::RussianSites.default_name(true)),
                         RuleTarget::Direct,
                     ),
                     rule(
                         "template-messengers",
                         true,
-                        RuleMatcher::Template(RuleTemplate::Messengers),
+                        RuleTemplate::Messengers
+                            .to_group(RuleTemplate::Messengers.default_name(true)),
                         RuleTarget::Proxy,
                     ),
                     rule(
                         "template-youtube",
                         false,
-                        RuleMatcher::Template(RuleTemplate::Youtube),
+                        RuleTemplate::Youtube.to_group(RuleTemplate::Youtube.default_name(true)),
                         RuleTarget::Block,
                     ),
                     rule(
                         "template-torrents",
                         true,
-                        RuleMatcher::Template(RuleTemplate::Torrents),
+                        RuleTemplate::Torrents.to_group(RuleTemplate::Torrents.default_name(true)),
                         RuleTarget::Direct,
                     ),
                 ],

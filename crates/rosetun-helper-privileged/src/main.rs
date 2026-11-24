@@ -27,7 +27,7 @@ mod sd_notify;
 mod server;
 #[cfg(windows)]
 mod service;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod signals;
 mod state;
 #[cfg(windows)]
@@ -102,6 +102,12 @@ fn runs_on_linux(mode: &Mode) -> bool {
     )
 }
 
+/// The console helper and the launchd daemon on macOS.
+#[cfg(target_os = "macos")]
+fn runs_on_macos(mode: &Mode) -> bool {
+    matches!(mode, Mode::Console | Mode::Service)
+}
+
 fn log_filter() -> tracing_subscriber::EnvFilter {
     tracing_subscriber::EnvFilter::try_from_env("ROSETUN_LOG").unwrap_or_else(|_| {
         tracing_subscriber::EnvFilter::new(format!(
@@ -114,7 +120,7 @@ fn log_filter() -> tracing_subscriber::EnvFilter {
 fn main() -> std::process::ExitCode {
     // First, while the process has one thread: every thread started later
     // inherits the mask, so only the waiter takes SIGTERM, SIGINT or SIGHUP.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     let signals = match signals::block() {
         Ok(signals) => signals,
         Err(error) => {
@@ -154,9 +160,16 @@ fn main() -> std::process::ExitCode {
         );
         return std::process::ExitCode::from(2);
     }
-    #[cfg(not(any(windows, target_os = "linux")))]
+    #[cfg(target_os = "macos")]
+    if !runs_on_macos(&mode) {
+        eprintln!(
+            "this command is not supported on macOS; run the helper without arguments or with --service"
+        );
+        return std::process::ExitCode::from(2);
+    }
+    #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
     if mode != Mode::Console {
-        eprintln!("service and install-directory commands are Windows only");
+        eprintln!("this command is not supported on this platform");
         return std::process::ExitCode::from(2);
     }
 
@@ -172,6 +185,10 @@ fn main() -> std::process::ExitCode {
         Mode::Console => run_linux(signals, false),
         #[cfg(target_os = "linux")]
         Mode::Service => run_linux(signals, true),
+        #[cfg(target_os = "macos")]
+        Mode::Console => run_macos(signals, false),
+        #[cfg(target_os = "macos")]
+        Mode::Service => run_macos(signals, true),
         #[cfg(target_os = "linux")]
         Mode::ResetFirewall => lockdown_linux::reset_firewall(),
         #[cfg(target_os = "linux")]
@@ -190,7 +207,7 @@ fn main() -> std::process::ExitCode {
             eprintln!("--restore-lockdown is Linux only");
             std::process::ExitCode::from(2)
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         Mode::Console => run_console(),
         #[cfg(windows)]
         Mode::Service => run_service(),
@@ -228,7 +245,7 @@ fn main() -> std::process::ExitCode {
             install_command(&path, "finalized", install_dir::finalize(&path))
         }
         #[cfg(not(windows))]
-        _ => unreachable!("Windows-only modes were rejected above"),
+        _ => unreachable!("unsupported modes were rejected above"),
     }
 }
 
@@ -293,7 +310,7 @@ fn init_console_log(gate: &VerboseGate) {
         .init();
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn run_console() -> std::process::ExitCode {
     let gate = VerboseGate::default();
     init_console_log(&gate);
@@ -320,6 +337,53 @@ fn run_console() -> std::process::ExitCode {
         }
     };
     if let Err(error) = Server::new(true).serve(listener, helper) {
+        tracing::error!(%error, "helper stopped");
+        return std::process::ExitCode::FAILURE;
+    }
+    std::process::ExitCode::SUCCESS
+}
+
+/// The console helper and the launchd daemon on macOS. Both stop on
+/// SIGTERM, SIGINT or SIGHUP through the same path as an IPC shutdown;
+/// only the console honours that request (as on Windows and Linux).
+/// Under launchd, logs go to stderr without ANSI sequences.
+#[cfg(target_os = "macos")]
+fn run_macos(signals: signals::Blocked, service: bool) -> std::process::ExitCode {
+    let gate = VerboseGate::default();
+    if service {
+        tracing_subscriber::fmt()
+            .with_env_filter(log_filter())
+            .with_writer(std::io::stderr)
+            .with_ansi(false)
+            .finish()
+            .with(log_gate_layer(&gate))
+            .init();
+    } else {
+        init_console_log(&gate);
+    }
+
+    let (listener, helper) = match start(
+        Path::new("/private/var/run/rosetun"),
+        gate,
+        rosetun_routing::backend(),
+    ) {
+        Ok(result) => result,
+        Err(error) => {
+            tracing::error!(%error, "failed to start helper");
+            return std::process::ExitCode::FAILURE;
+        }
+    };
+    let server = Server::new(!service);
+    let shutdown = server.shutdown_handle();
+    if let Err(error) = signals::spawn_waiter(signals, move |_| {
+        shutdown.request();
+    }) {
+        tracing::error!(%error, "failed to start the signal thread");
+        helper.shutdown();
+        return std::process::ExitCode::FAILURE;
+    }
+    tracing::info!(service, "helper is ready");
+    if let Err(error) = server.serve(listener, helper) {
         tracing::error!(%error, "helper stopped");
         return std::process::ExitCode::FAILURE;
     }
@@ -470,10 +534,10 @@ struct PreparedStart {
 }
 
 #[cfg_attr(
-    target_os = "linux",
+    any(target_os = "linux", target_os = "macos"),
     expect(
         unused_variables,
-        reason = "the Linux service directories are fixed, so the caller's run directory is not used"
+        reason = "the Unix service directories are fixed, so the caller's run directory is not used"
     )
 )]
 fn prepare_start(run_dir: &Path) -> Result<PreparedStart, StartError> {
@@ -496,7 +560,18 @@ fn prepare_start(run_dir: &Path) -> Result<PreparedStart, StartError> {
             data_dir: "/var/lib/rosetun".into(),
         })
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "macos")]
+    {
+        rosetun_ipc::transport::prepare_service_directories().map_err(|error| {
+            StartError(format!("failed to prepare service directories: {error}"))
+        })?;
+        Ok(PreparedStart {
+            listener,
+            run_dir: "/private/var/run/rosetun/private".into(),
+            data_dir: "/Library/Application Support/Rosetun".into(),
+        })
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         let data_dir = run_dir
             .parent()
@@ -799,6 +874,34 @@ mod tests {
         ] {
             assert!(!runs_on_linux(&mode(args)), "{args:?}");
         }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_runs_only_the_console_and_the_service() {
+        let mode = |args: &[&str]| parse_mode(args.iter().map(OsString::from)).unwrap();
+        assert!(runs_on_macos(&mode(&[])));
+        assert!(runs_on_macos(&mode(&["--service"])));
+        for args in [
+            &["--install-service"][..],
+            &["--uninstall-service"],
+            &["--reset-firewall"],
+            &["--restore-lockdown"],
+            &["--restart-for-upgrade"],
+            &["--verify-install-dir", "/opt/example"],
+            &["--secure-install-dir", "/opt/example"],
+            &["--finalize-install-dir", "/opt/example"],
+            &["--hold-for-upgrade", "/opt/example"],
+        ] {
+            assert!(!runs_on_macos(&mode(args)), "{args:?}");
+        }
+    }
+
+    #[test]
+    fn macos_launchd_plist_uses_expected_label_and_service_flag() {
+        let plist = include_str!("../../../packaging/macos/io.github.eoftgge.rosetun.helper.plist");
+        assert!(plist.contains("<string>io.github.eoftgge.rosetun.helper</string>"));
+        assert!(plist.contains("<string>--service</string>"));
     }
 
     #[cfg(windows)]

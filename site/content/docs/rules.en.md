@@ -6,16 +6,24 @@ weight = 5
 group = "Setup"
 +++
 
-- **Routing rules** for programs, websites, IP addresses and subnets, and lists, with **Quick templates** and actions **Through VPN**, **Direct** and **Block**.
+- **Routing rules** for programs, websites, IP addresses, subnets, lists and **rule groups**, with the **Templates** catalog and actions **Through VPN**, **Direct** and **Block**.
 - **Exits:** a rule can send its traffic through another country or a specific server while the rest goes through the server on the main screen. Picking a country or a server in the rule creates an exit on the **Exits** tab, where you can change its server and turn on a fallback to any server of the same country. If an exit's server disappears, its rules block traffic; they never go direct.
 - **Lists:** GeoIP and GeoSite (Xray `.dat` files) and sing-box rule sets (`.srs`) and your own text lists, from a file or a link. A list from a link is downloaded again only when it has changed (`ETag` / `Last-Modified`).
 - **Undo:** Ctrl+Z steps back through your changes on the Rules tab, **Revert** returns to the rules applied to the connection, and Del removes the selected rule without asking.
-- **Temporary rules:** add a rule only until disconnect; it applies at once and is never saved.
+- **Temporary rules:** add a rule only until disconnect; it applies at once, appears beside the active rule set on the connection screen and is never saved.
 - **Connections** on the Traffic tab: while connected, what your programs connect to right now, grouped by program, with the route each connection took and why (which rule, list or the default). Create a rule or close a connection from there. The list is kept only in memory for the account that connected and is cleared on disconnect; it is never written to disk or to the log.
+
+## Groups and templates {#groups}
+
+A group combines multiple websites, programs, IP addresses or lists under one name, one toggle and one route. It takes a single row in the table and works like any other rule: you can reorder it, disable it, export it and undo changes with Ctrl+Z.
+
+- **Templates catalog:** the **Templates** button next to **+ Add rule** opens ready-made presets (Russian sites, Messengers, YouTube, Torrents, AI services, Social media, Streaming & music, Games & launchers). You can preview each preset's conditions and pick its route before adding. Once added, a preset becomes an ordinary editable group.
+- **Custom groups:** select two or more rules in the table and click **Group**, or create one from scratch with **New group** inside the Templates dialog.
+- **Inspect and edit:** click a group's chevron (or double-click its row) to expand its conditions inline. From there you can remove individual items, open the group editor or ungroup it back into separate rules.
 
 ## Check an address {#test}
 
-On the Rules tab, type a site, an IP address or a program into **Check an address or program**. One line says where the set in use sends it: the route, and the rule, list or default behind it. Nothing connects and nothing goes over the network. Click the rule's number to find it in the table. The temporary rules of the running connection count.
+On the Rules tab, type a site, an IP address or a program into **Search or check address**. A line below the search bar says where the set in use sends it: the route, and the rule, list or default behind it. Nothing connects and nothing goes over the network. Click the rule's number to find it in the table. The temporary rules of the running connection count.
 
 Some answers are left open, and the line says so and shows what the rules say otherwise. A private address with **Local network** on depends on your network, which only the service knows. A program's name alone cannot meet a rule on a full path, and a site's name cannot meet a rule on an IP address. A list that cannot be read here, such as an uploaded `.srs`, leaves the answer open too.
 
@@ -45,13 +53,13 @@ Limits:
 
 - Exactly two exits. An exit cannot connect through itself, and there are no cycles or third hops.
 - B is an HTTP, HTTPS or SOCKS5 proxy, and its server is an IPv4 or IPv6 address, not a name. HTTPS still verifies the certificate; set the expected TLS server name where it is needed.
-- A can be any server that sing-box can reach, including one that runs through Xray, such as VLESS with REALITY when Xray is set to **Automatically**. B through Xray and TLS fragmentation do not work for this path.
+- A can be any server that sing-box can reach, including one that runs through Xray, such as VLESS when Xray is set to **Automatically**. B through Xray and TLS fragmentation do not work for this path.
 - Rosetun does not look up B's name itself, so B's address must be given as a number. The name of A is resolved by the usual rules. DNS for the sites you open follows your DNS settings, so this feature does not promise that all DNS goes through B.
 - UDP, including QUIC, that a rule sends through B is blocked. It does not fall back to A or to a direct connection. Other rules keep their behaviour.
 - A missing exit, an unreachable proxy, wrong credentials or a failed HTTPS handshake never switches to a shorter path. After a changed subscription, a country fallback or a different mode, the service checks the path again.
 - B's delay measures the whole path A → B. The exit IP on the connection screen describes the main route, not B's public address.
 
-**Connect through** can be empty. The editor then says "Only HTTP and SOCKS5 proxies connect through another exit". That happens when the exit being edited is not an HTTP, HTTPS or SOCKS5 proxy, when no exit is chosen yet, when there is no other exit, when TLS fragmentation is on, or when every other exit would make a path that is not supported, such as a third hop or a cycle. Choose another exit or server if the editor says that the path is unavailable.
+**Connect through** appears when at least one other exit can be used. If TLS fragmentation is the only obstacle, the editor prompts you to turn it off. If an existing path becomes unavailable, you can choose **Directly**.
 
 ## Export and import {#exchange}
 

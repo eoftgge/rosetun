@@ -82,7 +82,7 @@ fn cases() -> Vec<Case> {
         },
         Case {
             id: "rename_subscription",
-            width: DialogWidth::Narrow,
+            width: DialogWidth::Standard,
             cancel: Some(|| tr!("cancel")),
             title: Some(|| tr!("rename-subscription")),
             show: |ctx, state| {
@@ -90,6 +90,8 @@ fn cases() -> Vec<Case> {
                     id: SubscriptionId::new("sub"),
                     original: String::from("Work"),
                     name: String::from("Work"),
+                    original_user_agent: None,
+                    user_agent: crate::state::UserAgentDraft::default(),
                     error: None,
                     focus: false,
                 });

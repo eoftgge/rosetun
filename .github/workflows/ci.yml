@@ -67,6 +67,55 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Run tests
         run: cargo test --workspace --locked
+      - name: Run release script tests
+        run: python3 -m unittest discover -s tools/release -p "test_*.py"
+
+  macos:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify Apple Silicon runner
+        run: |
+          arch=$(uname -m)
+          echo "$arch"
+          if [ "$arch" != "arm64" ]; then
+            echo "Expected arm64 runner, got $arch" >&2
+            exit 1
+          fi
+      - name: Install Rust
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+          rustup default "$RUST_TOOLCHAIN"
+          rustc -vV
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: cargo-${{ runner.os }}-${{ runner.arch }}-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('Cargo.lock') }}
+      - name: Validate macOS packaging files
+        run: |
+          plutil -lint packaging/macos/io.github.eoftgge.rosetun.helper.plist
+          sed -e 's/@SHORT_VERSION@/0.7.0/g' -e 's/@BUNDLE_VERSION@/0.7.0-beta.1/g' \
+            packaging/macos/Info.plist.in | plutil -lint -
+          sed -e 's/@VERSION@/0.7.0-beta.1/g' \
+            packaging/macos/distribution.xml.in | xmllint --noout -
+          bash -n installer/macos/build-pkg.sh packaging/macos/uninstall.sh \
+            packaging/macos/scripts/preinstall packaging/macos/scripts/postinstall
+          if command -v shellcheck >/dev/null 2>&1; then
+            shellcheck installer/macos/build-pkg.sh packaging/macos/uninstall.sh \
+              packaging/macos/scripts/preinstall packaging/macos/scripts/postinstall
+          fi
+      - name: Check workspace
+        run: cargo check --workspace --all-targets --locked --target aarch64-apple-darwin
+      - name: Build binaries
+        run: cargo build --locked --target aarch64-apple-darwin -p rosetun -p rosetun-gui -p rosetun-helper-privileged
+      - name: Run macOS tests
+        run: cargo test --workspace --locked --target aarch64-apple-darwin
 
   deny:
     runs-on: ubuntu-24.04

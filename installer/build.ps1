@@ -205,6 +205,7 @@ https://git.zx2c4.com/wintun/plain/prebuilt-binaries-license.txt?h=$wintunVersio
 "@
 Set-Content -LiteralPath (Join-Path $licensesDir 'wintun.txt') -Value $wintunNotice -Encoding utf8
 Copy-Item -Path (Join-Path $root 'crates/rosetun-gui/assets/fonts/OFL-*.txt') -Destination $licensesDir
+Copy-Item -LiteralPath (Join-Path $root 'crates/rosetun-gui/assets/flags/MIT-flag-icons.txt') -Destination $licensesDir
 $sourceNotice = @"
 sing-box $singBoxVersion is licensed under the GNU General Public License,
 version 3 or later (see sing-box.txt). Rosetun ships the unmodified official

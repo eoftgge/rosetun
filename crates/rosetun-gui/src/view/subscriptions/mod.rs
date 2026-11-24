@@ -248,25 +248,135 @@ fn provider_link(ui: &mut egui::Ui, state: &State, label: &str, link: &str, show
     }
 }
 
+fn user_agent_choice_label(choice: crate::state::UserAgentChoice) -> String {
+    match choice {
+        crate::state::UserAgentChoice::Rosetun => tr!("user-agent-rosetun"),
+        crate::state::UserAgentChoice::Happ => "Happ".to_owned(),
+        crate::state::UserAgentChoice::Custom => tr!("user-agent-custom"),
+    }
+}
+
+pub(crate) fn user_agent_field(
+    ui: &mut egui::Ui,
+    id_salt: &str,
+    draft: &mut crate::state::UserAgentDraft,
+    enabled: bool,
+) -> (bool, Option<egui::Response>) {
+    use crate::state::UserAgentChoice;
+
+    ui.label(tr!("subscription-user-agent"));
+    let previous = draft.choice;
+    ui.add_enabled_ui(enabled, |ui| {
+        widgets::drop_down(
+            ui,
+            id_salt,
+            None,
+            user_agent_choice_label(draft.choice),
+            |ui| {
+                for choice in [
+                    UserAgentChoice::Rosetun,
+                    UserAgentChoice::Happ,
+                    UserAgentChoice::Custom,
+                ] {
+                    ui.selectable_value(&mut draft.choice, choice, user_agent_choice_label(choice));
+                }
+            },
+        );
+    });
+    let mut changed = draft.choice != previous;
+    let mut custom_input = None;
+    if draft.choice == UserAgentChoice::Custom {
+        ui.add_space(theme::space::XS);
+        let input = ui.add(
+            widgets::TextField::new(&mut draft.custom)
+                .hint(rosetun_core::DEFAULT_USER_AGENT)
+                .char_limit(rosetun_core::SUBSCRIPTION_USER_AGENT_LIMIT)
+                .enabled(enabled),
+        );
+        if input.changed() {
+            changed = true;
+        }
+        custom_input = Some(input);
+    }
+    if draft.is_valid() {
+        ui.add(
+            egui::Label::new(
+                RichText::new(tr!("subscription-user-agent-help"))
+                    .small()
+                    .color(theme::palette().text_dim),
+            )
+            .wrap(),
+        );
+    } else {
+        ui.add(
+            egui::Label::new(RichText::new(tr!("error-fetch-user-agent")).color(theme::error()))
+                .wrap(),
+        );
+    }
+    (changed, custom_input)
+}
+
 pub(crate) fn rename_dialog(ctx: &egui::Context, state: &mut State, actions: &mut Vec<Action>) {
     let Some(dialog) = &mut state.subscriptions.rename else {
         return;
     };
     let busy = state.operations.renaming;
-    let choice = widgets::name_modal(
-        ctx,
-        widgets::NameModal {
-            id: "rename_subscription",
-            title: tr!("rename-subscription"),
-            label: tr!("subscription-name"),
-            submit: tr!("rename"),
-            name: &mut dialog.name,
-            focus: &mut dialog.focus,
-            error: &mut dialog.error,
-            busy,
-            char_limit: Some(rosetun_core::SUBSCRIPTION_NAME_LIMIT),
-        },
-    );
+    let mut choice = widgets::ModalChoice::None;
+    let response = widgets::Dialog::new("rename_subscription", widgets::DialogWidth::Standard)
+        .show(ctx, |ui| {
+            ui.heading(tr!("rename-subscription"));
+            ui.add_space(theme::space::M);
+            ui.spacing_mut().item_spacing.y = theme::space::XS;
+            ui.label(tr!("subscription-name"));
+            let name_input = ui.add(
+                widgets::TextField::new(&mut dialog.name)
+                    .char_limit(rosetun_core::SUBSCRIPTION_NAME_LIMIT)
+                    .enabled(!busy),
+            );
+            if dialog.focus {
+                name_input.request_focus();
+                dialog.focus = false;
+            }
+            if name_input.changed() {
+                dialog.error = None;
+            }
+
+            ui.add_space(theme::space::L);
+            let (ua_changed, ua_input) = user_agent_field(
+                ui,
+                "edit_subscription_user_agent",
+                &mut dialog.user_agent,
+                !busy,
+            );
+            if ua_changed {
+                dialog.error = None;
+            }
+
+            let valid = !busy && !dialog.name.trim().is_empty() && dialog.user_agent_valid();
+            let ua_focused = ua_input
+                .as_ref()
+                .is_some_and(|input| input.has_focus() || input.lost_focus());
+            if valid
+                && (name_input.has_focus() || name_input.lost_focus() || ua_focused)
+                && ui.input(|input| input.key_pressed(egui::Key::Enter))
+            {
+                choice = widgets::ModalChoice::Confirm;
+            }
+            if let Some(error) = dialog.error.as_ref() {
+                ui.add_space(theme::space::S);
+                ui.add(egui::Label::new(RichText::new(error).color(theme::error())).wrap());
+            }
+            let footer = widgets::DialogFooter::new(tr!("save"), tr!("cancel"))
+                .primary_enabled(valid)
+                .busy(busy);
+            let clicked = widgets::ModalChoice::from(widgets::dialog_footer(ui, footer).choice());
+            if clicked != widgets::ModalChoice::None {
+                choice = clicked;
+            }
+        });
+    if choice == widgets::ModalChoice::None && !busy && response.should_close() {
+        choice = widgets::ModalChoice::Cancel;
+    }
     match choice {
         widgets::ModalChoice::Cancel => actions.push(Action::CancelRename),
         widgets::ModalChoice::Confirm => actions.push(Action::SubmitRename),
@@ -317,14 +427,14 @@ pub(crate) fn remove_dialog(ctx: &egui::Context, state: &State, actions: &mut Ve
             {
                 ui.add(
                     egui::Label::new(
-                        RichText::new(tr!("remove-selected-warning")).color(theme::ERROR),
+                        RichText::new(tr!("remove-selected-warning")).color(theme::error()),
                     )
                     .wrap(),
                 );
             }
             if let Some(error) = &dialog.error {
                 ui.add(
-                    egui::Label::new(RichText::new(state.text(error)).color(theme::ERROR)).wrap(),
+                    egui::Label::new(RichText::new(state.text(error)).color(theme::error())).wrap(),
                 );
             }
         },

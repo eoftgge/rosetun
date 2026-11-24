@@ -1,17 +1,21 @@
-use eframe::egui::{self, RichText};
+use eframe::egui::{self, Color32, RichText};
 
 use crate::icons::{self, Icon};
 use crate::theme;
 
+use super::menu::menu_popup;
 use super::text_field::{field_height, style_field};
+
+/// Radius of the active-filter mark in the corner of a compact filter button.
+const ACTIVE_DOT_RADIUS: f32 = 2.5;
 
 /// A drop-down as high as a field, in the field's fill, border and corners, with the chevron at
 /// the right inside. `width` is its width, the whole row when `None`; `menu` adds the choices.
-pub(crate) fn drop_down(
+pub(crate) fn drop_down<'a>(
     ui: &mut egui::Ui,
     id_salt: impl std::hash::Hash + std::fmt::Debug,
     width: Option<f32>,
-    selected_text: impl Into<egui::WidgetText>,
+    selected_text: impl egui::IntoAtoms<'a>,
     menu: impl FnOnce(&mut egui::Ui),
 ) -> egui::Response {
     let width = width.unwrap_or_else(|| ui.available_width());
@@ -53,7 +57,14 @@ pub(crate) fn drop_down(
                     ui.set_min_width(ui.available_width());
                     // A chosen item is filled with the accent itself, not the faint wash
                     // behind selected text.
-                    ui.visuals_mut().selection.bg_fill = palette.accent_base;
+                    let visuals = ui.visuals_mut();
+                    visuals.override_text_color = None;
+                    visuals.widgets.inactive.fg_stroke.color = palette.text;
+                    visuals.widgets.hovered.fg_stroke.color = palette.text;
+                    visuals.widgets.active.fg_stroke.color = palette.on_accent;
+                    visuals.selection.bg_fill = palette.accent_base;
+                    visuals.selection.stroke =
+                        egui::Stroke::new(theme::stroke::HAIRLINE, palette.on_accent);
                     menu(ui);
                 })
                 .response
@@ -73,6 +84,107 @@ pub(crate) fn filter_combo(
     menu: impl FnOnce(&mut egui::Ui),
 ) -> egui::Response {
     drop_down(ui, id_salt, Some(width), selected_text, menu).on_hover_text(hover)
+}
+
+/// A square icon button for a filter row when width is tight, as high as a field.
+/// Opens the same choices in a popup `popup_width` wide; `active_color` marks a non-default
+/// filter with colour and a corner dot so active filtering stays visible without text.
+pub(crate) fn filter_combo_icon(
+    ui: &mut egui::Ui,
+    id_salt: impl std::hash::Hash + std::fmt::Debug,
+    popup_width: f32,
+    active_color: Option<Color32>,
+    hover: String,
+    menu: impl FnOnce(&mut egui::Ui),
+) -> egui::Response {
+    ui.push_id(id_salt, |ui| {
+        let side = field_height(ui);
+        let enabled = ui.is_enabled();
+        let sense = if enabled {
+            egui::Sense::click()
+        } else {
+            egui::Sense::hover()
+        };
+        let (rect, response) = ui.allocate_exact_size(egui::vec2(side, side), sense);
+        let popup = menu_popup(&response);
+        let open = popup.is_open();
+        let palette = theme::palette();
+        if ui.is_rect_visible(rect) {
+            let fill = if enabled && (response.hovered() || response.is_pointer_button_down_on()) {
+                palette.border
+            } else {
+                palette.input
+            };
+            let border = if enabled && (response.hovered() || open || response.has_focus()) {
+                palette.text_dim
+            } else {
+                palette.border_strong
+            };
+            ui.painter().rect(
+                rect,
+                egui::CornerRadius::same(theme::RADIUS),
+                fill,
+                egui::Stroke::new(theme::stroke::HAIRLINE, border),
+                egui::StrokeKind::Inside,
+            );
+            let icon_color = if !enabled {
+                palette.border_strong
+            } else if let Some(color) = active_color {
+                color
+            } else if response.hovered() || open {
+                palette.text
+            } else {
+                palette.text_muted
+            };
+            icons::paint(ui.painter(), rect.center(), Icon::Filter, icon_color);
+            if let Some(color) = active_color {
+                let dot = if enabled {
+                    color
+                } else {
+                    palette.border_strong
+                };
+                ui.painter().circle_filled(
+                    egui::pos2(
+                        rect.right() - theme::space::XS - ACTIVE_DOT_RADIUS,
+                        rect.top() + theme::space::XS + ACTIVE_DOT_RADIUS,
+                    ),
+                    ACTIVE_DOT_RADIUS,
+                    dot,
+                );
+            }
+        }
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, enabled, &hover));
+        if enabled {
+            let max_height = ui.spacing().combo_height;
+            popup.show(|ui| {
+                egui::ScrollArea::vertical()
+                    .max_height(max_height)
+                    .show(ui, |ui| {
+                        ui.with_layout(egui::Layout::top_down_justified(egui::Align::LEFT), |ui| {
+                            ui.set_min_width(popup_width);
+                            let visuals = ui.visuals_mut();
+                            visuals.override_text_color = None;
+                            visuals.widgets.inactive.fg_stroke.color = palette.text;
+                            visuals.widgets.hovered.fg_stroke.color = palette.text;
+                            visuals.widgets.active.fg_stroke.color = palette.on_accent;
+                            visuals.selection.bg_fill = palette.accent_base;
+                            visuals.selection.stroke =
+                                egui::Stroke::new(theme::stroke::HAIRLINE, palette.on_accent);
+                            menu(ui);
+                        });
+                    });
+            });
+        } else {
+            drop(popup);
+        }
+        let response = if enabled {
+            response.on_hover_cursor(egui::CursorIcon::PointingHand)
+        } else {
+            response
+        };
+        response.on_hover_text(hover)
+    })
+    .inner
 }
 
 #[cfg(test)]
@@ -235,5 +347,130 @@ mod tests {
                 "{item_widths:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_compact_filter_combo_is_square_and_opens_a_full_width_choice_menu() {
+        let mut screen = screen();
+        let mut picked = String::from("Any route");
+        let mut button_rect = egui::Rect::NOTHING;
+        let mut height = 0.0;
+        let mut item_width = 0.0;
+        let show = |picked: &mut String,
+                    button_rect: &mut egui::Rect,
+                    height: &mut f32,
+                    item_width: &mut f32,
+                    ui: &mut egui::Ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                *height = field_height(ui);
+                let active = (picked != "Any route").then_some(theme::palette().accent_light);
+                *button_rect = filter_combo_icon(
+                    ui,
+                    "compact_filter",
+                    SEARCH_WIDTH_FOR_TEST,
+                    active,
+                    picked.clone(),
+                    |ui| {
+                        for name in ["Any route", "Through VPN", "Direct"] {
+                            let item = ui.selectable_label(picked == name, name);
+                            *item_width = (*item_width).max(item.rect.width());
+                            if item.clicked() {
+                                *picked = name.to_owned();
+                            }
+                        }
+                    },
+                )
+                .rect;
+            });
+        };
+        let (texts, circles) = screen.settle_with_circles(|ui| {
+            show(
+                &mut picked,
+                &mut button_rect,
+                &mut height,
+                &mut item_width,
+                ui,
+            );
+        });
+        assert!(
+            texts.is_empty(),
+            "compact button should paint no text: {texts:?}"
+        );
+        assert!(
+            circles.is_empty(),
+            "inactive filter should paint no active dot: {circles:?}"
+        );
+        assert_eq!(button_rect.size(), egui::vec2(height, height));
+
+        let pos = button_rect.center();
+        let button = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        screen.run(vec![egui::Event::PointerMoved(pos), button(true)], |ui| {
+            show(
+                &mut picked,
+                &mut button_rect,
+                &mut height,
+                &mut item_width,
+                ui,
+            );
+        });
+        screen.run(vec![button(false)], |ui| {
+            show(
+                &mut picked,
+                &mut button_rect,
+                &mut height,
+                &mut item_width,
+                ui,
+            );
+        });
+        let open = screen.settle(|ui| {
+            show(
+                &mut picked,
+                &mut button_rect,
+                &mut height,
+                &mut item_width,
+                ui,
+            );
+        });
+        assert!(
+            open.iter().any(|(text, _)| text == "Through VPN"),
+            "{open:?}"
+        );
+        assert!(
+            item_width >= SEARCH_WIDTH_FOR_TEST,
+            "popup item width {item_width} < {SEARCH_WIDTH_FOR_TEST}"
+        );
+
+        screen.click_text("Through VPN", |ui| {
+            show(
+                &mut picked,
+                &mut button_rect,
+                &mut height,
+                &mut item_width,
+                ui,
+            );
+        });
+        assert_eq!(picked, "Through VPN");
+        let (after_texts, after_circles) = screen.settle_with_circles(|ui| {
+            show(
+                &mut picked,
+                &mut button_rect,
+                &mut height,
+                &mut item_width,
+                ui,
+            );
+        });
+        assert!(
+            after_texts.is_empty(),
+            "popup should close after selecting an item: {after_texts:?}"
+        );
+        assert!(
+            !after_circles.is_empty(),
+            "active filter should paint its corner indicator dot"
+        );
     }
 }

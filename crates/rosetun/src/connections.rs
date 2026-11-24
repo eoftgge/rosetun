@@ -130,9 +130,9 @@ impl SessionRules {
                 temporary: true, ..
             } => "temporary".to_owned(),
             Reason::Rule {
-                source: RuleSource::Template { template, .. },
+                source: RuleSource::Group { name, .. },
                 ..
-            } => format!("template {}", template.key()),
+            } => format!("group {}", terminal_text(&name)),
             Reason::Rule {
                 source: RuleSource::List { .. },
                 ..
@@ -397,14 +397,14 @@ mod tests {
         };
         let mut set = RuleSet::new(RuleSetId::new("set"), "Set", RuleTarget::Proxy);
         set.rules = vec![
-            rule("torrents", RuleMatcher::Template(RuleTemplate::Torrents)),
+            rule("torrents", RuleTemplate::Torrents.to_group("Torrents")),
             rule(
                 "site",
                 RuleMatcher::Domain(DomainMatch::Suffix("example.com".into())),
             ),
         ];
         let numbers = set.rules.iter().map(|rule| rule.id.clone()).collect();
-        let (rule_set, rule_templates) = set.expand_templates();
+        let (rule_set, rule_groups) = set.expand_groups();
         let request = ConnectRequest {
             selection: Selection {
                 subscription: SubscriptionId::new("example"),
@@ -431,7 +431,7 @@ mod tests {
             )],
             lists: Vec::new(),
             settings: Settings::default(),
-            rule_templates,
+            rule_groups,
         };
         let rules = SessionRules {
             request: Some(request),
@@ -461,7 +461,7 @@ mod tests {
                 ConnectionRoute::Direct,
             ),
             (
-                "template torrents",
+                "group Torrents",
                 "nothing.invalid",
                 Some(if cfg!(windows) {
                     r"C:\Program Files\Example\qbittorrent.exe"

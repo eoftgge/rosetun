@@ -10,7 +10,12 @@ use url::Url;
 
 pub(crate) const MAX_BODY_BYTES: u64 = 5 * 1024 * 1024;
 pub(crate) const MAX_LIST_BYTES: u64 = crate::MAX_LIST_BYTES as u64;
-pub(crate) const DEFAULT_USER_AGENT: &str = concat!("Rosetun/", env!("CARGO_PKG_VERSION"));
+pub const DEFAULT_USER_AGENT: &str = concat!("Rosetun/", env!("CARGO_PKG_VERSION"));
+pub const HAPP_USER_AGENT: &str = "Happ/4.0.0";
+
+pub fn is_valid_user_agent(user_agent: &str) -> bool {
+    !user_agent.is_empty() && user_agent.bytes().all(|byte| (0x20..=0x7e).contains(&byte))
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct Timeouts {
@@ -212,6 +217,19 @@ fn fetch_via_vpn_with(
     })
 }
 
+/// The service's proxy through the connected main server, or `None` without a
+/// connection. A service that cannot answer is an error, never a direct path.
+pub(crate) fn helper_vpn_proxy() -> Result<Option<ureq::Proxy>, FetchError> {
+    let mut helper =
+        rosetun_ipc::HelperClient::connect(&rosetun_ipc::default_endpoint(), "rosetun-update")
+            .map_err(|_| FetchError::VpnUnavailable)?;
+    helper
+        .subscription_proxy()
+        .map_err(|_| FetchError::VpnUnavailable)?
+        .map(|endpoint| subscription_proxy(&endpoint))
+        .transpose()
+}
+
 fn subscription_proxy(
     endpoint: &rosetun_ipc::SubscriptionProxy,
 ) -> Result<ureq::Proxy, FetchError> {
@@ -358,7 +376,7 @@ fn fetch_with_agent(
         .as_deref()
         .unwrap_or(DEFAULT_USER_AGENT);
 
-    if user_agent.is_empty() || !user_agent.bytes().all(|byte| (0x20..=0x7e).contains(&byte)) {
+    if !is_valid_user_agent(user_agent) {
         return Err(FetchError::InvalidUserAgent);
     }
 

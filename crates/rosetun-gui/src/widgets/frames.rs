@@ -1,6 +1,6 @@
 use eframe::egui::{self, CornerRadius, Stroke};
 
-use crate::theme::{self, ERROR, RADIUS};
+use crate::theme::{self, RADIUS};
 
 pub(crate) fn card_frame() -> egui::Frame {
     egui::Frame::new()
@@ -43,7 +43,7 @@ pub(crate) fn error_with_actions(
     card_frame()
         .show(ui, |ui| {
             ui.horizontal_top(|ui| {
-                ui.colored_label(ERROR, crate::constants::ERROR_MARK);
+                ui.colored_label(theme::error(), crate::constants::ERROR_MARK);
                 ui.vertical(|ui| {
                     ui.add(egui::Label::new(message).wrap());
                     ui.add_space(theme::space::S);
@@ -73,6 +73,9 @@ pub(crate) fn dismissible_error_with_action(
     let mut clicked = false;
     let dismissed = card_frame()
         .show(ui, |ui| {
+            let button_height = (ui.text_style_height(&egui::TextStyle::Button)
+                + 2.0 * ui.spacing().button_padding.y)
+                .max(ui.spacing().interact_size.y);
             egui::Sides::new()
                 .shrink_left()
                 .wrap()
@@ -80,17 +83,55 @@ pub(crate) fn dismissible_error_with_action(
                 .show(
                     ui,
                     |ui| {
-                        ui.colored_label(ERROR, crate::constants::ERROR_MARK);
+                        let body_font = egui::TextStyle::Body.resolve(ui.style());
+                        let mark_width = ui
+                            .painter()
+                            .layout_no_wrap(
+                                crate::constants::ERROR_MARK.to_owned(),
+                                body_font.clone(),
+                                theme::error(),
+                            )
+                            .size()
+                            .x
+                            + ui.spacing().item_spacing.x;
+                        let text_width = (ui.available_width() - mark_width).max(0.0);
+                        let message_height = ui
+                            .painter()
+                            .layout(
+                                message.to_owned(),
+                                body_font,
+                                theme::palette().text,
+                                text_width,
+                            )
+                            .size()
+                            .y;
+                        let content_height = if action.is_some() {
+                            message_height
+                                + ui.spacing().item_spacing.y
+                                + ui.text_style_height(&egui::TextStyle::Body)
+                        } else {
+                            message_height
+                        };
+                        let top_pad = ((button_height - content_height) / 2.0).max(0.0);
                         ui.vertical(|ui| {
-                            ui.add(egui::Label::new(message).wrap());
-                            if let Some((label, enabled)) = action {
-                                clicked = ui
-                                    .scope(|ui| {
-                                        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-                                        crate::widgets::link(ui, label, enabled).clicked()
-                                    })
-                                    .inner;
+                            if top_pad > 0.0 {
+                                ui.add_space(top_pad);
                             }
+                            ui.horizontal_top(|ui| {
+                                ui.colored_label(theme::error(), crate::constants::ERROR_MARK);
+                                ui.vertical(|ui| {
+                                    ui.add(egui::Label::new(message).wrap());
+                                    if let Some((label, enabled)) = action {
+                                        clicked = ui
+                                            .scope(|ui| {
+                                                ui.style_mut().wrap_mode =
+                                                    Some(egui::TextWrapMode::Extend);
+                                                crate::widgets::link(ui, label, enabled).clicked()
+                                            })
+                                            .inner;
+                                    }
+                                });
+                            });
                         });
                     },
                     |ui| ui.button(tr!("dismiss")).clicked(),
@@ -211,6 +252,65 @@ mod tests {
             })
             .unwrap();
         assert_eq!(link.galley.rows.len(), 1);
+        output.textures_delta.clear();
+    }
+
+    #[test]
+    fn single_line_error_banner_centers_text_with_dismiss_button() {
+        let ctx = egui::Context::default();
+        crate::theme::apply(&ctx);
+        let message = "Изменения не применены: служба закрыла соединение";
+        let dismiss = tr!("dismiss");
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(960.0, 400.0),
+                )),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    dismissible_error(ui, message);
+                });
+            },
+        );
+        let text_center_y = |value: &str| {
+            output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == value => {
+                        Some(text.pos.y + text.galley.size().y / 2.0)
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("missing text {value:?}"))
+        };
+        let banner = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Rect(rect) if rect.fill == theme::palette().card => Some(rect.rect),
+                _ => None,
+            })
+            .unwrap();
+        let mark_y = text_center_y(crate::constants::ERROR_MARK);
+        let message_y = text_center_y(message);
+        let dismiss_y = text_center_y(&dismiss);
+        let banner_y = banner.center().y;
+        assert!(
+            (mark_y - message_y).abs() <= 0.5,
+            "mark={mark_y}, message={message_y}"
+        );
+        assert!(
+            (message_y - dismiss_y).abs() <= 1.0,
+            "message={message_y}, dismiss={dismiss_y}"
+        );
+        assert!(
+            (message_y - banner_y).abs() <= 1.0,
+            "message={message_y}, banner={banner_y}"
+        );
         output.textures_delta.clear();
     }
 }

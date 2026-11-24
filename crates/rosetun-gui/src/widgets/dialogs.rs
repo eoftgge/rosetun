@@ -133,7 +133,6 @@ impl<'a> DialogFooter<'a> {
     }
 
     /// A second way forward, between Cancel and the main button.
-    #[cfg(any(windows, target_os = "linux", test))]
     pub(crate) fn other(mut self, other: impl Into<egui::WidgetText>) -> Self {
         self.other = Some(other.into());
         self
@@ -311,7 +310,7 @@ pub(crate) fn name_modal(ctx: &egui::Context, options: NameModal<'_>) -> ModalCh
             choice = ModalChoice::Confirm;
         }
         if let Some(error) = options.error.as_ref() {
-            ui.colored_label(theme::ERROR, error);
+            ui.colored_label(theme::error(), error);
         }
         let footer = DialogFooter::new(options.submit, tr!("cancel"))
             .primary_enabled(valid)

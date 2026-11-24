@@ -123,7 +123,7 @@ impl XrayHelper {
             return Err(EngineError::BinaryNotFound(BINARY.into()));
         }
         let binary = std::fs::canonicalize(path)?;
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         rosetun_engine::installed::verify(&binary)?;
         version::check(&binary)?;
         Ok(binary)
@@ -136,7 +136,7 @@ impl XrayHelper {
         endpoints: &[&SocksEndpoint],
         verbose_until_unix: Arc<AtomicU64>,
     ) -> Result<Box<dyn EngineProcess>, EngineError> {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         rosetun_engine::installed::verify(binary)?;
         std::fs::create_dir_all(&self.work_dir)?;
         let config_path = self.work_dir.join(&config.file_name);
@@ -201,13 +201,14 @@ impl XrayHelper {
     }
 }
 
-/// On Linux in a process group of its own, tied to the helper's life.
+/// On Linux and macOS in a process group of its own (and tied to the helper's
+/// life on Linux).
 fn start(command: Command) -> std::io::Result<Child> {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         rosetun_engine::process::spawn(command)
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         let mut command = command;
         command.spawn()
@@ -216,7 +217,7 @@ fn start(command: Command) -> std::io::Result<Child> {
 
 /// SIGTERM to Xray's own group; `Ok(true)` once it has exited, `Ok(false)`
 /// when the grace period ran out and the caller kills.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn interrupt_and_wait(child: &mut Child, grace: Duration) -> std::io::Result<bool> {
     use std::time::Instant;
 
@@ -244,8 +245,8 @@ fn interrupt_and_wait(child: &mut Child, grace: Duration) -> std::io::Result<boo
     }
 }
 
-/// No graceful path off Linux: Xray has no adapter, and the caller kills.
-#[cfg(not(target_os = "linux"))]
+/// No graceful path on Windows: Xray has no adapter, and the caller kills.
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn interrupt_and_wait(_child: &mut Child, _grace: Duration) -> std::io::Result<bool> {
     Ok(false)
 }
@@ -406,7 +407,7 @@ mod tests {
         assert!(!debug.contains(first.password()));
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn fake_xray(script: &str) -> Child {
         let mut command = Command::new("/bin/sh");
         command
@@ -424,7 +425,7 @@ mod tests {
         child
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn xray_is_interrupted_before_it_is_killed() {
         let mut child = fake_xray("trap 'exit 0' TERM; echo ready; while :; do sleep 1; done");
@@ -435,7 +436,7 @@ mod tests {
         );
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn xray_that_ignores_sigterm_is_left_to_the_kill() {
         let mut child = fake_xray("trap '' TERM; echo ready; exec sleep 30");

@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::Path;
 
 use eframe::egui::{self, Color32, RichText, Stroke};
@@ -233,7 +234,7 @@ fn content_area(
             if let Some(error) = error {
                 ui.add_sized(
                     egui::vec2(width, ERROR_HEIGHT),
-                    egui::Label::new(RichText::new(error).color(theme::ERROR)).truncate(),
+                    egui::Label::new(RichText::new(error).color(theme::error())).truncate(),
                 )
                 .on_hover_text(error);
             }
@@ -700,7 +701,7 @@ fn address_input(
         ui.label(
             RichText::new(tr!("address-limit", n = MAX_ADDRESSES.to_string()))
                 .small()
-                .color(theme::ERROR),
+                .color(theme::error()),
         );
     }
     if dialog
@@ -767,7 +768,7 @@ fn recent_site_button(
 ) -> egui::Response {
     let palette = theme::palette();
     let color = if !enabled {
-        theme::DISABLED
+        theme::disabled()
     } else if added {
         palette.accent_light
     } else if has_rule {
@@ -825,6 +826,8 @@ fn process_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Ve
     }
     if cfg!(target_os = "linux") {
         destination_note(ui, tr!("rule-app-linux-rights"));
+    } else if cfg!(target_os = "macos") {
+        destination_note(ui, tr!("rule-app-macos-helpers"));
     }
     let folder_id = egui::Id::unique("rule_folder_choice");
     let folder_shown = widgets::reveal_progress(
@@ -912,12 +915,18 @@ fn process_list(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Vec
         .processes
         .iter()
         .enumerate()
-        .filter(|(_, group)| process_matches_filter(group, &filter))
+        .filter(|(_, group)| filter.is_empty() || process_matches_filter(group, &filter))
         .map(|(index, _)| index)
         .collect();
     let (running, other): (Vec<usize>, Vec<usize>) = shown
         .iter()
         .partition(|index| dialog.processes[**index].windowed);
+    let mut name_counts = HashMap::new();
+    for group in &dialog.processes {
+        *name_counts
+            .entry(group.name.to_ascii_lowercase())
+            .or_insert(0_usize) += 1;
+    }
     let typed_key = match rosetun_core::parse_process_input(&filter) {
         Ok(ProcessMatch::Name(name)) if !filter.is_empty() => Some(ProgramKey::of_name(&name)),
         Ok(ProcessMatch::Path(path)) if !filter.is_empty() => Some(ProgramKey::of_path(&path)),
@@ -951,7 +960,7 @@ fn process_list(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Vec
             ui.spacing_mut().item_spacing.y = PROCESS_ROW_GAP;
             if let Some(error) = &dialog.processes_error {
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new(error).small().color(theme::ERROR));
+                    ui.label(RichText::new(error).small().color(theme::error()));
                     if widgets::link(ui, &tr!("retry"), !dialog.busy).clicked() {
                         actions.push(Action::RefreshProcesses);
                     }
@@ -1002,7 +1011,8 @@ fn process_list(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Vec
                 );
                 for &index in indices {
                     let group = &dialog.processes[index];
-                    if group_row(ui, dialog, group).changed() && !dialog.busy {
+                    let same_name = name_counts[&group.name.to_ascii_lowercase()] > 1;
+                    if group_row(ui, dialog, group, same_name).changed() && !dialog.busy {
                         listed = Some(index);
                     }
                 }
@@ -1088,17 +1098,16 @@ fn extra_row(ui: &mut egui::Ui, program: &ChosenProgram, enabled: bool) -> egui:
 
 /// One listed program: its name with the number of copies, and its path on hover. The path
 /// is a second line only when another listed program has the same name.
-fn group_row(ui: &mut egui::Ui, dialog: &AddRuleDialog, group: &ProcessGroup) -> egui::Response {
+fn group_row(
+    ui: &mut egui::Ui,
+    dialog: &AddRuleDialog,
+    group: &ProcessGroup,
+    same_name: bool,
+) -> egui::Response {
     let path = group.path.as_ref().map_or_else(
         || tr!("path-unavailable"),
         |path| display::safe_text(&path.to_string_lossy()),
     );
-    let same_name = dialog
-        .processes
-        .iter()
-        .filter(|other| other.name.eq_ignore_ascii_case(&group.name))
-        .count()
-        > 1;
     let name = if group.count > 1 {
         i18n::process_copies(&display::safe_text(&group.name), group.count)
     } else {
@@ -1211,7 +1220,7 @@ fn process_row(ui: &mut egui::Ui, row: ProcessRow<'_>, enabled: bool) -> egui::R
             egui::Align2::CENTER_CENTER,
             row.tile.letter,
             theme::font::semibold(theme::font::CAPTION),
-            theme::palette().text,
+            egui::Color32::WHITE,
         );
     }
     let text_left = tile_rect.right() + PROCESS_ROW_INSET;
@@ -1220,7 +1229,7 @@ fn process_row(ui: &mut egui::Ui, row: ProcessRow<'_>, enabled: bool) -> egui::R
         egui::pos2(rect.right() - PROCESS_ROW_INSET, rect.bottom()),
     ));
     let name_color = if !enabled {
-        theme::DISABLED
+        theme::disabled()
     } else if selected {
         theme::palette().accent_light
     } else {
@@ -1295,11 +1304,30 @@ fn tile_color(name: &str) -> Color32 {
 /// "Send to": one field whose list opens over the dialog.
 fn destination_picker(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, config: &AppConfig) {
     let enabled = !dialog.busy && ui.is_enabled();
-    let label = destination_label(&dialog.target, &config.exits);
+    let (label, country) = match &dialog.target {
+        RuleDestination::NewExit(NewExit::Node { name, .. }) => {
+            let (country, name) = display::leading_flag(name);
+            (tr!("target-exit", name = display::safe_text(name)), country)
+        }
+        target => {
+            let country = match target {
+                RuleDestination::Exit(id) => config
+                    .exits
+                    .iter()
+                    .find(|exit| &exit.id == id)
+                    .and_then(|exit| destinations::exit_display_country(config, exit)),
+                RuleDestination::NewExit(NewExit::Country { code, .. }) => {
+                    Some(code.as_str().to_owned())
+                }
+                _ => None,
+            };
+            (destination_label(target, &config.exits), country)
+        }
+    };
     let color = if enabled {
         destination_color(&dialog.target)
     } else {
-        theme::DISABLED
+        theme::disabled()
     };
     // Whole points, so the list that opens as wide as the field has whole-point items.
     let (rect, response) = ui.allocate_exact_size(
@@ -1310,7 +1338,8 @@ fn destination_picker(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, config: &Ap
             egui::Sense::hover()
         },
     );
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, enabled, &label));
+    let spoken = widgets::spoken_with_country(&label, country.as_deref());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, enabled, &spoken));
     let open = egui::Popup::is_id_open(ui.ctx(), destination_popup_id());
     if ui.is_rect_visible(rect) {
         let painter = ui.painter();
@@ -1330,15 +1359,29 @@ fn destination_picker(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, config: &Ap
             ),
             egui::StrokeKind::Inside,
         );
-        painter.circle_filled(egui::pos2(rect.left() + 14.0, rect.center().y), 3.5, color);
+        let left = if let Some(code) = country.as_deref() {
+            let size = egui::Vec2::from(theme::country_badge::ROW_SIZE);
+            let badge = egui::Rect::from_min_size(
+                egui::pos2(
+                    rect.left() + theme::space::M,
+                    rect.center().y - size.y / 2.0,
+                ),
+                size,
+            );
+            widgets::country_badge(ui, badge, code, config.interface.show_country_flags, false);
+            badge.right() + theme::space::S
+        } else {
+            painter.circle_filled(egui::pos2(rect.left() + 14.0, rect.center().y), 3.5, color);
+            rect.left() + 26.0
+        };
         let galley = egui::WidgetText::from(RichText::new(&label).color(color)).into_galley(
             ui,
             Some(egui::TextWrapMode::Truncate),
-            (rect.width() - 62.0).max(40.0),
+            (rect.right() - left - theme::space::XL - theme::space::M).max(0.0),
             egui::TextStyle::Body,
         );
         painter.galley(
-            egui::pos2(rect.left() + 26.0, rect.center().y - galley.size().y / 2.0),
+            egui::pos2(left, rect.center().y - galley.size().y / 2.0),
             galley,
             color,
         );
@@ -1349,7 +1392,7 @@ fn destination_picker(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, config: &Ap
             if enabled {
                 theme::palette().text_dim
             } else {
-                theme::DISABLED
+                theme::disabled()
             },
         );
     }
@@ -1397,6 +1440,7 @@ fn destination_item(
     enabled: bool,
     selected: bool,
     hint: Option<&str>,
+    country: Option<(&str, bool)>,
 ) -> bool {
     // `menu_item` takes the width its ui already spans, and a scope starts empty.
     let width = ui.min_rect().width().max(ui.available_width());
@@ -1405,7 +1449,7 @@ fn destination_item(
             ui.set_min_width(width);
             ui.spacing_mut().button_padding.x = 26.0;
             ui.visuals_mut().override_text_color = Some(color);
-            widgets::menu_item(
+            widgets::menu_item_with_country(
                 ui,
                 widgets::MenuItem {
                     label,
@@ -1414,14 +1458,15 @@ fn destination_item(
                     danger: false,
                     note: None,
                 },
+                country,
             )
         })
         .inner;
-    if ui.is_rect_visible(item.rect) {
+    if country.is_none() && ui.is_rect_visible(item.rect) {
         ui.painter().circle_filled(
             egui::pos2(item.rect.left() + 14.0, item.rect.center().y),
             3.5,
-            if enabled { color } else { theme::DISABLED },
+            if enabled { color } else { theme::disabled() },
         );
     }
     let item = match hint {
@@ -1472,6 +1517,7 @@ fn destination_menu(
     config: &AppConfig,
 ) -> Option<RuleDestination> {
     let mut chosen = None;
+    let flags = config.interface.show_country_flags;
     for target in [RuleTarget::Proxy, RuleTarget::Direct, RuleTarget::Block] {
         let destination = RuleDestination::from(target);
         let selected = dialog.target == destination;
@@ -1483,6 +1529,7 @@ fn destination_menu(
             true,
             selected,
             hint.as_deref(),
+            None,
         ) {
             chosen = Some(destination);
         }
@@ -1491,13 +1538,18 @@ fn destination_menu(
         destination_section(ui, tr!("where-section-exits"));
         for exit in &config.exits {
             let name = display::safe_text(&exit.name);
-            let label = match destinations::exit_country(exit) {
-                Some(code) => format!("{name} · {}", code.as_str()),
-                None => name,
-            };
+            let country = destinations::exit_display_country(config, exit);
             let destination = RuleDestination::Exit(exit.id.clone());
             let selected = dialog.target == destination;
-            if destination_item(ui, &label, theme::EXIT, true, selected, None) {
+            if destination_item(
+                ui,
+                &name,
+                theme::exit(),
+                true,
+                selected,
+                None,
+                country.as_deref().map(|code| (code, flags)),
+            ) {
                 chosen = Some(destination);
             }
         }
@@ -1522,8 +1574,15 @@ fn destination_menu(
                 &dialog.target,
                 RuleDestination::NewExit(NewExit::Country { code: picked, .. }) if picked == &code
             );
-            let label = format!("{name} · {}", code.as_str());
-            if destination_item(ui, &label, theme::EXIT, !full, selected, None) {
+            if destination_item(
+                ui,
+                &name,
+                theme::exit(),
+                !full,
+                selected,
+                None,
+                Some((code.as_str(), flags)),
+            ) {
                 chosen = Some(RuleDestination::NewExit(NewExit::Country { code, name }));
             }
         }
@@ -1559,8 +1618,17 @@ fn destination_menu(
                 _ => false,
             };
             let enabled = !full || node.exit.is_some();
-            let label = display::safe_text(node.name);
-            if destination_item(ui, &label, theme::EXIT, enabled, selected, None) {
+            let (country, name) = display::leading_flag(node.name);
+            let label = display::safe_text(name);
+            if destination_item(
+                ui,
+                &label,
+                theme::exit(),
+                enabled,
+                selected,
+                None,
+                country.as_deref().map(|code| (code, flags)),
+            ) {
                 chosen = Some(match node.exit {
                     Some(exit) => RuleDestination::Exit(exit.clone()),
                     None => RuleDestination::NewExit(NewExit::Node {
@@ -2162,11 +2230,8 @@ mod tests {
             target_label(RuleTarget::Proxy),
             target_label(RuleTarget::Direct),
             target_label(RuleTarget::Block),
-            "Example exit · NL".to_owned(),
-            format!(
-                "{} · DE",
-                i18n::country_name(&CountryCode::parse("DE").unwrap())
-            ),
+            "Example exit".to_owned(),
+            i18n::country_name(&CountryCode::parse("DE").unwrap()),
             "NL One".to_owned(),
         ] {
             assert!(texts.contains(&label), "{label} in {texts:?}");

@@ -8,7 +8,6 @@ use rosetun_config::{
 use rosetun_core::{CheckKind, CheckStatus, DnsPreset};
 
 use crate::brand;
-use crate::display;
 use crate::errors;
 use crate::icons::{self, Icon};
 use crate::state::{AboutFolder, Action, SessionPart, SettingsSection, State, now_unix};
@@ -43,7 +42,12 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
 
 fn general(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     widgets::settings_card(ui, |card| {
-        card.row(tr!("scale"), Some(&tr!("zoom-hint")), |ui| {
+        let zoom_hint = if cfg!(target_os = "macos") {
+            tr!("zoom-hint-macos")
+        } else {
+            tr!("zoom-hint")
+        };
+        card.row(tr!("scale"), Some(&zoom_hint), |ui| {
             let scales: Vec<_> = rosetun_core::INTERFACE_SCALES
                 .into_iter()
                 .map(|percent| (percent, i18n::scale(percent)))
@@ -114,6 +118,18 @@ fn general(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                 );
             });
         });
+        card.row(tr!("country-markers"), None, |ui| {
+            if let Some(show) = widgets::segmented(
+                ui,
+                "country_markers",
+                state.config.interface.show_country_flags,
+                &[(true, tr!("country-flags")), (false, tr!("country-codes"))],
+                false,
+                state.can_edit_settings(),
+            ) {
+                actions.push(Action::SetShowCountryFlags(show));
+            }
+        });
         let mut reduce_motion = state.config.interface.reduce_motion;
         if card
             .toggle(
@@ -153,6 +169,8 @@ fn accent_label(accent: AccentPreset) -> String {
         AccentPreset::Lilac => tr!("accent-lilac"),
         AccentPreset::Teal => tr!("accent-teal"),
         AccentPreset::Amber => tr!("accent-amber"),
+        AccentPreset::Black => tr!("accent-black"),
+        AccentPreset::White => tr!("accent-white"),
     }
 }
 
@@ -803,7 +821,7 @@ fn dns_form(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
         });
     if let Err(error) = &parsed {
         ui.colored_label(
-            theme::ERROR,
+            theme::error(),
             errors::dns_input(crate::i18n::language(), error),
         );
     }
@@ -922,7 +940,7 @@ fn fragment_form(ui: &mut egui::Ui, state: &mut State, editable: bool, actions: 
         });
     if let Err(error) = &parsed {
         ui.colored_label(
-            theme::ERROR,
+            theme::error(),
             errors::fragment_input(crate::i18n::language(), error),
         );
     }
@@ -999,7 +1017,7 @@ fn xray(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                         egui::Label::new(
                             RichText::new(crate::i18n::xray_off_warning(count))
                                 .small()
-                                .color(theme::ERROR),
+                                .color(theme::error()),
                         )
                         .wrap(),
                     );
@@ -1051,7 +1069,7 @@ fn service(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     let color = if running {
         theme::connected()
     } else {
-        theme::ERROR
+        theme::error()
     };
     let mut detail = tr!("service-detail").to_owned();
     if running && let Some(version) = &state.helper_version {
@@ -1065,8 +1083,7 @@ fn service(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                     ui.spacing_mut().item_spacing.x = theme::space::XS;
                     let (dot, _) =
                         ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
-                    ui.painter().circle_filled(dot.center(), 5.0, color);
-                    ui.colored_label(color, tr!("service-label"));
+                    let label = ui.colored_label(color, tr!("service-label"));
                     ui.colored_label(
                         color,
                         if running {
@@ -1074,6 +1091,11 @@ fn service(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                         } else {
                             tr!("service-stopped")
                         },
+                    );
+                    ui.painter().circle_filled(
+                        egui::pos2(dot.center().x, label.rect.center().y),
+                        5.0,
+                        color,
                     );
                 });
             },
@@ -1119,7 +1141,7 @@ fn service(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                 };
                 let (icon, color) = match result.status {
                     CheckStatus::Ok => (Icon::Check, theme::connected()),
-                    CheckStatus::Warning => (Icon::Warning, theme::WARNING),
+                    CheckStatus::Warning => (Icon::Warning, theme::warning()),
                     CheckStatus::Unavailable | CheckStatus::Skipped => {
                         (Icon::Unknown, theme::palette().text_dim)
                     }
@@ -1151,8 +1173,9 @@ fn service(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     ui.add_space(theme::space::L);
     widgets::settings_card(ui, |card| {
         card.row(tr!("log-title"), Some(&tr!("log-detail")), |ui| {
-            #[cfg(any(windows, target_os = "linux"))]
+            #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
             ui.horizontal(|ui| {
+                #[cfg(any(windows, target_os = "linux"))]
                 if widgets::outline_button(
                     ui,
                     if state.settings.screen.report_running {
@@ -1172,7 +1195,7 @@ fn service(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                     actions.push(Action::OpenFolder(AboutFolder::Config));
                 }
             });
-            #[cfg(not(any(windows, target_os = "linux")))]
+            #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
             let _ = ui;
         });
         #[cfg(any(windows, target_os = "linux"))]
@@ -1218,7 +1241,7 @@ fn service(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                 let allowed = state.can_reset_settings();
                 let response = widgets::outline_button(
                     ui,
-                    RichText::new(tr!("reset-to-default")).color(theme::ERROR),
+                    RichText::new(tr!("reset-to-default")).color(theme::error()),
                     allowed,
                 );
                 if response.clicked() {
@@ -1235,7 +1258,7 @@ fn service(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
 /// One line under a failed lookup that points to the DNS check.
 pub(crate) fn dns_hint(ui: &mut egui::Ui, actions: &mut Vec<Action>) {
     ui.horizontal_wrapped(|ui| {
-        ui.colored_label(theme::WARNING, tr!("system-check-dns-hint"));
+        ui.colored_label(theme::warning(), tr!("system-check-dns-hint"));
         if ui.link(tr!("system-check-more")).clicked() {
             actions.push(Action::ShowSystemChecks);
         }
@@ -1295,6 +1318,13 @@ fn about(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                             .small()
                             .color(theme::palette().text_muted),
                     );
+                    if cfg!(target_os = "macos") {
+                        ui.label(
+                            RichText::new(tr!("macos-experimental-build"))
+                                .small()
+                                .color(theme::palette().text_dim),
+                        );
+                    }
                 });
             });
         });
@@ -1369,7 +1399,11 @@ fn about(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                                     } else {
                                         String::new()
                                     },
-                                    tr!("update-installer-detail"),
+                                    if State::can_install_updates() {
+                                        tr!("update-installer-checked")
+                                    } else {
+                                        tr!("update-installer-detail")
+                                    },
                                 );
                                 ui.add(
                                     egui::Label::new(
@@ -1379,21 +1413,29 @@ fn about(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                                     )
                                     .wrap(),
                                 );
+                                if let Some((status, color)) =
+                                    super::update_offer::offer_status(state)
+                                {
+                                    ui.add(
+                                        egui::Label::new(
+                                            RichText::new(status).small().color(color),
+                                        )
+                                        .wrap(),
+                                    );
+                                }
                                 ui.add_space(theme::space::S);
                                 ui.horizontal_wrapped(|ui| {
-                                    if widgets::button_fill(ui, tr!("update-open-page"), true)
-                                        .clicked()
-                                    {
-                                        display::open_web_link(ui.ctx(), &release.url);
-                                    }
-                                    if widgets::outline_button(
-                                        ui,
-                                        tr!("update-skip"),
-                                        state.can_edit_settings(),
-                                    )
-                                    .clicked()
-                                    {
-                                        actions.push(Action::SkipVersion);
+                                    let buttons = super::update_offer::offer_buttons(state);
+                                    for (index, button) in buttons.iter().enumerate() {
+                                        super::update_offer::offer_button(
+                                            ui,
+                                            state,
+                                            release,
+                                            *button,
+                                            index == 0,
+                                            false,
+                                            actions,
+                                        );
                                     }
                                 });
                             });
@@ -1573,11 +1615,11 @@ fn about_path(
         },
         None,
         |ui| {
-            #[cfg(any(windows, target_os = "linux"))]
+            #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
             if widgets::outline_button(ui, tr!("open-folder"), state.can_open_folders()).clicked() {
                 actions.push(Action::OpenFolder(folder));
             }
-            #[cfg(not(any(windows, target_os = "linux")))]
+            #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
             let _ = (ui, actions, folder);
         },
     );
@@ -2269,6 +2311,30 @@ mod pending_notice_tests {
     }
 
     #[test]
+    fn country_display_options_fit_in_both_interface_languages() {
+        for language in LANGUAGES {
+            i18n::in_language(language, || {
+                for (size, _) in WINDOWS {
+                    let state = connected(ConnectionState::Disconnected);
+                    let mut screen = TestScreen::new(size);
+                    let shown = screen.settle(|ui| general(ui, &state, &mut Vec::new()));
+                    for label in [
+                        tr!("country-markers"),
+                        tr!("country-flags"),
+                        tr!("country-codes"),
+                    ] {
+                        let (_, rect) = shown.iter().find(|(text, _)| *text == label).unwrap();
+                        assert!(
+                            rect.left() >= 0.0 && rect.right() <= size.x,
+                            "{label}: {rect:?}"
+                        );
+                    }
+                }
+            });
+        }
+    }
+
+    #[test]
     fn the_xray_cards_centre_their_rings_on_their_text() {
         for language in LANGUAGES {
             i18n::in_language(language, || {
@@ -2613,6 +2679,32 @@ mod pending_notice_tests {
                         .any(|(text, _)| *text == tr!("private-networks-needs-lan")),
                     "{language:?}: {shown:?}"
                 );
+            });
+        }
+    }
+
+    #[test]
+    fn service_status_dot_is_centred_on_title() {
+        for language in LANGUAGES {
+            i18n::in_language(language, || {
+                let state = State::default();
+                let (size, nav) = WINDOWS[0];
+                let mut screen = TestScreen::new(size);
+                let (texts, circles) = screen.settle_with_circles(|ui| {
+                    page(ui, nav, |ui| service(ui, &state, &mut Vec::new()));
+                });
+                let label = texts
+                    .iter()
+                    .find(|(text, _)| *text == tr!("service-label"))
+                    .unwrap_or_else(|| panic!("service-label missing in {language:?}"))
+                    .1;
+                let (dot, _) = circles
+                    .iter()
+                    .find(|(_, radius)| (*radius - 5.0).abs() < 0.01)
+                    .expect("service status dot is painted");
+                assert!(dot.x < label.left(), "dot stands left of the title");
+                let offset = (dot.y - label.center().y).abs();
+                assert!(offset <= 0.5, "{language:?}: dot offset {offset}");
             });
         }
     }

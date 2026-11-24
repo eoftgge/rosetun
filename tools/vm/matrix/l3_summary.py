@@ -34,6 +34,8 @@ TWO_HOP = ('two-hop.positive.http.ipv4', 'two-hop.positive.http.ipv6', 'two-hop.
            'two-hop.engine-restart', 'two-hop.dependency-removed', 'two-hop.lockdown', 'two-hop.allow-lan',
            'two-hop.target-subscription-fallback', 'two-hop.xray-fragment',
            'two-hop.positive.xray-first-hop')
+# Additional protocol rows marked `not-run` in scenarios-l3.tsv when no fixture is provisioned for them.
+UNRUN_PROTOCOLS = ('protocol.tuic', 'protocol.anytls')
 # The window each scenario ran in: the label of the window and its number among the windows with that label,
 # from zero. A window is a protected session and its label is the function of run-l3.sh that opened it
 # (connect_with is called from that function), so scenarios that share a session share a window: `identity`
@@ -84,6 +86,7 @@ WINDOW_OF = {
     # router (test image v6b); without that router the scenario is SKIP and opens no window.
     'ipv6.neighbor': ('neighbor', 0),
     **dict.fromkeys(TWO_HOP),
+    **dict.fromkeys(UNRUN_PROTOCOLS),
 }
 # A scenario that opens a session of its own only when none is open: `forwarded` connects only if `inbound`
 # did not (it stopped before its connect, or the session was lost), and its window is then the one judged.

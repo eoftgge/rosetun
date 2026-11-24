@@ -15,4 +15,5 @@ Download and verify the installer. Install Rosetun, add your provider subscripti
 - [How do I check protection?](../docs/protection/)
 - [No network or the app will not open?](../docs/troubleshooting/)
 - [What works on Linux?](../docs/linux/)
+- [What works on macOS?](../docs/macos/)
 - [What data is sent?](../docs/privacy/)

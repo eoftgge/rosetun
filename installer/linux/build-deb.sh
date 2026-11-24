@@ -206,6 +206,7 @@ place 0644 installer/third-party/xray-mpl-2.0.txt "$licenses/xray-mpl-2.0.txt"
 for font_license in crates/rosetun-gui/assets/fonts/OFL-*.txt; do
     place 0644 "$font_license" "$licenses/${font_license##*/}"
 done
+place 0644 crates/rosetun-gui/assets/flags/MIT-flag-icons.txt "$licenses/MIT-flag-icons.txt"
 cargo -q about generate --fail --locked installer/third-party.hbs -o "$root/$licenses/third-party.html"
 chmod 0644 "$root/$licenses/third-party.html"
 cat >"$root/$licenses/sing-box-source.txt" <<NOTICE

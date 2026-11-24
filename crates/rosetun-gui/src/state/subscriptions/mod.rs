@@ -84,6 +84,54 @@ impl fmt::Debug for OpenedLink {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum UserAgentChoice {
+    #[default]
+    Rosetun,
+    Happ,
+    Custom,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct UserAgentDraft {
+    pub(crate) choice: UserAgentChoice,
+    pub(crate) custom: String,
+}
+
+impl UserAgentDraft {
+    pub(crate) fn from_saved(saved: Option<&str>) -> Self {
+        match saved.map(str::trim).filter(|value| !value.is_empty()) {
+            None => Self::default(),
+            Some(value) if value == rosetun_core::HAPP_USER_AGENT => Self {
+                choice: UserAgentChoice::Happ,
+                custom: String::new(),
+            },
+            Some(value) => Self {
+                choice: UserAgentChoice::Custom,
+                custom: value.to_owned(),
+            },
+        }
+    }
+
+    pub(crate) fn effective_value(&self) -> Option<String> {
+        match self.choice {
+            UserAgentChoice::Rosetun => None,
+            UserAgentChoice::Happ => Some(rosetun_core::HAPP_USER_AGENT.to_owned()),
+            UserAgentChoice::Custom => {
+                let trimmed = self.custom.trim();
+                (!trimmed.is_empty()).then(|| trimmed.to_owned())
+            }
+        }
+    }
+
+    pub(crate) fn is_valid(&self) -> bool {
+        match self.choice {
+            UserAgentChoice::Rosetun | UserAgentChoice::Happ => true,
+            UserAgentChoice::Custom => optional_user_agent_valid(&self.custom),
+        }
+    }
+}
+
 pub(crate) struct AddDialog {
     pub(crate) proxy_tab: bool,
     pub(crate) proxy_uri: String,
@@ -94,6 +142,7 @@ pub(crate) struct AddDialog {
     pub(crate) editing_proxy: Option<SubscriptionId>,
     pub(crate) url: String,
     pub(crate) name: String,
+    pub(crate) user_agent: UserAgentDraft,
     pub(crate) send_hwid: bool,
     pub(crate) busy: bool,
     pub(crate) error: Option<AddFromUrlError>,
@@ -115,6 +164,7 @@ impl Default for AddDialog {
             editing_proxy: None,
             url: String::new(),
             name: String::new(),
+            user_agent: UserAgentDraft::default(),
             send_hwid: true,
             busy: false,
             error: None,
@@ -126,6 +176,13 @@ impl Default for AddDialog {
     }
 }
 
+pub(crate) fn optional_user_agent_valid(text: &str) -> bool {
+    let trimmed = text.trim();
+    trimmed.is_empty()
+        || (trimmed.len() <= rosetun_core::SUBSCRIPTION_USER_AGENT_LIMIT
+            && rosetun_core::is_valid_user_agent(trimmed))
+}
+
 /// A port typed in the proxy form: digits only, 1 to 65535.
 pub(crate) fn parse_proxy_port(text: &str) -> Option<u16> {
     if text.is_empty() || !text.bytes().all(|byte| byte.is_ascii_digit()) {
@@ -135,6 +192,10 @@ pub(crate) fn parse_proxy_port(text: &str) -> Option<u16> {
 }
 
 impl AddDialog {
+    pub(crate) fn user_agent_valid(&self) -> bool {
+        self.user_agent.is_valid()
+    }
+
     pub(crate) fn select_proxy_tab(&mut self, proxy: bool) -> bool {
         if self.busy || self.qr.busy() || self.editing_proxy.is_some() || self.proxy_tab == proxy {
             return false;
@@ -205,8 +266,17 @@ pub(crate) struct RenameDialog {
     /// The name as the dialog first showed it: submitting it unchanged saves nothing.
     pub(crate) original: String,
     pub(crate) name: String,
+    /// The saved `User-Agent` as the dialog first showed it (`None` means default).
+    pub(crate) original_user_agent: Option<String>,
+    pub(crate) user_agent: UserAgentDraft,
     pub(crate) error: Option<String>,
     pub(crate) focus: bool,
+}
+
+impl RenameDialog {
+    pub(crate) fn user_agent_valid(&self) -> bool {
+        self.user_agent.is_valid()
+    }
 }
 
 pub(crate) enum UpdateOutcome {
@@ -571,17 +641,25 @@ impl State {
                             Box::new(node.clone()),
                         ));
                     }
+                    if !dialog.user_agent_valid() {
+                        dialog.error = Some(AddFromUrlError::Fetch {
+                            source: rosetun_core::FetchError::InvalidUserAgent,
+                            message: String::new(),
+                        });
+                        return None;
+                    }
                     match rosetun_core::normalize_subscription_url(&dialog.url) {
                         Ok(input) => {
                             dialog.busy = true;
                             dialog.error = None;
                             let name = (!dialog.name.trim().is_empty())
                                 .then(|| dialog.name.trim().to_owned());
+                            let user_agent = dialog.user_agent.effective_value();
                             return Some(Job::Add {
                                 input,
                                 options: AddOptions {
                                     name,
-                                    user_agent: None,
+                                    user_agent,
                                     send_hwid: dialog.send_hwid,
                                 },
                             });
@@ -671,10 +749,14 @@ impl State {
                         self.config.subscriptions.iter().find(|sub| sub.id == id)
                 {
                     let original = self.text(&subscription.name);
+                    let user_agent = UserAgentDraft::from_saved(subscription.user_agent.as_deref());
+                    let original_user_agent = user_agent.effective_value();
                     self.subscriptions.rename = Some(RenameDialog {
                         id,
                         name: original.clone(),
                         original,
+                        original_user_agent,
+                        user_agent,
                         error: None,
                         focus: true,
                     });
@@ -691,14 +773,25 @@ impl State {
                 {
                     let name = dialog.name.trim();
                     if !name.is_empty() {
-                        if name == dialog.original.trim() {
-                            self.subscriptions.rename = None;
+                        if dialog.user_agent_valid() {
+                            let user_agent = dialog.user_agent.effective_value();
+                            if name == dialog.original.trim()
+                                && user_agent == dialog.original_user_agent
+                            {
+                                self.subscriptions.rename = None;
+                            } else {
+                                self.operations.renaming = true;
+                                dialog.error = None;
+                                return Some(Job::RenameSubscription(
+                                    dialog.id.clone(),
+                                    name.to_owned(),
+                                    user_agent,
+                                ));
+                            }
                         } else {
-                            self.operations.renaming = true;
-                            dialog.error = None;
-                            return Some(Job::RenameSubscription(
-                                dialog.id.clone(),
-                                name.to_owned(),
+                            dialog.error = Some(errors::rename_subscription(
+                                crate::i18n::language(),
+                                &rosetun_core::RenameSubscriptionError::InvalidUserAgent,
                             ));
                         }
                     }

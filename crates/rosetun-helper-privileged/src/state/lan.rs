@@ -203,10 +203,16 @@ impl LanRuntime {
         self.servers.clear();
     }
 
-    fn read_segment(&self, tun: &TunSettings, servers: &[IpAddr], log: bool) -> LanSegment {
+    fn read_segment(
+        &self,
+        tun: &TunSettings,
+        tunnel_alias: &str,
+        servers: &[IpAddr],
+        log: bool,
+    ) -> LanSegment {
         let tunnel_networks = tunnel_networks(tun);
         let query = SegmentQuery {
-            tunnel_alias: &tun.name,
+            tunnel_alias,
             tunnel_networks: &tunnel_networks,
             servers,
         };
@@ -234,7 +240,7 @@ impl LanRuntime {
             return LanAccess::default();
         }
         LanAccess {
-            segment: self.read_segment(&settings.tun, servers, true),
+            segment: self.read_segment(&settings.tun, &settings.tun.name, servers, true),
             private_networks: settings.private_networks,
             ipv6_multicast: settings.tun.ipv6.is_some(),
             servers: canonical_servers(servers),
@@ -264,14 +270,19 @@ impl LanRuntime {
     }
 
     /// One tick of a running session: the new segment, once it has held.
-    fn session_segment_changed(&mut self, tun: &TunSettings) -> Option<LanSegment> {
-        let read = self.read_segment(tun, &self.servers, false);
+    fn session_segment_changed(
+        &mut self,
+        tun: &TunSettings,
+        tunnel_alias: &str,
+    ) -> Option<LanSegment> {
+        let read = self.read_segment(tun, tunnel_alias, &self.servers, false);
         self.watch.observe(&self.access.segment, read)
     }
 
     /// One tick without a session: the new segment, once it has held.
     fn lockdown_segment_changed(&mut self) -> Option<LanSegment> {
-        let read = self.read_segment(&TunSettings::default(), &[], false);
+        let default_tun = TunSettings::default();
+        let read = self.read_segment(&default_tun, &default_tun.name, &[], false);
         self.watch.observe(&self.lockdown_segment, read)
     }
 }
@@ -299,7 +310,8 @@ impl Session {
             .as_ref()
             .map(|request| request.settings.tun.clone())
             .unwrap_or_default();
-        self.lan.read_segment(&tun, servers, false)
+        let alias = self.effective_tun_name(&tun);
+        self.lan.read_segment(&tun, alias, servers, false)
     }
 
     /// The session's servers are these from now on. Lockdown's persistent
@@ -360,7 +372,11 @@ impl Session {
             tracing::info!("the addresses a shared proxy listens on changed");
             return true;
         }
-        let Some(segment) = self.lan.session_segment_changed(&settings.tun) else {
+        let tunnel_alias = self.effective_tun_name(&settings.tun).to_owned();
+        let Some(segment) = self
+            .lan
+            .session_segment_changed(&settings.tun, &tunnel_alias)
+        else {
             return false;
         };
         tracing::info!(networks = segment.networks().len(), "local network changed");

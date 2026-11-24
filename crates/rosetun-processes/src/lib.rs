@@ -2,6 +2,12 @@
 
 #[cfg(target_os = "linux")]
 mod linux;
+#[cfg(target_os = "macos")]
+#[expect(
+    unsafe_code,
+    reason = "Darwin libproc and CoreFoundation FFI; every unsafe block carries a SAFETY comment"
+)]
+mod macos;
 #[cfg(windows)]
 #[expect(
     unsafe_code,
@@ -35,7 +41,12 @@ pub fn running_processes() -> Result<Vec<RunningProcess>, ProcessListError> {
     linux::running_processes()
 }
 
-#[cfg(not(any(windows, target_os = "linux")))]
+#[cfg(target_os = "macos")]
+pub fn running_processes() -> Result<Vec<RunningProcess>, ProcessListError> {
+    macos::running_processes()
+}
+
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
 pub fn running_processes() -> Result<Vec<RunningProcess>, ProcessListError> {
     Ok(Vec::new())
 }
@@ -54,7 +65,14 @@ pub fn file_description(path: &Path, language: &str) -> Option<String> {
     linux::file_description(path, language)
 }
 
-#[cfg(not(any(windows, target_os = "linux")))]
+/// The display name from the enclosing macOS `.app` bundle's `Info.plist`, or
+/// the bundle's stem when the plist cannot be read.
+#[cfg(target_os = "macos")]
+pub fn file_description(path: &Path, _language: &str) -> Option<String> {
+    macos::file_description(path)
+}
+
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
 pub fn file_description(_path: &Path, _language: &str) -> Option<String> {
     None
 }
@@ -69,7 +87,7 @@ pub fn program_icon_file(path: &Path, size_px: u32) -> Option<PathBuf> {
 mod tests {
     use super::*;
 
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     #[test]
     fn current_process_is_listed() {
         let current = std::env::current_exe().unwrap();
@@ -105,7 +123,7 @@ mod tests {
         assert_eq!(file_description(Path::new("app.exe"), "en"), None);
     }
 
-    #[cfg(not(any(windows, target_os = "linux")))]
+    #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
     #[test]
     fn other_platforms_return_an_empty_list() {
         assert!(running_processes().unwrap().is_empty());

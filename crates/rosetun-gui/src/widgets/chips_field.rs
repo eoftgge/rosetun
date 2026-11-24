@@ -208,7 +208,7 @@ impl<'a> ChipsField<'a> {
         let invalid = self.chips.iter().any(|chip| chip.error.is_some());
         let palette = theme::palette();
         let border = if invalid {
-            theme::ERROR
+            theme::error()
         } else if focused {
             palette.accent_base
         } else {
@@ -324,16 +324,16 @@ fn paint_chip(
     let palette = theme::palette();
     let (fill, stroke, text) = match chip.error {
         Some(_) => (
-            theme::ERROR.gamma_multiply(theme::alpha::TINT),
-            theme::ERROR,
-            theme::ERROR,
+            theme::error().gamma_multiply(theme::alpha::TINT),
+            theme::error(),
+            theme::error(),
         ),
         None => (palette.card, palette.border, palette.text),
     };
     let (fill, stroke, text) = if enabled {
         (fill, stroke, text)
     } else {
-        (fill, stroke, theme::DISABLED)
+        (fill, stroke, theme::disabled())
     };
     let painter = ui.painter_at(rect);
     painter.rect(
@@ -388,7 +388,7 @@ pub(crate) fn cross_button(
     );
     let palette = theme::palette();
     let color = if !enabled {
-        theme::DISABLED
+        theme::disabled()
     } else if response.hovered() {
         palette.text
     } else {
@@ -577,21 +577,21 @@ mod tests {
             shown
                 .painted
                 .iter()
-                .any(|rect| rect.rect == shown.rect && rect.stroke.color == theme::ERROR)
+                .any(|rect| rect.rect == shown.rect && rect.stroke.color == theme::error())
         );
         assert_eq!(
             shown
                 .painted
                 .iter()
                 .filter(
-                    |rect| rect.rect.height() == CHIP_HEIGHT && rect.stroke.color == theme::ERROR
+                    |rect| rect.rect.height() == CHIP_HEIGHT && rect.stroke.color == theme::error()
                 )
                 .count(),
             1
         );
         let shown = frame(&ctx, &chips[..1], &mut String::new(), Vec::new(), false);
         assert!(shown.painted.iter().any(|rect| rect.rect == shown.rect
-            && rect.stroke.color != theme::ERROR
+            && rect.stroke.color != theme::error()
             && rect.fill == theme::palette().input));
     }
 

@@ -16,4 +16,5 @@ aliases = ["/ru/help/"]
 - [Как проверить защиту?](../docs/protection/)
 - [Нет сети или приложение не открывается?](../docs/troubleshooting/)
 - [Что доступно на Linux?](../docs/linux/)
+- [Что доступно на macOS?](../docs/macos/)
 - [Какие данные отправляются?](../docs/privacy/)

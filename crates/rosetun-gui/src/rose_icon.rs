@@ -2,8 +2,6 @@
 use eframe::egui::Color32;
 
 use crate::rose_shape::PETALS;
-#[cfg(any(windows, target_os = "linux", test))]
-use crate::theme;
 use crate::theme::Palette;
 
 const SAMPLES_PER_AXIS: usize = 4;
@@ -55,8 +53,18 @@ fn badge_color(state: TrayState, palette: &Palette) -> Option<Color32> {
     match state {
         TrayState::Connected | TrayState::Disconnected => None,
         TrayState::Connecting => Some(palette.accent_bright),
-        TrayState::Blocked | TrayState::Failed => Some(theme::ERROR),
-        TrayState::ServiceUnavailable => Some(theme::DISABLED),
+        TrayState::Blocked | TrayState::Failed => Some(palette.error()),
+        TrayState::ServiceUnavailable => Some(palette.disabled()),
+    }
+}
+
+#[cfg(any(windows, target_os = "linux", test))]
+fn badge_mark_color(state: TrayState, palette: &Palette) -> Color32 {
+    if matches!(state, TrayState::Connecting) && !palette.light && palette.on_accent != palette.text
+    {
+        palette.on_accent
+    } else {
+        Color32::WHITE
     }
 }
 
@@ -137,7 +145,7 @@ fn sample_badge(
         return Some(None);
     }
     Some(Some(if badge_mark(point, state, grid.pixel) {
-        Color32::WHITE
+        badge_mark_color(state, palette)
     } else {
         color
     }))
@@ -161,7 +169,7 @@ fn sample(
         #[cfg(any(windows, target_os = "linux", test))]
         RoseIcon::Tray(TrayState::Connected) => palette.accent_base,
         #[cfg(any(windows, target_os = "linux", test))]
-        RoseIcon::Tray(_) => theme::DISCONNECTED,
+        RoseIcon::Tray(_) => palette.disconnected(),
     };
     #[cfg(any(windows, target_os = "linux", test))]
     let opacity = if matches!(icon, RoseIcon::Tray(TrayState::ServiceUnavailable)) {
@@ -566,23 +574,24 @@ mod tests {
         let images = states.map(|state| rose_icon_rgba(48, RoseIcon::Tray(state), &Palette::ROSE));
         for (state, rgba) in states.into_iter().zip(&images) {
             let petal = pixel(rgba, 48, 18, 12);
+            let disconnected = Palette::ROSE.disconnected();
             assert_eq!(
                 petal,
                 match state {
                     TrayState::Connected => Palette::ROSE.accent_base.to_array(),
                     TrayState::ServiceUnavailable => [
-                        ((u32::from(theme::DISCONNECTED.r()) * 140
+                        ((u32::from(disconnected.r()) * 140
                             + u32::from(Palette::ROSE.bg.r()) * 115)
                             / 255) as u8,
-                        ((u32::from(theme::DISCONNECTED.g()) * 140
+                        ((u32::from(disconnected.g()) * 140
                             + u32::from(Palette::ROSE.bg.g()) * 115)
                             / 255) as u8,
-                        ((u32::from(theme::DISCONNECTED.b()) * 140
+                        ((u32::from(disconnected.b()) * 140
                             + u32::from(Palette::ROSE.bg.b()) * 115)
                             / 255) as u8,
                         255,
                     ],
-                    _ => theme::DISCONNECTED.to_array(),
+                    _ => disconnected.to_array(),
                 },
                 "{state:?} petal"
             );
@@ -609,9 +618,13 @@ mod tests {
     fn tray_badges_have_coloured_discs_white_marks_and_cutouts_on_the_plate() {
         for (state, color, mark) in [
             (TrayState::Connecting, Palette::ROSE.accent_bright, (35, 27)),
-            (TrayState::Blocked, theme::ERROR, (35, 38)),
-            (TrayState::Failed, theme::ERROR, (35, 32)),
-            (TrayState::ServiceUnavailable, theme::DISABLED, (35, 35)),
+            (TrayState::Blocked, Palette::ROSE.error(), (35, 38)),
+            (TrayState::Failed, Palette::ROSE.error(), (35, 32)),
+            (
+                TrayState::ServiceUnavailable,
+                Palette::ROSE.disabled(),
+                (35, 35),
+            ),
         ] {
             let rgba = rose_icon_rgba(48, RoseIcon::Tray(state), &Palette::ROSE);
             assert_eq!(pixel(&rgba, 48, 35, 45), color.to_array(), "{state:?} disc");
@@ -624,6 +637,27 @@ mod tests {
                 pixel(&rgba, 48, 34, 21),
                 Palette::ROSE.bg.to_array(),
                 "{state:?} cutout"
+            );
+        }
+    }
+
+    #[test]
+    fn black_and_white_palettes_keep_distinct_tray_states_and_white_marks() {
+        for palette in [&Palette::BLACK, &Palette::WHITE] {
+            let images =
+                TRAY_STATES.map(|state| rose_icon_rgba(32, RoseIcon::Tray(state), palette));
+            assert_eq!(
+                images
+                    .iter()
+                    .collect::<std::collections::HashSet<_>>()
+                    .len(),
+                6,
+            );
+            let connecting = rose_icon_rgba(48, RoseIcon::Tray(TrayState::Connecting), palette);
+            assert_eq!(
+                pixel(&connecting, 48, 35, 27),
+                Color32::WHITE.to_array(),
+                "connecting mark should stay white on dark/rose badge disc"
             );
         }
     }
@@ -699,9 +733,10 @@ mod tests {
         assert_eq!(BadgeGrid::new(48).shift, 0.0);
         // At 20 px the disc covers columns 10..20: column 9 has no disc colour.
         let rgba = rose_icon_rgba(20, RoseIcon::Tray(TrayState::Failed), &Palette::ROSE);
-        assert_eq!(pixel(&rgba, 20, 15, 10)[..3], theme::ERROR.to_array()[..3]);
-        assert_ne!(pixel(&rgba, 20, 9, 15), theme::ERROR.to_array());
-        assert_eq!(pixel(&rgba, 20, 10, 15), theme::ERROR.to_array());
+        let error = Palette::ROSE.error().to_array();
+        assert_eq!(pixel(&rgba, 20, 15, 10)[..3], error[..3]);
+        assert_ne!(pixel(&rgba, 20, 9, 15), error);
+        assert_eq!(pixel(&rgba, 20, 10, 15), error);
     }
 
     #[test]

@@ -162,8 +162,7 @@ impl App {
             store.path().parent().map(std::borrow::ToOwned::to_owned);
         state.settings.screen.licenses_folder = std::env::current_exe()
             .ok()
-            .and_then(|exe| exe.parent().map(|dir| dir.join("licenses")))
-            .filter(|dir| dir.is_dir());
+            .and_then(|exe| find_licenses_folder(&exe));
         let workers = worker::start(store, tx, repaint.clone());
         #[cfg(windows)]
         workers.move_autostart_to_task();
@@ -499,6 +498,12 @@ impl App {
             #[cfg(any(windows, target_os = "linux", test))]
             Job::AnnounceUpdate(version) => self.workers.announce_update(version),
             Job::CheckUpdates => self.workers.check_updates(),
+            Job::DownloadUpdate {
+                version,
+                via_vpn,
+                cancel,
+            } => self.workers.download_update(version, via_vpn, cancel),
+            Job::InstallUpdate(update) => self.workers.install_update(update),
             Job::SetDns(dns) => self.workers.set_dns(dns),
             Job::ResetSettings => self.workers.reset_settings(),
             Job::SetVerboseLog(on) => self.workers.set_verbose_log(on),
@@ -507,7 +512,7 @@ impl App {
                 snapshot,
                 own_alias,
             } => self.workers.save_report(snapshot, own_alias),
-            #[cfg(any(windows, target_os = "linux"))]
+            #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
             Job::OpenFolder(folder) => self.workers.open_folder(folder),
             Job::SelectNode(subscription, node) => self.workers.select_node(subscription, node),
             Job::SelectRuleSet(id) => self.workers.select_rule_set(id),
@@ -548,6 +553,16 @@ impl App {
             Job::MoveRules(set, rules, to_index) => self.workers.move_rules(set, rules, to_index),
             Job::RemoveRule(set, rule) => self.workers.remove_rule(set, rule),
             Job::RemoveRules(set, rules) => self.workers.remove_rules(set, rules),
+            Job::GroupRules(set, rules, name, target) => {
+                self.workers.group_rules(set, rules, name, target);
+            }
+            Job::AddRulesToGroup(set, rules, target_group) => {
+                self.workers.add_rules_to_group(set, rules, target_group);
+            }
+            Job::UngroupRule(set, rule) => self.workers.ungroup_rule(set, rule),
+            Job::RemoveGroupItem(set, rule, index) => {
+                self.workers.remove_group_item(set, rule, index);
+            }
             Job::RestoreRuleSets(snapshot) => self.workers.restore_rule_sets(snapshot),
             Job::SetKillSwitch(enabled) => self.workers.set_kill_switch(enabled),
             Job::SetLockdown(enabled) => self.workers.set_lockdown(enabled),
@@ -583,7 +598,9 @@ impl App {
             Job::LookupExit { generation, route } => self.workers.lookup_exit(generation, route),
             Job::UpdateAll => self.workers.update_all(),
             Job::Remove(id) => self.workers.remove(id),
-            Job::RenameSubscription(id, name) => self.workers.rename_subscription(id, name),
+            Job::RenameSubscription(id, name, user_agent) => {
+                self.workers.rename_subscription(id, name, user_agent);
+            }
             Job::MoveSubscription(id, to_index) => self.workers.move_subscription(id, to_index),
         }
     }
@@ -601,12 +618,12 @@ fn session_ending() -> bool {
     false
 }
 
-#[cfg(all(any(windows, target_os = "linux"), not(test)))]
+#[cfg(all(any(windows, target_os = "linux", target_os = "macos"), not(test)))]
 fn system_language() -> Option<i18n::Language> {
     rosetun_shell::user_language().and_then(|locale| i18n::language_of_locale(&locale))
 }
 
-#[cfg(all(not(any(windows, target_os = "linux")), not(test)))]
+#[cfg(all(not(any(windows, target_os = "linux", target_os = "macos")), not(test)))]
 fn system_language() -> Option<i18n::Language> {
     None
 }
@@ -1033,11 +1050,38 @@ fn repaint_delay(clock_shown: bool, next_wake: Option<Duration>) -> Option<Durat
     }
 }
 
+fn find_licenses_folder(exe: &std::path::Path) -> Option<std::path::PathBuf> {
+    if cfg!(target_os = "macos")
+        && let Some(dir) = macos_bundle_licenses_folder(exe)
+    {
+        return Some(dir);
+    }
+    exe.parent()
+        .map(|dir| dir.join("licenses"))
+        .filter(|dir| dir.is_dir())
+}
+
+fn macos_bundle_licenses_folder(exe: &std::path::Path) -> Option<std::path::PathBuf> {
+    let macos_dir = exe.parent()?;
+    if macos_dir.file_name() != Some(std::ffi::OsStr::new("MacOS")) {
+        return None;
+    }
+    let contents_dir = macos_dir.parent()?;
+    if contents_dir.file_name() != Some(std::ffi::OsStr::new("Contents")) {
+        return None;
+    }
+    let dir = contents_dir.join("Resources").join("licenses");
+    dir.is_dir().then_some(dir)
+}
+
 #[cfg(test)]
 mod tests {
     #[cfg(windows)]
     use super::centered_position;
-    use super::{initial_accent, initial_scale, next_scale};
+    use super::{
+        find_licenses_folder, initial_accent, initial_scale, macos_bundle_licenses_folder,
+        next_scale,
+    };
     #[cfg(windows)]
     use eframe::egui;
     use rosetun_core::Store;
@@ -1215,5 +1259,42 @@ mod tests",
             super::repaint_delay(true, Some(Duration::ZERO)),
             Some(Duration::ZERO)
         );
+    }
+
+    #[test]
+    fn licenses_folder_finds_sibling_and_macos_bundle_resources() {
+        let root = std::env::temp_dir().join(format!(
+            "rosetun-gui-licenses-folder-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+
+        let sibling_exe = root.join("flat").join("rosetun-gui");
+        let sibling_licenses = root.join("flat").join("licenses");
+        fs::create_dir_all(&sibling_licenses).unwrap();
+        assert_eq!(find_licenses_folder(&sibling_exe), Some(sibling_licenses));
+        assert_eq!(macos_bundle_licenses_folder(&sibling_exe), None);
+
+        let bundle_exe = root
+            .join("Rosetun.app")
+            .join("Contents")
+            .join("MacOS")
+            .join("rosetun-gui");
+        let bundle_licenses = root
+            .join("Rosetun.app")
+            .join("Contents")
+            .join("Resources")
+            .join("licenses");
+        fs::create_dir_all(bundle_exe.parent().unwrap()).unwrap();
+        fs::create_dir_all(&bundle_licenses).unwrap();
+        assert_eq!(
+            macos_bundle_licenses_folder(&bundle_exe),
+            Some(bundle_licenses.clone())
+        );
+        if cfg!(target_os = "macos") {
+            assert_eq!(find_licenses_folder(&bundle_exe), Some(bundle_licenses));
+        }
+
+        fs::remove_dir_all(&root).unwrap();
     }
 }

@@ -122,7 +122,7 @@ mod tests {
                 }],
                 lists: Vec::new(),
                 settings: Settings::default(),
-                rule_templates: Vec::new(),
+                rule_groups: Vec::new(),
             })),
         };
         assert_eq!(roundtrip(&frame), frame);

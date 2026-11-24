@@ -386,8 +386,11 @@ fn reason_text(config: &AppConfig, reason: &Reason) -> String {
             };
             match source {
                 RuleSource::Condition(_) => format!("rule {number}"),
-                RuleSource::Template { template, .. } => {
-                    format!("template {} · rule {number}", template.key())
+                RuleSource::Group { name, .. } => {
+                    format!(
+                        "group \u{201c}{}\u{201d} · rule {number}",
+                        terminal_text(name)
+                    )
                 }
                 RuleSource::List { list, category } => {
                     let name = config
@@ -498,7 +501,7 @@ mod tests {
             ),
             rule(
                 "four",
-                RuleMatcher::Template(rosetun_config::RuleTemplate::Torrents),
+                rosetun_config::RuleTemplate::Torrents.to_group("Torrents"),
                 RuleTarget::Block,
             ),
         ]);

@@ -12,7 +12,9 @@ pub use errors::RoutingError;
 pub use platform::backend;
 #[cfg(target_os = "linux")]
 pub use platform::backend_with_cgroups;
-pub use platform::{TunnelAdapterState, tunnel_adapter_present, tunnel_adapter_state};
+pub use platform::{
+    TunnelAdapterState, tunnel_adapter_present, tunnel_adapter_state, tunnel_interface_by_ipv4,
+};
 pub use rosetun_config::ProtectionCapabilities;
 pub use route::route_interface;
 

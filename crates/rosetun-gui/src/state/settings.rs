@@ -122,6 +122,7 @@ fn waits_for_save(action: &Action) -> bool {
         | Action::SetLanguage(_)
         | Action::SetAccent(_)
         | Action::SetReduceMotion(_)
+        | Action::SetShowCountryFlags(_)
         | Action::SetDelayMode(_)
         | Action::SetConnectOnStart(_)
         | Action::SetAutoReconnect(_)
@@ -153,7 +154,9 @@ fn waits_for_save(action: &Action) -> bool {
         | Action::SetOnQuit(_)
         | Action::SetNotifications(_) => true,
         #[cfg(any(windows, target_os = "linux"))]
-        Action::ShowReportFolder | Action::OpenFolder(_) => true,
+        Action::ShowReportFolder => true,
+        #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
+        Action::OpenFolder(_) => true,
         _ => false,
     }
 }
@@ -343,7 +346,7 @@ impl State {
         !self.config_ready && self.config_error.is_some()
     }
 
-    #[cfg(any(windows, target_os = "linux", test))]
+    #[cfg(any(windows, target_os = "linux", target_os = "macos", test))]
     pub(crate) fn can_open_folders(&self) -> bool {
         (self.config_ready || self.config_unreadable())
             && !self.settings_busy_shown(self.settings.now_ms)
@@ -351,7 +354,14 @@ impl State {
 
     #[cfg(any(windows, target_os = "linux", test))]
     pub(crate) fn can_save_report(&self) -> bool {
-        (self.config_ready || self.config_unreadable()) && !self.settings.screen.report_running
+        #[cfg(any(windows, target_os = "linux"))]
+        {
+            (self.config_ready || self.config_unreadable()) && !self.settings.screen.report_running
+        }
+        #[cfg(not(any(windows, target_os = "linux")))]
+        {
+            false
+        }
     }
 
     /// Whether closing the window hides it to the tray. With unreadable
@@ -484,7 +494,7 @@ impl State {
                     }
                 }
             }
-            #[cfg(any(windows, target_os = "linux"))]
+            #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
             WorkerEvent::OpenFolder(result) => {
                 let error = result.err().map(|error| {
                     let message = tr!("error-open-folder", detail = error.to_string());
@@ -559,6 +569,12 @@ impl State {
             Action::SetReduceMotion(enabled) => {
                 if self.can_edit_settings() && self.config.interface.reduce_motion != enabled {
                     return self.start_settings(Job::Setting(SettingChange::ReduceMotion(enabled)));
+                }
+            }
+            Action::SetShowCountryFlags(enabled) => {
+                if self.can_edit_settings() && self.config.interface.show_country_flags != enabled {
+                    return self
+                        .start_settings(Job::Setting(SettingChange::ShowCountryFlags(enabled)));
                 }
             }
             Action::SetDelayMode(mode) => {
@@ -806,7 +822,7 @@ impl State {
                     return self.start_settings(Job::OpenFolder(folder));
                 }
             }
-            #[cfg(any(windows, target_os = "linux"))]
+            #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
             Action::OpenFolder(folder) => {
                 let path = match folder {
                     AboutFolder::Config => &self.settings.screen.config_folder,

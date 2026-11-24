@@ -226,6 +226,7 @@ fn the_warning_does_not_outlive_the_session() {
     assert_eq!(state.missing_protection(), None);
 }
 
+#[cfg(any(windows, target_os = "linux"))]
 #[test]
 fn the_tray_tooltip_carries_the_warning_only_while_it_is_shown() {
     let missing = connected_with(dns_lock_missing());

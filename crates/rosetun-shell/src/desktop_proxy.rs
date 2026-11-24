@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 
 /// Addresses that never go through the proxy, in the desktop's own words: this
 /// computer and the private networks, as other clients set it.
+#[cfg(any(windows, target_os = "linux"))]
 pub(crate) const LOOPBACK_V4: &str = "127.0.0.1";
 
 /// What a desktop keeps of its proxy settings, as read before the change.
@@ -27,6 +28,10 @@ pub(crate) enum SavedSettings {
     Kde(crate::desktop_proxy_linux::SavedKde),
     #[cfg(target_os = "linux")]
     Gnome(crate::desktop_proxy_linux::SavedGnome),
+    /// Keeps `SavedSettings` inhabited on platforms without an automatic desktop
+    /// proxy backend; `default_backend()` returns `None` there.
+    #[cfg(not(any(windows, target_os = "linux")))]
+    Unsupported,
     /// Stands in for a real backend's settings in tests.
     #[cfg(test)]
     Fake(String),

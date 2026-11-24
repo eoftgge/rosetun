@@ -212,11 +212,11 @@ mod tests {
     #[test]
     fn hero_title_tells_an_unavailable_service_from_one_not_answered_yet() {
         let mut state = State::default();
-        assert_eq!(hero_title(&state), (tr!("checking"), theme::DISCONNECTED));
+        assert_eq!(hero_title(&state), (tr!("checking"), theme::disconnected()));
         state.helper_error = Some(rosetun_ipc::ClientError::Closed);
         assert_eq!(
             hero_title(&state),
-            (tr!("connection-unavailable"), theme::ERROR)
+            (tr!("connection-unavailable"), theme::error())
         );
         state.helper_available = true;
         state.helper_error = None;
@@ -319,6 +319,27 @@ mod tests {
             });
         }
     }
+
+    #[test]
+    fn server_button_without_selected_server_vertically_centers_placeholder() {
+        for language in [i18n::Language::English, i18n::Language::Russian] {
+            i18n::in_language(language, || {
+                let state = State::default();
+                let mut screen = crate::test_ui::TestScreen::new(egui::vec2(960.0, 640.0));
+                let texts = screen.settle(|ui| {
+                    server_button(ui, &state);
+                });
+                let select_rect = text_rect(&texts, &tr!("select-server"));
+                let change_rect = text_rect(&texts, &tr!("server-change"));
+                assert!(
+                    (select_rect.center().y - change_rect.center().y).abs() <= 2.0,
+                    "placeholder y: {}, change y: {}",
+                    select_rect.center().y,
+                    change_rect.center().y,
+                );
+            });
+        }
+    }
 }
 
 /// Without a status the service either has not answered yet (start-up) or
@@ -326,17 +347,17 @@ mod tests {
 fn hero_title(state: &State) -> (String, Color32) {
     let Some(status) = state.visible_status() else {
         return if state.helper_error.is_some() {
-            (tr!("connection-unavailable"), theme::ERROR)
+            (tr!("connection-unavailable"), theme::error())
         } else {
-            (tr!("checking"), theme::DISCONNECTED)
+            (tr!("checking"), theme::disconnected())
         };
     };
     if matches!(status.state, ConnectionState::Reconnecting)
         && status.reconnect_failure_kind == Some(FailureKind::NoNetwork)
     {
-        (tr!("error-code-no-network"), theme::ERROR)
+        (tr!("error-code-no-network"), theme::error())
     } else if status.xray_stopped && matches!(status.state, ConnectionState::Reconnecting) {
-        (tr!("xray-reconnecting-title"), theme::ERROR)
+        (tr!("xray-reconnecting-title"), theme::error())
     } else {
         state_style(&status.state)
     }
@@ -431,7 +452,7 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                         if state.xhttp_without_xray() {
                             ui.add(
                                 egui::Label::new(
-                                    RichText::new(tr!("xhttp-needs-xray")).color(theme::ERROR),
+                                    RichText::new(tr!("xhttp-needs-xray")).color(theme::error()),
                                 )
                                 .wrap(),
                             );
@@ -460,7 +481,7 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                                     .wrap(),
                                 );
                                 if state.running_session_protected() {
-                                    ui.colored_label(theme::ERROR, tr!("no-network-protected"));
+                                    ui.colored_label(theme::error(), tr!("no-network-protected"));
                                 }
                             } else if status.xray_stopped
                                 && matches!(status.state, ConnectionState::Reconnecting)
@@ -521,7 +542,7 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                                             status.xray_use.unwrap_or(state.config.settings.xray),
                                             state.lockdown_active(),
                                         );
-                                        let response = ui.colored_label(theme::ERROR, title);
+                                        let response = ui.colored_label(theme::error(), title);
                                         if let Some(details) = state.failure_details() {
                                             response.on_hover_text(details);
                                         }
@@ -532,7 +553,7 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                                             )
                                         {
                                             ui.colored_label(
-                                                theme::ERROR,
+                                                theme::error(),
                                                 tr!("no-network-protected"),
                                             );
                                         }
@@ -577,7 +598,7 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                                         };
                                         ui.add(
                                             egui::Label::new(
-                                                RichText::new(text).small().color(theme::ERROR),
+                                                RichText::new(text).small().color(theme::error()),
                                             )
                                             .wrap(),
                                         );
@@ -586,7 +607,7 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                                     if let Some(warning) = &state.system_checks.failure_warning {
                                         ui.horizontal_wrapped(|ui| {
                                             ui.colored_label(
-                                                theme::WARNING,
+                                                theme::warning(),
                                                 tr!(
                                                     "system-check-found",
                                                     issue = i18n::check_issue(warning)
@@ -610,29 +631,37 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                         if selection_changed.is_some() {
                             let applying = server_pending && state.operations.helper;
                             let can_apply = server_pending && state.can_apply();
-                            let message = state.config.active_node().map_or_else(
-                                || tr!("selection-cleared").to_owned(),
+                            let (message, country) = state.config.active_node().map_or_else(
+                                || (tr!("selection-cleared"), None),
                                 |(_, node)| {
+                                    let (country, name) = display::leading_flag(&node.name);
                                     let name = display::drop_missing_glyphs(
                                         ui.ctx(),
                                         &egui::TextStyle::Body.resolve(ui.style()),
-                                        &state.text(&node.name),
+                                        &state.text(name),
                                     );
-                                    if applying {
+                                    let message = if applying {
                                         crate::i18n::switching_to(&name)
                                     } else if can_apply {
                                         crate::i18n::selected_not_applied(&name)
                                     } else {
                                         crate::i18n::selected_pending(&name)
-                                    }
+                                    };
+                                    (message, country)
                                 },
                             );
                             ui.horizontal_wrapped(|ui| {
                                 ui.spacing_mut().item_spacing.x = 0.0;
-                                ui.label(
-                                    RichText::new(message)
-                                        .small()
-                                        .color(theme::palette().accent_light),
+                                ui.add(
+                                    egui::WidgetAtom::new(widgets::country_label(
+                                        RichText::new(message)
+                                            .small()
+                                            .color(theme::palette().accent_light),
+                                        country.as_deref(),
+                                        state.config.interface.show_country_flags,
+                                        false,
+                                    ))
+                                    .wrap_mode(egui::TextWrapMode::Wrap),
                                 );
                                 if can_apply {
                                     ui.label(
@@ -719,7 +748,9 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                                             tr!("ping-ms", ms = millis.max(1).to_string()),
                                             theme::palette().text,
                                         ),
-                                        Some(_) => (tr!("ping-no-answer").to_owned(), theme::ERROR),
+                                        Some(_) => {
+                                            (tr!("ping-no-answer").to_owned(), theme::error())
+                                        }
                                         None => (
                                             tr!("ping-pending").to_owned(),
                                             theme::palette().text_dim,
@@ -790,19 +821,15 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                             detail_row(ui, tr!("engine"), |ui| {
                                 if visible_status.is_some_and(|status| status.xray) {
                                     ui.vertical(|ui| {
-                                        if visible_status.is_some_and(|status| status.fragmented) {
-                                            ui.label(tr!("fragment-engine-active"));
+                                        let label = if visible_status
+                                            .is_some_and(|status| status.fragmented)
+                                        {
+                                            tr!("fragment-engine-active")
                                         } else {
-                                            ui.label(tr!("xray-engine"));
-                                        }
-                                        ui.add(
-                                            egui::Label::new(
-                                                RichText::new(tr!("xray-engine-detail"))
-                                                    .small()
-                                                    .color(theme::palette().text_dim),
-                                            )
-                                            .wrap(),
-                                        );
+                                            tr!("xray-engine")
+                                        };
+                                        ui.add(egui::Label::new(label).truncate())
+                                            .on_hover_text(tr!("xray-engine-detail"));
                                         if let Some(status) = visible_status {
                                             unfragmented_note(ui, status);
                                         }
@@ -1094,7 +1121,8 @@ fn server_button(ui: &mut egui::Ui, state: &State) -> bool {
         .show(ui, |ui| {
             ui.set_min_width(width - 2.0 * theme::space::M);
             ui.horizontal(|ui| {
-                let badge_height = 26.0;
+                let badge_size = egui::Vec2::from(theme::country_badge::SERVER_SIZE);
+                let badge_height = badge_size.y;
                 let name_font = theme::font::title();
                 let badge = country
                     .map(|code| (code, true))
@@ -1102,76 +1130,58 @@ fn server_button(ui: &mut egui::Ui, state: &State) -> bool {
                 let block_height =
                     badge_height + 2.0 + ui.text_style_height(&egui::TextStyle::Small);
                 if let Some((code, verified)) = badge {
-                    let (area, _) = ui
-                        .allocate_exact_size(egui::vec2(36.0, block_height), egui::Sense::hover());
-                    let rect =
-                        egui::Rect::from_center_size(area.center(), egui::vec2(36.0, badge_height));
-                    ui.painter().rect_stroke(
-                        rect,
-                        theme::RADIUS_INNER,
-                        egui::Stroke::new(
-                            theme::stroke::HAIRLINE,
-                            if verified {
-                                theme::palette().accent_dark
-                            } else {
-                                theme::palette().border_strong
-                            },
-                        ),
-                        egui::StrokeKind::Inside,
+                    let (area, badge_response) = ui.allocate_exact_size(
+                        egui::vec2(badge_size.x, block_height),
+                        egui::Sense::hover(),
                     );
-                    ui.painter().text(
-                        rect.center(),
-                        egui::Align2::CENTER_CENTER,
+                    badge_response.on_hover_text(code);
+                    widgets::country_badge(
+                        ui,
+                        egui::Rect::from_center_size(area.center(), badge_size),
                         code,
-                        theme::font::mono_small(),
-                        if verified {
-                            theme::palette().accent_light
-                        } else {
-                            theme::palette().text_muted
-                        },
+                        state.config.interface.show_country_flags,
+                        verified,
                     );
                 }
                 let text_width = (ui.available_width() - 100.0).max(0.0);
-                ui.allocate_ui_with_layout(
-                    egui::vec2(text_width, block_height),
-                    egui::Layout::top_down(egui::Align::Min),
-                    |ui| {
-                        ui.set_width(text_width);
-                        ui.spacing_mut().item_spacing.y = 0.0;
-                        ui.allocate_ui_with_layout(
-                            egui::vec2(text_width, badge_height),
-                            egui::Layout::left_to_right(egui::Align::Center),
-                            |ui| {
-                                ui.set_width(text_width);
-                                ui.set_min_height(badge_height);
-                                let name = state.config.active_node().map_or_else(
-                                    || tr!("select-server").to_owned(),
-                                    |(_, node)| {
-                                        display::drop_missing_glyphs(
-                                            ui.ctx(),
-                                            &name_font,
-                                            &state.text(display::leading_flag(&node.name).1),
+                if let Some((subscription, node)) = state.config.active_node() {
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(text_width, block_height),
+                        egui::Layout::top_down(egui::Align::Min),
+                        |ui| {
+                            ui.set_width(text_width);
+                            ui.spacing_mut().item_spacing.y = 0.0;
+                            ui.allocate_ui_with_layout(
+                                egui::vec2(text_width, badge_height),
+                                egui::Layout::left_to_right(egui::Align::Center),
+                                |ui| {
+                                    ui.set_width(text_width);
+                                    ui.set_min_height(badge_height);
+                                    let name = display::drop_missing_glyphs(
+                                        ui.ctx(),
+                                        &name_font,
+                                        &state.text(display::leading_flag(&node.name).1),
+                                    );
+                                    ui.add(
+                                        egui::Label::new(
+                                            RichText::new(name)
+                                                .font(name_font.clone())
+                                                .color(theme::palette().text),
                                         )
-                                    },
-                                );
-                                ui.add(
-                                    egui::Label::new(
-                                        RichText::new(name)
-                                            .font(name_font.clone())
-                                            .color(theme::palette().text),
-                                    )
-                                    .truncate(),
-                                );
-                            },
-                        );
-                        ui.add_space(theme::space::XXS);
-                        ui.allocate_ui_with_layout(
-                            egui::vec2(text_width, ui.text_style_height(&egui::TextStyle::Small)),
-                            egui::Layout::left_to_right(egui::Align::Center),
-                            |ui| {
-                                ui.set_width(text_width);
-                                // No node address here: this screen ends up in screenshots.
-                                if let Some((subscription, _)) = state.config.active_node() {
+                                        .truncate(),
+                                    );
+                                },
+                            );
+                            ui.add_space(theme::space::XXS);
+                            ui.allocate_ui_with_layout(
+                                egui::vec2(
+                                    text_width,
+                                    ui.text_style_height(&egui::TextStyle::Small),
+                                ),
+                                egui::Layout::left_to_right(egui::Align::Center),
+                                |ui| {
+                                    ui.set_width(text_width);
+                                    // No node address here: this screen ends up in screenshots.
                                     let detail = state.text(&subscription.name);
                                     ui.add(
                                         egui::Label::new(
@@ -1181,11 +1191,28 @@ fn server_button(ui: &mut egui::Ui, state: &State) -> bool {
                                         )
                                         .truncate(),
                                     );
-                                }
-                            },
-                        );
-                    },
-                );
+                                },
+                            );
+                        },
+                    );
+                } else {
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(text_width, block_height),
+                        egui::Layout::left_to_right(egui::Align::Center),
+                        |ui| {
+                            ui.set_width(text_width);
+                            ui.set_min_height(block_height);
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(tr!("select-server"))
+                                        .font(name_font)
+                                        .color(theme::palette().text),
+                                )
+                                .truncate(),
+                            );
+                        },
+                    );
+                }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(
                         RichText::new(tr!("server-change")).color(theme::palette().accent_light),

@@ -10,6 +10,7 @@ headline = 'Ваш трафик. Ваши правила.'
 lead = 'VPN-клиент для Windows и Linux: подписки, правила, kill switch и Lockdown.'
 download_windows = 'Скачать для Windows'
 download_linux = 'Скачать для Linux'
+download_macos = 'macOS (Apple Silicon) · экспериментальная сборка'
 all_releases = 'Все выпуски'
 verify_download = 'Проверить загрузку'
 features_eyebrow = 'ПОД ВАШИ ЗАДАЧИ'
@@ -26,7 +27,7 @@ text = 'Kill switch блокирует трафик при потере тунн
 
 [[extra.features]]
 title = 'Ваши правила'
-text = 'Отправляйте программы, сайты и IP через VPN, напрямую или блокируйте. Используйте GeoIP, GeoSite и свои списки. Отменяйте изменения по Ctrl+Z. Временные правила действуют до отключения. Правила по программам работают на Windows и Linux. См. <a href="docs/rules/">ограничения Linux</a>.'
+text = 'Отправляйте программы, сайты, IP и группы правил через VPN, напрямую или блокируйте. Используйте готовые шаблоны, GeoIP, GeoSite и свои списки. Отменяйте изменения по Ctrl+Z. Временные правила действуют до отключения. Правила по программам работают на Windows и Linux. См. <a href="docs/rules/">ограничения Linux</a>.'
 
 [[extra.features]]
 title = 'Несколько направлений'
@@ -38,7 +39,7 @@ text = 'Добавляйте подписку ссылкой, QR-кодом ил
 
 [[extra.features]]
 title = 'Выбор соединения'
-text = 'VLESS, VMess, Trojan, Shadowsocks и Hysteria2. Ядра sing-box и Xray, REALITY и XHTTP, фрагментация TLS. Доступные транспорты и ограничения описаны на странице для провайдеров.'
+text = 'VLESS, VMess, Trojan, Shadowsocks, Hysteria2, TUIC v5, AnyTLS и WireGuard. Ядра sing-box и Xray, REALITY, XHTTP, балансировщики и finalmask, фрагментация TLS. Доступные транспорты и ограничения описаны на странице для провайдеров.'
 
 [[extra.features]]
 title = 'Приватность без обещаний'
@@ -107,6 +108,6 @@ Get-FileHash .\{{ r?.installer or "rosetun-VERSION-setup.exe" }} -Algorithm SHA2
 gh attestation verify .\{{ r?.installer or "rosetun-VERSION-setup.exe" }} --repo eoftgge/rosetun
 ```
 
-<p>Пакет Debian тоже есть в SHA256SUMS.txt и имеет аттестацию: <a href="docs/install/#debian-13">Debian 13</a>.</p>
+<p>Пакет Debian и экспериментальный пакет macOS тоже есть в SHA256SUMS.txt и имеют аттестацию: <a href="docs/install/#debian-13">Debian 13</a>, <a href="docs/install/#macos">macOS (Apple Silicon)</a>.</p>
 
 <p><a href="help/">Установка и первый запуск</a></p>

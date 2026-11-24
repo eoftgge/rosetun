@@ -1,6 +1,9 @@
-use crate::FetchError;
+use std::collections::BTreeMap;
+
 use rosetun_config::{Node, Outbound, SubscriptionInfo, TlsMode, Transport};
-use rosetun_subscription::ParseError;
+use rosetun_subscription::{ParseError, SkipReason};
+
+use crate::{FetchError, UnsupportedProtocolCounts};
 
 pub fn terminal_text(input: &str) -> String {
     input
@@ -75,6 +78,32 @@ fn url_path_and_query(link: &str) -> Option<String> {
     Some(path_and_query)
 }
 
+pub fn skipped_lines(
+    skipped: &BTreeMap<SkipReason, usize>,
+    unsupported: &UnsupportedProtocolCounts,
+) -> Vec<String> {
+    let mut lines = Vec::new();
+    for (reason, count) in skipped {
+        if *reason == SkipReason::UnsupportedProtocol && !unsupported.protocols.is_empty() {
+            let mut parts: Vec<String> = unsupported
+                .protocols
+                .iter()
+                .map(|(name, n)| format!("{name} {n}"))
+                .collect();
+            if unsupported.other > 0 {
+                parts.push(format!("other {}", unsupported.other));
+            }
+            lines.push(format!("unsupported: {}", parts.join(", ")));
+        } else {
+            lines.push(format!(
+                "skipped {count}: {}",
+                terminal_text(&reason.to_string())
+            ));
+        }
+    }
+    lines
+}
+
 pub fn fetch_error_message(error: &FetchError, subscription_url: &str) -> String {
     match error {
         FetchError::Parse(ParseError::DeviceLimit {
@@ -103,11 +132,11 @@ pub fn fetch_error_message(error: &FetchError, subscription_url: &str) -> String
                 output.push_str("\n  notice: ");
                 output.push_str(&provider_text(notice, subscription_url));
             }
-            for (reason, count) in crate::group_skipped(skipped) {
-                output.push_str(&format!(
-                    "\n  skipped {count}: {}",
-                    terminal_text(&reason.to_string())
-                ));
+            let grouped = crate::group_skipped(skipped);
+            let unsupported = crate::group_unsupported_protocols(skipped);
+            for line in skipped_lines(&grouped, &unsupported) {
+                output.push_str("\n  ");
+                output.push_str(&line);
             }
             output
         }
@@ -151,6 +180,54 @@ pub fn traffic_text(info: &SubscriptionInfo) -> String {
     }
 }
 
+fn balancer_primary_member(
+    balancer: &rosetun_config::XrayBalancer,
+) -> Option<&rosetun_config::BalancerMember> {
+    balancer
+        .members
+        .iter()
+        .find(|member| {
+            balancer
+                .selector
+                .iter()
+                .any(|prefix| member.tag.starts_with(prefix))
+        })
+        .or_else(|| balancer.members.first())
+}
+
+fn outbound_transport(
+    outbound: &Outbound,
+    stream: &rosetun_config::StreamSettings,
+) -> &'static str {
+    if matches!(outbound, Outbound::Hysteria2(_) | Outbound::Tuic(_)) {
+        return "quic";
+    }
+    if matches!(outbound, Outbound::WireGuard(_)) {
+        return "udp";
+    }
+    match &stream.transport {
+        Transport::Tcp => "tcp",
+        Transport::Ws { .. } => "ws",
+        Transport::Grpc { .. } => "grpc",
+        Transport::HttpUpgrade { .. } => "httpupgrade",
+        Transport::Xhttp { .. } => "xhttp",
+    }
+}
+
+fn outbound_tls(outbound: &Outbound, stream: &rosetun_config::StreamSettings) -> &'static str {
+    if matches!(outbound, Outbound::Hysteria2(_) | Outbound::Tuic(_)) {
+        return "tls";
+    }
+    if matches!(outbound, Outbound::WireGuard(_)) {
+        return "noise";
+    }
+    match &stream.tls {
+        TlsMode::Plain => "plain",
+        TlsMode::Tls(_) => "tls",
+        TlsMode::Reality(_) => "reality",
+    }
+}
+
 pub fn node_protocol(node: &Node) -> &'static str {
     match &node.outbound {
         Outbound::Http(_) if matches!(node.stream.tls, rosetun_config::TlsMode::Tls(_)) => "https",
@@ -161,32 +238,30 @@ pub fn node_protocol(node: &Node) -> &'static str {
         Outbound::Trojan(_) => "trojan",
         Outbound::Shadowsocks(_) => "shadowsocks",
         Outbound::Hysteria2(_) => "hysteria2",
+        Outbound::Tuic(_) => "tuic",
+        Outbound::AnyTls(_) => "anytls",
+        Outbound::WireGuard(_) => "wireguard",
+        Outbound::XrayBalancer(_) => "balancer",
         Outbound::Unknown { .. } => "unknown",
     }
 }
 
 pub fn node_transport(node: &Node) -> &'static str {
-    if matches!(node.outbound, Outbound::Hysteria2(_)) {
-        return "quic";
+    if let Outbound::XrayBalancer(balancer) = &node.outbound {
+        return balancer_primary_member(balancer).map_or("tcp", |member| {
+            outbound_transport(&member.outbound, &member.stream)
+        });
     }
-    match &node.stream.transport {
-        Transport::Tcp => "tcp",
-        Transport::Ws { .. } => "ws",
-        Transport::Grpc { .. } => "grpc",
-        Transport::HttpUpgrade { .. } => "httpupgrade",
-        Transport::Xhttp { .. } => "xhttp",
-    }
+    outbound_transport(&node.outbound, &node.stream)
 }
 
 pub fn node_tls(node: &Node) -> &'static str {
-    if matches!(node.outbound, Outbound::Hysteria2(_)) {
-        return "tls";
+    if let Outbound::XrayBalancer(balancer) = &node.outbound {
+        return balancer_primary_member(balancer).map_or("plain", |member| {
+            outbound_tls(&member.outbound, &member.stream)
+        });
     }
-    match &node.stream.tls {
-        TlsMode::Plain => "plain",
-        TlsMode::Tls(_) => "tls",
-        TlsMode::Reality(_) => "reality",
-    }
+    outbound_tls(&node.outbound, &node.stream)
 }
 
 pub fn node_address(node: &Node) -> String {
@@ -204,7 +279,7 @@ mod tests {
 
     #[test]
     fn hysteria2_details_show_quic_and_tls() {
-        let node = Node {
+        let mut node = Node {
             id: rosetun_config::NodeId::new("test"),
             name: "Test".into(),
             server: "example.com".into(),
@@ -225,6 +300,42 @@ mod tests {
         assert_eq!(node_protocol(&node), "hysteria2");
         assert_eq!(node_transport(&node), "quic");
         assert_eq!(node_tls(&node), "tls");
+
+        node.outbound = Outbound::Tuic(rosetun_config::TuicParams {
+            uuid: "00000000-0000-4000-8000-000000000001".into(),
+            password: String::new(),
+            congestion_control: None,
+            udp_relay_mode: None,
+            zero_rtt_handshake: false,
+            heartbeat: None,
+            disable_sni: false,
+        });
+        assert_eq!(node_protocol(&node), "tuic");
+        assert_eq!(node_transport(&node), "quic");
+        assert_eq!(node_tls(&node), "tls");
+
+        node.outbound = Outbound::AnyTls(rosetun_config::AnyTlsParams {
+            password: "test-secret".into(),
+            idle_session_check_interval: None,
+            idle_session_timeout: None,
+            min_idle_session: None,
+        });
+        assert_eq!(node_protocol(&node), "anytls");
+        assert_eq!(node_transport(&node), "tcp");
+        assert_eq!(node_tls(&node), "tls");
+
+        node.outbound = Outbound::WireGuard(rosetun_config::WireGuardParams {
+            private_key: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".into(),
+            public_key: "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=".into(),
+            pre_shared_key: None,
+            address: vec!["10.0.0.2/32".into()],
+            mtu: None,
+            reserved: None,
+            persistent_keepalive: None,
+        });
+        assert_eq!(node_protocol(&node), "wireguard");
+        assert_eq!(node_transport(&node), "udp");
+        assert_eq!(node_tls(&node), "noise");
         assert_eq!(node_address(&node), "example.com:443");
     }
 
@@ -353,5 +464,98 @@ mod tests {
         assert_eq!(node_address(&node), "[2001:db8::1]:443");
         node.server = "192.0.2.1".to_owned();
         assert_eq!(node_address(&node), "192.0.2.1:443");
+    }
+
+    #[test]
+    fn xray_balancer_details_use_primary_member_stream() {
+        let node = Node {
+            id: rosetun_config::NodeId::new("bal"),
+            name: "NL".into(),
+            server: "nl.example.invalid".into(),
+            port: 443,
+            outbound: Outbound::XrayBalancer(Box::new(rosetun_config::XrayBalancer {
+                members: vec![
+                    rosetun_config::BalancerMember {
+                        tag: "mask".into(),
+                        server: "nl4.example.invalid".into(),
+                        port: 443,
+                        outbound: Outbound::Vless(rosetun_config::VlessParams {
+                            uuid: "00000000-0000-4000-8000-000000000001".into(),
+                            flow: None,
+                        }),
+                        stream: rosetun_config::StreamSettings {
+                            tls: TlsMode::Tls(Default::default()),
+                            ..Default::default()
+                        },
+                    },
+                    rosetun_config::BalancerMember {
+                        tag: "proxy".into(),
+                        server: "nl.example.invalid".into(),
+                        port: 443,
+                        outbound: Outbound::Vless(rosetun_config::VlessParams {
+                            uuid: "00000000-0000-4000-8000-000000000001".into(),
+                            flow: Some("xtls-rprx-vision".into()),
+                        }),
+                        stream: rosetun_config::StreamSettings {
+                            transport: Transport::Tcp,
+                            tls: TlsMode::Reality(rosetun_config::RealityParams {
+                                sni: Some("blog.example.invalid".into()),
+                                public_key: "pubkey".into(),
+                                short_id: None,
+                                fingerprint: Some("firefox".into()),
+                            }),
+                            finalmask: None,
+                        },
+                    },
+                ],
+                selector: vec!["proxy".into()],
+                strategy: rosetun_config::BalancerStrategy::Random,
+                fallback_tag: Some("mask".into()),
+                observatory: None,
+            })),
+            stream: rosetun_config::StreamSettings::default(),
+            raw: None,
+        };
+        assert_eq!(node_protocol(&node), "balancer");
+        assert_eq!(node_transport(&node), "tcp");
+        assert_eq!(node_tls(&node), "reality");
+    }
+
+    #[test]
+    fn no_usable_nodes_names_unsupported_protocols_when_known() {
+        let error = FetchError::Parse(ParseError::NoUsableNodes {
+            skipped: vec![
+                Skipped {
+                    index: 1,
+                    scheme: Some("tuic".to_owned()),
+                    reason: SkipReason::UnsupportedProtocol,
+                },
+                Skipped {
+                    index: 2,
+                    scheme: Some("tuic".to_owned()),
+                    reason: SkipReason::UnsupportedProtocol,
+                },
+                Skipped {
+                    index: 3,
+                    scheme: Some("wireguard".to_owned()),
+                    reason: SkipReason::UnsupportedProtocol,
+                },
+                Skipped {
+                    index: 4,
+                    scheme: Some("happ".to_owned()),
+                    reason: SkipReason::ClientSettings,
+                },
+            ],
+            notices: Vec::new(),
+        });
+        let message = fetch_error_message(&error, "https://sub.example.com/private");
+        assert!(
+            message.contains("unsupported: TUIC 2, WireGuard 1"),
+            "{message}"
+        );
+        assert!(
+            message.contains("skipped 1: client settings are not node records"),
+            "{message}"
+        );
     }
 }

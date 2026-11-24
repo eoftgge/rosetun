@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Rosetun privileged helper LaunchDaemon for macOS.
+  Install as /Library/LaunchDaemons/io.github.eoftgge.rosetun.helper.plist
+  owned by root:wheel with mode 0644.
+
+  The helper executable lives in /usr/local/libexec/rosetun, owned by
+  root:wheel and writable by nobody else.
+  - Client socket: /private/var/run/rosetun/helper.sock (root:staff, mode 0660)
+  - Private runtime config: /private/var/run/rosetun/private (root, mode 0700)
+  - State and lists: /Library/Application Support/Rosetun (root, mode 0700)
+
+  On `launchctl bootout`, launchd sends SIGTERM; the helper performs a clean
+  shutdown, removes only the socket inode it created, and exits with status 0.
+  ExitTimeOut gives active engines time to stop cleanly before SIGKILL.
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>io.github.eoftgge.rosetun.helper</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/local/libexec/rosetun/rosetun-helper-privileged</string>
+		<string>--service</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<dict>
+		<key>SuccessfulExit</key>
+		<false/>
+	</dict>
+	<key>ThrottleInterval</key>
+	<integer>2</integer>
+	<key>ExitTimeOut</key>
+	<integer>45</integer>
+	<key>ProcessType</key>
+	<string>Background</string>
+	<key>StandardErrorPath</key>
+	<string>/private/var/log/rosetun-helper.log</string>
+</dict>
+</plist>

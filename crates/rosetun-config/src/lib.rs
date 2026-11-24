@@ -27,15 +27,24 @@ pub use list_validation::{
     validate_srs,
 };
 pub use node::{
-    Hysteria2Params, Node, Outbound, ProxyCredentials, RealityParams, ShadowsocksParams,
-    StreamSettings, TlsMode, TlsParams, Transport, TrojanParams, VlessParams, VmessParams,
-    XhttpExtra, XhttpMode, XhttpRange, XhttpXmux, fragments_tls, node_country, uses_xray,
+    AnyTlsParams, BalancerMember, BalancerStrategy, BurstObservatory, FinalMask, HeaderCustomItem,
+    HeaderCustomPacket, HeaderCustomPacketType, HeaderCustomTcp, Hysteria2Params,
+    LeastLoadSettings, MAX_BALANCER_MEMBERS, MAX_FINALMASK_ITEMS, MAX_FINALMASK_LAYERS,
+    MAX_FINALMASK_PAYLOAD, MAX_FINALMASK_STEPS, Node, Outbound, ProxyCredentials, RealityParams,
+    ShadowsocksParams, StandardObservatory, StreamSettings, TcpFinalMask, TlsMode, TlsParams,
+    Transport, TrojanParams, TuicCongestionControl, TuicParams, TuicUdpRelayMode, VlessParams,
+    VmessParams, WIREGUARD_MTU_MAX, WIREGUARD_MTU_MIN, WireGuardParams, XhttpExtra, XhttpMode,
+    XhttpRange, XhttpXmux, XrayBalancer, XrayObservatory, fragments_tls, is_valid_duration,
+    is_valid_uuid, is_valid_wireguard_address, is_valid_wireguard_key, node_country, uses_xray,
 };
 pub use prefix::{IpPrefix, LINK_LOCAL_V4, LINK_LOCAL_V6, is_private_address};
 pub use report::{
     hide_public_addresses, ip_literals, is_public_ip, redact_log_credentials, redact_report_text,
 };
-pub use rule::{DomainMatch, ProcessMatch, Rule, RuleMatcher, RuleSet, RuleTarget, RuleTemplate};
+pub use rule::{
+    DomainMatch, MAX_GROUP_ITEMS, ProcessMatch, RULE_GROUP_NAME_LIMIT, Rule, RuleMatcher, RuleSet,
+    RuleTarget, RuleTemplate,
+};
 pub use runtime::{
     ConnectStage, ConnectionNetwork, ConnectionRoute, ConnectionState, FailureKind,
     InstalledProtection, LiveConnection, ProtectionCapabilities, ProtectionShortfall,
@@ -53,7 +62,7 @@ use serde_json::{Map, Value};
 
 /// Bump for every serialized format change, including defaulted fields older releases drop on save.
 /// Add a Value migration and a new fixture; never edit fixtures of released formats.
-pub const CONFIG_VERSION: u32 = 9;
+pub const CONFIG_VERSION: u32 = 13;
 
 pub const EXIT_TRACE_IP: &str = "1.1.1.1";
 pub const EXIT_TRACE_PORT: u16 = 443;
@@ -90,17 +99,21 @@ pub enum AccentPreset {
     Lilac,
     Teal,
     Amber,
+    Black,
+    White,
 }
 
 impl AccentPreset {
     /// In the order the settings show them.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 8] = [
         Self::Rose,
         Self::Graphite,
         Self::Cocoa,
         Self::Lilac,
         Self::Teal,
         Self::Amber,
+        Self::Black,
+        Self::White,
     ];
 }
 
@@ -182,6 +195,8 @@ pub struct InterfaceSettings {
     pub language: LanguageSetting,
     #[serde(default)]
     pub reduce_motion: bool,
+    #[serde(default = "default_true")]
+    pub show_country_flags: bool,
     /// Format 7 field; a preset this release does not know reads as rose.
     #[serde(default, deserialize_with = "known_accent")]
     pub accent: AccentPreset,
@@ -251,6 +266,7 @@ impl Default for InterfaceSettings {
             newest_release: None,
             language: LanguageSetting::System,
             reduce_motion: false,
+            show_country_flags: true,
             accent: AccentPreset::Rose,
             recent_servers: Vec::new(),
             notifications: true,
@@ -361,6 +377,8 @@ pub enum ConfigError {
     InvalidExitDependency,
     #[error("a rule has an invalid exit reference")]
     InvalidRuleExit,
+    #[error("a rule group has an invalid name or items")]
+    InvalidRuleGroup,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -403,6 +421,10 @@ pub fn from_json(bytes: &[u8]) -> Result<(AppConfig, Option<u32>), FormatError> 
             6 => migrate_6_to_7(config),
             7 => migrate_7_to_8(config),
             8 => migrate_8_to_9(config),
+            9 => migrate_9_to_10(config),
+            10 => migrate_10_to_11(config),
+            11 => migrate_11_to_12(config),
+            12 => migrate_12_to_13(config),
             _ => return Err(FormatError::UnexpectedValue),
         }
         version += 1;
@@ -416,6 +438,62 @@ pub fn from_json(bytes: &[u8]) -> Result<(AppConfig, Option<u32>), FormatError> 
         config,
         (original_version < CONFIG_VERSION).then_some(original_version),
     ))
+}
+
+fn migrate_12_to_13(_config: &mut Map<String, Value>) {
+    // Format 13 adds Xray balancer outbounds, stream finalmask, and TLS session resumption;
+    // older writers must refuse this file.
+}
+
+fn migrate_11_to_12(config: &mut Map<String, Value>) {
+    let russian = config
+        .get("interface")
+        .and_then(Value::as_object)
+        .and_then(|interface| interface.get("language"))
+        .and_then(Value::as_str)
+        == Some("russian");
+    let Some(rule_sets) = config.get_mut("rule_sets").and_then(Value::as_array_mut) else {
+        return;
+    };
+    for set in rule_sets {
+        let Some(rules) = set
+            .as_object_mut()
+            .and_then(|set| set.get_mut("rules"))
+            .and_then(Value::as_array_mut)
+        else {
+            continue;
+        };
+        for rule in rules {
+            let Some(matcher) = rule
+                .as_object_mut()
+                .and_then(|rule| rule.get_mut("matcher"))
+            else {
+                continue;
+            };
+            let Some(key) = matcher
+                .as_object()
+                .and_then(|obj| obj.get("template"))
+                .and_then(Value::as_str)
+            else {
+                continue;
+            };
+            if let Some(template) = RuleTemplate::from_key(key) {
+                let group = template.to_group(template.default_name(russian));
+                if let Ok(encoded) = serde_json::to_value(group) {
+                    *matcher = encoded;
+                }
+            }
+        }
+    }
+}
+
+fn migrate_10_to_11(_config: &mut Map<String, Value>) {
+    // Format 11 adds WireGuard outbounds; older writers must refuse this file.
+}
+
+fn migrate_9_to_10(_config: &mut Map<String, Value>) {
+    // Format 10 adds the country flag preference (serde default) and TUIC / AnyTLS outbounds;
+    // older writers must refuse this file.
 }
 
 fn migrate_8_to_9(_config: &mut Map<String, Value>) {
@@ -565,19 +643,44 @@ impl AppConfig {
                 (RuleTarget::Proxy | RuleTarget::Direct | RuleTarget::Block, None) => {}
                 _ => return Err(ConfigError::InvalidRuleExit),
             }
-            if let RuleMatcher::List { list, category } = &rule.matcher {
+            self.validate_rule_matcher(&rule.matcher)?;
+        }
+        Ok(())
+    }
+
+    fn validate_rule_matcher(&self, matcher: &RuleMatcher) -> Result<(), ConfigError> {
+        match matcher {
+            RuleMatcher::List { list, category } => {
                 let entry = self
                     .lists
                     .iter()
                     .find(|entry| &entry.id == list)
                     .ok_or(ConfigError::MissingList)?;
                 match entry.validate_category(category.as_deref()) {
-                    Ok(()) | Err(ListCategoryError::Unknown) => {}
-                    Err(_) => return Err(ConfigError::InvalidListCategory),
+                    Ok(()) | Err(ListCategoryError::Unknown) => Ok(()),
+                    Err(_) => Err(ConfigError::InvalidListCategory),
                 }
             }
+            RuleMatcher::Group { name, items } => {
+                let trimmed = name.trim();
+                if trimmed.is_empty()
+                    || trimmed.chars().count() > RULE_GROUP_NAME_LIMIT
+                    || name.chars().any(char::is_control)
+                    || items.is_empty()
+                    || items.len() > MAX_GROUP_ITEMS
+                {
+                    return Err(ConfigError::InvalidRuleGroup);
+                }
+                for item in items {
+                    if matches!(item, RuleMatcher::Group { .. }) {
+                        return Err(ConfigError::InvalidRuleGroup);
+                    }
+                    self.validate_rule_matcher(item)?;
+                }
+                Ok(())
+            }
+            RuleMatcher::Domain(_) | RuleMatcher::Process(_) | RuleMatcher::IpCidr(_) => Ok(()),
         }
-        Ok(())
     }
 }
 

@@ -129,7 +129,9 @@ pub(crate) fn segmented<T: Copy + PartialEq, L: AsRef<str>>(
                 egui::StrokeKind::Inside,
             );
         }
-        let color = faded(if active || hovered {
+        let color = faded(if active {
+            theme::palette().on_accent
+        } else if hovered {
             theme::palette().text
         } else {
             theme::palette().text_muted

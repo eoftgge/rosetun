@@ -98,10 +98,7 @@ fn ping_quality(result: PingResult) -> u8 {
     }
 }
 
-pub(super) fn ping_label(
-    result: PingResult,
-    is_hysteria2: bool,
-) -> (String, Color32, Option<String>) {
+pub(super) fn ping_label(result: PingResult, is_udp: bool) -> (String, Color32, Option<String>) {
     match result {
         PingResult::Answered(elapsed) => (
             tr!("ping-ms", ms = ping_millis(elapsed).to_string()),
@@ -113,10 +110,10 @@ pub(super) fn ping_label(
             theme::palette().text_dim,
             Some(tr!("ping-full-hint")),
         ),
-        PingResult::NoAnswer => (tr!("ping-no-answer"), theme::ERROR, None),
+        PingResult::NoAnswer => (tr!("ping-no-answer"), theme::error(), None),
         PingResult::Fails => (
             tr!("ping-fails"),
-            theme::ERROR,
+            theme::error(),
             Some(tr!("ping-fails-hint")),
         ),
         PingResult::Unresolved => (
@@ -127,7 +124,7 @@ pub(super) fn ping_label(
         PingResult::Unsupported => (
             tr!("ping-unsupported"),
             theme::palette().text_dim,
-            is_hysteria2.then(|| tr!("ping-udp-hint")),
+            is_udp.then(|| tr!("ping-udp-hint")),
         ),
         PingResult::Pending => (tr!("ping-pending"), theme::palette().text_dim, None),
     }
@@ -137,7 +134,7 @@ fn hover_ping_hint(
     result: Option<PingResult>,
     pointer: Option<egui::Pos2>,
     region: Option<egui::Rect>,
-    is_hysteria2: bool,
+    is_udp: bool,
 ) -> Option<String> {
     if !pointer
         .zip(region)
@@ -145,7 +142,7 @@ fn hover_ping_hint(
     {
         return None;
     }
-    ping_label(result?, is_hysteria2).2
+    ping_label(result?, is_udp).2
 }
 
 pub(super) fn check_menu_items(
@@ -262,7 +259,10 @@ pub(super) fn server_row(
         ping_result,
         ui.ctx().pointer_hover_pos(),
         ping_region,
-        matches!(&node.outbound, Outbound::Hysteria2(_)),
+        matches!(
+            &node.outbound,
+            Outbound::Hysteria2(_) | Outbound::Tuic(_) | Outbound::WireGuard(_)
+        ),
     ) {
         response.on_hover_text(hint)
     } else {
@@ -327,22 +327,17 @@ pub(super) fn server_row(
     let mut name_left = rect.left() + ROW_PADDING;
     if columns.flags {
         if let Some(code) = code {
+            let size = egui::Vec2::from(theme::country_badge::ROW_SIZE);
             let badge = egui::Rect::from_min_size(
-                egui::pos2(name_left, rect.center().y - 10.0),
-                egui::vec2(28.0, 20.0),
+                egui::pos2(name_left, rect.center().y - size.y / 2.0),
+                size,
             );
-            painter.rect_stroke(
+            widgets::country_badge(
+                ui,
                 badge,
-                theme::RADIUS_INNER,
-                Stroke::new(theme::stroke::HAIRLINE, theme::palette().border_strong),
-                egui::StrokeKind::Inside,
-            );
-            painter.text(
-                badge.center(),
-                egui::Align2::CENTER_CENTER,
-                code,
-                theme::font::mono_small(),
-                theme::palette().text_muted,
+                &code,
+                state.config.interface.show_country_flags,
+                false,
             );
         }
         name_left += FLAG_WIDTH;
@@ -370,8 +365,13 @@ pub(super) fn server_row(
                 );
             }
         }
-        let (ping_text, color, _) =
-            ping_label(result, matches!(&node.outbound, Outbound::Hysteria2(_)));
+        let (ping_text, color, _) = ping_label(
+            result,
+            matches!(
+                &node.outbound,
+                Outbound::Hysteria2(_) | Outbound::Tuic(_) | Outbound::WireGuard(_)
+            ),
+        );
         painter.text(
             egui::pos2(right, rect.center().y),
             egui::Align2::RIGHT_CENTER,
@@ -605,13 +605,13 @@ mod tests {
             (
                 PingResult::NoAnswer,
                 tr!("ping-no-answer").to_owned(),
-                theme::ERROR,
+                theme::error(),
                 None,
             ),
             (
                 PingResult::Fails,
                 tr!("ping-fails").to_owned(),
-                theme::ERROR,
+                theme::error(),
                 Some(tr!("ping-fails-hint")),
             ),
             (

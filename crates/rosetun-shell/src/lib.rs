@@ -10,6 +10,12 @@ mod autostart;
 mod autostart_linux;
 #[cfg(target_os = "linux")]
 mod desktop_linux;
+#[cfg(target_os = "macos")]
+#[expect(
+    unsafe_code,
+    reason = "CoreFoundation FFI; every unsafe block carries a SAFETY comment"
+)]
+mod desktop_macos;
 #[cfg(windows)]
 #[expect(
     unsafe_code,
@@ -133,9 +139,11 @@ pub use autostart::{
 pub use autostart_linux::{Autostart, autostart_enabled, disable_autostart, enable_autostart};
 #[cfg(target_os = "linux")]
 pub use desktop_linux::{tray_notice, user_language};
+#[cfg(target_os = "macos")]
+pub use desktop_macos::{open_folder, user_language};
 pub use desktop_proxy::{DesktopProxy, ProxyRestore, ProxySet};
 #[cfg(windows)]
-pub use elevated::run_elevated;
+pub use elevated::{run_elevated, run_elevated_shown};
 #[cfg(target_os = "linux")]
 pub use file_dialog_linux::{FileDialogError, FileFilter, pick_file, save_file};
 #[cfg(target_os = "linux")]

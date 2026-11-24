@@ -19,13 +19,14 @@ use rosetun_core::{
     RuleSetError, RuleSetsSnapshot, SelectNodeError, SelectRuleSetError, SettingChange,
     SettingsError, Store, StoreError, SubscriptionUpdateResult, Timeouts, UpdateCheckError,
     UpdateReport, UpdateSubscriptionError, add_prepared_subscription, add_rule, add_rules,
-    create_exit, create_rule_set, delete_exit, delete_rule_set, move_rule, move_rules,
-    move_subscription, ping_all, prepare_subscription, reconcile_lists, remove_rule, remove_rules,
-    remove_subscription, rename_exit, rename_rule_set, rename_subscription, reset_settings,
-    restore_rule_sets, restore_rules_and_dns, save_exit, select_node, select_rule_set, set_accent,
-    set_default_target, set_dns, set_interface_scale, set_kill_switch, set_language,
-    set_rule_enabled, set_rule_target, set_verbose_log, update_all, update_all_lists, update_list,
-    update_rule, update_subscription,
+    add_rules_to_group, create_exit, create_rule_set, delete_exit, delete_rule_set, group_rules,
+    move_rule, move_rules, move_subscription, ping_all, prepare_subscription, reconcile_lists,
+    remove_group_item, remove_rule, remove_rules, remove_subscription, rename_exit,
+    rename_rule_set, reset_settings, restore_rule_sets, restore_rules_and_dns, save_exit,
+    select_node, select_rule_set, set_accent, set_default_target, set_dns, set_interface_scale,
+    set_kill_switch, set_language, set_rule_enabled, set_rule_target, set_verbose_log,
+    ungroup_rule, update_all, update_all_lists, update_list, update_rule, update_subscription,
+    update_subscription_settings,
 };
 use rosetun_ipc::{
     ClientError, ConnectRequest, ConnectRequestError, HelperClient, MAX_PROBE_NODES, ProbeRequest,
@@ -35,6 +36,7 @@ use rosetun_processes::{ProcessListError, RunningProcess, running_processes};
 
 use crate::qr::QrError;
 use crate::repaint::Repaint;
+use crate::rules::ProcessGroup;
 use crate::state::{ExitRoute, RequestInputs};
 
 const CLIENT_NAME: &str = concat!("rosetun-gui/", env!("CARGO_PKG_VERSION"));
@@ -182,10 +184,21 @@ pub(crate) enum WorkerEvent {
         checked_at: u64,
         result: Result<Option<Release>, UpdateCheckError>,
     },
+    UpdateProgress {
+        version: String,
+        received: u64,
+        total: Option<u64>,
+    },
+    UpdateDownloaded {
+        version: String,
+        result: Result<rosetun_core::DownloadedUpdate, rosetun_core::UpdateDownloadError>,
+    },
+    /// Setup answered: `None` when it installed without closing this window.
+    UpdateInstall(Option<crate::state::UpdateFailure>),
     SetDns(Result<(), SettingsError>),
     ResetSettings(Result<(), SettingsError>),
     SetVerboseLog(Result<(), SettingsError>),
-    #[cfg(any(windows, target_os = "linux"))]
+    #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
     OpenFolder(Result<(), std::io::Error>),
     SelectNode(Result<String, SelectNodeError>),
     SelectRuleSet(Result<(), SelectRuleSetError>),
@@ -195,7 +208,7 @@ pub(crate) enum WorkerEvent {
     SetDefaultTarget(Result<(), RuleSetError>),
     Processes {
         request: u64,
-        result: Result<Vec<RunningProcess>, ProcessListError>,
+        result: Result<Vec<ProcessGroup>, ProcessListError>,
     },
     #[cfg(windows)]
     BrowsedExecutable(Option<PathBuf>),
@@ -218,6 +231,10 @@ pub(crate) enum WorkerEvent {
     MoveRules(Result<(), RuleSetError>),
     RemoveRule(Result<(), RuleSetError>),
     RemoveRules(Result<(), RuleSetError>),
+    GroupRules(Result<Rule, RuleSetError>),
+    AddRulesToGroup(Result<Rule, RuleSetError>),
+    UngroupRule(Result<Vec<Rule>, RuleSetError>),
+    RemoveGroupItem(Result<(), RuleSetError>),
     RestoreRuleSets(Result<RestoredRuleSets, RuleSetError>),
     SetKillSwitch(Result<(), StoreError>),
     SetLockdown {

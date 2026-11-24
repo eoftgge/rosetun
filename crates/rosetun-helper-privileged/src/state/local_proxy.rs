@@ -29,13 +29,23 @@ enum PortProblem {
     Other,
 }
 
+/// `WSAEAFNOSUPPORT` on Windows, `EAFNOSUPPORT` on Linux (97) and macOS (47).
+#[cfg(windows)]
+const EAFNOSUPPORT: i32 = 10047;
+#[cfg(target_os = "linux")]
+const EAFNOSUPPORT: i32 = 97;
+#[cfg(target_os = "macos")]
+const EAFNOSUPPORT: i32 = 47;
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+const EAFNOSUPPORT: i32 = 97;
+
 impl PortProblem {
     fn of(error: &io::Error) -> Self {
         match error.kind() {
             io::ErrorKind::AddrInUse | io::ErrorKind::PermissionDenied => Self::Busy,
             io::ErrorKind::AddrNotAvailable => Self::NoAddress,
             // EAFNOSUPPORT, which std has no kind for, and Windows' WSAEAFNOSUPPORT.
-            _ if matches!(error.raw_os_error(), Some(97 | 10047)) => Self::NoAddress,
+            _ if error.raw_os_error() == Some(EAFNOSUPPORT) => Self::NoAddress,
             _ => Self::Other,
         }
     }
@@ -251,7 +261,7 @@ mod tests {
         );
     }
 
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
     #[test]
     fn a_shared_proxy_on_linux_listens_only_on_the_addresses_it_is_given() {
         let port = free_port();
@@ -303,7 +313,7 @@ mod tests {
         assert_eq!(PortProblem::of(&denied), PortProblem::Busy);
         let in_use = io::Error::from(io::ErrorKind::AddrInUse);
         assert_eq!(PortProblem::of(&in_use), PortProblem::Busy);
-        let no_family = io::Error::from_raw_os_error(if cfg!(windows) { 10047 } else { 97 });
+        let no_family = io::Error::from_raw_os_error(EAFNOSUPPORT);
         assert_eq!(PortProblem::of(&no_family), PortProblem::NoAddress);
     }
 }

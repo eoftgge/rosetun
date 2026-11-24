@@ -14,7 +14,7 @@ use std::net::IpAddr;
 use regex_automata::meta::Regex;
 use rosetun_config::{
     ConnectionRoute, DomainMatch, ExitId, LINK_LOCAL_V4, LINK_LOCAL_V6, ListId, LiveConnection,
-    ProcessMatch, Rule, RuleId, RuleMatcher, RuleSet, RuleTarget, RuleTemplate, list_tag,
+    ProcessMatch, Rule, RuleId, RuleMatcher, RuleSet, RuleTarget, list_tag,
 };
 use rosetun_ipc::ConnectRequest;
 use serde_json::Value;
@@ -111,11 +111,8 @@ pub enum Reason {
 pub enum RuleSource {
     /// The rule's own condition.
     Condition(RuleMatcher),
-    /// One of the conditions a template rule stands for.
-    Template {
-        template: RuleTemplate,
-        matcher: RuleMatcher,
-    },
+    /// One of the conditions a group rule stands for.
+    Group { name: String, matcher: RuleMatcher },
     List {
         list: ListId,
         category: Option<String>,
@@ -249,7 +246,7 @@ pub fn explain(
     let rules = request.effective_rule_set();
     for (temporary, rule) in consulted(request, &rules) {
         let source = match &rule.matcher {
-            RuleMatcher::Template(_) => continue,
+            RuleMatcher::Group { .. } => continue,
             RuleMatcher::List { list, category } => {
                 match lists.contents.get(&list_tag(list, category.as_deref())) {
                     Some(ListContent::LeftOut) => continue,
@@ -275,13 +272,13 @@ pub fn explain(
                     continue;
                 }
                 match request
-                    .rule_templates
+                    .rule_groups
                     .iter()
                     .find(|(id, _)| *id == rule.id)
                     .filter(|_| !temporary)
                 {
-                    Some((_, template)) => RuleSource::Template {
-                        template: *template,
+                    Some((_, name)) => RuleSource::Group {
+                        name: name.clone(),
                         matcher: matcher.clone(),
                     },
                     None => RuleSource::Condition(matcher.clone()),
@@ -377,7 +374,7 @@ fn matches_rule(matcher: &RuleMatcher, target: &Target<'_>) -> bool {
         RuleMatcher::IpCidr(cidr) => Cidr::parse(cidr)
             .zip(target.ip)
             .is_some_and(|(cidr, ip)| cidr.contains(ip)),
-        RuleMatcher::List { .. } | RuleMatcher::Template(_) => false,
+        RuleMatcher::List { .. } | RuleMatcher::Group { .. } => false,
     }
 }
 

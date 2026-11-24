@@ -294,11 +294,19 @@ function Start-RosetunTestNode {
     if ($ProcessIdentity) { $ProcessIdentity.Value = $null }
     $config = Get-Content -Path (Join-Path $PSScriptRoot 'test-node.json') -Raw | ConvertFrom-Json
     $tcpPort = Get-RosetunTestNodePort -CloudflareBlocked:$CloudflareBlocked -ExitNode:$ExitNode
-    $udpPort = ($config.inbounds | Where-Object { $_.type -eq 'hysteria2' }).listen_port
     $tcpOnly = $CloudflareBlocked -or $ExitNode
+    # @() keeps 0- and 1-port results arrays; Set-StrictMode has no .Count on $null or a scalar.
+    $tcpPorts = @(if ($tcpOnly) {
+        $tcpPort
+    } else {
+        $tcpPort
+        $config.inbounds | Where-Object { $_.type -eq 'anytls' } | ForEach-Object { $_.listen_port }
+    })
+    $udpPorts = @(if (-not $tcpOnly) {
+        $config.inbounds | Where-Object { $_.type -in @('hysteria2', 'tuic') } | ForEach-Object { $_.listen_port }
+    })
     $suffix = if ($CloudflareBlocked) { '-cloudflare-blocked' } elseif ($ExitNode) { '-exit' } else { '' }
     if ($tcpOnly) {
-        $udpPort = $null
         $config.inbounds = @($config.inbounds | Where-Object { $_.type -eq 'shadowsocks' })
         $config.inbounds[0].listen_port = $tcpPort
     }
@@ -313,17 +321,29 @@ function Start-RosetunTestNode {
         )
         $config.route | Add-Member -NotePropertyName final -NotePropertyValue 'direct'
     }
-    $tcpListening = Get-NetTCPConnection -LocalPort $tcpPort -State Listen -ErrorAction SilentlyContinue
-    $udpListening = if ($null -ne $udpPort) {
-        Get-NetUDPEndpoint -LocalPort $udpPort -ErrorAction SilentlyContinue
-    } else { $null }
-    $ports = if ($tcpOnly) { "TCP $tcpPort" } else { "TCP $tcpPort and UDP $udpPort" }
-    if ($tcpListening -and ($tcpOnly -or $udpListening)) {
+    $tcpListeningByPort = @{}
+    foreach ($port in $tcpPorts) {
+        $tcpListeningByPort[$port] = @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue)
+    }
+    $udpListeningByPort = @{}
+    foreach ($port in $udpPorts) {
+        $udpListeningByPort[$port] = @(Get-NetUDPEndpoint -LocalPort $port -ErrorAction SilentlyContinue)
+    }
+    $allBound = (@($tcpPorts | Where-Object { $tcpListeningByPort[$_].Count -gt 0 }).Count -eq $tcpPorts.Count) -and
+        (@($udpPorts | Where-Object { $udpListeningByPort[$_].Count -gt 0 }).Count -eq $udpPorts.Count)
+    $anyBound = (@($tcpPorts | Where-Object { $tcpListeningByPort[$_].Count -gt 0 }).Count -gt 0) -or
+        (@($udpPorts | Where-Object { $udpListeningByPort[$_].Count -gt 0 }).Count -gt 0)
+    $ports = if ($udpPorts.Count -eq 0) {
+        "TCP $($tcpPorts -join ', ')"
+    } else {
+        "TCP $($tcpPorts -join ', ') and UDP $($udpPorts -join ', ')"
+    }
+    if ($allBound) {
         Write-Host "Test node already listens on $ports."
         return $false
     }
-    if ($tcpListening -or $udpListening) {
-        throw 'One test port is already in use; stop the existing node before starting both inbounds.'
+    if ($anyBound) {
+        throw "One or more test ports ($ports) are already in use; stop the existing node before starting all inbounds."
     }
     if ($BindInterface) {
         $config.outbounds | Where-Object { $_.type -eq 'direct' } | ForEach-Object {
@@ -354,7 +374,7 @@ function Start-RosetunTestNode {
             [IO.File]::WriteAllText($keyPath, ($key.Value + "`n"))
             [IO.File]::WriteAllText($certPath, ($cert.Value + "`n"))
         }
-        ($config.inbounds | Where-Object { $_.type -eq 'hysteria2' }).tls | ForEach-Object {
+        ($config.inbounds | Where-Object { $_.type -in @('hysteria2', 'tuic', 'anytls') }).tls | ForEach-Object {
             $_ | Add-Member -NotePropertyName key_path -NotePropertyValue $keyPath -Force
             $_ | Add-Member -NotePropertyName certificate_path -NotePropertyValue $certPath -Force
         }
@@ -377,14 +397,23 @@ function Start-RosetunTestNode {
     }
     $deadline = (Get-Date).AddSeconds(15)
     while ($true) {
-        $tcpListening = @(Get-NetTCPConnection -LocalPort $tcpPort -State Listen -ErrorAction SilentlyContinue)
-        $udpListening = @(if ($null -ne $udpPort) {
-            Get-NetUDPEndpoint -LocalPort $udpPort -ErrorAction SilentlyContinue
-        })
-        if (-not $node.HasExited -and $tcpListening.Count -gt 0 -and
-            ($tcpOnly -or $udpListening.Count -gt 0) -and
-            -not ($tcpListening | Where-Object { $_.OwningProcess -ne $node.Id }) -and
-            ($tcpOnly -or -not ($udpListening | Where-Object { $_.OwningProcess -ne $node.Id }))) {
+        $tcpReady = $true
+        foreach ($port in $tcpPorts) {
+            $entries = @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue)
+            if ($entries.Count -eq 0 -or @($entries | Where-Object { $_.OwningProcess -ne $node.Id }).Count -gt 0) {
+                $tcpReady = $false
+                break
+            }
+        }
+        $udpReady = $true
+        foreach ($port in $udpPorts) {
+            $entries = @(Get-NetUDPEndpoint -LocalPort $port -ErrorAction SilentlyContinue)
+            if ($entries.Count -eq 0 -or @($entries | Where-Object { $_.OwningProcess -ne $node.Id }).Count -gt 0) {
+                $udpReady = $false
+                break
+            }
+        }
+        if (-not $node.HasExited -and $tcpReady -and $udpReady) {
             break
         }
         if ($node.HasExited -or (Get-Date) -gt $deadline) {
@@ -443,43 +472,63 @@ function Stop-RosetunTestNode {
 
     $config = Get-Content -Path (Join-Path $PSScriptRoot 'test-node.json') -Raw | ConvertFrom-Json
     $tcpPort = Get-RosetunTestNodePort -CloudflareBlocked:$CloudflareBlocked -ExitNode:$ExitNode
-    $udpPort = ($config.inbounds | Where-Object { $_.type -eq 'hysteria2' }).listen_port
     $tcpOnly = $CloudflareBlocked -or $ExitNode
-    if ($tcpOnly) {
-        $udpPort = $null
-    }
-    $ports = if ($tcpOnly) { "TCP $tcpPort" } else { "TCP $tcpPort and UDP $udpPort" }
-    $tcpListening = @(Get-NetTCPConnection -LocalPort $tcpPort -State Listen -ErrorAction SilentlyContinue)
-    $udpListening = @(if ($null -ne $udpPort) {
-        Get-NetUDPEndpoint -LocalPort $udpPort -ErrorAction SilentlyContinue
+    # @() keeps 0- and 1-port results arrays; Set-StrictMode has no .Count on $null or a scalar.
+    $tcpPorts = @(if ($tcpOnly) {
+        $tcpPort
+    } else {
+        $tcpPort
+        $config.inbounds | Where-Object { $_.type -eq 'anytls' } | ForEach-Object { $_.listen_port }
     })
-    if ($tcpListening.Count -eq 0 -or (-not $tcpOnly -and $udpListening.Count -eq 0)) {
-        Write-Warning "No complete test node listens on $ports; nothing stopped."
-        return
+    $udpPorts = @(if (-not $tcpOnly) {
+        $config.inbounds | Where-Object { $_.type -in @('hysteria2', 'tuic') } | ForEach-Object { $_.listen_port }
+    })
+    $ports = if ($udpPorts.Count -eq 0) {
+        "TCP $($tcpPorts -join ', ')"
+    } else {
+        "TCP $($tcpPorts -join ', ') and UDP $($udpPorts -join ', ')"
     }
-    $tcpOwners = @($tcpListening | Select-Object -ExpandProperty OwningProcess -Unique)
+    $allListeners = @()
+    foreach ($port in $tcpPorts) {
+        $entries = @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue)
+        if ($entries.Count -eq 0) {
+            Write-Warning "No complete test node listens on $ports; nothing stopped."
+            return
+        }
+        $allListeners += $entries
+    }
+    foreach ($port in $udpPorts) {
+        $entries = @(Get-NetUDPEndpoint -LocalPort $port -ErrorAction SilentlyContinue)
+        if ($entries.Count -eq 0) {
+            Write-Warning "No complete test node listens on $ports; nothing stopped."
+            return
+        }
+        $allListeners += $entries
+    }
     # @() keeps a single owner an array; Set-StrictMode has no .Count on a bare integer.
-    $udpOwners = @(if ($tcpOnly) { $tcpOwners } else {
-        $udpListening | Select-Object -ExpandProperty OwningProcess -Unique
-    })
-    if ($tcpOwners.Count -ne 1 -or $udpOwners.Count -ne 1 -or $tcpOwners[0] -ne $udpOwners[0]) {
+    $owners = @($allListeners | Select-Object -ExpandProperty OwningProcess -Unique)
+    if ($owners.Count -ne 1) {
         Write-Warning "$ports do not have one common owner; nothing stopped."
         return
     }
-    $node = Get-Process -Id $tcpOwners[0] -ErrorAction SilentlyContinue
+    $node = Get-Process -Id $owners[0] -ErrorAction SilentlyContinue
     if (-not $node -or $node.ProcessName -ne 'sing-box') {
-        Write-Warning "The process on TCP $tcpPort and UDP $udpPort is not sing-box.exe; nothing stopped."
+        Write-Warning "The process on $ports is not sing-box.exe; nothing stopped."
         return
     }
-    $tcpListening = @(Get-NetTCPConnection -LocalPort $tcpPort -State Listen -ErrorAction SilentlyContinue)
-    $udpListening = @(if ($null -ne $udpPort) {
-        Get-NetUDPEndpoint -LocalPort $udpPort -ErrorAction SilentlyContinue
-    })
-    if ($tcpListening.Count -eq 0 -or (-not $tcpOnly -and $udpListening.Count -eq 0) -or
-        @($tcpListening | Where-Object { $_.OwningProcess -ne $node.Id }).Count -gt 0 -or
-        @($udpListening | Where-Object { $_.OwningProcess -ne $node.Id }).Count -gt 0) {
-        Write-Warning "Test node port ownership changed; nothing stopped."
-        return
+    foreach ($port in $tcpPorts) {
+        $entries = @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue)
+        if ($entries.Count -eq 0 -or @($entries | Where-Object { $_.OwningProcess -ne $node.Id }).Count -gt 0) {
+            Write-Warning 'Test node port ownership changed; nothing stopped.'
+            return
+        }
+    }
+    foreach ($port in $udpPorts) {
+        $entries = @(Get-NetUDPEndpoint -LocalPort $port -ErrorAction SilentlyContinue)
+        if ($entries.Count -eq 0 -or @($entries | Where-Object { $_.OwningProcess -ne $node.Id }).Count -gt 0) {
+            Write-Warning 'Test node port ownership changed; nothing stopped.'
+            return
+        }
     }
     if ($PSBoundParameters.ContainsKey('ProcessIdentity')) {
         if ($null -eq $ProcessIdentity -or $null -eq $ProcessIdentity.CreationTicks) { return }
@@ -489,6 +538,7 @@ function Stop-RosetunTestNode {
             $node.StartTime.ToUniversalTime().Ticks -ne $ProcessIdentity.CreationTicks) { return }
     }
     Stop-Process -InputObject $node -Force
+    Wait-Process -InputObject $node -Timeout 5 -ErrorAction SilentlyContinue
 }
 
 function Connect-RosetunVm {
@@ -774,7 +824,10 @@ function Publish-Rosetun {
     $RequestPath = $temporaryRequest
     $derived = [ordered]@{}
 
-    $hysteriaPort = (Get-Content -Path (Join-Path $PSScriptRoot 'test-node.json') -Raw | ConvertFrom-Json).inbounds |
+    $testNodeConfig = Get-Content -Path (Join-Path $PSScriptRoot 'test-node.json') -Raw | ConvertFrom-Json
+    $defaultSwitchIp = (Get-NetIPAddress -InterfaceAlias 'vEthernet (Default Switch)' -AddressFamily IPv4).IPAddress
+
+    $hysteriaPort = $testNodeConfig.inbounds |
         Where-Object { $_.type -eq 'hysteria2' } | Select-Object -ExpandProperty listen_port
     if (-not (Get-NetUDPEndpoint -LocalPort $hysteriaPort -ErrorAction SilentlyContinue)) {
         throw "Nothing listens on UDP $hysteriaPort on the host. Start the test node first."
@@ -782,7 +835,7 @@ function Publish-Rosetun {
     $hysteria = $request | ConvertTo-Json -Depth 20 | ConvertFrom-Json
     $hysteria.node.id = 'home-hysteria2'
     $hysteria.node.name = 'Test Hysteria2'
-    $hysteria.node.server = (Get-NetIPAddress -InterfaceAlias 'vEthernet (Default Switch)' -AddressFamily IPv4).IPAddress
+    $hysteria.node.server = $defaultSwitchIp
     $hysteria.node.port = $hysteriaPort
     $hysteria.node.outbound = [pscustomobject]@{
         hysteria2 = [pscustomobject]@{ password = 'rosetun-test' }
@@ -799,6 +852,63 @@ function Publish-Rosetun {
     $hysteria.selection.node = $hysteria.node.id
     $hysteria.settings.kill_switch = $true
     $derived['request-hysteria2.json'] = $hysteria
+
+    $tuicInbound = $testNodeConfig.inbounds | Where-Object { $_.type -eq 'tuic' } | Select-Object -First 1
+    if (-not (Get-NetUDPEndpoint -LocalPort $tuicInbound.listen_port -ErrorAction SilentlyContinue)) {
+        throw "Nothing listens on UDP $($tuicInbound.listen_port) on the host. Start the test node first."
+    }
+    $tuic = $request | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+    $tuic.node.id = 'home-tuic'
+    $tuic.node.name = 'Test TUIC'
+    $tuic.node.server = $defaultSwitchIp
+    $tuic.node.port = $tuicInbound.listen_port
+    $tuic.node.outbound = [pscustomobject]@{
+        tuic = [pscustomobject]@{
+            uuid               = $tuicInbound.users[0].uuid
+            password           = $tuicInbound.users[0].password
+            congestion_control = $tuicInbound.congestion_control
+        }
+    }
+    $tuic.node.stream = [pscustomobject]@{
+        transport = 'tcp'
+        tls       = [pscustomobject]@{
+            tls = [pscustomobject]@{
+                sni            = 'rosetun-test.invalid'
+                alpn           = @('h3')
+                allow_insecure = $true
+            }
+        }
+    }
+    $tuic.selection.node = $tuic.node.id
+    $tuic.settings.kill_switch = $true
+    $derived['request-tuic.json'] = $tuic
+
+    $anytlsInbound = $testNodeConfig.inbounds | Where-Object { $_.type -eq 'anytls' } | Select-Object -First 1
+    if (-not (Get-NetTCPConnection -LocalPort $anytlsInbound.listen_port -State Listen -ErrorAction SilentlyContinue)) {
+        throw "Nothing listens on TCP $($anytlsInbound.listen_port) on the host. Start the test node first."
+    }
+    $anytls = $request | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+    $anytls.node.id = 'home-anytls'
+    $anytls.node.name = 'Test AnyTLS'
+    $anytls.node.server = $defaultSwitchIp
+    $anytls.node.port = $anytlsInbound.listen_port
+    $anytls.node.outbound = [pscustomobject]@{
+        anytls = [pscustomobject]@{
+            password = $anytlsInbound.users[0].password
+        }
+    }
+    $anytls.node.stream = [pscustomobject]@{
+        transport = 'tcp'
+        tls       = [pscustomobject]@{
+            tls = [pscustomobject]@{
+                sni            = 'rosetun-test.invalid'
+                allow_insecure = $true
+            }
+        }
+    }
+    $anytls.selection.node = $anytls.node.id
+    $anytls.settings.kill_switch = $true
+    $derived['request-anytls.json'] = $anytls
 
     $cloudflareBlocked = $request | ConvertTo-Json -Depth 20 | ConvertFrom-Json
     $cloudflareBlocked.node.id = 'home-cloudflare-blocked'

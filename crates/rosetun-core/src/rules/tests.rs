@@ -73,7 +73,7 @@ fn restoring_applied_rules_and_dns_keeps_other_configuration_changes() {
     let mut applied = RuleSet::new(RuleSetId::new("1"), "Applied", RuleTarget::Proxy);
     applied.rules.push(rule("1", "example.com"));
     applied.rules.push(Rule {
-        matcher: RuleMatcher::Template(RuleTemplate::Youtube),
+        matcher: RuleTemplate::Youtube.to_group("YouTube"),
         ..rule("2", "youtube.invalid")
     });
     config.rule_sets = vec![
@@ -101,10 +101,10 @@ fn restoring_applied_rules_and_dns_keeps_other_configuration_changes() {
     assert_eq!(AppliedSnapshot::from_config(&restored), snapshot);
     assert!(restored.interface.reduce_motion);
     assert_eq!(restored.rule_sets[1].name, "Changed while applying");
-    assert!(matches!(
+    assert_eq!(
         restored.active_rules().unwrap().rules[1].matcher,
-        RuleMatcher::Template(RuleTemplate::Youtube)
-    ));
+        RuleTemplate::Youtube.to_group("YouTube")
+    );
 }
 
 #[test]
@@ -1204,11 +1204,11 @@ fn process_input_rejects_relative_paths_and_invalid_names() {
 }
 
 #[test]
-fn template_rules_are_unique_even_when_disabled() {
+fn identical_group_rules_are_unique_even_when_disabled() {
     let directory = TestDirectory::new();
     let store = Store::at(directory.config_path());
     let set = create_rule_set(&store, "Set", RuleTarget::Proxy).unwrap();
-    let matcher = RuleMatcher::Template(RuleTemplate::RussianSites);
+    let matcher = RuleTemplate::RussianSites.to_group("Russian sites");
     let first = add_rule(&store, &set.id, matcher.clone(), &RuleDestination::Direct).unwrap();
     set_rule_enabled(&store, &set.id, &first.id, false).unwrap();
     assert_no_write!(
@@ -1220,7 +1220,7 @@ fn template_rules_are_unique_even_when_disabled() {
         add_rule(
             &store,
             &set.id,
-            RuleMatcher::Template(RuleTemplate::Youtube),
+            RuleTemplate::Youtube.to_group("YouTube"),
             &RuleDestination::Proxy
         )
         .is_ok()
@@ -1270,8 +1270,8 @@ fn rule_value_text_formats_every_matcher() {
             "192.0.2.0/24",
         ),
         (
-            RuleMatcher::Template(RuleTemplate::RussianSites),
-            "template:russian_sites",
+            RuleTemplate::RussianSites.to_group("Russian sites"),
+            "Russian sites",
         ),
     ] {
         assert_eq!(rule_value_text(&matcher), expected);
@@ -1289,4 +1289,210 @@ fn exact_and_suffix_domains_round_trip_through_text() {
             Ok(matcher)
         );
     }
+}
+
+#[test]
+fn group_ungroup_and_remove_group_item_work_atomically() {
+    let directory = TestDirectory::new();
+    let store = Store::at(directory.config_path());
+    let set = create_rule_set(&store, "Set", RuleTarget::Proxy).unwrap();
+    let r1 = add_rule(
+        &store,
+        &set.id,
+        domain("a.example"),
+        &RuleDestination::Direct,
+    )
+    .unwrap();
+    let r2 = add_rule(
+        &store,
+        &set.id,
+        domain("b.example"),
+        &RuleDestination::Direct,
+    )
+    .unwrap();
+    let r3 = add_rule(
+        &store,
+        &set.id,
+        domain("c.example"),
+        &RuleDestination::Proxy,
+    )
+    .unwrap();
+
+    // Rules are inserted at 0, so order is [r3, r2, r1]. Grouping r2 and r1 inserts at index 1.
+    let group = group_rules(
+        &store,
+        &set.id,
+        &[r1.id.clone(), r2.id.clone()],
+        "  My group  ",
+        &RuleDestination::Direct,
+    )
+    .unwrap();
+    let loaded = store.load().unwrap();
+    assert_eq!(loaded.rule_sets[0].rules.len(), 2);
+    assert_eq!(loaded.rule_sets[0].rules[0].id, r3.id);
+    assert_eq!(loaded.rule_sets[0].rules[1].id, group.id);
+    assert_eq!(
+        loaded.rule_sets[0].rules[1].matcher,
+        RuleMatcher::Group {
+            name: "My group".into(),
+            items: vec![domain("b.example"), domain("a.example")],
+        }
+    );
+
+    // Removing one item keeps the group with 1 item; removing the last item is refused.
+    remove_group_item(&store, &set.id, &group.id, 0).unwrap();
+    assert_no_write!(
+        store,
+        remove_group_item(&store, &set.id, &group.id, 0),
+        RuleSetError::InvalidGroup
+    );
+
+    // Edit group to add another item and rename.
+    update_rule(
+        &store,
+        &set.id,
+        &group.id,
+        RuleMatcher::Group {
+            name: "Renamed".into(),
+            items: vec![domain("a.example"), domain("d.example")],
+        },
+        &RuleDestination::Block,
+    )
+    .unwrap();
+    set_rule_enabled(&store, &set.id, &group.id, false).unwrap();
+
+    // Ungroup replaces in place, inheriting disabled state and Block target.
+    let expanded = ungroup_rule(&store, &set.id, &group.id).unwrap();
+    assert_eq!(expanded.len(), 2);
+    let loaded = store.load().unwrap();
+    assert_eq!(loaded.rule_sets[0].rules.len(), 3);
+    assert_eq!(loaded.rule_sets[0].rules[1].matcher, domain("a.example"));
+    assert_eq!(loaded.rule_sets[0].rules[2].matcher, domain("d.example"));
+    assert!(!loaded.rule_sets[0].rules[1].enabled);
+    assert_eq!(loaded.rule_sets[0].rules[1].target, RuleTarget::Block);
+}
+
+#[test]
+fn invalid_groups_are_rejected_without_writing() {
+    let directory = TestDirectory::new();
+    let store = Store::at(directory.config_path());
+    let set = create_rule_set(&store, "Set", RuleTarget::Proxy).unwrap();
+
+    let empty_name = RuleMatcher::Group {
+        name: "   ".into(),
+        items: vec![domain("example.com")],
+    };
+    let empty_items = RuleMatcher::Group {
+        name: "Empty".into(),
+        items: Vec::new(),
+    };
+    let nested = RuleMatcher::Group {
+        name: "Outer".into(),
+        items: vec![RuleMatcher::Group {
+            name: "Inner".into(),
+            items: vec![domain("example.com")],
+        }],
+    };
+    for invalid in [empty_name, empty_items, nested] {
+        assert_no_write!(
+            store,
+            add_rule(&store, &set.id, invalid, &RuleDestination::Proxy),
+            RuleSetError::InvalidGroup
+        );
+    }
+}
+
+#[test]
+fn add_rules_to_group_merges_deduplicates_and_preserves_target_group() {
+    let directory = TestDirectory::new();
+    let store = Store::at(directory.config_path());
+    let set = create_rule_set(&store, "Set", RuleTarget::Proxy).unwrap();
+
+    let first = add_rule(
+        &store,
+        &set.id,
+        domain("keep.example"),
+        &RuleDestination::Proxy,
+    )
+    .unwrap();
+    let target = add_rule(
+        &store,
+        &set.id,
+        RuleMatcher::Group {
+            name: "Games".into(),
+            items: vec![domain("steam.example")],
+        },
+        &RuleDestination::Direct,
+    )
+    .unwrap();
+    set_rule_enabled(&store, &set.id, &target.id, false).unwrap();
+
+    let single = add_rule(
+        &store,
+        &set.id,
+        domain("valorant.example"),
+        &RuleDestination::Proxy,
+    )
+    .unwrap();
+    let other_group = add_rule(
+        &store,
+        &set.id,
+        RuleMatcher::Group {
+            name: "Extra".into(),
+            items: vec![domain("steam.example"), domain("epic.example")],
+        },
+        &RuleDestination::Block,
+    )
+    .unwrap();
+
+    // Including target itself in the selection is tolerated and ignored; other
+    // selected rules and groups are flattened, deduplicated, and removed.
+    let updated = add_rules_to_group(
+        &store,
+        &set.id,
+        &[target.id.clone(), single.id.clone(), other_group.id.clone()],
+        &target.id,
+    )
+    .unwrap();
+    assert_eq!(updated.id, target.id);
+    assert!(!updated.enabled);
+    assert_eq!(updated.target, RuleTarget::Direct);
+    assert_eq!(
+        updated.matcher,
+        RuleMatcher::Group {
+            name: "Games".into(),
+            items: vec![
+                domain("steam.example"),
+                domain("epic.example"),
+                domain("valorant.example"),
+            ],
+        }
+    );
+
+    let loaded = store.load().unwrap();
+    assert_eq!(loaded.rule_sets[0].rules.len(), 2);
+    assert_eq!(loaded.rule_sets[0].rules[0].id, target.id);
+    assert_eq!(loaded.rule_sets[0].rules[1].id, first.id);
+
+    // Reject self-only, non-group target, and unknown rule IDs without writing.
+    assert_no_write!(
+        store,
+        add_rules_to_group(
+            &store,
+            &set.id,
+            std::slice::from_ref(&target.id),
+            &target.id
+        ),
+        RuleSetError::InvalidGroup
+    );
+    assert_no_write!(
+        store,
+        add_rules_to_group(&store, &set.id, std::slice::from_ref(&target.id), &first.id),
+        RuleSetError::InvalidGroup
+    );
+    assert_no_write!(
+        store,
+        add_rules_to_group(&store, &set.id, &[RuleId::new("missing")], &target.id),
+        RuleSetError::RuleNotFound
+    );
 }

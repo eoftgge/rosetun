@@ -1,4 +1,5 @@
 use super::*;
+use crate::rules::group_processes;
 
 #[test]
 fn rule_selection_click_toggle_and_visible_range() {
@@ -388,12 +389,12 @@ fn process_results_fill_only_the_current_dialog_and_are_dropped_on_close() {
     assert!(state.act(Action::RefreshProcesses).is_none());
     state.reduce(WorkerEvent::Processes {
         request: first,
-        result: Ok(vec![RunningProcess {
+        result: Ok(group_processes(vec![RunningProcess {
             pid: 100,
             name: "Telegram.exe".into(),
             path: Some(r"C:\Apps\Telegram.exe".into()),
             has_window: true,
-        }]),
+        }])),
     });
     let dialog = state.rules.screen.add.as_ref().unwrap();
     assert!(dialog.processes_loaded);
@@ -408,12 +409,12 @@ fn process_results_fill_only_the_current_dialog_and_are_dropped_on_close() {
     assert_ne!(first, second);
     state.reduce(WorkerEvent::Processes {
         request: first,
-        result: Ok(vec![RunningProcess {
+        result: Ok(group_processes(vec![RunningProcess {
             pid: 101,
             name: "Old.exe".into(),
             path: None,
             has_window: false,
-        }]),
+        }])),
     });
     assert!(
         state
@@ -637,7 +638,7 @@ fn editing_existing_suffixes_does_not_strip_www_or_reject_a_zone() {
 }
 
 #[test]
-fn editing_a_path_rule_keeps_the_path_and_rejects_templates() {
+fn editing_a_path_rule_keeps_the_path_and_groups_open_group_editor() {
     #[cfg(windows)]
     let path = r"C:\Apps\Tool.exe";
     #[cfg(not(windows))]
@@ -646,7 +647,7 @@ fn editing_a_path_rule_keeps_the_path_and_rejects_templates() {
     let id = state.config.rule_sets[1].rules[1].id.clone();
     state.config.rule_sets[1].rules[1].matcher =
         RuleMatcher::Process(ProcessMatch::Path(PathBuf::from(path)));
-    state.config.rule_sets[1].rules[2].matcher = RuleMatcher::Template(RuleTemplate::Youtube);
+    state.config.rule_sets[1].rules[2].matcher = RuleTemplate::Youtube.to_group("YouTube");
     assert!(
         AddRuleDialog::for_rule(
             state.config.rule_sets[1].id.clone(),
@@ -657,6 +658,17 @@ fn editing_a_path_rule_keeps_the_path_and_rejects_templates() {
     state.act(Action::OpenRules);
     assert!(state.act(Action::OpenEditRule(RuleId::new("2"))).is_none());
     assert!(state.rules.screen.add.is_none());
+    assert_eq!(
+        state
+            .rules
+            .screen
+            .group_editor
+            .as_ref()
+            .and_then(|dialog| dialog.editing.as_ref()),
+        Some(&RuleId::new("2"))
+    );
+    state.act(Action::CancelGroupEditor);
+    assert!(state.rules.screen.group_editor.is_none());
     assert!(
         state
             .act(Action::OpenEditRule(RuleId::new("missing")))
@@ -756,52 +768,393 @@ fn rule_target_filter_can_be_set_and_cleared() {
 }
 
 #[test]
-fn add_template_requires_a_selected_set_and_no_existing_template_or_edit() {
+fn add_preset_group_copies_items_into_editable_group_with_chosen_destination() {
     let mut state = state_with_rules();
     let template = RuleTemplate::RussianSites;
-    assert!(state.act(Action::AddTemplate(template)).is_none());
+    assert!(
+        state
+            .act(Action::AddPresetGroup(template, RuleDestination::Direct))
+            .is_none()
+    );
     state.act(Action::OpenRules);
     state.config.rule_sets[1].rules.clear();
+    let expected_name = crate::i18n::template_name(template);
     assert!(matches!(
-        state.act(Action::AddTemplate(template)),
-        Some(Job::AddRule(set, RuleMatcher::Template(RuleTemplate::RussianSites), RuleDestination::Direct))
-            if set == RuleSetId::new("2")
+        state.act(Action::AddPresetGroup(template, RuleDestination::Block)),
+        Some(Job::AddRule(
+            set,
+            RuleMatcher::Group { name, items },
+            RuleDestination::Block
+        )) if set == RuleSetId::new("2") && name == expected_name && items == template.matchers()
     ));
-    assert!(state.act(Action::AddTemplate(template)).is_none());
+    assert!(
+        state
+            .act(Action::AddPresetGroup(template, RuleDestination::Block))
+            .is_none()
+    );
     state.reduce(WorkerEvent::AddRule(Err(RuleSetError::DuplicateRule)));
     assert!(state.operation_error.is_some());
-    state.config.rule_sets[1].rules.push(Rule {
-        id: RuleId::new("template"),
-        enabled: false,
-        matcher: RuleMatcher::Template(template),
-        target: RuleTarget::Block,
-        exit: None,
-    });
-    assert!(state.act(Action::AddTemplate(template)).is_none());
 }
 
 #[test]
-fn remove_template_uses_the_rule_id_and_requires_presence() {
+fn group_selection_ungroup_and_remove_group_item_validate_and_dispatch_jobs() {
     let mut state = state_with_rules();
     state.act(Action::OpenRules);
-    let template = RuleTemplate::Youtube;
-    assert!(state.act(Action::RemoveTemplate(template)).is_none());
-    state.config.rule_sets[1].rules.push(Rule {
-        id: RuleId::new("template"),
+    assert!(state.act(Action::OpenGroupSelection).is_none());
+    for id in ["0", "2"] {
+        state.act(Action::SelectRule {
+            rule: RuleId::new(id),
+            additive: true,
+            range: false,
+        });
+    }
+    state.act(Action::OpenGroupSelection);
+    let dialog = state.rules.screen.group_selection.as_mut().unwrap();
+    assert_eq!(dialog.rules, vec![RuleId::new("0"), RuleId::new("2")]);
+    dialog.name = "Work sites".into();
+    dialog.target = RuleDestination::Direct;
+    assert!(matches!(
+        state.act(Action::SubmitGroupSelection),
+        Some(Job::GroupRules(set, ids, name, RuleDestination::Direct))
+            if set == RuleSetId::new("2")
+                && ids == vec![RuleId::new("0"), RuleId::new("2")]
+                && name == "Work sites"
+    ));
+    let grouped = Rule {
+        id: RuleId::new("group"),
         enabled: true,
-        matcher: RuleMatcher::Template(template),
+        matcher: RuleTemplate::Youtube.to_group("YouTube"),
+        target: RuleTarget::Proxy,
+        exit: None,
+    };
+    state.config.rule_sets[1].rules.push(grouped.clone());
+    state.reduce(WorkerEvent::GroupRules(Ok(grouped)));
+    assert!(state.rules.screen.group_selection.is_none());
+    assert_eq!(
+        state.rules.screen.selected_rules.iter().collect::<Vec<_>>(),
+        [&RuleId::new("group")]
+    );
+
+    state.act(Action::ToggleGroupExpanded(RuleId::new("group")));
+    assert!(
+        state
+            .rules
+            .screen
+            .expanded_groups
+            .contains(&RuleId::new("group"))
+    );
+    assert!(matches!(
+        state.act(Action::RemoveGroupItem(RuleId::new("group"), 0)),
+        Some(Job::RemoveGroupItem(set, rule, 0))
+            if set == RuleSetId::new("2") && rule == RuleId::new("group")
+    ));
+    state.reduce(WorkerEvent::RemoveGroupItem(Ok(())));
+    assert!(matches!(
+        state.act(Action::UngroupRule(RuleId::new("group"))),
+        Some(Job::UngroupRule(set, rule))
+            if set == RuleSetId::new("2") && rule == RuleId::new("group")
+    ));
+    assert!(
+        !state
+            .rules
+            .screen
+            .expanded_groups
+            .contains(&RuleId::new("group"))
+    );
+    state.reduce(WorkerEvent::UngroupRule(Ok(vec![])));
+}
+
+#[test]
+fn group_editor_creates_new_group_and_updates_existing_group() {
+    let mut state = state_with_rules();
+    state.act(Action::OpenRules);
+    state.act(Action::OpenTemplatesCatalog);
+    assert!(state.rules.screen.templates_catalog.is_some());
+    state.act(Action::OpenNewGroup);
+    assert!(state.rules.screen.templates_catalog.is_none());
+    let dialog = state.rules.screen.group_editor.as_mut().unwrap();
+    dialog.name = "Custom".into();
+    dialog.input = "example.com".into();
+    dialog.commit_input();
+    dialog.set_item_kind(GroupItemKind::Process);
+    dialog.input = "tool.exe".into();
+    assert!(matches!(
+        state.act(Action::SubmitGroupEditor),
+        Some(Job::AddRule(set, RuleMatcher::Group { name, items }, RuleDestination::Proxy))
+            if set == RuleSetId::new("2")
+                && name == "Custom"
+                && items == vec![
+                    RuleMatcher::Domain(rosetun_config::DomainMatch::Suffix("example.com".into())),
+                    RuleMatcher::Process(rosetun_config::ProcessMatch::Name("tool.exe".into())),
+                ]
+    ));
+    state.reduce(WorkerEvent::AddRule(Ok(rule_set("2").rules[0].clone())));
+    assert!(state.rules.screen.group_editor.is_none());
+}
+
+#[test]
+fn group_editor_parses_address_suffixes_exact_domains_and_batches() {
+    let mut state = state_with_rules();
+    state.act(Action::OpenRules);
+    state.act(Action::OpenNewGroup);
+    let dialog = state.rules.screen.group_editor.as_mut().unwrap();
+
+    // Multiple entries separated by commas and whitespace.
+    dialog.input = "example.com, *.ru, .su, 192.0.2.0/24".into();
+    dialog.commit_input();
+    assert!(dialog.input_error.is_none());
+    assert!(dialog.input.is_empty());
+    assert_eq!(
+        dialog.items,
+        vec![
+            RuleMatcher::Domain(rosetun_config::DomainMatch::Suffix("example.com".into())),
+            RuleMatcher::Domain(rosetun_config::DomainMatch::Suffix("ru".into())),
+            RuleMatcher::Domain(rosetun_config::DomainMatch::Suffix("su".into())),
+            RuleMatcher::IpCidr("192.0.2.0/24".into()),
+        ]
+    );
+
+    // Turning off subdomains adds Exact for bare domains, while keeping explicit *.tld as Suffix.
+    dialog.subdomains = false;
+    dialog.input = "exact.example.org, *.рф".into();
+    dialog.commit_input();
+    assert!(dialog.input_error.is_none());
+    assert_eq!(
+        &dialog.items[4..],
+        &[
+            RuleMatcher::Domain(rosetun_config::DomainMatch::Exact(
+                "exact.example.org".into()
+            )),
+            RuleMatcher::Domain(rosetun_config::DomainMatch::Suffix("xn--p1ai".into())),
+        ]
+    );
+
+    // Host bits in CIDR produce a clear error without mutating items.
+    dialog.input = "192.0.2.5/24".into();
+    dialog.commit_input();
+    assert!(dialog.input_error.is_some());
+    assert_eq!(dialog.items.len(), 6);
+}
+
+#[test]
+fn group_editor_process_mode_handles_dotted_linux_binaries_and_paths() {
+    let mut state = state_with_rules();
+    state.act(Action::OpenRules);
+    state.act(Action::OpenNewGroup);
+    let dialog = state.rules.screen.group_editor.as_mut().unwrap();
+    dialog.set_item_kind(GroupItemKind::Process);
+
+    for name in ["python3.12", "game.x86_64", "app.AppImage"] {
+        dialog.input = name.into();
+        dialog.commit_input();
+        assert!(dialog.input_error.is_none(), "{name}");
+    }
+    dialog.input = "/usr/bin/python3.12".into();
+    dialog.commit_input();
+    assert!(dialog.input_error.is_none());
+
+    assert_eq!(
+        dialog.items,
+        vec![
+            RuleMatcher::Process(rosetun_config::ProcessMatch::Name("python3.12".into())),
+            RuleMatcher::Process(rosetun_config::ProcessMatch::Name("game.x86_64".into())),
+            RuleMatcher::Process(rosetun_config::ProcessMatch::Name("app.AppImage".into())),
+            RuleMatcher::Process(rosetun_config::ProcessMatch::Path(
+                std::path::PathBuf::from("/usr/bin/python3.12")
+            )),
+        ]
+    );
+}
+
+#[test]
+fn group_editor_list_mode_validates_and_toggles_categories() {
+    let mut state = state_with_rules();
+    let geosite = rosetun_config::List {
+        id: rosetun_config::ListId::new("geosite"),
+        name: "GeoSite".into(),
+        format: rosetun_config::ListFormat::GeoSite,
+        source: rosetun_config::ListSource::File {
+            original_name: "geosite.dat".into(),
+        },
+        categories: vec!["youtube".into(), "ru".into()],
+        size: Some(100),
+        updated_at: None,
+        sha256: Some("abc".into()),
+    };
+    let plain = rosetun_config::List {
+        id: rosetun_config::ListId::new("plain"),
+        name: "Custom SRS".into(),
+        format: rosetun_config::ListFormat::SingBoxBinary,
+        source: rosetun_config::ListSource::File {
+            original_name: "custom.srs".into(),
+        },
+        categories: Vec::new(),
+        size: Some(100),
+        updated_at: None,
+        sha256: Some("def".into()),
+    };
+    state.config.lists = vec![geosite.clone(), plain.clone()];
+
+    state.act(Action::OpenRules);
+    state.act(Action::OpenNewGroup);
+    let dialog = state.rules.screen.group_editor.as_mut().unwrap();
+    dialog.set_item_kind(GroupItemKind::List);
+    dialog.select_list(geosite.id.clone());
+
+    // Missing category is rejected for GeoSite.
+    dialog.commit_list(&geosite);
+    assert!(dialog.input_error.is_some());
+    assert!(dialog.items.is_empty());
+
+    // Unknown category is rejected.
+    dialog.category = "nonexistent".into();
+    dialog.commit_list(&geosite);
+    assert!(dialog.input_error.is_some());
+
+    // Valid category (including @attribute) succeeds.
+    dialog.category = "youtube@cn".into();
+    dialog.commit_list(&geosite);
+    assert!(dialog.input_error.is_none());
+    assert!(dialog.category.is_empty());
+
+    // Chip toggle adds and removes a category cleanly.
+    dialog.toggle_list_category(&geosite, "ru");
+    assert!(dialog.contains_list_category(&geosite.id, "ru"));
+    dialog.toggle_list_category(&geosite, "ru");
+    assert!(!dialog.contains_list_category(&geosite.id, "ru"));
+
+    // Plain (non-categorized) list commits with category: None, and rejects duplicates.
+    dialog.select_list(plain.id.clone());
+    dialog.commit_list(&plain);
+    assert!(dialog.input_error.is_none());
+    dialog.commit_list(&plain);
+    assert!(dialog.input_error.is_some());
+
+    assert_eq!(
+        dialog.items,
+        vec![
+            RuleMatcher::List {
+                list: geosite.id,
+                category: Some("youtube@cn".into()),
+            },
+            RuleMatcher::List {
+                list: plain.id,
+                category: None,
+            },
+        ]
+    );
+}
+
+#[test]
+fn group_editor_reorders_items_and_saves_updated_order() {
+    let mut state = state_with_rules();
+    let group_id = RuleId::new("g0");
+    let items = vec![
+        RuleMatcher::Domain(DomainMatch::Suffix("a.example".into())),
+        RuleMatcher::Domain(DomainMatch::Suffix("b.example".into())),
+        RuleMatcher::Domain(DomainMatch::Suffix("c.example".into())),
+    ];
+    state.config.rule_sets[1].rules.push(Rule {
+        id: group_id.clone(),
+        enabled: true,
+        matcher: RuleMatcher::Group {
+            name: "Bundle".into(),
+            items: items.clone(),
+        },
         target: RuleTarget::Proxy,
         exit: None,
     });
+
+    state.act(Action::OpenRules);
+    state.act(Action::OpenEditRule(group_id.clone()));
+    let dialog = state.rules.screen.group_editor.as_mut().unwrap();
+
+    // Out-of-bounds and no-op moves keep items untouched.
+    dialog.move_item(0, 0);
+    dialog.move_item(0, 99);
+    dialog.move_item(99, 0);
+    assert_eq!(dialog.items, items);
+
+    // Move last item to first, then move second item down to last.
+    dialog.move_item(2, 0);
+    assert_eq!(
+        dialog.items,
+        vec![items[2].clone(), items[0].clone(), items[1].clone()]
+    );
+    dialog.move_item(1, 2);
+    let expected = vec![items[2].clone(), items[1].clone(), items[0].clone()];
+    assert_eq!(dialog.items, expected);
+
+    // Submitting a reordered group emits UpdateRule (not treated as unchanged).
     assert!(matches!(
-        state.act(Action::RemoveTemplate(template)),
-        Some(Job::RemoveRule(set, rule))
-            if set == RuleSetId::new("2") && rule == RuleId::new("template")
+        state.act(Action::SubmitGroupEditor),
+        Some(Job::UpdateRule(
+            set,
+            id,
+            RuleMatcher::Group { name, items: saved },
+            RuleDestination::Proxy
+        )) if set == RuleSetId::new("2")
+            && id == group_id
+            && name == "Bundle"
+            && saved == expected
     ));
-    assert!(state.act(Action::RemoveTemplate(template)).is_none());
-    state.reduce(WorkerEvent::RemoveRule(Ok(())));
-    state.config.rule_sets[1].rules.pop();
-    assert!(state.act(Action::RemoveTemplate(template)).is_none());
+}
+
+#[test]
+fn add_rules_to_group_validates_target_and_selects_updated_group() {
+    let mut state = state_with_rules();
+    let group_id = RuleId::new("g0");
+    let group = Rule {
+        id: group_id.clone(),
+        enabled: true,
+        matcher: RuleMatcher::Group {
+            name: "Games".into(),
+            items: vec![RuleMatcher::Domain(DomainMatch::Suffix(
+                "steam.example".into(),
+            ))],
+        },
+        target: RuleTarget::Direct,
+        exit: None,
+    };
+    state.config.rule_sets[1].rules.push(group.clone());
+
+    state.act(Action::OpenRules);
+    // Rejects non-group target and self-only addition.
+    assert!(
+        state
+            .act(Action::AddRulesToGroup(
+                vec![RuleId::new("0")],
+                RuleId::new("1")
+            ))
+            .is_none()
+    );
+    assert!(
+        state
+            .act(Action::AddRulesToGroup(
+                vec![group_id.clone()],
+                group_id.clone()
+            ))
+            .is_none()
+    );
+
+    // Filters out the target group if it was part of the selection.
+    assert!(matches!(
+        state.act(Action::AddRulesToGroup(
+            vec![RuleId::new("0"), group_id.clone(), RuleId::new("2")],
+            group_id.clone()
+        )),
+        Some(Job::AddRulesToGroup(set, sources, target))
+            if set == RuleSetId::new("2")
+                && sources == vec![RuleId::new("0"), RuleId::new("2")]
+                && target == group_id
+    ));
+    state.reduce(WorkerEvent::AddRulesToGroup(Ok(group)));
+    assert_eq!(
+        state.rules.screen.selected_rules.iter().collect::<Vec<_>>(),
+        vec![&group_id]
+    );
+    assert!(state.rules.screen.reveal_selection);
+    assert_eq!(state.rules.screen.highlight_rule, Some((group_id, 1)));
 }
 
 #[test]
@@ -1072,7 +1425,7 @@ fn program_dialog(processes: Vec<RunningProcess>) -> State {
     };
     state.reduce(WorkerEvent::Processes {
         request,
-        result: Ok(processes),
+        result: Ok(group_processes(processes)),
     });
     state
 }
@@ -1107,10 +1460,10 @@ fn a_program_given_by_name_or_path_is_found_in_the_list_once_it_loads() {
         };
         state.reduce(WorkerEvent::Processes {
             request,
-            result: Ok(vec![
+            result: Ok(group_processes(vec![
                 running("Tool.exe", path, true),
                 running("Tool.exe", other, false),
-            ]),
+            ])),
         });
         let dialog = state.rules.screen.add.as_ref().unwrap();
         assert_eq!(dialog.chosen.len(), 1, "{matcher:?}");
@@ -1307,11 +1660,11 @@ fn reading_the_process_list_again_keeps_the_ticks() {
     // The list changed meanwhile: one program closed, another started.
     state.reduce(WorkerEvent::Processes {
         request,
-        result: Ok(vec![
+        result: Ok(group_processes(vec![
             running("Other.exe", other, true),
             running("Curl.exe", third, true),
             running("Tool.exe", path, true),
-        ]),
+        ])),
     });
     let dialog = state.rules.screen.add.as_ref().unwrap();
     let after: Vec<_> = dialog.chosen.iter().map(|item| item.key.clone()).collect();
@@ -1329,7 +1682,7 @@ fn reading_the_process_list_again_keeps_the_ticks() {
     };
     state.reduce(WorkerEvent::Processes {
         request,
-        result: Ok(vec![running("Curl.exe", third, true)]),
+        result: Ok(group_processes(vec![running("Curl.exe", third, true)])),
     });
     let dialog = state.rules.screen.add.as_ref().unwrap();
     assert_eq!(dialog.chosen.len(), 2, "a program that closed stays ticked");
@@ -1548,7 +1901,11 @@ fn a_program_given_by_name_is_found_in_its_own_letter_case_only() {
         };
         state.reduce(WorkerEvent::Processes {
             request,
-            result: Ok(vec![running("Tool", "/opt/apps/Tool", true)]),
+            result: Ok(group_processes(vec![running(
+                "Tool",
+                "/opt/apps/Tool",
+                true,
+            )])),
         });
         let dialog = state.rules.screen.add.as_ref().unwrap();
         assert_eq!(dialog.chosen[0].path.is_some(), found, "{name}");

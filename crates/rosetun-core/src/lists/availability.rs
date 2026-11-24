@@ -44,42 +44,64 @@ fn inspect_rules(
     found: &mut Vec<MissingListCategory>,
 ) -> Result<(), ListError> {
     for rule in rules {
-        let RuleMatcher::List {
-            list: id,
-            category: Some(category),
-        } = &rule.matcher
-        else {
-            continue;
-        };
-        let list = config
-            .lists
-            .iter()
-            .find(|item| &item.id == id)
-            .ok_or(ListError::NotFound)?;
-        if !list.format.has_categories() {
-            continue;
+        match &rule.matcher {
+            RuleMatcher::Group { items, .. } => {
+                for item in items {
+                    inspect_matcher(store, config, item, &rule.id, set, cached, found)?;
+                }
+            }
+            matcher => {
+                inspect_matcher(store, config, matcher, &rule.id, set, cached, found)?;
+            }
         }
-        let base = category
-            .split_once('@')
-            .map_or(category.as_str(), |(base, _)| base);
-        if list.categories.iter().any(|name| name == base) {
-            continue;
-        }
-        let tag = list_tag(id, Some(category));
-        let has_copy = if let Some(has_copy) = cached.get(&tag) {
-            *has_copy
-        } else {
-            let has_copy = last_good::load(store, &tag)?.is_some();
-            cached.insert(tag, has_copy);
-            has_copy
-        };
-        found.push(MissingListCategory {
-            set: set.cloned(),
-            rule: rule.id.clone(),
-            list: id.clone(),
-            category: category.clone(),
-            last_good: has_copy,
-        });
     }
+    Ok(())
+}
+
+fn inspect_matcher(
+    store: &Store,
+    config: &AppConfig,
+    matcher: &RuleMatcher,
+    rule_id: &RuleId,
+    set: Option<&RuleSetId>,
+    cached: &mut HashMap<String, bool>,
+    found: &mut Vec<MissingListCategory>,
+) -> Result<(), ListError> {
+    let RuleMatcher::List {
+        list: id,
+        category: Some(category),
+    } = matcher
+    else {
+        return Ok(());
+    };
+    let list = config
+        .lists
+        .iter()
+        .find(|item| &item.id == id)
+        .ok_or(ListError::NotFound)?;
+    if !list.format.has_categories() {
+        return Ok(());
+    }
+    let base = category
+        .split_once('@')
+        .map_or(category.as_str(), |(base, _)| base);
+    if list.categories.iter().any(|name| name == base) {
+        return Ok(());
+    }
+    let tag = list_tag(id, Some(category));
+    let has_copy = if let Some(has_copy) = cached.get(&tag) {
+        *has_copy
+    } else {
+        let has_copy = last_good::load(store, &tag)?.is_some();
+        cached.insert(tag, has_copy);
+        has_copy
+    };
+    found.push(MissingListCategory {
+        set: set.cloned(),
+        rule: rule_id.clone(),
+        list: id.clone(),
+        category: category.clone(),
+        last_good: has_copy,
+    });
     Ok(())
 }

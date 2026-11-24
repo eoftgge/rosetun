@@ -88,8 +88,8 @@ fn request(allow_lan: bool) -> ConnectRequest {
             RuleTarget::Direct,
         ),
         rule(
-            "template",
-            RuleMatcher::Template(RuleTemplate::Torrents),
+            "group",
+            RuleTemplate::Torrents.to_group("Torrents"),
             RuleTarget::Direct,
         ),
         Rule {
@@ -101,7 +101,7 @@ fn request(allow_lan: bool) -> ConnectRequest {
             )
         },
     ];
-    let (mut rule_set, rule_templates) = set.expand_templates();
+    let (mut rule_set, rule_groups) = set.expand_groups();
     // This test builds the engine as a release does, and on Linux it does not
     // offer rules by program, which `render` then reports instead of rendering.
     if !cfg!(windows) {
@@ -142,7 +142,7 @@ fn request(allow_lan: bool) -> ConnectRequest {
             private_networks: allow_lan,
             ..Settings::default()
         },
-        rule_templates,
+        rule_groups,
     }
 }
 

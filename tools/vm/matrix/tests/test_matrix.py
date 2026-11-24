@@ -47,7 +47,7 @@ def summarize(report):
 
 class CatalogTests(unittest.TestCase):
     def test_all_existing_catalogs_keep_their_fields(self):
-        expected_counts = {"linux-l2": 34, "linux-l3": 61, "linux-l4": 27,
+        expected_counts = {"linux-l2": 34, "linux-l3": 63, "linux-l4": 27,
                            "linux-l5": 17, "linux-proxy": 47, "linux-reboot-smoke": 3}
         for suite, filename in SUITES.items():
             with self.subTest(suite=suite):
@@ -114,20 +114,22 @@ class NotRunClassTests(unittest.TestCase):
         self.unrun = [row['id'] for row in read_catalog(LINUX_ROOT / 'scenarios-l3.tsv') if row['evidence'] == 'not-run']
 
     def test_the_catalog_reads_the_class_as_it_is_and_the_plan_keeps_it_for_both_catalogs_that_have_it(self):
-        self.assertEqual(20, len(self.unrun))
-        for suite in ('linux-l3', 'linux-proxy'):
+        self.assertEqual(22, len(self.unrun))
+        expected = {'linux-l3': (self.unrun, {'two-hop', 'protocols'}),
+                    'linux-proxy': ([i for i in self.unrun if i.startswith('two-hop.')], {'two-hop'})}
+        for suite, (expected_ids, expected_groups) in expected.items():
             with self.subTest(suite=suite):
                 plan = make_plan(suite, 'test', {'mode': 'exploratory'})
                 rows = [row for row in plan['catalog'] if row['evidence'] == 'not-run']
-                self.assertEqual(self.unrun, [row['id'] for row in rows])
+                self.assertEqual(expected_ids, [row['id'] for row in rows])
                 self.assertFalse(any(row['required'] for row in rows))
-                self.assertEqual({'two-hop'}, {row['group'] for row in rows})
+                self.assertEqual(expected_groups, {row['group'] for row in rows})
                 validate_plan(plan)
 
     def test_a_skip_of_an_optional_scenario_of_the_class_is_no_problem_and_the_run_is_partial(self):
         result = assess(self.report, self.status, self.plan)
         self.assertEqual(('PASS', []), (result['validation']['status'], result['validation']['problems']))
-        self.assertEqual(20, result['execution']['counts']['SKIP'])
+        self.assertEqual(22, result['execution']['counts']['SKIP'])
         self.assertEqual('partial', result['coverage'])
         rows = {row['id']: row for row in result['rows']}
         self.assertEqual({'SKIP'}, {rows[i]['execution'] for i in self.unrun})
@@ -139,7 +141,7 @@ class NotRunClassTests(unittest.TestCase):
         from tools.vm.matrix.tests.test_matrix import summarize
         summarize(self.report)
         result = assess(self.report, self.status, self.plan)
-        self.assertEqual(['two-hop.positive.xray-first-hop: scenario without a check claims PASS'],
+        self.assertEqual(['protocol.anytls: scenario without a check claims PASS'],
                          result['validation']['problems'])
 
     def test_a_class_the_catalog_does_not_declare_is_not_accepted_in_its_place(self):

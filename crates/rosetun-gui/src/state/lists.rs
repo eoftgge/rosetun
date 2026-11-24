@@ -119,6 +119,14 @@ pub(crate) struct ListsState {
     scan_in_flight: Option<u64>,
 }
 
+pub(crate) fn matcher_uses_list(matcher: &RuleMatcher, id: &ListId) -> bool {
+    match matcher {
+        RuleMatcher::List { list, .. } => list == id,
+        RuleMatcher::Group { items, .. } => items.iter().any(|item| matcher_uses_list(item, id)),
+        _ => false,
+    }
+}
+
 pub(crate) fn used_by(config: &AppConfig, id: &ListId) -> Vec<String> {
     config
         .rule_sets
@@ -126,7 +134,7 @@ pub(crate) fn used_by(config: &AppConfig, id: &ListId) -> Vec<String> {
         .filter(|set| {
             set.rules
                 .iter()
-                .any(|rule| matches!(&rule.matcher, RuleMatcher::List { list, .. } if list == id))
+                .any(|rule| matcher_uses_list(&rule.matcher, id))
         })
         .map(|set| set.name.clone())
         .collect()
@@ -134,9 +142,7 @@ pub(crate) fn used_by(config: &AppConfig, id: &ListId) -> Vec<String> {
 
 impl State {
     pub(super) fn active_rules_use_list(&self, id: &ListId) -> bool {
-        let uses_list = |rule: &Rule| {
-            rule.enabled && matches!(&rule.matcher, RuleMatcher::List { list, .. } if list == id)
-        };
+        let uses_list = |rule: &Rule| rule.enabled && matcher_uses_list(&rule.matcher, id);
         self.config
             .active_rules()
             .is_some_and(|set| set.rules.iter().any(uses_list))

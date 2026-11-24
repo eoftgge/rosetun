@@ -11,6 +11,8 @@ publish.workspace = true
 # The GUI's system check: it reads adapters, processes and desktop settings,
 # which the CLI has no use for and should not carry.
 system-checks = ["dep:rosetun-adapters", "dep:rosetun-processes", "dep:rosetun-shell"]
+# A checked update made up in other crates' tests; never in a build.
+test-support = []
 
 [dependencies]
 rosetun-config.workspace = true
@@ -25,6 +27,7 @@ percent-encoding.workspace = true
 ureq = { workspace = true, features = ["rustls", "platform-verifier", "gzip", "socks-proxy"] }
 url.workspace = true
 idna.workspace = true
+minisign-verify.workspace = true
 regex-automata.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

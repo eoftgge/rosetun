@@ -93,6 +93,18 @@ impl Saved {
             Job::RemoveRules(set, rules) => {
                 WorkerEvent::RemoveRules(rosetun_core::remove_rules(store, &set, &rules))
             }
+            Job::GroupRules(set, rules, name, target) => WorkerEvent::GroupRules(
+                rosetun_core::group_rules(store, &set, &rules, &name, &target),
+            ),
+            Job::AddRulesToGroup(set, rules, target_group) => WorkerEvent::AddRulesToGroup(
+                rosetun_core::add_rules_to_group(store, &set, &rules, &target_group),
+            ),
+            Job::UngroupRule(set, rule) => {
+                WorkerEvent::UngroupRule(rosetun_core::ungroup_rule(store, &set, &rule))
+            }
+            Job::RemoveGroupItem(set, rule, index) => WorkerEvent::RemoveGroupItem(
+                rosetun_core::remove_group_item(store, &set, &rule, index),
+            ),
             Job::RestoreRuleSets(snapshot) => {
                 WorkerEvent::RestoreRuleSets(rosetun_core::restore_rule_sets(store, &snapshot))
             }
@@ -248,9 +260,18 @@ fn rule_edits() -> Vec<(&'static str, Prepare, Action)> {
             Action::SetDefaultTarget(RuleTarget::Direct),
         ),
         (
-            "template",
+            "preset group",
             no_preparation,
-            Action::AddTemplate(RuleTemplate::Youtube),
+            Action::AddPresetGroup(RuleTemplate::Youtube, RuleDestination::Proxy),
+        ),
+        (
+            "group selected",
+            |state| {
+                select_first_and_last(state);
+                state.act(Action::OpenGroupSelection);
+                state.rules.screen.group_selection.as_mut().unwrap().name = "Selected".into();
+            },
+            Action::SubmitGroupSelection,
         ),
         ("add", open_new_domain, Action::SubmitAddRule),
         ("add addresses", open_new_addresses, Action::SubmitAddRule),
@@ -438,18 +459,84 @@ fn deleting_shows_an_undo_notice_until_it_expires() {
 
     saved.act(&mut state, Action::SetRuleEnabled(RuleId::new("0"), false));
     assert!(state.rule_notice().is_none(), "a toggle needs no notice");
-    saved.act(&mut state, Action::AddTemplate(RuleTemplate::Youtube));
-    saved.act(&mut state, Action::RemoveTemplate(RuleTemplate::Youtube));
-    assert!(
-        state.rule_notice().is_none(),
-        "a template card is its own undo"
-    );
+
+    state.set_frame_time(30_000);
+    select_first_and_last(&mut state);
+    state.act(Action::OpenGroupSelection);
+    state.rules.screen.group_selection.as_mut().unwrap().name = "Bundle".into();
+    saved.act(&mut state, Action::SubmitGroupSelection);
+    assert!(matches!(
+        state.rule_notice(),
+        Some((UndoNotice::RulesGrouped(2), _))
+    ));
+    let group_id = state.config.rule_sets[1].rules[0].id.clone();
+    saved.act(&mut state, Action::RemoveGroupItem(group_id.clone(), 0));
+    saved.act(&mut state, Action::UndoRules);
+    saved.act(&mut state, Action::UngroupRule(group_id));
+    assert!(matches!(
+        state.rule_notice(),
+        Some((UndoNotice::GroupUngrouped(2), _))
+    ));
+    saved.act(&mut state, Action::UndoRules);
+    saved.act(&mut state, Action::UndoRules);
 
     open_delete_set(&mut state);
     saved.act(&mut state, Action::ConfirmDeleteSet);
     assert!(matches!(
         state.rule_notice(),
         Some((UndoNotice::SetDeleted, _))
+    ));
+}
+
+#[test]
+fn add_rules_to_group_can_be_undone_and_redone() {
+    let mut state = rules_state();
+    let mut saved = Saved::new(&state);
+
+    // First create a group from rules 0 and 1.
+    select(&mut state, "0");
+    state.act(Action::SelectRule {
+        rule: RuleId::new("1"),
+        additive: true,
+        range: false,
+    });
+    state.act(Action::OpenGroupSelection);
+    state.rules.screen.group_selection.as_mut().unwrap().name = "Bundle".into();
+    saved.act(&mut state, Action::SubmitGroupSelection);
+
+    let group_id = state.config.rule_sets[1].rules[0].id.clone();
+    let third_id = state.config.rule_sets[1].rules[1].id.clone();
+    assert_eq!(state.config.rule_sets[1].rules.len(), 2);
+
+    // Move the remaining rule into the existing group.
+    state.set_frame_time(40_000);
+    saved.act(
+        &mut state,
+        Action::AddRulesToGroup(vec![third_id.clone()], group_id.clone()),
+    );
+    assert!(matches!(
+        state.rule_notice(),
+        Some((UndoNotice::RulesGrouped(1), _))
+    ));
+    assert_eq!(state.config.rule_sets[1].rules.len(), 1);
+    assert!(matches!(
+        &state.config.rule_sets[1].rules[0].matcher,
+        RuleMatcher::Group { name, items } if name == "Bundle" && items.len() == 3
+    ));
+
+    // Undo restores the separate rule and the 2-item group; Redo merges it again.
+    saved.act(&mut state, Action::UndoRules);
+    assert_eq!(state.config.rule_sets[1].rules.len(), 2);
+    assert!(matches!(
+        &state.config.rule_sets[1].rules[0].matcher,
+        RuleMatcher::Group { items, .. } if items.len() == 2
+    ));
+
+    saved.act(&mut state, Action::RedoRules);
+    assert_eq!(state.config.rule_sets[1].rules.len(), 1);
+    assert!(matches!(
+        &state.config.rule_sets[1].rules[0].matcher,
+        RuleMatcher::Group { items, .. } if items.len() == 3
     ));
 }
 

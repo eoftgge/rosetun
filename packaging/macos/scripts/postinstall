@@ -1,0 +1,55 @@
+#!/bin/bash
+# Enforces safe root-owned permissions on installed helper and engine paths and starts LaunchDaemon.
+set -euo pipefail
+
+LABEL='io.github.eoftgge.rosetun.helper'
+PLIST="/Library/LaunchDaemons/$LABEL.plist"
+LIBEXEC='/usr/local/libexec/rosetun'
+CLI='/usr/local/bin/rosetun'
+APP='/Applications/Rosetun.app'
+STATE_DIR='/Library/Application Support/Rosetun'
+RUN_DIR='/private/var/run/rosetun'
+
+/usr/sbin/chown -R root:wheel "$LIBEXEC"
+/bin/chmod 0755 "$LIBEXEC"
+for bin in rosetun-helper-privileged sing-box xray uninstall.sh; do
+    if [ -f "$LIBEXEC/$bin" ]; then
+        /bin/chmod 0755 "$LIBEXEC/$bin"
+    fi
+done
+
+if [ -f "$CLI" ]; then
+    /usr/sbin/chown root:wheel "$CLI"
+    /bin/chmod 0755 "$CLI"
+fi
+
+if [ -d "$APP" ]; then
+    /usr/sbin/chown -R root:wheel "$APP"
+fi
+
+/usr/sbin/chown root:wheel "$PLIST"
+/bin/chmod 0644 "$PLIST"
+
+/usr/bin/install -d -o root -g wheel -m 0700 "$STATE_DIR"
+/usr/bin/install -d -o root -g staff -m 0750 "$RUN_DIR"
+
+# Warn clearly if a parent directory above /usr/local/libexec/rosetun is not root-owned
+# or is writable by group/others, because rosetun-helper-privileged refuses to launch
+# engines from a path that non-root accounts can alter.
+for ancestor in /usr/local /usr/local/libexec; do
+    if [ -L "$ancestor" ]; then
+        printf 'Rosetun warning: %s is a symbolic link; helper engine verification requires real root-owned directories.\n' "$ancestor" >&2
+    elif [ -d "$ancestor" ]; then
+        owner_uid=$(/usr/bin/stat -f '%u' "$ancestor")
+        mode_octal=$(/usr/bin/stat -f '%Lp' "$ancestor")
+        if [ "$owner_uid" != '0' ] || [ $((8#$mode_octal & 022)) -ne 0 ]; then
+            printf 'Rosetun warning: %s has uid=%s mode=%s; expected root (uid=0) with no group/other write bits (0755).\n' \
+                "$ancestor" "$owner_uid" "$mode_octal" >&2
+        fi
+    fi
+done
+
+/bin/launchctl bootout "system/$LABEL" >/dev/null 2>&1 || true
+/bin/launchctl enable "system/$LABEL" >/dev/null 2>&1 || true
+/bin/launchctl bootstrap system "$PLIST"
+/bin/launchctl kickstart -k "system/$LABEL" >/dev/null 2>&1 || true

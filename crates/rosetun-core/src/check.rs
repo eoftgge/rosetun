@@ -255,7 +255,7 @@ fn unknown_of(subject: &Subject, rule: &Rule, lists: &SessionLists) -> Option<Un
         }
         RuleMatcher::Domain(_)
         | RuleMatcher::Process(ProcessMatch::Name(_))
-        | RuleMatcher::Template(_) => (false, false),
+        | RuleMatcher::Group { .. } => (false, false),
     };
     match subject {
         Subject::Site(_) if address => Some(Unknown::SiteAddress),

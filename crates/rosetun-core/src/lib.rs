@@ -21,6 +21,7 @@ mod subscriptions;
 mod system_checks;
 mod text;
 mod update;
+mod update_download;
 mod updates;
 
 pub use check::{Answer, InputError, Subject, Unknown, check};
@@ -34,7 +35,9 @@ pub use explain::{
     Destination, ExplainedRoute, Explanation, Reason, RuleSource, SessionLists, explain,
     explain_connection, read_session_lists,
 };
-pub use fetch::{FetchError, Timeouts, fetch};
+pub use fetch::{
+    DEFAULT_USER_AGENT, FetchError, HAPP_USER_AGENT, Timeouts, fetch, is_valid_user_agent,
+};
 pub use lists::{
     ListError, ListOperation, ListParseError, ListPayload, ListPreparationError, ListUpdateResult,
     MAX_LIST_BYTES, MissingListCategory, PayloadFormat, PreparedConnection, PreparedListPayload,
@@ -50,11 +53,12 @@ pub use rosetun_subscription::{
 pub use rules::{
     AddedRules, AppliedSnapshot, DomainLineError, DomainLines, IpCidrError, IpLineError, IpLines,
     RestoredRuleSets, RuleDestination, RuleInputError, RuleSetError, RuleSetsSnapshot, SetSnapshot,
-    add_rule, add_rules, create_rule_set, delete_rule_set, ip_lines_have_local_address, move_rule,
-    move_rules, parse_domain_input, parse_domain_lines, parse_ip_cidr, parse_ip_lines,
-    parse_process_input, remove_rule, remove_rules, rename_rule_set, restore_rule_sets,
-    restore_rules_and_dns, rule_value_ascii, rule_value_text, set_default_target, set_rule_enabled,
-    set_rule_target, temporary_rules, update_rule, validate_list_matcher, with_subdomains,
+    add_rule, add_rules, add_rules_to_group, create_rule_set, delete_rule_set, group_rules,
+    ip_lines_have_local_address, move_rule, move_rules, parse_domain_input, parse_domain_lines,
+    parse_ip_cidr, parse_ip_lines, parse_process_input, remove_group_item, remove_rule,
+    remove_rules, rename_rule_set, restore_rule_sets, restore_rules_and_dns, rule_value_ascii,
+    rule_value_text, set_default_target, set_rule_enabled, set_rule_target, temporary_rules,
+    ungroup_rule, update_rule, validate_list_matcher, with_subdomains,
 };
 #[cfg(target_os = "linux")]
 pub use scope::{Scope, ScopeProgram, enter_scope};
@@ -77,18 +81,22 @@ pub use subscription_url::{
 pub use subscriptions::{
     AddFromUrlError, AddOptions, AddSubscriptionError, CommitUpdateError, MoveSubscriptionError,
     PreparedSubscription, RemoveSubscriptionError, RenameSubscriptionError,
-    SUBSCRIPTION_NAME_LIMIT, SubscriptionUpdateResult, UpdateSubscriptionError,
-    add_prepared_subscription, add_subscription, commit_subscription_update, is_local_proxy,
-    move_subscription, prepare_subscription, remove_subscription, rename_subscription, save_proxy,
-    update_all, update_subscription,
+    SUBSCRIPTION_NAME_LIMIT, SUBSCRIPTION_USER_AGENT_LIMIT, SubscriptionUpdateResult,
+    UpdateSubscriptionError, add_prepared_subscription, add_subscription,
+    commit_subscription_update, is_local_proxy, move_subscription, prepare_subscription,
+    remove_subscription, rename_subscription, save_proxy, update_all, update_subscription,
+    update_subscription_settings,
 };
 #[cfg(feature = "system-checks")]
 pub use system_checks::{CheckDetail, CheckKind, CheckResult, CheckStatus, check_system};
 pub use text::{
     expiry_text, fetch_error_message, node_address, node_protocol, node_tls, node_transport,
-    provider_link, provider_text, terminal_text, traffic_text, updated_text,
+    provider_link, provider_text, skipped_lines, terminal_text, traffic_text, updated_text,
 };
-pub use update::{UpdateReport, group_skipped};
+pub use update::{
+    UnsupportedProtocolCounts, UpdateReport, group_skipped, group_unsupported_protocols,
+};
+pub use update_download::{DownloadedUpdate, UpdateDownloadError, download_update, installer_name};
 pub use updates::{Release, UpdateCheckError, is_newer, latest_release, remembered_release};
 
 pub use rosetun_config::{fragments_tls, is_sensitive_log_target, uses_xray};

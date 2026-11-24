@@ -16,18 +16,61 @@ fn primary_fill(enabled: bool) -> Color32 {
     }
 }
 
+fn primary_foreground(enabled: bool) -> Color32 {
+    let palette = theme::palette();
+    if enabled {
+        palette.on_accent
+    } else if palette.on_accent == palette.text {
+        palette.text_muted
+    } else {
+        palette.on_accent.gamma_multiply(theme::alpha::MUTED)
+    }
+}
+
 pub(crate) fn button_fill(
     ui: &mut egui::Ui,
     text: impl Into<egui::WidgetText>,
     enabled: bool,
 ) -> egui::Response {
     ui.scope(|ui| {
-        if !enabled {
-            ui.visuals_mut().override_text_color = Some(theme::palette().text_muted);
-        }
+        ui.visuals_mut().override_text_color = Some(primary_foreground(enabled));
         ui.add_enabled(enabled, egui::Button::new(text).fill(primary_fill(enabled)))
     })
     .inner
+}
+
+/// A square primary filled button carrying only `icon`, as high as a field.
+/// `label` is spoken to assistive tools and shown on hover.
+pub(crate) fn button_fill_icon(
+    ui: &mut egui::Ui,
+    icon: Icon,
+    label: &str,
+    enabled: bool,
+) -> egui::Response {
+    let side = super::text_field::field_height(ui);
+    let enabled = enabled && ui.is_enabled();
+    let response = ui
+        .scope(|ui| {
+            ui.spacing_mut().button_padding = egui::Vec2::ZERO;
+            ui.spacing_mut().interact_size = egui::vec2(side, side);
+            ui.add_enabled(
+                enabled,
+                egui::Button::new("")
+                    .min_size(egui::vec2(side, side))
+                    .fill(primary_fill(enabled)),
+            )
+        })
+        .inner;
+    if ui.is_rect_visible(response.rect) {
+        icons::paint(
+            ui.painter(),
+            response.rect.center(),
+            icon,
+            primary_foreground(enabled),
+        );
+    }
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, label));
+    response.on_hover_text(label).on_disabled_hover_text(label)
 }
 
 pub(crate) fn outline_button(
@@ -51,6 +94,49 @@ pub(crate) fn outline_button(
         ui.add_enabled(enabled, button)
     })
     .inner
+}
+
+/// A square outlined button carrying only `icon`, as high as a field.
+/// `label` is spoken to assistive tools and shown on hover.
+pub(crate) fn outline_button_icon(
+    ui: &mut egui::Ui,
+    icon: Icon,
+    label: &str,
+    enabled: bool,
+) -> egui::Response {
+    let side = super::text_field::field_height(ui);
+    let enabled = enabled && ui.is_enabled();
+    let response = ui
+        .scope(|ui| {
+            ui.spacing_mut().button_padding = egui::Vec2::ZERO;
+            ui.spacing_mut().interact_size = egui::vec2(side, side);
+            ui.visuals_mut().widgets.inactive.bg_stroke.width = 1.0;
+            ui.add_enabled(
+                enabled,
+                egui::Button::new("")
+                    .min_size(egui::vec2(side, side))
+                    .fill(Color32::TRANSPARENT)
+                    .stroke(Stroke::new(
+                        theme::stroke::HAIRLINE,
+                        if enabled {
+                            theme::palette().border_strong
+                        } else {
+                            theme::palette().border
+                        },
+                    )),
+            )
+        })
+        .inner;
+    if ui.is_rect_visible(response.rect) {
+        let color = if enabled {
+            theme::palette().text_muted
+        } else {
+            theme::disabled()
+        };
+        icons::paint(ui.painter(), response.rect.center(), icon, color);
+    }
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, label));
+    response.on_hover_text(label).on_disabled_hover_text(label)
 }
 
 /// An outlined button that opens a menu: the chevron stands inside the button, after the text.
@@ -95,7 +181,8 @@ pub(crate) fn outline_button_menu(
     shown.response
 }
 
-pub(crate) fn button_fill_compact(ui: &mut egui::Ui, text: &str, enabled: bool) -> egui::Response {
+#[cfg(test)]
+fn button_fill_compact(ui: &mut egui::Ui, text: &str, enabled: bool) -> egui::Response {
     compact_button(ui, text, enabled, false, false)
 }
 
@@ -146,8 +233,8 @@ fn compact_button(
         ui.spacing_mut().interact_size.y = 28.0;
         if outlined {
             ui.visuals_mut().widgets.inactive.bg_stroke.width = 1.0;
-        } else if !enabled {
-            ui.visuals_mut().override_text_color = Some(theme::palette().text_muted);
+        } else {
+            ui.visuals_mut().override_text_color = Some(primary_foreground(enabled));
         }
         ui.add_enabled(enabled, button)
     })
@@ -238,6 +325,24 @@ mod tests {
                 assert_eq!(disabled.rect.size(), menu.rect.size());
                 assert!(menu.rect.width() > plain.rect.width());
                 assert!(menu.sense.senses_click() && !disabled.enabled());
+            });
+        });
+        output.textures_delta.clear();
+    }
+
+    #[test]
+    fn an_icon_fill_button_is_square_as_high_as_a_field_and_keeps_its_size_when_disabled() {
+        let ctx = egui::Context::default();
+        theme::apply(&ctx);
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let height = super::super::text_field::field_height(ui);
+                let enabled = button_fill_icon(ui, Icon::Plus, "Add rule", true);
+                let disabled = button_fill_icon(ui, Icon::Plus, "Add rule", false);
+                assert_eq!(enabled.rect.height(), height);
+                assert_eq!(enabled.rect.width(), height);
+                assert_eq!(disabled.rect.size(), enabled.rect.size());
+                assert!(!disabled.enabled());
             });
         });
         output.textures_delta.clear();

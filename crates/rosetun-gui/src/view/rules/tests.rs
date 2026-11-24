@@ -47,20 +47,23 @@ fn a_program_rule_shows_the_icon_of_its_path_or_of_a_running_program_by_name() {
     assert_eq!(program_icon_path(&site, &running), None);
 }
 
-#[test]
-fn toolbar_controls_do_not_overlap_at_minimum_window_scales() {
-    let set = drag_set();
-    for scale in [1.0, 1.25, 1.5] {
-        let width = 960.0 / scale;
+fn render_toolbar(
+    set: &RuleSet,
+    width: f32,
+    scale: f32,
+    language: crate::i18n::Language,
+) -> (ToolbarRects, f32) {
+    crate::i18n::in_language(language, || {
         let ctx = egui::Context::default();
         theme::apply(&ctx);
         let mut filter = RuleFilter::default();
         let mut rects = None;
+        let mut field_height = 0.0;
         let mut output = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
-                    egui::vec2(width, 640.0 / scale),
+                    egui::vec2(width / scale, 640.0 / scale),
                 )),
                 ..Default::default()
             },
@@ -68,11 +71,12 @@ fn toolbar_controls_do_not_overlap_at_minimum_window_scales() {
                 egui::CentralPanel::default()
                     .frame(egui::Frame::new().inner_margin(theme::margin::same(theme::space::XXL)))
                     .show(ctx, |ui| {
+                        field_height = widgets::field_height(ui);
                         rects = Some(filter_controls(
                             ui,
                             &mut filter,
                             &[],
-                            &set,
+                            set,
                             &[],
                             true,
                             &mut Vec::new(),
@@ -81,17 +85,98 @@ fn toolbar_controls_do_not_overlap_at_minimum_window_scales() {
             },
         );
         output.textures_delta.clear();
-        let rects = rects.unwrap();
-        assert!(rects.search.right() <= rects.tabs.left(), "{scale}");
-        assert!(rects.filter.right() <= rects.add.left(), "{scale}");
-        assert!(rects.filter.width() >= TARGET_FILTER_WIDTH, "{scale}");
-        assert!(rects.add.right() <= width - theme::space::XXL, "{scale}");
-        if rects.two_rows {
-            assert!(rects.tabs.bottom() <= rects.filter.top(), "{scale}");
-            assert!(rects.tabs.bottom() <= rects.add.top(), "{scale}");
-        } else {
-            assert!(rects.tabs.right() <= rects.filter.left(), "{scale}");
+        (rects.unwrap(), field_height)
+    })
+}
+
+#[test]
+fn toolbar_controls_do_not_overlap_at_minimum_window_scales() {
+    let mut set = drag_set();
+    set.rules.push(Rule {
+        id: RuleId::new("other"),
+        enabled: true,
+        matcher: RuleMatcher::IpCidr("192.0.2.0/24".to_owned()),
+        target: RuleTarget::Direct,
+        exit: None,
+    });
+    for language in [
+        crate::i18n::Language::English,
+        crate::i18n::Language::Russian,
+    ] {
+        for (width, scale) in [(960.0, 1.0), (960.0, 1.25), (960.0, 1.5), (1920.0, 1.0)] {
+            let (rects, field_height) = render_toolbar(&set, width, scale, language);
+            let right = width / scale - theme::space::XXL;
+            assert!(
+                rects.search.right() <= rects.tabs.left(),
+                "{language:?} {width} {scale}"
+            );
+            assert!(
+                rects.filter.right() <= rects.templates.left(),
+                "{language:?} {width} {scale}"
+            );
+            assert!(
+                rects.templates.right() <= rects.add.left(),
+                "{language:?} {width} {scale}"
+            );
+            assert!(
+                rects.add.right() <= right,
+                "{language:?} {width} {scale}: {:?} vs {right}",
+                rects.add
+            );
+            if rects.compact_controls {
+                assert_eq!(
+                    rects.filter.size(),
+                    egui::vec2(field_height, field_height),
+                    "{language:?} {width} {scale}"
+                );
+                assert_eq!(
+                    rects.templates.size(),
+                    egui::vec2(field_height, field_height),
+                    "{language:?} {width} {scale}"
+                );
+                assert_eq!(
+                    rects.add.size(),
+                    egui::vec2(field_height, field_height),
+                    "{language:?} {width} {scale}"
+                );
+            } else {
+                assert!(
+                    rects.filter.width() >= TARGET_FILTER_WIDTH,
+                    "{language:?} {width} {scale}"
+                );
+                assert!(
+                    rects.templates.width() > field_height,
+                    "{language:?} {width} {scale}"
+                );
+                assert!(
+                    rects.add.width() > field_height,
+                    "{language:?} {width} {scale}"
+                );
+            }
+            if rects.two_rows {
+                assert!(
+                    rects.tabs.bottom() <= rects.filter.top(),
+                    "{language:?} {width} {scale}"
+                );
+                assert!(
+                    rects.tabs.bottom() <= rects.templates.top(),
+                    "{language:?} {width} {scale}"
+                );
+                assert!(
+                    rects.tabs.bottom() <= rects.add.top(),
+                    "{language:?} {width} {scale}"
+                );
+            } else {
+                assert!(
+                    rects.tabs.right() <= rects.filter.left(),
+                    "{language:?} {width} {scale}"
+                );
+            }
         }
+        let (wide, _) = render_toolbar(&set, 1920.0, 1.0, language);
+        assert!(!wide.compact_controls && !wide.two_rows, "{language:?}");
+        let (narrow, _) = render_toolbar(&set, 960.0, 1.25, language);
+        assert!(narrow.compact_controls, "{language:?}");
     }
 }
 
@@ -166,6 +251,7 @@ fn row_input_actions(
                         state,
                         &RowContext {
                             set,
+                            target_choices: table::rule_target_choices(&state.config),
                             unresolved: &crate::destinations::unresolved_exits(&state.config),
                             running: HashMap::new(),
                         },
@@ -432,7 +518,7 @@ fn toolbar_and_hint_reserve_the_same_height() {
     theme::apply(&ctx);
     let mut state = State::default();
     state.config_ready = true;
-    for selected in [false, true] {
+    for (selected, line) in [(false, None), (false, Some(check_line(None))), (true, None)] {
         state.rules.screen.selected_rules.clear();
         if selected {
             state.rules.screen.selected_rules = [RuleId::new("1"), RuleId::new("2")].into();
@@ -447,7 +533,7 @@ fn toolbar_and_hint_reserve_the_same_height() {
             },
             |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    let slot = selection_slot(ui, &state, &mut Vec::new());
+                    let slot = selection_slot(ui, &state, line.clone(), &mut Vec::new());
                     assert!((slot.rect.height() - 38.0).abs() < 1.0, "{slot:?}");
                 });
             },
@@ -607,18 +693,21 @@ fn action_filter_button_matches_the_search_field_height() {
     theme::apply(&ctx);
     let mut output = ctx.run_ui(egui::RawInput::default(), |ctx| {
         egui::CentralPanel::default().show(ctx, |ui| {
-            let response = target_filter(ui, &RuleFilter::default(), &[], &mut Vec::new());
+            let full = target_filter(ui, &RuleFilter::default(), &[], false, &mut Vec::new());
+            let compact = target_filter(ui, &RuleFilter::default(), &[], true, &mut Vec::new());
             let mut query = String::new();
             let search = widgets::search_field(ui, &mut query, "", widgets::SEARCH_WIDTH);
-            assert_eq!(response.rect.height(), search.rect.height());
-            assert_eq!(response.rect.height(), widgets::field_height(ui));
+            let height = widgets::field_height(ui);
+            assert_eq!(full.rect.height(), search.rect.height());
+            assert_eq!(full.rect.height(), height);
+            assert_eq!(compact.rect.size(), egui::vec2(height, height));
         });
     });
     output.textures_delta.clear();
 }
 
 #[test]
-fn template_cards_keep_a_row_of_equal_sized_non_overlapping_cards() {
+fn starter_cards_keep_a_row_of_equal_sized_non_overlapping_cards() {
     let ctx = egui::Context::default();
     theme::apply(&ctx);
     let mut state = State::default();
@@ -630,13 +719,13 @@ fn template_cards_keep_a_row_of_equal_sized_non_overlapping_cards() {
             RuleTarget::Proxy,
         );
         if installed {
-            set.rules = RuleTemplate::ALL
+            set.rules = RuleTemplate::STARTER
                 .into_iter()
                 .enumerate()
                 .map(|(index, template)| Rule {
                     id: RuleId::new(index.to_string()),
                     enabled: true,
-                    matcher: RuleMatcher::Template(template),
+                    matcher: template.to_group(crate::i18n::template_name(template)),
                     target: template.default_target(),
                     exit: None,
                 })
@@ -650,10 +739,10 @@ fn template_cards_keep_a_row_of_equal_sized_non_overlapping_cards() {
                     let mut rects = Vec::new();
                     ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
                         ui.spacing_mut().item_spacing.x = 12.0;
-                        for template in RuleTemplate::ALL {
+                        for template in RuleTemplate::STARTER {
                             let rect = ui
                                 .scope(|ui| {
-                                    template_card(
+                                    starter_card(
                                         ui,
                                         &state,
                                         &set,
@@ -684,6 +773,60 @@ fn template_cards_keep_a_row_of_equal_sized_non_overlapping_cards() {
             output.textures_delta.clear();
         }
     }
+}
+
+#[test]
+fn group_row_expands_drawer_and_renders_items_inline() {
+    let mut state = State::default();
+    state.config_ready = true;
+    state.config.interface.reduce_motion = true;
+    let mut set = RuleSet::new(
+        rosetun_config::RuleSetId::new("set"),
+        "Test",
+        RuleTarget::Proxy,
+    );
+    let group_id = RuleId::new("grp");
+    set.rules.push(Rule {
+        id: group_id.clone(),
+        enabled: true,
+        matcher: RuleMatcher::Group {
+            name: "Video".into(),
+            items: vec![
+                RuleMatcher::Domain(DomainMatch::Suffix("youtube.com".into())),
+                RuleMatcher::Domain(DomainMatch::Suffix("googlevideo.com".into())),
+            ],
+        },
+        target: RuleTarget::Proxy,
+        exit: None,
+    });
+    let mut screen = crate::test_ui::TestScreen::new(egui::vec2(800.0, 400.0));
+    let render = |state: &State, ui: &mut egui::Ui, actions: &mut Vec<Action>| {
+        ui.push_id((set.id.as_str(), set.rules[0].id.as_str()), |ui| {
+            rule_row(
+                ui,
+                state,
+                &RowContext {
+                    set: &set,
+                    target_choices: table::rule_target_choices(&state.config),
+                    unresolved: &crate::destinations::unresolved_exits(&state.config),
+                    running: HashMap::new(),
+                },
+                &set.rules[0],
+                Some(0),
+                (ui.available_width() - 350.0).max(0.0),
+                actions,
+            );
+        });
+    };
+
+    let collapsed = screen.settle(|ui| render(&state, ui, &mut Vec::new()));
+    assert!(collapsed.iter().any(|(text, _)| text == "Video"));
+    assert!(!collapsed.iter().any(|(text, _)| text == "googlevideo.com"));
+
+    state.rules.screen.expanded_groups.insert(group_id);
+    let expanded = screen.settle(|ui| render(&state, ui, &mut Vec::new()));
+    assert!(expanded.iter().any(|(text, _)| text == "youtube.com"));
+    assert!(expanded.iter().any(|(text, _)| text == "googlevideo.com"));
 }
 
 #[test]
@@ -787,17 +930,18 @@ fn exit_rules_read_through_their_exit_in_their_own_colour() {
     );
     assert_eq!(rule_label(&rule, &[]), "Through an exit");
     let destination = RuleDestination::of(&rule);
-    assert_eq!(destination_color(&destination), theme::EXIT);
+    assert_eq!(destination_color(&destination), theme::exit());
     assert_ne!(
         destination_color(&destination),
         target_color(RuleTarget::Block)
     );
-    let choices = table::rule_target_choices(std::slice::from_ref(&exit));
+    let config = crate::destinations::tests::config(&[("a", "🇩🇪 Example")], vec![exit.clone()]);
+    let choices = table::rule_target_choices(&config);
     assert_eq!(choices.len(), 4);
-    assert_eq!(choices[3].label, "Example exit · NL");
+    assert_eq!(choices[3].label, "Example exit");
+    assert_eq!(choices[3].country, Some(("NL".to_owned(), true)));
     assert!(choices[3].section.is_some());
 
-    let config = crate::destinations::tests::config(&[("a", "🇩🇪 Example")], vec![exit.clone()]);
     assert!(crate::destinations::unresolved_exits(&config).contains(&exit.id));
 }
 
@@ -847,6 +991,7 @@ fn check_line(rule: Option<(String, RuleId)>) -> crate::state::CheckLine {
         ),
         rule,
         hint: None,
+        target: Some(RuleTarget::Direct),
         answer: true,
     }
 }
@@ -856,15 +1001,12 @@ fn the_check_shows_its_answer_and_a_link_that_asks_for_the_rule() {
     for language in [i18n::Language::English, i18n::Language::Russian] {
         i18n::in_language(language, || {
             let mut screen = crate::test_ui::TestScreen::new(egui::vec2(960.0, 640.0));
-            let mut input = "video.example.com".to_owned();
             let label = tr!("rule-check-number", number = "13".to_owned());
             let mut actions = Vec::new();
             let mut show = |ui: &mut egui::Ui| {
-                check::address_check(
+                check::check_result(
                     ui,
-                    true,
-                    &mut input,
-                    Some(check_line(Some((label.clone(), RuleId::new("one"))))),
+                    check_line(Some((label.clone(), RuleId::new("one")))),
                     &mut actions,
                 );
             };
@@ -908,23 +1050,588 @@ fn the_check_shows_its_answer_and_a_link_that_asks_for_the_rule() {
 }
 
 #[test]
-fn an_empty_check_keeps_the_height_of_a_line() {
-    let height = |line: Option<crate::state::CheckLine>| {
-        let mut screen = crate::test_ui::TestScreen::new(egui::vec2(960.0, 640.0));
-        let mut input = String::new();
-        let mut bottom = 0.0;
-        screen.settle(|ui| {
-            check::address_check(ui, true, &mut input, line.clone(), &mut Vec::new());
-            bottom = ui.min_rect().bottom();
+fn catalog_dialog_places_destination_picker_to_the_left_of_add_button() {
+    for language in [i18n::Language::English, i18n::Language::Russian] {
+        i18n::in_language(language, || {
+            let mut state = State::default();
+            state.config_ready = true;
+            state.config.rule_sets.push(drag_set());
+            state.rules.screen.selected_set = Some(rosetun_config::RuleSetId::new("set"));
+            state.act(Action::OpenTemplatesCatalog);
+
+            let ctx = egui::Context::default();
+            theme::apply(&ctx);
+            let mut texts = Vec::new();
+            for _ in 0..3 {
+                let mut actions = Vec::new();
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(1200.0, 800.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        templates::catalog_dialog(ctx, &mut state, &mut actions);
+                    },
+                );
+                output.textures_delta.clear();
+                texts = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) => Some((
+                            text.galley.text().to_owned(),
+                            egui::Rect::from_min_size(text.pos, text.galley.size()),
+                        )),
+                        _ => None,
+                    })
+                    .collect();
+            }
+
+            let add_label = tr!("template-add");
+            let direct_label = target_label(RuleTarget::Direct);
+            let proxy_label = target_label(RuleTarget::Proxy);
+            let show_label = tr!("templates-show-items");
+            let add_rects: Vec<_> = texts
+                .iter()
+                .filter(|(t, _)| t == &add_label)
+                .map(|(_, r)| *r)
+                .collect();
+            assert!(!add_rects.is_empty(), "{language:?}: expected Add buttons");
+            for add_rect in add_rects {
+                let same_row_target = texts.iter().find(|(t, r)| {
+                    (t == &direct_label || t == &proxy_label)
+                        && (r.center().y - add_rect.center().y).abs() < 6.0
+                });
+                let (_, target_rect) = same_row_target.unwrap_or_else(|| {
+                    panic!("{language:?}: missing destination picker on row of {add_rect:?}")
+                });
+                assert!(
+                    target_rect.right() < add_rect.left(),
+                    "{language:?}: target {target_rect:?} should sit left of Add {add_rect:?}"
+                );
+                let same_row_toggle = texts.iter().find(|(t, r)| {
+                    t == &show_label && (r.center().y - add_rect.center().y).abs() < 6.0
+                });
+                let (_, toggle_rect) = same_row_toggle.unwrap_or_else(|| {
+                    panic!("{language:?}: missing show-items toggle on row of {add_rect:?}")
+                });
+                assert!(
+                    toggle_rect.right() < target_rect.left(),
+                    "{language:?}: toggle {toggle_rect:?} should sit left of target {target_rect:?}"
+                );
+            }
         });
-        bottom
-    };
+    }
+}
 
-    let empty = height(None);
-    let answered = height(Some(check_line(None)));
+#[test]
+fn group_editor_dialog_renders_all_item_kinds_in_both_languages() {
+    for language in [i18n::Language::English, i18n::Language::Russian] {
+        i18n::in_language(language, || {
+            let mut state = State::default();
+            state.config_ready = true;
+            state.config.rule_sets.push(drag_set());
+            state.config.lists.push(rosetun_config::List {
+                id: rosetun_config::ListId::new("geosite"),
+                name: "GeoSite".into(),
+                format: rosetun_config::ListFormat::GeoSite,
+                source: rosetun_config::ListSource::File {
+                    original_name: "geosite.dat".into(),
+                },
+                categories: vec!["youtube".into(), "ru".into()],
+                size: Some(100),
+                updated_at: None,
+                sha256: Some("abc".into()),
+            });
+            state.rules.screen.selected_set = Some(rosetun_config::RuleSetId::new("set"));
+            state.act(Action::OpenNewGroup);
 
-    assert!(
-        (empty - answered).abs() < 1.0,
-        "empty {empty}, answered {answered}"
-    );
+            let ctx = egui::Context::default();
+            theme::apply(&ctx);
+            for kind in [
+                crate::state::GroupItemKind::Address,
+                crate::state::GroupItemKind::Process,
+                crate::state::GroupItemKind::List,
+            ] {
+                state
+                    .rules
+                    .screen
+                    .group_editor
+                    .as_mut()
+                    .unwrap()
+                    .set_item_kind(kind);
+                let mut texts = Vec::new();
+                for _ in 0..3 {
+                    let mut actions = Vec::new();
+                    let mut output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(1200.0, 800.0),
+                            )),
+                            ..Default::default()
+                        },
+                        |ctx| {
+                            dialogs::group_editor_dialog(ctx, &mut state, &mut actions);
+                        },
+                    );
+                    output.textures_delta.clear();
+                    texts = output
+                        .shapes
+                        .iter()
+                        .filter_map(|shape| match &shape.shape {
+                            egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                            _ => None,
+                        })
+                        .collect();
+                }
+                assert!(
+                    texts.contains(&tr!("rule-kind-address")),
+                    "{language:?} {kind:?}: {texts:?}"
+                );
+                assert!(
+                    texts.contains(&tr!("rule-kind-app")),
+                    "{language:?} {kind:?}: {texts:?}"
+                );
+                assert!(
+                    texts.contains(&tr!("rule-kind-list")),
+                    "{language:?} {kind:?}: {texts:?}"
+                );
+                if kind == crate::state::GroupItemKind::Address {
+                    assert!(
+                        texts.contains(&tr!("include-subdomains")),
+                        "{language:?}: expected subdomains checkbox"
+                    );
+                }
+                if kind == crate::state::GroupItemKind::List {
+                    assert!(
+                        texts.iter().any(|t| t == "youtube"),
+                        "{language:?}: expected category suggestion chips"
+                    );
+                }
+            }
+        });
+    }
+}
+
+#[test]
+fn right_clicking_selected_rules_opens_context_menu_with_group_and_delete() {
+    for language in [i18n::Language::English, i18n::Language::Russian] {
+        i18n::in_language(language, || {
+            let set = drag_set();
+            let mut state = State::default();
+            state.config_ready = true;
+            state.config.rule_sets.push(set.clone());
+            state.rules.screen.selected_set = Some(set.id.clone());
+            state.rules.screen.selected_rules = [RuleId::new("0"), RuleId::new("1")].into();
+
+            let mut screen = crate::test_ui::TestScreen::new(egui::vec2(960.0, 480.0));
+            let render = |ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>| {
+                let unresolved = crate::destinations::unresolved_exits(&state.config);
+                let choices = table::rule_target_choices(&state.config);
+                let row_ctx = RowContext {
+                    set: &set,
+                    target_choices: choices,
+                    unresolved: &unresolved,
+                    running: HashMap::new(),
+                };
+                for idx in 0..3 {
+                    ui.push_id(&set.rules[idx].id, |ui| {
+                        rule_row(
+                            ui,
+                            state,
+                            &row_ctx,
+                            &set.rules[idx],
+                            Some(idx),
+                            (ui.available_width() - 350.0).max(0.0),
+                            actions,
+                        );
+                    });
+                }
+            };
+
+            let mut actions = Vec::new();
+            let texts = screen.settle(|ui| render(ui, &state, &mut actions));
+            let (_, row0_rect) = texts.iter().find(|(text, _)| text == "0.example").unwrap();
+            let row0_pos = row0_rect.center();
+
+            // Right-click on a selected row keeps selection and opens multi-selection menu.
+            let right_click =
+                |screen: &mut crate::test_ui::TestScreen, state: &State, pos: egui::Pos2| {
+                    let mut actions = Vec::new();
+                    let btn = |pressed| egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Secondary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    };
+                    screen.run(vec![egui::Event::PointerMoved(pos), btn(true)], |ui| {
+                        render(ui, state, &mut actions);
+                    });
+                    screen.run(vec![btn(false)], |ui| {
+                        render(ui, state, &mut actions);
+                    });
+                    let texts = screen.run(Vec::new(), |ui| {
+                        render(ui, state, &mut actions);
+                    });
+                    (texts, actions)
+                };
+
+            let (menu_texts, menu_actions) = right_click(&mut screen, &state, row0_pos);
+            assert!(
+                menu_actions.is_empty(),
+                "{language:?}: right-clicking an already selected row must not alter selection"
+            );
+            let group_label = tr!("group-selected");
+            let delete_label = crate::i18n::delete_selected_rules(2);
+            assert!(
+                menu_texts.iter().any(|(t, _)| t == &group_label),
+                "{language:?}: expected {group_label:?} in {menu_texts:?}"
+            );
+            assert!(
+                menu_texts.iter().any(|(t, _)| t == &delete_label),
+                "{language:?}: expected {delete_label:?} in {menu_texts:?}"
+            );
+
+            // Clicking "Group" in the context menu emits OpenGroupSelection.
+            let mut actions = Vec::new();
+            screen.click_text(&group_label, |ui| render(ui, &state, &mut actions));
+            assert!(
+                actions
+                    .iter()
+                    .any(|a| matches!(a, Action::OpenGroupSelection)),
+                "{language:?}: expected OpenGroupSelection (got {} actions)",
+                actions.len()
+            );
+
+            // Right-clicking again and clicking "Delete 2 rules" emits DeleteSelectedRules.
+            right_click(&mut screen, &state, row0_pos);
+            let mut actions = Vec::new();
+            screen.click_text(&delete_label, |ui| render(ui, &state, &mut actions));
+            assert!(
+                actions
+                    .iter()
+                    .any(|a| matches!(a, Action::DeleteSelectedRules)),
+                "{language:?}: expected DeleteSelectedRules (got {} actions)",
+                actions.len()
+            );
+
+            // Right-clicking an unselected row selects it cleanly.
+            let (_, row2_rect) = texts.iter().find(|(text, _)| text == "2.example").unwrap();
+            let (_, row2_actions) = right_click(&mut screen, &state, row2_rect.center());
+            assert!(
+                row2_actions.iter().any(|a| matches!(
+                    a,
+                    Action::SelectRule {
+                        rule,
+                        additive: false,
+                        range: false
+                    } if rule == &RuleId::new("2")
+                )),
+                "{language:?}: expected SelectRule for unselected row (got {} actions)",
+                row2_actions.len()
+            );
+        });
+    }
+}
+
+#[test]
+fn context_menu_add_to_group_submenu_emits_add_rules_to_group() {
+    for language in [i18n::Language::English, i18n::Language::Russian] {
+        i18n::in_language(language, || {
+            let group_id = RuleId::new("g0");
+            let mut rules = vec![
+                Rule {
+                    id: RuleId::new("0"),
+                    enabled: true,
+                    matcher: RuleMatcher::Domain(DomainMatch::Suffix("0.example".into())),
+                    target: RuleTarget::Proxy,
+                    exit: None,
+                },
+                Rule {
+                    id: RuleId::new("1"),
+                    enabled: true,
+                    matcher: RuleMatcher::Domain(DomainMatch::Suffix("1.example".into())),
+                    target: RuleTarget::Proxy,
+                    exit: None,
+                },
+                Rule {
+                    id: group_id.clone(),
+                    enabled: true,
+                    matcher: RuleMatcher::Group {
+                        name: "Games".into(),
+                        items: vec![RuleMatcher::Domain(DomainMatch::Suffix(
+                            "steam.example".into(),
+                        ))],
+                    },
+                    target: RuleTarget::Direct,
+                    exit: None,
+                },
+            ];
+            // Add enough groups (> 8) to exercise the ScrollArea submenu path too,
+            // ensuring the very first group ("Games") is never truncated to "...".
+            for extra in 1..=9 {
+                rules.push(Rule {
+                    id: RuleId::new(format!("g{extra}")),
+                    enabled: true,
+                    matcher: RuleMatcher::Group {
+                        name: format!("Group {extra}"),
+                        items: vec![RuleMatcher::Domain(DomainMatch::Suffix(format!(
+                            "group{extra}.example"
+                        )))],
+                    },
+                    target: RuleTarget::Direct,
+                    exit: None,
+                });
+            }
+            let set = RuleSet {
+                id: rosetun_config::RuleSetId::new("set"),
+                name: "Main".into(),
+                default_target: RuleTarget::Direct,
+                rules,
+            };
+            let mut state = State::default();
+            state.config_ready = true;
+            state.config.rule_sets.push(set.clone());
+            state.config.active_rule_set = Some(set.id.clone());
+            state.rules.screen.selected_set = Some(set.id.clone());
+            state.rules.screen.selected_rules.insert(RuleId::new("0"));
+            state.rules.screen.selected_rules.insert(RuleId::new("1"));
+
+            let mut screen = crate::test_ui::TestScreen::new(egui::vec2(960.0, 480.0));
+            let render = |ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>| {
+                let unresolved = crate::destinations::unresolved_exits(&state.config);
+                let choices = table::rule_target_choices(&state.config);
+                let row_ctx = RowContext {
+                    set: &set,
+                    target_choices: choices,
+                    unresolved: &unresolved,
+                    running: HashMap::new(),
+                };
+                for idx in 0..3 {
+                    ui.push_id(&set.rules[idx].id, |ui| {
+                        rule_row(
+                            ui,
+                            state,
+                            &row_ctx,
+                            &set.rules[idx],
+                            Some(idx),
+                            (ui.available_width() - 350.0).max(0.0),
+                            actions,
+                        );
+                    });
+                }
+            };
+
+            let mut actions = Vec::new();
+            let texts = screen.settle(|ui| render(ui, &state, &mut actions));
+            let (_, row0_rect) = texts.iter().find(|(text, _)| text == "0.example").unwrap();
+            let row0_pos = row0_rect.center();
+
+            // Right-click a selected row to open the context menu.
+            let btn = |pressed| egui::Event::PointerButton {
+                pos: row0_pos,
+                button: egui::PointerButton::Secondary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            };
+            screen.run(vec![egui::Event::PointerMoved(row0_pos), btn(true)], |ui| {
+                render(ui, &state, &mut actions);
+            });
+            screen.run(vec![btn(false)], |ui| {
+                render(ui, &state, &mut actions);
+            });
+            let menu_texts = screen.run(Vec::new(), |ui| {
+                render(ui, &state, &mut actions);
+            });
+            let add_to_group = tr!("group-add-to");
+            let (_, submenu_rect) = menu_texts
+                .iter()
+                .find(|(text, _)| text == &add_to_group)
+                .unwrap_or_else(|| {
+                    panic!("{language:?}: expected {add_to_group:?} in {menu_texts:?}")
+                });
+
+            // Hover the "Add to group" submenu trigger to open the target group list.
+            let submenu_pos = submenu_rect.center();
+            screen.run(vec![egui::Event::PointerMoved(submenu_pos)], |ui| {
+                render(ui, &state, &mut actions);
+            });
+            let submenu_texts = screen.run(Vec::new(), |ui| {
+                render(ui, &state, &mut actions);
+            });
+            // Find the first "Games" item painted inside the scrolled submenu (to the right of the trigger).
+            let (_, group_rect) = submenu_texts
+                .iter()
+                .find(|(text, rect)| text == "Games" && rect.left() > submenu_rect.left())
+                .unwrap_or_else(|| {
+                    panic!(
+                        "{language:?}: expected submenu item 'Games' right of {submenu_rect:?} in {submenu_texts:?}"
+                    )
+                });
+
+            // Click the target group inside the submenu.
+            let target_pos = group_rect.center();
+            let primary = |pressed| egui::Event::PointerButton {
+                pos: target_pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            };
+            let mut click_actions = Vec::new();
+            screen.run(
+                vec![egui::Event::PointerMoved(target_pos), primary(true)],
+                |ui| {
+                    render(ui, &state, &mut click_actions);
+                },
+            );
+            screen.run(vec![primary(false)], |ui| {
+                render(ui, &state, &mut click_actions);
+            });
+            assert!(
+                click_actions.iter().any(|action| matches!(
+                    action,
+                    Action::AddRulesToGroup(sources, target)
+                        if sources == &vec![RuleId::new("0"), RuleId::new("1")]
+                            && target == &group_id
+                )),
+                "{language:?}: expected AddRulesToGroup([0, 1], g0), got {} actions",
+                click_actions.len()
+            );
+        });
+    }
+}
+
+#[test]
+fn group_editor_dialog_reorders_items_and_renders_reorder_controls() {
+    for language in [i18n::Language::English, i18n::Language::Russian] {
+        i18n::in_language(language, || {
+            let mut state = State::default();
+            state.config_ready = true;
+            let set_id = rosetun_config::RuleSetId::new("set");
+            state.config.rule_sets.push(RuleSet {
+                id: set_id.clone(),
+                name: "Main".into(),
+                default_target: RuleTarget::Direct,
+                rules: Vec::new(),
+            });
+            state.rules.screen.selected_set = Some(set_id);
+            state.act(Action::OpenNewGroup);
+            let dialog = state.rules.screen.group_editor.as_mut().unwrap();
+            dialog.name = "Bundle".into();
+            dialog.items = vec![
+                RuleMatcher::Domain(DomainMatch::Suffix("first.example".into())),
+                RuleMatcher::Domain(DomainMatch::Suffix("second.example".into())),
+                RuleMatcher::Domain(DomainMatch::Suffix("third.example".into())),
+            ];
+
+            let mut screen = crate::test_ui::TestScreen::new(egui::vec2(760.0, 680.0));
+            let mut actions = Vec::new();
+            let texts = screen.settle(|ui| {
+                dialogs::group_editor_dialog(ui.ctx(), &mut state, &mut actions);
+            });
+            let first_y = texts
+                .iter()
+                .find(|(text, _)| text == "first.example")
+                .unwrap()
+                .1
+                .center()
+                .y;
+            let second_y = texts
+                .iter()
+                .find(|(text, _)| text == "second.example")
+                .unwrap()
+                .1
+                .center()
+                .y;
+            let third_y = texts
+                .iter()
+                .find(|(text, _)| text == "third.example")
+                .unwrap()
+                .1
+                .center()
+                .y;
+            assert!(first_y < second_y && second_y < third_y);
+
+            // Confirm the 6-dot grip handle on the first row is vertically centered with its text.
+            let ctx = egui::Context::default();
+            theme::apply(&ctx);
+            let mut grip_ys = Vec::new();
+            let mut label_y = None;
+            for _ in 0..3 {
+                let mut frame_actions = Vec::new();
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(760.0, 680.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        dialogs::group_editor_dialog(ctx, &mut state, &mut frame_actions);
+                    },
+                );
+                output.textures_delta.clear();
+                grip_ys.clear();
+                label_y = None;
+                for clipped in &output.shapes {
+                    match &clipped.shape {
+                        egui::Shape::Text(text) if text.galley.text() == "first.example" => {
+                            let rect = text.galley.rect.translate(text.pos.to_vec2());
+                            label_y = Some(rect.center().y);
+                        }
+                        egui::Shape::Circle(circle) if (circle.radius - 1.0).abs() < 0.05 => {
+                            grip_ys.push(circle.center.y);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            let label_y = label_y.expect("first.example label");
+            let first_row_dots: Vec<f32> = grip_ys
+                .into_iter()
+                .filter(|y| (*y - label_y).abs() < 12.0)
+                .collect();
+            assert_eq!(first_row_dots.len(), 6, "expected 6 grip dots on first row");
+            let grip_center_y = first_row_dots.iter().sum::<f32>() / first_row_dots.len() as f32;
+            assert!(
+                (grip_center_y - label_y).abs() <= 1.0,
+                "{language:?}: grip center {grip_center_y} must align with row label center {label_y}"
+            );
+
+            // Reorder via state method and confirm painted vertical order follows.
+            state
+                .rules
+                .screen
+                .group_editor
+                .as_mut()
+                .unwrap()
+                .move_item(2, 0);
+            let texts_after = screen.settle(|ui| {
+                dialogs::group_editor_dialog(ui.ctx(), &mut state, &mut actions);
+            });
+            let first_y = texts_after
+                .iter()
+                .find(|(text, _)| text == "first.example")
+                .unwrap()
+                .1
+                .center()
+                .y;
+            let third_y = texts_after
+                .iter()
+                .find(|(text, _)| text == "third.example")
+                .unwrap()
+                .1
+                .center()
+                .y;
+            assert!(
+                third_y < first_y,
+                "{language:?}: expected third.example above first.example after reorder"
+            );
+        });
+    }
 }

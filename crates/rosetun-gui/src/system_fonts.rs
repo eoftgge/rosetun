@@ -18,12 +18,18 @@ use eframe::egui::{FallbackRequest, FontData, FontInsert, FontProvider};
 use eframe::epaint::text::Blob;
 use skrifa::MetadataProvider as _;
 
-/// The largest font file read; the largest known one, Microsoft JhengHei, is about 21 MB.
-const MAX_FONT_BYTES: u64 = 64 * 1024 * 1024;
+/// The largest font file read; system fonts are memory-mapped rather than copied,
+/// and macOS CJK collections such as `PingFang.ttc` can exceed 64 MiB.
+const MAX_FONT_BYTES: u64 = 96 * 1024 * 1024;
 
 const KANA: Script = Script {
     ranges: &[0x3040..=0x30FF, 0x31F0..=0x31FF, 0xFF65..=0xFF9F],
     windows: &[YU_GOTHIC_UI, MEIRYO_UI, YAHEI_UI],
+    macos: &[
+        MACOS_HIRAGINO_SANS_W3,
+        MACOS_HIRAGINO_SANS_GB,
+        MACOS_STHEITI_LIGHT,
+    ],
     fontconfig_lang: Some("ja"),
 };
 const HANGUL: Script = Script {
@@ -35,6 +41,7 @@ const HANGUL: Script = Script {
         0xFFA0..=0xFFDC,
     ],
     windows: &[MALGUN_GOTHIC],
+    macos: &[MACOS_APPLE_SD_GOTHIC_NEO],
     fontconfig_lang: Some("ko"),
 };
 /// Han ideographs with the CJK punctuation and full-width forms around them. One character is
@@ -61,12 +68,27 @@ const HAN: Script = Script {
         MEIRYO_UI,
         MALGUN_GOTHIC,
     ],
+    macos: &[
+        MACOS_PINGFANG_SC,
+        MACOS_PINGFANG_0,
+        MACOS_HIRAGINO_SANS_GB,
+        MACOS_STHEITI_LIGHT,
+        MACOS_STHEITI_MEDIUM,
+        MACOS_HIRAGINO_SANS_W3,
+        MACOS_APPLE_SD_GOTHIC_NEO,
+    ],
     fontconfig_lang: Some("zh-cn"),
 };
 /// Thai, Lao, Khmer and the other scripts of Leelawadee UI.
 const SOUTHEAST_ASIAN: Script = Script {
     ranges: &[0x0E00..=0x0EFF, 0x1780..=0x17FF, 0x1980..=0x1AAF],
     windows: &[Face::new("LeelawUI.ttf", 0), Face::new("tahoma.ttf", 0)],
+    macos: &[
+        Face::new("Thonburi.ttc", 0),
+        Face::new("ThonburiUI.ttc", 0),
+        Face::new("LaoMN.ttc", 0),
+        Face::new("KhmerMN.ttc", 0),
+    ],
     fontconfig_lang: None,
 };
 /// Devanagari through Sinhala, all in Nirmala UI: a collection since Windows 11, a single file
@@ -74,6 +96,19 @@ const SOUTHEAST_ASIAN: Script = Script {
 const INDIC: Script = Script {
     ranges: &[0x0900..=0x0DFF, 0xA8E0..=0xA8FF],
     windows: &[Face::new("Nirmala.ttc", 0), Face::new("Nirmala.ttf", 0)],
+    macos: &[
+        Face::new("Kohinoor.ttc", 0),
+        Face::new("DevanagariMT.ttc", 0),
+        Face::new("KohinoorBangla.ttc", 0),
+        Face::new("KohinoorGujarati.ttc", 0),
+        Face::new("KohinoorTelugu.ttc", 0),
+        Face::new("MuktaMahee.ttc", 0),
+        Face::new("TamilMN.ttc", 0),
+        Face::new("KannadaMN.ttc", 0),
+        Face::new("MalayalamMN.ttc", 0),
+        Face::new("OriyaMN.ttc", 0),
+        Face::new("SinhalaMN.ttc", 0),
+    ],
     fontconfig_lang: None,
 };
 const SCRIPTS: [Script; 5] = [KANA, HANGUL, HAN, SOUTHEAST_ASIAN, INDIC];
@@ -92,6 +127,30 @@ const GENERAL: &[Face] = &[
     Face::new("ebrima.ttf", 0),
     Face::new("mmrtext.ttf", 0),
 ];
+/// Tried for every character on macOS after its script's fonts: SFNS covers Latin/Greek/Turkish,
+/// GeezaPro covers Arabic, SFHebrew/ArialHB cover Hebrew, and the rest cover Armenian, Georgian,
+/// Myanmar, Tibetan, Ethiopic and broad supplemental glyphs.
+#[cfg_attr(
+    not(any(target_os = "macos", test)),
+    expect(
+        dead_code,
+        reason = "the macOS fonts list is searched on macOS and in tests"
+    )
+)]
+const MACOS_GENERAL: &[Face] = &[
+    Face::new("SFNS.ttf", 0),
+    Face::new("GeezaPro.ttc", 0),
+    Face::new("SFHebrew.ttf", 0),
+    Face::new("ArialHB.ttc", 0),
+    Face::new("SFGeorgian.ttf", 0),
+    Face::new("SFArmenian.ttf", 0),
+    Face::new("NotoSansArmenian.ttc", 0),
+    Face::new("NotoSansMyanmar.ttc", 0),
+    Face::new("MyanmarMN.ttc", 0),
+    Face::new("Kailasa.ttf", 0),
+    Face::new("Kefa.ttc", 0),
+    Face::new("Arial Unicode.ttf", 0),
+];
 
 const YAHEI_UI: Face = Face::new("msyh.ttc", 1);
 const JHENGHEI_UI: Face = Face::new("msjh.ttc", 1);
@@ -100,7 +159,15 @@ const MEIRYO_UI: Face = Face::new("meiryo.ttc", 2);
 const YU_GOTHIC_UI: Face = Face::new("YuGothM.ttc", 1);
 const MALGUN_GOTHIC: Face = Face::new("malgun.ttf", 0);
 
-/// A known Windows font: a file in the fonts folder and the face in it.
+const MACOS_PINGFANG_SC: Face = Face::new("PingFang.ttc", 2);
+const MACOS_PINGFANG_0: Face = Face::new("PingFang.ttc", 0);
+const MACOS_HIRAGINO_SANS_GB: Face = Face::new("Hiragino Sans GB.ttc", 0);
+const MACOS_HIRAGINO_SANS_W3: Face = Face::new("ヒラギノ角ゴシック W3.ttc", 0);
+const MACOS_STHEITI_LIGHT: Face = Face::new("STHeiti Light.ttc", 0);
+const MACOS_STHEITI_MEDIUM: Face = Face::new("STHeiti Medium.ttc", 0);
+const MACOS_APPLE_SD_GOTHIC_NEO: Face = Face::new("AppleSDGothicNeo.ttc", 0);
+
+/// A known system font: a file in a fonts folder and the face index in it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Face {
     file: &'static str,
@@ -127,10 +194,18 @@ struct Script {
         )
     )]
     windows: &'static [Face],
+    #[cfg_attr(
+        not(any(target_os = "macos", test)),
+        expect(
+            dead_code,
+            reason = "the macOS fonts list is searched on macOS and in tests"
+        )
+    )]
+    macos: &'static [Face],
     /// The language that makes fontconfig pick the font where the character alone does not.
     #[cfg_attr(
-        windows,
-        expect(dead_code, reason = "fontconfig is asked only outside Windows")
+        not(target_os = "linux"),
+        expect(dead_code, reason = "fontconfig is asked only on Linux")
     )]
     fontconfig_lang: Option<&'static str>,
 }
@@ -146,8 +221,11 @@ enum Finder {
     /// Known fonts in a folder: the Windows fonts folder, or a test's folder.
     #[cfg(any(windows, test))]
     Folder(PathBuf),
-    /// Whatever fontconfig picks for a language or a character.
-    #[cfg(not(windows))]
+    /// Known macOS fonts across the standard Apple font directories, with directory-scan fallback.
+    #[cfg(any(target_os = "macos", test))]
+    Macos(Vec<PathBuf>),
+    /// Whatever fontconfig picks for a language or a character on Linux.
+    #[cfg(target_os = "linux")]
     Fontconfig,
 }
 
@@ -171,12 +249,12 @@ struct Loaded {
     /// Faces in the order they were found.
     found: Vec<LoadedFace>,
     /// fontconfig's answer to each pattern asked.
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
     matched: HashMap<String, Option<Location>>,
-    /// Characters fontconfig was asked about, so each is asked once.
+    /// Characters already searched through fallback scanning, so each is tried once.
     #[cfg(not(windows))]
     asked: HashSet<char>,
-    /// The font files found without fontconfig, once looked for.
+    /// The font files found by directory scan, once looked for.
     #[cfg(not(windows))]
     font_files: Option<Vec<PathBuf>>,
 }
@@ -209,14 +287,23 @@ impl SystemFonts {
     pub(crate) fn new() -> Self {
         #[cfg(windows)]
         let finder = rosetun_shell::fonts_dir().map(Finder::Folder);
-        #[cfg(not(windows))]
+        #[cfg(target_os = "macos")]
+        let finder = Some(Finder::Macos(macos_font_folders()));
+        #[cfg(target_os = "linux")]
         let finder = Some(Finder::Fontconfig);
+        #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
+        let finder = None;
         Self::with_finder(finder)
     }
 
     #[cfg(test)]
     fn in_folder(dir: &std::path::Path) -> Self {
         Self::with_finder(Some(Finder::Folder(dir.to_owned())))
+    }
+
+    #[cfg(test)]
+    fn in_macos_folders(dirs: Vec<PathBuf>) -> Self {
+        Self::with_finder(Some(Finder::Macos(dirs)))
     }
 
     fn with_finder(finder: Option<Finder>) -> Self {
@@ -233,7 +320,9 @@ impl SystemFonts {
             Finder::Folder(dir) => folder_locations(dir, c)
                 .iter()
                 .find_map(|location| loaded.face(location).filter(|face| face.has(c))),
-            #[cfg(not(windows))]
+            #[cfg(any(target_os = "macos", test))]
+            Finder::Macos(dirs) => macos_face(dirs, &mut loaded, c),
+            #[cfg(target_os = "linux")]
             Finder::Fontconfig => fontconfig_face(&mut loaded, c),
         }
     }
@@ -278,9 +367,72 @@ fn folder_locations(dir: &std::path::Path, c: char) -> Vec<Location> {
         .collect()
 }
 
+/// The macOS fonts for `c` in priority order: its script's preferred faces first, then any
+/// already-loaded face, then general macOS faces, and finally a bounded scan of the folders.
+#[cfg(any(target_os = "macos", test))]
+fn macos_face(dirs: &[PathBuf], loaded: &mut Loaded, c: char) -> Option<LoadedFace> {
+    if let Some(script) = script_of(c)
+        && let Some(face) = macos_locations(dirs, script.macos)
+            .iter()
+            .find_map(|location| loaded.face(location).filter(|face| face.has(c)))
+    {
+        return Some(face);
+    }
+    if let Some(face) = loaded.found.iter().find(|face| face.has(c)) {
+        return Some(face.clone());
+    }
+    if let Some(face) = macos_locations(dirs, MACOS_GENERAL)
+        .iter()
+        .find_map(|location| loaded.face(location).filter(|face| face.has(c)))
+    {
+        return Some(face);
+    }
+    #[cfg(not(windows))]
+    {
+        if !loaded.asked.insert(c) {
+            return None;
+        }
+        searched_face_in(dirs, loaded, c)
+    }
+    #[cfg(windows)]
+    {
+        None
+    }
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn macos_locations(dirs: &[PathBuf], faces: &[Face]) -> Vec<Location> {
+    let mut locations = Vec::with_capacity(faces.len() * dirs.len());
+    for face in faces {
+        for dir in dirs {
+            locations.push(Location {
+                path: dir.join(face.file),
+                index: face.index,
+            });
+        }
+    }
+    locations
+}
+
+#[cfg(target_os = "macos")]
+fn macos_font_folders() -> Vec<PathBuf> {
+    let mut folders = vec![
+        PathBuf::from("/System/Library/Fonts"),
+        PathBuf::from("/System/Library/Fonts/Supplemental"),
+        PathBuf::from("/Library/Fonts"),
+    ];
+    if let Some(home) = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .filter(|home| home.is_absolute())
+    {
+        folders.push(home.join("Library/Fonts"));
+    }
+    folders
+}
+
 /// The language's own font first, then any font already found, then fontconfig's pick for the
 /// character itself, asked once per character.
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
 fn fontconfig_face(loaded: &mut Loaded, c: char) -> Option<LoadedFace> {
     if let Some(lang) = script_of(c).and_then(|script| script.fontconfig_lang)
         && let Some(face) = fontconfig_pattern_face(loaded, &format!("sans-serif:lang={lang}"))
@@ -295,14 +447,14 @@ fn fontconfig_face(loaded: &mut Loaded, c: char) -> Option<LoadedFace> {
         return None;
     }
     if !fontconfig_present() {
-        return searched_face(loaded, c);
+        return searched_face_in(&linux_font_folders(), loaded, c);
     }
     fontconfig_pattern_face(loaded, &format!("sans-serif:charset={:x}", u32::from(c)))
         .filter(|face| face.has(c))
 }
 
 /// `fc-match` comes with the fontconfig package, which a desktop has but a small system may not.
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
 fn fontconfig_present() -> bool {
     static PRESENT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *PRESENT.get_or_init(|| {
@@ -316,12 +468,12 @@ fn fontconfig_present() -> bool {
     })
 }
 
-/// Without fontconfig: the first font in the usual folders that has the character.
+/// Fallback scan: the first font in `folders` that has the character.
 #[cfg(not(windows))]
-fn searched_face(loaded: &mut Loaded, c: char) -> Option<LoadedFace> {
+fn searched_face_in(folders: &[PathBuf], loaded: &mut Loaded, c: char) -> Option<LoadedFace> {
     let files = loaded
         .font_files
-        .get_or_insert_with(|| font_files_in(&font_folders()))
+        .get_or_insert_with(|| font_files_in(folders))
         .clone();
     files.into_iter().find_map(|path| {
         loaded
@@ -330,8 +482,8 @@ fn searched_face(loaded: &mut Loaded, c: char) -> Option<LoadedFace> {
     })
 }
 
-#[cfg(not(windows))]
-fn font_folders() -> Vec<PathBuf> {
+#[cfg(target_os = "linux")]
+fn linux_font_folders() -> Vec<PathBuf> {
     let mut folders = vec![
         PathBuf::from("/usr/share/fonts"),
         PathBuf::from("/usr/local/share/fonts"),
@@ -382,7 +534,7 @@ fn font_files_in(folders: &[PathBuf]) -> Vec<PathBuf> {
     files
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
 fn fontconfig_pattern_face(loaded: &mut Loaded, pattern: &str) -> Option<LoadedFace> {
     let location = match loaded.matched.get(pattern) {
         Some(location) => location.clone(),
@@ -395,7 +547,7 @@ fn fontconfig_pattern_face(loaded: &mut Loaded, pattern: &str) -> Option<LoadedF
     loaded.face(&location?)
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
 fn fontconfig_match(pattern: &str) -> Option<Location> {
     let output = std::process::Command::new("fc-match")
         .arg("--format=%{index} %{file}")
@@ -411,7 +563,7 @@ fn fontconfig_match(pattern: &str) -> Option<Location> {
 }
 
 /// `fc-match --format='%{index} %{file}'` output: the face index, a space, the file.
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
 fn parse_fontconfig_match(output: &[u8]) -> Option<Location> {
     use std::os::unix::ffi::OsStrExt as _;
 
@@ -435,8 +587,12 @@ fn read_face(location: &Location) -> Option<FontData> {
         tracing::debug!("skipped a fallback font larger than the limit");
         return None;
     }
-    if skrifa::FontRef::from_index(data.bytes(), data.index).is_err() {
+    let Ok(font) = skrifa::FontRef::from_index(data.bytes(), data.index) else {
         tracing::debug!("skipped a fallback font that could not be parsed");
+        return None;
+    };
+    if font.outline_glyphs().format().is_none() {
+        tracing::debug!("skipped a fallback font without standard vector outlines");
         return None;
     }
     Some(data)

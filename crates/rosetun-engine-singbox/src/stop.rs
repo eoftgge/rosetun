@@ -118,8 +118,8 @@ fn kill(process: &mut impl Stoppable) -> io::Result<StopOutcome> {
 }
 
 /// A spawned sing-box. It runs in its own process group, which is the group
-/// the interrupt goes to: `CTRL_BREAK_EVENT` on Windows, SIGTERM on Linux.
-/// sing-box removes its TUN and routes on either.
+/// the interrupt goes to: `CTRL_BREAK_EVENT` on Windows, SIGTERM on Linux and
+/// macOS. sing-box removes its TUN and routes on either.
 pub(crate) struct ChildStop<'a>(pub(crate) &'a mut Child);
 
 impl ChildStop<'_> {
@@ -143,11 +143,11 @@ impl Stoppable for ChildStop<'_> {
         {
             crate::console::interrupt_group(self.0.id())
         }
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
             rosetun_engine::process::interrupt_group(self.0)
         }
-        #[cfg(not(any(windows, target_os = "linux")))]
+        #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
         {
             Err(io::ErrorKind::Unsupported.into())
         }
@@ -321,8 +321,8 @@ mod tests {
         );
     }
 
-    #[cfg(target_os = "linux")]
-    mod linux {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    mod unix {
         use std::path::{Path, PathBuf};
         use std::process::{Command, Stdio};
 

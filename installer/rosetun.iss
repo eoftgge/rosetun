@@ -303,8 +303,10 @@ begin
   else
     begin
       Log('Could not hold the network for the upgrade, code ' + IntToStr(Code));
+      // A silent upgrade (the in-app update) gets No: without the hold the
+      // network would open while the service is replaced.
       Result := SuppressibleMsgBox(FmtMessage(CustomMessage('HoldFailed'), [IntToStr(Code)]),
-        mbConfirmation, MB_YESNO, IDYES) = IDYES;
+        mbConfirmation, MB_YESNO, IDNO) = IDYES;
     end;
   end;
 end;
@@ -385,6 +387,16 @@ begin
         Log('Started the GUI to reconnect after the upgrade')
       else
         Log('Could not start the GUI after the upgrade: ' + SysErrorMessage(ResultCode));
+    end
+    // The in-app update runs Setup silently with /LAUNCH=1 and wants the
+    // window back; [Run] entries skip a silent install.
+    else if WizardSilent() and (ExpandConstant('{param:LAUNCH|0}') = '1') and ShouldLaunchGui() then
+    begin
+      if ExecAsOriginalUser(ExpandConstant('{app}\{#GuiExe}'), '', ExpandConstant('{app}'),
+        SW_SHOWNORMAL, ewNoWait, ResultCode) then
+        Log('Started the GUI after the silent update')
+      else
+        Log('Could not start the GUI after the silent update: ' + SysErrorMessage(ResultCode));
     end;
   end;
 end;

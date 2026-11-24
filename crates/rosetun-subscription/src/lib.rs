@@ -5,6 +5,7 @@ mod json;
 mod links;
 mod meta;
 mod proxy;
+mod wireguard;
 mod xhttp;
 
 use std::collections::BTreeMap;
@@ -19,6 +20,7 @@ pub enum Format {
     Links { base64: bool },
     XrayJson,
     SingBoxJson,
+    WireGuardConf,
 }
 
 pub struct Parsed {
@@ -115,6 +117,7 @@ pub enum SkipReason {
     UnsupportedShadowsocksMethod,
     UnsupportedObfs,
     UnsupportedPin,
+    UnsupportedOption,
     ServiceRecord,
 }
 
@@ -153,7 +156,8 @@ impl fmt::Display for SkipReason {
                 f.write_str("Shadowsocks method is not supported")
             }
             Self::UnsupportedObfs => f.write_str("Hysteria2 obfuscation type is not supported"),
-            Self::UnsupportedPin => f.write_str("Hysteria2 certificate pin is not supported"),
+            Self::UnsupportedPin => f.write_str("certificate pin is not supported"),
+            Self::UnsupportedOption => f.write_str("protocol option is not supported"),
             Self::ServiceRecord => f.write_str("record contains a provider notice"),
         }
     }
@@ -290,6 +294,9 @@ fn classify(text: &str) -> Result<Option<Format>, ParseError> {
     if starts_ascii_case(text, "<!doctype") || starts_ascii_case(text, "<html") {
         return Err(ParseError::WebPage);
     }
+    if wireguard::is_conf(text) {
+        return Ok(Some(Format::WireGuardConf));
+    }
     if text.starts_with('{') || text.starts_with('[') {
         let value: serde_json::Value =
             serde_json::from_str(text).map_err(|error| ParseError::InvalidJson {
@@ -350,6 +357,7 @@ fn parse_text(
                 })?;
             json::records(&value, format)
         }
+        Format::WireGuardConf => wireguard::parse_conf(text, metadata),
     };
 
     for (offset, (scheme, entry)) in records.into_iter().enumerate() {
@@ -418,3 +426,80 @@ impl From<Result<Node, SkipReason>> for Entry {
 }
 
 type Record = (Option<String>, Entry);
+
+pub(crate) fn known_scheme(scheme: &str) -> Option<&'static str> {
+    Some(match scheme {
+        "vless" => "vless",
+        "vmess" => "vmess",
+        "trojan" => "trojan",
+        "ss" => "ss",
+        "shadowsocks" => "shadowsocks",
+        "hysteria2" => "hysteria2",
+        "hy2" => "hy2",
+        "hysteria" => "hysteria",
+        "tuic" => "tuic",
+        "anytls" => "anytls",
+        "wireguard" => "wireguard",
+        "wg" => "wg",
+        "amneziawg" => "amneziawg",
+        "awg" => "awg",
+        "socks" => "socks",
+        "socks4" => "socks4",
+        "socks5" => "socks5",
+        "http" => "http",
+        "https" => "https",
+        "ssr" => "ssr",
+        "shadowsocksr" => "shadowsocksr",
+        "naive" => "naive",
+        "naive+https" => "naive+https",
+        "naive+quic" => "naive+quic",
+        "shadowtls" => "shadowtls",
+        "snell" => "snell",
+        "ssh" => "ssh",
+        "masque" => "masque",
+        "juicity" => "juicity",
+        "mieru" => "mieru",
+        "tor" => "tor",
+        "tailscale" => "tailscale",
+        "happ" => "happ",
+        "incy" => "incy",
+        "v2raytun" => "v2raytun",
+        "hiddify" => "hiddify",
+        "streisand" => "streisand",
+        "sing-box" => "sing-box",
+        "clash" => "clash",
+        "clashmeta" => "clashmeta",
+        _ => return None,
+    })
+}
+
+/// Canonical display name for a known protocol scheme recorded on a skipped entry.
+pub fn protocol_display_name(scheme: &str) -> Option<&'static str> {
+    Some(match scheme.to_ascii_lowercase().as_str() {
+        "vless" => "VLESS",
+        "vmess" => "VMess",
+        "trojan" => "Trojan",
+        "ss" | "shadowsocks" => "Shadowsocks",
+        "hysteria2" | "hy2" => "Hysteria2",
+        "hysteria" => "Hysteria",
+        "tuic" => "TUIC",
+        "anytls" => "AnyTLS",
+        "wireguard" | "wg" => "WireGuard",
+        "amneziawg" | "awg" => "AmneziaWG",
+        "socks" | "socks4" => "SOCKS",
+        "socks5" => "SOCKS5",
+        "http" => "HTTP",
+        "https" => "HTTPS",
+        "ssr" | "shadowsocksr" => "ShadowsocksR",
+        "naive" | "naive+https" | "naive+quic" => "NaiveProxy",
+        "shadowtls" => "ShadowTLS",
+        "snell" => "Snell",
+        "ssh" => "SSH",
+        "masque" => "MASQUE",
+        "juicity" => "Juicity",
+        "mieru" => "Mieru",
+        "tor" => "Tor",
+        "tailscale" => "Tailscale",
+        _ => return None,
+    })
+}

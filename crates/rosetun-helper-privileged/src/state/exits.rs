@@ -13,12 +13,43 @@ use rosetun_engine_xray::SocksEndpoint;
 use rosetun_ipc::{ErrorCode, ExtraNode, HelperError};
 
 use super::{
-    NameLookup, StartMode, SuccessfulEndpoint, node_with_endpoint, normalize_server,
-    probe::resolve_for_apply, protected_endpoint, resolve_quiet, select_endpoint,
+    NameLookup, ResolvedNodeEndpoints, StartMode, SuccessfulEndpoint, node_with_endpoints,
+    normalize_server, probe::resolve_node_for_apply, protected_endpoints, resolve_quiet,
+    select_endpoint,
 };
 
 /// The main node's Xray outbound tag.
 const TAG_MAIN: &str = "proxy";
+
+fn resolve_fresh_node(node: &Node, lookup: NameLookup) -> Option<ResolvedNodeEndpoints> {
+    let rosetun_config::Outbound::XrayBalancer(balancer) = &node.outbound else {
+        let ip = node.server.parse::<IpAddr>().ok().or_else(|| {
+            resolve_quiet(&node.server, node.port, lookup)
+                .and_then(|addresses| select_endpoint(&addresses))
+                .ok()
+        })?;
+        return Some(ResolvedNodeEndpoints::single(&node.server, ip));
+    };
+    let mut members = HashMap::new();
+    let mut primary = None;
+    for member in &balancer.members {
+        let key = normalize_server(&member.server);
+        if let Some(&existing) = members.get(&key) {
+            primary.get_or_insert(existing);
+            continue;
+        }
+        let ip = member.server.parse::<IpAddr>().ok().or_else(|| {
+            resolve_quiet(&member.server, member.port, lookup)
+                .and_then(|addresses| select_endpoint(&addresses))
+                .ok()
+        });
+        if let Some(ip) = ip {
+            members.insert(key, ip);
+            primary.get_or_insert(ip);
+        }
+    }
+    primary.map(|primary| ResolvedNodeEndpoints::from_members(primary, members))
+}
 
 /// Addresses for a connect or reconnect, in request order. A fresh connect
 /// resolves before protection goes up; a protected reconnect cannot resolve
@@ -28,19 +59,22 @@ pub(super) fn start_endpoints(
     mode: StartMode,
     remembered: &HashMap<ExitId, SuccessfulEndpoint>,
     lookup: NameLookup,
-) -> Vec<Option<IpAddr>> {
+) -> Vec<Option<ResolvedNodeEndpoints>> {
     extra
         .iter()
         .map(|extra| {
             if extra.via.is_some() {
-                return extra.node.server.parse::<IpAddr>().ok();
+                return extra
+                    .node
+                    .server
+                    .parse::<IpAddr>()
+                    .ok()
+                    .map(|ip| ResolvedNodeEndpoints::single(&extra.node.server, ip));
             }
             match mode {
-                StartMode::Fresh => resolve_quiet(&extra.node.server, extra.node.port, lookup)
-                    .and_then(|addresses| select_endpoint(&addresses))
-                    .ok(),
+                StartMode::Fresh => resolve_fresh_node(&extra.node, lookup),
                 StartMode::ProtectedReconnect => {
-                    protected_endpoint(&extra.node, remembered.get(&extra.exit)).ok()
+                    protected_endpoints(&extra.node, remembered.get(&extra.exit)).ok()
                 }
             }
         })
@@ -53,25 +87,19 @@ pub(super) fn apply_endpoints(
     extra: &[ExtraNode],
     remembered: &HashMap<ExitId, SuccessfulEndpoint>,
     lookup: NameLookup,
-) -> Vec<Option<IpAddr>> {
+) -> Vec<Option<ResolvedNodeEndpoints>> {
     extra
         .iter()
         .map(|extra| {
             if extra.via.is_some() {
-                return extra.node.server.parse::<IpAddr>().ok();
+                return extra
+                    .node
+                    .server
+                    .parse::<IpAddr>()
+                    .ok()
+                    .map(|ip| ResolvedNodeEndpoints::single(&extra.node.server, ip));
             }
-            extra
-                .node
-                .server
-                .parse::<IpAddr>()
-                .ok()
-                .or_else(|| {
-                    remembered
-                        .get(&extra.exit)
-                        .filter(|cached| cached.server == normalize_server(&extra.node.server))
-                        .map(|cached| cached.address)
-                })
-                .or_else(|| resolve_for_apply(&extra.node, lookup))
+            resolve_node_for_apply(&extra.node, remembered.get(&extra.exit), lookup)
         })
         .collect()
 }
@@ -81,21 +109,18 @@ pub(super) fn apply_endpoints(
 pub(super) fn remember(
     remembered: &mut HashMap<ExitId, SuccessfulEndpoint>,
     extra: &[ExtraNode],
-    endpoints: &[Option<IpAddr>],
+    endpoints: &[Option<ResolvedNodeEndpoints>],
 ) {
     remembered.retain(|exit, _| {
         extra
             .iter()
             .any(|extra| extra.exit == *exit && extra.via.is_none())
     });
-    for (extra, address) in extra.iter().zip(endpoints) {
-        if let Some(address) = address.filter(|_| extra.via.is_none()) {
+    for (extra, resolved) in extra.iter().zip(endpoints) {
+        if let Some(resolved) = resolved.as_ref().filter(|_| extra.via.is_none()) {
             remembered.insert(
                 extra.exit.clone(),
-                SuccessfulEndpoint {
-                    server: normalize_server(&extra.node.server),
-                    address,
-                },
+                resolved.clone().into_successful(&extra.node.server),
             );
         }
     }
@@ -105,7 +130,7 @@ pub(super) fn remember(
 /// exits and children of unavailable first hops have no tag.
 pub(super) fn exit_tags(
     extra: &[ExtraNode],
-    endpoints: &[Option<IpAddr>],
+    endpoints: &[Option<ResolvedNodeEndpoints>],
 ) -> Vec<(ExitId, Option<String>)> {
     extra
         .iter()
@@ -117,13 +142,17 @@ pub(super) fn exit_tags(
         .collect()
 }
 
-fn available(extra: &[ExtraNode], endpoints: &[Option<IpAddr>], index: usize) -> bool {
-    endpoints.get(index).copied().flatten().is_some()
+fn available(
+    extra: &[ExtraNode],
+    endpoints: &[Option<ResolvedNodeEndpoints>],
+    index: usize,
+) -> bool {
+    endpoints.get(index).is_some_and(Option::is_some)
         && extra[index].via.as_ref().is_none_or(|via| {
             extra
                 .iter()
                 .position(|entry| &entry.exit == via)
-                .is_some_and(|parent| endpoints.get(parent).copied().flatten().is_some())
+                .is_some_and(|parent| endpoints.get(parent).is_some_and(Option::is_some))
         })
 }
 
@@ -147,7 +176,7 @@ impl std::fmt::Debug for ExtraNodes<'_> {
 impl<'a> ExtraNodes<'a> {
     pub(super) fn new(
         extra: &'a [ExtraNode],
-        endpoints: &[Option<IpAddr>],
+        endpoints: &[Option<ResolvedNodeEndpoints>],
         rules: &RuleSet,
     ) -> Self {
         let mut nodes = Vec::with_capacity(extra.len());
@@ -156,12 +185,11 @@ impl<'a> ExtraNodes<'a> {
         for (index, entry) in extra.iter().enumerate() {
             match endpoints
                 .get(index)
-                .copied()
-                .flatten()
+                .and_then(Option::as_ref)
                 .filter(|_| available(extra, endpoints, index))
             {
-                Some(address) => {
-                    nodes.push((&entry.exit, node_with_endpoint(&entry.node, address)));
+                Some(resolved) => {
+                    nodes.push((&entry.exit, node_with_endpoints(&entry.node, resolved)));
                     identities.push((index, entry.via.as_ref()));
                 }
                 None => {

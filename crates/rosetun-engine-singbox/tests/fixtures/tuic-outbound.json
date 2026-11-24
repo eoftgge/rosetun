@@ -1,0 +1,21 @@
+{
+  "congestion_control": "bbr",
+  "heartbeat": "10s",
+  "password": "test-secret",
+  "server": "192.0.2.1",
+  "server_port": 8444,
+  "tag": "proxy",
+  "tls": {
+    "alpn": [
+      "h3"
+    ],
+    "disable_sni": true,
+    "enabled": true,
+    "insecure": true,
+    "server_name": "tuic.example.com"
+  },
+  "type": "tuic",
+  "udp_relay_mode": "quic",
+  "uuid": "00000000-0000-4000-8000-000000000001",
+  "zero_rtt_handshake": true
+}

@@ -16,7 +16,10 @@ REPOSITORY = 'eoftgge/rosetun'
 API = f'https://api.github.com/repos/{REPOSITORY}'
 RELEASES = f'https://github.com/{REPOSITORY}/releases/download/'
 DATA = Path('site/data/release.json')
-KEYS = {'version', 'installer', 'download_url', 'checksum_url', 'sha256_line', 'deb', 'deb_url', 'banner'}
+KEYS = {
+    'version', 'installer', 'download_url', 'checksum_url', 'sha256_line',
+    'deb', 'deb_url', 'macos', 'macos_url', 'banner',
+}
 
 
 def workspace_version(manifest):
@@ -40,17 +43,24 @@ def fetch(url, api=False):
     return body
 
 
-def banner(version, linux):
+def banner(version, linux, macos=False):
     """The documentation banner of each language, from the stable version and its platforms."""
     release = tuple(map(int, version.split('.')))
     result = {}
-    for lang, label, platforms, baseline in (
-        ('ru', 'Стабильный выпуск', 'Windows и Linux', 'Документация: 0.6'),
-        ('en', 'Stable release', 'Windows and Linux', 'Documentation: 0.6'),
+    for lang, label, platforms, macos_platforms, baseline in (
+        ('ru', 'Стабильный выпуск', 'Windows и Linux',
+         'Windows, Linux и macOS (Apple Silicon, экспериментальная сборка)', 'Документация: 0.7'),
+        ('en', 'Stable release', 'Windows and Linux',
+         'Windows, Linux and macOS (Apple Silicon, experimental)', 'Documentation: 0.7'),
     ):
-        supported = platforms if linux and release >= (0, 5, 0) else 'Windows'
+        if macos and linux and release >= (0, 7, 0):
+            supported = macos_platforms
+        elif linux and release >= (0, 5, 0):
+            supported = platforms
+        else:
+            supported = 'Windows'
         result[lang] = f'{label}: {version} · {supported}.'
-        if release < (0, 6, 0):
+        if release < (0, 7, 0):
             result[lang] += f' {baseline}.'
     return result
 
@@ -87,9 +97,16 @@ def replacements(release, sums):
         deb_url = asset_url(deb)
         if not any(re.fullmatch(r'[0-9a-fA-F]{64} [ *]' + re.escape(deb), line) for line in sums.splitlines()):
             raise ValueError('expected a checksum of the Debian package')
+    macos = f'rosetun-{version}-macos-arm64-experimental.pkg'
+    macos_url = ''
+    if any(a['name'] == macos for a in assets):
+        macos_url = asset_url(macos)
+        if not any(re.fullmatch(r'[0-9a-fA-F]{64} [ *]' + re.escape(macos), line) for line in sums.splitlines()):
+            raise ValueError('expected a checksum of the macOS package')
     return dict(version=version, installer=installer, download_url=download, checksum_url=checksums,
                 sha256_line=matching[0], deb=deb if deb_url else '', deb_url=deb_url,
-                banner=banner(version, bool(deb_url)))
+                macos=macos if macos_url else '', macos_url=macos_url,
+                banner=banner(version, bool(deb_url), bool(macos_url)))
 
 
 def write(output, values):
@@ -100,11 +117,13 @@ def write(output, values):
     output.write_text(json.dumps(values, ensure_ascii=False, indent=2) + '\n', encoding='utf-8', newline='\n')
 
 
-def preview_values(version, linux):
+def preview_values(version, linux, macos=False):
     """Use synthetic checksums only for a local, offline release preview."""
     names = [f'rosetun-{version}-setup.exe', 'SHA256SUMS.txt']
     if linux:
         names.append(f'rosetun_{version}_amd64.deb')
+    if macos:
+        names.append(f'rosetun-{version}-macos-arm64-experimental.pkg')
     release = dict(tag_name=f'v{version}', draft=False, prerelease=False, assets=[
         dict(name=name, browser_download_url=f'{RELEASES}v{version}/{name}') for name in names
     ])
@@ -118,7 +137,11 @@ def published_values(manifest):
         raise ValueError('release tag does not match the workspace version')
     # Validate asset URLs before making any release download request.
     provisional = replacements(release, '\n'.join(
-        '0' * 64 + '  ' + name for name in (f'rosetun-{version}-setup.exe', f'rosetun_{version}_amd64.deb')
+        '0' * 64 + '  ' + name for name in (
+            f'rosetun-{version}-setup.exe',
+            f'rosetun_{version}_amd64.deb',
+            f'rosetun-{version}-macos-arm64-experimental.pkg',
+        )
     ))
     sums = fetch(provisional['checksum_url']).decode('utf-8-sig')
     return replacements(release, sums)
@@ -130,12 +153,13 @@ if __name__ == '__main__':
     parser.add_argument('--preview', action='store_true', help='offline preview of the workspace version; never publish')
     parser.add_argument('--preview-version', help='offline preview with synthetic checksums; never publish')
     parser.add_argument('--preview-deb', action='store_true', help='include a Debian package in the preview')
+    parser.add_argument('--preview-macos', action='store_true', help='include an experimental macOS package in the preview')
     args = parser.parse_args()
-    if args.preview_deb and not (args.preview or args.preview_version):
-        parser.error('--preview-deb requires --preview or --preview-version')
+    if (args.preview_deb or args.preview_macos) and not (args.preview or args.preview_version):
+        parser.error('--preview-deb and --preview-macos require --preview or --preview-version')
     if args.preview or args.preview_version:
         version = args.preview_version or workspace_version(Path('Cargo.toml'))
-        write(args.output, preview_values(version, args.preview_deb))
+        write(args.output, preview_values(version, args.preview_deb, args.preview_macos))
         print('Local preview only: checksums are synthetic. Do not publish this build.')
         raise SystemExit(0)
     write(args.output, published_values(Path('Cargo.toml')))

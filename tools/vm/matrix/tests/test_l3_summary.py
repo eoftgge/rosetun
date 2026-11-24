@@ -1005,21 +1005,25 @@ class TableTests(unittest.TestCase):
 
     def test_the_group_is_in_the_catalog_and_every_scenario_has_its_window_entry(self):
         ids = scenario_ids()
-        self.assertEqual(61, len(ids))
+        self.assertEqual(63, len(ids))
         self.assertTrue(set(summary.GROUP) <= set(ids))
-        # The group has windows; the two-hop scenarios, which have no check yet, have none and are outside it.
-        self.assertEqual(set(summary.GROUP) | set(summary.TWO_HOP), set(summary.WINDOW_OF))
-        self.assertEqual({None}, {summary.WINDOW_OF[i] for i in summary.TWO_HOP})
-        self.assertFalse(set(summary.GROUP) & set(summary.TWO_HOP))
+        # The group has windows; the two-hop and unrun protocol scenarios, which have no check yet, have none and are outside it.
+        unrun = set(summary.TWO_HOP) | set(summary.UNRUN_PROTOCOLS)
+        self.assertEqual(set(summary.GROUP) | unrun, set(summary.WINDOW_OF))
+        self.assertEqual({None}, {summary.WINDOW_OF[i] for i in unrun})
+        self.assertFalse(set(summary.GROUP) & unrun)
         self.assertEqual(LABELS, summary.GROUP_LABELS)
         self.assertEqual([i for i in ids if i.startswith('preflight.')], list(summary.GROUP[:5]))
 
     def test_the_two_hop_scenarios_are_exactly_the_rows_of_the_catalog_that_were_never_run(self):
-        self.assertEqual(sorted(summary.TWO_HOP), sorted(unrun_ids()))
+        self.assertEqual(sorted(summary.TWO_HOP + summary.UNRUN_PROTOCOLS), sorted(unrun_ids()))
         self.assertEqual(20, len(summary.TWO_HOP))
+        self.assertEqual(2, len(summary.UNRUN_PROTOCOLS))
         for row in scenario_rows():
             if row[0] in summary.TWO_HOP:
                 self.assertEqual(('no', 'not-run', 'two-hop'), (row[1], row[2], row[3]))
+            elif row[0] in summary.UNRUN_PROTOCOLS:
+                self.assertEqual(('no', 'not-run', 'protocols'), (row[1], row[2], row[3]))
         self.assertEqual(len(set(summary.TWO_HOP)), len(summary.TWO_HOP))
         self.assertEqual(LABELS, summary.GROUP_LABELS)
 

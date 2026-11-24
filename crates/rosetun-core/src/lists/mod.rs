@@ -726,13 +726,21 @@ pub fn remove_list(store: &Store, id: &ListId) -> Result<(), ListError> {
             let sets: Vec<_> = config
                 .rule_sets
                 .iter()
-                .filter(|set| set.rules.iter().any(|rule| matches!(&rule.matcher, RuleMatcher::List { list, .. } if list == id)))
+                .filter(|set| {
+                    set.rules
+                        .iter()
+                        .any(|rule| matcher_uses_list(&rule.matcher, id))
+                })
                 .map(|set| set.name.clone())
                 .collect();
             if !sets.is_empty() {
                 return Err(ListError::InUse { sets });
             }
-            let index = config.lists.iter().position(|item| &item.id == id).ok_or(ListError::NotFound)?;
+            let index = config
+                .lists
+                .iter()
+                .position(|item| &item.id == id)
+                .ok_or(ListError::NotFound)?;
             Ok::<_, ListError>(config.lists.remove(index))
         },
         |list| publish_removal(&directory, list),
@@ -740,6 +748,14 @@ pub fn remove_list(store: &Store, id: &ListId) -> Result<(), ListError> {
         |list| cleanup_previous(&directory, Some(list)),
     )?;
     Ok(())
+}
+
+fn matcher_uses_list(matcher: &RuleMatcher, id: &ListId) -> bool {
+    match matcher {
+        RuleMatcher::List { list, .. } => list == id,
+        RuleMatcher::Group { items, .. } => items.iter().any(|item| matcher_uses_list(item, id)),
+        _ => false,
+    }
 }
 
 pub fn text_entry_count(store: &Store, id: &ListId) -> Result<Option<usize>, ListError> {

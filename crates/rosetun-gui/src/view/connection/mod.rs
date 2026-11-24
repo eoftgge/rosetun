@@ -58,7 +58,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
     }) {
         widgets::card_frame().show(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            ui.colored_label(theme::WARNING, tr!("tunnel-dns-warning"));
+            ui.colored_label(theme::warning(), tr!("tunnel-dns-warning"));
         });
         ui.add_space(theme::SECTION_GAP);
     }
@@ -69,7 +69,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
         widgets::card_frame().show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.horizontal_wrapped(|ui| {
-                ui.colored_label(theme::WARNING, tr!("vpn-bypass-warning"));
+                ui.colored_label(theme::warning(), tr!("vpn-bypass-warning"));
                 if state.config.settings.kill_switch {
                     ui.colored_label(theme::palette().text_dim, tr!("next-connect-note"));
                 } else if widgets::outline_button(
@@ -91,6 +91,13 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
     }
     if state.available_update().is_some() {
         update_strip(ui, state, actions);
+        ui.add_space(theme::SECTION_GAP);
+    }
+    if cfg!(target_os = "macos") {
+        experimental_macos_strip(ui);
+        ui.add_space(theme::SECTION_GAP);
+    } else if state.kill_switch_unavailable() && state.lockdown_unavailable() {
+        protection_strip(ui, tr!("protection-unavailable-direct-traffic"));
         ui.add_space(theme::SECTION_GAP);
     }
     hero_card(ui, state, actions);
@@ -151,36 +158,36 @@ fn service_banner(ui: &mut egui::Ui, state: &State) {
         egui::Sides::new().shrink_left().wrap().spacing(16.0).show(
             ui,
             |ui| {
+                const ICON_SIZE: f32 = 28.0;
                 ui.horizontal_top(|ui| {
-                    let (rect, _) =
-                        ui.allocate_exact_size(egui::vec2(28.0, 28.0), egui::Sense::hover());
-                    ui.painter().circle_stroke(
-                        rect.center(),
-                        13.0,
-                        egui::Stroke::new(theme::stroke::GLYPH, theme::ERROR),
+                    ui.set_min_height(ICON_SIZE);
+                    let origin = ui.cursor().left_top();
+                    let gap = ui.spacing().item_spacing.x;
+                    ui.add_space(ICON_SIZE + gap);
+                    // Center the badge on the text block once its wrapped height is known.
+                    let text = ui
+                        .vertical(|ui| {
+                            ui.label(
+                                RichText::new(tr!("service-down-title"))
+                                    .strong()
+                                    .color(theme::palette().text),
+                            );
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(tr!("service-down-body"))
+                                        .small()
+                                        .color(theme::palette().text_dim),
+                                )
+                                .wrap(),
+                            );
+                        })
+                        .response
+                        .rect;
+                    let center = egui::pos2(
+                        origin.x + ICON_SIZE / 2.0,
+                        text.center().y.max(origin.y + ICON_SIZE / 2.0),
                     );
-                    ui.painter().text(
-                        rect.center(),
-                        egui::Align2::CENTER_CENTER,
-                        "!",
-                        theme::font::title(),
-                        theme::ERROR,
-                    );
-                    ui.vertical(|ui| {
-                        ui.label(
-                            RichText::new(tr!("service-down-title"))
-                                .strong()
-                                .color(theme::palette().text),
-                        );
-                        ui.add(
-                            egui::Label::new(
-                                RichText::new(tr!("service-down-body"))
-                                    .small()
-                                    .color(theme::palette().text_dim),
-                            )
-                            .wrap(),
-                        );
-                    });
+                    paint_warning_badge(ui.painter(), center);
                 });
             },
             |ui| {
@@ -221,13 +228,26 @@ fn service_banner(ui: &mut egui::Ui, state: &State) {
     });
 }
 
-/// The service reports one hold: on Windows an upgrade left it, on Linux
+fn paint_warning_badge(painter: &egui::Painter, center: egui::Pos2) {
+    let stroke = egui::Stroke::new(theme::stroke::GLYPH, theme::error());
+    painter.circle_stroke(center, 13.0, stroke);
+    painter.line_segment(
+        [
+            center + egui::vec2(0.0, -5.75),
+            center + egui::vec2(0.0, 1.25),
+        ],
+        stroke,
+    );
+    painter.circle_filled(center + egui::vec2(0.0, 4.75), 1.1, theme::error());
+}
+
+/// The service reports one hold: on Windows an upgrade left it, on Unix
 /// the service's table outlived a crash.
 fn hold_banner() -> String {
-    if cfg!(target_os = "linux") {
-        tr!("crash-hold-banner")
-    } else {
+    if cfg!(windows) {
         tr!("upgrade-hold-banner")
+    } else {
+        tr!("crash-hold-banner")
     }
 }
 
@@ -248,12 +268,47 @@ fn protection_strip(ui: &mut egui::Ui, text: String) {
         });
 }
 
+/// Experimental macOS notice: identifies the Apple Silicon build and warns
+/// that Kill switch and Lockdown are unavailable so traffic may go direct if
+/// the tunnel drops.
+fn experimental_macos_strip(ui: &mut egui::Ui) {
+    egui::Frame::new()
+        .fill(theme::palette().input)
+        .stroke(egui::Stroke::new(
+            theme::stroke::HAIRLINE,
+            theme::palette().text_dim,
+        ))
+        .corner_radius(theme::RADIUS)
+        .inner_margin(theme::margin::symmetric(theme::space::L, theme::space::S))
+        .show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.vertical(|ui| {
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(tr!("macos-experimental-build"))
+                            .strong()
+                            .color(theme::palette().text),
+                    )
+                    .wrap(),
+                );
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(tr!("protection-unavailable-direct-traffic"))
+                            .small()
+                            .color(theme::palette().text_dim),
+                    )
+                    .wrap(),
+                );
+            });
+        });
+}
+
 /// After an upgrade that held the network closed, until a connect or the
 /// user opens it.
 fn upgrade_hold_strip(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     egui::Frame::new()
         .fill(theme::palette().input)
-        .stroke(egui::Stroke::new(theme::stroke::HAIRLINE, theme::ERROR))
+        .stroke(egui::Stroke::new(theme::stroke::HAIRLINE, theme::error()))
         .corner_radius(theme::RADIUS)
         .inner_margin(theme::margin::symmetric(theme::space::L, theme::space::S))
         .show(ui, |ui| {
@@ -339,21 +394,30 @@ fn update_strip(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                                 )
                                 .wrap(),
                             );
+                            if let Some((status, color)) = super::update_offer::offer_status(state)
+                            {
+                                ui.label(
+                                    RichText::new(tr!("apply-separator"))
+                                        .color(theme::palette().text_dim),
+                                );
+                                ui.add(egui::Label::new(RichText::new(status).color(color)).wrap());
+                            }
                         },
                     );
                 },
                 |ui| {
-                    if widgets::outline_button(
-                        ui,
-                        tr!("update-offer-skip"),
-                        state.can_edit_settings(),
-                    )
-                    .clicked()
-                    {
-                        actions.push(Action::SkipVersion);
-                    }
-                    if widgets::button_fill(ui, tr!("update-download"), true).clicked() {
-                        display::open_web_link(ui.ctx(), &release.url);
+                    // The right side is laid out from the right edge.
+                    let buttons = super::update_offer::offer_buttons(state);
+                    for (index, button) in buttons.iter().enumerate().rev() {
+                        super::update_offer::offer_button(
+                            ui,
+                            state,
+                            release,
+                            *button,
+                            index == 0,
+                            true,
+                            actions,
+                        );
                     }
                 },
             );
@@ -362,12 +426,12 @@ fn update_strip(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
 
 pub(crate) fn state_style(state: &ConnectionState) -> (String, Color32) {
     match state {
-        ConnectionState::Disconnected => (tr!("disconnected"), theme::DISCONNECTED),
+        ConnectionState::Disconnected => (tr!("disconnected"), theme::disconnected()),
         ConnectionState::Connecting => (tr!("connecting"), theme::palette().accent_bright),
         ConnectionState::Connected => (tr!("connected"), theme::connected()),
         ConnectionState::Reconnecting => (tr!("reconnecting"), theme::palette().accent_bright),
-        ConnectionState::Failed { .. } => (tr!("failed"), theme::ERROR),
-        ConnectionState::FailedProtected { .. } => (tr!("failed-protected"), theme::ERROR),
+        ConnectionState::Failed { .. } => (tr!("failed"), theme::error()),
+        ConnectionState::FailedProtected { .. } => (tr!("failed-protected"), theme::error()),
     }
 }
 
@@ -414,7 +478,7 @@ pub(crate) fn protection_dialog(ctx: &egui::Context, state: &State, actions: &mu
         |ui| {
             ui.add_space(theme::space::M);
             ui.add(
-                egui::Label::new(RichText::new(tr!("protection-warning")).color(theme::ERROR))
+                egui::Label::new(RichText::new(tr!("protection-warning")).color(theme::error()))
                     .wrap(),
             );
             if let Some(error) = &state.operation_error {
@@ -516,7 +580,7 @@ pub(crate) fn lockdown_dialog(ctx: &egui::Context, state: &State, actions: &mut 
             }
             if let Some(error) = &state.operation_error {
                 ui.add(
-                    egui::Label::new(RichText::new(state.text(error)).color(theme::ERROR)).wrap(),
+                    egui::Label::new(RichText::new(state.text(error)).color(theme::error())).wrap(),
                 );
             }
         },
@@ -549,8 +613,16 @@ fn conflict_names(state: &State, names: &[String]) -> String {
 }
 
 /// The confirmation's platform-specific lines: how far it is tested, what
-/// loses the network, and the way out, which on Linux is `sudo`.
+/// loses the network, and the way out, which on Unix is `sudo`.
 fn lockdown_text(text: LockdownText) -> String {
+    #[cfg(windows)]
+    {
+        match text {
+            LockdownText::Experimental => tr!("lockdown-experimental"),
+            LockdownText::VirtualMachines => tr!("lockdown-virtual-machines"),
+            LockdownText::WayOut => tr!("lockdown-way-out"),
+        }
+    }
     #[cfg(target_os = "linux")]
     {
         match text {
@@ -559,13 +631,10 @@ fn lockdown_text(text: LockdownText) -> String {
             LockdownText::WayOut => tr!("lockdown-way-out-linux"),
         }
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(windows, target_os = "linux")))]
     {
-        match text {
-            LockdownText::Experimental => tr!("lockdown-experimental"),
-            LockdownText::VirtualMachines => tr!("lockdown-virtual-machines"),
-            LockdownText::WayOut => tr!("lockdown-way-out"),
-        }
+        let _ = text;
+        tr!("lockdown-unavailable")
     }
 }
 
@@ -631,5 +700,307 @@ mod conflict_names_tests {
         let clipped = conflict_names(&state, &[long]);
         assert_eq!(clipped.chars().count(), 49);
         assert!(clipped.ends_with('…'));
+    }
+}
+
+#[cfg(test)]
+mod update_strip_tests {
+    use super::*;
+    use crate::state::UpdateDownload;
+    use crate::view::update_offer::{OfferButton, offer_buttons};
+
+    fn offering(download: UpdateDownload) -> State {
+        let mut state = State::default();
+        state.config_ready = true;
+        state.updates.newest_release = Some(rosetun_core::Release {
+            version: "999.0.0-beta.10".into(),
+            url: "https://example.com/release".into(),
+            prerelease: true,
+        });
+        state.updates.download = download;
+        state
+    }
+
+    fn ready() -> UpdateDownload {
+        UpdateDownload::Ready(rosetun_core::DownloadedUpdate::for_tests(
+            "999.0.0-beta.10",
+            std::path::PathBuf::from("rosetun-setup.exe"),
+        ))
+    }
+
+    #[test]
+    fn the_offer_puts_the_next_step_first_and_github_always_in_reach() {
+        let downloading = UpdateDownload::Downloading {
+            version: "999.0.0-beta.10".into(),
+            received: 1,
+            total: None,
+        };
+        let windows = State::can_install_updates();
+        for (download, expected) in [
+            (
+                UpdateDownload::Idle,
+                if windows {
+                    vec![
+                        OfferButton::Download,
+                        OfferButton::OpenGithub,
+                        OfferButton::Skip,
+                    ]
+                } else {
+                    vec![OfferButton::OpenGithub, OfferButton::Skip]
+                },
+            ),
+            (
+                downloading,
+                if windows {
+                    vec![OfferButton::Cancel, OfferButton::OpenGithub]
+                } else {
+                    vec![OfferButton::OpenGithub]
+                },
+            ),
+            (
+                ready(),
+                if windows {
+                    vec![
+                        OfferButton::Install,
+                        OfferButton::OpenGithub,
+                        OfferButton::Skip,
+                    ]
+                } else {
+                    vec![OfferButton::OpenGithub, OfferButton::Skip]
+                },
+            ),
+        ] {
+            assert_eq!(
+                offer_buttons(&offering(download.clone())),
+                expected,
+                "{download:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_longest_offer_fits_the_smallest_window_in_both_languages() {
+        for language in [
+            crate::i18n::Language::English,
+            crate::i18n::Language::Russian,
+        ] {
+            crate::i18n::in_language(language, || {
+                let state = offering(ready());
+                let mut screen = crate::test_ui::TestScreen::new(egui::vec2(960.0, 640.0));
+                let texts = screen.settle(|ui| update_strip(ui, &state, &mut Vec::new()));
+                let mut labels = vec![tr!("update-open-github"), tr!("update-offer-skip")];
+                if State::can_install_updates() {
+                    labels.push(tr!("update-install"));
+                    labels.push(tr!("update-ready"));
+                }
+                for label in labels {
+                    let (_, rect) = texts
+                        .iter()
+                        .find(|(text, _)| *text == label)
+                        .unwrap_or_else(|| panic!("{label:?} not drawn in {language:?}"));
+                    assert!(
+                        rect.left() >= 0.0 && rect.right() <= 960.0,
+                        "{label:?} {rect:?} {language:?}"
+                    );
+                }
+            });
+        }
+    }
+
+    #[test]
+    fn all_offer_notification_states_fit_the_window_in_both_languages() {
+        let downloading = UpdateDownload::Downloading {
+            version: "999.0.0-beta.10".into(),
+            received: 45,
+            total: Some(100),
+        };
+        let failed = UpdateDownload::Failed {
+            version: "999.0.0-beta.10".into(),
+            failure: crate::state::UpdateFailure::Download(
+                rosetun_core::UpdateDownloadError::Mismatch,
+            ),
+        };
+        for language in [
+            crate::i18n::Language::English,
+            crate::i18n::Language::Russian,
+        ] {
+            crate::i18n::in_language(language, || {
+                for (download, required_labels) in [
+                    (
+                        UpdateDownload::Idle,
+                        if State::can_install_updates() {
+                            vec![
+                                tr!("update-download"),
+                                tr!("update-open-github"),
+                                tr!("update-offer-skip"),
+                            ]
+                        } else {
+                            vec![tr!("update-open-github"), tr!("update-offer-skip")]
+                        },
+                    ),
+                    (
+                        downloading.clone(),
+                        if State::can_install_updates() {
+                            vec![
+                                tr!("update-downloading-percent", percent = "45".to_string()),
+                                tr!("cancel"),
+                                tr!("update-open-github"),
+                            ]
+                        } else {
+                            vec![tr!("update-open-github")]
+                        },
+                    ),
+                    (
+                        ready(),
+                        if State::can_install_updates() {
+                            vec![
+                                tr!("update-ready"),
+                                tr!("update-install"),
+                                tr!("update-open-github"),
+                                tr!("update-offer-skip"),
+                            ]
+                        } else {
+                            vec![tr!("update-open-github"), tr!("update-offer-skip")]
+                        },
+                    ),
+                    (
+                        failed.clone(),
+                        if State::can_install_updates() {
+                            vec![
+                                tr!("update-error-check"),
+                                tr!("update-download"),
+                                tr!("update-open-github"),
+                                tr!("update-offer-skip"),
+                            ]
+                        } else {
+                            vec![tr!("update-open-github"), tr!("update-offer-skip")]
+                        },
+                    ),
+                ] {
+                    for reduce_motion in [false, true] {
+                        let mut state = offering(download.clone());
+                        state.config.interface.reduce_motion = reduce_motion;
+                        let mut screen = crate::test_ui::TestScreen::new(egui::vec2(960.0, 640.0));
+                        let texts = screen.settle(|ui| update_strip(ui, &state, &mut Vec::new()));
+                        for label in &required_labels {
+                            let (_, rect) = texts
+                                .iter()
+                                .find(|(text, _)| *text == *label)
+                                .unwrap_or_else(|| {
+                                    panic!("{label:?} not drawn in {language:?} for {download:?}")
+                                });
+                            assert!(
+                                rect.left() >= 0.0 && rect.right() <= 960.0,
+                                "{label:?} {rect:?} {language:?}"
+                            );
+                        }
+                    }
+                }
+            });
+        }
+    }
+
+    #[test]
+    fn install_confirmation_dialog_fits_both_languages() {
+        for language in [
+            crate::i18n::Language::English,
+            crate::i18n::Language::Russian,
+        ] {
+            crate::i18n::in_language(language, || {
+                let mut actions = Vec::new();
+                let mut screen = crate::test_ui::TestScreen::new(egui::vec2(960.0, 640.0));
+                let texts = screen.settle(|ui| {
+                    crate::view::update_offer::install_dialog(ui.ctx(), &mut actions);
+                });
+                for label in [
+                    tr!("update-install-confirm-title"),
+                    tr!("update-install-confirm-body"),
+                    tr!("cancel"),
+                    tr!("update-install"),
+                ] {
+                    let (_, rect) = texts
+                        .iter()
+                        .find(|(text, _)| *text == label)
+                        .unwrap_or_else(|| panic!("{label:?} not found in {language:?}"));
+                    assert!(
+                        rect.left() >= 0.0 && rect.right() <= 960.0,
+                        "{label:?} {rect:?} {language:?}"
+                    );
+                }
+            });
+        }
+    }
+
+    #[test]
+    fn connection_screen_warns_when_kill_switch_and_lockdown_are_unavailable() {
+        for language in [
+            crate::i18n::Language::English,
+            crate::i18n::Language::Russian,
+        ] {
+            crate::i18n::in_language(language, || {
+                let mut state = State::default();
+                state.config_ready = true;
+                state.helper_available = true;
+                state.protection = Some(rosetun_config::ProtectionCapabilities::default());
+                let mut screen = crate::test_ui::TestScreen::new(egui::vec2(960.0, 640.0));
+                let texts = screen.settle(|ui| show(ui, &state, &mut Vec::new()));
+                assert!(
+                    texts
+                        .iter()
+                        .any(|(text, _)| *text == tr!("protection-unavailable-direct-traffic")),
+                    "{language:?}"
+                );
+                assert_eq!(
+                    texts
+                        .iter()
+                        .any(|(text, _)| *text == tr!("macos-experimental-build")),
+                    cfg!(target_os = "macos"),
+                    "{language:?}"
+                );
+
+                state.protection = Some(crate::worker::FULL_PROTECTION);
+                let mut screen = crate::test_ui::TestScreen::new(egui::vec2(960.0, 640.0));
+                let texts = screen.settle(|ui| show(ui, &state, &mut Vec::new()));
+                assert_eq!(
+                    texts
+                        .iter()
+                        .any(|(text, _)| *text == tr!("protection-unavailable-direct-traffic")),
+                    cfg!(target_os = "macos"),
+                    "{language:?}"
+                );
+            });
+        }
+    }
+
+    #[test]
+    fn service_banner_warning_badge_is_centred_on_text() {
+        for language in [
+            crate::i18n::Language::English,
+            crate::i18n::Language::Russian,
+        ] {
+            crate::i18n::in_language(language, || {
+                let state = State::default();
+                let mut screen = crate::test_ui::TestScreen::new(egui::vec2(960.0, 640.0));
+                let (texts, circles) = screen.settle_with_circles(|ui| {
+                    service_banner(ui, &state);
+                });
+                let rect_of = |wanted: &str| {
+                    texts
+                        .iter()
+                        .find(|(text, _)| text == wanted)
+                        .unwrap_or_else(|| panic!("no text {wanted:?} in {language:?}"))
+                        .1
+                };
+                let title = rect_of(&tr!("service-down-title"));
+                let body = rect_of(&tr!("service-down-body"));
+                let (ring, _) = circles
+                    .iter()
+                    .find(|(_, radius)| (*radius - 13.0).abs() < 0.01)
+                    .expect("warning ring is painted");
+                assert!(ring.x < title.left(), "ring stands left of the text");
+                let offset = (ring.y - title.union(body).center().y).abs();
+                assert!(offset <= 1.0, "{language:?}: ring offset {offset}");
+            });
+        }
     }
 }

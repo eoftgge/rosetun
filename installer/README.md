@@ -84,9 +84,17 @@ The local Linux stand deliberately remains a **Debian 13 build and runtime check
 
 The file lists in `packaging/linux` go into the package as they are. `packaging/linux/icons` is rendered from the rose: after changing the icon, run `cargo test -p rosetun-gui write_linux_icons -- --ignored`.
 
+## macOS package (Apple Silicon, experimental)
+
+`installer/macos/build-pkg.sh` builds `target/macos/rosetun-<version>-macos-arm64-experimental.pkg` on Apple Silicon macOS (`arm64`) as an ordinary user, with Rust 1.99.1. Pass `--release` to install pinned `cargo-about` 0.9.2 when missing. The script checks the pinned `sing-box` and `Xray-core` versions against `SUPPORTED_SING_BOX_VERSION` and `SUPPORTED_XRAY_VERSION`, verifies the official Darwin `arm64` archive SHA-256 digests, builds `Rosetun.icns` from `packaging/linux/icons`, stages `Rosetun.app` (with licenses in `Contents/Resources/licenses`), `/usr/local/bin/rosetun`, `/usr/local/libexec/rosetun/{rosetun-helper-privileged,sing-box,xray,uninstall.sh}`, and `/Library/LaunchDaemons/io.github.eoftgge.rosetun.helper.plist`, and builds a non-relocatable `.pkg` restricted to `arm64` on macOS 14 or newer.
+
+When `APPLE_DEVELOPER_ID_APP` and `APPLE_DEVELOPER_ID_INSTALLER` are set, `build-pkg.sh` signs all Mach-O binaries and `Rosetun.app` inside-out with `codesign --force --options runtime --timestamp`, signs the `.pkg` with `productbuild --sign ... --timestamp`, and submits it to Apple's Notary Service (`xcrun notarytool submit --wait`), staples the ticket (`xcrun stapler staple`), and verifies the package with `spctl --assess --type install`. Provide notarization credentials via `APPLE_NOTARY_KEYCHAIN_PROFILE`, or `APPLE_API_KEY_PATH` + `APPLE_API_KEY_ID` + `APPLE_API_ISSUER_ID`, or `APPLE_ID` + `APPLE_APP_PASSWORD` + `APPLE_TEAM_ID`. For local or unsigned builds without Developer ID identities, pass `--allow-unsigned`.
+
+In `.github/workflows/release.yml`, configure the `MACOS_APP_CERT_P12`, `MACOS_APP_CERT_PASSWORD`, `MACOS_INSTALLER_CERT_P12`, `MACOS_INSTALLER_CERT_PASSWORD`, `APPLE_DEVELOPER_ID_APP`, `APPLE_DEVELOPER_ID_INSTALLER`, and App Store Connect API (`APPLE_API_KEY_P8`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER_ID`) or Apple ID (`APPLE_ID`, `APPLE_APP_PASSWORD`, `APPLE_TEAM_ID`) secrets to enable Developer ID signing and notarization. When those secrets are absent, the workflow builds an unsigned experimental `.pkg`.
+
 ## Releases
 
-Development takes place on `dev`. The default branch, `master`, tracks stable releases. CI runs on both branches. A signed `v<version>` tag matching `Cargo.toml` starts the release workflow. Tag a stable release on `master` or a prerelease of a newer version on `dev`. The workflow publishes the Windows installer, Debian package, Linux archive, engine sources, checksums and bilingual release notes. It attests build provenance for the installer, package and archive. Debian prerelease filenames use `-` where the package's internal version uses `~`.
+Development takes place on `dev`. The default branch, `master`, tracks stable releases. CI runs on both branches. A signed `v<version>` tag matching `Cargo.toml` starts the release workflow. Tag a stable release on `master` or a prerelease of a newer version on `dev`. The workflow publishes the Windows installer, Debian package, Linux archive, experimental Apple Silicon macOS `.pkg`, engine sources, checksums and bilingual release notes. It attests build provenance for the installer, packages and archive. Debian prerelease filenames use `-` where the package's internal version uses `~`.
 
 First use **Actions → Release → Run workflow** on `dev` for a trial build. It uploads release assets for review. Check the rendered notes and checksums, then fast-forward `master` and tag the released commit.
 
@@ -98,4 +106,4 @@ git tag -s vX.Y.Z -m "Rosetun X.Y.Z"
 git push origin master vX.Y.Z
 ```
 
-Run `./installer/build.ps1 -Release` to build the Windows installer, verify the engine source archives and render the Windows and engine fields in [release-notes.md](release-notes.md). The release workflow fills in the Debian package and Linux archive fields after both assets are built. The SHA-256 pins for engine sources in `build.ps1` need to match their versions. To ship a fix after release, use a new version and tag.
+Run `./installer/build.ps1 -Release` to build the Windows installer, verify the engine source archives and render the Windows and engine fields in [release-notes.md](release-notes.md). The release workflow fills in the Debian package, Linux archive and experimental macOS package fields after those assets are built. The SHA-256 pins for engine sources in `build.ps1` need to match their versions. To ship a fix after release, use a new version and tag.

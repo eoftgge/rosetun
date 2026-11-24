@@ -1143,7 +1143,7 @@ fn failed_apply_preserves_session_and_shows_error() {
 fn successful_connections_and_applies_capture_unexpanded_rule_sets() {
     let mut state = state_for_auto_connect();
     let mut set = rule_set("1");
-    set.rules[0].matcher = RuleMatcher::Template(RuleTemplate::Youtube);
+    set.rules[0].matcher = RuleTemplate::Youtube.to_group("YouTube");
     state.config.rule_sets.push(set.clone());
     state.config.active_rule_set = Some(set.id.clone());
     let running = AppliedSnapshot::from_config(&state.config);
@@ -1153,7 +1153,7 @@ fn successful_connections_and_applies_capture_unexpanded_rule_sets() {
             .rule_set
             .rules
             .iter()
-            .all(|rule| !matches!(rule.matcher, RuleMatcher::Template(_)))
+            .all(|rule| !matches!(rule.matcher, RuleMatcher::Group { .. }))
     );
 
     state.connect_in_flight = true;
@@ -1168,13 +1168,13 @@ fn successful_connections_and_applies_capture_unexpanded_rule_sets() {
     }));
     let candidate = AppliedSnapshot::from_config(&state.config);
     let Some(Job::Apply(request)) = state.act(Action::Apply) else {
-        panic!("changed template must apply");
+        panic!("changed group must apply");
     };
     assert_eq!(state.session.applied_snapshot, Some(running));
     state.reduce(WorkerEvent::Apply(Ok(*request)));
     assert_eq!(state.session.applied_snapshot, Some(candidate));
     assert!(matches!(
-        state
+        &state
             .session
             .applied_snapshot
             .as_ref()
@@ -1184,7 +1184,7 @@ fn successful_connections_and_applies_capture_unexpanded_rule_sets() {
             .unwrap()
             .rules[0]
             .matcher,
-        RuleMatcher::Template(RuleTemplate::Youtube)
+        RuleMatcher::Group { name, .. } if name == "YouTube"
     ));
     state.reduce(WorkerEvent::Status(Status::default()));
     assert!(state.session.applied_snapshot.is_none());

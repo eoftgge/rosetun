@@ -96,7 +96,10 @@ fn every_kind_of_answer_has_its_line() {
                 "suffix",
                 RuleMatcher::Domain(DomainMatch::Suffix("example.net".into())),
             ),
-            rule("torrents", RuleMatcher::Template(RuleTemplate::Torrents)),
+            rule(
+                "torrents",
+                RuleTemplate::Torrents.to_group(crate::i18n::template_name(RuleTemplate::Torrents)),
+            ),
         ],
         vec![rule(
             "temporary",
@@ -157,8 +160,8 @@ fn every_kind_of_answer_has_its_line() {
         ),
         known(
             tr!(
-                "connections-why-template",
-                template = crate::i18n::template_name(RuleTemplate::Torrents),
+                "connections-why-group",
+                group = crate::i18n::template_name(RuleTemplate::Torrents),
                 condition = if cfg!(windows) {
                     "qbittorrent.exe"
                 } else {
@@ -166,7 +169,7 @@ fn every_kind_of_answer_has_its_line() {
                 }
                 .to_owned()
             ),
-            None
+            Some("torrents")
         )
     );
     assert_eq!(

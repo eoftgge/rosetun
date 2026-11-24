@@ -43,7 +43,10 @@ impl WorkerDispatcher {
             emit(
                 &publisher.tx,
                 &publisher.repaint,
-                WorkerEvent::Processes { request, result },
+                WorkerEvent::Processes {
+                    request,
+                    result: result.map(crate::rules::group_processes),
+                },
             );
         });
     }
@@ -156,6 +159,41 @@ impl WorkerDispatcher {
     pub(crate) fn remove_rules(&self, set: RuleSetId, rules: Vec<RuleId>) {
         self.spawn_complete("rosetun-remove-rules", move |store| {
             WorkerEvent::RemoveRules(remove_rules(store, &set, &rules))
+        });
+    }
+
+    pub(crate) fn group_rules(
+        &self,
+        set: RuleSetId,
+        rules: Vec<RuleId>,
+        name: String,
+        target: RuleDestination,
+    ) {
+        self.spawn_complete("rosetun-group-rules", move |store| {
+            WorkerEvent::GroupRules(group_rules(store, &set, &rules, &name, &target))
+        });
+    }
+
+    pub(crate) fn add_rules_to_group(
+        &self,
+        set: RuleSetId,
+        rules: Vec<RuleId>,
+        target_group: RuleId,
+    ) {
+        self.spawn_complete("rosetun-add-rules-to-group", move |store| {
+            WorkerEvent::AddRulesToGroup(add_rules_to_group(store, &set, &rules, &target_group))
+        });
+    }
+
+    pub(crate) fn ungroup_rule(&self, set: RuleSetId, rule: RuleId) {
+        self.spawn_complete("rosetun-ungroup-rule", move |store| {
+            WorkerEvent::UngroupRule(ungroup_rule(store, &set, &rule))
+        });
+    }
+
+    pub(crate) fn remove_group_item(&self, set: RuleSetId, rule: RuleId, index: usize) {
+        self.spawn_complete("rosetun-remove-group-item", move |store| {
+            WorkerEvent::RemoveGroupItem(remove_group_item(store, &set, &rule, index))
         });
     }
 

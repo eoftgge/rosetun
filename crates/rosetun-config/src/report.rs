@@ -12,6 +12,7 @@ const SECRET_KEYS: &[&str] = &[
     "pre_shared_key",
     "presharedkey",
     "private_key",
+    "privatekey",
     "secret",
     "token",
     "auth",
@@ -592,5 +593,79 @@ mod tests {
             Rules: 12\nWindows 10.0.26300\nFirewall: Found\n\
             2026-10-26T10:00:00.123Z  INFO rosetun_helper::state: connected elapsed_ms=532 thread_id=4 stage=CheckingEngine\n";
         assert_eq!(redact_report_text(input), input);
+    }
+
+    #[test]
+    fn tuic_and_anytls_links_and_credentials_are_redacted() {
+        let text = concat!(
+            "tuic://123e4567-e89b-12d3-a456-426614174000:tuic-secret@203.0.113.10:8444?sni=tuic.example.com ",
+            "anytls://anytls-secret@203.0.113.11:8445?sni=anytls.example.com ",
+            "{\"type\":\"tuic\",\"uuid\":\"123e4567-e89b-12d3-a456-426614174000\",\"password\":\"tuic-secret\"} ",
+            "{\"type\":\"anytls\",\"password\":\"anytls-secret\",\"public_key\":\"reality-pubkey\"}"
+        );
+        let report = redact_report_text(text);
+        for secret in [
+            "123e4567-e89b-12d3-a456-426614174000",
+            "tuic-secret",
+            "anytls-secret",
+            "reality-pubkey",
+            "203.0.113.10",
+            "203.0.113.11",
+            "tuic.example.com",
+            "anytls.example.com",
+        ] {
+            assert!(!report.contains(secret), "report leaked {secret}: {report}");
+        }
+        let log = super::redact_log_credentials(text);
+        for secret in [
+            "123e4567-e89b-12d3-a456-426614174000",
+            "tuic-secret",
+            "anytls-secret",
+            "reality-pubkey",
+        ] {
+            assert!(!log.contains(secret), "log leaked {secret}: {log}");
+        }
+    }
+
+    #[test]
+    fn wireguard_links_and_credentials_are_redacted() {
+        let text = concat!(
+            "wireguard://wg-priv-uri@203.0.113.12:51820?publickey=wg-pub-uri&presharedkey=wg-psk-uri ",
+            "wg://wg-priv-short@203.0.113.13:51820?publickey=wg-pub-short ",
+            "PrivateKey = wg-priv-ini\nPublicKey = wg-pub-ini\nPresharedKey = wg-psk-ini\n",
+            "{\"type\":\"wireguard\",\"private_key\":\"wg-priv-json\",\"public_key\":\"wg-pub-json\",\"pre_shared_key\":\"wg-psk-json\"}"
+        );
+        let report = redact_report_text(text);
+        for secret in [
+            "wg-priv-uri",
+            "wg-pub-uri",
+            "wg-psk-uri",
+            "wg-priv-short",
+            "wg-pub-short",
+            "wg-priv-ini",
+            "wg-pub-ini",
+            "wg-psk-ini",
+            "wg-priv-json",
+            "wg-pub-json",
+            "wg-psk-json",
+            "203.0.113.12",
+            "203.0.113.13",
+        ] {
+            assert!(!report.contains(secret), "report leaked {secret}: {report}");
+        }
+        let log = super::redact_log_credentials(text);
+        for secret in [
+            "wg-priv-uri",
+            "wg-pub-uri",
+            "wg-psk-uri",
+            "wg-priv-ini",
+            "wg-pub-ini",
+            "wg-psk-ini",
+            "wg-priv-json",
+            "wg-pub-json",
+            "wg-psk-json",
+        ] {
+            assert!(!log.contains(secret), "log leaked {secret}: {log}");
+        }
     }
 }

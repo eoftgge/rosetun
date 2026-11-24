@@ -3971,6 +3971,7 @@ fn protected_helper(
             // This domain must never be resolved during reconnect.
             server: "cached.invalid".to_owned(),
             address: "203.0.113.10".parse().expect("IP"),
+            members: HashMap::new(),
         });
         session.process = Some(Box::new(ExitedProcess));
     }
@@ -4354,6 +4355,10 @@ fn xray_chain_helper() -> XrayChainHelper {
 fn reality_request() -> ConnectRequest {
     let mut request = connect_request();
     request.settings.kill_switch = true;
+    request.node.outbound = Outbound::Vless(VlessParams {
+        uuid: "00000000-0000-0000-0000-000000000000".to_owned(),
+        flow: None,
+    });
     request.node.stream.tls = rosetun_config::TlsMode::Reality(rosetun_config::RealityParams {
         sni: Some("example.com".into()),
         public_key: "test-public-key".into(),
@@ -4396,6 +4401,27 @@ fn xray_chain_protects_then_starts_xray_then_singbox() {
             .unwrap()
             .load(Ordering::Acquire)
     );
+}
+
+#[test]
+fn plain_vless_node_uses_xray_in_auto_mode() {
+    let (helper, controls, runner, binaries, _, _) = xray_chain_helper();
+    let mut vless = connect_request();
+    vless.settings.kill_switch = true;
+    vless.node.outbound = Outbound::Vless(VlessParams {
+        uuid: "00000000-0000-0000-0000-000000000000".to_owned(),
+        flow: None,
+    });
+    vless.node.stream.tls = rosetun_config::TlsMode::Tls(rosetun_config::TlsParams::default());
+
+    helper.connect(&vless).unwrap();
+    assert_eq!(binaries.lock().unwrap()[0].len(), 2);
+    assert_eq!(
+        *controls.events.lock().unwrap(),
+        ["protect", "xray", "sing-box", "tunnel"]
+    );
+    assert_eq!(runner.starts.load(Ordering::Acquire), 1);
+    assert!(helper.status().xray);
 }
 
 #[test]
@@ -4638,9 +4664,8 @@ fn connect_request() -> ConnectRequest {
             name: "test".to_owned(),
             server: "127.0.0.1".to_owned(),
             port: 443,
-            outbound: Outbound::Vless(VlessParams {
-                uuid: "00000000-0000-0000-0000-000000000000".to_owned(),
-                flow: None,
+            outbound: Outbound::Trojan(rosetun_config::TrojanParams {
+                password: "test-password".to_owned(),
             }),
             stream: Default::default(),
             raw: None,
@@ -4650,7 +4675,7 @@ fn connect_request() -> ConnectRequest {
         temporary_rules: Vec::new(),
         lists: Vec::new(),
         settings: Settings::default(),
-        rule_templates: Vec::new(),
+        rule_groups: Vec::new(),
     }
 }
 
@@ -5486,6 +5511,7 @@ fn apply_reuses_normalized_cached_server_name() {
     helper.session().unwrap().last_endpoint = Some(SuccessfulEndpoint {
         server: "cached.invalid".to_owned(),
         address,
+        members: HashMap::new(),
     });
     let mut changed = request.clone();
     changed.node.server = "CACHED.INVALID.".to_owned();
@@ -5581,14 +5607,14 @@ fn invalid_temporary_rules_leave_connect_and_apply_untouched() {
     request.settings.kill_switch = true;
     let mut too_many = request.clone();
     too_many.temporary_rules = vec![temporary_rule(); MAX_TEMPORARY_RULES + 1];
-    let mut template = request.clone();
-    template.temporary_rules.push(Rule {
-        matcher: RuleMatcher::Template(RuleTemplate::Youtube),
+    let mut group = request.clone();
+    group.temporary_rules.push(Rule {
+        matcher: RuleTemplate::Youtube.to_group("YouTube"),
         enabled: false,
         ..temporary_rule()
     });
 
-    for invalid in [&too_many, &template] {
+    for invalid in [&too_many, &group] {
         let error = helper.connect(invalid).expect_err("invalid connect");
         assert_eq!(error.code, ErrorCode::UnsupportedRules);
         assert!(matches!(
@@ -5599,7 +5625,7 @@ fn invalid_temporary_rules_leave_connect_and_apply_untouched() {
     }
 
     helper.connect(&request).expect("connect");
-    for invalid in [&too_many, &template] {
+    for invalid in [&too_many, &group] {
         let error = helper.apply(invalid).expect_err("invalid apply");
         assert_eq!(error.code, ErrorCode::UnsupportedRules);
         assert!(matches!(helper.status().state, ConnectionState::Connected));
@@ -5713,29 +5739,27 @@ fn invalid_tun_names_leave_connect_and_apply_untouched() {
 }
 
 #[test]
-fn base_rule_set_templates_leave_connect_and_apply_untouched() {
+fn base_rule_set_groups_leave_connect_and_apply_untouched() {
     let (helper, controls, prepared, _) = supervised_helper(true);
     let mut request = connect_request();
     request.settings.kill_switch = true;
     let mut invalid = request.clone();
     invalid.rule_set.rules.push(Rule {
-        matcher: RuleMatcher::Template(RuleTemplate::Youtube),
+        matcher: RuleTemplate::Youtube.to_group("YouTube"),
         enabled: false,
         ..temporary_rule()
     });
 
-    let error = helper
-        .connect(&invalid)
-        .expect_err("base template rejected");
+    let error = helper.connect(&invalid).expect_err("base group rejected");
     assert_eq!(error.code, ErrorCode::UnsupportedRules);
-    assert!(error.message.contains("rule set contains a template"));
+    assert!(error.message.contains("rule set contains a group"));
     assert_eq!(helper.status(), Status::default());
     assert_eq!(controls.spawns(), 0);
 
     helper.connect(&request).expect("connect");
-    let error = helper.apply(&invalid).expect_err("base template rejected");
+    let error = helper.apply(&invalid).expect_err("base group rejected");
     assert_eq!(error.code, ErrorCode::UnsupportedRules);
-    assert!(error.message.contains("rule set contains a template"));
+    assert!(error.message.contains("rule set contains a group"));
     assert_eq!(helper.session().unwrap().request.as_ref(), Some(&request));
     assert_eq!(controls.spawns(), 1);
     assert_eq!(prepared.load(Ordering::Acquire), 0);
@@ -6133,7 +6157,9 @@ fn probe_mixes_plain_and_reality_nodes_in_one_xray_process() {
         .with_xray_runner(Arc::clone(&runner) as Arc<dyn XrayRunner>)
         .with_test_physical_interface(|_| Some("Ethernet".into()));
     let mut request = probe_request();
-    request.nodes[0].stream.tls = reality_request().node.stream.tls;
+    let reality = reality_request().node;
+    request.nodes[0].outbound = reality.outbound;
+    request.nodes[0].stream.tls = reality.stream.tls;
     let mut plain = connect_request().node;
     plain.id = NodeId::new("plain");
     request.nodes.push(plain);
@@ -6628,16 +6654,7 @@ fn subscription_credentials_belong_only_to_the_session_owner_and_expire_on_disco
         )
         .contains(&proxy.password)
     );
-    let mut other = test_caller();
-    #[cfg(windows)]
-    {
-        other.account = AccountIdentity::WindowsSid(vec![99]);
-    }
-    #[cfg(target_os = "linux")]
-    {
-        other.account = AccountIdentity::LinuxUid(99999);
-    }
-    other.administrator = true;
+    let other = Caller::fake(b"other", true);
     assert_eq!(
         helper.subscription_proxy_as(&other).unwrap_err().code,
         ErrorCode::AccessDenied
@@ -7235,6 +7252,7 @@ fn protected_reconnect_uses_the_remembered_extra_address() {
             SuccessfulEndpoint {
                 server: "exit.invalid".into(),
                 address: "198.51.100.21".parse().unwrap(),
+                members: HashMap::new(),
             },
         );
     }
@@ -7277,7 +7295,9 @@ fn apply_with_other_extra_nodes_restarts_and_rollback_restores_them() {
 fn xray_is_permitted_when_only_an_extra_node_needs_it() {
     let (helper, _, runner, binaries, _, _) = xray_chain_helper();
     let mut request = exit_request("other", "198.51.100.20");
-    request.extra_nodes[0].node.stream.tls = reality_request().node.stream.tls;
+    let reality = reality_request().node;
+    request.extra_nodes[0].node.outbound = reality.outbound;
+    request.extra_nodes[0].node.stream.tls = reality.stream.tls;
     helper.connect(&request).unwrap();
 
     let permitted = binaries.lock().unwrap()[0].clone();
@@ -7305,8 +7325,11 @@ fn xray_is_not_permitted_when_no_node_needs_it() {
 fn main_and_extra_nodes_share_one_xray_process() {
     let (helper, _, runner, binaries, _, _) = xray_chain_helper();
     let mut request = exit_request("other", "198.51.100.20");
-    request.node.stream.tls = reality_request().node.stream.tls;
-    request.extra_nodes[0].node.stream.tls = reality_request().node.stream.tls;
+    let reality = reality_request().node;
+    request.node.outbound = reality.outbound.clone();
+    request.node.stream.tls = reality.stream.tls.clone();
+    request.extra_nodes[0].node.outbound = reality.outbound;
+    request.extra_nodes[0].node.stream.tls = reality.stream.tls;
     helper.connect(&request).unwrap();
 
     assert_eq!(binaries.lock().unwrap()[0].len(), 2);
@@ -7820,6 +7843,64 @@ fn linux_uids_preserve_session_and_owner_only_read_policies() {
     };
     let admin = Caller {
         account: AccountIdentity::LinuxUid(0),
+        administrator: true,
+    };
+    *helper.owner.lock().unwrap() = Some(owner.account.clone());
+    *helper.last_owner.lock().unwrap() = Some(owner.account.clone());
+    assert!(helper.connections_as(&owner).is_ok());
+    assert!(helper.diagnostic_log_as(&owner).is_ok());
+    for denied in [&other, &admin] {
+        assert_eq!(
+            helper.connections_as(denied).unwrap_err().code,
+            ErrorCode::AccessDenied
+        );
+        assert_eq!(
+            helper.diagnostic_log_as(denied).unwrap_err().code,
+            ErrorCode::AccessDenied
+        );
+        assert_eq!(
+            helper
+                .close_connection_as(denied, "fixture")
+                .unwrap_err()
+                .code,
+            ErrorCode::AccessDenied
+        );
+    }
+    assert_eq!(
+        helper.disconnect_as(&other).unwrap_err().code,
+        ErrorCode::AccessDenied
+    );
+    assert_eq!(
+        helper.temporary_rules_as(&other).unwrap_err().code,
+        ErrorCode::AccessDenied
+    );
+    assert_eq!(
+        helper.session_exits_as(&other).unwrap_err().code,
+        ErrorCode::AccessDenied
+    );
+    assert!(helper.temporary_rules_as(&admin).is_ok());
+    assert!(helper.session_exits_as(&admin).is_ok());
+    helper.disconnect_as(&admin).unwrap();
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_uids_preserve_session_and_owner_only_read_policies() {
+    let helper = Helper::new(
+        EngineRegistry::new(),
+        Box::new(UnusedRouting),
+        VerboseGate::default(),
+    );
+    let owner = Caller {
+        account: AccountIdentity::MacOsUid(501),
+        administrator: false,
+    };
+    let other = Caller {
+        account: AccountIdentity::MacOsUid(502),
+        administrator: false,
+    };
+    let admin = Caller {
+        account: AccountIdentity::MacOsUid(0),
         administrator: true,
     };
     *helper.owner.lock().unwrap() = Some(owner.account.clone());
@@ -9607,7 +9688,10 @@ fn unavailable_first_hop_blocks_b_and_retains_independent_exit_identity() {
         NameLookup::System,
     );
     assert_eq!(
-        endpoints,
+        endpoints
+            .iter()
+            .map(|resolved| resolved.as_ref().map(|r| r.primary))
+            .collect::<Vec<_>>(),
         [
             Some("198.51.100.2".parse().unwrap()),
             None,
@@ -9659,4 +9743,353 @@ fn domain_b_is_never_looked_up_by_endpoint_preparation() {
             None
         );
     }
+}
+
+#[test]
+fn actual_tunnel_interface_drives_bypass_and_physical_exclusion() {
+    #[derive(Debug)]
+    struct UtunProcess;
+
+    impl EngineProcess for UtunProcess {
+        fn is_running(&mut self) -> Result<bool, EngineError> {
+            Ok(true)
+        }
+
+        fn tunnel_interface(&self) -> Option<String> {
+            Some("utun6".to_owned())
+        }
+
+        fn stop(&mut self) -> Result<(), EngineError> {
+            Ok(())
+        }
+    }
+
+    #[derive(Debug)]
+    struct UtunEngine;
+
+    impl EngineBackend for UtunEngine {
+        fn kind(&self) -> EngineKind {
+            EngineKind::SingBox
+        }
+
+        fn integration(&self) -> EngineIntegration {
+            EngineIntegration::EngineManagedTun
+        }
+
+        fn capabilities(&self) -> EngineCapabilities {
+            StubEngine.capabilities()
+        }
+
+        fn locate_binary(&self) -> Result<PathBuf, EngineError> {
+            StubEngine.locate_binary()
+        }
+
+        fn tunnel_dns_server(
+            &self,
+            _tun: &rosetun_config::TunSettings,
+        ) -> Option<std::net::SocketAddr> {
+            None
+        }
+
+        fn render(&self, request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError> {
+            StubEngine.render(request)
+        }
+
+        fn spawn(
+            &self,
+            _binary: &Path,
+            _config: &RenderedConfig,
+        ) -> Result<Box<dyn EngineProcess>, EngineError> {
+            Ok(Box::new(UtunProcess))
+        }
+    }
+
+    static EXCLUDED_TUN: Mutex<Option<String>> = Mutex::new(None);
+    fn record_excluded(alias: &str) -> Option<String> {
+        *EXCLUDED_TUN.lock().unwrap() = Some(alias.to_owned());
+        Some("en0".to_owned())
+    }
+
+    let _guard = ROUTE_TEST_LOCK.lock().unwrap();
+    *EXCLUDED_TUN.lock().unwrap() = None;
+
+    let mut engines = EngineRegistry::new();
+    engines.register(Box::new(UtunEngine));
+    let helper = Helper::new(engines, Box::new(UnusedRouting), VerboseGate::default());
+    helper.session.lock().unwrap().physical_interface = record_excluded;
+
+    let mut request = connect_request();
+    request.settings.kill_switch = false;
+    request.settings.tun.name = "rosetun0".into();
+    helper.connect(&request).unwrap();
+
+    let now = Instant::now();
+    {
+        let mut session = helper.session.lock().unwrap();
+        assert_eq!(session.effective_tun_name(&request.settings.tun), "utun6");
+        session.bypass.lookup = |_| Ok("utun6".into());
+        for seconds in [0, 2, 4, 6] {
+            session.observe_bypass(now + Duration::from_secs(seconds));
+            assert!(!helper.status().bypass_detected);
+        }
+        session.bypass.lookup = |_| Ok("en0".into());
+        for seconds in [8, 10] {
+            session.observe_bypass(now + Duration::from_secs(seconds));
+            assert!(!helper.status().bypass_detected);
+        }
+        session.observe_bypass(now + Duration::from_secs(12));
+        assert!(helper.status().bypass_detected);
+    }
+
+    helper.supervise(now + Duration::from_secs(14));
+    assert_eq!(EXCLUDED_TUN.lock().unwrap().as_deref(), Some("utun6"));
+
+    helper.disconnect().unwrap();
+    let session = helper.session.lock().unwrap();
+    assert_eq!(
+        session.effective_tun_name(&request.settings.tun),
+        "rosetun0"
+    );
+    assert_eq!(helper.effective_tun_name(&request.settings.tun), "rosetun0");
+}
+
+#[test]
+fn xray_chain_reconnects_when_physical_interface_changes() {
+    static CURRENT_IF: Mutex<&'static str> = Mutex::new("en0");
+    fn current_physical(_: &str) -> Option<String> {
+        Some((*CURRENT_IF.lock().unwrap()).to_owned())
+    }
+
+    let _guard = ROUTE_TEST_LOCK.lock().unwrap();
+    *CURRENT_IF.lock().unwrap() = "en0";
+
+    let (helper, _, runner, _, _, _) = xray_chain_helper();
+    let helper = helper.with_test_physical_interface(current_physical);
+    let mut request = reality_request();
+    request.settings.kill_switch = false;
+    request.settings.auto_reconnect = true;
+    request.settings.xray = rosetun_config::XrayUse::Always;
+    helper.connect(&request).unwrap();
+    assert_eq!(runner.starts.load(Ordering::Acquire), 1);
+    assert!(runner.last_config().contains("\"en0\""));
+
+    *CURRENT_IF.lock().unwrap() = "en5";
+    helper.supervise(Instant::now());
+    assert_eq!(helper.status().state, ConnectionState::Connected);
+    assert_eq!(runner.starts.load(Ordering::Acquire), 2);
+    assert!(runner.last_config().contains("\"en5\""));
+}
+
+#[test]
+fn apply_and_probe_exclude_actual_utun_interface_while_connected() {
+    static SEEN_ALIASES: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    fn record_alias(alias: &str) -> Option<String> {
+        SEEN_ALIASES.lock().unwrap().push(alias.to_owned());
+        Some("en0".to_owned())
+    }
+
+    let _guard = ROUTE_TEST_LOCK.lock().unwrap();
+    SEEN_ALIASES.lock().unwrap().clear();
+
+    let (helper, _, runner, _, _, _) = xray_chain_helper();
+    let helper = helper.with_test_physical_interface(record_alias);
+    let mut request = reality_request();
+    request.settings.kill_switch = false;
+    request.settings.tun.name = "rosetun0".into();
+    request.settings.xray = rosetun_config::XrayUse::Off;
+    helper.connect_as(&test_caller(), &request).unwrap();
+
+    {
+        let mut session = helper.session.lock().unwrap();
+        session.active_tun_name = Some("utun6".to_owned());
+        *session.shared_active_tun.lock().unwrap() = Some("utun6".to_owned());
+    }
+    assert_eq!(helper.effective_tun_name(&request.settings.tun), "utun6");
+
+    // Pre-validation inside apply_as for an Xray node must exclude the live utun6.
+    SEEN_ALIASES.lock().unwrap().clear();
+    let mut switched = request.clone();
+    switched.settings.xray = rosetun_config::XrayUse::Always;
+    helper.apply_as(&test_caller(), &switched).unwrap();
+    assert_eq!(
+        SEEN_ALIASES.lock().unwrap().first().map(String::as_str),
+        Some("utun6")
+    );
+    assert_eq!(runner.starts.load(Ordering::Acquire), 1);
+
+    // Probing while connected must also exclude the live active TUN name.
+    {
+        let mut session = helper.session.lock().unwrap();
+        session.active_tun_name = Some("utun7".to_owned());
+        *session.shared_active_tun.lock().unwrap() = Some("utun7".to_owned());
+    }
+    SEEN_ALIASES.lock().unwrap().clear();
+    let _ = helper.probe_nodes(&rosetun_ipc::ProbeRequest {
+        nodes: vec![request.node.clone()],
+        settings: request.settings.clone(),
+    });
+    assert_eq!(
+        SEEN_ALIASES.lock().unwrap().first().map(String::as_str),
+        Some("utun7")
+    );
+
+    helper.disconnect_as(&test_caller()).unwrap();
+    assert_eq!(helper.effective_tun_name(&request.settings.tun), "rosetun0");
+}
+
+#[test]
+fn xray_balancer_endpoints_preserve_sni_failover_on_partial_dns_and_cache_for_reconnect() {
+    use rosetun_config::{
+        BalancerMember, BalancerStrategy, BurstObservatory, LeastLoadSettings, RealityParams,
+        StreamSettings, TlsMode, TlsParams, Transport, VlessParams, XrayBalancer, XrayObservatory,
+    };
+
+    let balanced = Node {
+        id: NodeId::new("bal-nl"),
+        name: "NL".into(),
+        server: "nl.example.invalid".into(),
+        port: 443,
+        outbound: Outbound::XrayBalancer(Box::new(XrayBalancer {
+            members: vec![
+                BalancerMember {
+                    tag: "proxy".into(),
+                    server: "nl.example.invalid".into(),
+                    port: 443,
+                    outbound: Outbound::Vless(VlessParams {
+                        uuid: "00000000-0000-4000-8000-000000000001".into(),
+                        flow: Some("xtls-rprx-vision".into()),
+                    }),
+                    stream: StreamSettings {
+                        transport: Transport::Tcp,
+                        tls: TlsMode::Reality(RealityParams {
+                            sni: None,
+                            public_key: "test-public-key".into(),
+                            short_id: None,
+                            fingerprint: Some("firefox".into()),
+                        }),
+                        finalmask: None,
+                    },
+                },
+                BalancerMember {
+                    tag: "mask".into(),
+                    server: "nl4.example.invalid".into(),
+                    port: 443,
+                    outbound: Outbound::Vless(VlessParams {
+                        uuid: "00000000-0000-4000-8000-000000000001".into(),
+                        flow: Some("xtls-rprx-vision".into()),
+                    }),
+                    stream: StreamSettings {
+                        transport: Transport::Tcp,
+                        tls: TlsMode::Tls(TlsParams::default()),
+                        finalmask: None,
+                    },
+                },
+            ],
+            selector: vec!["proxy".into()],
+            strategy: BalancerStrategy::LeastLoad(LeastLoadSettings {
+                max_rtt: Some("3000ms".into()),
+                tolerance_bp: Some(5000),
+                expected: None,
+                baselines: Vec::new(),
+            }),
+            fallback_tag: Some("mask".into()),
+            observatory: Some(XrayObservatory::Burst(BurstObservatory {
+                subject_selector: vec!["proxy".into()],
+                destination: Some("https://connectivitycheck.gstatic.com/generate_204".into()),
+                interval: Some("15s".into()),
+                timeout: Some("5s".into()),
+                sampling: Some(2),
+                http_method: Some("GET".into()),
+            })),
+        })),
+        stream: StreamSettings::default(),
+        raw: None,
+    };
+
+    // Case 1: both members resolve -> SNI preserved on both, both cached for protected reconnect.
+    let mut map = HashMap::new();
+    map.insert("nl.example.invalid".into(), "192.0.2.10".parse().unwrap());
+    map.insert("nl4.example.invalid".into(), "192.0.2.11".parse().unwrap());
+    let both = ResolvedNodeEndpoints::from_members("192.0.2.10".parse().unwrap(), map);
+    let prepared = node_with_endpoints(&balanced, &both);
+    prepared.validate_proxy().unwrap();
+    let Outbound::XrayBalancer(bal) = &prepared.outbound else {
+        panic!("expected balancer");
+    };
+    assert_eq!(bal.members.len(), 2);
+    assert_eq!(bal.members[0].server, "192.0.2.10");
+    assert_eq!(bal.members[1].server, "192.0.2.11");
+    assert!(matches!(
+        &bal.members[0].stream.tls,
+        TlsMode::Reality(r) if r.sni.as_deref() == Some("nl.example.invalid")
+    ));
+    assert!(matches!(
+        &bal.members[1].stream.tls,
+        TlsMode::Tls(t) if t.sni.as_deref() == Some("nl4.example.invalid")
+    ));
+
+    let cached = both.into_successful(&balanced.server);
+    let reconnected = protected_endpoints(&balanced, Some(&cached)).unwrap();
+    let mut ips = Vec::new();
+    reconnected.push_unique_ips(&mut ips);
+    assert!(ips.contains(&"192.0.2.10".parse().unwrap()));
+    assert!(ips.contains(&"192.0.2.11".parse().unwrap()));
+
+    // Case 2: primary fails DNS, only fallback resolves -> fallback promoted to selector.
+    let mut fallback_only_map = HashMap::new();
+    fallback_only_map.insert("nl4.example.invalid".into(), "192.0.2.11".parse().unwrap());
+    let fallback_only =
+        ResolvedNodeEndpoints::from_members("192.0.2.11".parse().unwrap(), fallback_only_map);
+    let failover = node_with_endpoints(&balanced, &fallback_only);
+    failover.validate_proxy().unwrap();
+    let Outbound::XrayBalancer(bal) = &failover.outbound else {
+        panic!("expected balancer");
+    };
+    assert_eq!(bal.members.len(), 1);
+    assert_eq!(bal.members[0].tag, "mask");
+    assert_eq!(bal.selector, ["mask"]);
+    assert_eq!(bal.fallback_tag, None);
+    let Some(XrayObservatory::Burst(obs)) = &bal.observatory else {
+        panic!("expected burst observatory");
+    };
+    assert_eq!(obs.subject_selector, ["mask"]);
+
+    // Case 3: connecting a balanced node via helper resolves both members and starts Xray,
+    // and probing with XrayUse::Off marks it Unsupported.
+    let (helper, _, runner, _, _, _) = xray_chain_helper();
+    {
+        let mut session = helper.session.lock().unwrap();
+        session.name_lookup = |server, _, _| match server {
+            "nl.example.invalid" => Ok(vec!["192.0.2.10".parse().unwrap()]),
+            "nl4.example.invalid" => Ok(vec!["192.0.2.11".parse().unwrap()]),
+            _ => Err(Unresolved {
+                error: HelperError::new(ErrorCode::ServerNameUnresolved, "unknown"),
+                offline: false,
+            }),
+        };
+    }
+    let mut request = reality_request();
+    request.node = balanced.clone();
+    request.settings.kill_switch = false;
+    request.settings.xray = rosetun_config::XrayUse::Auto;
+    helper.connect_as(&test_caller(), &request).unwrap();
+    assert_eq!(runner.starts.load(Ordering::Acquire), 1);
+    {
+        let session = helper.session.lock().unwrap();
+        let saved = session.last_endpoint.as_ref().unwrap();
+        assert!(saved.contains_address("192.0.2.10".parse().unwrap()));
+        assert!(saved.contains_address("192.0.2.11".parse().unwrap()));
+    }
+    helper.disconnect_as(&test_caller()).unwrap();
+
+    let mut off_settings = request.settings.clone();
+    off_settings.xray = rosetun_config::XrayUse::Off;
+    let probe = helper
+        .probe_nodes(&rosetun_ipc::ProbeRequest {
+            nodes: vec![balanced],
+            settings: off_settings,
+        })
+        .unwrap();
+    assert_eq!(probe.len(), 1);
+    assert_eq!(probe[0].outcome, rosetun_ipc::ProbeOutcome::Unsupported);
 }

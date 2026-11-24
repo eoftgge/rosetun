@@ -4,6 +4,7 @@ mod checkbox;
 mod chips_field;
 mod choice_card;
 mod combo;
+mod country_badge;
 mod dialogs;
 mod frames;
 mod menu;
@@ -19,15 +20,16 @@ mod transitions;
 
 pub(crate) use action_notice::{NoticeAction, action_notice};
 pub(crate) use buttons::{
-    button_fill, button_fill_compact, link, outline_button, outline_button_compact,
-    outline_button_full, outline_button_menu,
+    button_fill, button_fill_icon, link, outline_button, outline_button_compact,
+    outline_button_full, outline_button_icon, outline_button_menu,
 };
 pub(crate) use checkbox::checkbox;
 #[cfg(test)]
 pub(crate) use chips_field::chips_input_id;
 pub(crate) use chips_field::{Chip, ChipsEvent, ChipsField};
 pub(crate) use choice_card::{choice_card, radio_card};
-pub(crate) use combo::{drop_down, filter_combo};
+pub(crate) use combo::{drop_down, filter_combo, filter_combo_icon};
+pub(crate) use country_badge::{country_badge, country_label, spoken_with_country};
 pub(crate) use dialogs::{
     ConfirmModal, Dialog, DialogFooter, DialogWidth, FooterChoice, ModalChoice, NameModal,
     confirm_modal, dialog_done, dialog_footer, name_modal,
@@ -40,11 +42,10 @@ pub(crate) use frames::{
 };
 pub(crate) use menu::{
     MenuItem, MenuWidth, context_menu_popup, menu_choice_width, menu_content_width, menu_item,
-    menu_popup, menu_width,
+    menu_item_with_country, menu_popup, menu_submenu, menu_width,
 };
 pub(crate) use search::{
-    CHECK_FIELD_WIDTH, MIN_SEARCH_WIDTH, SEARCH_WIDTH, search_field, search_field_with_suffix,
-    search_width_beside,
+    MIN_SEARCH_WIDTH, SEARCH_WIDTH, search_field, search_field_with_suffix, search_width_beside,
 };
 pub(crate) use segmented::{segmented, segmented_width};
 pub(crate) use settings_card::{RowOptions, SettingsCard, row_detail, settings_card};

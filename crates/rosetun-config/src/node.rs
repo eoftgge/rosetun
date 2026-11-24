@@ -5,25 +5,21 @@ use serde::{Deserialize, Serialize};
 
 use crate::{CountryCode, NodeId, Settings, XrayUse};
 
-// sing-box#4520: REALITY servers on Xray 26.9.8+ reject sing-box's handshake.
-const XRAY_FOR_REALITY: bool = true;
-
 /// Whether Xray carries this node. Every caller asks here, so a connect, an apply and a server
 /// check always agree.
 pub fn uses_xray(node: &Node, settings: &Settings) -> bool {
     match settings.xray {
         XrayUse::Off => false,
+        // Balancers and finalmask are Xray-only features.
+        _ if node.requires_xray() => true,
         // Splitting the packets to the server is Xray's feature, so a node it can run goes there.
         _ if settings.tls_fragment.applies_to(node) => true,
-        // sing-box has no XHTTP transport, so such a node has no other route.
+        // VLESS is Xray's native protocol (including REALITY, where sing-box#4520 breaks on Xray
+        // 26.9.8+), and sing-box has no XHTTP transport.
         XrayUse::Auto if matches!(node.stream.transport, Transport::Xhttp { .. }) => {
             xray_supports(&node.outbound)
         }
-        XrayUse::Auto => {
-            XRAY_FOR_REALITY
-                && matches!(&node.outbound, Outbound::Vless(_))
-                && matches!(&node.stream.tls, TlsMode::Reality(_))
-        }
+        XrayUse::Auto => matches!(&node.outbound, Outbound::Vless(_)),
         XrayUse::Always => xray_supports(&node.outbound),
     }
 }
@@ -34,15 +30,23 @@ pub fn fragments_tls(node: &Node, settings: &Settings) -> bool {
     settings.xray != XrayUse::Off && settings.tls_fragment.applies_to(node)
 }
 
-pub(crate) fn xray_supports(outbound: &Outbound) -> bool {
+pub(crate) fn xray_supports_member(outbound: &Outbound) -> bool {
     match outbound {
         Outbound::Vmess(params) => params.alter_id == 0,
         Outbound::Vless(_) | Outbound::Trojan(_) | Outbound::Shadowsocks(_) => true,
         Outbound::Http(_)
         | Outbound::Socks5(_)
         | Outbound::Hysteria2(_)
+        | Outbound::Tuic(_)
+        | Outbound::AnyTls(_)
+        | Outbound::WireGuard(_)
+        | Outbound::XrayBalancer(_)
         | Outbound::Unknown { .. } => false,
     }
+}
+
+pub(crate) fn xray_supports(outbound: &Outbound) -> bool {
+    matches!(outbound, Outbound::XrayBalancer(_)) || xray_supports_member(outbound)
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -113,6 +117,13 @@ pub enum Outbound {
     Trojan(TrojanParams),
     Shadowsocks(ShadowsocksParams),
     Hysteria2(Hysteria2Params),
+    Tuic(TuicParams),
+    #[serde(rename = "anytls")]
+    AnyTls(AnyTlsParams),
+    #[serde(rename = "wireguard")]
+    WireGuard(WireGuardParams),
+    #[serde(rename = "xray_balancer")]
+    XrayBalancer(Box<XrayBalancer>),
     Unknown {
         scheme: String,
         params: BTreeMap<String, String>,
@@ -129,6 +140,10 @@ impl fmt::Debug for Outbound {
             Self::Trojan(params) => f.debug_tuple("Trojan").field(params).finish(),
             Self::Shadowsocks(params) => f.debug_tuple("Shadowsocks").field(params).finish(),
             Self::Hysteria2(params) => f.debug_tuple("Hysteria2").field(params).finish(),
+            Self::Tuic(params) => f.debug_tuple("Tuic").field(params).finish(),
+            Self::AnyTls(params) => f.debug_tuple("AnyTls").field(params).finish(),
+            Self::WireGuard(params) => f.debug_tuple("WireGuard").field(params).finish(),
+            Self::XrayBalancer(params) => f.debug_tuple("XrayBalancer").field(params).finish(),
             Self::Unknown { scheme, params } => f
                 .debug_struct("Unknown")
                 .field("scheme", scheme)
@@ -150,61 +165,282 @@ impl fmt::Debug for ProxyCredentials {
     }
 }
 
+/// Checks a standard 36-character hyphenated or 32-character hex UUID.
+pub fn is_valid_uuid(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    match bytes.len() {
+        32 => bytes.iter().all(u8::is_ascii_hexdigit),
+        36 => bytes.iter().enumerate().all(|(index, byte)| {
+            if matches!(index, 8 | 13 | 18 | 23) {
+                *byte == b'-'
+            } else {
+                byte.is_ascii_hexdigit()
+            }
+        }),
+        _ => false,
+    }
+}
+
+/// Checks a positive Go-style duration string (for example `10s`, `500ms`, `1m30s`).
+pub fn is_valid_duration(value: &str) -> bool {
+    if value.is_empty() || value.len() > 32 {
+        return false;
+    }
+    let mut rest = value;
+    let mut non_zero = false;
+    while !rest.is_empty() {
+        let digits_end = rest
+            .find(|ch: char| !ch.is_ascii_digit())
+            .unwrap_or(rest.len());
+        if digits_end == 0 {
+            return false;
+        }
+        if rest[..digits_end].bytes().any(|byte| byte != b'0') {
+            non_zero = true;
+        }
+        rest = &rest[digits_end..];
+        if let Some(after_dot) = rest.strip_prefix('.') {
+            let frac_end = after_dot
+                .find(|ch: char| !ch.is_ascii_digit())
+                .unwrap_or(after_dot.len());
+            if frac_end == 0 {
+                return false;
+            }
+            if after_dot[..frac_end].bytes().any(|byte| byte != b'0') {
+                non_zero = true;
+            }
+            rest = &after_dot[frac_end..];
+        }
+        let unit_len = if rest.starts_with("ns") || rest.starts_with("us") || rest.starts_with("ms")
+        {
+            2
+        } else if rest.starts_with(['s', 'm', 'h']) {
+            1
+        } else {
+            return false;
+        };
+        rest = &rest[unit_len..];
+    }
+    non_zero
+}
+
+/// Minimum and maximum interface MTU accepted for WireGuard endpoints.
+pub const WIREGUARD_MTU_MIN: u16 = 576;
+pub const WIREGUARD_MTU_MAX: u16 = 9000;
+
+/// Checks a canonical 44-character standard Base64 32-byte WireGuard key.
+pub fn is_valid_wireguard_key(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.len() != 44 || bytes[43] != b'=' {
+        return false;
+    }
+    let decode = |byte: u8| match byte {
+        b'A'..=b'Z' => Some(byte - b'A'),
+        b'a'..=b'z' => Some(byte - b'a' + 26),
+        b'0'..=b'9' => Some(byte - b'0' + 52),
+        b'+' => Some(62),
+        b'/' => Some(63),
+        _ => None,
+    };
+    if !bytes[..43].iter().all(|&byte| decode(byte).is_some()) {
+        return false;
+    }
+    // 32 bytes = 256 bits = 42 * 6 + 4 bits; the 2 unused low bits of char 42 must be zero.
+    decode(bytes[42]).is_some_and(|bits| bits & 0x03 == 0)
+}
+
+/// Checks a WireGuard interface CIDR (`<ip>/<prefix>`), preserving host bits.
+pub fn is_valid_wireguard_address(value: &str) -> bool {
+    let Some((ip, prefix)) = value.split_once('/') else {
+        return false;
+    };
+    if prefix.is_empty()
+        || !prefix.bytes().all(|byte| byte.is_ascii_digit())
+        || (prefix.len() > 1 && prefix.starts_with('0'))
+    {
+        return false;
+    }
+    let Ok(bits) = prefix.parse::<u8>() else {
+        return false;
+    };
+    match ip.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V4(_)) => bits <= 32,
+        Ok(std::net::IpAddr::V6(_)) => bits <= 128,
+        Err(_) => false,
+    }
+}
+
+fn is_valid_host(server: &str) -> bool {
+    let host = server.strip_suffix('.').unwrap_or(server);
+    server.parse::<std::net::IpAddr>().is_ok()
+        || (!host.is_empty()
+            && host.len() <= 253
+            && host.split('.').all(|label| {
+                !label.is_empty()
+                    && label.len() <= 63
+                    && !label.starts_with('-')
+                    && !label.ends_with('-')
+                    && label
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+            }))
+}
+
 impl Node {
-    /// Validates external proxies at both the storage and engine boundaries.
+    /// Whether this node uses an Xray-only feature (a balancer or `finalmask`).
+    pub fn requires_xray(&self) -> bool {
+        matches!(self.outbound, Outbound::XrayBalancer(_)) || self.stream.finalmask.is_some()
+    }
+
+    /// Validates external proxies and strict native protocols at both storage and engine boundaries.
     pub fn validate_proxy(&self) -> Result<(), &'static str> {
-        let (Outbound::Http(credentials) | Outbound::Socks5(credentials)) = &self.outbound else {
-            return Ok(());
-        };
-        let valid_host = |server: &str| {
-            let host = server.strip_suffix('.').unwrap_or(server);
-            server.parse::<std::net::IpAddr>().is_ok()
-                || (!host.is_empty()
-                    && host.len() <= 253
-                    && host.split('.').all(|label| {
-                        !label.is_empty()
-                            && label.len() <= 63
-                            && !label.starts_with('-')
-                            && !label.ends_with('-')
-                            && label
-                                .bytes()
-                                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
-                    }))
-        };
-        if !valid_host(&self.server) || self.port == 0 {
-            return Err(
-                "proxy requires a valid DNS name or IP address and a port between 1 and 65535",
-            );
+        if let Some(finalmask) = &self.stream.finalmask {
+            if !xray_supports_member(&self.outbound) {
+                return Err("finalmask is only supported on Xray outbounds");
+            }
+            finalmask.validate()?;
         }
-        if self.stream.transport != Transport::Tcp {
-            return Err("proxy requires TCP transport");
-        }
-        match (&self.outbound, &self.stream.tls) {
-            (Outbound::Http(_), TlsMode::Tls(tls)) => {
-                if tls.allow_insecure || tls.sni.as_ref().is_some_and(|name| !valid_host(name)) {
+        match &self.outbound {
+            Outbound::Http(credentials) | Outbound::Socks5(credentials) => {
+                if !is_valid_host(&self.server) || self.port == 0 {
                     return Err(
-                        "HTTPS proxy requires certificate verification and a valid TLS server name",
+                        "proxy requires a valid DNS name or IP address and a port between 1 and 65535",
                     );
                 }
+                if self.stream.transport != Transport::Tcp {
+                    return Err("proxy requires TCP transport");
+                }
+                match (&self.outbound, &self.stream.tls) {
+                    (Outbound::Http(_), TlsMode::Tls(tls)) => {
+                        if tls.allow_insecure
+                            || tls.sni.as_ref().is_some_and(|name| !is_valid_host(name))
+                        {
+                            return Err(
+                                "HTTPS proxy requires certificate verification and a valid TLS server name",
+                            );
+                        }
+                    }
+                    (_, TlsMode::Plain) => {}
+                    _ => return Err("proxy TLS mode is not supported"),
+                }
+                if credentials
+                    .username
+                    .chars()
+                    .chain(credentials.password.chars())
+                    .any(char::is_control)
+                    || (credentials.username.is_empty() && !credentials.password.is_empty())
+                    || (matches!(self.outbound, Outbound::Http(_))
+                        && credentials.username.contains(':'))
+                    || (matches!(self.outbound, Outbound::Socks5(_))
+                        && (credentials.username.len() > 255
+                            || credentials.password.len() > 255
+                            || (!credentials.username.is_empty()
+                                && credentials.password.is_empty())))
+                {
+                    return Err("proxy credentials are invalid for the selected protocol");
+                }
+                Ok(())
             }
-            (_, TlsMode::Plain) => {}
-            _ => return Err("proxy TLS mode is not supported"),
+            Outbound::Tuic(params) => {
+                if !is_valid_host(&self.server) || self.port == 0 {
+                    return Err(
+                        "TUIC requires a valid DNS name or IP address and a port between 1 and 65535",
+                    );
+                }
+                if self.stream.transport != Transport::Tcp {
+                    return Err("TUIC uses its built-in QUIC transport");
+                }
+                if !matches!(self.stream.tls, TlsMode::Tls(_)) {
+                    return Err("TUIC requires TLS");
+                }
+                if !is_valid_uuid(&params.uuid) || params.password.chars().any(char::is_control) {
+                    return Err("TUIC requires a valid UUID and valid password");
+                }
+                if params
+                    .heartbeat
+                    .as_deref()
+                    .is_some_and(|value| !is_valid_duration(value))
+                {
+                    return Err("TUIC heartbeat must be a positive duration");
+                }
+                Ok(())
+            }
+            Outbound::AnyTls(params) => {
+                if !is_valid_host(&self.server) || self.port == 0 {
+                    return Err(
+                        "AnyTLS requires a valid DNS name or IP address and a port between 1 and 65535",
+                    );
+                }
+                if self.stream.transport != Transport::Tcp {
+                    return Err("AnyTLS requires TCP transport");
+                }
+                match &self.stream.tls {
+                    TlsMode::Tls(_) => {}
+                    TlsMode::Reality(reality) if !reality.public_key.is_empty() => {}
+                    _ => return Err("AnyTLS requires TLS or REALITY"),
+                }
+                if params.password.is_empty() || params.password.chars().any(char::is_control) {
+                    return Err("AnyTLS requires a non-empty password");
+                }
+                if params
+                    .idle_session_check_interval
+                    .as_deref()
+                    .is_some_and(|value| !is_valid_duration(value))
+                    || params
+                        .idle_session_timeout
+                        .as_deref()
+                        .is_some_and(|value| !is_valid_duration(value))
+                    || params
+                        .min_idle_session
+                        .is_some_and(|value| i32::try_from(value).is_err())
+                {
+                    return Err("AnyTLS idle session settings are invalid");
+                }
+                Ok(())
+            }
+            Outbound::WireGuard(params) => {
+                if !is_valid_host(&self.server) || self.port == 0 {
+                    return Err(
+                        "WireGuard requires a valid DNS name or IP address and a port between 1 and 65535",
+                    );
+                }
+                if self.stream.transport != Transport::Tcp
+                    || !matches!(self.stream.tls, TlsMode::Plain)
+                {
+                    return Err("WireGuard uses its built-in encrypted UDP transport");
+                }
+                if !is_valid_wireguard_key(&params.private_key)
+                    || !is_valid_wireguard_key(&params.public_key)
+                    || params
+                        .pre_shared_key
+                        .as_deref()
+                        .is_some_and(|key| !is_valid_wireguard_key(key))
+                {
+                    return Err("WireGuard keys must be valid 32-byte Base64 values");
+                }
+                if params.address.is_empty()
+                    || params.address.len() > 8
+                    || !params
+                        .address
+                        .iter()
+                        .all(|address| is_valid_wireguard_address(address))
+                {
+                    return Err("WireGuard requires valid interface CIDR addresses");
+                }
+                if params
+                    .mtu
+                    .is_some_and(|mtu| !(WIREGUARD_MTU_MIN..=WIREGUARD_MTU_MAX).contains(&mtu))
+                {
+                    return Err("WireGuard MTU is out of range");
+                }
+                if params.persistent_keepalive == Some(0) {
+                    return Err("WireGuard persistent keepalive must be greater than zero");
+                }
+                Ok(())
+            }
+            Outbound::XrayBalancer(balancer) => balancer.validate(),
+            _ => Ok(()),
         }
-        if credentials
-            .username
-            .chars()
-            .chain(credentials.password.chars())
-            .any(char::is_control)
-            || (credentials.username.is_empty() && !credentials.password.is_empty())
-            || (matches!(self.outbound, Outbound::Http(_)) && credentials.username.contains(':'))
-            || (matches!(self.outbound, Outbound::Socks5(_))
-                && (credentials.username.len() > 255
-                    || credentials.password.len() > 255
-                    || (!credentials.username.is_empty() && credentials.password.is_empty())))
-        {
-            return Err("proxy credentials are invalid for the selected protocol");
-        }
-        Ok(())
     }
 }
 
@@ -299,12 +535,155 @@ impl fmt::Debug for Hysteria2Params {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TuicCongestionControl {
+    #[default]
+    Cubic,
+    NewReno,
+    Bbr,
+}
+
+impl TuicCongestionControl {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "cubic" => Some(Self::Cubic),
+            "new_reno" => Some(Self::NewReno),
+            "bbr" => Some(Self::Bbr),
+            _ => None,
+        }
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Cubic => "cubic",
+            Self::NewReno => "new_reno",
+            Self::Bbr => "bbr",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TuicUdpRelayMode {
+    #[default]
+    Native,
+    Quic,
+}
+
+impl TuicUdpRelayMode {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "native" => Some(Self::Native),
+            "quic" => Some(Self::Quic),
+            _ => None,
+        }
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Native => "native",
+            Self::Quic => "quic",
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TuicParams {
+    pub uuid: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub password: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub congestion_control: Option<TuicCongestionControl>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub udp_relay_mode: Option<TuicUdpRelayMode>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub zero_rtt_handshake: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub heartbeat: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub disable_sni: bool,
+}
+
+impl fmt::Debug for TuicParams {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TuicParams")
+            .field("uuid", &"[redacted]")
+            .field(
+                "password",
+                &(!self.password.is_empty()).then_some("[redacted]"),
+            )
+            .field("congestion_control", &self.congestion_control)
+            .field("udp_relay_mode", &self.udp_relay_mode)
+            .field("zero_rtt_handshake", &self.zero_rtt_handshake)
+            .field("heartbeat", &self.heartbeat)
+            .field("disable_sni", &self.disable_sni)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AnyTlsParams {
+    pub password: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idle_session_check_interval: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idle_session_timeout: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_idle_session: Option<u32>,
+}
+
+impl fmt::Debug for AnyTlsParams {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AnyTlsParams")
+            .field("password", &"[redacted]")
+            .field(
+                "idle_session_check_interval",
+                &self.idle_session_check_interval,
+            )
+            .field("idle_session_timeout", &self.idle_session_timeout)
+            .field("min_idle_session", &self.min_idle_session)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WireGuardParams {
+    pub private_key: String,
+    pub public_key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pre_shared_key: Option<String>,
+    pub address: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reserved: Option<[u8; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mtu: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub persistent_keepalive: Option<u16>,
+}
+
+impl fmt::Debug for WireGuardParams {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("WireGuardParams")
+            .field("private_key", &"[redacted]")
+            .field("public_key", &"[redacted]")
+            .field("has_pre_shared_key", &self.pre_shared_key.is_some())
+            .field("address_count", &self.address.len())
+            .field("has_reserved", &self.reserved.is_some())
+            .field("mtu", &self.mtu)
+            .field("persistent_keepalive", &self.persistent_keepalive)
+            .finish()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct StreamSettings {
     #[serde(default)]
     pub transport: Transport,
     #[serde(default)]
     pub tls: TlsMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finalmask: Option<FinalMask>,
 }
 
 #[derive(Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -489,6 +868,8 @@ pub struct TlsParams {
     pub allow_insecure: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fingerprint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enable_session_resumption: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -500,6 +881,431 @@ pub struct RealityParams {
     pub short_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fingerprint: Option<String>,
+}
+
+pub const MAX_BALANCER_MEMBERS: usize = 16;
+pub const MAX_FINALMASK_LAYERS: usize = 8;
+pub const MAX_FINALMASK_STEPS: usize = 16;
+pub const MAX_FINALMASK_ITEMS: usize = 16;
+pub const MAX_FINALMASK_PAYLOAD: usize = 4096;
+
+/// Xray `streamSettings.finalmask` options carried from a subscription.
+/// Subscriptions are parsed into this typed model and checked against its limits;
+/// nothing from a subscription reaches Xray as raw JSON.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct FinalMask {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tcp: Vec<TcpFinalMask>,
+}
+
+impl FinalMask {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.tcp.is_empty() || self.tcp.len() > MAX_FINALMASK_LAYERS {
+            return Err("finalmask requires between 1 and 8 TCP layers");
+        }
+        for mask in &self.tcp {
+            match mask {
+                TcpFinalMask::HeaderCustom(custom) => custom.validate()?,
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "kebab-case")]
+pub enum TcpFinalMask {
+    HeaderCustom(HeaderCustomTcp),
+}
+
+#[derive(Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct HeaderCustomTcp {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub clients: Vec<Vec<HeaderCustomItem>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub servers: Vec<Vec<HeaderCustomItem>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub errors: Vec<Vec<HeaderCustomItem>>,
+}
+
+impl HeaderCustomTcp {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.clients.is_empty() && self.servers.is_empty() && self.errors.is_empty() {
+            return Err("header-custom finalmask must define at least one packet sequence");
+        }
+        for sequence in [&self.clients, &self.servers, &self.errors] {
+            if sequence.len() > MAX_FINALMASK_STEPS {
+                return Err("header-custom finalmask has too many steps");
+            }
+            for step in sequence {
+                if step.is_empty() || step.len() > MAX_FINALMASK_ITEMS {
+                    return Err("header-custom finalmask step has invalid item count");
+                }
+                for item in step {
+                    item.validate()?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+impl fmt::Debug for HeaderCustomTcp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HeaderCustomTcp")
+            .field("clients_steps", &self.clients.len())
+            .field("servers_steps", &self.servers.len())
+            .field("errors_steps", &self.errors.len())
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct HeaderCustomItem {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delay: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rand: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rand_range: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub packet_type: Option<HeaderCustomPacketType>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub packet: Option<HeaderCustomPacket>,
+}
+
+impl HeaderCustomItem {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.rand.is_some() && self.packet.is_some() {
+            return Err("header-custom item cannot set both rand and packet");
+        }
+        if self.delay.is_some_and(|delay| delay > 60_000) {
+            return Err("header-custom delay is out of range");
+        }
+        if self
+            .rand
+            .is_some_and(|rand| rand > MAX_FINALMASK_PAYLOAD as u32)
+        {
+            return Err("header-custom rand length is out of range");
+        }
+        if let Some(range) = self.rand_range.as_deref()
+            && !is_valid_byte_range(range)
+        {
+            return Err("header-custom randRange must be a byte range 0-255");
+        }
+        match &self.packet {
+            Some(HeaderCustomPacket::Bytes(bytes)) if bytes.len() > MAX_FINALMASK_PAYLOAD => {
+                return Err("header-custom packet payload is too large");
+            }
+            Some(HeaderCustomPacket::Text(text)) if text.len() > MAX_FINALMASK_PAYLOAD => {
+                return Err("header-custom packet payload is too large");
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+}
+
+impl fmt::Debug for HeaderCustomItem {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HeaderCustomItem")
+            .field("delay", &self.delay)
+            .field("rand", &self.rand)
+            .field("rand_range", &self.rand_range)
+            .field("packet_type", &self.packet_type)
+            .field("has_packet", &self.packet.is_some())
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HeaderCustomPacketType {
+    Array,
+    Str,
+    Hex,
+    Base64,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum HeaderCustomPacket {
+    Bytes(Vec<u8>),
+    Text(String),
+}
+
+impl fmt::Debug for HeaderCustomPacket {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("HeaderCustomPacket([redacted])")
+    }
+}
+
+fn is_valid_byte_range(value: &str) -> bool {
+    let Some((start, end)) = value.split_once('-') else {
+        return false;
+    };
+    let (Ok(start), Ok(end)) = (start.parse::<u8>(), end.parse::<u8>()) else {
+        return false;
+    };
+    start <= end
+}
+
+fn is_valid_balancer_tag(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && value
+            .bytes()
+            .all(|byte| !byte.is_ascii_control() && !byte.is_ascii_whitespace() && byte.is_ascii())
+}
+
+fn is_valid_probe_url(value: &str) -> bool {
+    let rest = value
+        .strip_prefix("https://")
+        .or_else(|| value.strip_prefix("http://"));
+    let Some(rest) = rest else {
+        return false;
+    };
+    !rest.is_empty()
+        && value.len() <= 512
+        && value
+            .bytes()
+            .all(|byte| !byte.is_ascii_control() && !byte.is_ascii_whitespace() && byte.is_ascii())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct XrayBalancer {
+    pub members: Vec<BalancerMember>,
+    pub selector: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback_tag: Option<String>,
+    #[serde(default)]
+    pub strategy: BalancerStrategy,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observatory: Option<XrayObservatory>,
+}
+
+impl XrayBalancer {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.members.is_empty() || self.members.len() > MAX_BALANCER_MEMBERS {
+            return Err("Xray balancer requires between 1 and 16 member outbounds");
+        }
+        let mut tags = std::collections::HashSet::with_capacity(self.members.len());
+        for member in &self.members {
+            if !is_valid_balancer_tag(&member.tag) || !tags.insert(member.tag.as_str()) {
+                return Err("Xray balancer member tags must be unique ASCII tokens");
+            }
+            if !is_valid_host(&member.server) || member.port == 0 {
+                return Err("Xray balancer member requires a valid host and port");
+            }
+            if !xray_supports_member(&member.outbound) {
+                return Err("Xray balancer member uses an unsupported outbound protocol");
+            }
+            if let Some(finalmask) = &member.stream.finalmask {
+                finalmask.validate()?;
+            }
+        }
+        if self.selector.is_empty() || self.selector.len() > MAX_BALANCER_MEMBERS {
+            return Err("Xray balancer requires at least one selector prefix");
+        }
+        for prefix in &self.selector {
+            if !is_valid_balancer_tag(prefix)
+                || !self.members.iter().any(|m| m.tag.starts_with(prefix))
+            {
+                return Err("Xray balancer selector must match at least one member");
+            }
+        }
+        if let Some(fallback) = self.fallback_tag.as_deref()
+            && !tags.contains(fallback)
+        {
+            return Err("Xray balancer fallbackTag must match a member tag");
+        }
+        if let BalancerStrategy::LeastLoad(settings) = &self.strategy {
+            settings.validate()?;
+        }
+        if let Some(observatory) = &self.observatory {
+            observatory.validate(&self.members)?;
+        }
+        Ok(())
+    }
+
+    /// Primary member for display/defaults: the first member matched by `selector`, or the first member.
+    pub fn primary_member(&self) -> Option<&BalancerMember> {
+        self.members
+            .iter()
+            .find(|member| {
+                self.selector
+                    .iter()
+                    .any(|prefix| member.tag.starts_with(prefix))
+            })
+            .or_else(|| self.members.first())
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BalancerMember {
+    pub tag: String,
+    pub server: String,
+    pub port: u16,
+    pub outbound: Outbound,
+    #[serde(default)]
+    pub stream: StreamSettings,
+}
+
+impl fmt::Debug for BalancerMember {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BalancerMember")
+            .field("tag", &self.tag)
+            .field("server", &"[redacted]")
+            .field("port", &self.port)
+            .field("outbound", &self.outbound)
+            .field("stream", &self.stream)
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum BalancerStrategy {
+    #[default]
+    Random,
+    RoundRobin,
+    LeastPing,
+    LeastLoad(LeastLoadSettings),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct LeastLoadSettings {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_rtt: Option<String>,
+    /// Tolerance in ten-thousandths (`0..=10_000`, where `5000` represents `0.5`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tolerance_bp: Option<u16>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub baselines: Vec<String>,
+}
+
+impl LeastLoadSettings {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self
+            .max_rtt
+            .as_deref()
+            .is_some_and(|value| !is_valid_duration(value))
+        {
+            return Err("Xray balancer maxRTT must be a positive duration");
+        }
+        if self.tolerance_bp.is_some_and(|bp| bp > 10_000) {
+            return Err("Xray balancer tolerance must be between 0 and 1");
+        }
+        if self.baselines.len() > MAX_BALANCER_MEMBERS
+            || self.baselines.iter().any(|value| !is_valid_duration(value))
+        {
+            return Err("Xray balancer baselines must be positive durations");
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum XrayObservatory {
+    Standard(StandardObservatory),
+    Burst(BurstObservatory),
+}
+
+impl XrayObservatory {
+    pub fn validate(&self, members: &[BalancerMember]) -> Result<(), &'static str> {
+        let selectors = match self {
+            Self::Standard(obs) => {
+                if obs
+                    .probe_url
+                    .as_deref()
+                    .is_some_and(|url| !is_valid_probe_url(url))
+                {
+                    return Err("Xray observatory probeUrl must be an HTTP(S) URL");
+                }
+                if obs
+                    .probe_interval
+                    .as_deref()
+                    .is_some_and(|value| !is_valid_duration(value))
+                {
+                    return Err("Xray observatory probeInterval must be a positive duration");
+                }
+                &obs.subject_selector
+            }
+            Self::Burst(obs) => {
+                if obs
+                    .destination
+                    .as_deref()
+                    .is_some_and(|url| !is_valid_probe_url(url))
+                {
+                    return Err("Xray burstObservatory destination must be an HTTP(S) URL");
+                }
+                if obs
+                    .interval
+                    .as_deref()
+                    .is_some_and(|value| !is_valid_duration(value))
+                {
+                    return Err("Xray burstObservatory interval must be a positive duration");
+                }
+                if obs
+                    .timeout
+                    .as_deref()
+                    .is_some_and(|value| !is_valid_duration(value))
+                {
+                    return Err("Xray burstObservatory timeout must be a positive duration");
+                }
+                if obs.sampling.is_some_and(|n| n == 0 || n > 64) {
+                    return Err("Xray burstObservatory sampling must be between 1 and 64");
+                }
+                if obs
+                    .http_method
+                    .as_deref()
+                    .is_some_and(|method| !matches!(method, "HEAD" | "GET"))
+                {
+                    return Err("Xray burstObservatory httpMethod must be HEAD or GET");
+                }
+                &obs.subject_selector
+            }
+        };
+        if selectors.is_empty() || selectors.len() > MAX_BALANCER_MEMBERS {
+            return Err("Xray observatory requires at least one subjectSelector");
+        }
+        for prefix in selectors {
+            if !is_valid_balancer_tag(prefix) || !members.iter().any(|m| m.tag.starts_with(prefix))
+            {
+                return Err("Xray observatory subjectSelector must match at least one member");
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct StandardObservatory {
+    pub subject_selector: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub probe_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub probe_interval: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub enable_concurrency: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct BurstObservatory {
+    pub subject_selector: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub destination: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interval: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sampling: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub http_method: Option<String>,
 }
 
 #[cfg(test)]
@@ -654,6 +1460,27 @@ mod tests {
                 false,
             ),
             (
+                Outbound::Tuic(TuicParams {
+                    uuid: "00000000-0000-4000-8000-000000000001".into(),
+                    password: "test".into(),
+                    congestion_control: None,
+                    udp_relay_mode: None,
+                    zero_rtt_handshake: false,
+                    heartbeat: None,
+                    disable_sni: false,
+                }),
+                false,
+            ),
+            (
+                Outbound::AnyTls(AnyTlsParams {
+                    password: "test".into(),
+                    idle_session_check_interval: None,
+                    idle_session_timeout: None,
+                    min_idle_session: None,
+                }),
+                false,
+            ),
+            (
                 Outbound::Unknown {
                     scheme: "example".into(),
                     params: BTreeMap::new(),
@@ -663,11 +1490,13 @@ mod tests {
         ];
         for (outbound, supported) in outbounds {
             node.outbound = outbound;
-            for tls in [TlsMode::Plain, reality.clone()] {
+            for tls in [
+                TlsMode::Plain,
+                TlsMode::Tls(TlsParams::default()),
+                reality.clone(),
+            ] {
                 node.stream.tls = tls;
-                let auto = supported
-                    && matches!(node.outbound, Outbound::Vless(_))
-                    && matches!(node.stream.tls, TlsMode::Reality(_));
+                let auto = matches!(node.outbound, Outbound::Vless(_));
                 assert_eq!(uses_xray(&node, &with_xray(XrayUse::Auto)), auto);
                 assert!(!uses_xray(&node, &with_xray(XrayUse::Off)));
                 assert_eq!(uses_xray(&node, &with_xray(XrayUse::Always)), supported);
@@ -699,6 +1528,7 @@ mod tests {
             stream: StreamSettings {
                 transport: Transport::Tcp,
                 tls,
+                finalmask: None,
             },
             raw: None,
         }
@@ -752,6 +1582,27 @@ mod tests {
                 }),
                 false,
             ),
+            (
+                Outbound::Tuic(TuicParams {
+                    uuid: "00000000-0000-4000-8000-000000000001".into(),
+                    password: "test".into(),
+                    congestion_control: None,
+                    udp_relay_mode: None,
+                    zero_rtt_handshake: false,
+                    heartbeat: None,
+                    disable_sni: false,
+                }),
+                false,
+            ),
+            (
+                Outbound::AnyTls(AnyTlsParams {
+                    password: "test".into(),
+                    idle_session_check_interval: None,
+                    idle_session_timeout: None,
+                    min_idle_session: None,
+                }),
+                false,
+            ),
             (Outbound::Http(ProxyCredentials::default()), false),
             (Outbound::Socks5(ProxyCredentials::default()), false),
         ]
@@ -790,14 +1641,19 @@ mod tests {
 
     #[test]
     fn the_hello_mode_leaves_a_node_without_tls_on_sing_box() {
-        let vless = every_outbound().remove(0).0;
-        let node = example_node(vless, TlsMode::Plain);
+        let vmess = every_outbound().remove(1).0;
+        let node = example_node(vmess, TlsMode::Plain);
         let hello = with_fragment(XrayUse::Auto, "tlshello");
         assert!(!uses_xray(&node, &hello));
         assert!(!fragments_tls(&node, &hello));
         let range = with_fragment(XrayUse::Auto, "1-3");
         assert!(uses_xray(&node, &range));
         assert!(fragments_tls(&node, &range));
+
+        let vless = every_outbound().remove(0).0;
+        let vless_plain = example_node(vless, TlsMode::Plain);
+        assert!(uses_xray(&vless_plain, &hello));
+        assert!(!fragments_tls(&vless_plain, &hello));
     }
 
     fn xhttp() -> Transport {
@@ -890,6 +1746,7 @@ mod tests {
             stream: StreamSettings {
                 transport: xhttp(),
                 tls: TlsMode::Plain,
+                finalmask: None,
             },
             raw: None,
         };
@@ -906,5 +1763,269 @@ mod tests {
         });
         assert!(!uses_xray(&node, &with_xray(XrayUse::Auto)));
         assert!(!uses_xray(&node, &with_xray(XrayUse::Always)));
+    }
+
+    #[test]
+    fn tuic_and_anytls_debug_redact_credentials_and_serde_omits_defaults() {
+        let tuic = Node {
+            id: NodeId::new("tuic"),
+            name: "TUIC".into(),
+            server: "example.com".into(),
+            port: 443,
+            outbound: Outbound::Tuic(TuicParams {
+                uuid: "00000000-0000-4000-8000-000000000042".into(),
+                password: "test-secret-tuic".into(),
+                congestion_control: None,
+                udp_relay_mode: None,
+                zero_rtt_handshake: false,
+                heartbeat: None,
+                disable_sni: false,
+            }),
+            stream: StreamSettings {
+                transport: Transport::Tcp,
+                tls: TlsMode::Tls(TlsParams::default()),
+                finalmask: None,
+            },
+            raw: Some(
+                "tuic://00000000-0000-4000-8000-000000000042:test-secret-tuic@example.com:443"
+                    .into(),
+            ),
+        };
+        let debug = format!("{tuic:?}");
+        assert!(!debug.contains("00000000-0000-4000-8000-000000000042"));
+        assert!(!debug.contains("test-secret-tuic"));
+        let json = serde_json::to_value(&tuic).unwrap();
+        assert_eq!(
+            json["outbound"]["tuic"]["uuid"],
+            "00000000-0000-4000-8000-000000000042"
+        );
+        assert_eq!(json["outbound"]["tuic"]["password"], "test-secret-tuic");
+        assert!(json["outbound"]["tuic"].get("congestion_control").is_none());
+        assert!(json["outbound"]["tuic"].get("udp_relay_mode").is_none());
+        assert!(json["outbound"]["tuic"].get("zero_rtt_handshake").is_none());
+        assert!(json["outbound"]["tuic"].get("heartbeat").is_none());
+        assert!(json["outbound"]["tuic"].get("disable_sni").is_none());
+
+        let anytls = Node {
+            id: NodeId::new("anytls"),
+            name: "AnyTLS".into(),
+            server: "example.com".into(),
+            port: 443,
+            outbound: Outbound::AnyTls(AnyTlsParams {
+                password: "test-secret-anytls".into(),
+                idle_session_check_interval: None,
+                idle_session_timeout: None,
+                min_idle_session: None,
+            }),
+            stream: StreamSettings {
+                transport: Transport::Tcp,
+                tls: TlsMode::Tls(TlsParams::default()),
+                finalmask: None,
+            },
+            raw: Some("anytls://test-secret-anytls@example.com:443".into()),
+        };
+        let debug = format!("{anytls:?}");
+        assert!(!debug.contains("test-secret-anytls"));
+        let json = serde_json::to_value(&anytls).unwrap();
+        assert_eq!(json["outbound"]["anytls"]["password"], "test-secret-anytls");
+        assert!(
+            json["outbound"]["anytls"]
+                .get("idle_session_check_interval")
+                .is_none()
+        );
+        assert!(
+            json["outbound"]["anytls"]
+                .get("idle_session_timeout")
+                .is_none()
+        );
+        assert!(json["outbound"]["anytls"].get("min_idle_session").is_none());
+    }
+
+    #[test]
+    fn tuic_and_anytls_validate_required_fields_and_durations() {
+        let mut tuic = example_node(
+            Outbound::Tuic(TuicParams {
+                uuid: "00000000-0000-4000-8000-000000000001".into(),
+                password: String::new(),
+                congestion_control: Some(TuicCongestionControl::Bbr),
+                udp_relay_mode: Some(TuicUdpRelayMode::Native),
+                zero_rtt_handshake: true,
+                heartbeat: Some("10s".into()),
+                disable_sni: false,
+            }),
+            TlsMode::Tls(TlsParams::default()),
+        );
+        assert!(tuic.validate_proxy().is_ok());
+
+        let mut bad = tuic.clone();
+        bad.stream.tls = TlsMode::Plain;
+        assert!(bad.validate_proxy().is_err());
+
+        let mut bad = tuic.clone();
+        bad.stream.tls = TlsMode::Reality(RealityParams {
+            sni: Some("example.com".into()),
+            public_key: "test-public-key".into(),
+            short_id: None,
+            fingerprint: None,
+        });
+        assert!(bad.validate_proxy().is_err());
+
+        let mut bad = tuic.clone();
+        bad.outbound = Outbound::Tuic(TuicParams {
+            uuid: "not-a-uuid".into(),
+            password: "test".into(),
+            congestion_control: None,
+            udp_relay_mode: None,
+            zero_rtt_handshake: false,
+            heartbeat: None,
+            disable_sni: false,
+        });
+        assert!(bad.validate_proxy().is_err());
+
+        tuic.outbound = Outbound::Tuic(TuicParams {
+            uuid: "00000000-0000-4000-8000-000000000001".into(),
+            password: "test".into(),
+            congestion_control: None,
+            udp_relay_mode: None,
+            zero_rtt_handshake: false,
+            heartbeat: Some("0s".into()),
+            disable_sni: false,
+        });
+        assert!(tuic.validate_proxy().is_err());
+
+        let anytls = example_node(
+            Outbound::AnyTls(AnyTlsParams {
+                password: "test-password".into(),
+                idle_session_check_interval: Some("30s".into()),
+                idle_session_timeout: Some("1m30s".into()),
+                min_idle_session: Some(2),
+            }),
+            TlsMode::Reality(RealityParams {
+                sni: Some("example.com".into()),
+                public_key: "test-public-key".into(),
+                short_id: Some("0123".into()),
+                fingerprint: Some("chrome".into()),
+            }),
+        );
+        assert!(anytls.validate_proxy().is_ok());
+
+        let mut bad = anytls.clone();
+        bad.stream.tls = TlsMode::Plain;
+        assert!(bad.validate_proxy().is_err());
+
+        let mut bad = anytls.clone();
+        bad.outbound = Outbound::AnyTls(AnyTlsParams {
+            password: String::new(),
+            idle_session_check_interval: None,
+            idle_session_timeout: None,
+            min_idle_session: None,
+        });
+        assert!(bad.validate_proxy().is_err());
+
+        let mut bad = anytls;
+        bad.outbound = Outbound::AnyTls(AnyTlsParams {
+            password: "test-password".into(),
+            idle_session_check_interval: Some("-5s".into()),
+            idle_session_timeout: None,
+            min_idle_session: None,
+        });
+        assert!(bad.validate_proxy().is_err());
+
+        assert!(is_valid_uuid("00000000-0000-4000-8000-000000000001"));
+        assert!(is_valid_uuid("00000000000040008000000000000001"));
+        assert!(!is_valid_uuid("00000000-0000-4000-8000-00000000000g"));
+        assert!(is_valid_duration("10s"));
+        assert!(is_valid_duration("500ms"));
+        assert!(is_valid_duration("1m30s"));
+        assert!(is_valid_duration("0.5s"));
+        assert!(!is_valid_duration("0s"));
+        assert!(!is_valid_duration("-10s"));
+        assert!(!is_valid_duration("10"));
+
+        let wg_key_a = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+        let wg_key_b = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=";
+        let wg_psk = "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=";
+        assert!(is_valid_wireguard_key(wg_key_a));
+        assert!(is_valid_wireguard_key(wg_key_b));
+        assert!(!is_valid_wireguard_key("too-short"));
+        // Trailing unused bits in char 42 ('B' = 1) must be rejected.
+        assert!(!is_valid_wireguard_key(
+            "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB="
+        ));
+        assert!(!is_valid_wireguard_key(
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        ));
+
+        assert!(is_valid_wireguard_address("10.0.0.2/32"));
+        assert!(is_valid_wireguard_address("172.16.0.2/24"));
+        assert!(is_valid_wireguard_address("fd00::2/128"));
+        assert!(!is_valid_wireguard_address("10.0.0.2"));
+        assert!(!is_valid_wireguard_address("10.0.0.2/33"));
+        assert!(!is_valid_wireguard_address("fd00::2/129"));
+        assert!(!is_valid_wireguard_address("10.0.0.2/08"));
+
+        let wg = example_node(
+            Outbound::WireGuard(WireGuardParams {
+                private_key: wg_key_a.into(),
+                public_key: wg_key_b.into(),
+                pre_shared_key: Some(wg_psk.into()),
+                address: vec!["10.0.0.2/32".into(), "fd00::2/128".into()],
+                reserved: Some([1, 2, 3]),
+                mtu: Some(1280),
+                persistent_keepalive: Some(25),
+            }),
+            TlsMode::Plain,
+        );
+        assert!(wg.validate_proxy().is_ok());
+        let debug = format!("{wg:?}");
+        for secret in [wg_key_a, wg_key_b, wg_psk] {
+            assert!(!debug.contains(secret), "debug leaked {secret}: {debug}");
+        }
+        let encoded = serde_json::to_value(&wg).unwrap();
+        assert_eq!(encoded["outbound"]["wireguard"]["mtu"], 1280);
+        assert_eq!(
+            encoded["outbound"]["wireguard"]["reserved"],
+            serde_json::json!([1, 2, 3])
+        );
+
+        let mut bad = wg.clone();
+        bad.stream.tls = TlsMode::Tls(TlsParams::default());
+        assert!(bad.validate_proxy().is_err());
+
+        let mut bad = wg.clone();
+        bad.outbound = Outbound::WireGuard(WireGuardParams {
+            private_key: wg_key_a.into(),
+            public_key: wg_key_b.into(),
+            pre_shared_key: None,
+            address: Vec::new(),
+            reserved: None,
+            mtu: None,
+            persistent_keepalive: None,
+        });
+        assert!(bad.validate_proxy().is_err());
+
+        let mut bad = wg.clone();
+        bad.outbound = Outbound::WireGuard(WireGuardParams {
+            private_key: wg_key_a.into(),
+            public_key: wg_key_b.into(),
+            pre_shared_key: None,
+            address: vec!["10.0.0.2/32".into()],
+            reserved: None,
+            mtu: Some(500),
+            persistent_keepalive: None,
+        });
+        assert!(bad.validate_proxy().is_err());
+
+        let mut bad = wg;
+        bad.outbound = Outbound::WireGuard(WireGuardParams {
+            private_key: wg_key_a.into(),
+            public_key: wg_key_b.into(),
+            pre_shared_key: None,
+            address: vec!["10.0.0.2/32".into()],
+            reserved: None,
+            mtu: None,
+            persistent_keepalive: Some(0),
+        });
+        assert!(bad.validate_proxy().is_err());
     }
 }

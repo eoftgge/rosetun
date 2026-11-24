@@ -3,8 +3,8 @@ use std::net::IpAddr;
 use std::path::PathBuf;
 
 use rosetun_config::{
-    AppConfig, DnsSettings, DomainMatch, ExitId, ListCategoryError, ProcessMatch, Rule, RuleId,
-    RuleMatcher, RuleSet, RuleSetId, RuleTarget,
+    AppConfig, DnsSettings, DomainMatch, ExitId, ListCategoryError, MAX_GROUP_ITEMS, ProcessMatch,
+    RULE_GROUP_NAME_LIMIT, Rule, RuleId, RuleMatcher, RuleSet, RuleSetId, RuleTarget,
 };
 pub use rosetun_config::{IpCidrError, RuleInputError, parse_domain_input, parse_ip_cidr};
 
@@ -25,6 +25,8 @@ pub enum RuleSetError {
     EmptyName,
     #[error("this rule is already in the set")]
     DuplicateRule,
+    #[error("rule group must have a valid name and at least one rule")]
+    InvalidGroup,
     #[error("the selected list does not exist")]
     ListNotFound,
     #[error(transparent)]
@@ -262,8 +264,13 @@ pub fn restore_rule_sets(
 
 fn settle_restored_rules(config: &AppConfig, set: &mut RuleSet) -> usize {
     let before = set.rules.len();
-    set.rules
-        .retain(|rule| validate_list_matcher(config, &rule.matcher).is_ok());
+    set.rules.retain_mut(|rule| match &mut rule.matcher {
+        RuleMatcher::Group { items, .. } => {
+            items.retain(|item| validate_list_matcher(config, item).is_ok());
+            !items.is_empty()
+        }
+        matcher => validate_list_matcher(config, matcher).is_ok(),
+    });
     for rule in &mut set.rules {
         if let Some(exit) = &rule.exit
             && !config.exits.iter().any(|item| &item.id == exit)
@@ -368,15 +375,66 @@ pub fn validate_list_matcher(
     config: &AppConfig,
     matcher: &RuleMatcher,
 ) -> Result<(), RuleSetError> {
-    if let RuleMatcher::List { list, category } = matcher {
-        let entry = config
-            .lists
-            .iter()
-            .find(|entry| &entry.id == list)
-            .ok_or(RuleSetError::ListNotFound)?;
-        entry.validate_category(category.as_deref())?;
+    match matcher {
+        RuleMatcher::List { list, category } => {
+            let entry = config
+                .lists
+                .iter()
+                .find(|entry| &entry.id == list)
+                .ok_or(RuleSetError::ListNotFound)?;
+            entry.validate_category(category.as_deref())?;
+        }
+        RuleMatcher::Group { items, .. } => {
+            for item in items {
+                validate_list_matcher(config, item)?;
+            }
+        }
+        _ => {}
     }
     Ok(())
+}
+
+fn validate_group_name(name: &str) -> Result<String, RuleSetError> {
+    let name = name.trim();
+    if name.is_empty()
+        || name.chars().count() > RULE_GROUP_NAME_LIMIT
+        || name.chars().any(char::is_control)
+    {
+        return Err(RuleSetError::InvalidGroup);
+    }
+    Ok(name.to_owned())
+}
+
+fn prepare_matcher(config: &AppConfig, matcher: RuleMatcher) -> Result<RuleMatcher, RuleSetError> {
+    match matcher {
+        RuleMatcher::Group { name, items } => {
+            let name = validate_group_name(&name)?;
+            let mut normalized = Vec::with_capacity(items.len());
+            for item in items {
+                if matches!(item, RuleMatcher::Group { .. }) {
+                    return Err(RuleSetError::InvalidGroup);
+                }
+                validate_list_matcher(config, &item)?;
+                if !normalized
+                    .iter()
+                    .any(|existing| same_matcher(existing, &item, cfg!(windows)))
+                {
+                    normalized.push(item);
+                }
+            }
+            if normalized.is_empty() || normalized.len() > MAX_GROUP_ITEMS {
+                return Err(RuleSetError::InvalidGroup);
+            }
+            Ok(RuleMatcher::Group {
+                name,
+                items: normalized,
+            })
+        }
+        other => {
+            validate_list_matcher(config, &other)?;
+            Ok(other)
+        }
+    }
 }
 
 fn same_matcher(a: &RuleMatcher, b: &RuleMatcher, names_ignore_case: bool) -> bool {
@@ -385,6 +443,23 @@ fn same_matcher(a: &RuleMatcher, b: &RuleMatcher, names_ignore_case: bool) -> bo
             RuleMatcher::Process(ProcessMatch::Name(a)),
             RuleMatcher::Process(ProcessMatch::Name(b)),
         ) if names_ignore_case => a.to_lowercase() == b.to_lowercase(),
+        (
+            RuleMatcher::Group {
+                name: a_name,
+                items: a_items,
+            },
+            RuleMatcher::Group {
+                name: b_name,
+                items: b_items,
+            },
+        ) => {
+            a_name == b_name
+                && a_items.len() == b_items.len()
+                && a_items
+                    .iter()
+                    .zip(b_items)
+                    .all(|(left, right)| same_matcher(left, right, names_ignore_case))
+        }
         _ => a == b,
     }
 }
@@ -396,7 +471,7 @@ pub fn add_rule(
     destination: &RuleDestination,
 ) -> Result<Rule, RuleSetError> {
     store.modify(|config| {
-        validate_list_matcher(config, &matcher)?;
+        let matcher = prepare_matcher(config, matcher)?;
         let (target, exit) = destination_in(config, destination)?;
         let set = rule_set_mut(config, set)?;
         if set
@@ -439,14 +514,15 @@ pub fn add_rules(
         });
     }
     store.modify(|config| {
-        for matcher in &matchers {
-            validate_list_matcher(config, matcher)?;
+        let mut prepared = Vec::with_capacity(matchers.len());
+        for matcher in matchers {
+            prepared.push(prepare_matcher(config, matcher)?);
         }
         let (target, exit) = destination_in(config, destination)?;
         let set = rule_set_mut(config, set)?;
         let mut added = Vec::new();
         let mut skipped = 0;
-        for matcher in matchers {
+        for matcher in prepared {
             if set
                 .rules
                 .iter()
@@ -531,7 +607,7 @@ pub fn update_rule(
     destination: &RuleDestination,
 ) -> Result<(), RuleSetError> {
     store.modify(|config| {
-        validate_list_matcher(config, &matcher)?;
+        let matcher = prepare_matcher(config, matcher)?;
         let rules = &rule_set_mut(config, set)?.rules;
         if !rules.iter().any(|item| &item.id == rule) {
             return Err(RuleSetError::RuleNotFound);
@@ -663,6 +739,256 @@ pub fn remove_rules(store: &Store, set: &RuleSetId, rules: &[RuleId]) -> Result<
         }
 
         set.rules.retain(|rule| !selected.contains(&rule.id));
+        Ok(())
+    })
+}
+
+/// Combines selected rules (flattening any existing groups among them) into a
+/// single group rule placed at the first selected rule's position.
+pub fn group_rules(
+    store: &Store,
+    set: &RuleSetId,
+    rules: &[RuleId],
+    name: &str,
+    destination: &RuleDestination,
+) -> Result<Rule, RuleSetError> {
+    if rules.is_empty() {
+        return Err(RuleSetError::InvalidGroup);
+    }
+    let name = validate_group_name(name)?;
+    let selected = rules.iter().cloned().collect::<BTreeSet<_>>();
+    store.modify(|config| {
+        let (target, exit) = destination_in(config, destination)?;
+        let set = rule_set_mut(config, set)?;
+        if !selected
+            .iter()
+            .all(|id| set.rules.iter().any(|rule| &rule.id == id))
+        {
+            return Err(RuleSetError::RuleNotFound);
+        }
+
+        let insert_at = set
+            .rules
+            .iter()
+            .position(|rule| selected.contains(&rule.id))
+            .ok_or(RuleSetError::RuleNotFound)?;
+
+        let mut items = Vec::new();
+        let mut any_enabled = false;
+        for rule in set.rules.iter().filter(|rule| selected.contains(&rule.id)) {
+            any_enabled |= rule.enabled;
+            match &rule.matcher {
+                RuleMatcher::Group {
+                    items: group_items, ..
+                } => {
+                    for item in group_items {
+                        if !items
+                            .iter()
+                            .any(|existing| same_matcher(existing, item, cfg!(windows)))
+                        {
+                            items.push(item.clone());
+                        }
+                    }
+                }
+                other => {
+                    if !items
+                        .iter()
+                        .any(|existing| same_matcher(existing, other, cfg!(windows)))
+                    {
+                        items.push(other.clone());
+                    }
+                }
+            }
+        }
+        if items.is_empty() || items.len() > MAX_GROUP_ITEMS {
+            return Err(RuleSetError::InvalidGroup);
+        }
+
+        let matcher = RuleMatcher::Group { name, items };
+        if set.rules.iter().any(|rule| {
+            !selected.contains(&rule.id) && same_matcher(&rule.matcher, &matcher, cfg!(windows))
+        }) {
+            return Err(RuleSetError::DuplicateRule);
+        }
+
+        set.rules.retain(|rule| !selected.contains(&rule.id));
+        let group = Rule {
+            id: RuleId::new(next_id(set.rules.iter().map(|rule| rule.id.as_str()))),
+            enabled: any_enabled,
+            matcher,
+            target,
+            exit,
+        };
+        let index = insert_at.min(set.rules.len());
+        set.rules.insert(index, group.clone());
+        Ok(group)
+    })
+}
+
+/// Moves selected rules (flattening any existing groups among them) into an
+/// existing group rule, keeping the target group's name, destination, enabled
+/// state, and position while skipping duplicate items.
+pub fn add_rules_to_group(
+    store: &Store,
+    set: &RuleSetId,
+    rules: &[RuleId],
+    target_group: &RuleId,
+) -> Result<Rule, RuleSetError> {
+    let selected = rules
+        .iter()
+        .filter(|id| *id != target_group)
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if selected.is_empty() {
+        return Err(RuleSetError::InvalidGroup);
+    }
+    store.modify(|config| {
+        let set = rule_set_mut(config, set)?;
+        let target_index = set
+            .rules
+            .iter()
+            .position(|rule| &rule.id == target_group)
+            .ok_or(RuleSetError::RuleNotFound)?;
+        let (name, mut items) = match &set.rules[target_index].matcher {
+            RuleMatcher::Group { name, items } => (name.clone(), items.clone()),
+            _ => return Err(RuleSetError::InvalidGroup),
+        };
+        if !selected
+            .iter()
+            .all(|id| set.rules.iter().any(|rule| &rule.id == id))
+        {
+            return Err(RuleSetError::RuleNotFound);
+        }
+
+        for rule in set.rules.iter().filter(|rule| selected.contains(&rule.id)) {
+            match &rule.matcher {
+                RuleMatcher::Group {
+                    items: group_items, ..
+                } => {
+                    for item in group_items {
+                        if !items
+                            .iter()
+                            .any(|existing| same_matcher(existing, item, cfg!(windows)))
+                        {
+                            items.push(item.clone());
+                        }
+                    }
+                }
+                other => {
+                    if !items
+                        .iter()
+                        .any(|existing| same_matcher(existing, other, cfg!(windows)))
+                    {
+                        items.push(other.clone());
+                    }
+                }
+            }
+        }
+        if items.is_empty() || items.len() > MAX_GROUP_ITEMS {
+            return Err(RuleSetError::InvalidGroup);
+        }
+
+        let matcher = RuleMatcher::Group { name, items };
+        if set.rules.iter().any(|rule| {
+            &rule.id != target_group
+                && !selected.contains(&rule.id)
+                && same_matcher(&rule.matcher, &matcher, cfg!(windows))
+        }) {
+            return Err(RuleSetError::DuplicateRule);
+        }
+
+        set.rules[target_index].matcher = matcher;
+        let updated = set.rules[target_index].clone();
+        set.rules.retain(|rule| !selected.contains(&rule.id));
+        Ok(updated)
+    })
+}
+
+/// Replaces a group rule in place with individual rules inheriting its enabled
+/// state and destination, skipping items already present in the set.
+pub fn ungroup_rule(
+    store: &Store,
+    set: &RuleSetId,
+    rule: &RuleId,
+) -> Result<Vec<Rule>, RuleSetError> {
+    store.modify(|config| {
+        let set = rule_set_mut(config, set)?;
+        let index = set
+            .rules
+            .iter()
+            .position(|item| &item.id == rule)
+            .ok_or(RuleSetError::RuleNotFound)?;
+        let RuleMatcher::Group { .. } = &set.rules[index].matcher else {
+            return Err(RuleSetError::InvalidGroup);
+        };
+        let removed = set.rules.remove(index);
+        let RuleMatcher::Group { items, .. } = removed.matcher else {
+            unreachable!();
+        };
+
+        let mut expanded = Vec::with_capacity(items.len());
+        for matcher in items {
+            if set
+                .rules
+                .iter()
+                .chain(expanded.iter())
+                .any(|existing: &Rule| same_matcher(&existing.matcher, &matcher, cfg!(windows)))
+            {
+                continue;
+            }
+            let id = next_id(
+                set.rules
+                    .iter()
+                    .chain(expanded.iter())
+                    .map(|existing| existing.id.as_str()),
+            );
+            expanded.push(Rule {
+                id: RuleId::new(id),
+                enabled: removed.enabled,
+                matcher,
+                target: removed.target,
+                exit: removed.exit.clone(),
+            });
+        }
+        set.rules.splice(index..index, expanded.iter().cloned());
+        Ok(expanded)
+    })
+}
+
+/// Removes one condition from a group rule. Refuses to empty the group.
+pub fn remove_group_item(
+    store: &Store,
+    set: &RuleSetId,
+    rule: &RuleId,
+    item_index: usize,
+) -> Result<(), RuleSetError> {
+    store.modify(|config| {
+        let set = rule_set_mut(config, set)?;
+        let index = set
+            .rules
+            .iter()
+            .position(|item| &item.id == rule)
+            .ok_or(RuleSetError::RuleNotFound)?;
+        let RuleMatcher::Group { name, items } = &set.rules[index].matcher else {
+            return Err(RuleSetError::InvalidGroup);
+        };
+        if item_index >= items.len() || items.len() <= 1 {
+            return Err(RuleSetError::InvalidGroup);
+        }
+        let mut updated_items = items.clone();
+        updated_items.remove(item_index);
+        let updated = RuleMatcher::Group {
+            name: name.clone(),
+            items: updated_items,
+        };
+        if set
+            .rules
+            .iter()
+            .any(|other| &other.id != rule && same_matcher(&other.matcher, &updated, cfg!(windows)))
+        {
+            return Err(RuleSetError::DuplicateRule);
+        }
+        set.rules[index].matcher = updated;
         Ok(())
     })
 }
@@ -832,7 +1158,7 @@ pub fn rule_value_text(matcher: &RuleMatcher) -> String {
             || format!("list:{list}"),
             |category| format!("list:{list}:{category}"),
         ),
-        RuleMatcher::Template(template) => format!("template:{}", template.key()),
+        RuleMatcher::Group { name, .. } => name.clone(),
     }
 }
 

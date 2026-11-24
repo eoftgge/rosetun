@@ -8,6 +8,7 @@ headline = 'Your traffic. Your rules.'
 lead = 'VPN client for Windows and Linux: subscriptions, rules, kill switch and Lockdown.'
 download_windows = 'Download for Windows'
 download_linux = 'Download for Linux'
+download_macos = 'macOS (Apple Silicon) · experimental build'
 all_releases = 'All releases'
 verify_download = 'Verify download'
 features_eyebrow = 'MADE FOR YOUR ROUTINE'
@@ -24,7 +25,7 @@ text = 'The kill switch blocks traffic when the tunnel drops and keeps the netwo
 
 [[extra.features]]
 title = 'Your rules'
-text = 'Send apps, websites and IP addresses through the VPN, connect directly or block them. Use GeoIP, GeoSite and your own lists. Undo a change with Ctrl+Z. Temporary rules last until you disconnect. Rules by app work on Windows and Linux. See the <a href="docs/rules/">Linux limitations</a>.'
+text = 'Send apps, websites, IP addresses and rule groups through the VPN, connect directly or block them. Use ready-made templates, GeoIP, GeoSite and your own lists. Undo a change with Ctrl+Z. Temporary rules last until you disconnect. Rules by app work on Windows and Linux. See the <a href="docs/rules/">Linux limitations</a>.'
 
 [[extra.features]]
 title = 'More than one exit'
@@ -36,7 +37,7 @@ text = 'Add a subscription with a link, a QR code or a rosetun:// button on your
 
 [[extra.features]]
 title = 'Connection choices'
-text = 'VLESS, VMess, Trojan, Shadowsocks and Hysteria2. sing-box and Xray engines, REALITY and XHTTP, TLS fragmentation. See the provider page for transports and limitations.'
+text = 'VLESS, VMess, Trojan, Shadowsocks, Hysteria2, TUIC v5, AnyTLS and WireGuard. sing-box and Xray engines, REALITY, XHTTP, balancers and finalmask, TLS fragmentation. See the provider page for transports and limitations.'
 
 [[extra.features]]
 title = 'Privacy without promises'
@@ -105,6 +106,6 @@ For public tagged releases, the workflow creates an installer provenance attesta
 gh attestation verify .\{{ r?.installer or "rosetun-VERSION-setup.exe" }} --repo eoftgge/rosetun
 ```
 
-<p>The Debian package is in SHA256SUMS.txt and has an attestation too: <a href="docs/install/#debian-13">Debian 13</a>.</p>
+<p>The Debian package and the experimental macOS package are in SHA256SUMS.txt and have attestations too: <a href="docs/install/#debian-13">Debian 13</a>, <a href="docs/install/#macos">macOS (Apple Silicon)</a>.</p>
 
 <p><a href="help/">Installation and first launch</a></p>

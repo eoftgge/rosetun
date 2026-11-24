@@ -82,7 +82,7 @@ pub(crate) fn exit_path_supported(
         temporary_rules: Vec::new(),
         lists: Vec::new(),
         settings: draft.settings,
-        rule_templates: Vec::new(),
+        rule_groups: Vec::new(),
     };
     request.validate_exit_chains().is_ok()
 }
@@ -114,6 +114,24 @@ pub(crate) fn exit_country(exit: &Exit) -> Option<&CountryCode> {
     match &exit.target {
         ExitTarget::Country(code) => Some(code),
         ExitTarget::Node { fallback, .. } => fallback.as_ref(),
+    }
+}
+
+/// The configured country, or the country of the configured server when it is known.
+pub(crate) fn exit_display_country(config: &AppConfig, exit: &Exit) -> Option<String> {
+    match &exit.target {
+        ExitTarget::Country(code) => Some(code.as_str().to_owned()),
+        ExitTarget::Node {
+            selection,
+            fallback,
+        } => config
+            .node_at(selection)
+            .and_then(|(_, node)| {
+                crate::display::leading_flag(&node.name)
+                    .0
+                    .or_else(|| node_country(&node.name).map(|code| code.as_str().to_owned()))
+            })
+            .or_else(|| fallback.as_ref().map(|code| code.as_str().to_owned())),
     }
 }
 

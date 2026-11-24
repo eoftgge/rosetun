@@ -1,13 +1,13 @@
 use rosetun_config::{
     AppConfig, DelayMode, ExitId, LiveConnection, LogLevel, Node, NodeId, Outbound,
-    ProtectionCapabilities, Rule, RuleId, RuleSet, RuleSetId, RuleTarget, RuleTemplate, Selection,
-    Settings, Status, StreamSettings, SubscriptionId, Traffic, resolve_exits,
+    ProtectionCapabilities, Rule, RuleId, RuleSet, RuleSetId, RuleTarget, Selection, Settings,
+    Status, StreamSettings, SubscriptionId, Traffic, resolve_exits,
 };
 use serde::{Deserialize, Serialize};
 use std::fmt::Formatter;
 use std::time::Duration;
 
-pub const PROTOCOL_VERSION: u32 = 24;
+pub const PROTOCOL_VERSION: u32 = 26;
 const LOCAL_PROXY_PORT_BUSY: &str = "another program holds the local proxy port ";
 const TUNNEL_ADDRESS_IN_USE: &str = "the tunnel address is still held by the previous session";
 
@@ -198,10 +198,10 @@ pub struct ConnectRequest {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub lists: Vec<ListRef>,
     pub settings: Settings,
-    /// The template each expanded rule id came from. The client's own record
+    /// The group each expanded rule id came from. The client's own record
     /// for explaining routes; the service never receives it.
     #[serde(skip)]
-    pub rule_templates: Vec<(RuleId, RuleTemplate)>,
+    pub rule_groups: Vec<(RuleId, String)>,
 }
 
 impl std::fmt::Debug for ConnectRequest {
@@ -264,10 +264,10 @@ impl ConnectRequest {
         };
         let (selection, node) = &chosen;
 
-        let (rule_set, rule_templates) = match &config.active_rule_set {
+        let (rule_set, rule_groups) = match &config.active_rule_set {
             Some(_) => config
                 .active_rules()
-                .map(RuleSet::expand_templates)
+                .map(RuleSet::expand_groups)
                 .ok_or(ConnectRequestError::RuleSetNotFound)?,
             None => (
                 RuleSet::new(RuleSetId::new("default"), "Default", RuleTarget::Proxy),
@@ -282,7 +282,7 @@ impl ConnectRequest {
             temporary_rules,
             lists: Vec::new(),
             settings: config.settings.clone(),
-            rule_templates,
+            rule_groups,
         };
         let resolved = resolve_exits(
             &config.exits,
@@ -838,7 +838,7 @@ mod tests {
             serde_json::to_string(&super::ErrorCode::AccessDenied).unwrap(),
             "\"access_denied\""
         );
-        assert_eq!(super::PROTOCOL_VERSION, 24);
+        assert_eq!(super::PROTOCOL_VERSION, 26);
         assert_eq!(
             serde_json::to_string(&super::Request::OpenNetwork).unwrap(),
             "\"open_network\""
@@ -1050,7 +1050,7 @@ mod tests {
             rules.push(Rule {
                 id: RuleId::new(format!("rule-{index}")),
                 enabled: true,
-                matcher: RuleMatcher::Template(RuleTemplate::Youtube),
+                matcher: RuleTemplate::Youtube.to_group("YouTube"),
                 target: RuleTarget::Exit,
                 exit: Some(id),
             });
@@ -1087,7 +1087,7 @@ mod tests {
         let rule = Rule {
             id: RuleId::new("chain"),
             enabled: true,
-            matcher: RuleMatcher::Template(RuleTemplate::Youtube),
+            matcher: RuleTemplate::Youtube.to_group("YouTube"),
             target: RuleTarget::Exit,
             exit: Some(child.clone()),
         };
@@ -1124,7 +1124,7 @@ mod tests {
         config.rule_sets[0].rules.push(Rule {
             id: RuleId::new("exit"),
             enabled: true,
-            matcher: RuleMatcher::Template(RuleTemplate::Youtube),
+            matcher: RuleTemplate::Youtube.to_group("YouTube"),
             target: RuleTarget::Exit,
             exit: Some(exit_id.clone()),
         });
@@ -1455,16 +1455,16 @@ mod tests {
     }
 
     #[test]
-    fn request_expands_templates_in_place_before_sending_to_helper() {
+    fn request_expands_groups_in_place_before_sending_to_helper() {
         let mut config = selected_config();
-        let template = Rule {
-            id: RuleId::new("template"),
+        let group = Rule {
+            id: RuleId::new("group"),
             enabled: false,
-            matcher: RuleMatcher::Template(RuleTemplate::Torrents),
+            matcher: RuleTemplate::Torrents.to_group("Torrents"),
             target: RuleTarget::Block,
             exit: None,
         };
-        config.rule_sets[0].rules.insert(0, template.clone());
+        config.rule_sets[0].rules.insert(0, group.clone());
         let request = ConnectRequest::from_config(&config).unwrap();
         let conditions = RuleTemplate::Torrents.matchers().len();
         assert_eq!(request.rule_set.rules.len(), conditions + 1);
@@ -1472,9 +1472,9 @@ mod tests {
             .iter()
             .zip(RuleTemplate::Torrents.matchers())
         {
-            assert_eq!(rule.id, template.id);
+            assert_eq!(rule.id, group.id);
             assert!(!rule.enabled);
-            assert_eq!(rule.target, template.target);
+            assert_eq!(rule.target, group.target);
             assert_eq!(rule.matcher, matcher);
         }
         assert_eq!(
@@ -1486,15 +1486,19 @@ mod tests {
                 .rule_set
                 .rules
                 .iter()
-                .all(|rule| !matches!(rule.matcher, RuleMatcher::Template(_)))
+                .all(|rule| !matches!(rule.matcher, RuleMatcher::Group { .. }))
         );
-        assert_eq!(config.rule_sets[0].rules[0], template);
+        assert_eq!(
+            request.rule_groups,
+            vec![(group.id.clone(), "Torrents".into())]
+        );
+        assert_eq!(config.rule_sets[0].rules[0], group);
     }
 
     #[test]
-    fn request_expands_enabled_templates_for_routing() {
+    fn request_expands_enabled_groups_for_routing() {
         let mut config = selected_config();
-        config.rule_sets[0].rules[0].matcher = RuleMatcher::Template(RuleTemplate::Youtube);
+        config.rule_sets[0].rules[0].matcher = RuleTemplate::Youtube.to_group("YouTube");
         config.rule_sets[0].rules[0].target = RuleTarget::Proxy;
         let request = ConnectRequest::from_config(&config).unwrap();
         assert_eq!(request.rule_set.rules.len(), 7);
@@ -1679,6 +1683,114 @@ mod tests {
             "0d5c1f2e",
         ] {
             assert!(!debug.contains(secret), "{secret} in {debug}");
+        }
+    }
+
+    #[test]
+    fn tuic_anytls_and_wireguard_are_allowed_as_two_hop_parent_and_refused_as_exit_b() {
+        use super::{ConnectRequestError, ExtraNode};
+        use rosetun_config::{
+            AnyTlsParams, ExitId, ProxyCredentials, TlsMode, TlsParams, Transport, TuicParams,
+            WireGuardParams,
+        };
+
+        let config = selected_config();
+        let base_request = super::ConnectRequest::from_config(&config).unwrap();
+        let selection = config.active.clone().unwrap();
+
+        let make_node = |id: &str, outbound: Outbound, tls: TlsMode| Node {
+            id: NodeId::new(id),
+            name: id.to_owned(),
+            server: "192.0.2.50".into(),
+            port: 443,
+            outbound,
+            stream: StreamSettings {
+                transport: Transport::Tcp,
+                tls,
+                finalmask: None,
+            },
+            raw: None,
+        };
+
+        let socks = make_node(
+            "socks",
+            Outbound::Socks5(ProxyCredentials::default()),
+            TlsMode::Plain,
+        );
+        let tuic = make_node(
+            "tuic",
+            Outbound::Tuic(TuicParams {
+                uuid: "00000000-0000-4000-8000-000000000001".into(),
+                password: "test-password".into(),
+                congestion_control: None,
+                udp_relay_mode: None,
+                zero_rtt_handshake: false,
+                heartbeat: None,
+                disable_sni: false,
+            }),
+            TlsMode::Tls(TlsParams::default()),
+        );
+        let anytls = make_node(
+            "anytls",
+            Outbound::AnyTls(AnyTlsParams {
+                password: "test-password".into(),
+                idle_session_check_interval: None,
+                idle_session_timeout: None,
+                min_idle_session: None,
+            }),
+            TlsMode::Tls(TlsParams::default()),
+        );
+        let wireguard = make_node(
+            "wireguard",
+            Outbound::WireGuard(WireGuardParams {
+                private_key: "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=".into(),
+                public_key: "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=".into(),
+                pre_shared_key: None,
+                address: vec!["10.0.0.2/32".into()],
+                reserved: None,
+                mtu: None,
+                persistent_keepalive: None,
+            }),
+            TlsMode::Plain,
+        );
+
+        for parent in [&tuic, &anytls, &wireguard] {
+            let mut request = base_request.clone();
+            request.extra_nodes = vec![
+                ExtraNode {
+                    via: None,
+                    exit: ExitId::new("a"),
+                    selection: selection.clone(),
+                    node: parent.clone(),
+                },
+                ExtraNode {
+                    via: Some(ExitId::new("a")),
+                    exit: ExitId::new("b"),
+                    selection: selection.clone(),
+                    node: socks.clone(),
+                },
+            ];
+            assert!(request.validate_exit_chains().is_ok());
+
+            let mut reversed = base_request.clone();
+            reversed.extra_nodes = vec![
+                ExtraNode {
+                    via: None,
+                    exit: ExitId::new("a"),
+                    selection: selection.clone(),
+                    node: socks.clone(),
+                },
+                ExtraNode {
+                    via: Some(ExitId::new("a")),
+                    exit: ExitId::new("b"),
+                    selection: selection.clone(),
+                    node: parent.clone(),
+                },
+            ];
+            assert!(matches!(
+                reversed.validate_exit_chains(),
+                Err(ConnectRequestError::UnsupportedExitChain)
+            ));
         }
     }
 }

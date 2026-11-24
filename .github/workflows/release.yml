@@ -18,7 +18,85 @@ env:
   INNO_SETUP_VERSION: '6.7.1'
 
 jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    permissions:
+      # Seeing existing draft releases via `gh release list` requires contents: write.
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Test release scripts
+        run: python3 -m unittest discover -s tools/release -p "test_*.py"
+      - name: Check tag and release availability
+        if: github.event_name == 'push'
+        env:
+          TAG: ${{ github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
+        run: python3 tools/release/assemble.py check-tag --tag "$TAG" --sha "$GITHUB_SHA"
+
+  windows:
+    needs: validate
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        shell: bash
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --component clippy,rustfmt
+          rustup default "$RUST_TOOLCHAIN"
+      - name: Run tests
+        shell: bash
+        run: cargo test --workspace --locked
+      - name: Install Inno Setup if needed
+        shell: bash
+        run: |
+          find_iscc() {
+            for candidate in \
+              '/c/Program Files (x86)/Inno Setup 6/ISCC.exe' \
+              '/c/Program Files/Inno Setup 6/ISCC.exe'; do
+              if [ -f "$candidate" ]; then
+                printf '%s\n' "$candidate"
+                return 0
+              fi
+            done
+            return 1
+          }
+          if ! iscc=$(find_iscc); then
+            choco install innosetup --version "$INNO_SETUP_VERSION" -y --no-progress
+            iscc=$(find_iscc)
+          fi
+          printf 'ISCC=%s\n' "$(cygpath -w "$iscc")" >>"$GITHUB_ENV"
+      # No actions/cache here: a release must not start from a tool binary
+      # that another run wrote. build.ps1 -Release installs cargo-about.
+      - name: Install cargo-deny
+        # Keep this version in sync with the deny job in ci.yml.
+        shell: bash
+        run: cargo install cargo-deny --locked --version 0.20.2
+      - name: Check dependencies
+        # Advisories published since the last CI run stop the release too.
+        shell: bash
+        run: cargo deny --locked check --warn unmaintained
+      - name: Build release assets
+        run: ./installer/build.ps1 -Release
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: rosetun-windows
+          path: |
+            target/installer/rosetun-*-setup.exe
+            target/installer/sing-box-*-source.tar.gz
+            target/installer/xray-*-source.tar.gz
+            target/installer/SHA256SUMS.txt
+            target/installer/release-notes.md
+          if-no-files-found: error
+          retention-days: 1
+
   deb:
+    needs: validate
     runs-on: ubuntu-24.04
     # Build and resolve dependencies on glibc 2.36, also usable on newer systems.
     container: debian:12-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc
@@ -36,7 +114,7 @@ jobs:
         with:
           persist-credentials: false
       # build-deb.sh refuses root, and a clean environment keeps it from writing
-      # to the runner's files. No actions/cache, as in the release job below.
+      # to the runner's files. No actions/cache, as in the other release jobs.
       - name: Test and build the package
         run: |
           chown -R builder:builder "$GITHUB_WORKSPACE"
@@ -106,9 +184,101 @@ jobs:
           chown -R builder:builder "$GITHUB_WORKSPACE"
           runuser -u builder -- bash tools/arch/check-package.sh target/deb/rosetun-*-linux-amd64.tar.gz
 
+  macos:
+    needs: validate
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify Apple Silicon runner
+        run: |
+          arch=$(uname -m)
+          if [ "$arch" != "arm64" ]; then
+            echo "Expected arm64 runner, got $arch" >&2
+            exit 1
+          fi
+      # No actions/cache here: a release build must not start from cached build tools.
+      - name: Install Rust
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --component rustfmt
+          rustup default "$RUST_TOOLCHAIN"
+          rustc -vV
+      - name: Validate and test on macOS
+        run: |
+          cargo fmt --all --check
+          plutil -lint packaging/macos/io.github.eoftgge.rosetun.helper.plist
+          sed -e 's/@SHORT_VERSION@/0.7.0/g' -e 's/@BUNDLE_VERSION@/0.7.0-beta.1/g' \
+            packaging/macos/Info.plist.in | plutil -lint -
+          sed -e 's/@VERSION@/0.7.0-beta.1/g' \
+            packaging/macos/distribution.xml.in | xmllint --noout -
+          bash -n installer/macos/build-pkg.sh packaging/macos/uninstall.sh \
+            packaging/macos/scripts/preinstall packaging/macos/scripts/postinstall
+          if command -v shellcheck >/dev/null 2>&1; then
+            shellcheck installer/macos/build-pkg.sh packaging/macos/uninstall.sh \
+              packaging/macos/scripts/preinstall packaging/macos/scripts/postinstall
+          fi
+          cargo test -q --workspace --locked --target aarch64-apple-darwin
+      - name: Build macOS package
+        id: build_macos
+        env:
+          MACOS_APP_CERT_P12: ${{ secrets.MACOS_APP_CERT_P12 }}
+          MACOS_APP_CERT_PASSWORD: ${{ secrets.MACOS_APP_CERT_PASSWORD }}
+          MACOS_INSTALLER_CERT_P12: ${{ secrets.MACOS_INSTALLER_CERT_P12 }}
+          MACOS_INSTALLER_CERT_PASSWORD: ${{ secrets.MACOS_INSTALLER_CERT_PASSWORD }}
+          APPLE_DEVELOPER_ID_APP: ${{ secrets.APPLE_DEVELOPER_ID_APP }}
+          APPLE_DEVELOPER_ID_INSTALLER: ${{ secrets.APPLE_DEVELOPER_ID_INSTALLER }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -n "$MACOS_APP_CERT_P12" ] && [ -n "$MACOS_INSTALLER_CERT_P12" ]; then
+            keychain="$RUNNER_TEMP/rosetun-build.keychain-db"
+            keychain_password=$(uuidgen)
+            security create-keychain -p "$keychain_password" "$keychain"
+            security set-keychain-settings -lut 21600 "$keychain"
+            security unlock-keychain -p "$keychain_password" "$keychain"
+            security list-keychains -d user -s "$keychain" login.keychain-db
+
+            app_p12="$RUNNER_TEMP/app-cert.p12"
+            installer_p12="$RUNNER_TEMP/installer-cert.p12"
+            printf '%s' "$MACOS_APP_CERT_P12" | base64 --decode >"$app_p12"
+            printf '%s' "$MACOS_INSTALLER_CERT_P12" | base64 --decode >"$installer_p12"
+            security import "$app_p12" -P "$MACOS_APP_CERT_PASSWORD" -A -t cert -f pkcs12 -k "$keychain"
+            security import "$installer_p12" -P "$MACOS_INSTALLER_CERT_PASSWORD" -A -t cert -f pkcs12 -k "$keychain"
+            security set-key-partition-list -S apple-tool:,apple:,codesign: -k "$keychain_password" "$keychain"
+            rm -f "$app_p12" "$installer_p12"
+
+            if [ -n "$APPLE_API_KEY_P8" ]; then
+              api_key_path="$RUNNER_TEMP/AuthKey.p8"
+              printf '%s' "$APPLE_API_KEY_P8" | base64 --decode >"$api_key_path"
+              chmod 0600 "$api_key_path"
+              export APPLE_API_KEY_PATH="$api_key_path"
+            fi
+            bash installer/macos/build-pkg.sh --release
+          else
+            bash installer/macos/build-pkg.sh --release --allow-unsigned
+          fi
+      - name: Clean up temporary signing credentials
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/rosetun-build.keychain-db" ]; then
+            security delete-keychain "$RUNNER_TEMP/rosetun-build.keychain-db" || true
+          fi
+          rm -f "$RUNNER_TEMP/app-cert.p12" "$RUNNER_TEMP/installer-cert.p12" "$RUNNER_TEMP/AuthKey.p8"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: rosetun-macos
+          path: target/macos/rosetun-*-macos-arm64-experimental.pkg
+          if-no-files-found: error
+          retention-days: 1
+
   release:
-    needs: [deb, linux-dependencies, arch]
-    runs-on: windows-2025
+    needs: [windows, deb, linux-dependencies, arch, macos]
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
       id-token: write
@@ -117,114 +287,21 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          fetch-depth: 0
-      - name: Check tag and release availability
-        if: github.event_name == 'push'
-        shell: pwsh
-        env:
-          TAG: ${{ github.ref_name }}
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          . ./installer/version.ps1
-          $releaseVersion = Get-RosetunVersion
-          if ($env:TAG -ne "v$($releaseVersion.Version)") {
-            throw "Tag $env:TAG does not match Cargo.toml version $($releaseVersion.Version)."
-          }
-          git merge-base --is-ancestor $env:GITHUB_SHA origin/master
-          $onMaster = $LASTEXITCODE -eq 0
-          git merge-base --is-ancestor $env:GITHUB_SHA origin/dev
-          $onDev = $LASTEXITCODE -eq 0
-          # git exits with 1 when the commit is not an ancestor; do not fail the step on it.
-          $global:LASTEXITCODE = 0
-          # master carries the current version and its betas. Alphas and betas of the
-          # next minor version are tagged on dev until that version reaches master.
-          $masterManifest = git show origin/master:Cargo.toml | Out-String
-          $global:LASTEXITCODE = 0
-          $masterVersion = [regex]::Match($masterManifest, '(?ms)^\[workspace\.package\].*?^version\s*=\s*"(?<v>\d+)\.(?<m>\d+)\.')
-          $tagVersion = [regex]::Match($releaseVersion.Version, '^(?<v>\d+)\.(?<m>\d+)\.\d+-(alpha|beta)\.')
-          $nextMinor = $masterVersion.Success -and $tagVersion.Success -and (
-            [int]$tagVersion.Groups['v'].Value -gt [int]$masterVersion.Groups['v'].Value -or (
-              [int]$tagVersion.Groups['v'].Value -eq [int]$masterVersion.Groups['v'].Value -and
-              [int]$tagVersion.Groups['m'].Value -gt [int]$masterVersion.Groups['m'].Value))
-          if (-not ($onMaster -or ($onDev -and $nextMinor))) {
-            throw "Tag $env:TAG must point to a commit on master, or on dev for an alpha or beta of the next version."
-          }
-          gh release view $env:TAG --json id 2>$null | Out-Null
-          $exists = $LASTEXITCODE -eq 0
-          # GitHub fails a pwsh step whose last native command exited non-zero.
-          $global:LASTEXITCODE = 0
-          if ($exists) { throw "Release $env:TAG already exists." }
-      - name: Install Rust
-        shell: pwsh
-        run: |
-          rustup toolchain install $env:RUST_TOOLCHAIN --profile minimal --component clippy,rustfmt
-          if ($LASTEXITCODE -ne 0) { throw 'Failed to install Rust toolchain.' }
-          rustup default $env:RUST_TOOLCHAIN
-          if ($LASTEXITCODE -ne 0) { throw 'Failed to select Rust toolchain.' }
-      - name: Run tests
-        run: cargo test --workspace --locked
-      - name: Install Inno Setup if needed
-        shell: pwsh
-        run: |
-          $locations = @(
-            "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
-            "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
-          )
-          $iscc = $locations | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
-          if (-not $iscc) {
-            choco install innosetup --version $env:INNO_SETUP_VERSION -y --no-progress
-            if ($LASTEXITCODE -ne 0) { throw 'Failed to install Inno Setup.' }
-            $iscc = $locations | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
-          }
-          if (-not $iscc) { throw 'ISCC.exe was not found after installing Inno Setup.' }
-          [IO.File]::AppendAllText($env:GITHUB_ENV, "ISCC=$iscc`n", [Text.UTF8Encoding]::new($false))
-      # No actions/cache here: a signed release must not start from a tool
-      # binary that another run wrote. build.ps1 -Release installs cargo-about.
-      - name: Install cargo-deny
-        # Keep this version in sync with the deny job in ci.yml.
-        run: cargo install cargo-deny --locked --version 0.20.2
-      - name: Check dependencies
-        # Advisories published since the last CI run stop the release too.
-        run: cargo deny --locked check --warn unmaintained
-      - name: Build release assets
-        id: build
-        run: ./installer/build.ps1 -Release
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: rosetun-windows
+          path: target/installer
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: rosetun-deb
           path: target/installer
-      - name: Add the Debian package
-        id: deb
-        shell: pwsh
-        run: |
-          $packages = @(Get-ChildItem -LiteralPath 'target/installer' -Filter 'rosetun_*_amd64.deb' -File)
-          if ($packages.Count -ne 1) { throw 'Expected exactly one Debian package.' }
-          # GitHub turns "~" in an asset's name into ".", which would part it from
-          # SHA256SUMS.txt. The package's own version keeps the "~" dpkg sorts by.
-          $name = $packages[0].Name.Replace('~', '-')
-          $package = Join-Path 'target/installer' $name
-          if ($name -cne $packages[0].Name) { Move-Item -LiteralPath $packages[0].FullName -Destination $package }
-          $hash = (Get-FileHash -LiteralPath $package -Algorithm SHA256).Hash.ToLowerInvariant()
-          $utf8 = [Text.UTF8Encoding]::new($false)
-          [IO.File]::AppendAllText('target/installer/SHA256SUMS.txt', "$hash  $name`n", $utf8)
-          $notes = [IO.File]::ReadAllText('target/installer/release-notes.md', $utf8)
-          $notes = $notes.Replace('{{deb}}', $name).Replace('{{deb_sha256}}', $hash)
-          [IO.File]::WriteAllText('target/installer/release-notes.md', $notes, $utf8)
-          [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "package=$package`n", $utf8)
-      - name: Add the Linux archive
-        id: archive
-        shell: pwsh
-        run: |
-          $archives = @(Get-ChildItem -LiteralPath 'target/installer' -Filter 'rosetun-*-linux-amd64.tar.gz' -File)
-          if ($archives.Count -ne 1) { throw 'Expected exactly one Linux archive.' }
-          $archive = $archives[0]
-          $hash = (Get-FileHash -LiteralPath $archive.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-          $utf8 = [Text.UTF8Encoding]::new($false)
-          [IO.File]::AppendAllText('target/installer/SHA256SUMS.txt', "$hash  $($archive.Name)`n", $utf8)
-          $notes = [IO.File]::ReadAllText('target/installer/release-notes.md', $utf8)
-          $notes = $notes.Replace('{{linux_archive}}', $archive.Name).Replace('{{linux_archive_sha256}}', $hash)
-          [IO.File]::WriteAllText('target/installer/release-notes.md', $notes, $utf8)
-          [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "archive=target/installer/$($archive.Name)`n", $utf8)
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: rosetun-macos
+          path: target/installer
+      - name: Assemble release checksums and notes
+        id: assemble
+        run: python3 tools/release/assemble.py assemble --dir target/installer
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         if: github.event_name == 'push' && github.event.repository.visibility == 'public'
         with:
@@ -232,48 +309,52 @@ jobs:
             target/installer/rosetun-*-setup.exe
             target/installer/rosetun_*_amd64.deb
             target/installer/rosetun-*-linux-amd64.tar.gz
+            target/installer/rosetun-*-macos-arm64-experimental.pkg
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: github.event_name == 'workflow_dispatch'
         with:
-          name: rosetun-${{ steps.build.outputs.version }}-preview
+          name: rosetun-${{ steps.assemble.outputs.version }}-preview
           path: |
-            ${{ steps.build.outputs.setup }}
-            ${{ steps.deb.outputs.package }}
-            ${{ steps.archive.outputs.archive }}
-            target/installer/SHA256SUMS.txt
-            target/installer/release-notes.md
+            ${{ steps.assemble.outputs.setup }}
+            ${{ steps.assemble.outputs.deb }}
+            ${{ steps.assemble.outputs.archive }}
+            ${{ steps.assemble.outputs.macos }}
+            ${{ steps.assemble.outputs.sums }}
+            ${{ steps.assemble.outputs.notes }}
           if-no-files-found: error
           retention-days: 7
-      - name: Publish release
+      - name: Create the draft release
         if: github.event_name == 'push'
-        shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
-          VERSION: ${{ steps.build.outputs.version }}
-          PRERELEASE: ${{ steps.build.outputs.prerelease }}
-          SETUP: ${{ steps.build.outputs.setup }}
-          DEB: ${{ steps.deb.outputs.package }}
-          ARCHIVE: ${{ steps.archive.outputs.archive }}
+          VERSION: ${{ steps.assemble.outputs.version }}
+          PRERELEASE: ${{ steps.assemble.outputs.prerelease }}
+          SETUP: ${{ steps.assemble.outputs.setup }}
+          DEB: ${{ steps.assemble.outputs.deb }}
+          ARCHIVE: ${{ steps.assemble.outputs.archive }}
+          MACOS: ${{ steps.assemble.outputs.macos }}
+          SING_BOX_SOURCE: ${{ steps.assemble.outputs.sing_box_source }}
+          XRAY_SOURCE: ${{ steps.assemble.outputs.xray_source }}
+          SUMS: ${{ steps.assemble.outputs.sums }}
+          NOTES: ${{ steps.assemble.outputs.notes }}
         run: |
-          $sources = @(Get-ChildItem -LiteralPath 'target/installer' -Filter 'sing-box-*-source.tar.gz' -File)
-          if ($sources.Count -ne 1) { throw 'Expected exactly one sing-box source archive.' }
-          $xraySources = @(Get-ChildItem -LiteralPath 'target/installer' -Filter 'xray-*-source.tar.gz' -File)
-          if ($xraySources.Count -ne 1) { throw 'Expected exactly one Xray source archive.' }
-          $releaseArgs = @(
-            $env:TAG
-            $env:SETUP
-            $env:DEB
-            $env:ARCHIVE
-            $sources[0].FullName
-            $xraySources[0].FullName
-            'target/installer/SHA256SUMS.txt'
-            '--title'
-            "Rosetun $env:VERSION"
-            '--notes-file'
-            'target/installer/release-notes.md'
-            '--verify-tag'
+          args=(
+            "$TAG"
+            "$SETUP"
+            "$DEB"
+            "$ARCHIVE"
+            "$MACOS"
+            "$SING_BOX_SOURCE"
+            "$XRAY_SOURCE"
+            "$SUMS"
+            --title "Rosetun $VERSION"
+            --notes-file "$NOTES"
+            --verify-tag
+            # The owner signs SHA256SUMS.txt locally, then publishes the draft.
+            --draft
           )
-          if ($env:PRERELEASE -eq 'true') { $releaseArgs += '--prerelease' }
-          gh release create @releaseArgs
-          if ($LASTEXITCODE -ne 0) { throw 'Failed to publish the release.' }
+          if [ "$PRERELEASE" = "true" ]; then
+            args+=(--prerelease)
+          fi
+          gh release create "${args[@]}"

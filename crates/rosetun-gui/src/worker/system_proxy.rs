@@ -89,6 +89,7 @@ impl WorkerDispatcher {
 
     /// On the caller's thread: the GUI is about to exit, and a session ending
     /// may not leave it time for anything later.
+    #[cfg(any(windows, target_os = "linux"))]
     pub(crate) fn restore_system_proxy(&self) {
         self.desktop_proxy.apply(SystemProxyWish::Clear);
     }

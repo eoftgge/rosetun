@@ -718,7 +718,11 @@ fn a_failed_lockdown_command_names_the_way_out() {
         HelperCommandError::LockdownLaunch(std::io::Error::other("test")),
     ] {
         let message = errors::helper_command(crate::i18n::Language::English, &error);
-        assert!(message.contains("rosetun lockdown"), "{message}");
+        if cfg!(any(windows, target_os = "linux")) {
+            assert!(message.contains("rosetun lockdown"), "{message}");
+        } else {
+            assert_eq!(message, "Lockdown is unavailable on this system.");
+        }
     }
 }
 

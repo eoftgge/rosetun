@@ -150,16 +150,26 @@ fn rules_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>, heigh
                 }
             },
         );
-        rule_set_picker(ui, state, actions);
-        if !state.session.temporary_rules.is_empty() {
-            ui.label(
-                RichText::new(crate::i18n::temporary_count(
-                    state.session.temporary_rules.len(),
-                ))
-                .small()
-                .color(theme::palette().text_dim),
-            );
-        }
+        // Beside the set, not above its rules: the count is about the session, and a line of
+        // its own would make both cards taller when the first temporary rule appears.
+        let row_height = picker_height(ui);
+        egui::Sides::new().height(row_height).shrink_left().show(
+            ui,
+            |ui| rule_set_picker(ui, state, actions),
+            |ui| {
+                if state.session.temporary_rules.is_empty() {
+                    return;
+                }
+                ui.label(
+                    RichText::new(crate::i18n::temporary_count(
+                        state.session.temporary_rules.len(),
+                    ))
+                    .small()
+                    .color(theme::palette().text_dim),
+                )
+                .on_hover_text(tr!("temporary-hint"));
+            },
+        );
         if let Some(rules) = state.config.active_rules() {
             let mut enabled = rules.rules.iter().filter(|rule| rule.enabled);
             let mut shown = 0;
@@ -199,7 +209,7 @@ fn rules_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>, heigh
         if missing > 0 {
             ui.horizontal(|ui| {
                 ui.colored_label(
-                    theme::ERROR,
+                    theme::error(),
                     tr!("list-missing-summary", n = missing.to_string()),
                 );
                 if widgets::link(ui, &tr!("rules"), true).clicked() {
@@ -316,6 +326,11 @@ fn rule_row(ui: &mut egui::Ui, state: &State, rule: &Rule) -> (egui::Rect, egui:
     .inner
 }
 
+/// The rule set picker's row height; what sits beside it is centred on it.
+fn picker_height(ui: &egui::Ui) -> f32 {
+    ui.text_style_height(&egui::TextStyle::Body) + 8.0
+}
+
 fn rule_set_picker(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     let name = state.config.active_rules().map_or_else(
         || tr!("default-rules").to_owned(),
@@ -338,13 +353,8 @@ fn rule_set_picker(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
     } else {
         egui::Sense::hover()
     };
-    let (rect, response) = ui.allocate_exact_size(
-        egui::vec2(
-            text_width + 22.0,
-            ui.text_style_height(&egui::TextStyle::Body) + 8.0,
-        ),
-        sense,
-    );
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(text_width + 22.0, picker_height(ui)), sense);
     if ui.is_rect_visible(rect) {
         if enabled && response.hovered() {
             ui.painter().rect_filled(
@@ -803,6 +813,48 @@ mod tests {
                             panic!("{place}: two cards expected");
                         };
                         assert!((left.height() - right.height()).abs() < 0.5, "{place}");
+                    }
+                }
+            });
+        }
+    }
+
+    #[test]
+    fn temporary_rules_sit_beside_the_set_and_keep_the_cards_still() {
+        for language in [Language::English, Language::Russian] {
+            i18n::in_language(language, || {
+                for column in [944.0, TWO_COLUMN_WIDTH] {
+                    let place = format!("{language:?}, column {column}");
+                    let plain = state(EXIT_NAME);
+                    let mut temporary = state(EXIT_NAME);
+                    temporary.session.temporary_rules = temporary.config.rule_sets[0].rules.clone();
+                    let window = egui::vec2(960.0, 640.0);
+                    let before = themed(&plain, window, column);
+                    let after = themed(&temporary, window, column);
+                    let count = crate::i18n::temporary_count(2);
+                    assert!(!before.has(&count), "{place}");
+                    // The sizing passes draw the cards too; the last text is the visible one.
+                    let last = |text: &str| {
+                        after
+                            .shown
+                            .iter()
+                            .rev()
+                            .find(|found| found.text == text)
+                            .unwrap_or_else(|| panic!("{text:?} not drawn"))
+                    };
+                    let count = last(&count);
+                    assert!(!count.elided, "{place}");
+                    let set = last("Example set");
+                    assert!(
+                        (count.rect.center().y - set.rect.center().y).abs() < 2.0,
+                        "{place}: {:?} {:?}",
+                        count.rect,
+                        set.rect
+                    );
+                    assert!(count.rect.left() > set.rect.right(), "{place}");
+                    let visible = |frame: &Frame| frame.cards[frame.cards.len() - 2..].to_vec();
+                    for (old, new) in visible(&before).iter().zip(visible(&after)) {
+                        assert!((old.height() - new.height()).abs() < 0.5, "{place}");
                     }
                 }
             });

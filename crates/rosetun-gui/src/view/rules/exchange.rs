@@ -148,7 +148,7 @@ pub(crate) fn show(ctx: &egui::Context, state: &mut State, actions: &mut Vec<Act
                     }
                 }
                 if let Some(error) = &import.error {
-                    ui.colored_label(theme::ERROR, error);
+                    ui.colored_label(theme::error(), error);
                 }
                 ui.add_space(theme::space::M);
 
@@ -262,7 +262,7 @@ pub(crate) fn show(ctx: &egui::Context, state: &mut State, actions: &mut Vec<Act
                                         Warning::BroadDirect => tr!("rules-transfer-broad"),
                                     };
                                     ui.colored_label(
-                                        theme::ERROR,
+                                        theme::error(),
                                         format!("{}: {text}", entry.index + 1),
                                     );
                                 }
@@ -281,7 +281,7 @@ pub(crate) fn show(ctx: &egui::Context, state: &mut State, actions: &mut Vec<Act
                         !busy,
                     );
                     if target == rosetun_config::RuleTarget::Direct {
-                        ui.colored_label(theme::ERROR, tr!("rules-transfer-broad"));
+                        ui.colored_label(theme::error(), tr!("rules-transfer-broad"));
                     }
                 }
                 let mut footer = widgets::DialogFooter::new(

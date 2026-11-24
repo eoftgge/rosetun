@@ -4,17 +4,17 @@
 //! process whose first thread blocks the signals before any other thread
 //! starts, which the test harness cannot give, hence `harness = false`.
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[path = "../src/signals.rs"]
 mod signals;
 
 fn main() {
-    #[cfg(target_os = "linux")]
-    linux::run();
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    unix::run();
 }
 
-#[cfg(target_os = "linux")]
-mod linux {
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod unix {
     use std::io::{BufRead, BufReader, Write};
     use std::process::{Command, Stdio};
     use std::sync::mpsc;

@@ -35,6 +35,13 @@ What Rosetun protects, what counts as a vulnerability and what does not. To repo
 - **The `.deb` package:** a maintainer script that opens the network during an upgrade, removes the way out before Lockdown is gone, or leaves a file others can write; an upgrade marker in `/run/rosetun` that an ordinary account can set.
 - **`rosetun://` links through the socket** in `$XDG_RUNTIME_DIR`: another account delivering a link to your Rosetun, or the `.desktop` handler running anything but `rosetun-gui --open-url`.
 
+**On macOS (Apple Silicon · experimental build):**
+
+- **The service socket** (`/private/var/run/rosetun/helper.sock`, `root:staff`, mode 0660): one account controlling another account's tunnel, or a program posing as the service (the client verifies the service runs as `root`).
+- **Installation and engine verification:** `/usr/local/libexec/rosetun` or installed engines writable without `root`, or the service launching an engine that fails ownership and permission verification.
+- **`/Library/Application Support/Rosetun`:** the folder or lists readable or writable without `root`.
+- Kill switch and Lockdown are not implemented on macOS; traffic going direct if the tunnel drops is a known limitation (see [macOS support](../macos/)).
+
 Include the Rosetun version, system, connection mode, protection settings and steps to reproduce. **Collect report** (Settings → Service and log) prepares a redacted report. Review it before attaching it and leave out subscription links, server links, credentials and raw logs.
 
 ## Out of scope {#out-of-scope}

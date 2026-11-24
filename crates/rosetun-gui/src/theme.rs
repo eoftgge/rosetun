@@ -1,3 +1,5 @@
+use std::io::Read;
+use std::sync::LazyLock;
 use std::sync::atomic::{AtomicU8, Ordering};
 
 use eframe::egui::{
@@ -7,35 +9,68 @@ use rosetun_config::AccentPreset;
 
 pub(crate) const BRAND_FONT: &str = "brand";
 pub(crate) const UI_SEMIBOLD: &str = "ui-semibold";
+const EMOJI_FONT: &str = "noto-color-emoji";
 
-fn fonts() -> egui::FontDefinitions {
+pub(crate) mod country_badge {
+    /// Common footprint for a flag and its country code.
+    pub(crate) const ROW_SIZE: [f32; 2] = [28.0, 20.0];
+    pub(crate) const SERVER_SIZE: [f32; 2] = [36.0, 26.0];
+}
+
+fn inflate_font(compressed: &[u8]) -> std::sync::Arc<egui::FontData> {
+    let mut decoder = flate2::read::ZlibDecoder::new(compressed);
+    let mut bytes = Vec::new();
+    decoder
+        .read_to_end(&mut bytes)
+        .expect("bundled font should inflate cleanly");
+    std::sync::Arc::new(egui::FontData::from_owned(bytes))
+}
+
+static FONTS: LazyLock<egui::FontDefinitions> = LazyLock::new(|| {
     let mut fonts = egui::FontDefinitions::default();
     fonts.font_data.insert(
         "manrope-regular".to_owned(),
-        std::sync::Arc::new(egui::FontData::from_static(include_bytes!(
-            "../assets/fonts/Manrope-Regular.ttf"
+        inflate_font(include_bytes!(concat!(
+            env!("OUT_DIR"),
+            "/Manrope-Regular.ttf.zlib"
         ))),
     );
     fonts.font_data.insert(
         "manrope-semibold".to_owned(),
-        std::sync::Arc::new(egui::FontData::from_static(include_bytes!(
-            "../assets/fonts/Manrope-SemiBold.ttf"
+        inflate_font(include_bytes!(concat!(
+            env!("OUT_DIR"),
+            "/Manrope-SemiBold.ttf.zlib"
+        ))),
+    );
+    fonts.font_data.insert(
+        EMOJI_FONT.to_owned(),
+        // The pinned OFL font keeps emoji independent of the installed system fonts.
+        inflate_font(include_bytes!(concat!(
+            env!("OUT_DIR"),
+            "/Noto-COLRv1.ttf.zlib"
         ))),
     );
     let proportional = fonts
         .families
         .get_mut(&FontFamily::Proportional)
         .expect("default proportional font family");
+    proportional.insert(0, EMOJI_FONT.to_owned());
     let mut semibold = vec!["manrope-semibold".to_owned()];
     semibold.extend(proportional.iter().cloned());
     proportional.insert(0, "manrope-regular".to_owned());
+    let monospace = fonts
+        .families
+        .get_mut(&FontFamily::Monospace)
+        .expect("default monospace font family");
+    monospace.insert(1, EMOJI_FONT.to_owned());
     fonts
         .families
         .insert(FontFamily::Name(UI_SEMIBOLD.into()), semibold);
     fonts.font_data.insert(
         "cormorant-garamond-semibold".to_owned(),
-        std::sync::Arc::new(egui::FontData::from_static(include_bytes!(
-            "../assets/fonts/CormorantGaramond-SemiBold.ttf"
+        inflate_font(include_bytes!(concat!(
+            env!("OUT_DIR"),
+            "/CormorantGaramond-SemiBold.ttf.zlib"
         ))),
     );
     fonts.families.insert(
@@ -43,12 +78,17 @@ fn fonts() -> egui::FontDefinitions {
         vec!["cormorant-garamond-semibold".to_owned()],
     );
     fonts
+});
+
+fn fonts() -> egui::FontDefinitions {
+    FONTS.clone()
 }
 
 /// The colours an accent preset changes: the accent family and the surfaces
-/// tinted to match it. State colours below are the same in every preset.
+/// tinted to match it. Semantic state colours adapt to light and dark surfaces.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Palette {
+    pub(crate) light: bool,
     pub(crate) bg: Color32,
     pub(crate) panel: Color32,
     pub(crate) card: Color32,
@@ -59,6 +99,8 @@ pub(crate) struct Palette {
     pub(crate) text: Color32,
     pub(crate) text_muted: Color32,
     pub(crate) text_dim: Color32,
+    /// Foreground text and icons drawn over `accent_base` / `accent_dark`.
+    pub(crate) on_accent: Color32,
     pub(crate) accent_dark: Color32,
     pub(crate) accent_base: Color32,
     pub(crate) accent_bright: Color32,
@@ -69,6 +111,7 @@ pub(crate) struct Palette {
 
 impl Palette {
     pub(crate) const ROSE: Self = Self {
+        light: false,
         bg: rgb(0x171014),
         panel: rgb(0x1B1418),
         card: rgb(0x1F1519),
@@ -79,6 +122,7 @@ impl Palette {
         text: rgb(0xF3ECEE),
         text_muted: rgb(0xB9A9AF),
         text_dim: rgb(0x937F88),
+        on_accent: rgb(0xF3ECEE),
         accent_dark: rgb(0x8C2338),
         accent_base: rgb(0xC2374F),
         accent_bright: rgb(0xD9475F),
@@ -86,6 +130,7 @@ impl Palette {
         accent_pale: rgb(0xF4B6C1),
     };
     pub(crate) const LILAC: Self = Self {
+        light: false,
         bg: rgb(0x120F17),
         panel: rgb(0x16121B),
         card: rgb(0x1B1622),
@@ -96,6 +141,7 @@ impl Palette {
         text: rgb(0xEFEBF3),
         text_muted: rgb(0xB3ABBF),
         text_dim: rgb(0x9A90A8),
+        on_accent: rgb(0xEFEBF3),
         accent_dark: rgb(0x4E3178),
         accent_base: rgb(0x7A4DB8),
         accent_bright: rgb(0x8C60CC),
@@ -103,6 +149,7 @@ impl Palette {
         accent_pale: rgb(0xDCC6F4),
     };
     pub(crate) const TEAL: Self = Self {
+        light: false,
         bg: rgb(0x0D1414),
         panel: rgb(0x111818),
         card: rgb(0x141D1E),
@@ -113,6 +160,7 @@ impl Palette {
         text: rgb(0xEAF2F1),
         text_muted: rgb(0xA6B8B6),
         text_dim: rgb(0x859896),
+        on_accent: rgb(0xEAF2F1),
         accent_dark: rgb(0x134A45),
         accent_base: rgb(0x1E7870),
         accent_bright: rgb(0x279086),
@@ -121,6 +169,7 @@ impl Palette {
     };
     /// Neutral surfaces with the rose accent.
     pub(crate) const GRAPHITE: Self = Self {
+        light: false,
         bg: rgb(0x121214),
         panel: rgb(0x161618),
         card: rgb(0x1A1A1D),
@@ -131,6 +180,7 @@ impl Palette {
         text: rgb(0xEEEEF0),
         text_muted: rgb(0xB1B1B9),
         text_dim: rgb(0x8F8F99),
+        on_accent: rgb(0xEEEEF0),
         accent_dark: rgb(0x8C2338),
         accent_base: rgb(0xC2374F),
         accent_bright: rgb(0xD9475F),
@@ -139,6 +189,7 @@ impl Palette {
     };
     /// Warm dark greys with a muted cocoa rose.
     pub(crate) const COCOA: Self = Self {
+        light: false,
         bg: rgb(0x141211),
         panel: rgb(0x181615),
         card: rgb(0x1C1A18),
@@ -149,6 +200,7 @@ impl Palette {
         text: rgb(0xF0ECE9),
         text_muted: rgb(0xB6AEA8),
         text_dim: rgb(0x958C85),
+        on_accent: rgb(0xF0ECE9),
         accent_dark: rgb(0x5A3A30),
         accent_base: rgb(0x8A5646),
         accent_bright: rgb(0x9E6656),
@@ -156,6 +208,7 @@ impl Palette {
         accent_pale: rgb(0xE8D2C8),
     };
     pub(crate) const AMBER: Self = Self {
+        light: false,
         bg: rgb(0x15100B),
         panel: rgb(0x19140E),
         card: rgb(0x1F1912),
@@ -166,22 +219,124 @@ impl Palette {
         text: rgb(0xF4EEE6),
         text_muted: rgb(0xBEB1A1),
         text_dim: rgb(0x9C8D7B),
+        on_accent: rgb(0xF4EEE6),
         accent_dark: rgb(0x6B4210),
         accent_base: rgb(0x99601A),
         accent_bright: rgb(0xB37224),
         accent_light: rgb(0xE3A04A),
         accent_pale: rgb(0xF6DAA8),
     };
+    /// Deep OLED obsidian with a calm steel-graphite accent and crisp white text.
+    pub(crate) const BLACK: Self = Self {
+        light: false,
+        bg: rgb(0x050506),
+        panel: rgb(0x09090B),
+        card: rgb(0x0E0E11),
+        modal: rgb(0x121216),
+        input: rgb(0x17171C),
+        border: rgb(0x23232A),
+        border_strong: rgb(0x363642),
+        text: rgb(0xF2F2F5),
+        text_muted: rgb(0xA9A9B5),
+        text_dim: rgb(0x868694),
+        on_accent: rgb(0xF2F2F5),
+        accent_dark: rgb(0x3E4250),
+        accent_base: rgb(0x585D70),
+        accent_bright: rgb(0x70768C),
+        accent_light: rgb(0xB2B8C9),
+        accent_pale: rgb(0xE0E4F0),
+    };
+    /// Soft porcelain white with the signature rose accent.
+    pub(crate) const WHITE: Self = Self {
+        light: true,
+        bg: rgb(0xF6F3F5),
+        panel: rgb(0xFAF8F9),
+        card: rgb(0xFFFFFF),
+        modal: rgb(0xFFFFFF),
+        input: rgb(0xF3EFF2),
+        border: rgb(0xE6DFE3),
+        border_strong: rgb(0xCCC2C8),
+        text: rgb(0x1B1519),
+        text_muted: rgb(0x594C54),
+        text_dim: rgb(0x6F6169),
+        on_accent: rgb(0xFFFFFF),
+        accent_dark: rgb(0x8A1E34),
+        accent_base: rgb(0xC2374F),
+        accent_bright: rgb(0xD4445D),
+        accent_light: rgb(0x9E263D),
+        accent_pale: rgb(0xFBE8EC),
+    };
+
+    pub(crate) const fn disabled(&self) -> Color32 {
+        if self.light {
+            rgb(0xA89EA4)
+        } else {
+            rgb(0x5C4D54)
+        }
+    }
+
+    pub(crate) const fn disconnected(&self) -> Color32 {
+        if self.light {
+            rgb(0x686168)
+        } else {
+            rgb(0x8C8189)
+        }
+    }
+
+    /// Connected status colour: belongs to the palette and stays clearly
+    /// separated from `error()` in luminance without relying on hue.
+    pub(crate) const fn connected(&self) -> Color32 {
+        if self.light {
+            self.accent_dark
+        } else {
+            self.accent_pale
+        }
+    }
+
+    pub(crate) const fn error(&self) -> Color32 {
+        if self.light {
+            rgb(0xC93B0E)
+        } else {
+            rgb(0xFF6A2A)
+        }
+    }
+
+    pub(crate) const fn warning(&self) -> Color32 {
+        if self.light {
+            rgb(0x9A6300)
+        } else {
+            rgb(0xE8B457)
+        }
+    }
+
+    /// Rules through an exit: apart from the accent of the main VPN and the orange of Block.
+    pub(crate) const fn exit(&self) -> Color32 {
+        if self.light {
+            rgb(0x255BA8)
+        } else {
+            rgb(0x8FB4E8)
+        }
+    }
+
+    pub(crate) const fn expired(&self) -> Color32 {
+        if self.light {
+            rgb(0xC62828)
+        } else {
+            rgb(0xEF6262)
+        }
+    }
 }
 
 /// In the order of `AccentPreset::ALL`.
-static PALETTES: [Palette; 6] = [
+static PALETTES: [Palette; 8] = [
     Palette::ROSE,
     Palette::GRAPHITE,
     Palette::COCOA,
     Palette::LILAC,
     Palette::TEAL,
     Palette::AMBER,
+    Palette::BLACK,
+    Palette::WHITE,
 ];
 
 /// Index into `PALETTES`; changed between frames, read on every paint.
@@ -213,6 +368,8 @@ fn palette_index(accent: AccentPreset) -> u8 {
         AccentPreset::Lilac => 3,
         AccentPreset::Teal => 4,
         AccentPreset::Amber => 5,
+        AccentPreset::Black => 6,
+        AccentPreset::White => 7,
     }
 }
 
@@ -233,18 +390,27 @@ const fn rgb(value: u32) -> Color32 {
     Color32::from_rgb((value >> 16) as u8, (value >> 8) as u8, value as u8)
 }
 
-pub(crate) const DISABLED: Color32 = Color32::from_rgb(0x5C, 0x4D, 0x54);
-/// The palette's pale accent: it belongs to the scheme, and it is lighter
-/// than `ERROR`, so connected and failed differ without hue.
-pub(crate) fn connected() -> Color32 {
-    palette().accent_pale
+pub(crate) fn disabled() -> Color32 {
+    palette().disabled()
 }
-pub(crate) const DISCONNECTED: Color32 = Color32::from_rgb(0x8C, 0x81, 0x89);
-pub(crate) const ERROR: Color32 = Color32::from_rgb(0xFF, 0x6A, 0x2A);
-pub(crate) const WARNING: Color32 = Color32::from_rgb(0xE8, 0xB4, 0x57);
-/// Rules through an exit: apart from the rose of the main VPN and the orange of Block.
-pub(crate) const EXIT: Color32 = Color32::from_rgb(0x8F, 0xB4, 0xE8);
-pub(crate) const EXPIRED: Color32 = Color32::from_rgb(0xEF, 0x62, 0x62);
+pub(crate) fn connected() -> Color32 {
+    palette().connected()
+}
+pub(crate) fn disconnected() -> Color32 {
+    palette().disconnected()
+}
+pub(crate) fn error() -> Color32 {
+    palette().error()
+}
+pub(crate) fn warning() -> Color32 {
+    palette().warning()
+}
+pub(crate) fn exit() -> Color32 {
+    palette().exit()
+}
+pub(crate) fn expired() -> Color32 {
+    palette().expired()
+}
 
 /// Colours of the program tiles in the "Add rule" window. A tile takes one by
 /// its name, so they are muted, fixed and the same in every palette.
@@ -411,14 +577,27 @@ pub(crate) fn text_selection(palette: &Palette) -> egui::style::Selection {
 
 pub(crate) fn apply(ctx: &egui::Context) {
     ctx.set_fonts(fonts());
-    ctx.set_theme(egui::Theme::Dark);
     apply_style(ctx);
 }
 
 /// The style in the colours of the current palette; called again when the preset changes.
 pub(crate) fn apply_style(ctx: &egui::Context) {
     let palette = palette();
-    let mut visuals = Visuals::dark();
+    ctx.set_theme(if palette.light {
+        egui::Theme::Light
+    } else {
+        egui::Theme::Dark
+    });
+    let mut visuals = if palette.light {
+        Visuals::light()
+    } else {
+        Visuals::dark()
+    };
+    let active_fill = if palette.on_accent == palette.text {
+        palette.accent_dark
+    } else {
+        palette.border_strong
+    };
     visuals.override_text_color = Some(palette.text);
     visuals.hyperlink_color = palette.accent_light;
     visuals.window_fill = palette.modal;
@@ -434,8 +613,8 @@ pub(crate) fn apply_style(ctx: &egui::Context) {
     visuals.widgets.hovered.bg_fill = palette.border;
     visuals.widgets.hovered.weak_bg_fill = palette.border;
     visuals.widgets.hovered.fg_stroke = Stroke::new(1.0, palette.text);
-    visuals.widgets.active.bg_fill = palette.accent_dark;
-    visuals.widgets.active.weak_bg_fill = palette.accent_dark;
+    visuals.widgets.active.bg_fill = active_fill;
+    visuals.widgets.active.weak_bg_fill = active_fill;
     visuals.widgets.active.fg_stroke = Stroke::new(1.0, palette.text);
     visuals.selection = text_selection(palette);
     visuals.window_corner_radius = CornerRadius::same(RADIUS);
@@ -561,6 +740,8 @@ mod tests {
         assert_eq!(palette_of(AccentPreset::Teal), &Palette::TEAL);
         assert_eq!(palette_of(AccentPreset::Cocoa), &Palette::COCOA);
         assert_eq!(palette_of(AccentPreset::Amber), &Palette::AMBER);
+        assert_eq!(palette_of(AccentPreset::Black), &Palette::BLACK);
+        assert_eq!(palette_of(AccentPreset::White), &Palette::WHITE);
     }
 
     #[test]
@@ -635,19 +816,25 @@ mod tests {
     }
 
     #[test]
-    fn connected_is_lighter_than_error_in_every_palette() {
+    fn connected_is_luminance_separated_from_error_in_every_palette() {
         for palette in &PALETTES {
-            assert!(
-                luminance(palette.accent_pale) > luminance(ERROR) * 1.3,
-                "connected too dark in {palette:?}"
-            );
+            let connected = luminance(palette.connected());
+            let error = luminance(palette.error());
+            if palette.light {
+                assert!(
+                    connected * 1.3 < error,
+                    "connected too close to error in light palette {palette:?}"
+                );
+            } else {
+                assert!(connected > error * 1.3, "connected too dark in {palette:?}");
+            }
         }
     }
 
     #[test]
     fn every_palette_keeps_text_readable() {
         for palette in &PALETTES {
-            let on_accent = contrast(palette.text, palette.accent_base);
+            let on_accent = contrast(palette.on_accent, palette.accent_base);
             assert!(
                 on_accent >= 4.5,
                 "text on accent {on_accent:.2} in {palette:?}"
@@ -655,7 +842,53 @@ mod tests {
             for surface in [palette.card, palette.panel] {
                 let dim = contrast(palette.text_dim, surface);
                 assert!(dim >= 4.5, "dim text {dim:.2} in {palette:?}");
+                for (name, color) in [
+                    ("connected", palette.connected()),
+                    ("disconnected", palette.disconnected()),
+                    ("error", palette.error()),
+                    ("warning", palette.warning()),
+                    ("exit", palette.exit()),
+                    ("expired", palette.expired()),
+                ] {
+                    let ratio = contrast(color, surface);
+                    assert!(
+                        ratio >= 4.5,
+                        "{name} {ratio:.2} on {surface:?} in {palette:?}"
+                    );
+                }
             }
+            for text in [palette.text_muted, palette.accent_light] {
+                let badge = contrast(text, palette.border);
+                assert!(badge >= 4.5, "country badge text {badge:.2} in {palette:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn dice_renders_in_color_with_the_bundled_font() {
+        for font in [
+            FontId::proportional(font::BODY),
+            font::semibold(font::BODY),
+            font::mono_small(),
+        ] {
+            let ctx = egui::Context::default();
+            apply(&ctx);
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                let text = crate::display::drop_missing_glyphs(ui.ctx(), &font, "🎲");
+                assert_eq!(text, "🎲");
+                ui.label(egui::RichText::new(text).font(font.clone()));
+            });
+            let has_color = output.textures_delta.set.iter().any(|(_, deltas)| {
+                deltas.iter().any(|delta| {
+                    let egui::ImageData::Color(image) = &delta.image;
+                    image
+                        .pixels
+                        .iter()
+                        .any(|color| color.r() != color.g() || color.g() != color.b())
+                })
+            });
+            output.textures_delta.clear();
+            assert!(has_color, "{font:?}");
         }
     }
 }

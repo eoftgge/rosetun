@@ -4,8 +4,11 @@ use std::time::{Duration, Instant};
 
 pub const ENDPOINT_ENV: &str = "ROSETUN_HELPER_ENDPOINT";
 
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "macos")))]
 const UNIX_ENDPOINT: &str = "/run/rosetun/helper.sock";
+
+#[cfg(target_os = "macos")]
+const UNIX_ENDPOINT: &str = "/private/var/run/rosetun/helper.sock";
 
 // Generic write includes FILE_CREATE_PIPE_INSTANCE (0x4). Authenticated
 // clients may exchange frames, but only SYSTEM, Administrators and the pipe
@@ -62,6 +65,7 @@ pub struct Connection {
 pub enum AccountIdentity {
     WindowsSid(Vec<u8>),
     LinuxUid(u32),
+    MacOsUid(u32),
 }
 
 pub struct PeerIdentity {
@@ -116,14 +120,14 @@ impl Connection {
                 .ok_or_else(|| io::Error::other("not a server pipe connection"))?;
             platform::identify_peer(pipe)
         }
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
             let stream = self.read_socket.as_ref().ok_or_else(|| {
                 io::Error::new(io::ErrorKind::PermissionDenied, "no authenticated socket")
             })?;
             platform::identify_peer(stream)
         }
-        #[cfg(not(any(windows, target_os = "linux")))]
+        #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
         {
             Err(io::Error::new(
                 io::ErrorKind::Unsupported,
@@ -133,7 +137,7 @@ impl Connection {
     }
 
     /// Wrap a real connected Unix stream; credentials remain bound to this socket.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn from_unix_stream(stream: std::os::unix::net::UnixStream) -> io::Result<Self> {
         let writer = stream.try_clone()?;
         let read_socket = stream.try_clone()?;
@@ -247,7 +251,11 @@ fn read_timed_out() -> io::Error {
 #[path = "transport/linux.rs"]
 mod platform;
 
-#[cfg(all(unix, not(target_os = "linux")))]
+#[cfg(target_os = "macos")]
+#[path = "transport/macos.rs"]
+mod platform;
+
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
 mod platform {
     use super::*;
 
@@ -1002,7 +1010,7 @@ mod platform {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use platform::prepare_service_directories;
 pub use platform::{Listener, connect};
 

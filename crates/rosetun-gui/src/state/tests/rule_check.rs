@@ -65,7 +65,7 @@ fn an_empty_field_has_no_line() {
     let mut state = checking(Vec::new());
 
     assert_eq!(state.rule_check(), None);
-    state.rules.check.input = "   ".into();
+    state.rules.screen.filter.search = "   ".into();
     assert_eq!(state.rule_check(), None);
     assert!(state.take_check_lists().is_none());
 }
@@ -76,7 +76,7 @@ fn a_site_is_answered_with_the_rule_that_routes_it() {
         rule("first", suffix("example.org"), RuleTarget::Block),
         rule("second", suffix("example.com"), RuleTarget::Direct),
     ]);
-    state.rules.check.input = "https://www.example.com:8443/watch".into();
+    state.rules.screen.filter.search = "https://www.example.com:8443/watch".into();
 
     let line = state.rule_check().unwrap();
 
@@ -100,7 +100,7 @@ fn a_site_is_answered_with_the_rule_that_routes_it() {
 #[test]
 fn no_matching_rule_is_the_default_rule() {
     let mut state = checking(vec![rule("one", suffix("example.org"), RuleTarget::Block)]);
-    state.rules.check.input = "example.com".into();
+    state.rules.screen.filter.search = "example.com".into();
 
     let line = state.rule_check().unwrap();
 
@@ -118,7 +118,7 @@ fn no_matching_rule_is_the_default_rule() {
 #[test]
 fn the_answer_follows_an_edit_of_the_rules() {
     let mut state = checking(vec![rule("one", suffix("example.com"), RuleTarget::Direct)]);
-    state.rules.check.input = "example.com".into();
+    state.rules.screen.filter.search = "example.com".into();
     let direct = state.rule_check().unwrap();
 
     state.config.rule_sets[1].rules[0].target = RuleTarget::Block;
@@ -140,7 +140,7 @@ fn a_disabled_rule_is_passed_over() {
     let mut off = rule("off", suffix("example.com"), RuleTarget::Block);
     off.enabled = false;
     let mut state = checking(vec![off]);
-    state.rules.check.input = "example.com".into();
+    state.rules.screen.filter.search = "example.com".into();
 
     assert!(
         state
@@ -155,7 +155,7 @@ fn a_disabled_rule_is_passed_over() {
 fn a_temporary_rule_stands_above_the_saved_ones() {
     let mut state = checking(vec![rule("one", suffix("example.com"), RuleTarget::Direct)]);
     state.session.temporary_rules = vec![rule("temp", suffix("example.com"), RuleTarget::Block)];
-    state.rules.check.input = "example.com".into();
+    state.rules.screen.filter.search = "example.com".into();
 
     let line = state.rule_check().unwrap();
 
@@ -202,7 +202,7 @@ fn an_exit_is_named() {
     let mut exit_rule = rule("one", suffix("example.com"), RuleTarget::Exit);
     exit_rule.exit = Some(ExitId::new("japan"));
     state.config.rule_sets[1].rules = vec![exit_rule];
-    state.rules.check.input = "example.com".into();
+    state.rules.screen.filter.search = "example.com".into();
 
     let line = state.rule_check().unwrap();
 
@@ -229,10 +229,10 @@ fn a_program_is_answered_by_name_and_a_path_rule_is_an_open_question() {
             RuleTarget::Direct,
         ),
     ]);
-    state.rules.check.input = "tool".into();
+    state.rules.screen.filter.search = "tool".into();
 
     let by_name = state.rule_check().unwrap();
-    state.rules.check.input = "/opt/example/tool".into();
+    state.rules.screen.filter.search = "/opt/example/tool".into();
     let by_path = state.rule_check().unwrap();
 
     assert_eq!(
@@ -247,10 +247,10 @@ fn a_program_is_answered_by_name_and_a_path_rule_is_an_open_question() {
 #[test]
 fn a_private_address_depends_on_the_network_only_when_it_is_allowed() {
     let mut state = checking(Vec::new());
-    state.rules.check.input = "192.0.2.1".into();
+    state.rules.screen.filter.search = "192.0.2.1".into();
     state.config.settings.allow_lan = true;
     let public = state.rule_check().unwrap();
-    state.rules.check.input = "192.168.1.10".into();
+    state.rules.screen.filter.search = "192.168.1.10".into();
     let on = state.rule_check().unwrap();
     state.config.settings.allow_lan = false;
     let off = state.rule_check().unwrap();
@@ -268,31 +268,48 @@ fn a_private_address_depends_on_the_network_only_when_it_is_allowed() {
 }
 
 #[test]
-fn what_is_not_understood_says_so() {
-    let mut state = checking(Vec::new());
-    state.rules.check.input = "two words.com".into();
+fn plain_search_text_and_unmatched_bare_words_stay_quiet() {
+    let mut state = checking(vec![rule(
+        "exe",
+        RuleMatcher::Process(ProcessMatch::Name("tool.exe".into())),
+        RuleTarget::Direct,
+    )]);
+    for query in ["two words.com", "mydeaf", "российские"] {
+        state.rules.screen.filter.search = query.into();
+        assert_eq!(state.rule_check(), None, "query: {query}");
+        assert!(state.take_check_lists().is_none(), "query: {query}");
+    }
 
-    assert_eq!(state.rule_check().unwrap().text, tr!("rule-check-invalid"));
-    assert!(state.take_check_lists().is_none());
+    // Explicit `.exe` still answers even when it hits the default rule.
+    state.rules.screen.filter.search = "discord.exe".into();
+    let exe = state.rule_check().unwrap();
+    assert!(exe.answer);
+    assert!(exe.text.contains(&tr!("rule-check-default")));
 }
 
 #[test]
 fn the_check_waits_for_the_set_in_use() {
     let mut state = checking(vec![rule("one", suffix("example.com"), RuleTarget::Direct)]);
-    state.rules.check.input = "example.com".into();
+    state.rules.screen.filter.search = "example.com".into();
     assert!(state.rule_check_available());
 
     state.act(Action::ChooseRuleSet(RuleSetId::new("1")));
 
     assert!(!state.rule_check_available());
-    assert_eq!(state.rule_check(), None);
+    assert_eq!(
+        state.rule_check().unwrap().text,
+        tr!("rule-check-other-set")
+    );
     assert!(state.take_check_lists().is_none());
+
+    state.rules.screen.filter.search = "mydeaf".into();
+    assert_eq!(state.rule_check(), None);
 }
 
 #[test]
 fn lists_are_read_once_and_again_when_they_change() {
     let mut state = list_state();
-    state.rules.check.input = "example.com".into();
+    state.rules.screen.filter.search = "example.com".into();
 
     assert_eq!(state.rule_check().unwrap().text, tr!("rule-check-checking"));
     let Some(Job::CheckLists { request, .. }) = state.take_check_lists() else {
@@ -328,7 +345,7 @@ fn lists_are_read_once_and_again_when_they_change() {
 #[test]
 fn a_stale_read_does_not_replace_a_newer_one() {
     let mut state = list_state();
-    state.rules.check.input = "example.com".into();
+    state.rules.screen.filter.search = "example.com".into();
     let Some(Job::CheckLists { request: old, .. }) = state.take_check_lists() else {
         panic!("the list is to be read");
     };
@@ -349,7 +366,7 @@ fn a_stale_read_does_not_replace_a_newer_one() {
 #[test]
 fn a_list_that_cannot_be_read_leaves_the_answer_unknown() {
     let mut state = list_state();
-    state.rules.check.input = "example.com".into();
+    state.rules.screen.filter.search = "example.com".into();
     let Some(Job::CheckLists { request, .. }) = state.take_check_lists() else {
         panic!("the list is to be read");
     };

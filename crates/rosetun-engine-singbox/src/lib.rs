@@ -136,7 +136,7 @@ impl EngineBackend for SingBoxBackend {
             }
         };
         let binary = std::fs::canonicalize(binary)?;
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         rosetun_engine::installed::verify(&binary)?;
 
         version::check(&binary)?;
@@ -256,9 +256,9 @@ impl EngineBackend for SingBoxBackend {
         verbose_until_unix: Arc<AtomicU64>,
         rights: EngineRights,
     ) -> Result<Box<dyn EngineProcess>, EngineError> {
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         let _ = rights;
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         rosetun_engine::installed::verify(binary)?;
         std::fs::create_dir_all(&self.work_dir)?;
         let config_path = self.work_dir.join(&config.file_name);
@@ -280,9 +280,9 @@ impl EngineBackend for SingBoxBackend {
             .stderr(Stdio::piped());
         #[cfg(windows)]
         let mut child = console::spawn(&mut command)?;
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         let mut child = rosetun_engine::process::spawn_with_rights(command, rights)?;
-        #[cfg(not(any(windows, target_os = "linux")))]
+        #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
         let mut child = command.spawn()?;
 
         let (ready_sender, readiness) = Readiness::new();
@@ -531,16 +531,28 @@ fn find_in_neighbours() -> Option<PathBuf> {
 struct HintFlags {
     slow_tunnel: AtomicBool,
     tunnel_created: AtomicBool,
+    tunnel_interface: std::sync::Mutex<Option<String>>,
     adapter_still_removing: AtomicBool,
     tunnel_address_in_use: AtomicBool,
 }
 
 impl HintFlags {
     fn observe(&self, line: &str) {
-        if readiness::is_tunnel_created_message(line)
-            && !self.tunnel_created.swap(true, Ordering::AcqRel)
-        {
-            tracing::debug!("TUN created; waiting for engine post-start readiness");
+        if let Some(interface) = readiness::tunnel_created_interface(line) {
+            let mut slot = self
+                .tunnel_interface
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if slot.is_none() {
+                *slot = Some(interface.clone());
+            }
+            drop(slot);
+            if !self.tunnel_created.swap(true, Ordering::AcqRel) {
+                tracing::debug!(
+                    interface = %interface,
+                    "TUN created; waiting for engine post-start readiness"
+                );
+            }
         }
         if readiness::is_slow_tunnel_message(line) {
             self.slow_tunnel.store(true, Ordering::Release);
@@ -551,6 +563,13 @@ impl HintFlags {
         if output::is_address_conflict_message(line) {
             self.tunnel_address_in_use.store(true, Ordering::Release);
         }
+    }
+
+    fn tunnel_interface(&self) -> Option<String> {
+        self.tunnel_interface
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 }
 
@@ -592,6 +611,9 @@ impl EngineProcess for SingBoxProcess {
             adapter_still_removing: self.hints.adapter_still_removing.load(Ordering::Acquire),
             tunnel_address_in_use: self.hints.tunnel_address_in_use.load(Ordering::Acquire),
         }
+    }
+    fn tunnel_interface(&self) -> Option<String> {
+        self.hints.tunnel_interface()
     }
     fn is_running(&mut self) -> Result<bool, EngineError> {
         match self.child.try_wait()? {
@@ -661,6 +683,7 @@ mod tests {
                     short_id: Some("ab".to_owned()),
                     fingerprint: None,
                 }),
+                finalmask: None,
             },
             raw: None,
         }
@@ -1726,7 +1749,7 @@ mod tests {
             "outbound": "proxy",
         });
         // Linux reads programs only for a session with rules by program.
-        if cfg!(windows) || with_rules_by_program {
+        if cfg!(any(windows, target_os = "macos")) || with_rules_by_program {
             rule["process_path_regex"] =
                 serde_json::json!([render::process_name_regex(render::GUI_PROCESS)]);
         }
@@ -1743,7 +1766,6 @@ mod tests {
             target: RuleTarget::Direct,
             exit: None,
         });
-
         for target in [RuleTarget::Proxy, RuleTarget::Direct, RuleTarget::Block] {
             rule_set.default_target = target;
             let (route, unsupported) =
@@ -1771,7 +1793,7 @@ mod tests {
     /// Linux an engine without a rule by program has no right to look, so nothing
     /// may turn the search on there.
     #[test]
-    fn process_lookup_without_process_rules_is_on_only_on_windows() {
+    fn process_lookup_without_process_rules_is_off_only_on_linux() {
         let rule_set = RuleSet {
             rules: Vec::new(),
             ..rules()
@@ -1784,7 +1806,7 @@ mod tests {
                 .expect("rules")
                 .iter()
                 .any(|rule| rule.get("process_path_regex").is_some()),
-            cfg!(windows)
+            cfg!(any(windows, target_os = "macos"))
         );
         assert!(route.get("find_process").is_none());
     }
@@ -1846,11 +1868,11 @@ mod tests {
             .expect("route rules array");
 
         // Where it can name the GUI, the exit lookup comes after the service's two.
-        let exit_lookup = usize::from(cfg!(windows));
+        let exit_lookup = usize::from(cfg!(any(windows, target_os = "macos")));
         assert_eq!(route_rules.len(), 7 + exit_lookup);
         assert_eq!(route_rules[0]["action"], "sniff");
         assert_eq!(route_rules[1]["action"], "hijack-dns");
-        if cfg!(windows) {
+        if cfg!(any(windows, target_os = "macos")) {
             assert_eq!(route_rules[2]["outbound"], "proxy");
         }
         assert_eq!(route_rules[2 + exit_lookup]["outbound"], "direct");
@@ -1906,8 +1928,21 @@ mod tests {
         let inbound = &config["inbounds"][0];
         assert_eq!(inbound["type"], "tun");
         assert_eq!(inbound["stack"], "gvisor");
-        assert_eq!(inbound["interface_name"], "rosetun0");
+        if cfg!(target_os = "macos") {
+            assert!(inbound.get("interface_name").is_none());
+        } else {
+            assert_eq!(inbound["interface_name"], "rosetun0");
+        }
         assert_eq!(inbound["address"][0], "172.19.0.1/30");
+    }
+
+    #[test]
+    fn hint_flags_latch_actual_tunnel_interface() {
+        let hints = HintFlags::default();
+        assert_eq!(hints.tunnel_interface(), None);
+        hints.observe("+0900 2026-11-21 12:00:00 INFO inbound/tun[tun-in]: started at utun6");
+        assert!(hints.tunnel_created.load(Ordering::Acquire));
+        assert_eq!(hints.tunnel_interface().as_deref(), Some("utun6"));
     }
 
     #[test]

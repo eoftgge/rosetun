@@ -166,9 +166,14 @@ impl WorkerDispatcher {
         });
     }
 
-    pub(crate) fn rename_subscription(&self, id: SubscriptionId, name: String) {
+    pub(crate) fn rename_subscription(
+        &self,
+        id: SubscriptionId,
+        name: String,
+        user_agent: Option<String>,
+    ) {
         self.spawn_complete("rosetun-rename-subscription", move |store| {
-            let result = rename_subscription(store, &id, &name);
+            let result = update_subscription_settings(store, &id, &name, user_agent.as_deref());
             if let Err(error) = &result {
                 log_subscription_error("rename", error);
             }
@@ -196,10 +201,14 @@ fn check_nodes<'a>(subscription: &'a Subscription, selected: Option<&NodeId>) ->
 }
 
 fn ping_targets<'a>(nodes: &[&'a Node]) -> (Vec<&'a Node>, Vec<&'a Node>) {
-    nodes
-        .iter()
-        .copied()
-        .partition(|node| !matches!(&node.outbound, rosetun_config::Outbound::Hysteria2(_)))
+    nodes.iter().copied().partition(|node| {
+        !matches!(
+            &node.outbound,
+            rosetun_config::Outbound::Hysteria2(_)
+                | rosetun_config::Outbound::Tuic(_)
+                | rosetun_config::Outbound::WireGuard(_)
+        )
+    })
 }
 
 fn log_subscription_error(operation: &str, error: &impl std::fmt::Display) {
@@ -288,11 +297,44 @@ mod tests {
             up_mbps: None,
             down_mbps: None,
         });
-        let (targets, unsupported) = ping_targets(&[&udp, &tcp]);
-        assert_eq!(targets.len(), 1);
+        let mut tuic = tcp.clone();
+        tuic.id = NodeId::new("tuic");
+        tuic.outbound = rosetun_config::Outbound::Tuic(rosetun_config::TuicParams {
+            uuid: "11111111-1111-4111-8111-111111111111".into(),
+            password: "test-secret".into(),
+            congestion_control: None,
+            udp_relay_mode: None,
+            zero_rtt_handshake: false,
+            heartbeat: None,
+            disable_sni: false,
+        });
+        let mut anytls = tcp.clone();
+        anytls.id = NodeId::new("anytls");
+        anytls.outbound = rosetun_config::Outbound::AnyTls(rosetun_config::AnyTlsParams {
+            password: "test-secret".into(),
+            idle_session_check_interval: None,
+            idle_session_timeout: None,
+            min_idle_session: None,
+        });
+        let mut wireguard = tcp.clone();
+        wireguard.id = NodeId::new("wireguard");
+        wireguard.outbound = rosetun_config::Outbound::WireGuard(rosetun_config::WireGuardParams {
+            private_key: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".into(),
+            public_key: "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=".into(),
+            pre_shared_key: None,
+            address: vec!["10.0.0.2/32".into()],
+            mtu: None,
+            reserved: None,
+            persistent_keepalive: None,
+        });
+        let (targets, unsupported) = ping_targets(&[&udp, &tuic, &wireguard, &tcp, &anytls]);
+        assert_eq!(targets.len(), 2);
         assert_eq!(targets[0].id, tcp.id);
-        assert_eq!(unsupported.len(), 1);
+        assert_eq!(targets[1].id, anytls.id);
+        assert_eq!(unsupported.len(), 3);
         assert_eq!(unsupported[0].id, udp.id);
+        assert_eq!(unsupported[1].id, tuic.id);
+        assert_eq!(unsupported[2].id, wireguard.id);
     }
 
     #[test]

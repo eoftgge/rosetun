@@ -1,0 +1,24 @@
+#!/bin/bash
+# Stops an existing Rosetun LaunchDaemon cleanly before replacing files on upgrade.
+set -euo pipefail
+
+LABEL='io.github.eoftgge.rosetun.helper'
+PLIST="/Library/LaunchDaemons/$LABEL.plist"
+SOCKET='/private/var/run/rosetun/helper.sock'
+
+if /bin/launchctl print "system/$LABEL" >/dev/null 2>&1; then
+    /bin/launchctl bootout "system/$LABEL" >/dev/null 2>&1 ||
+        /bin/launchctl bootout system "$PLIST" >/dev/null 2>&1 || true
+
+    # Give the helper a short window to tear down active engines and remove its socket.
+    for _ in $(seq 1 20); do
+        if ! /usr/bin/pgrep -x rosetun-helper-privileged >/dev/null 2>&1; then
+            break
+        fi
+        /bin/sleep 0.5
+    done
+fi
+
+if [ -S "$SOCKET" ] && ! /usr/bin/pgrep -x rosetun-helper-privileged >/dev/null 2>&1; then
+    /bin/rm -f -- "$SOCKET"
+fi

@@ -43,7 +43,7 @@ struct HandleConfig {
     accepted_at: Instant,
     timeouts: ReadTimeouts,
     last_timeout_warning: Arc<Mutex<Option<Instant>>>,
-    #[cfg(test)]
+    #[cfg(all(test, any(windows, target_os = "linux", target_os = "macos")))]
     status_delay: Duration,
 }
 
@@ -111,11 +111,11 @@ pub(crate) struct Server {
     ipc_shutdown: bool,
     read_timeouts: ReadTimeouts,
     active: Arc<AtomicUsize>,
-    #[cfg(test)]
+    #[cfg(all(test, any(windows, target_os = "linux", target_os = "macos")))]
     status_delay: Duration,
 }
 
-#[cfg(any(windows, target_os = "linux", test))]
+#[cfg(any(windows, target_os = "linux", target_os = "macos"))]
 #[derive(Debug, Clone)]
 pub(crate) struct ShutdownHandle(Sender<ServerEvent>);
 
@@ -128,12 +128,12 @@ impl Server {
             ipc_shutdown,
             read_timeouts: ReadTimeouts::default(),
             active: Arc::new(AtomicUsize::new(0)),
-            #[cfg(test)]
+            #[cfg(all(test, any(windows, target_os = "linux", target_os = "macos")))]
             status_delay: Duration::ZERO,
         }
     }
 
-    #[cfg(any(windows, target_os = "linux", test))]
+    #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
     pub(crate) fn shutdown_handle(&self) -> ShutdownHandle {
         ShutdownHandle(self.tx.clone())
     }
@@ -208,7 +208,7 @@ impl Server {
                         accepted_at,
                         timeouts: self.read_timeouts,
                         last_timeout_warning: Arc::clone(&last_timeout_warning),
-                        #[cfg(test)]
+                        #[cfg(all(test, any(windows, target_os = "linux", target_os = "macos")))]
                         status_delay: self.status_delay,
                     };
                     if let Err(error) = std::thread::Builder::new()
@@ -238,7 +238,7 @@ impl Server {
     }
 }
 
-#[cfg(any(windows, target_os = "linux", test))]
+#[cfg(any(windows, target_os = "linux", target_os = "macos"))]
 impl ShutdownHandle {
     pub(crate) fn request(&self) {
         let _ = self.0.send(ServerEvent::Shutdown);
@@ -333,7 +333,7 @@ fn handle(
         );
         let shutdown = matches!(body, Request::Shutdown) && matches!(response, Response::Ok);
 
-        #[cfg(test)]
+        #[cfg(all(test, any(windows, target_os = "linux", target_os = "macos")))]
         if matches!(body, Request::Status) {
             std::thread::sleep(config.status_delay);
         }
@@ -494,7 +494,7 @@ fn dispatch(
             ErrorCode::InvalidState,
             "the helper runs as a service; stop the Rosetun service instead",
         )),
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         Request::Shutdown if !caller.expect("caller checked").is_administrator() => {
             Response::Error(HelperError::new(
                 ErrorCode::AccessDenied,
@@ -511,7 +511,7 @@ fn reply(connection: &mut Connection, id: u64, body: Response) -> Result<(), Str
         .map_err(|error| error.to_string())
 }
 
-#[cfg(test)]
+#[cfg(all(test, any(windows, target_os = "linux", target_os = "macos")))]
 #[path = "server/read_tests.rs"]
 mod read_tests;
 
@@ -572,9 +572,9 @@ mod tests {
         ));
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
-    fn linux_shutdown_rejects_an_authenticated_non_administrator() {
+    fn unix_shutdown_rejects_an_authenticated_non_administrator() {
         let helper = Helper::new(
             rosetun_engine::EngineRegistry::new(),
             rosetun_routing::backend(),

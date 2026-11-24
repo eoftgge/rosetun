@@ -1,5 +1,6 @@
 use eframe::egui;
 
+use super::country_badge;
 use crate::icons::{self, Icon};
 use crate::theme;
 
@@ -17,6 +18,14 @@ pub(crate) struct MenuItem<'a> {
 }
 
 pub(crate) fn menu_item(ui: &mut egui::Ui, item: MenuItem<'_>) -> egui::Response {
+    menu_item_with_country(ui, item, None)
+}
+
+pub(crate) fn menu_item_with_country(
+    ui: &mut egui::Ui,
+    item: MenuItem<'_>,
+    country: Option<(&str, bool)>,
+) -> egui::Response {
     let enabled = item.enabled && ui.is_enabled();
     let sense = if enabled {
         egui::Sense::click()
@@ -34,7 +43,7 @@ pub(crate) fn menu_item(ui: &mut egui::Ui, item: MenuItem<'_>) -> egui::Response
             ui.painter().rect_filled(
                 rect,
                 radius,
-                theme::ERROR.gamma_multiply(theme::alpha::TINT),
+                theme::error().gamma_multiply(theme::alpha::TINT),
             );
         } else if item.selected {
             ui.painter().rect_filled(rect, radius, selected_fill);
@@ -43,9 +52,9 @@ pub(crate) fn menu_item(ui: &mut egui::Ui, item: MenuItem<'_>) -> egui::Response
                 .rect_filled(rect, radius, theme::palette().border);
         }
         let color = if !enabled {
-            theme::DISABLED
+            theme::disabled()
         } else if item.danger {
-            theme::ERROR
+            theme::error()
         } else {
             ui.visuals()
                 .override_text_color
@@ -60,7 +69,7 @@ pub(crate) fn menu_item(ui: &mut egui::Ui, item: MenuItem<'_>) -> egui::Response
                 if enabled {
                     theme::palette().text
                 } else {
-                    theme::DISABLED
+                    theme::disabled()
                 },
             );
             right -= CHECK_SPACE;
@@ -80,12 +89,30 @@ pub(crate) fn menu_item(ui: &mut egui::Ui, item: MenuItem<'_>) -> egui::Response
                 if enabled {
                     theme::palette().accent_light
                 } else {
-                    theme::DISABLED
+                    theme::disabled()
                 },
             );
             right -= width + 10.0;
         }
-        let left = rect.left() + ui.spacing().button_padding.x.max(ITEM_SIDE_PADDING);
+        let mut left = rect.left() + ui.spacing().button_padding.x.max(ITEM_SIDE_PADDING);
+        if let Some((code, show_flag)) = country {
+            let size = egui::Vec2::from(theme::country_badge::ROW_SIZE);
+            let badge = egui::Rect::from_min_size(
+                egui::pos2(
+                    rect.left() + ITEM_SIDE_PADDING,
+                    rect.center().y - size.y / 2.0,
+                ),
+                size,
+            );
+            if enabled {
+                country_badge(ui, badge, code, show_flag, false);
+            } else {
+                let mut faded = ui.new_child(egui::UiBuilder::new().max_rect(badge));
+                faded.multiply_opacity(theme::alpha::DISABLED);
+                country_badge(&faded, badge, code, show_flag, false);
+            }
+            left = left.max(badge.right() + theme::space::S);
+        }
         let galley = egui::WidgetText::from(egui::RichText::new(item.label).color(color))
             .into_galley(
                 ui,
@@ -99,8 +126,9 @@ pub(crate) fn menu_item(ui: &mut egui::Ui, item: MenuItem<'_>) -> egui::Response
             color,
         );
     }
+    let spoken = country_badge::spoken_with_country(item.label, country.map(|(code, _)| code));
     response.widget_info(|| {
-        egui::WidgetInfo::selected(egui::Role::Button, enabled, item.selected, item.label)
+        egui::WidgetInfo::selected(egui::Role::Button, enabled, item.selected, &spoken)
     });
     if enabled {
         response.on_hover_cursor(egui::CursorIcon::PointingHand)
@@ -163,6 +191,82 @@ fn content_width(ui: &mut egui::Ui, labels: &[&str], minimum: f32, trailing: f32
     ui.set_width((longest + padding + trailing).max(minimum));
 }
 
+pub(crate) fn menu_submenu(ui: &mut egui::Ui, label: &str, content: impl FnOnce(&mut egui::Ui)) {
+    let enabled = ui.is_enabled();
+    let sense = if enabled {
+        egui::Sense::click()
+    } else {
+        egui::Sense::hover()
+    };
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.min_rect().width(), 30.0), sense);
+    let submenu_id = egui::containers::menu::SubMenu::id_from_widget_id(response.id);
+    let is_open = egui::containers::menu::MenuState::from_ui(ui, |state, _| {
+        state.open_item == Some(submenu_id)
+    });
+    if ui.is_rect_visible(rect) {
+        let radius = item_radius(ui.ctx().pixels_per_point());
+        if enabled && (response.hovered() || is_open) {
+            ui.painter()
+                .rect_filled(rect, radius, theme::palette().border);
+        }
+        let color = if enabled {
+            ui.visuals()
+                .override_text_color
+                .unwrap_or(theme::palette().text)
+        } else {
+            theme::disabled()
+        };
+        let right = rect.right() - ITEM_SIDE_PADDING;
+        icons::paint(
+            ui.painter(),
+            egui::pos2(right - 4.0, rect.center().y),
+            Icon::Chevron { open: 0.0 },
+            if enabled {
+                theme::palette().text_muted
+            } else {
+                theme::disabled()
+            },
+        );
+        let left = rect.left() + ui.spacing().button_padding.x.max(ITEM_SIDE_PADDING);
+        let galley = egui::WidgetText::from(egui::RichText::new(label).color(color)).into_galley(
+            ui,
+            Some(egui::TextWrapMode::Truncate),
+            (right - CHECK_SPACE - left).max(0.0),
+            egui::TextStyle::Button,
+        );
+        ui.painter().galley(
+            egui::pos2(left, rect.center().y - galley.size().y / 2.0),
+            galley,
+            color,
+        );
+    }
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, label));
+    let response = if enabled {
+        response.on_hover_cursor(egui::CursorIcon::PointingHand)
+    } else {
+        response
+    };
+    if enabled {
+        let radius = item_radius(ui.ctx().pixels_per_point());
+        let config =
+            egui::containers::menu::MenuConfig::new().style(move |style: &mut egui::Style| {
+                apply_menu_style(style, radius);
+            });
+        let mut close_parent = false;
+        egui::containers::menu::SubMenu::new()
+            .config(config)
+            .show(ui, &response, |ui| {
+                content(ui);
+                if ui.should_close() {
+                    close_parent = true;
+                }
+            });
+        if close_parent {
+            ui.close();
+        }
+    }
+}
+
 pub(crate) fn menu_popup(response: &egui::Response) -> egui::Popup<'_> {
     style_popup(egui::Popup::menu(response), response)
 }
@@ -174,15 +278,19 @@ pub(crate) fn context_menu_popup(response: &egui::Response) -> egui::Popup<'_> {
 fn style_popup<'a>(popup: egui::Popup<'a>, response: &egui::Response) -> egui::Popup<'a> {
     let radius = item_radius(response.ctx.pixels_per_point());
     popup.style(move |style: &mut egui::Style| {
-        egui::containers::menu::menu_style(style);
-        style.spacing.button_padding = egui::vec2(10.0, 4.0);
-        style.spacing.menu_margin = theme::margin::same(theme::space::XS);
-        let widgets = &mut style.visuals.widgets;
-        widgets.inactive.corner_radius = radius;
-        widgets.hovered.corner_radius = radius;
-        widgets.active.corner_radius = radius;
-        widgets.open.corner_radius = radius;
+        apply_menu_style(style, radius);
     })
+}
+
+fn apply_menu_style(style: &mut egui::Style, radius: egui::CornerRadius) {
+    egui::containers::menu::menu_style(style);
+    style.spacing.button_padding = egui::vec2(10.0, 4.0);
+    style.spacing.menu_margin = theme::margin::same(theme::space::XS);
+    let widgets = &mut style.visuals.widgets;
+    widgets.inactive.corner_radius = radius;
+    widgets.hovered.corner_radius = radius;
+    widgets.active.corner_radius = radius;
+    widgets.open.corner_radius = radius;
 }
 
 #[cfg(test)]

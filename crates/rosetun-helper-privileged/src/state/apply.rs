@@ -1,4 +1,3 @@
-use std::net::IpAddr;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 
@@ -8,7 +7,7 @@ use rosetun_ipc::{ConnectRequest, ErrorCode, HelperError};
 
 use super::{
     Caller, Helper, NameLookup, RECONNECT_BACKOFF, Reconnect, Session, SessionHolder, StartMode,
-    exits, node_with_endpoint, normalize_server, probe::resolve_for_apply, render_config,
+    exits, node_with_endpoints, probe::resolve_node_for_apply, protected_endpoints, render_config,
     validate_request,
 };
 
@@ -56,25 +55,17 @@ impl Helper {
             return Ok(());
         }
 
-        let endpoint = request
-            .node
-            .server
-            .parse::<IpAddr>()
-            .ok()
-            .or_else(|| {
-                session
-                    .last_endpoint
-                    .as_ref()
-                    .filter(|cached| cached.server == normalize_server(&request.node.server))
-                    .map(|cached| cached.address)
-            })
-            .or_else(|| resolve_for_apply(&request.node, session.engine_lookup()))
-            .ok_or_else(|| {
-                HelperError::new(
-                    ErrorCode::RoutingFailed,
-                    "cannot resolve the new server through the tunnel",
-                )
-            })?;
+        let endpoint = resolve_node_for_apply(
+            &request.node,
+            session.last_endpoint.as_ref(),
+            session.engine_lookup(),
+        )
+        .ok_or_else(|| {
+            HelperError::new(
+                ErrorCode::RoutingFailed,
+                "cannot resolve the new server through the tunnel",
+            )
+        })?;
 
         let backend = self.engines.get(request.settings.engine).ok_or_else(|| {
             HelperError::new(
@@ -85,7 +76,7 @@ impl Helper {
                 ),
             )
         })?;
-        let prepared_node = node_with_endpoint(&request.node, endpoint);
+        let prepared_node = node_with_endpoints(&request.node, &endpoint);
         let extra_endpoints = exits::apply_endpoints(
             &request.extra_nodes,
             &session.last_extra_endpoints,
@@ -113,12 +104,13 @@ impl Helper {
         )?;
         if socks.any() {
             let interface =
-                (session.physical_interface)(&request.settings.tun.name).ok_or_else(|| {
-                    HelperError::new(
-                        ErrorCode::XrayStartFailed,
-                        "physical interface is unavailable for Xray",
-                    )
-                })?;
+                (session.physical_interface)(session.effective_tun_name(&current.settings.tun))
+                    .ok_or_else(|| {
+                        HelperError::new(
+                            ErrorCode::XrayStartFailed,
+                            "physical interface is unavailable for Xray",
+                        )
+                    })?;
             socks.render(
                 &prepared_node,
                 &extra,
@@ -130,19 +122,8 @@ impl Helper {
         }
         drop(socks);
 
-        let previous_endpoint = current
-            .node
-            .server
-            .parse::<IpAddr>()
-            .ok()
-            .or_else(|| {
-                session
-                    .last_endpoint
-                    .as_ref()
-                    .filter(|cached| cached.server == normalize_server(&current.node.server))
-                    .map(|cached| cached.address)
-            })
-            .ok_or_else(|| {
+        let previous_endpoint = protected_endpoints(&current.node, session.last_endpoint.as_ref())
+            .map_err(|_| {
                 HelperError::new(
                     ErrorCode::RoutingFailed,
                     "previous server address is unavailable",

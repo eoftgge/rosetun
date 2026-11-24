@@ -7,10 +7,6 @@ on:
     branches: [master, dev]
     paths: ['Cargo.toml', 'site/**', 'tools/site/**', '.github/workflows/pages.yml']
   workflow_dispatch:
-  # Releases created with GITHUB_TOKEN do not emit another workflow run.
-  workflow_run:
-    workflows: [Release]
-    types: [completed]
 
 permissions:
   contents: read
@@ -21,14 +17,12 @@ concurrency:
 
 jobs:
   build:
-    if: >-
-      (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success') &&
-      (github.event_name != 'release' || (!github.event.release.prerelease && !github.event.release.draft))
+    if: github.event_name != 'release' || (!github.event.release.prerelease && !github.event.release.draft)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ (github.event_name == 'workflow_run' || github.event_name == 'release') && 'master' || github.ref }}
+          ref: ${{ github.event_name == 'release' && 'master' || github.ref }}
           persist-credentials: false
       # The Zola version and the SHA-256 of its archive are pinned in tools/site/zola.toml;
       # the script checks the hash before it unpacks anything.
@@ -57,9 +51,7 @@ jobs:
 
   deploy:
     needs: build
-    if: >-
-      github.event_name == 'release' || github.event_name == 'workflow_run' ||
-      github.ref == 'refs/heads/master'
+    if: github.event_name == 'release' || github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     permissions:
       pages: write

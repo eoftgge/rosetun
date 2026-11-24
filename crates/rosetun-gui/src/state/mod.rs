@@ -38,7 +38,9 @@ use exits::ExitsState;
 pub(crate) use exits::{DeleteExitDialog, RenameExitDialog};
 pub(crate) use exits::{ExitDialog, ExitKind};
 use lists::ListsState;
-pub(crate) use lists::{AddListDialog, ListOutcome, RulesTab, source_file_name, used_by};
+pub(crate) use lists::{
+    AddListDialog, ListOutcome, RulesTab, matcher_uses_list, source_file_name, used_by,
+};
 #[cfg(test)]
 pub(crate) use lists::{RemoveListDialog, RenameListDialog};
 #[cfg(any(windows, target_os = "linux"))]
@@ -51,8 +53,8 @@ pub(crate) use rules::NameDialog;
 pub(crate) use rules::PROCESS_LIST_STALE_MS;
 use rules::RulesState;
 pub(crate) use rules::{
-    AddRuleDialog, AddressError, CheckLine, ChosenProgram, MAX_ADDRESSES, MAX_PROGRAMS,
-    NameDialogKind, RecentSite, RuleInputKind, UndoNotice,
+    AddRuleDialog, AddressError, CheckLine, ChosenProgram, GroupItemKind, MAX_ADDRESSES,
+    MAX_PROGRAMS, NameDialogKind, RecentSite, RuleInputKind, UndoNotice,
 };
 use session::SessionState;
 pub(crate) use session::{RequestInputs, SessionPart};
@@ -62,7 +64,8 @@ pub(crate) use settings::{AboutFolder, SettingsSection};
 pub(crate) use subscriptions::OpenedLink;
 use subscriptions::SubscriptionsState;
 pub(crate) use subscriptions::{
-    AddDialog, PingResult, QrSource, QrStage, UpdateOutcome, shared_auto_update_hours,
+    AddDialog, PingResult, QrSource, QrStage, UpdateOutcome, UserAgentChoice, UserAgentDraft,
+    shared_auto_update_hours,
 };
 #[cfg(test)]
 pub(crate) use subscriptions::{RemoveDialog, RenameDialog};
@@ -73,6 +76,7 @@ pub(crate) use traffic::{
     TrafficRange, program_rule, site_rule,
 };
 use updates::UpdatesState;
+pub(crate) use updates::{UpdateDownload, UpdateFailure};
 
 pub(crate) fn now_unix() -> u64 {
     SystemTime::now()
@@ -128,6 +132,7 @@ pub(crate) struct State {
     /// closed: connect at start whatever "Connect at startup" says.
     after_upgrade: bool,
     /// The connect in flight is that start's.
+    #[cfg(any(windows, target_os = "linux", test))]
     after_upgrade_connect: bool,
     /// This run took over from one an upgrade replaced: a hold on the first
     /// status means it should connect.
@@ -140,6 +145,7 @@ pub(crate) struct State {
     pub(crate) service_group: ServiceGroup,
     /// That start found nothing to connect to, or its connect failed: the
     /// window should show why the network is closed.
+    #[cfg(any(windows, target_os = "linux", test))]
     upgrade_attention: bool,
     /// A server picked in the tray while disconnected connects once it is saved.
     connect_after_choice: bool,
@@ -210,12 +216,14 @@ impl Default for State {
             config_ready: false,
             auto_connect_pending: true,
             after_upgrade: false,
+            #[cfg(any(windows, target_os = "linux", test))]
             after_upgrade_connect: false,
             #[cfg(any(target_os = "linux", test))]
             relaunched: false,
             #[cfg(any(target_os = "linux", test))]
             helper_answered: false,
             service_group: ServiceGroup::default(),
+            #[cfg(any(windows, target_os = "linux", test))]
             upgrade_attention: false,
             connect_after_choice: false,
             subscriptions: SubscriptionsState::default(),
@@ -293,6 +301,7 @@ pub(crate) enum Action {
     SetLanguage(LanguageSetting),
     SetAccent(AccentPreset),
     SetReduceMotion(bool),
+    SetShowCountryFlags(bool),
     /// How the main screen measures the delay.
     SetDelayMode(DelayMode),
     #[cfg(any(windows, target_os = "linux"))]
@@ -329,6 +338,12 @@ pub(crate) enum Action {
     SetCheckUpdates(bool),
     CheckUpdatesNow,
     SkipVersion,
+    /// Download and check the installer of the offered version.
+    DownloadUpdate,
+    CancelUpdateDownload,
+    /// Run the checked installer; asks first while a session is up.
+    InstallUpdate,
+    ConfirmInstallUpdate(bool),
     /// The tray announced this version; saved so it is announced once.
     #[cfg(any(windows, target_os = "linux", test))]
     AnnounceUpdate(String),
@@ -343,7 +358,7 @@ pub(crate) enum Action {
     SaveReport,
     #[cfg(any(windows, target_os = "linux"))]
     ShowReportFolder,
-    #[cfg(any(windows, target_os = "linux"))]
+    #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
     OpenFolder(AboutFolder),
     OpenRules,
     OpenActiveRules,
@@ -406,8 +421,19 @@ pub(crate) enum Action {
     /// The active set goes back to the rules the running session uses.
     RevertRules,
     SetDefaultTarget(RuleTarget),
-    AddTemplate(RuleTemplate),
-    RemoveTemplate(RuleTemplate),
+    OpenTemplatesCatalog,
+    CloseTemplatesCatalog,
+    AddPresetGroup(RuleTemplate, RuleDestination),
+    ToggleGroupExpanded(RuleId),
+    OpenGroupSelection,
+    CancelGroupSelection,
+    SubmitGroupSelection,
+    AddRulesToGroup(Vec<RuleId>, RuleId),
+    UngroupRule(RuleId),
+    RemoveGroupItem(RuleId, usize),
+    OpenNewGroup,
+    CancelGroupEditor,
+    SubmitGroupEditor,
     OpenRulesExport(bool),
     ConfirmRulesExport(bool),
     ReadRulesImport(bool),
@@ -527,6 +553,12 @@ pub(crate) enum Job {
     #[cfg(any(windows, target_os = "linux", test))]
     AnnounceUpdate(String),
     CheckUpdates,
+    DownloadUpdate {
+        version: String,
+        via_vpn: bool,
+        cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    },
+    InstallUpdate(rosetun_core::DownloadedUpdate),
     SetDns(DnsSettings),
     ResetSettings,
     SetVerboseLog(bool),
@@ -535,7 +567,7 @@ pub(crate) enum Job {
         snapshot: Box<crate::report::ReportSnapshot>,
         own_alias: String,
     },
-    #[cfg(any(windows, target_os = "linux"))]
+    #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
     OpenFolder(PathBuf),
     SelectNode(SubscriptionId, NodeId),
     SelectRuleSet(Option<RuleSetId>),
@@ -572,6 +604,10 @@ pub(crate) enum Job {
     MoveRules(RuleSetId, Vec<RuleId>, usize),
     RemoveRule(RuleSetId, RuleId),
     RemoveRules(RuleSetId, Vec<RuleId>),
+    GroupRules(RuleSetId, Vec<RuleId>, String, RuleDestination),
+    AddRulesToGroup(RuleSetId, Vec<RuleId>, RuleId),
+    UngroupRule(RuleSetId, RuleId),
+    RemoveGroupItem(RuleSetId, RuleId, usize),
     RestoreRuleSets(RuleSetsSnapshot),
     SetKillSwitch(bool),
     SetLockdown(bool),
@@ -624,7 +660,7 @@ pub(crate) enum Job {
     },
     UpdateAll,
     Remove(SubscriptionId),
-    RenameSubscription(SubscriptionId, String),
+    RenameSubscription(SubscriptionId, String, Option<String>),
     MoveSubscription(SubscriptionId, usize),
 }
 
@@ -749,6 +785,10 @@ impl State {
             | WorkerEvent::MoveRules(_)
             | WorkerEvent::RemoveRule(_)
             | WorkerEvent::RemoveRules(_)
+            | WorkerEvent::GroupRules(_)
+            | WorkerEvent::AddRulesToGroup(_)
+            | WorkerEvent::UngroupRule(_)
+            | WorkerEvent::RemoveGroupItem(_)
             | WorkerEvent::RestoreRuleSets(_)) => self.reduce_rules(event),
             #[cfg(windows)]
             event @ WorkerEvent::BrowsedExecutable(_) => self.reduce_rules(event),
@@ -770,12 +810,19 @@ impl State {
                 self.reduce_settings(event);
             }
             #[cfg(any(windows, target_os = "linux"))]
-            event @ (WorkerEvent::ReportSaved { .. } | WorkerEvent::OpenFolder(_)) => {
+            event @ WorkerEvent::ReportSaved { .. } => {
+                self.reduce_settings(event);
+            }
+            #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
+            event @ WorkerEvent::OpenFolder(_) => {
                 self.reduce_settings(event);
             }
             WorkerEvent::UpdateCheck { checked_at, result } => {
                 self.reduce_updates(result, checked_at);
             }
+            event @ (WorkerEvent::UpdateProgress { .. }
+            | WorkerEvent::UpdateDownloaded { .. }
+            | WorkerEvent::UpdateInstall(_)) => self.reduce_update_download(event),
             event @ (WorkerEvent::Qr { .. } | WorkerEvent::QrScreenClip { .. }) => {
                 self.reduce_qr(event);
             }
@@ -860,6 +907,7 @@ impl State {
             | Action::SetLanguage(_)
             | Action::SetAccent(_)
             | Action::SetReduceMotion(_)
+            | Action::SetShowCountryFlags(_)
             | Action::SetDelayMode(_)
             | Action::SetConnectOnStart(_)
             | Action::SetAutoReconnect(_)
@@ -890,12 +938,21 @@ impl State {
                 return self.act_settings(action);
             }
             #[cfg(any(windows, target_os = "linux"))]
-            action @ (Action::SaveReport | Action::ShowReportFolder | Action::OpenFolder(_)) => {
+            action @ (Action::SaveReport | Action::ShowReportFolder) => {
+                return self.act_settings(action);
+            }
+            #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
+            action @ Action::OpenFolder(_) => {
                 return self.act_settings(action);
             }
             #[cfg(any(windows, target_os = "linux", test))]
             action @ Action::AnnounceUpdate(_) => return self.act_updates(action),
-            action @ (Action::CheckUpdatesNow | Action::SkipVersion) => {
+            action @ (Action::CheckUpdatesNow
+            | Action::SkipVersion
+            | Action::DownloadUpdate
+            | Action::CancelUpdateDownload
+            | Action::InstallUpdate
+            | Action::ConfirmInstallUpdate(_)) => {
                 return self.act_updates(action);
             }
             action @ (Action::ShowLists
@@ -951,8 +1008,19 @@ impl State {
             | Action::DeleteRule(_)
             | Action::DeleteSelectedRules
             | Action::SetDefaultTarget(_)
-            | Action::AddTemplate(_)
-            | Action::RemoveTemplate(_)
+            | Action::OpenTemplatesCatalog
+            | Action::CloseTemplatesCatalog
+            | Action::AddPresetGroup(_, _)
+            | Action::ToggleGroupExpanded(_)
+            | Action::OpenGroupSelection
+            | Action::CancelGroupSelection
+            | Action::SubmitGroupSelection
+            | Action::AddRulesToGroup(_, _)
+            | Action::UngroupRule(_)
+            | Action::RemoveGroupItem(_, _)
+            | Action::OpenNewGroup
+            | Action::CancelGroupEditor
+            | Action::SubmitGroupEditor
             | Action::OpenAddRule
             | Action::OpenAddRuleFor(_)
             | Action::OpenEditRule(_)

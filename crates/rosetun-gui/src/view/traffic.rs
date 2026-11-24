@@ -325,6 +325,9 @@ fn traffic_chart(ui: &mut egui::Ui, chart: &Chart) {
     let columns = chart.columns.as_slice();
     let width = ui.available_width().max(0.0);
     let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 120.0), egui::Sense::hover());
+    if !ui.is_rect_visible(rect) {
+        return;
+    }
     let baseline = rect.top() + 74.0;
     ui.painter().hline(
         rect.x_range(),
@@ -427,7 +430,7 @@ fn displayed_heights(ctx: &egui::Context, chart: &Chart) -> Vec<(f32, f32)> {
         bars.push(bar);
     }
     let settling = bars.iter().any(|bar| !bar.settled(now));
-    if chart.frames && (settling || chart.travel.is_some()) {
+    if chart.frames && (settling || chart.travel.is_some_and(|progress| progress < 1.0)) {
         ctx.request_repaint();
     }
     ctx.data_mut(|data| {

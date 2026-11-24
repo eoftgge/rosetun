@@ -1188,9 +1188,9 @@ checksum = "aa9a19cbb55df58761df49b23516a86d432839add4af60fc256da840f66ed35b"
 
 [[package]]
 name = "form_urlencoded"
-version = "1.2.2"
+version = "1.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf"
+checksum = "afa489199eaffb1211795df1c6236ce1ad0d41a6fa45250add73e3b02420f06e"
 dependencies = [
  "percent-encoding",
 ]
@@ -1344,6 +1344,7 @@ dependencies = [
  "hashbrown 0.17.1",
  "log",
  "peniko",
+ "png",
  "skrifa",
  "smallvec",
  "vello_common",
@@ -1947,6 +1948,12 @@ checksum = "488016bfae457b036d996092f6cb448677611ce4449e970ceaf42695203f218a"
 dependencies = [
  "autocfg",
 ]
+
+[[package]]
+name = "minisign-verify"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "871285dc19d8d0ebe0eef3d0e99a205f2a71363b122632cbbfa4a6c370a960ce"
 
 [[package]]
 name = "miniz_oxide"
@@ -2863,7 +2870,7 @@ dependencies = [
 
 [[package]]
 name = "rosetun"
-version = "0.6.0"
+version = "0.7.0-beta.2"
 dependencies = [
  "rosetun-config",
  "rosetun-core",
@@ -2878,7 +2885,7 @@ dependencies = [
 
 [[package]]
 name = "rosetun-adapters"
-version = "0.6.0"
+version = "0.7.0-beta.2"
 dependencies = [
  "windows-sys 0.61.2",
  "zbus",
@@ -2886,7 +2893,7 @@ dependencies = [
 
 [[package]]
 name = "rosetun-config"
-version = "0.6.0"
+version = "0.7.0-beta.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -2897,10 +2904,11 @@ dependencies = [
 
 [[package]]
 name = "rosetun-core"
-version = "0.6.0"
+version = "0.7.0-beta.2"
 dependencies = [
  "base64",
  "idna",
+ "minisign-verify",
  "percent-encoding",
  "regex-automata",
  "rosetun-adapters",
@@ -2923,14 +2931,14 @@ dependencies = [
 
 [[package]]
 name = "rosetun-dns"
-version = "0.6.0"
+version = "0.7.0-beta.2"
 dependencies = [
  "windows-sys 0.61.2",
 ]
 
 [[package]]
 name = "rosetun-engine"
-version = "0.6.0"
+version = "0.7.0-beta.2"
 dependencies = [
  "getrandom 0.4.3",
  "libc",
@@ -2940,7 +2948,7 @@ dependencies = [
 
 [[package]]
 name = "rosetun-engine-singbox"
-version = "0.6.0"
+version = "0.7.0-beta.2"
 dependencies = [
  "rosetun-config",
  "rosetun-engine",
@@ -2953,7 +2961,7 @@ dependencies = [
 
 [[package]]
 name = "rosetun-engine-xray"
-version = "0.6.0"
+version = "0.7.0-beta.2"
 dependencies = [
  "getrandom 0.4.3",
  "rosetun-config",
@@ -2964,10 +2972,12 @@ dependencies = [
 
 [[package]]
 name = "rosetun-gui"
-version = "0.6.0"
+version = "0.7.0-beta.2"
 dependencies = [
  "arboard",
  "eframe",
+ "epaint",
+ "flate2",
  "fluent-bundle",
  "fluent-syntax",
  "image",
@@ -2996,7 +3006,7 @@ dependencies = [
 
 [[package]]
 name = "rosetun-helper-privileged"
-version = "0.6.0"
+version = "0.7.0-beta.2"
 dependencies = [
  "base64",
  "libc",
@@ -3019,7 +3029,7 @@ dependencies = [
 
 [[package]]
 name = "rosetun-hwid"
-version = "0.6.0"
+version = "0.7.0-beta.2"
 dependencies = [
  "rosetun-config",
  "sha2",
@@ -3029,7 +3039,7 @@ dependencies = [
 
 [[package]]
 name = "rosetun-ipc"
-version = "0.6.0"
+version = "0.7.0-beta.2"
 dependencies = [
  "libc",
  "rosetun-config",
@@ -3042,7 +3052,7 @@ dependencies = [
 
 [[package]]
 name = "rosetun-processes"
-version = "0.6.0"
+version = "0.7.0-beta.2"
 dependencies = [
  "thiserror 2.0.21",
  "windows-sys 0.61.2",
@@ -3050,7 +3060,7 @@ dependencies = [
 
 [[package]]
 name = "rosetun-routing"
-version = "0.6.0"
+version = "0.7.0-beta.2"
 dependencies = [
  "libc",
  "rosetun-config",
@@ -3061,7 +3071,7 @@ dependencies = [
 
 [[package]]
 name = "rosetun-shell"
-version = "0.6.0"
+version = "0.7.0-beta.2"
 dependencies = [
  "libc",
  "memmap2",
@@ -3074,7 +3084,7 @@ dependencies = [
 
 [[package]]
 name = "rosetun-subscription"
-version = "0.6.0"
+version = "0.7.0-beta.2"
 dependencies = [
  "base64",
  "percent-encoding",
@@ -3571,7 +3581,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.5",
  "windows-sys 0.61.2",
@@ -3894,9 +3904,9 @@ dependencies = [
 
 [[package]]
 name = "url"
-version = "2.5.8"
+version = "2.5.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff67a8a4397373c3ef660812acab3268222035010ab8680ec4215f38ba3d0eed"
+checksum = "f00cd2407bb42c0ef17be88d4cf020f5cceffd121665bac9b8b9493a369b3b1a"
 dependencies = [
  "form_urlencoded",
  "idna",
@@ -3944,6 +3954,7 @@ dependencies = [
  "guillotiere",
  "log",
  "peniko",
+ "png",
  "smallvec",
  "thiserror 2.0.21",
 ]
@@ -3957,6 +3968,7 @@ dependencies = [
  "bytemuck",
  "glifo",
  "hashbrown 0.17.1",
+ "png",
  "vello_common",
 ]
 

@@ -14,7 +14,7 @@ static NEXT_ENDPOINT: AtomicU64 = AtomicU64::new(1);
 
 fn unique_endpoint() -> PathBuf {
     let suffix = format!(
-        "rosetun-read-{}-{}",
+        "rt-{}-{}",
         std::process::id(),
         NEXT_ENDPOINT.fetch_add(1, Ordering::Relaxed)
     );
@@ -90,17 +90,25 @@ struct TestServer {
 
 impl TestServer {
     fn start(timeouts: ReadTimeouts) -> Self {
-        Self::start_with_status_delay(timeouts, Duration::ZERO)
+        Self::start_configured(timeouts, Duration::ZERO, false)
     }
 
     fn start_with_status_delay(timeouts: ReadTimeouts, status_delay: Duration) -> Self {
+        Self::start_configured(timeouts, status_delay, false)
+    }
+
+    fn start_configured(
+        timeouts: ReadTimeouts,
+        status_delay: Duration,
+        ipc_shutdown: bool,
+    ) -> Self {
         let endpoint = unique_endpoint();
         #[cfg(windows)]
         let listener = Listener::bind(&endpoint).expect("bind test endpoint");
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         let listener =
             Listener::bind_test_fixture(endpoint.parent().unwrap()).expect("bind owned fixture");
-        let mut server = Server::new(false);
+        let mut server = Server::new(ipc_shutdown);
         server.read_timeouts = timeouts;
         server.status_delay = status_delay;
         let active = Arc::clone(&server.active);
@@ -159,7 +167,7 @@ impl Drop for TestServer {
         if !thread::panicking() {
             stopped.expect("server shutdown");
         }
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         if !thread::panicking() {
             std::fs::remove_dir(self.endpoint.parent().unwrap())
                 .expect("remove empty test directory");
@@ -225,7 +233,7 @@ fn shutdown_without_clients_closes_listener_before_serve_returns() {
     thread::sleep(Duration::from_millis(30));
     server.stop().expect("bounded shutdown without clients");
     assert!(open_raw(&server.endpoint).is_err(), "accept survived serve");
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         assert!(!server.endpoint.exists(), "owned endpoint survived serve");
         let rebound = Listener::bind_test_fixture(server.endpoint.parent().unwrap())
@@ -272,7 +280,7 @@ fn shutdown_with_full_client_limit_and_concurrent_connect_does_not_wait_for_clie
     server.wait_active(0, Duration::from_secs(2));
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn shutdown_cleanup_preserves_a_replacement_endpoint() {
     use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
@@ -351,7 +359,11 @@ fn silent_clients_release_all_slots_after_hello_timeout() {
 
 #[test]
 fn partial_frame_and_idle_client_close_on_their_own_deadlines() {
-    let server = TestServer::start(timeouts());
+    let server = TestServer::start(ReadTimeouts {
+        hello: Duration::from_millis(1_500),
+        frame: Duration::from_millis(450),
+        idle: Duration::from_millis(900),
+    });
     let (mut partial, mut writer) =
         open_with_writer(&server.endpoint).expect("open partial client");
     hello(&mut partial);
@@ -359,11 +371,11 @@ fn partial_frame_and_idle_client_close_on_their_own_deadlines() {
         .write_all(b"{\"request\":")
         .expect("write partial frame");
     let started = Instant::now();
-    thread::sleep(Duration::from_millis(90));
+    thread::sleep(Duration::from_millis(100));
     writer.write_all(b"42").expect("continue partial frame");
     server.wait_active(1, Duration::from_secs(1));
     expect_closed(partial);
-    assert!(started.elapsed() < Duration::from_millis(360));
+    assert!(started.elapsed() < Duration::from_millis(800));
     server.wait_active(0, Duration::from_secs(1));
 
     let mut stalled = server.connect();
@@ -371,14 +383,14 @@ fn partial_frame_and_idle_client_close_on_their_own_deadlines() {
     let started = Instant::now();
     server.wait_active(1, Duration::from_secs(1));
     expect_closed(stalled);
-    assert!(started.elapsed() >= Duration::from_millis(300));
+    assert!(started.elapsed() >= Duration::from_millis(750));
     server.wait_active(0, Duration::from_secs(1));
 }
 
 #[test]
 fn partial_hello_cannot_outlast_the_handshake_deadline() {
     let server = TestServer::start(ReadTimeouts {
-        hello: Duration::from_millis(270),
+        hello: Duration::from_millis(500),
         frame: Duration::from_secs(2),
         idle: Duration::from_secs(2),
     });
@@ -386,7 +398,7 @@ fn partial_hello_cannot_outlast_the_handshake_deadline() {
     writer
         .write_all(b"{\"request\":")
         .expect("start hello frame");
-    server.wait_active(1, Duration::from_millis(180));
+    server.wait_active(1, Duration::from_millis(350));
     expect_closed(client);
     server.wait_active(0, Duration::from_secs(1));
 }
@@ -455,7 +467,85 @@ fn malformed_frames_and_disconnects_release_their_permits() {
     ));
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn status_exchange_and_shutdown_policy_over_real_unix_socket() {
+    use rosetun_ipc::{ErrorCode, HelperError};
+
+    // Service mode rejects IPC shutdown regardless of caller privilege.
+    let service_server = TestServer::start_configured(timeouts(), Duration::ZERO, false);
+    let mut service_client = service_server.connect();
+    let Response::Hello { protection, .. } = exchange(
+        &mut service_client,
+        1,
+        Request::Hello {
+            client: "stage2-service-test".to_owned(),
+            protocol_version: PROTOCOL_VERSION,
+        },
+    ) else {
+        panic!("expected hello response");
+    };
+    if cfg!(target_os = "macos") {
+        assert!(!protection.kill_switch);
+        assert!(!protection.lockdown);
+    }
+    assert!(matches!(
+        exchange(&mut service_client, 2, Request::Status),
+        Response::Status(_)
+    ));
+    assert!(matches!(
+        exchange(&mut service_client, 3, Request::Shutdown),
+        Response::Error(HelperError {
+            code: ErrorCode::InvalidState,
+            ..
+        })
+    ));
+    assert!(matches!(
+        exchange(&mut service_client, 4, Request::Status),
+        Response::Status(_)
+    ));
+    drop(service_client);
+    drop(service_server);
+
+    // Console mode checks OS peer credentials and rejects non-admin shutdown.
+    let mut console_server = TestServer::start_configured(timeouts(), Duration::ZERO, true);
+    let mut console_client = console_server.connect();
+    hello(&mut console_client);
+    assert!(matches!(
+        exchange(&mut console_client, 2, Request::Status),
+        Response::Status(_)
+    ));
+    // SAFETY: geteuid has no arguments or invariants.
+    let is_root = unsafe { libc::geteuid() } == 0;
+    let reply = exchange(&mut console_client, 3, Request::Shutdown);
+    if is_root {
+        assert_eq!(reply, Response::Ok);
+        console_server
+            .finished
+            .recv_timeout(Duration::from_secs(4))
+            .expect("root shutdown stops console server");
+        let thread = console_server.thread.take().expect("server thread");
+        thread
+            .join()
+            .expect("server thread")
+            .expect("clean shutdown");
+    } else {
+        assert!(matches!(
+            reply,
+            Response::Error(HelperError {
+                code: ErrorCode::AccessDenied,
+                ..
+            })
+        ));
+        assert!(matches!(
+            exchange(&mut console_client, 4, Request::Status),
+            Response::Status(_)
+        ));
+    }
+    drop(console_client);
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn a_termination_signal_stops_the_server_and_removes_its_socket() {
     use std::os::unix::thread::JoinHandleExt;

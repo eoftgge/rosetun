@@ -114,6 +114,12 @@ mod tests {
             ),
             Some(SUPPORTED_XRAY_VERSION)
         );
+        assert_eq!(
+            parse_version(
+                "Xray 26.11.9 (Xray, Penetrates Everything.) 676eaf6 (go1.27.3 darwin/arm64)\n"
+            ),
+            Some(SUPPORTED_XRAY_VERSION)
+        );
         assert_eq!(parse_version("Xray 26.10.21 (Xray)\n"), Some("26.10.21"));
         assert_eq!(parse_version("Xray 26.11.9\n"), None);
         assert_eq!(parse_version("prefix Xray 26.11.9 (Xray)\n"), None);

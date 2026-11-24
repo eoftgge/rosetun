@@ -18,33 +18,37 @@ const MIN_NODE_LIST: f32 = 66.0;
 // Everything else in the node form at its tallest, plus room above and below the dialog.
 const NODE_FORM_REST: f32 = 550.0;
 
-pub(crate) fn exit_title(exit: &Exit) -> String {
-    let name = display::safe_text(&exit.name);
-    match destinations::exit_country(exit) {
-        Some(code) => format!("{name} · {}", code.as_str()),
-        None => name,
-    }
-}
-
 /// The second line of a row and whether it is a warning.
-fn exit_detail(config: &AppConfig, exit: &Exit, resolved: Option<&Selection>) -> (String, bool) {
+fn exit_detail(
+    state: &State,
+    exit: &Exit,
+    resolved: Option<&Selection>,
+) -> (String, bool, Option<String>) {
     let kind = match exit.target {
         ExitTarget::Country(_) => tr!("exit-kind-country"),
         ExitTarget::Node { .. } => tr!("exit-kind-node"),
     };
-    let (now, warning) = match destinations::exit_now(config, exit, resolved) {
-        ExitNow::Node(name) => (tr!("exit-now", node = display::safe_text(name)), false),
+    let (now, warning, country) = match destinations::exit_now(&state.config, exit, resolved) {
+        ExitNow::Node(name) => {
+            let (flag, label) = display::leading_flag(name);
+            let country = flag.or_else(|| {
+                rosetun_config::node_country(name).map(|code| code.as_str().to_owned())
+            });
+            (tr!("exit-now", node = state.text(label)), false, country)
+        }
         ExitNow::Fallback(code) => (
             tr!("exit-now-fallback", country = i18n::country_name(code)),
             false,
+            Some(code.as_str().to_owned()),
         ),
-        ExitNow::NodeGone => (tr!("exit-now-gone"), true),
+        ExitNow::NodeGone => (tr!("exit-now-gone"), true, None),
         ExitNow::NoCountryNodes(code) => (
             tr!("exit-now-no-nodes", country = i18n::country_name(code)),
             true,
+            Some(code.as_str().to_owned()),
         ),
     };
-    (format!("{kind} · {now}"), warning)
+    (format!("{kind} · {now}"), warning, country)
 }
 
 fn header_has_add_button(state: &State) -> bool {
@@ -130,7 +134,7 @@ fn exit_row(
     actions: &mut Vec<Action>,
 ) -> egui::Response {
     let title = destinations::exit_path_label(&state.config, exit);
-    let (detail, warning) = exit_detail(&state.config, exit, resolved);
+    let (detail, warning, country) = exit_detail(state, exit, resolved);
     let rules = state.exit_rules(&exit.id);
     let can_edit = state.can_edit_rules();
     widgets::card_frame()
@@ -153,7 +157,31 @@ fn exit_row(
                 |ui| {
                     ui.set_min_height(CARD_CONTENT_HEIGHT);
                     ui.spacing_mut().item_spacing.x = theme::space::S;
-                    icons::icon_badge_colored(ui, Icon::Globe, 32.0, theme::EXIT);
+                    if let Some(code) = &country {
+                        let (slot, response) = ui.allocate_exact_size(
+                            egui::Vec2::splat(theme::space::XXL),
+                            egui::Sense::hover(),
+                        );
+                        let badge = egui::Rect::from_center_size(
+                            slot.center(),
+                            theme::country_badge::ROW_SIZE.into(),
+                        );
+                        widgets::country_badge(
+                            ui,
+                            badge,
+                            code,
+                            state.config.interface.show_country_flags,
+                            false,
+                        );
+                        response.on_hover_text(code);
+                    } else {
+                        icons::icon_badge_colored(
+                            ui,
+                            Icon::Globe,
+                            theme::space::XXL,
+                            theme::exit(),
+                        );
+                    }
                     let width = (ui.available_width() - RIGHT_WIDTH).max(100.0);
                     ui.allocate_ui_with_layout(
                         egui::vec2(width, 40.0),
@@ -166,7 +194,7 @@ fn exit_row(
                             ui.add(
                                 egui::Label::new(RichText::new(&detail).small().color(
                                     if warning {
-                                        theme::WARNING
+                                        theme::warning()
                                     } else {
                                         theme::palette().text_muted
                                     },
@@ -259,10 +287,6 @@ fn dialog_countries(config: &AppConfig, dialog: &ExitDialog) -> Vec<CountryCode>
     countries
 }
 
-fn country_label(code: &CountryCode) -> String {
-    format!("{} · {}", i18n::country_name(code), code.as_str())
-}
-
 fn note(ui: &mut egui::Ui, text: String, color: egui::Color32) {
     ui.add(egui::Label::new(RichText::new(text).small().color(color)).wrap());
 }
@@ -270,21 +294,34 @@ fn note(ui: &mut egui::Ui, text: String, color: egui::Color32) {
 fn country_picker(ui: &mut egui::Ui, dialog: &mut ExitDialog, config: &AppConfig, busy: bool) {
     ui.label(tr!("exit-country"));
     let countries = dialog_countries(config, dialog);
+    let flags = config.interface.show_country_flags;
+    let selected_code = dialog.country.as_ref().map(|code| code.as_str().to_owned());
     let selected = dialog
         .country
         .as_ref()
-        .map_or_else(|| tr!("exit-country-pick"), country_label);
+        .map_or_else(|| tr!("exit-country-pick"), i18n::country_name);
     ui.add_enabled_ui(!busy, |ui| {
-        widgets::drop_down(ui, "exit_country", None, selected, |ui| {
-            for code in countries {
-                let label = country_label(&code);
-                let picked = dialog.country.as_ref() == Some(&code);
-                if ui.selectable_label(picked, label).clicked() {
-                    dialog.country = Some(code);
-                    dialog.error = None;
+        widgets::drop_down(
+            ui,
+            "exit_country",
+            None,
+            widgets::country_label(selected, selected_code.as_deref(), flags, false),
+            |ui| {
+                for code in countries {
+                    let label = widgets::country_label(
+                        i18n::country_name(&code),
+                        Some(code.as_str()),
+                        flags,
+                        false,
+                    );
+                    let picked = dialog.country.as_ref() == Some(&code);
+                    if ui.selectable_label(picked, label).clicked() {
+                        dialog.country = Some(code);
+                        dialog.error = None;
+                    }
                 }
-            }
-        });
+            },
+        );
     });
     ui.add_space(theme::space::S);
     note(ui, tr!("exit-country-hint"), theme::palette().text_muted);
@@ -302,6 +339,9 @@ fn node_picker(ui: &mut egui::Ui, dialog: &mut ExitDialog, config: &AppConfig, b
         )
     });
     let nodes = destinations::matching_nodes(config, &dialog.node_search);
+    let country_column = nodes
+        .iter()
+        .any(|node| display::leading_flag(node.name).0.is_some());
     let mut picked = None;
     egui::ScrollArea::vertical()
         .id_salt("exit_nodes")
@@ -320,11 +360,26 @@ fn node_picker(ui: &mut egui::Ui, dialog: &mut ExitDialog, config: &AppConfig, b
                     .filter(|id| dialog.editing.as_ref() != Some(*id))
                     .and_then(|id| config.exits.iter().find(|exit| &exit.id == id));
                 let selected = dialog.node.as_ref() == Some(&node.selection);
+                let (country, label) = display::leading_flag(node.name);
+                let label = display::safe_text(label);
+                let spoken = widgets::spoken_with_country(&label, country.as_deref());
+                let enabled = !busy && taken.is_none();
                 let response = ui.add_enabled(
-                    !busy && taken.is_none(),
-                    egui::Button::selectable(selected, display::safe_text(node.name))
-                        .min_size(egui::vec2(ui.available_width(), 0.0)),
+                    enabled,
+                    egui::Button::selectable(
+                        selected,
+                        widgets::country_label(
+                            label,
+                            country.as_deref(),
+                            config.interface.show_country_flags,
+                            country_column,
+                        ),
+                    )
+                    .min_size(egui::vec2(ui.available_width(), 0.0)),
                 );
+                response.widget_info(|| {
+                    egui::WidgetInfo::selected(egui::Role::Button, enabled, selected, &spoken)
+                });
                 if let Some(exit) = taken {
                     response.on_disabled_hover_text(tr!(
                         "exit-node-taken",
@@ -345,7 +400,7 @@ fn node_picker(ui: &mut egui::Ui, dialog: &mut ExitDialog, config: &AppConfig, b
         })
     });
     if gone {
-        note(ui, tr!("exit-node-gone-pick"), theme::WARNING);
+        note(ui, tr!("exit-node-gone-pick"), theme::warning());
     }
     ui.add_space(theme::space::S);
     let country = dialog.fallback_country.clone();
@@ -377,6 +432,107 @@ fn node_picker(ui: &mut egui::Ui, dialog: &mut ExitDialog, config: &AppConfig, b
             tr!("exit-fallback-no-country"),
             theme::palette().text_dim,
         );
+    }
+}
+
+fn via_picker(ui: &mut egui::Ui, dialog: &mut ExitDialog, config: &AppConfig, busy: bool) {
+    let candidates = dialog.via_candidates(config).to_vec();
+    if candidates.is_empty() {
+        let fragment_blocked = dialog.via_blocked_by_tls_fragmentation();
+        if fragment_blocked || dialog.via.is_some() {
+            ui.add_space(theme::space::M);
+            let hint = if fragment_blocked {
+                tr!("exit-via-tls-fragmentation")
+            } else {
+                tr!("exit-path-unsupported")
+            };
+            let color = if dialog.via.is_some() {
+                theme::warning()
+            } else {
+                theme::palette().text_dim
+            };
+            note(ui, hint, color);
+        }
+        if dialog.via.is_some()
+            && widgets::outline_button_compact(ui, &tr!("exit-via-direct"), !busy).clicked()
+        {
+            dialog.via = None;
+            dialog.error = None;
+        }
+        return;
+    }
+    let flags = config.interface.show_country_flags;
+    let parent = dialog
+        .via
+        .as_ref()
+        .and_then(|id| config.exits.iter().find(|exit| &exit.id == id));
+    let country = parent.and_then(|exit| destinations::exit_display_country(config, exit));
+    let selected = match parent {
+        Some(exit) => display::safe_text(&exit.name),
+        None if dialog.via.is_some() => tr!("connection-exit-removed"),
+        None => tr!("exit-via-direct"),
+    };
+    let spoken = widgets::spoken_with_country(&selected, country.as_deref());
+    ui.add_space(theme::space::M);
+    ui.label(tr!("exit-via"));
+    ui.add_enabled_ui(!busy, |ui| {
+        widgets::drop_down(
+            ui,
+            "exit_via",
+            None,
+            widgets::country_label(selected, country.as_deref(), flags, false),
+            |ui| {
+                if ui
+                    .selectable_value(&mut dialog.via, None, tr!("exit-via-direct"))
+                    .changed()
+                {
+                    dialog.error = None;
+                }
+                for parent in config
+                    .exits
+                    .iter()
+                    .filter(|exit| candidates.contains(&exit.id))
+                {
+                    let country = destinations::exit_display_country(config, parent);
+                    let name = display::safe_text(&parent.name);
+                    let spoken = widgets::spoken_with_country(&name, country.as_deref());
+                    let label = widgets::country_label(name, country.as_deref(), flags, false);
+                    let picked = dialog.via.as_ref() == Some(&parent.id);
+                    let response =
+                        ui.selectable_value(&mut dialog.via, Some(parent.id.clone()), label);
+                    response.widget_info(|| {
+                        egui::WidgetInfo::selected(egui::Role::Button, true, picked, &spoken)
+                    });
+                    if response.changed() {
+                        dialog.error = None;
+                    }
+                }
+            },
+        )
+        .widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, !busy, &spoken));
+    });
+    if let Some(via) = &dialog.via {
+        let parent = config.exits.iter().find(|exit| &exit.id == via);
+        let title = parent.map_or_else(
+            || tr!("connection-exit-removed"),
+            |exit| display::safe_text(&exit.name),
+        );
+        let country = parent.and_then(|exit| destinations::exit_display_country(config, exit));
+        let path = format!("{title} → {}", display::safe_text(&dialog.name));
+        ui.add(
+            egui::WidgetAtom::new(widgets::country_label(
+                RichText::new(path)
+                    .small()
+                    .color(theme::palette().text_muted),
+                country.as_deref(),
+                flags,
+                false,
+            ))
+            .wrap_mode(egui::TextWrapMode::Wrap),
+        );
+        if !candidates.contains(via) {
+            note(ui, tr!("exit-path-unsupported"), theme::warning());
+        }
     }
 }
 
@@ -434,64 +590,7 @@ pub(crate) fn exit_dialog(ctx: &egui::Context, state: &mut State, actions: &mut 
                         ExitKind::Country => country_picker(ui, dialog, config, busy),
                         ExitKind::Node => node_picker(ui, dialog, config, busy),
                     });
-                    ui.add_space(theme::space::M);
-                    ui.label(tr!("exit-via"));
-                    let selected = dialog.via.as_ref().map_or_else(
-                        || tr!("exit-via-direct"),
-                        |id| {
-                            config
-                                .exits
-                                .iter()
-                                .find(|exit| &exit.id == id)
-                                .map_or_else(|| tr!("connection-exit-removed"), exit_title)
-                        },
-                    );
-                    let candidates = dialog.via_candidates(config).to_vec();
-                    // A saved path that no longer works stays changeable.
-                    let nothing_to_pick =
-                        dialog.target().is_some() && candidates.is_empty() && dialog.via.is_none();
-                    ui.add_enabled_ui(!busy && !nothing_to_pick, |ui| {
-                        widgets::drop_down(ui, "exit_via", None, selected, |ui| {
-                            ui.selectable_value(&mut dialog.via, None, tr!("exit-via-direct"));
-                            for parent in config
-                                .exits
-                                .iter()
-                                .filter(|exit| candidates.contains(&exit.id))
-                            {
-                                ui.selectable_value(
-                                    &mut dialog.via,
-                                    Some(parent.id.clone()),
-                                    exit_title(parent),
-                                );
-                            }
-                        })
-                        .on_disabled_hover_text(tr!("exit-via-none"));
-                    });
-                    if nothing_to_pick {
-                        note(ui, tr!("exit-via-none"), theme::palette().text_muted);
-                    }
-                    if let Some(via) = &dialog.via {
-                        let parent = config
-                            .exits
-                            .iter()
-                            .find(|exit| &exit.id == via)
-                            .map_or_else(|| tr!("connection-exit-removed"), exit_title);
-                        note(
-                            ui,
-                            format!("{parent} → {}", display::safe_text(&dialog.name)),
-                            theme::palette().text_muted,
-                        );
-                        if dialog.target().is_some_and(|target| {
-                            !destinations::exit_path_supported(
-                                config,
-                                dialog.editing.as_ref(),
-                                &target,
-                                dialog.via.as_ref(),
-                            )
-                        }) {
-                            note(ui, tr!("exit-path-unsupported"), theme::WARNING);
-                        }
-                    }
+                    via_picker(ui, dialog, config, busy);
                     if dialog.editing.is_none() && full {
                         ui.add_space(theme::space::S);
                         note(
@@ -500,12 +599,12 @@ pub(crate) fn exit_dialog(ctx: &egui::Context, state: &mut State, actions: &mut 
                                 "where-exits-full",
                                 count = rosetun_ipc::MAX_EXTRA_NODES.to_string()
                             ),
-                            theme::WARNING,
+                            theme::warning(),
                         );
                     }
                     if let Some(error) = &dialog.error {
                         ui.add_space(theme::space::S);
-                        ui.add(egui::Label::new(RichText::new(error).color(theme::ERROR)).wrap());
+                        ui.add(egui::Label::new(RichText::new(error).color(theme::error())).wrap());
                     }
                 });
             let footer = widgets::DialogFooter::new(tr!("save"), tr!("cancel"))
@@ -564,7 +663,13 @@ pub(crate) fn delete_dialog(ctx: &egui::Context, state: &State, actions: &mut Ve
         },
         |ui| {
             if let Some(exit) = state.config.exits.iter().find(|exit| exit.id == dialog.id) {
-                ui.label(exit_title(exit));
+                let country = destinations::exit_display_country(&state.config, exit);
+                ui.add(egui::WidgetAtom::new(widgets::country_label(
+                    display::safe_text(&exit.name),
+                    country.as_deref(),
+                    state.config.interface.show_country_flags,
+                    false,
+                )));
             }
             ui.add_space(theme::space::M);
             if dialog.dependents.is_empty() {
@@ -579,7 +684,7 @@ pub(crate) fn delete_dialog(ctx: &egui::Context, state: &State, actions: &mut Ve
                 );
             }
             if let Some(error) = &dialog.error {
-                ui.add(egui::Label::new(RichText::new(error).color(theme::ERROR)).wrap());
+                ui.add(egui::Label::new(RichText::new(error).color(theme::error())).wrap());
             }
         },
     );
@@ -625,7 +730,7 @@ mod tests {
 
     fn state() -> State {
         let mut config = config(
-            &[("nl", "NL One"), ("plain", "Plain")],
+            &[("nl", "🇳🇱 One"), ("plain", "Plain")],
             vec![
                 exit("1", ExitTarget::Country(country("NL"))),
                 node_exit("2", "nl", Some(country("NL"))),
@@ -671,7 +776,7 @@ mod tests {
             let show = |state: &mut State, ui: &mut egui::Ui| {
                 exit_dialog(ui.ctx(), state, &mut Vec::new());
             };
-            let wanted = country_label(&country("NL"));
+            let wanted = i18n::country_name(&country("NL"));
             let open = screen.click_text(&tr!("exit-country-pick"), |ui| show(&mut state, ui));
             assert!(open.iter().any(|(text, _)| *text == wanted), "{open:?}");
             screen.click_text(&wanted, |ui| show(&mut state, ui));
@@ -680,6 +785,110 @@ mod tests {
                 Some(country("NL"))
             );
         });
+    }
+
+    #[test]
+    fn via_picker_requires_a_supported_server_and_parent() {
+        use crate::test_ui::TestScreen;
+
+        for ((proxy, address, parent, expected), fragmented) in [
+            (false, "192.0.2.10", true, false),
+            (true, "proxy.example.com", true, false),
+            (true, "192.0.2.10", false, false),
+            (true, "192.0.2.10", true, true),
+        ]
+        .into_iter()
+        .flat_map(|case| [(case, false), (case, true)])
+        {
+            let mut state = state();
+            state.config.settings.tls_fragment.enabled = fragmented;
+            state.config.exits.truncate(usize::from(parent));
+            let first = &mut state.config.subscriptions[0].nodes[0];
+            first.outbound = rosetun_config::Outbound::Socks5(Default::default());
+            first.server = "192.0.2.20".to_owned();
+            let node = &mut state.config.subscriptions[0].nodes[1];
+            if proxy {
+                node.outbound = rosetun_config::Outbound::Socks5(Default::default());
+            }
+            node.server = address.to_owned();
+            state.act(Action::OpenNewExit);
+            let dialog = state.exits.dialog.as_mut().unwrap();
+            dialog.kind = ExitKind::Node;
+            dialog.pick_node(&state.config, selection("plain"));
+            let mut screen = TestScreen::new(egui::vec2(960.0, 640.0));
+            let texts = screen.settle(|ui| via_picker(ui, dialog, &state.config, false));
+            assert_eq!(
+                texts.iter().any(|(text, _)| text == &tr!("exit-via")),
+                expected && !fragmented,
+                "{proxy} {address} {parent} {fragmented}",
+            );
+            assert_eq!(
+                texts
+                    .iter()
+                    .any(|(text, _)| text == &tr!("exit-via-tls-fragmentation")),
+                expected && fragmented,
+                "{proxy} {address} {parent} {fragmented}",
+            );
+        }
+    }
+
+    #[test]
+    fn an_unavailable_saved_path_can_be_cleared_explicitly() {
+        use crate::test_ui::TestScreen;
+
+        let mut state = state();
+        state.act(Action::OpenNewExit);
+        let dialog = state.exits.dialog.as_mut().unwrap();
+        dialog.kind = ExitKind::Node;
+        dialog.pick_node(&state.config, selection("plain"));
+        dialog.via = Some(ExitId::new("1"));
+        let mut screen = TestScreen::new(egui::vec2(960.0, 640.0));
+        let texts = screen.click_text(&tr!("exit-via-direct"), |ui| {
+            via_picker(ui, dialog, &state.config, false);
+        });
+        assert!(dialog.via.is_none());
+        assert!(!texts.iter().any(|(text, _)| text == &tr!("exit-via")));
+    }
+
+    #[test]
+    fn node_picker_replaces_the_prefix_with_the_selected_country_badge() {
+        let config = config(&[("nl", "🇳🇱 One"), ("plain", "Plain")], Vec::new());
+        for flags in [true, false] {
+            let mut state = State::default();
+            state.config_ready = true;
+            state.config = config.clone();
+            state.config.interface.show_country_flags = flags;
+            state.act(Action::OpenNewExit);
+            let dialog = state.exits.dialog.as_mut().unwrap();
+            let ctx = egui::Context::default();
+            theme::apply(&ctx);
+            let mut output = ctx.run_ui(input(960.0, 780.0), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    node_picker(ui, dialog, &state.config, false);
+                });
+            });
+            output.textures_delta.clear();
+            let marker = output.shapes.iter().find_map(|shape| {
+                let mut shapes = vec![&shape.shape];
+                while let Some(shape) = shapes.pop() {
+                    match shape {
+                        egui::Shape::Vec(children) => shapes.extend(children),
+                        egui::Shape::Rect(badge)
+                            if badge.rect.size() == theme::country_badge::ROW_SIZE.into()
+                                && badge.round_to_pixels == Some(true) =>
+                        {
+                            return Some(badge);
+                        }
+                        _ => {}
+                    }
+                }
+                None
+            });
+            assert_eq!(marker.unwrap().brush.is_some(), flags);
+            assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape,
+                egui::Shape::Text(text) if text.galley.text().contains("[NL]")
+            )));
+        }
     }
 
     #[test]
@@ -707,11 +916,11 @@ mod tests {
         let netherlands = i18n::country_name(&country("NL"));
         for (expected, color) in [
             (
-                format!("{country_kind} · {}", tr!("exit-now", node = "NL One")),
+                format!("{country_kind} · {}", tr!("exit-now", node = "One")),
                 theme::palette().text_muted,
             ),
             (
-                format!("{node_kind} · {}", tr!("exit-now", node = "NL One")),
+                format!("{node_kind} · {}", tr!("exit-now", node = "One")),
                 theme::palette().text_muted,
             ),
             (
@@ -723,7 +932,7 @@ mod tests {
             ),
             (
                 format!("{node_kind} · {}", tr!("exit-now-gone")),
-                theme::WARNING,
+                theme::warning(),
             ),
             (
                 tr!("exit-rules", count = 1, n = "1"),
@@ -737,6 +946,30 @@ mod tests {
                     .any(|(text, found)| text == &expected && *found == color),
                 "{expected} in {texts:?}"
             );
+        }
+    }
+
+    #[test]
+    fn resolved_countries_use_the_shared_badge_in_both_modes() {
+        let mut state = state();
+        for flags in [true, false] {
+            state.config.interface.show_country_flags = flags;
+            let ctx = egui::Context::default();
+            theme::apply(&ctx);
+            let mut output = ctx.run_ui(input(960.0, 640.0), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| show(ui, &state, &mut Vec::new()));
+            });
+            output.textures_delta.clear();
+            let badges = output.shapes.iter().filter(|shape| {
+                matches!(&shape.shape, egui::Shape::Rect(badge)
+                    if badge.rect.size() == theme::country_badge::ROW_SIZE.into()
+                        && badge.stroke.color == theme::palette().border_strong
+                        && badge.brush.is_some() == flags)
+            });
+            assert_eq!(badges.count(), 3);
+            assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape,
+                egui::Shape::Text(text) if text.galley.text().contains("[NL]")
+            )));
         }
     }
 
