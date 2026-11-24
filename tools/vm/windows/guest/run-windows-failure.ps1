@@ -141,9 +141,10 @@ try {
     if ($caseName -eq 'no-network') {
         Set-RosetunRunnerStep -Step 'no-network'
         $adapterIndex = Get-PhysicalInterfaceIndex
+        $adapterName = (Get-NetAdapter -InterfaceIndex $adapterIndex | Select-Object -First 1).Name
         $routeRestored = $false
         try {
-            Disable-NetAdapter -InterfaceIndex $adapterIndex -Confirm:$false
+            Disable-NetAdapter -Name $adapterName -Confirm:$false
             $networkTimer = [Diagnostics.Stopwatch]::StartNew()
             $attempt = Invoke-FailureCli -Arguments @('connect', $baseRequestPath) -Seconds 30
             $failed = Wait-FailureState -Expected 'Failed' -TimeoutSeconds 10
@@ -164,7 +165,7 @@ try {
             }
         }
         finally {
-            Enable-NetAdapter -InterfaceIndex $adapterIndex -Confirm:$false
+            Enable-NetAdapter -Name $adapterName -Confirm:$false
         }
         $routeRestored = Wait-PhysicalRoute -Index $adapterIndex -TimeoutSeconds 60
         Test-Step -Id 'no-network.physical-route-returns-after-adapter-enable' -Scenario 'no network' -Expectation 'physical route returns after adapter enable' {

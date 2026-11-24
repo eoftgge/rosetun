@@ -227,8 +227,8 @@ function Start-FailureEgressWatch {
     $marker = 'rosetun-egress-probe='
     Stop-FailureEgressWatch -Quiet | Out-Null
     $range = $targetUrl.TrimEnd('/') + "/?$marker[1-10000000]"
-    $arguments = ('/d /c "{0}" --interface {1} --max-time 2 --rate 300/m --silent --ssl-no-revoke --output NUL ' +
-        '--write-out "%{{stderr}}%{{exitcode}}\n" "{2}" 2> "{3}"') -f $curlPath, $physical, $range, $watchPath
+    $arguments = ('/d /c ""{0}" --interface {1} --max-time 2 --rate 300/m --silent --ssl-no-revoke --output NUL ' +
+        '--write-out "%{{stderr}}%{{exitcode}}\n" "{2}" 2> "{3}""') -f $curlPath, $physical, $range, $watchPath
     $action = New-ScheduledTaskAction -Execute (Join-Path $env:SystemRoot 'System32\cmd.exe') -Argument $arguments -WorkingDirectory $work
     $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
     $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries

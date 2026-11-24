@@ -5740,17 +5740,21 @@ cases run back-to-back with the final code:
 | `engine-killed` | `197b6966...` | 0 | 213.6 s | 17 PASS | `EXPECTED` (`leak: NONE`, tunnel 80, unexpected 0) | runner `PASS`, `left: []` (WFP clean) |
 | `temporary` | `f0616df2...` | 0 | 213.7 s | 18 PASS | `EXPECTED` (tunnel 209, 1 expected direct flow, unexpected 17) | runner `PASS`, `left: []` (WFP clean) |
 | `helper-killed` | `caf0e8cd...` | 0 | 213.2 s | 12 PASS | `EXPECTED` (`leak: NONE`, tunnel 78, unexpected 0) | runner `PASS`, `left: []` (WFP clean) |
+| `no-network` (2026-11-24, `lab-v5n`) | `48956fb2...` | 0 | 205.3 s | 15 PASS | `EXPECTED` (`leak: NONE`, tunnel 89, unexpected 0) | runner `PASS`, `left: []` (WFP clean) |
+| `apply-rules` (2026-11-24, `lab-v5n`) | `c461dd9b...` | 0 | 206.5 s | 14 PASS | `EXPECTED` (`leak: NONE`, tunnel 174, unexpected 0) | runner `PASS`, `left: []` (WFP clean) |
+| `reconnect` (2026-11-24, `lab-v5n`) | `3e84af9d...` | 0 | 210.3 s | 16 PASS | `EXPECTED` (`leak: NONE`, tunnel 183, unexpected 0) | runner `PASS`, `left: []` (WFP clean) |
+| `dns-lock` (2026-11-24, `lab-v5n`) | `84a36adc...` | 0 | 204.8 s | 12 PASS | `EXPECTED` (`leak: NONE`, tunnel 177, unexpected 0) | runner `PASS`, `left: []` (WFP clean) |
 
-All three runs: `accepted: true`, `findings: []`, `unverified: []`, `image_unchanged: true`, all four lab fixtures
-answered (`dns`, `doh`, `https` direct and `via_node`, `node`), all six markers sent once and acknowledged, runner
-finished in ~41 s (2 polls, `sing-box-first-launch-seconds: 2`), guest shut down via ACPI.
+All seven runs: `accepted: true`, `findings: []`, `unverified: []`, `image_unchanged: true`, all four lab fixtures
+answered (`dns`, `doh`, `https` direct and `via_node`, `node`), all six markers sent once and acknowledged, guest shut
+down via ACPI. Live verification of the four remaining cases caught and fixed two guest-script bugs: resolving the
+physical adapter `-Name` for `Disable-NetAdapter`/`Enable-NetAdapter` in `no-network`, and outer-quoting the
+`cmd.exe /d /c` command line in `Start-FailureEgressWatch` for `reconnect`.
 
 ### Not done here, UNRUN
 
 - Nothing qualifies: `qualified: false`, diagnostic runs only, no release gate or Hyper-V parity table is touched.
-- Four of the seven cases (`no-network`, `apply-rules`, `reconnect`, `dns-lock`) have offline tests and runner code but
-  have not yet been executed on the live QEMU stand.
-- Remaining Windows suites (Proxy, LAN, Upgrade): stages 10d and 10e.
+- Extended protocols, second-node, two-hop, and DHCP fixtures: stage 10f.
 
 ## Stage 10c: Windows Lockdown (`windows-lockdown`) and controller `power_cycle`
 
