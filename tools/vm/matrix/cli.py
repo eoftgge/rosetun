@@ -68,6 +68,8 @@ def main(argv=None):
     evidence.add_argument('--run', action='append', required=True, dest='runs',
                           help='a run as `runs` lists it, or the base identifier of a lab run (-lab and -test); repeatable')
     evidence.add_argument('--out', required=True, help='a directory that does not exist yet')
+    evidence.add_argument('--include-archive', action='store_true',
+                          help='also read reconciled runs already moved into state/archive/ by `recover --archive`')
     plan = commands.add_parser("plan", help="write a deterministic catalog snapshot to stdout")
     plan.add_argument("suite", choices=[*SUITES, "windows-list", "windows-proxy", "windows-failure",
                                         "windows-lockdown", "windows-lan", UPGRADE_SUITE, PROTOCOLS_SUITE,
@@ -161,7 +163,8 @@ def main(argv=None):
         elif args.command == 'evidence':
             from . import release_evidence
             try:
-                result, code = release_evidence.build_pack(args.state_directory, args.runs, args.out), 0
+                result, code = release_evidence.build_pack(args.state_directory, args.runs, args.out,
+                                                           include_archive=args.include_archive), 0
             except release_evidence.EvidenceRefused as error:
                 result, code = release_evidence.refusal(error), 1
         elif args.command == 'attach':

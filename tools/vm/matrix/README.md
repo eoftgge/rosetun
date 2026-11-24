@@ -6135,6 +6135,51 @@ All five runs: `accepted: true`, `findings: []`, `unverified: []`, `image_unchan
 - Chunked atomic lab-action replies (`write_reply_scripts`), `planned_session_rotations` QGA headroom, and
   deduplicating `DnsLog(aggregate=True)` for the 40-scenario Two-Hop run.
 
+## Stage 10g: Windows parity evidence packs
+
+`python -m tools.vm.matrix evidence` supports all eight Windows matrix suites alongside the Linux lab suites:
+- `windows-list` (`parity-windows-list.tsv`)
+- `windows-failure` — grouped per case (`parity-windows-failure-<case>.tsv`, one table per case:
+  `engine-killed`, `helper-killed`, `no-network`, `apply-rules`, `reconnect`, `temporary`, `dns-lock`)
+- `windows-lockdown` — grouped per case (`parity-windows-lockdown-<case>.tsv`, e.g. `full`, `core`, `reboot`)
+- `windows-proxy` (`parity-windows-proxy.tsv`)
+- `windows-lan` (`parity-windows-lan.tsv`)
+- `windows-upgrade` (`parity-windows-upgrade.tsv`)
+- `windows-protocols` (`parity-windows-protocols.tsv`)
+- `windows-twohop` (`parity-windows-twohop.tsv`)
+
+Infrastructure smoke suites (`windows-boot-smoke`, `windows-reboot-smoke`, `windows-lab-smoke`) remain
+diagnostic and are still refused (`diagnostic-run`).
+
+### Collecting three consecutive clean Windows runs
+
+Because each Windows run occupies the stand until archived (`recover --run-id <id> --archive`), consecutive
+runs are archived into `state/archive/` between executions and then packed read-only with `--include-archive`:
+
+```
+python -m tools.vm.matrix evidence \
+  --state-directory STATE \
+  --include-archive \
+  --run RUN1 --run RUN2 --run RUN3 \
+  --out DIR
+```
+
+- All runs in one set must come from the same clean commit (`source_dirty: false`, identical `source_sha`).
+- Packing from `state/archive/` writes the exact same `runs/<directory>/` paths and identical bytes as packing
+  from `state/runs/`. A run present in both `runs/` and `archive/` (or split across them) is refused with
+  `run-in-runs-and-archive`.
+- For each Windows run, the pack records `images.test` (from `preflight.image`), `images.lab`, `pcap` verified
+  against `lab.evidence` and `capture.pcap`, `findings`, `unproven` (from `execution.unverified`),
+  `window_verdicts` (per-window `LISTED`, `EXPECTED`, `NONE`, `DETECTED`, `MISMATCH`, or `UNVERIFIED`), and
+  `window_counts_all_as_expected`.
+- `parity-<set>.tsv` lists every check from `preflight.checks` in order with `result1..N`, flags any
+  `disagree:<id>` finding as `DISAGREE` in `crosscheck1..N`, notes any cross-run differences, and leaves the
+  `hyperv` column blank for the owner.
+- `manifest.json` records factual per-set counters (`run_count`, `all_exit_zero`, `all_windows_as_expected`,
+  `all_findings_empty`, `all_unproven_empty`). `release_gate` remains `false`, `security_invariants` remains
+  `"UNVERIFIED"`, and `owner_signature` remains `null`; judging parity against legacy Hyper-V runs and signing
+  the pack remain exclusively the owner's decision.
+
 ## Stage 12: release evidence pack
 
 `evidence` copies the records of chosen finished runs into one new directory and
@@ -6144,12 +6189,14 @@ false, the security invariants stay UNVERIFIED, and judging the pack and signing
 are the owner's, outside this tool.
 
 ```
-python -m tools.vm.matrix evidence --state-directory STATE --run RUN [--run RUN ...] --out DIR
+python -m tools.vm.matrix evidence --state-directory STATE [--include-archive] --run RUN [--run RUN ...] --out DIR
 ```
 
 - `--run` is a run as `runs` lists it (`<id>-test`, `<id>-lab`), or the base
   identifier of a lab run, which stands for its `-lab` and `-test` directories
   together. Name each run once; the order of the arguments does not matter.
+- `--include-archive` also searches reconciled runs previously moved into
+  `STATE/archive/` by `recover --archive`. Without it, only `STATE/runs/` is read.
 - `--out` must not exist and must lie outside the state. The pack is written to
   `DIR.partial` and renamed on success, so a refusal or a failure leaves nothing.
 - Exit 0: built. Exit 1: refused (`built: false`, `reason`, and `run` when one run
@@ -6166,21 +6213,28 @@ python -m tools.vm.matrix evidence --state-directory STATE --run RUN [--run RUN 
   `capture.pcap` is in the lab's directory it is hashed and must match the summary.
   The owner token of a run and a private key are never evidence: a copied file that
   contains either stops the pack.
-- `parity-<set>.tsv` for each suite (`l3`, `proxy`, `l4`, `l5`): the columns of the
-  stage 8g tables (`id`, `required`, `result1..N`, `crosscheck1..N`, `window`,
-  `window_verdict1..N`, `note`) and an empty `hyperv` column last, for the owner.
-  The runs of a suite are the columns, in the order of their start. The `note` says
-  only where the runs differ or a scenario is not among the assessment rows.
+- `parity-<set>.tsv` for each suite (`l3`, `proxy`, `l4`, `l5`, `windows-list`,
+  `windows-failure-<case>`, `windows-lockdown-<case>`, `windows-proxy`,
+  `windows-lan`, `windows-upgrade`, `windows-protocols`, `windows-twohop`): the
+  columns of the stage 8g/10g tables (`id`, `required`, `result1..N`,
+  `crosscheck1..N`, `window`, `window_verdict1..N`, `note`) and an empty `hyperv`
+  column last, for the owner. The runs of a suite are the columns, in the order of
+  their start. The `note` says only where the runs differ or a scenario is not
+  among the assessment rows.
 - `parity-summary.json`: per suite, per run: commit, `source_dirty`, images, run
   directories, exit code, summary hash, capture size and hash, start and end from the
-  lifecycle journal, windows, scenario counts. It interprets nothing.
+  lifecycle journal, windows, scenario counts (plus `case` and `window_verdicts`
+  when present on Windows suites). It interprets nothing.
 - `manifest.json`, schema `rosetun.matrix.release-evidence.v1`:
   `release_gate: false`, `security_invariants: "UNVERIFIED"`,
-  `owner_signature: null`; `sets` (commit, run list and table per suite); `runs`
+  `owner_signature: null`; `sets` (commit, run list, table, `run_count`,
+  `all_exit_zero`, `all_windows_as_expected`, `all_findings_empty`,
+  `all_unproven_empty`); `runs`
   (`run`, `suite`, `commit`, `source_dirty`, `source_dirty_digest`, `images`,
   `directories`, `exit_code`, `outcome`, `summary_schema`, `summary_sha256`,
   `completion_verified`, `attached`, `findings`, `unproven`, `pcap`, `started_utc`,
-  `finished_utc`, `windows`, `window_counts_all_as_expected`, `scenario_counts`);
+  `finished_utc`, `windows`, `window_counts_all_as_expected`, `scenario_counts`,
+  plus optional `case` and `window_verdicts`);
   `files` (bytes and SHA-256 of every file of the pack but the manifest).
 
 The same runs give the same bytes: keys and files are sorted, and the content holds
@@ -6188,9 +6242,9 @@ no time of the build.
 
 ### Refusals
 
-`run-not-found`, `duplicate-run`, `completion-not-verified` (the run's own
-completion check fails), `summaries-differ` (the `-lab` and `-test` summaries are
-not the same bytes), `summary-invalid`, `source-unknown`, `source-dirty`,
+`run-not-found`, `duplicate-run`, `run-in-runs-and-archive`, `completion-not-verified`
+(the run's own completion check fails), `summaries-differ` (the `-lab` and `-test`
+summaries are not the same bytes), `summary-invalid`, `source-unknown`, `source-dirty`,
 `commits-differ-in-a-set` (runs of one suite from different commits; suites may
 differ), `diagnostic-run`, `attached-run` (`attached: true`, or no
 `attached: false` in a summary that is not a lab's: a qualifying step needs
@@ -6210,6 +6264,6 @@ the pack. A table with an empty `hyperv` column is a draft.
 `vm-matrix.yml` runs the tests of the pack (`test_release_evidence`) on both
 runners with the rest of the offline tests; the one test that closes a run through
 the real controller is `controller_only`. A Linux-only step validates every
-`execution*.example.toml` with `execution.validate`: it needs no stand, but the
-examples name Linux paths that are not absolute on Windows. CI has no release gate
-and needs no KVM.
+`execution*.example.toml` with `execution.validate` / `windows_smoke.validate`: it
+needs no stand, but the examples name Linux paths that are not absolute on Windows.
+CI has no release gate and needs no KVM.

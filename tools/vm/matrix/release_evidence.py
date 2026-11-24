@@ -27,6 +27,17 @@ REPORT = 'report.json'
 SUITE_DIRECTORY = re.compile(r'(linux|windows)-[a-z0-9-]{1,40}')
 OWNER_FILL = 'hyperv'
 SHA = re.compile(r'[0-9a-f]{40}')
+CASE_NAME = re.compile(r'[a-z0-9-]{1,32}')
+WINDOWS_MATRIX_SCHEMAS = {
+    'windows-list': 'rosetun.matrix.windows-list-summary.v1',
+    'windows-failure': 'rosetun.matrix.windows-failure-summary.v1',
+    'windows-lockdown': 'rosetun.matrix.windows-lockdown-summary.v1',
+    'windows-proxy': 'rosetun.matrix.windows-proxy-summary.v1',
+    'windows-lan': 'rosetun.matrix.windows-lan-summary.v1',
+    'windows-upgrade': 'rosetun.matrix.windows-upgrade-summary.v1',
+    'windows-protocols': 'rosetun.matrix.windows-protocols-summary.v1',
+    'windows-twohop': 'rosetun.matrix.windows-twohop-summary.v1',
+}
 
 
 class EvidenceRefused(ValueError):
@@ -53,6 +64,34 @@ def _sha256(raw):
     return hashlib.sha256(raw).hexdigest()
 
 
+def _is_windows_matrix(summary):
+    suite = summary.get('suite')
+    return (suite in WINDOWS_MATRIX_SCHEMAS
+            and summary.get('schema') == WINDOWS_MATRIX_SCHEMAS[suite]
+            and summary.get('mode') == 'lab')
+
+
+def _suite_case(summary):
+    if not _is_windows_matrix(summary):
+        return None
+    execution = summary.get('execution')
+    preflight = summary.get('preflight')
+    case = (execution.get('case') if type(execution) is dict else None)
+    if case is None and type(preflight) is dict:
+        case = preflight.get('case')
+    if case is None:
+        return None
+    if type(case) is not str or not CASE_NAME.fullmatch(case):
+        raise EvidenceRefused('summary-invalid')
+    return case
+
+
+def _set_key(summary):
+    suite = summary['suite']
+    case = _suite_case(summary)
+    return f'{suite}-{case}' if case is not None else suite
+
+
 def _read(directory, relative):
     path = resource_path(directory, relative)
     _regular_file(path)
@@ -74,6 +113,16 @@ def _reports(directory):
             elif (directory / top / name).is_dir() and (directory / top / name / REPORT).is_file():
                 found.append(relative + '/' + REPORT)
     return found
+
+
+def _lab_evidence(lab):
+    if type(lab) is not dict:
+        return {}
+    qualification = lab.get('qualification')
+    if type(qualification) is dict and type(qualification.get('evidence')) is dict:
+        return qualification['evidence']
+    evidence = lab.get('evidence')
+    return evidence if type(evidence) is dict else {}
 
 
 def _pcap(directory, evidence):
@@ -104,26 +153,41 @@ class _Run:
         self.pcap = None
 
 
-def _expand(root, token):
+def _expand(state, token, *, include_archive=False):
     """A run as `runs` lists it, or the base identifier of a lab run with its -lab and -test directories."""
     _identifier(token)
-    if (root / token).is_dir():
-        return [token]
-    pair = [token + role for role in ('-lab', '-test') if (root / (token + role)).is_dir()]
-    if not pair:
+    roots = [state / 'runs']
+    if include_archive:
+        archive = state / 'archive'
+        if archive.exists():
+            _no_links(archive)
+            if archive.is_dir():
+                roots.append(archive)
+    found = []
+    for root in roots:
+        if (root / token).is_dir():
+            found.append((root, [token]))
+            continue
+        pair = [token + role for role in ('-lab', '-test') if (root / (token + role)).is_dir()]
+        if pair:
+            found.append((root, pair))
+    if not found:
         raise EvidenceRefused('run-not-found', token)
-    return pair
+    if len(found) > 1:
+        raise EvidenceRefused('run-in-runs-and-archive', token)
+    return found[0]
 
 
-def _collect(state, tokens):
-    root = state / 'runs'
-    _no_links(root)
+def _collect(state, tokens, *, include_archive=False):
+    runs_root = state / 'runs'
+    _no_links(runs_root)
     runs, seen = [], set()
     for token in tokens:
         if token in seen:
             raise EvidenceRefused('duplicate-run', token)
         seen.add(token)
-        run = _Run(token, _expand(root, token))
+        root, directories = _expand(state, token, include_archive=include_archive)
+        run = _Run(token, directories)
         for name in run.directories:
             directory = root / name
             _no_links(directory)
@@ -140,7 +204,7 @@ def _collect(state, tokens):
         run.summary = _summary(run)
         _gate(run)
         lab = run.summary.get('lab')
-        run.pcap = (_pcap(root / _capturing(run), lab.get('qualification', {}).get('evidence', {}))
+        run.pcap = (_pcap(root / _capturing(run), _lab_evidence(lab))
                     if type(lab) is dict else None)
         if run.pcap and run.pcap['file_matches'] is False:
             raise EvidenceRefused('pcap-does-not-match-its-record', token)
@@ -173,7 +237,9 @@ def _gate(run):
         raise EvidenceRefused('source-unknown', run.token)
     if source.get('source_dirty') is not False:
         raise EvidenceRefused('source-dirty', run.token)
-    if summary.get('diagnostic'):
+    # Linux `--diagnostic` runs and Windows infrastructure smokes are never evidence. Windows matrix runs always carry
+    # `diagnostic: true` solely because the 9a image descriptor is `qualified: false`, and reject `--diagnostic` on CLI.
+    if summary.get('diagnostic') and not _is_windows_matrix(summary):
         raise EvidenceRefused('diagnostic-run', run.token)
     # A lab run is never attached and says nothing; every other summary must say `attached: false`.
     attached = summary.get('attached')
@@ -181,12 +247,24 @@ def _gate(run):
         raise EvidenceRefused('attached-run', run.token)
     if type(summary.get('exit_code')) is not int:
         raise EvidenceRefused('summary-invalid', run.token)
+    try:
+        _suite_case(summary)
+    except EvidenceRefused as error:
+        raise EvidenceRefused(error.reason, run.token) from None
 
 
 def _images(summary):
     configuration = summary.get('configuration', {})
+    preflight = summary.get('preflight', {})
+    execution = summary.get('execution', {})
+    test_block = configuration.get('image') if type(configuration) is dict else None
+    if type(test_block) is not dict and _is_windows_matrix(summary):
+        test_block = preflight.get('image') if type(preflight) is dict else None
+        if type(test_block) is not dict and type(execution) is dict:
+            test_block = execution.get('image')
+    lab_block = configuration.get('lab', {}).get('image') if type(configuration) is dict and type(configuration.get('lab')) is dict else None
     found = {}
-    for role, block in (('test', configuration.get('image')), ('lab', configuration.get('lab', {}).get('image'))):
+    for role, block in (('test', test_block), ('lab', lab_block)):
         if type(block) is dict:
             found[role] = {key: block.get(key) for key in ('identifier', 'sha256', 'size_bytes', 'format', 'profile',
                                                            'architecture', 'guest_os', 'schema')}
@@ -202,46 +280,151 @@ def _results(summary):
     scenarios = summary.get('legacy', {}).get('scenarios')
     if scenarios:
         return {row['id']: row['result'] for row in scenarios}
-    return dict(summary.get('group', {}).get('results', {}))
+    group_results = summary.get('group', {}).get('results')
+    if group_results:
+        return dict(group_results)
+    if _is_windows_matrix(summary):
+        execution = summary.get('execution')
+        checks = execution.get('checks') if type(execution) is dict else None
+        if type(checks) is list:
+            return {row['id']: row['result'] for row in checks
+                    if type(row) is dict and type(row.get('id')) is str and type(row.get('result')) is str}
+    return {}
+
+
+def _outcome(summary):
+    if summary.get('outcome') is not None:
+        return summary.get('outcome')
+    if not _is_windows_matrix(summary):
+        return None
+    execution = summary.get('execution')
+    if type(execution) is not dict:
+        return 'incomplete'
+    if execution.get('accepted') is True:
+        return 'accepted'
+    if execution.get('findings'):
+        return 'findings'
+    return 'unverified'
+
+
+def _window_verdicts(summary):
+    if not _is_windows_matrix(summary):
+        return None
+    execution = summary.get('execution')
+    exec_windows = execution.get('windows') if type(execution) is dict else None
+    if type(exec_windows) is not dict:
+        return None
+    return {
+        label: ('LISTED' if row.get('listed') is True else row.get('verdict'))
+        for label, row in sorted(exec_windows.items())
+        if type(row) is dict
+    }
+
+
+def _windows_as_expected(summary):
+    lab = summary.get('lab') if type(summary.get('lab')) is dict else {}
+    counts = lab.get('window_counts')
+    if counts is not None:
+        return all(row.get('as_expected') is True for row in counts)
+    if not _is_windows_matrix(summary):
+        return None
+    observer = lab.get('observer') if type(lab.get('observer')) is dict else {}
+    if lab.get('missing_labels') or lab.get('extra_windows') or observer.get('reasons'):
+        return False
+    execution = summary.get('execution')
+    exec_windows = execution.get('windows') if type(execution) is dict else None
+    if type(exec_windows) is not dict or not exec_windows:
+        return None
+    judged = [row for row in exec_windows.values() if type(row) is dict and row.get('listed') is not True]
+    if not judged:
+        return False
+    for row in exec_windows.values():
+        if type(row) is not dict or row.get('leak') == 'UNVERIFIED' or row.get('reasons'):
+            return False
+    return all(row.get('verdict') in ('NONE', 'EXPECTED') for row in judged)
 
 
 def _record(run):
     summary, source = run.summary, run.summary['preflight']['controller_source']
     started, finished = _ends(run.files['runs/' + _primary(run) + '/lifecycle.jsonl'])
     results = _results(summary)
-    group = summary.get('group', {})
+    is_win = _is_windows_matrix(summary)
+    group = summary.get('group', {}) if type(summary.get('group')) is dict else {}
+    execution = summary.get('execution', {}) if type(summary.get('execution')) is dict else {}
     lab = summary.get('lab') if type(summary.get('lab')) is dict else {}
-    windows, counts = lab.get('windows'), lab.get('window_counts')
-    return {
+    windows = lab.get('windows')
+    exec_windows = execution.get('windows') if is_win and type(execution.get('windows')) is dict else None
+    window_count = len(exec_windows) if exec_windows is not None else (len(windows) if windows is not None else None)
+    findings = execution.get('findings') if is_win else group.get('findings')
+    unproven = execution.get('unverified') if is_win else group.get('unproven')
+    record = {
         'run': run.token, 'suite': summary['suite'], 'commit': source['source_sha'],
         'source_dirty': False, 'source_dirty_digest': source.get('source_dirty_digest'),
         'images': _images(summary), 'directories': list(run.directories),
-        'exit_code': summary['exit_code'], 'outcome': summary.get('outcome'),
+        'exit_code': summary['exit_code'], 'outcome': _outcome(summary),
         'summary_schema': summary['schema'], 'summary_sha256': _sha256(
             run.files['runs/' + _primary(run) + '/execution-summary.json']),
         'completion_verified': True, 'attached': False,
-        'findings': group.get('findings'), 'unproven': group.get('unproven'),
+        'findings': findings, 'unproven': unproven,
         'pcap': run.pcap, 'started_utc': started, 'finished_utc': finished,
-        'windows': len(windows) if windows is not None else None,
-        'window_counts_all_as_expected': all(row.get('as_expected') is True for row in counts) if counts is not None else None,
+        'windows': window_count,
+        'window_counts_all_as_expected': _windows_as_expected(summary),
         'scenario_counts': {key: list(results.values()).count(key) for key in sorted(set(results.values()))},
     }
+    case = _suite_case(summary)
+    if case is not None:
+        record['case'] = case
+    verdicts = _window_verdicts(summary)
+    if verdicts is not None:
+        record['window_verdicts'] = verdicts
+    return record
 
 
 def _cell(value):
     return '-' if value is None else re.sub(r'[\t\r\n]+', ' ', str(value))
 
 
+def _windows_crosscheck(summary):
+    execution = summary.get('execution')
+    findings = execution.get('findings') if type(execution) is dict else None
+    if type(findings) is not list:
+        return {}
+    found = {}
+    for item in findings:
+        if type(item) is str and item.startswith('disagree:'):
+            check_id = item[len('disagree:'):]
+            if check_id:
+                found[check_id] = {'id': check_id, 'agreement': 'DISAGREE', 'window': None, 'window_verdict': None}
+    return found
+
+
 def parity_table(runs):
-    """The 8g table of one suite: a column of results, cross-checks and window verdicts per run, and an empty one for the owner."""
+    """The 8g/10g table of one suite: results, cross-checks and window verdicts per run, and an empty column for the owner."""
     count = len(runs)
     required, order = {}, []
     for run in runs:
-        for row in run.summary.get('execution', {}).get('assessment', {}).get('rows', []):
-            required.setdefault(row['id'], 'yes' if row.get('required') else 'no')
-            order.append(row['id'])
+        summary = run.summary
+        execution = summary.get('execution') if type(summary.get('execution')) is dict else {}
+        assessment = execution.get('assessment') if type(execution.get('assessment')) is dict else {}
+        rows = assessment.get('rows') if type(assessment.get('rows')) is list else []
+        if rows:
+            for row in rows:
+                required.setdefault(row['id'], 'yes' if row.get('required') else 'no')
+                order.append(row['id'])
+        elif _is_windows_matrix(summary):
+            preflight = summary.get('preflight') if type(summary.get('preflight')) is dict else {}
+            planned = preflight.get('checks') if type(preflight.get('checks')) is list else []
+            for check_id in planned:
+                if type(check_id) is str:
+                    required.setdefault(check_id, 'yes')
+                    order.append(check_id)
     results = [_results(run.summary) for run in runs]
-    checks = [{row['id']: row for row in run.summary.get('crosscheck', [])} for run in runs]
+    checks = [
+        ({row['id']: row for row in run.summary['crosscheck']}
+         if type(run.summary.get('crosscheck')) is list
+         else (_windows_crosscheck(run.summary) if _is_windows_matrix(run.summary) else {}))
+        for run in runs
+    ]
     for source in (*(list(result) for result in results), *(list(check) for check in checks)):
         order.extend(source)
     order = list(dict.fromkeys(order))
@@ -273,7 +456,7 @@ def _set_name(suite):
     return suite[len('linux-'):] if suite.startswith('linux-') else suite
 
 
-def build_pack(state_directory, run_tokens, out):
+def build_pack(state_directory, run_tokens, out, *, include_archive=False):
     """Write the pack to `out`, which must not exist yet; the stand's state is only read."""
     state = _state_path(state_directory)
     if not run_tokens:
@@ -286,10 +469,10 @@ def build_pack(state_directory, run_tokens, out):
     resolved = out.parent.resolve() / out.name
     if state.resolve() in (resolved, *resolved.parents):
         raise EvidenceRefused('out-inside-state')
-    runs = _collect(state, run_tokens)
+    runs = _collect(state, run_tokens, include_archive=include_archive)
     by_suite = {}
     for run in runs:
-        by_suite.setdefault(run.summary['suite'], []).append(run)
+        by_suite.setdefault(_set_key(run.summary), []).append(run)
     records = {run.token: _record(run) for run in runs}
     sets = {}
     for suite, members in sorted(by_suite.items()):
@@ -313,8 +496,17 @@ def build_pack(state_directory, run_tokens, out):
     files.update(generated)
     manifest = {
         'schema': SCHEMA, 'release_gate': False, 'security_invariants': 'UNVERIFIED', 'owner_signature': None,
-        'sets': {suite: {'commit': records[members[0].token]['commit'], 'runs': [run.token for run in members],
-                         'parity': 'parity-%s.tsv' % _set_name(suite)} for suite, members in sets.items()},
+        'sets': {suite: {
+            'commit': records[members[0].token]['commit'],
+            'runs': [run.token for run in members],
+            'parity': 'parity-%s.tsv' % _set_name(suite),
+            'run_count': len(members),
+            'all_exit_zero': all(records[run.token]['exit_code'] == 0 for run in members),
+            'all_windows_as_expected': all(records[run.token]['window_counts_all_as_expected'] is True
+                                           for run in members),
+            'all_findings_empty': all(records[run.token]['findings'] == [] for run in members),
+            'all_unproven_empty': all(records[run.token]['unproven'] == [] for run in members),
+        } for suite, members in sets.items()},
         'runs': [records[run.token] for members in sets.values() for run in members],
         'files': {name: {'bytes': len(raw), 'sha256': _sha256(raw)} for name, raw in sorted(files.items())},
     }
@@ -326,10 +518,15 @@ def build_pack(state_directory, run_tokens, out):
 
 
 def _parity_run(record):
-    return {key: record[key] for key in ('commit', 'source_dirty', 'images', 'directories', 'exit_code', 'summary_sha256',
-                                         'pcap', 'started_utc', 'finished_utc', 'windows',
-                                         'window_counts_all_as_expected')} | {'run_id': record['run'],
-                                                                              'group_counts': record['scenario_counts']}
+    row = {key: record[key] for key in ('commit', 'source_dirty', 'images', 'directories', 'exit_code', 'summary_sha256',
+                                        'pcap', 'started_utc', 'finished_utc', 'windows',
+                                        'window_counts_all_as_expected')} | {'run_id': record['run'],
+                                                                             'group_counts': record['scenario_counts']}
+    if 'case' in record:
+        row['case'] = record['case']
+    if 'window_verdicts' in record:
+        row['window_verdicts'] = record['window_verdicts']
+    return row
 
 
 def _write(out, files):
