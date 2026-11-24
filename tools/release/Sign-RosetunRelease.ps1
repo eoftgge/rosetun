@@ -85,7 +85,9 @@ try {
     $signature = "$sums.minisig"
 
     Write-Host "Signing SHA256SUMS.txt of $tag. minisign asks for the key password."
-    & minisign -S -s $secretKeyPath -m $sums -t $trustedComment
+    # -H forces a prehashed ("ED") signature on older minisign builds (such as 0.8);
+    # the updater verifies with allow_legacy = false and rejects legacy ("Ed") signatures.
+    & minisign -S -H -s $secretKeyPath -m $sums -t $trustedComment
     Assert-RosetunExitCode -Action 'Signing'
     if (-not (Test-Path -LiteralPath $signature -PathType Leaf)) {
         throw 'minisign did not write a signature file.'
@@ -93,7 +95,16 @@ try {
 
     & minisign -V -p $publicKeyPath -m $sums
     Assert-RosetunExitCode -Action 'Verifying the signature with the public key'
-    $comments = @(Get-Content -LiteralPath $signature | Where-Object { $_ -like 'trusted comment:*' })
+    $signatureLines = @(Get-Content -LiteralPath $signature)
+    if ($signatureLines.Count -lt 4) {
+        throw 'The signature file is incomplete.'
+    }
+    $signatureBytes = [Convert]::FromBase64String($signatureLines[1].Trim())
+    if ($signatureBytes.Length -lt 2 -or
+        [Text.Encoding]::ASCII.GetString($signatureBytes, 0, 2) -cne 'ED') {
+        throw 'The signature is not prehashed (ED); the updater refuses legacy (Ed) signatures.'
+    }
+    $comments = @($signatureLines | Where-Object { $_ -like 'trusted comment:*' })
     if ($comments.Count -ne 1 -or $comments[0] -cne "trusted comment: $trustedComment") {
         throw "The trusted comment of the signature is not exactly 'trusted comment: $trustedComment'."
     }
