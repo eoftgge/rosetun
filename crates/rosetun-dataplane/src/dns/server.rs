@@ -231,11 +231,23 @@ fn bind_pair(addr: SocketAddr) -> io::Result<(UdpSocket, TcpListener, SocketAddr
         1
     };
     let mut last_err = None;
-    for _ in 0..attempts {
-        let tcp = TcpListener::bind(addr)?;
-        let bound = tcp.local_addr()?;
-        match UdpSocket::bind(bound) {
-            Ok(udp) => {
+    for attempt in 0..attempts {
+        // Windows can reserve different ephemeral ranges for TCP and UDP.
+        // Alternate the socket that selects the port so one range does not
+        // consume the entire retry budget.
+        let pair = if addr.port() == 0 && attempt % 2 == 0 {
+            UdpSocket::bind(addr).and_then(|udp| {
+                let bound = udp.local_addr()?;
+                Ok((udp, TcpListener::bind(bound)?, bound))
+            })
+        } else {
+            TcpListener::bind(addr).and_then(|tcp| {
+                let bound = tcp.local_addr()?;
+                Ok((UdpSocket::bind(bound)?, tcp, bound))
+            })
+        };
+        match pair {
+            Ok((udp, tcp, bound)) => {
                 udp.set_read_timeout(Some(SHUTDOWN_POLL))?;
                 return Ok((udp, tcp, bound));
             }

@@ -172,6 +172,7 @@ function Test-TunnelEgressOnce {
     $result = Invoke-RosetunNative -FilePath $curlPath -TimeoutSeconds 20 -Arguments @(
         '--max-time', '10', '--silent', '--insecure', '--ssl-no-revoke',
         '--write-out', "`nlocal=%{local_ip} remote=%{remote_ip} code=%{http_code}", $probeUrl)
+    $script:TunnelCurlExit = [int]$result.ExitCode
     if ($result.ExitCode -ne 0) { return $false }
     $local = ''
     $remote = ''
@@ -181,6 +182,19 @@ function Test-TunnelEgressOnce {
     }
     return ($tunAddresses -contains $local -and $remote -eq $target4 -and $code -eq '200' -and
         $result.Output -match 'rosetun-lab-target')
+}
+
+function Record-NativeCounters {
+    param([Parameter(Mandatory)][string]$Prefix)
+    $counterLine = Select-String -LiteralPath (Join-Path $logs 'helper.log') -Pattern 'native packet pump counters' |
+        Select-Object -Last 1
+    if ($null -eq $counterLine) { return }
+    $plain = $counterLine.Line -replace '\x1b\[[0-9;]*m', ''
+    foreach ($name in @('frames', 'bad_checksum', 'tcp', 'written', 'write_errors', 'accepted')) {
+        if ($plain -match "(?:^|\s)$name=(\d+)") {
+            Add-RosetunRunnerNote -Name "$Prefix-$name" -Value ([long]$Matches[1])
+        }
+    }
 }
 
 function Wait-TunnelEgress {
@@ -699,14 +713,17 @@ try {
     }
 
     Set-RosetunRunnerStep -Step 'mode'
+    $script:TunnelCurlExit = -1
     Test-Step -Id 'mode.tun' -Scenario 'mode' -Expectation 'connect NativeMixed with kill switch' {
         (Connect-ProxyVariant 'tun-strict.json') -and (Wait-TunnelEgress)
     }
+    Add-RosetunRunnerNote -Name 'mode-native-curl-exit' -Value $script:TunnelCurlExit
     Start-ProxyEgressWatch
     $egressWatchActive = $true
     $watch = [pscustomobject]@{ Probes = 0; Leaks = 0 }
     try {
         $toProxy = Invoke-ProxyCli -Arguments @('apply', (Join-Path $work 'proxy-strict.json')) -Seconds 60
+        Record-NativeCounters -Prefix 'mode-native'
         Test-Step -Id 'mode.to-proxy' -Scenario 'mode' -Expectation 'apply TUN to proxy' -Note "exit $($toProxy.ExitCode)" { $toProxy.ExitCode -eq 0 }
         Test-Step -Id 'mode.adapter-gone' -Scenario 'mode' -Expectation 'TUN adapter removed' {
             Wait-ProxyCondition -TimeoutSeconds 20 -Condition { -not (Test-TunAdapter) }

@@ -126,23 +126,44 @@ impl<B: RouteBackend> Drop for RouteLease<B> {
 #[derive(Debug)]
 pub struct InterfaceRoutes {
     index: NonZeroU32,
+    peers: [Option<IpAddr>; 2],
 }
 
 #[cfg(windows)]
 impl InterfaceRoutes {
     pub fn new(index: NonZeroU32) -> Self {
-        Self { index }
+        Self {
+            index,
+            peers: [None, None],
+        }
+    }
+
+    pub fn with_peers(index: NonZeroU32, ipv4: IpAddr, ipv6: Option<IpAddr>) -> Self {
+        Self {
+            index,
+            peers: [Some(ipv4), ipv6],
+        }
     }
 }
 
 #[cfg(windows)]
 impl RouteBackend for InterfaceRoutes {
     fn add(&mut self, prefix: IpPrefix) -> io::Result<()> {
-        windows::change(self.index, prefix, true)
+        windows::change(
+            self.index,
+            prefix,
+            self.peers[usize::from(!prefix.is_ipv4())],
+            true,
+        )
     }
 
     fn delete(&mut self, prefix: IpPrefix) -> io::Result<()> {
-        windows::change(self.index, prefix, false)
+        windows::change(
+            self.index,
+            prefix,
+            self.peers[usize::from(!prefix.is_ipv4())],
+            false,
+        )
     }
 }
 
@@ -238,18 +259,21 @@ mod windows {
 
         pub fn capture(
             &mut self,
-            interface: NonZeroU32,
+            interface: InterfaceRoutes,
             plan: &CaptureRoutes,
             endpoints: &[IpAddr],
         ) -> io::Result<()> {
-            if self.capture.is_some() || self.ipv4 == interface || self.ipv6 == Some(interface) {
+            if self.capture.is_some()
+                || self.ipv4 == interface.index
+                || self.ipv6 == Some(interface.index)
+            {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
                     "invalid native route interface",
                 ));
             }
             self.ensure_endpoints(endpoints)?;
-            self.capture = Some(RouteLease::install(InterfaceRoutes::new(interface), plan)?);
+            self.capture = Some(RouteLease::install(interface, plan)?);
             Ok(())
         }
 
@@ -351,8 +375,23 @@ mod windows {
         Ok(route)
     }
 
-    pub(super) fn change(interface: NonZeroU32, prefix: IpPrefix, add: bool) -> io::Result<()> {
-        apply(&row_for(interface, prefix), add)
+    pub(super) fn change(
+        interface: NonZeroU32,
+        prefix: IpPrefix,
+        peer: Option<IpAddr>,
+        add: bool,
+    ) -> io::Result<()> {
+        let mut row = row_for(interface, prefix);
+        if let Some(peer) = peer {
+            if peer.is_ipv4() != prefix.is_ipv4() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "invalid tunnel route gateway",
+                ));
+            }
+            row.NextHop = sockaddr(peer);
+        }
+        apply(&row, add)
     }
 
     fn row_for(interface: NonZeroU32, prefix: IpPrefix) -> MIB_IPFORWARD_ROW2 {

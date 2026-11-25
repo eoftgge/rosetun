@@ -7,7 +7,8 @@ use std::sync::Arc;
 use rosetun_config::{IpPrefix, TunSettings};
 use rosetun_dataplane::NativeTunnel;
 use rosetun_dataplane::tun::{
-    CaptureRoutes, DeviceSettings, NativeDevice, PinnedWintun, WindowsProcessLookup, WindowsRoutes,
+    CaptureRoutes, DeviceSettings, InterfaceRoutes, NativeDevice, PinnedWintun,
+    WindowsProcessLookup, WindowsRoutes,
 };
 use rosetun_ipc::{ErrorCode, HelperError};
 
@@ -66,8 +67,13 @@ impl NativeTun {
         let plan = CaptureRoutes::plan(&self.settings, lan).map_err(route_error)?;
         let index = NonZeroU32::new(self.device.index().map_err(route_error)?)
             .ok_or_else(|| route_error("native tunnel has no interface index"))?;
+        let interface = InterfaceRoutes::with_peers(
+            index,
+            self.settings.ipv4.peer,
+            self.settings.ipv6.map(|address| address.peer),
+        );
         self.routes
-            .capture(index, &plan, servers)
+            .capture(interface, &plan, servers)
             .map_err(route_error)?;
         self.resolver = Some(
             resolver::Resolver::install(

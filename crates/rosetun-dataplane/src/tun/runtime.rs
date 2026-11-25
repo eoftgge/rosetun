@@ -13,8 +13,8 @@ use rosetun_config::ConnectionNetwork;
 use rosetun_engine::{EngineRoute, TrafficProbe};
 
 use super::{
-    DeviceSettings, FullConeNat, MappingKey, MixedTcp, Packet, PacketDevice, TcpFlow, TcpRedirect,
-    TcpStack, Transport, udp_reply,
+    DeviceSettings, FullConeNat, MappingKey, MixedTcp, Packet, PacketDevice, PacketError, TcpFlow,
+    TcpRedirect, TcpStack, Transport, udp_reply,
 };
 use crate::conntable::{ConnectionMeta, ConnectionTable, Registration};
 use crate::dns::DnsService;
@@ -187,6 +187,31 @@ struct Pump {
     clients: Arc<Clients>,
     stopped: Arc<AtomicBool>,
     mtu: usize,
+    counters: PumpCounters,
+}
+
+#[derive(Default)]
+struct PumpCounters {
+    frames: u64,
+    bad_checksum: u64,
+    tcp: u64,
+    written: u64,
+    write_errors: u64,
+    accepted: u64,
+}
+
+impl Drop for Pump {
+    fn drop(&mut self) {
+        tracing::debug!(
+            frames = self.counters.frames,
+            bad_checksum = self.counters.bad_checksum,
+            tcp = self.counters.tcp,
+            written = self.counters.written,
+            write_errors = self.counters.write_errors,
+            accepted = self.counters.accepted,
+            "native packet pump counters"
+        );
+    }
 }
 
 /// Mixed TCP and UDP packet pump. Its owner retains the adapter, routes and
@@ -258,6 +283,7 @@ impl TunnelRuntime {
             clients: Arc::clone(&runtime.clients),
             stopped: Arc::clone(&runtime.stopped),
             mtu,
+            counters: PumpCounters::default(),
         };
         runtime.thread = Some(
             thread::Builder::new()
@@ -366,11 +392,15 @@ impl Pump {
                 };
                 match self.device.receive(&mut frame, wait) {
                     Ok(size) => {
+                        self.counters.frames += 1;
                         if let Some(contents) = frame.get(..size)
                             && size <= self.mtu
-                            && let Ok(packet) = Packet::parse(contents)
                         {
-                            self.dispatch(&packet, now);
+                            match Packet::parse(contents) {
+                                Ok(packet) => self.dispatch(&packet, now),
+                                Err(PacketError::Checksum) => self.counters.bad_checksum += 1,
+                                Err(_) => {}
+                            }
                         }
                     }
                     Err(error)
@@ -399,6 +429,7 @@ impl Pump {
                 let Some(flow) = self.tcp.accept(peer) else {
                     continue;
                 };
+                self.counters.accepted += 1;
                 let Some(client) = self.clients.track(&stream, MAX_CLIENTS) else {
                     self.tcp.close(peer, Instant::now());
                     continue;
@@ -424,8 +455,13 @@ impl Pump {
 
     fn dispatch(&mut self, packet: &Packet<'_>, now: Instant) {
         if packet.transport() == Transport::Tcp {
+            self.counters.tcp += 1;
             if let Ok(Some(redirected)) = self.tcp.redirect(packet, now) {
-                let _ = self.device.send(&redirected);
+                if self.device.send(&redirected).is_ok() {
+                    self.counters.written += 1;
+                } else {
+                    self.counters.write_errors += 1;
+                }
             }
             return;
         }
@@ -732,6 +768,7 @@ mod tests {
             clients: Arc::new(Clients::default()),
             stopped: Arc::new(AtomicBool::new(false)),
             mtu: 1500,
+            counters: PumpCounters::default(),
         };
         let request = udp_reply(client, target, b"data", 1500).unwrap();
         pump.dispatch(&Packet::parse(&request).unwrap(), Instant::now());
