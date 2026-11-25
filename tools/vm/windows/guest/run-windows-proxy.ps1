@@ -744,10 +744,11 @@ try {
     Test-Step -Id 'mode.watch' -Scenario 'mode' -Expectation 'no direct egress during mode changes' -Note "probes=$($watch.Probes) leaks=$($watch.Leaks)" {
         $watch.Probes -gt 0 -and $watch.Leaks -eq 0
     }
-    [void](Send-RosetunMarker -Plan $plan -Label 'strict' -Word 'close')
-    $openWindow = $null
+    # The marker socket goes straight to the lab and has no firewall permit.
     [void](Disconnect-ProxySession)
     Record-NativeCounters -Prefix 'mode-native-reconnect'
+    [void](Send-RosetunMarker -Plan $plan -Label 'strict' -Word 'close')
+    $openWindow = $null
 
     # Sharing plain (outside judged windows)
     Set-RosetunRunnerStep -Step 'sharing-plain'
@@ -759,14 +760,14 @@ try {
 
     # Window 2: sharing-strict (judged, allowances: lan-peer-arp, shared-proxy-peer, shared-proxy-server)
     Set-RosetunRunnerStep -Step 'sharing-strict'
-    Test-Step -Id 'sharing.strict.connect' -Scenario 'sharing' -Expectation 'sharing strict connect' { Connect-ProxyVariant 'proxy-share-strict.json' }
     if (Send-RosetunMarker -Plan $plan -Label 'sharing-strict' -Word 'open') { $openWindow = 'sharing-strict' }
+    Test-Step -Id 'sharing.strict.connect' -Scenario 'sharing' -Expectation 'sharing strict connect' { Connect-ProxyVariant 'proxy-share-strict.json' }
     Test-Step -Id 'sharing.strict.host' -Scenario 'sharing' -Expectation 'sharing strict host' { Invoke-LabProxyProbe }
     Test-Step -Id 'sharing.strict.server' -Scenario 'sharing' -Expectation 'sharing strict server' { -not (Invoke-LabProxyProbe -FromServer) }
     Test-Step -Id 'sharing.strict.loopback' -Scenario 'sharing' -Expectation 'sharing strict loopback' { Wait-ProxyCarries }
+    [void](Disconnect-ProxySession)
     [void](Send-RosetunMarker -Plan $plan -Label 'sharing-strict' -Word 'close')
     $openWindow = $null
-    [void](Disconnect-ProxySession)
 
     # Sharing off / disconnected (outside judged windows)
     Set-RosetunRunnerStep -Step 'sharing-off'
@@ -801,10 +802,10 @@ try {
     # Window 3: lockdown (judged, allowances: lan-peer-arp, shared-proxy-peer)
     Set-RosetunRunnerStep -Step 'lockdown'
     $components.lockdown = 'UNVERIFIED'
+    if (Send-RosetunMarker -Plan $plan -Label 'lockdown' -Word 'open') { $openWindow = 'lockdown' }
     try {
         $ldOn = Invoke-ProxyCli -Arguments @('lockdown', 'on', '--lan', 'off') -Seconds 60
         Test-Step -Id 'lockdown.on' -Scenario 'lockdown' -Expectation 'lockdown on' -Note "exit $($ldOn.ExitCode)" { $ldOn.ExitCode -eq 0 }
-        if (Send-RosetunMarker -Plan $plan -Label 'lockdown' -Word 'open') { $openWindow = 'lockdown' }
         Test-Step -Id 'lockdown.connect' -Scenario 'lockdown' -Expectation 'lockdown connect' { Connect-ProxyVariant 'proxy-share.json' }
         Test-Step -Id 'lockdown.proxy' -Scenario 'lockdown' -Expectation 'lockdown proxy' { Wait-ProxyCarries }
         Test-Step -Id 'lockdown.direct' -Scenario 'lockdown' -Expectation 'lockdown direct' { -not (Test-DirectEgress) }
@@ -818,10 +819,10 @@ try {
     }
     finally {
         [void](Disconnect-ProxySession)
-        [void](Send-RosetunMarker -Plan $plan -Label 'lockdown' -Word 'close')
-        $openWindow = $null
         $ldOff = Invoke-ProxyCli -Arguments @('lockdown', 'off') -Seconds 60
         if ($ldOff.ExitCode -ne 0) { $components.lockdown = 'ERROR' }
+        [void](Send-RosetunMarker -Plan $plan -Label 'lockdown' -Word 'close')
+        $openWindow = $null
     }
 }
 catch {
