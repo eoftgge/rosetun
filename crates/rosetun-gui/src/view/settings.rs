@@ -759,7 +759,7 @@ fn dns(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
     });
 }
 
-/// "Not applied В· Apply" under a setting that a running session can pick up right away.
+/// "Not applied · Apply" under a setting that a running session can pick up right away.
 fn apply_note(ui: &mut egui::Ui, state: &State, part: SessionPart, actions: &mut Vec<Action>) {
     if !state.session_up() || !state.pending_reconnect(part) || !state.can_apply() {
         return;
@@ -1774,8 +1774,8 @@ mod update_status_tests {
         assert_eq!(
             update_status(&state, 200, Language::Russian),
             (
-                "Р’РµСЂСЃРёСЏ 999.0.0-alpha.4 РїСЂРѕРїСѓС‰РµРЅР°".into(),
-                "РќР°РїРѕРјРЅРёРј, РєРѕРіРґР° РІС‹Р№РґРµС‚ СЃР»РµРґСѓСЋС‰Р°СЏ. РџСЂРѕРІРµСЂРµРЅРѕ 2 РјРёРЅСѓС‚С‹ РЅР°Р·Р°Рґ.".into(),
+                "Версия 999.0.0-alpha.4 пропущена".into(),
+                "Напомним, когда выйдет следующая. Проверено 2 минуты назад.".into(),
             )
         );
     }
