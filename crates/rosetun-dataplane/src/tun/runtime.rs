@@ -4,7 +4,7 @@ use std::fmt;
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, SyncSender, TrySendError};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError};
 use std::sync::{Arc, PoisonError, RwLock};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -28,6 +28,7 @@ const FLOW_TIMEOUT: Duration = Duration::from_secs(5);
 const UDP_IDLE: Duration = Duration::from_secs(60);
 const UDP_MAPPINGS: usize = 512;
 const UDP_PEERS: usize = 32;
+const UDP_QUEUE: usize = 64;
 const MAX_CLIENTS: usize = 512;
 const DNS_WORKERS: usize = 4;
 const DNS_QUEUE: usize = 32;
@@ -168,7 +169,7 @@ struct UdpMapping {
     peers: HashMap<SocketAddr, Registration>,
 }
 
-struct DnsQuery {
+struct Datagram {
     flow: TcpFlow,
     payload: Vec<u8>,
 }
@@ -180,14 +181,22 @@ struct Pump {
     listeners: Vec<TcpListener>,
     local_ips: Vec<IpAddr>,
     tcp: MixedTcp,
-    udp: FullConeNat<UdpEgress, UdpMapping>,
-    response: Vec<u8>,
-    dns: Vec<SyncSender<DnsQuery>>,
+    udp: SyncSender<Datagram>,
+    dns: Vec<SyncSender<Datagram>>,
     dns_worker: usize,
     clients: Arc<Clients>,
     stopped: Arc<AtomicBool>,
     mtu: usize,
     counters: PumpCounters,
+}
+
+struct UdpPump {
+    device: Arc<dyn PacketDevice>,
+    policy: Arc<TunnelPolicy>,
+    table: ConnectionTable,
+    udp: FullConeNat<UdpEgress, UdpMapping>,
+    response: Vec<u8>,
+    mtu: usize,
 }
 
 #[derive(Default)]
@@ -225,6 +234,7 @@ pub struct TunnelRuntime {
     stopped: Arc<AtomicBool>,
     thread: Option<JoinHandle<io::Result<()>>>,
     dns_threads: Vec<JoinHandle<()>>,
+    udp_thread: Option<JoinHandle<()>>,
     clients: Arc<Clients>,
     redirects: Vec<TcpRedirect>,
 }
@@ -261,11 +271,13 @@ impl TunnelRuntime {
             stopped: Arc::new(AtomicBool::new(false)),
             thread: None,
             dns_threads: Vec::new(),
+            udp_thread: None,
             clients: Arc::new(Clients::default()),
             redirects,
         };
         let mtu = usize::from(settings.mtu);
         let dns = runtime.start_dns_workers(&policy.dns, mtu)?;
+        let udp = runtime.start_udp_worker(&policy, mtu)?;
         let mut pump = Pump {
             device: Arc::clone(&runtime.device),
             policy,
@@ -279,8 +291,7 @@ impl TunnelRuntime {
             .flatten()
             .collect(),
             tcp,
-            udp: FullConeNat::new(UDP_MAPPINGS, UDP_IDLE),
-            response: vec![0; usize::from(u16::MAX)],
+            udp,
             dns,
             dns_worker: 0,
             clients: Arc::clone(&runtime.clients),
@@ -296,14 +307,37 @@ impl TunnelRuntime {
         Ok(runtime)
     }
 
+    fn start_udp_worker(
+        &mut self,
+        policy: &Arc<TunnelPolicy>,
+        mtu: usize,
+    ) -> io::Result<SyncSender<Datagram>> {
+        let (sender, receiver) = mpsc::sync_channel(UDP_QUEUE);
+        let stopped = Arc::clone(&self.stopped);
+        let mut pump = UdpPump {
+            device: Arc::clone(&self.device),
+            policy: Arc::clone(policy),
+            table: self.table.clone(),
+            udp: FullConeNat::new(UDP_MAPPINGS, UDP_IDLE),
+            response: vec![0; usize::from(u16::MAX)],
+            mtu,
+        };
+        self.udp_thread = Some(
+            thread::Builder::new()
+                .name("rosetun-tun-udp".into())
+                .spawn(move || pump.run(&receiver, &stopped))?,
+        );
+        Ok(sender)
+    }
+
     fn start_dns_workers(
         &mut self,
         dns: &Arc<DnsService>,
         mtu: usize,
-    ) -> io::Result<Vec<SyncSender<DnsQuery>>> {
+    ) -> io::Result<Vec<SyncSender<Datagram>>> {
         let mut senders = Vec::new();
         for _ in 0..DNS_WORKERS {
-            let (tx, rx) = mpsc::sync_channel::<DnsQuery>(DNS_QUEUE);
+            let (tx, rx) = mpsc::sync_channel::<Datagram>(DNS_QUEUE);
             let device = Arc::clone(&self.device);
             let dns = Arc::clone(dns);
             let stopped = Arc::clone(&self.stopped);
@@ -336,6 +370,10 @@ impl TunnelRuntime {
         self.thread
             .as_ref()
             .is_some_and(|worker| !worker.is_finished())
+            && self
+                .udp_thread
+                .as_ref()
+                .is_some_and(|worker| !worker.is_finished())
     }
 
     pub fn redirects(&self) -> &[TcpRedirect] {
@@ -359,6 +397,9 @@ impl TunnelRuntime {
                 .join()
                 .unwrap_or_else(|_| Err(io::Error::other("tunnel packet worker panicked")))
         });
+        if let Some(worker) = self.udp_thread.take() {
+            let _ = worker.join();
+        }
         self.clients.close_and_wait();
         for worker in self.dns_threads.drain(..) {
             let _ = worker.join();
@@ -383,10 +424,6 @@ impl Pump {
                 self.tcp.close(peer, now);
             }
             self.accept(&closed_tx);
-            let generation = self.policy.generation();
-            self.udp
-                .retain(|key, _| key.egress.generation == generation);
-            self.receive_udp(now);
             for index in 0..PACKET_BUDGET {
                 let wait = if index == 0 {
                     PUMP_INTERVAL
@@ -481,7 +518,7 @@ impl Pump {
             destination: packet.destination(),
         };
         if flow.destination.port() == 53 {
-            let query = DnsQuery {
+            let query = Datagram {
                 flow,
                 payload: payload.to_vec(),
             };
@@ -498,6 +535,36 @@ impl Pump {
             }
             return;
         }
+        // Opening a SOCKS association, looking up processes, and resolving
+        // rule addresses can block. The device reader only queues a datagram.
+        let _ = self.udp.try_send(Datagram {
+            flow,
+            payload: payload.to_vec(),
+        });
+    }
+}
+
+impl UdpPump {
+    fn run(&mut self, receiver: &Receiver<Datagram>, stopped: &AtomicBool) {
+        while !stopped.load(Ordering::Acquire) {
+            let now = Instant::now();
+            let generation = self.policy.generation();
+            self.udp
+                .retain(|key, _| key.egress.generation == generation);
+            self.receive_udp(now);
+            match receiver.recv_timeout(PUMP_INTERVAL) {
+                Ok(datagram) if !stopped.load(Ordering::Acquire) => {
+                    self.send(&datagram, Instant::now());
+                }
+                Ok(_) | Err(RecvTimeoutError::Disconnected) => break,
+                Err(RecvTimeoutError::Timeout) => {}
+            }
+        }
+    }
+
+    fn send(&mut self, datagram: &Datagram, now: Instant) {
+        let flow = datagram.flow;
+        let payload = &datagram.payload;
         let domain = sniff_quic_datagram(payload).and_then(|sniffed| sniffed.domain);
         let Some(selected) = self.policy.select(&flow, ConnectionNetwork::Udp, domain) else {
             return;
@@ -759,24 +826,22 @@ mod tests {
         let target = upstream.local_addr().unwrap();
         let client: SocketAddr = "192.0.2.1:49151".parse().unwrap();
         let tun = Arc::new(MockTun::default());
-        let mut pump = Pump {
+        let mut pump = UdpPump {
             device: tun.clone(),
             policy: policy(true),
             table: ConnectionTable::new(),
-            listeners: Vec::new(),
-            local_ips: vec![client.ip()],
-            tcp: MixedTcp::new([]).unwrap(),
             udp: FullConeNat::new(8, UDP_IDLE),
             response: vec![0; 1500],
-            dns: Vec::new(),
-            dns_worker: 0,
-            clients: Arc::new(Clients::default()),
-            stopped: Arc::new(AtomicBool::new(false)),
             mtu: 1500,
-            counters: PumpCounters::default(),
         };
-        let request = udp_reply(client, target, b"data", 1500).unwrap();
-        pump.dispatch(&Packet::parse(&request).unwrap(), Instant::now());
+        let datagram = Datagram {
+            flow: TcpFlow {
+                source: client,
+                destination: target,
+            },
+            payload: b"data".to_vec(),
+        };
+        pump.send(&datagram, Instant::now());
         let mut buffer = [0; 16];
         let (length, mapped_peer) = upstream.recv_from(&mut buffer).unwrap();
         assert_eq!(&buffer[..length], b"data");
@@ -798,6 +863,83 @@ mod tests {
         let entries = pump.table.active();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].process.as_deref(), Some("example.exe"));
+    }
+
+    #[test]
+    fn a_slow_udp_association_does_not_hold_up_the_tcp_device_reader() {
+        #[derive(Debug)]
+        struct SlowUdp {
+            entered: SyncSender<()>,
+            release: Mutex<Receiver<()>>,
+        }
+
+        impl Dialer for SlowUdp {
+            fn connect(&self, _: &Target, _: Duration) -> io::Result<TcpStream> {
+                Err(io::ErrorKind::Unsupported.into())
+            }
+
+            fn udp(&self, timeout: Duration) -> io::Result<UdpPath> {
+                let _ = self.entered.send(());
+                let _ = self.release.lock().unwrap().recv_timeout(timeout);
+                Err(io::ErrorKind::TimedOut.into())
+            }
+        }
+
+        let (entered, opening) = mpsc::sync_channel(1);
+        let (release, blocked) = mpsc::sync_channel(1);
+        let policy = policy(true);
+        policy.policy.write().unwrap().outbounds = Arc::new(Outbounds {
+            direct: Arc::new(SlowUdp {
+                entered,
+                release: Mutex::new(blocked),
+            }),
+            ..outbounds()
+        });
+        let client: SocketAddr = "192.0.2.1:55100".parse().unwrap();
+        let destination: SocketAddr = "198.51.100.2:443".parse().unwrap();
+        let device = Arc::new(MockTun::default());
+        let stopped = Arc::new(AtomicBool::new(false));
+        let (sender, receiver) = mpsc::sync_channel(UDP_QUEUE);
+        let table = ConnectionTable::new();
+        let mut udp = UdpPump {
+            device: device.clone(),
+            policy: Arc::clone(&policy),
+            table: table.clone(),
+            udp: FullConeNat::new(8, UDP_IDLE),
+            response: vec![0; 1500],
+            mtu: 1500,
+        };
+        let mut pump = Pump {
+            device: device.clone(),
+            policy,
+            table,
+            listeners: Vec::new(),
+            local_ips: vec![client.ip()],
+            tcp: MixedTcp::new([TcpRedirect {
+                listener: "192.0.2.1:45000".parse().unwrap(),
+                peer: "192.0.2.2".parse().unwrap(),
+            }])
+            .unwrap(),
+            udp: sender,
+            dns: Vec::new(),
+            dns_worker: 0,
+            clients: Arc::new(Clients::default()),
+            stopped: Arc::clone(&stopped),
+            mtu: 1500,
+            counters: PumpCounters::default(),
+        };
+        let stopped_for_worker = Arc::clone(&stopped);
+        let worker = thread::spawn(move || udp.run(&receiver, &stopped_for_worker));
+        let datagram = udp_reply(client, destination, b"first datagram", 1500).unwrap();
+        pump.dispatch(&Packet::parse(&datagram).unwrap(), Instant::now());
+        opening.recv_timeout(Duration::from_secs(2)).unwrap();
+        let syn = crate::tun::packet::tcp_test_packet(client, destination, 0x02);
+        pump.dispatch(&Packet::parse(&syn).unwrap(), Instant::now());
+        let written = device.0.lock().unwrap().len();
+        stopped.store(true, Ordering::Release);
+        release.send(()).unwrap();
+        worker.join().unwrap();
+        assert_eq!(written, 1, "the SYN was redirected before UDP was released");
     }
 
     #[test]
