@@ -20,6 +20,30 @@ pub fn render(
     verbose: bool,
     log_level: LogLevel,
 ) -> Result<RenderedConfig, EngineError> {
+    if interface.is_empty() {
+        return Err(EngineError::Render(
+            "physical interface is required for Xray".into(),
+        ));
+    }
+    render_session(nodes, Some(interface), fragment, verbose, log_level)
+}
+
+pub fn render_outbound_worker(
+    nodes: &[(&str, &Node, &SocksEndpoint)],
+    fragment: &TlsFragment,
+    verbose: bool,
+    log_level: LogLevel,
+) -> Result<RenderedConfig, EngineError> {
+    render_session(nodes, None, fragment, verbose, log_level)
+}
+
+fn render_session(
+    nodes: &[(&str, &Node, &SocksEndpoint)],
+    interface: Option<&str>,
+    fragment: &TlsFragment,
+    verbose: bool,
+    log_level: LogLevel,
+) -> Result<RenderedConfig, EngineError> {
     let mut inbounds = Vec::with_capacity(nodes.len());
     let mut outbounds = Vec::with_capacity(nodes.len());
     let mut fragments = Vec::new();
@@ -103,7 +127,7 @@ fn render_balancer_entry(
     tag: &str,
     inbound_tag: &str,
     balancer: &XrayBalancer,
-    interface: &str,
+    interface: Option<&str>,
     fragment: &TlsFragment,
     outbounds: &mut Vec<Value>,
     fragments: &mut Vec<Value>,
@@ -271,6 +295,11 @@ pub fn render_probe(
     interface: &str,
     fragment: &TlsFragment,
 ) -> Result<RenderedConfig, EngineError> {
+    if interface.is_empty() {
+        return Err(EngineError::Render(
+            "physical interface is required for Xray".into(),
+        ));
+    }
     let mut inbounds = Vec::with_capacity(nodes.len());
     let mut outbounds = Vec::with_capacity(nodes.len());
     let mut fragments = Vec::new();
@@ -303,7 +332,7 @@ pub fn render_probe(
             outbound_kind,
             stream,
             tag,
-            interface,
+            Some(interface),
             fragment,
         ) {
             Ok(outbound) => outbound,
@@ -320,7 +349,7 @@ pub fn render_probe(
             outbound_kind,
             stream,
             tag,
-            interface,
+            Some(interface),
             fragment,
         ));
         rules.push(json!({
@@ -382,11 +411,11 @@ fn fragment_outbound_parts(
     outbound: &Outbound,
     stream: &StreamSettings,
     tag: &str,
-    interface: &str,
+    interface: Option<&str>,
     fragment: &TlsFragment,
 ) -> Option<Value> {
     fragment.applies_to_parts(outbound, stream).then(|| {
-        json!({
+        let mut outbound = json!({
             "tag": fragment_tag(tag),
             "protocol": "freedom",
             "settings": {
@@ -396,8 +425,12 @@ fn fragment_outbound_parts(
                     "interval": fragment.interval.to_string(),
                 },
             },
-            "streamSettings": { "sockopt": { "interface": interface } },
-        })
+
+        });
+        if let Some(interface) = interface {
+            outbound["streamSettings"] = json!({ "sockopt": { "interface": interface } });
+        }
+        outbound
     })
 }
 
@@ -416,17 +449,12 @@ fn proxy_outbound_parts(
     outbound: &Outbound,
     stream_settings: &StreamSettings,
     tag: &str,
-    interface: &str,
+    interface: Option<&str>,
     fragment: &TlsFragment,
 ) -> Result<Value, EngineError> {
     if server.parse::<std::net::IpAddr>().is_err() {
         return Err(EngineError::Render(
             "Xray server address must be an IP literal".into(),
-        ));
-    }
-    if interface.is_empty() {
-        return Err(EngineError::Render(
-            "physical interface is required for Xray".into(),
         ));
     }
     let (protocol, settings) = match outbound {
@@ -480,7 +508,10 @@ fn proxy_outbound_parts(
         }
     };
 
-    let mut stream = json!({ "network": "tcp", "sockopt": { "interface": interface } });
+    let mut stream = json!({ "network": "tcp" });
+    if let Some(interface) = interface {
+        stream["sockopt"] = json!({ "interface": interface });
+    }
     if fragment.applies_to_parts(outbound, stream_settings) {
         stream["sockopt"]["dialerProxy"] = fragment_tag(tag).into();
     }
@@ -1125,7 +1156,7 @@ mod tests {
                     &node.outbound,
                     &node.stream,
                     "proxy",
-                    "Ethernet",
+                    Some("Ethernet"),
                     &TlsFragment::default(),
                 ),
                 Err(EngineError::Unsupported(_))

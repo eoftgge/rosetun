@@ -1474,6 +1474,7 @@ mod tests {
     #[test]
     fn without_the_program_permits_the_session_blocks_the_gui_outside_the_tunnel() {
         let plan = RoutingPlan {
+            proxy_application: None,
             scope: ProtectionScope::AllTraffic,
             allow_lan: true,
             lan: Default::default(),
@@ -1774,6 +1775,7 @@ mod tests {
     #[test]
     fn session_rules_in_the_lockdown_sublayer_open_the_tunnel_only() {
         let plan = RoutingPlan {
+            proxy_application: None,
             scope: ProtectionScope::AllTraffic,
             allow_lan: true,
             lan: Default::default(),

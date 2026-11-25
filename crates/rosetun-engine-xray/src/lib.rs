@@ -18,7 +18,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rosetun_engine::{EngineProcess, OutboundFailures, RenderedConfig, errors::EngineError};
 
-pub use render::{render, render_probe};
+pub use render::{render, render_outbound_worker, render_probe};
 pub use version::SUPPORTED_XRAY_VERSION;
 
 const BINARY: &str = if cfg!(windows) { "xray.exe" } else { "xray" };
@@ -118,6 +118,17 @@ impl XrayHelper {
     }
 
     pub fn locate_binary(&self) -> Result<PathBuf, EngineError> {
+        self.locate_with_rights(rosetun_engine::EngineRights::Network)
+    }
+
+    pub fn locate_outbound_worker(&self) -> Result<PathBuf, EngineError> {
+        self.locate_with_rights(rosetun_engine::EngineRights::OutboundWorker)
+    }
+
+    fn locate_with_rights(
+        &self,
+        rights: rosetun_engine::EngineRights,
+    ) -> Result<PathBuf, EngineError> {
         let path = self.binary_path()?;
         if !path.is_file() {
             return Err(EngineError::BinaryNotFound(BINARY.into()));
@@ -125,7 +136,7 @@ impl XrayHelper {
         let binary = std::fs::canonicalize(path)?;
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         rosetun_engine::installed::verify(&binary)?;
-        version::check(&binary)?;
+        version::check(&binary, rights)?;
         Ok(binary)
     }
 
@@ -135,6 +146,39 @@ impl XrayHelper {
         config: &RenderedConfig,
         endpoints: &[&SocksEndpoint],
         verbose_until_unix: Arc<AtomicU64>,
+    ) -> Result<Box<dyn EngineProcess>, EngineError> {
+        self.spawn_with_rights(
+            binary,
+            config,
+            endpoints,
+            verbose_until_unix,
+            rosetun_engine::EngineRights::Network,
+        )
+    }
+
+    pub fn spawn_outbound_worker(
+        &self,
+        binary: &Path,
+        config: &RenderedConfig,
+        endpoints: &[&SocksEndpoint],
+        verbose_until_unix: Arc<AtomicU64>,
+    ) -> Result<Box<dyn EngineProcess>, EngineError> {
+        self.spawn_with_rights(
+            binary,
+            config,
+            endpoints,
+            verbose_until_unix,
+            rosetun_engine::EngineRights::OutboundWorker,
+        )
+    }
+
+    fn spawn_with_rights(
+        &self,
+        binary: &Path,
+        config: &RenderedConfig,
+        endpoints: &[&SocksEndpoint],
+        verbose_until_unix: Arc<AtomicU64>,
+        rights: rosetun_engine::EngineRights,
     ) -> Result<Box<dyn EngineProcess>, EngineError> {
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         rosetun_engine::installed::verify(binary)?;
@@ -150,7 +194,7 @@ impl XrayHelper {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        let mut child = start(command)?;
+        let mut child = start(command, rights)?;
         let (ready_sender, ready_receiver) = mpsc::channel();
         let failures = Arc::new(output::FailureCounters::default());
         let secrets = endpoints
@@ -203,10 +247,10 @@ impl XrayHelper {
 
 /// On Linux and macOS in a process group of its own (and tied to the helper's
 /// life on Linux).
-fn start(command: Command) -> std::io::Result<Child> {
+fn start(command: Command, _rights: rosetun_engine::EngineRights) -> std::io::Result<Child> {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
-        rosetun_engine::process::spawn(command)
+        rosetun_engine::process::spawn_with_rights(command, _rights)
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {

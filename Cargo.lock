@@ -2942,10 +2942,10 @@ dependencies = [
  "rosetun-engine",
  "rosetun-ipc",
  "rustls",
+ "rustls-native-certs",
  "serde_json",
  "thiserror 2.0.21",
  "tracing",
- "webpki-roots",
 ]
 
 [[package]]
@@ -3030,6 +3030,7 @@ dependencies = [
  "base64",
  "libc",
  "rosetun-config",
+ "rosetun-dataplane",
  "rosetun-dns",
  "rosetun-engine",
  "rosetun-engine-singbox",

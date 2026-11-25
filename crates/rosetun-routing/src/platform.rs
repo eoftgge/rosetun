@@ -156,7 +156,38 @@ pub(super) fn shared_proxy_addresses() -> Vec<std::net::IpAddr> {
     {
         macos::connected::private_addresses()
     }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(windows)]
+    {
+        let adapters = windows::adapters().unwrap_or_default();
+        let scan = crate::lan::select(
+            &adapters,
+            &crate::lan::SegmentQuery {
+                tunnel_alias: "",
+                tunnel_networks: &[],
+                servers: &[],
+            },
+        );
+        let mut addresses: Vec<_> = adapters
+            .iter()
+            .flat_map(|adapter| {
+                let segment = &scan.segment;
+                adapter.addresses.iter().filter_map(move |(address, _)| {
+                    segment
+                        .networks()
+                        .iter()
+                        .any(|network| {
+                            network.interface == adapter.interface
+                                && network.prefix.contains(*address)
+                        })
+                        .then_some(*address)
+                })
+            })
+            .collect();
+        addresses.sort_unstable();
+        addresses.dedup();
+        addresses
+    }
+    #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
     {
         Vec::new()
     }

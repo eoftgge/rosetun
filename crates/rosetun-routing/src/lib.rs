@@ -142,8 +142,10 @@ pub enum ProtectionScope {
     SharedProxy,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct RoutingPlan {
+    /// Service executable that owns the running SystemProxy data plane.
+    pub proxy_application: Option<std::path::PathBuf>,
     pub scope: ProtectionScope,
     /// "Local network": other programs may reach what `lan` holds. Ignored
     /// for DNS-only protection.
@@ -156,6 +158,19 @@ pub struct RoutingPlan {
     /// The local proxy's port when other devices may use it: from the
     /// networks `lan.segment` holds and from nowhere else.
     pub shared_proxy: Option<u16>,
+}
+
+impl std::fmt::Debug for RoutingPlan {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RoutingPlan")
+            .field("system_proxy", &self.proxy_application.is_some())
+            .field("scope", &self.scope)
+            .field("allow_lan", &self.allow_lan)
+            .field("lan", &self.lan)
+            .field("lockdown", &self.lockdown)
+            .field("shared_proxy", &self.shared_proxy)
+            .finish()
+    }
 }
 
 /// What exists of Lockdown.

@@ -89,6 +89,7 @@ impl LockdownRules {
 
 #[derive(Debug, Clone)]
 struct SessionRules {
+    system_proxy: bool,
     scope: ProtectionScope,
     allow_lan: bool,
     /// What "Local network" opens for the session; only with `allow_lan`.
@@ -99,6 +100,7 @@ struct SessionRules {
 impl SessionRules {
     fn of(plan: &RoutingPlan, tunnel: Option<InterfaceName>) -> Self {
         Self {
+            system_proxy: plan.proxy_application.is_some(),
             scope: plan.scope,
             allow_lan: plan.allow_lan,
             lan: plan.lan.clone(),
@@ -312,6 +314,9 @@ fn render(shared: &Shared, leaves: Option<&Leaves>) -> String {
         allow_lan: session.is_some_and(|session| session.allow_lan),
         lan: Some(&lan),
         engines: leaves.map(|leaves| &leaves.engines),
+        proxy_helper: leaves
+            .filter(|_| session.is_some_and(|session| session.system_proxy))
+            .map(|leaves| &leaves.helper),
         hold: None,
         tunnel: session.and_then(|session| session.tunnel.as_ref()),
         lockdown,
@@ -342,6 +347,7 @@ fn hold_rules(leaves: Option<&Leaves>) -> String {
         allow_lan: false,
         lan: None,
         engines: leaves.map(|leaves| &leaves.engines),
+        proxy_helper: None,
         hold: leaves.map(|leaves| &leaves.helper),
         tunnel: None,
         lockdown: None,
@@ -363,6 +369,7 @@ fn boot_rules(saved: Saved) -> String {
         allow_lan: false,
         lan: Some(&lan),
         engines: None,
+        proxy_helper: None,
         hold: None,
         tunnel: None,
         lockdown: Some(Lockdown {
@@ -916,6 +923,7 @@ mod tests {
                 scope,
                 allow_lan: false,
                 engines: Some(&leaves().engines),
+                proxy_helper: None,
                 hold: None,
                 tunnel: None,
                 lockdown: None,
@@ -1037,6 +1045,7 @@ mod tests {
 
     fn plan(scope: ProtectionScope) -> RoutingPlan {
         RoutingPlan {
+            proxy_application: None,
             scope,
             allow_lan: false,
             lan: Default::default(),

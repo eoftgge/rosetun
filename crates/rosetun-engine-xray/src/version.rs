@@ -29,7 +29,10 @@ fn failure(binary: &Path, message: impl std::fmt::Display) -> EngineError {
     .into()
 }
 
-pub(crate) fn check(binary: &Path) -> Result<(), EngineError> {
+pub(crate) fn check(
+    binary: &Path,
+    rights: rosetun_engine::EngineRights,
+) -> Result<(), EngineError> {
     let deadline = Instant::now() + CHECK_TIMEOUT;
     let mut command = Command::new(binary);
     command
@@ -37,7 +40,7 @@ pub(crate) fn check(binary: &Path) -> Result<(), EngineError> {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
-    let mut child = crate::start(command).map_err(|error| failure(binary, error))?;
+    let mut child = crate::start(command, rights).map_err(|error| failure(binary, error))?;
 
     let Some(mut stdout) = child.stdout.take() else {
         crate::stop_failed_spawn(&mut child);

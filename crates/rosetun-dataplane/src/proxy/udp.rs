@@ -179,8 +179,9 @@ fn open_flow<'scope, 'env>(
     } else {
         None
     };
-    let (verdict, domain) = router.decide(target, sniffed.as_deref(), ConnectionNetwork::Udp);
-    let Some((dialer, route)) = router.outbounds().select(&verdict) else {
+    let (verdict, domain, outbounds) =
+        router.decide(target, sniffed.as_deref(), ConnectionNetwork::Udp);
+    let Some((dialer, route)) = outbounds.select(&verdict) else {
         return Some(FlowEntry::Blocked(Instant::now()));
     };
     let path = dialer

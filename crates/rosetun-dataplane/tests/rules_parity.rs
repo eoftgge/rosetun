@@ -113,6 +113,8 @@ fn plan_from_request(request: &ConnectRequest, lists: Vec<ListInput>) -> RulePla
         rules: request.effective_rule_set(),
         temporary_count: request.temporary_rules.len(),
         allow_lan: request.settings.allow_lan,
+        lan_segment: Vec::new(),
+        lan_servers: Vec::new(),
         private_networks: request.settings.private_networks,
         exits: request
             .extra_nodes

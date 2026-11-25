@@ -229,6 +229,7 @@ pub struct Dataplane {
     router: Arc<Router>,
     dns: Arc<DnsService>,
     direct_resolver: Arc<dyn Resolve>,
+    dns_options: DnsOptions,
     dns_server: DnsServer,
     proxy_server: ProxyServer,
     entry_server: Option<EntryServer>,
@@ -246,7 +247,7 @@ impl fmt::Debug for Dataplane {
 }
 
 impl Dataplane {
-    /// Starts the data plane using `webpki-roots` for DoH TLS verification.
+    /// Starts the data plane with the system trust store for DoH TLS verification.
     pub fn start(config: DataplaneConfig) -> Result<Self, DataplaneError> {
         Self::start_inner(config, None)
     }
@@ -334,6 +335,7 @@ impl Dataplane {
             router,
             dns,
             direct_resolver,
+            dns_options: config.dns_options,
             dns_server,
             proxy_server,
             entry_server,
@@ -396,6 +398,42 @@ impl Dataplane {
             Arc::clone(&self.direct_resolver),
         ));
         self.router.set_outbounds(outbounds);
+    }
+
+    /// Updates a running session while preserving the bound sockets and connection table.
+    pub fn update_session(
+        &self,
+        engine: RuleEngine,
+        endpoints: OutboundEndpoints,
+        dns: Option<&DnsSettings>,
+        delay: &DelayInbound,
+    ) -> Result<(), DataplaneError> {
+        if let Some(settings) = dns {
+            let dialer = endpoints.proxy.as_ref().map_or_else(
+                || Arc::new(DirectDialer::new(Arc::new(SystemResolver))) as Arc<dyn Dialer>,
+                UpstreamProxy::to_dialer,
+            );
+            self.dns
+                .replace(DnsService::new(settings, dialer, self.dns_options)?);
+        }
+        let exit_tags = endpoints
+            .exits
+            .iter()
+            .map(|exit| (exit.tag.clone(), exit.exit.clone()))
+            .collect::<Vec<_>>();
+        let policy = Arc::new(RulePolicy {
+            engine,
+            resolver: Arc::clone(&self.dns) as Arc<dyn Resolve>,
+        });
+        let outbounds = Arc::new(build_outbounds(
+            &endpoints,
+            Arc::clone(&self.direct_resolver),
+        ));
+        self.router.set_routing(policy, outbounds);
+        if let Some(entry) = &self.entry_server {
+            entry.update_accounts(EntryAccount::from_delay_inbound(delay, &exit_tags));
+        }
+        Ok(())
     }
 
     /// Stops all listeners and closes active connections. Idempotent.

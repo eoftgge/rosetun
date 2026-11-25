@@ -37,7 +37,7 @@ use rosetun_engine::{
     UrlTestTarget, errors::EngineError,
 };
 
-pub use render::render;
+pub use render::{render, render_outbound_worker};
 pub use version::SUPPORTED_SING_BOX_VERSION;
 
 const BINARY: &str = if cfg!(windows) {
@@ -84,6 +84,28 @@ impl SingBoxBackend {
     }
 }
 
+impl SingBoxBackend {
+    fn locate_with_rights(&self, rights: EngineRights) -> Result<PathBuf, EngineError> {
+        let binary = match &self.binary {
+            Binary::Path(binary) if binary.is_file() => binary.clone(),
+            Binary::Path(binary) => {
+                return Err(EngineError::BinaryNotFound(binary.display().to_string()));
+            }
+            Binary::Neighbour => find_in_neighbours()
+                .ok_or_else(|| EngineError::BinaryNotFound(BINARY.to_owned()))?,
+            Binary::Unavailable(reason) => {
+                return Err(EngineError::BinaryUnavailable(reason.clone()));
+            }
+        };
+        let binary = std::fs::canonicalize(binary)?;
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        rosetun_engine::installed::verify(&binary)?;
+
+        version::check(&binary, rights)?;
+        Ok(binary)
+    }
+}
+
 impl EngineBackend for SingBoxBackend {
     fn kind(&self) -> EngineKind {
         EngineKind::SingBox
@@ -124,23 +146,10 @@ impl EngineBackend for SingBoxBackend {
     }
 
     fn locate_binary(&self) -> Result<PathBuf, EngineError> {
-        let binary = match &self.binary {
-            Binary::Path(binary) if binary.is_file() => binary.clone(),
-            Binary::Path(binary) => {
-                return Err(EngineError::BinaryNotFound(binary.display().to_string()));
-            }
-            Binary::Neighbour => find_in_neighbours()
-                .ok_or_else(|| EngineError::BinaryNotFound(BINARY.to_owned()))?,
-            Binary::Unavailable(reason) => {
-                return Err(EngineError::BinaryUnavailable(reason.clone()));
-            }
-        };
-        let binary = std::fs::canonicalize(binary)?;
-        #[cfg(any(target_os = "linux", target_os = "macos"))]
-        rosetun_engine::installed::verify(&binary)?;
-
-        version::check(&binary)?;
-        Ok(binary)
+        self.locate_with_rights(EngineRights::Network)
+    }
+    fn locate_outbound_worker(&self) -> Result<PathBuf, EngineError> {
+        self.locate_with_rights(EngineRights::OutboundWorker)
     }
 
     fn render(&self, request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError> {

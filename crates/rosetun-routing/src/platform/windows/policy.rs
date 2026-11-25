@@ -224,7 +224,25 @@ impl BootstrapPolicy {
             ProtectionScope::DnsOnly => Self::dns_only(engine_binaries),
             ProtectionScope::SharedProxy => Self { rules: Vec::new() },
         };
-        if let (Some(port), Some(engine)) = (plan.shared_proxy, engine_binaries.first()) {
+        if plan.scope != ProtectionScope::SharedProxy
+            && let Some(application) = plan.proxy_application.as_deref()
+        {
+            for family in [AddressFamily::Ipv4, AddressFamily::Ipv6] {
+                for protocol in DNS_PROTOCOLS {
+                    let mut conditions = engine_permit(application);
+                    conditions.push(Condition::Protocol(protocol));
+                    policy
+                        .rules
+                        .push(Rule::allow(family, conditions, BOOTSTRAP_ALLOW_WEIGHT));
+                }
+            }
+        }
+        if let (Some(port), Some(engine)) = (
+            plan.shared_proxy,
+            plan.proxy_application
+                .as_deref()
+                .or_else(|| engine_binaries.first().copied()),
+        ) {
             policy
                 .rules
                 .extend(shared_proxy_rules(port, &plan.lan, engine));
@@ -549,6 +567,7 @@ pub(super) mod tests {
 
     fn plan() -> RoutingPlan {
         RoutingPlan {
+            proxy_application: None,
             scope: ProtectionScope::AllTraffic,
             allow_lan: false,
             lan: Default::default(),
@@ -594,6 +613,49 @@ pub(super) mod tests {
         let mut proxy = plan();
         proxy.shared_proxy = None;
         assert_eq!(BootstrapPolicy::from_plan(&proxy, &[engine]), policy);
+    }
+
+    #[test]
+    fn only_the_proxy_session_permits_service_egress() {
+        let service = Path::new(r"C:\Program Files\Rosetun\rosetun-helper-privileged.exe");
+        let engine = Path::new(r"C:\ProgramData\Rosetun\data\engines\sing-box.exe");
+        let proxy = RoutingPlan {
+            proxy_application: Some(service.to_owned()),
+            shared_proxy: Some(10808),
+            lan: proxy_lan(),
+            lockdown: true,
+            ..plan()
+        };
+        let permits_service = |rule: &Rule| {
+            rule.action == Action::Allow
+                && rule
+                    .conditions
+                    .contains(&Condition::Application(service.to_owned()))
+                && rule.conditions.contains(&Condition::ServiceAccount)
+        };
+        let policy = BootstrapPolicy::from_plan(&proxy, &[engine]);
+        let outbound: Vec<_> = policy
+            .rules
+            .iter()
+            .filter(|rule| rule.layer == Layer::Connect && permits_service(rule))
+            .collect();
+        assert_eq!(outbound.len(), 4);
+        assert!(outbound.iter().all(|rule| {
+            super::DNS_PROTOCOLS
+                .iter()
+                .any(|protocol| rule.conditions.contains(&Condition::Protocol(*protocol)))
+        }));
+        assert!(
+            inbound_rules(&policy)
+                .iter()
+                .any(|rule| permits_service(rule))
+        );
+        assert!(
+            !BootstrapPolicy::from_plan(&plan(), &[engine])
+                .rules
+                .iter()
+                .any(permits_service)
+        );
     }
 
     #[test]
@@ -955,6 +1017,7 @@ pub(super) mod tests {
 
     fn lan_plan(private_networks: bool) -> RoutingPlan {
         RoutingPlan {
+            proxy_application: None,
             scope: ProtectionScope::AllTraffic,
             allow_lan: true,
             lan: lan(private_networks),
@@ -1375,6 +1438,7 @@ pub(super) mod tests {
         let engine = Path::new(r"C:\sing-box.exe");
         let policy = BootstrapPolicy::from_plan(
             &RoutingPlan {
+                proxy_application: None,
                 scope: ProtectionScope::DnsOnly,
                 allow_lan: false,
                 lan: Default::default(),
@@ -1451,6 +1515,7 @@ pub(super) mod tests {
     #[test]
     fn dns_only_ignores_allow_lan() {
         let plan = RoutingPlan {
+            proxy_application: None,
             scope: ProtectionScope::DnsOnly,
             allow_lan: false,
             lan: Default::default(),

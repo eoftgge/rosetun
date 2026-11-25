@@ -1005,6 +1005,7 @@ mod tests {
             for allow_lan in [false, true] {
                 for lockdown in [false, true] {
                     let plan = RoutingPlan {
+                        proxy_application: None,
                         scope,
                         allow_lan,
                         lan: every_lan_shape(),

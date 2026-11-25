@@ -134,6 +134,33 @@ impl DnsWatchdog {
         )
     }
 
+    pub(super) fn start_proxy(
+        status: Arc<Mutex<Status>>,
+        server: SocketAddr,
+        entry: rosetun_engine::DelayInbound,
+        timing: WatchdogTiming,
+    ) -> io::Result<Self> {
+        Self::start_with_probes(
+            status,
+            timing,
+            move |stopped| dns::probe(server, timing.dns_timeout, stopped),
+            move |stopped| {
+                !stopped()
+                    && entry
+                        .account(rosetun_engine::UrlTestTarget::Session)
+                        .is_some_and(|account| {
+                            super::repeated::full_delay_any(
+                                entry.address,
+                                account,
+                                &rosetun_engine::PROBE_URLS,
+                                timing.path_timeout,
+                            )
+                            .is_ok()
+                        })
+            },
+        )
+    }
+
     fn start_with_probes(
         status: Arc<Mutex<Status>>,
         timing: WatchdogTiming,

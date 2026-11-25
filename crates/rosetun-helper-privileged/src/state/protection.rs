@@ -432,7 +432,15 @@ impl ProtectionRuntime {
             tracing::info!("kill switch released with Lockdown");
             return;
         };
+        let proxy_application = match (!tunnel).then(local_proxy::application).transpose() {
+            Ok(application) => application,
+            Err(error) => {
+                tracing::warn!(code = ?error.code, "cannot identify the proxy service");
+                return;
+            }
+        };
         let plan = RoutingPlan {
+            proxy_application,
             scope,
             allow_lan: settings.allow_lan,
             lan: if shared_proxy.is_some() {
@@ -536,6 +544,10 @@ fn all_traffic(
     };
     Ok((
         RoutingPlan {
+            proxy_application: tunnel
+                .is_none()
+                .then(local_proxy::application)
+                .transpose()?,
             scope: ProtectionScope::AllTraffic,
             allow_lan: request.settings.allow_lan,
             lan: lan.clone(),

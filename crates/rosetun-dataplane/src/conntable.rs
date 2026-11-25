@@ -91,6 +91,7 @@ struct Inner {
     active: Mutex<HashMap<String, Entry>>,
     closed: Mutex<VecDeque<ClosedConnection>>,
     max_active: usize,
+    stopped: AtomicBool,
     max_closed: usize,
 }
 
@@ -126,6 +127,7 @@ impl ConnectionTable {
                 active: Mutex::new(HashMap::new()),
                 closed: Mutex::new(VecDeque::new()),
                 max_active,
+                stopped: AtomicBool::new(false),
                 max_closed,
             }),
         }
@@ -141,7 +143,7 @@ impl ConnectionTable {
             sockets: Mutex::new(Vec::new()),
         });
         let mut active = lock(&self.inner.active);
-        if active.len() >= self.inner.max_active {
+        if self.inner.stopped.load(Ordering::Acquire) || active.len() >= self.inner.max_active {
             return Err(TableFull);
         }
         let mut id = new_id();
@@ -219,6 +221,11 @@ impl ConnectionTable {
         for shared in all {
             shared.close();
         }
+    }
+
+    pub(crate) fn shutdown(&self) {
+        self.inner.stopped.store(true, Ordering::Release);
+        self.close_all();
     }
 
     /// A probe that reads this table the way the helper reads the engine's

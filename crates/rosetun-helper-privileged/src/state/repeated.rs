@@ -46,6 +46,25 @@ pub(super) fn repeated_delay_any(
     urls: &[&str],
     timeout: Duration,
 ) -> Result<Duration, RepeatedError> {
+    delay_any(entry, account, urls, timeout, true)
+}
+
+pub(super) fn full_delay_any(
+    entry: SocketAddr,
+    account: &DelayAccount,
+    urls: &[&str],
+    timeout: Duration,
+) -> Result<Duration, RepeatedError> {
+    delay_any(entry, account, urls, timeout, false)
+}
+
+fn delay_any(
+    entry: SocketAddr,
+    account: &DelayAccount,
+    urls: &[&str],
+    timeout: Duration,
+    repeated: bool,
+) -> Result<Duration, RepeatedError> {
     let started = Instant::now();
     let check = NEXT_CHECK.fetch_add(1, Ordering::Relaxed);
     tracing::debug!(check, target = %account.tag, timeout_ms = timeout.as_millis(), providers = urls.len(), "repeated check started");
@@ -67,9 +86,7 @@ pub(super) fn repeated_delay_any(
                     .checked_sub(started.elapsed())
                     .filter(|left| !left.is_zero())
                     .ok_or(RepeatedError::TimedOut)
-                    .and_then(|left| {
-                        repeated_delay_observed(entry, &account, &url, left, diagnostic)
-                    });
+                    .and_then(|left| measure(entry, &account, &url, left, diagnostic, repeated));
                 tracing::debug!(
                     check,
                     provider,
@@ -123,7 +140,7 @@ fn repeated_delay(
     url: &str,
     timeout: Duration,
 ) -> Result<Duration, RepeatedError> {
-    repeated_delay_observed(
+    measure(
         entry,
         account,
         url,
@@ -133,15 +150,17 @@ fn repeated_delay(
             provider: 0,
             started: Instant::now(),
         },
+        true,
     )
 }
 
-fn repeated_delay_observed(
+fn measure(
     entry: SocketAddr,
     account: &DelayAccount,
     url: &str,
     timeout: Duration,
     diagnostic: Diagnostic,
+    repeated: bool,
 ) -> Result<Duration, RepeatedError> {
     let proxy = ureq::Proxy::builder(ureq::ProxyProtocol::Socks5h)
         .host(&entry.ip().to_string())
@@ -162,6 +181,9 @@ fn repeated_delay_observed(
 
     let started = Instant::now();
     send(&agent, url, timeout, diagnostic, 1).map_err(|_| RepeatedError::First)?;
+    if !repeated {
+        return Ok(started.elapsed());
+    }
     let left = timeout
         .checked_sub(started.elapsed())
         .filter(|left| !left.is_zero())

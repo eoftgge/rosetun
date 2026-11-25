@@ -116,6 +116,7 @@ fn capability_mask(capabilities: &[u32]) -> u64 {
 fn rights_mask(rights: EngineRights) -> u64 {
     let network = capability_mask(&ENGINE_CAPABILITIES);
     match rights {
+        EngineRights::OutboundWorker => 0,
         EngineRights::Network => network,
         EngineRights::NetworkAndProcesses => {
             network | capability_mask(&PROCESS_READING_CAPABILITIES)
@@ -316,7 +317,7 @@ fn rights_refusal(
     placed: bool,
     held: Option<u64>,
 ) -> Option<String> {
-    if rights == EngineRights::Network {
+    if rights != EngineRights::NetworkAndProcesses {
         return None;
     }
     match identity {
@@ -390,6 +391,16 @@ fn launch(
     identity: Identity,
     rights: EngineRights,
 ) -> io::Result<Child> {
+    let identity = if rights == EngineRights::OutboundWorker && identity == Identity::Inherit {
+        // SAFETY: Reading the effective uid needs no pointers or process state.
+        if unsafe { libc::geteuid() } == 0 {
+            engine_account()?.map_or(Identity::Missing, Identity::Account)
+        } else {
+            identity
+        }
+    } else {
+        identity
+    };
     let steps = match identity {
         Identity::Inherit => None,
         Identity::Account(account) => Some(drop_steps(account, rights)),
@@ -426,6 +437,9 @@ fn launch(
                 for step in steps {
                     apply(step)?;
                 }
+            } else if rights == EngineRights::OutboundWorker {
+                apply(Step::SetCapabilities(0))?;
+                apply(Step::NoNewPrivileges)?;
             }
             // After the change of account, which clears the signal.
             if libc::prctl(
@@ -750,6 +764,15 @@ mod identity_tests {
 
     fn position(steps: &[Step], wanted: impl Fn(&Step) -> bool) -> usize {
         steps.iter().position(wanted).expect("the step is there")
+    }
+
+    #[test]
+    fn outbound_workers_keep_no_capabilities() {
+        assert_eq!(rights_mask(EngineRights::OutboundWorker), 0);
+        assert_eq!(
+            drop_steps(ACCOUNT, EngineRights::OutboundWorker)[4],
+            Step::SetCapabilities(0)
+        );
     }
 
     #[test]

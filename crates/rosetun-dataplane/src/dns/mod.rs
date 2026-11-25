@@ -59,6 +59,8 @@ thread_local! {
 pub enum DnsError {
     #[error("invalid resolver server name")]
     InvalidServerName,
+    #[error("invalid resolver port")]
+    InvalidPort,
     #[error("invalid resolver path")]
     InvalidPath,
     #[error("invalid root certificate")]
@@ -154,6 +156,10 @@ impl Drop for InFlightGuard<'_> {
 
 /// Thread-safe DNS resolver backed by DoH with forward and reverse TTL caches.
 pub struct DnsService {
+    resolver: std::sync::RwLock<Arc<DnsResolver>>,
+}
+
+struct DnsResolver {
     server_ip: IpAddr,
     server_name_lower: String,
     options: DnsOptions,
@@ -168,14 +174,12 @@ impl fmt::Debug for DnsService {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("DnsService")
             .field("cache_entries", &self.cache_len())
-            .field("in_flight", &self.in_flight.load(Ordering::Relaxed))
             .finish_non_exhaustive()
     }
 }
 
 impl DnsService {
-    /// Creates a DNS service that verifies the upstream against the bundled
-    /// Mozilla root certificates (`webpki-roots`).
+    /// Creates a DNS service that verifies the upstream against the system's trust store.
     pub fn new(
         settings: &DnsSettings,
         dialer: Arc<dyn Dialer>,
@@ -217,25 +221,68 @@ impl DnsService {
     ) -> Self {
         let server_name_lower = normalize_domain(&settings.server_name);
         Self {
-            server_ip: settings.server,
-            server_name_lower,
-            options,
-            doh,
-            cache: Mutex::new(TtlCache::new(options.cache_entries)),
-            reverse: Mutex::new(TtlCache::new(options.reverse_entries)),
-            in_flight: AtomicUsize::new(0),
-            clock,
+            resolver: std::sync::RwLock::new(Arc::new(DnsResolver {
+                server_ip: settings.server,
+                server_name_lower,
+                options,
+                doh,
+                cache: Mutex::new(TtlCache::new(options.cache_entries)),
+                reverse: Mutex::new(TtlCache::new(options.reverse_entries)),
+                in_flight: AtomicUsize::new(0),
+                clock,
+            })),
         }
+    }
+
+    fn resolver(&self) -> Arc<DnsResolver> {
+        Arc::clone(
+            &self
+                .resolver
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
+    }
+
+    pub(crate) fn replace(&self, next: Self) {
+        *self
+            .resolver
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = next
+            .resolver
+            .into_inner()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
     }
 
     /// Swaps the outbound [`Dialer`] at runtime without clearing caches.
     pub fn set_dialer(&self, dialer: Arc<dyn Dialer>) {
-        self.doh.set_dialer(dialer);
+        self.resolver().doh.set_dialer(dialer);
     }
 
+    pub fn exchange(&self, query: &[u8]) -> Result<Vec<u8>, DnsError> {
+        self.resolver().exchange(query)
+    }
+
+    pub fn domain_for(&self, ip: IpAddr) -> Option<String> {
+        self.resolver().domain_for(ip)
+    }
+
+    pub fn lookup(&self, name: &str) -> io::Result<Vec<IpAddr>> {
+        self.resolver().lookup(name)
+    }
+
+    pub fn cache_len(&self) -> usize {
+        self.resolver().cache_len()
+    }
+
+    pub fn flush(&self) {
+        self.resolver().flush();
+    }
+}
+
+impl DnsResolver {
     /// Processes a single wire-format DNS query and returns the wire-format
     /// response carrying the same message ID.
-    pub fn exchange(&self, query: &[u8]) -> Result<Vec<u8>, DnsError> {
+    fn exchange(&self, query: &[u8]) -> Result<Vec<u8>, DnsError> {
         if IN_DOH_EXCHANGE.with(Cell::get) {
             return Err(DnsError::Loop);
         }
@@ -308,14 +355,14 @@ impl DnsService {
 
     /// Returns the lower-case domain name (without trailing dot) last seen
     /// answering an `A` or `AAAA` query with `ip`, if still unexpired.
-    pub fn domain_for(&self, ip: IpAddr) -> Option<String> {
+    fn domain_for(&self, ip: IpAddr) -> Option<String> {
         let now = (self.clock)();
         let mut reverse = self.reverse.lock().ok()?;
         reverse.get(&ip, now).cloned()
     }
 
     /// Resolves `name` to IPv4 and IPv6 addresses via [`Self::exchange`].
-    pub fn lookup(&self, name: &str) -> io::Result<Vec<IpAddr>> {
+    fn lookup(&self, name: &str) -> io::Result<Vec<IpAddr>> {
         if IN_DOH_EXCHANGE.with(Cell::get) {
             return Err(io::Error::other(DnsError::Loop));
         }
@@ -364,12 +411,12 @@ impl DnsService {
     }
 
     /// Number of entries currently held in the forward DNS cache.
-    pub fn cache_len(&self) -> usize {
+    fn cache_len(&self) -> usize {
         self.cache.lock().map_or(0, |cache| cache.len())
     }
 
     /// Clears both the forward and reverse caches.
-    pub fn flush(&self) {
+    fn flush(&self) {
         if let Ok(mut cache) = self.cache.lock() {
             cache.clear();
         }

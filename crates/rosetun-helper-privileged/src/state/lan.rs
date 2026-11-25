@@ -186,7 +186,6 @@ impl LanRuntime {
         &self.access
     }
 
-    #[cfg(test)]
     pub(super) fn servers(&self) -> &[IpAddr] {
         &self.servers
     }

@@ -63,7 +63,11 @@ impl DohClient {
         dialer: Arc<dyn Dialer>,
         timeout: Duration,
     ) -> Result<Self, DnsError> {
-        let roots = RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        let mut roots = RootCertStore::empty();
+        roots.add_parsable_certificates(rustls_native_certs::load_native_certs().certs);
+        if roots.is_empty() {
+            return Err(DnsError::InvalidRootCertificate);
+        }
         Self::with_root_store(settings, dialer, timeout, roots)
     }
 
@@ -98,6 +102,9 @@ impl DohClient {
         let server_name = ServerName::try_from(trimmed_name.to_owned())
             .map_err(|_| DnsError::InvalidServerName)?;
         let port = settings.port.unwrap_or(DEFAULT_PORT);
+        if port == 0 {
+            return Err(DnsError::InvalidPort);
+        }
         let path = settings.path.as_deref().unwrap_or(DEFAULT_PATH).to_owned();
         if !path.starts_with('/') || contains_http_control(&path) {
             return Err(DnsError::InvalidPath);
@@ -244,7 +251,9 @@ impl DohClient {
         stream.write_all(&request).map_err(DnsError::Io)?;
         stream.flush().map_err(DnsError::Io)?;
 
-        let (body, reusable) = read_http_response(&mut stream, deadline)?;
+        let (body, reusable) = read_http_response(&mut stream, deadline, |stream, deadline| {
+            apply_remaining_timeout(stream.get_ref(), deadline)
+        })?;
         if reusable {
             self.put_pooled(stream, generation);
         }
@@ -286,17 +295,23 @@ fn apply_remaining_timeout(tcp: &TcpStream, deadline: Instant) -> Result<(), Dns
     Ok(())
 }
 
-struct HttpReader<'a> {
-    stream: &'a mut TlsStream,
+struct HttpReader<'a, R> {
+    stream: &'a mut R,
+    set_timeout: fn(&R, Instant) -> Result<(), DnsError>,
     deadline: Instant,
     buf: Vec<u8>,
     pos: usize,
 }
 
-impl<'a> HttpReader<'a> {
-    fn new(stream: &'a mut TlsStream, deadline: Instant) -> Self {
+impl<'a, R: Read> HttpReader<'a, R> {
+    fn new(
+        stream: &'a mut R,
+        deadline: Instant,
+        set_timeout: fn(&R, Instant) -> Result<(), DnsError>,
+    ) -> Self {
         Self {
             stream,
+            set_timeout,
             deadline,
             buf: Vec::with_capacity(1024),
             pos: 0,
@@ -308,9 +323,14 @@ impl<'a> HttpReader<'a> {
     }
 
     fn read_more(&mut self) -> Result<usize, DnsError> {
-        apply_remaining_timeout(self.stream.get_ref(), self.deadline)?;
         let mut chunk = [0u8; 2048];
-        let count = self.stream.read(&mut chunk).map_err(DnsError::Io)?;
+        let count = loop {
+            (self.set_timeout)(self.stream, self.deadline)?;
+            match self.stream.read(&mut chunk) {
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                result => break result.map_err(DnsError::Io)?,
+            }
+        };
         if count > 0 {
             self.buf.extend_from_slice(&chunk[..count]);
         }
@@ -394,20 +414,20 @@ impl<'a> HttpReader<'a> {
                 return Err(DnsError::ResponseTooLarge);
             }
             out.extend_from_slice(self.buffered());
-            self.buf.clear();
-            self.pos = 0;
         }
+        self.buf.clear();
+        self.pos = 0;
         loop {
-            apply_remaining_timeout(self.stream.get_ref(), self.deadline)?;
-            let mut chunk = [0u8; 2048];
-            let count = self.stream.read(&mut chunk).map_err(DnsError::Io)?;
+            let count = self.read_more()?;
             if count == 0 {
                 return Ok(out);
             }
+            let chunk = &self.buf;
             if out.len() + count > max_len {
                 return Err(DnsError::ResponseTooLarge);
             }
             out.extend_from_slice(&chunk[..count]);
+            self.buf.clear();
         }
     }
 }
@@ -420,11 +440,12 @@ fn find_crlf(data: &[u8]) -> Option<usize> {
     data.windows(2).position(|window| window == b"\r\n")
 }
 
-fn read_http_response(
-    stream: &mut TlsStream,
+fn read_http_response<R: Read>(
+    stream: &mut R,
     deadline: Instant,
+    set_timeout: fn(&R, Instant) -> Result<(), DnsError>,
 ) -> Result<(Vec<u8>, bool), DnsError> {
-    let mut reader = HttpReader::new(stream, deadline);
+    let mut reader = HttpReader::new(stream, deadline, set_timeout);
     let raw_headers = reader.read_headers()?;
     let header_text = std::str::from_utf8(&raw_headers).map_err(|_| DnsError::BadHttpResponse)?;
     let mut lines = header_text.split("\r\n");
@@ -483,6 +504,7 @@ fn read_http_response(
     };
 
     let body = if chunked {
+        reusable &= content_length.is_none();
         read_chunked_body(&mut reader)?
     } else if let Some(len) = content_length {
         if len > MAX_BODY_BYTES {
@@ -520,7 +542,7 @@ fn parse_status_line(line: &str) -> Result<(bool, u16), DnsError> {
     Ok((http_11, code))
 }
 
-fn read_chunked_body(reader: &mut HttpReader<'_>) -> Result<Vec<u8>, DnsError> {
+fn read_chunked_body(reader: &mut HttpReader<'_, impl Read>) -> Result<Vec<u8>, DnsError> {
     let mut out = Vec::new();
     loop {
         let size_line = reader.read_line(MAX_CHUNK_LINE_BYTES)?;
@@ -554,5 +576,41 @@ fn read_chunked_body(reader: &mut HttpReader<'_>) -> Result<Vec<u8>, DnsError> {
         if crlf != b"\r\n" {
             return Err(DnsError::BadHttpResponse);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_interrupted_read_retries_with_the_same_deadline() {
+        struct InterruptedOnce(Option<&'static [u8]>);
+
+        impl Read for InterruptedOnce {
+            fn read(&mut self, chunk: &mut [u8]) -> io::Result<usize> {
+                match &mut self.0 {
+                    Some(remaining) => remaining.read(chunk),
+                    None => {
+                        self.0 = Some(b"HTTP/1.1 200 OK\r\nContent-Length: 1\r\n\r\nx");
+                        Err(io::ErrorKind::Interrupted.into())
+                    }
+                }
+            }
+        }
+
+        let (body, reusable) =
+            read_http_response(&mut InterruptedOnce(None), Instant::now(), |_, _| Ok(())).unwrap();
+        assert_eq!(body, b"x");
+        assert!(reusable);
+    }
+
+    #[test]
+    fn a_chunked_response_with_a_content_length_closes_the_connection() {
+        let mut response = &b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nContent-Length: 99\r\n\r\n1\r\nx\r\n0\r\n\r\n"[..];
+        let (body, reusable) =
+            read_http_response(&mut response, Instant::now(), |_, _| Ok(())).unwrap();
+        assert_eq!(body, b"x");
+        assert!(!reusable);
     }
 }

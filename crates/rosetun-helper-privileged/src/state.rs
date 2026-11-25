@@ -10,6 +10,7 @@ mod lockdown;
 mod path;
 mod probe;
 mod protection;
+mod proxy_session;
 mod repeated;
 mod session_lock;
 #[cfg(target_os = "linux")]
@@ -291,7 +292,19 @@ struct Reconnect {
 trait XrayRunner: Send + Sync + std::fmt::Debug {
     fn binary_path(&self) -> Result<PathBuf, EngineError>;
     fn locate_binary(&self) -> Result<PathBuf, EngineError>;
+    fn locate_outbound_worker(&self) -> Result<PathBuf, EngineError> {
+        self.locate_binary()
+    }
     fn probe_config_path(&self) -> PathBuf;
+    fn spawn_outbound_worker(
+        &self,
+        binary: &Path,
+        config: &RenderedConfig,
+        endpoints: &[&SocksEndpoint],
+        verbose_until_unix: Arc<AtomicU64>,
+    ) -> Result<Box<dyn EngineProcess>, EngineError> {
+        self.spawn(binary, config, endpoints, verbose_until_unix)
+    }
     fn spawn(
         &self,
         binary: &Path,
@@ -302,8 +315,22 @@ trait XrayRunner: Send + Sync + std::fmt::Debug {
 }
 
 impl XrayRunner for XrayHelper {
+    fn spawn_outbound_worker(
+        &self,
+        binary: &Path,
+        config: &RenderedConfig,
+        endpoints: &[&SocksEndpoint],
+        verbose_until_unix: Arc<AtomicU64>,
+    ) -> Result<Box<dyn EngineProcess>, EngineError> {
+        XrayHelper::spawn_outbound_worker(self, binary, config, endpoints, verbose_until_unix)
+    }
+
     fn binary_path(&self) -> Result<PathBuf, EngineError> {
         XrayHelper::binary_path(self)
+    }
+
+    fn locate_outbound_worker(&self) -> Result<PathBuf, EngineError> {
+        XrayHelper::locate_outbound_worker(self)
     }
 
     fn locate_binary(&self) -> Result<PathBuf, EngineError> {
@@ -335,6 +362,7 @@ struct Session {
     xray: Option<Arc<dyn XrayRunner>>,
     physical_interface: fn(&str) -> Option<String>,
     control: Option<ControlEndpoint>,
+    proxy_session: Option<proxy_session::ProxySession>,
     monitor: Option<TrafficMonitor>,
     connections: Arc<Mutex<ConnectionBook>>,
     watchdog: Option<DnsWatchdog>,
@@ -465,6 +493,7 @@ impl Helper {
                 #[cfg(test)]
                 physical_interface: test_physical_interface,
                 control: None,
+                proxy_session: None,
                 monitor: None,
                 connections,
                 watchdog: None,
@@ -676,6 +705,15 @@ impl Helper {
     /// before anything of the session is touched: a rule that never matches sends
     /// the program's traffic another way without a word.
     fn require_engine_rights(&self, request: &ConnectRequest) -> Result<(), HelperError> {
+        if request.settings.connection_mode == rosetun_config::ConnectionMode::SystemProxy
+            && EngineRights::for_rules(&request.effective_rule_set())
+                == EngineRights::NetworkAndProcesses
+        {
+            return Err(HelperError::new(
+                ErrorCode::UnsupportedRules,
+                "rules by program are unavailable in local proxy mode",
+            ));
+        }
         let Some(reason) = self.process_rights_unavailable.as_deref() else {
             return Ok(());
         };
@@ -773,6 +811,10 @@ impl Helper {
         }
         let session = self.session_for(SessionHolder::Query)?;
         if !self.check_connections_owner(caller)? {
+            return Ok(());
+        }
+        if let Some(proxy) = &session.proxy_session {
+            proxy.dataplane.close_connection(id);
             return Ok(());
         }
         let Some(control) = session.control.clone() else {
@@ -955,8 +997,9 @@ impl Helper {
             let expired = session
                 .missing_route_since
                 .is_some_and(|since| now.saturating_duration_since(since) >= NETWORK_GRACE);
-            let exited = session.process.is_some() && !session.live_engine_running();
-            if (expired || exited) && session.process.is_some() {
+            let has_engine = session.process.is_some() || session.proxy_session.is_some();
+            let exited = has_engine && !session.live_engine_running();
+            if has_engine && (expired || exited) {
                 tracing::info!(
                     expired,
                     exited,
@@ -975,7 +1018,7 @@ impl Helper {
                 .is_some_and(|reconnect| reconnect.cause == "network lost");
             if from_network_loss
                 && loss_duration.is_some_and(|duration| duration < NETWORK_GRACE)
-                && session.process.is_some()
+                && (session.process.is_some() || session.proxy_session.is_some())
                 && session.live_engine_running()
             {
                 tracing::info!("checking live tunnel after physical network returned");
@@ -1031,25 +1074,30 @@ impl Helper {
                 return;
             }
         } else {
-            let xray_exited = if session.request.is_some() && session.xray_chain {
-                match session.xray_process.as_mut() {
-                    Some(process) => !matches!(process.is_running(), Ok(true)),
-                    None => true,
-                }
+            let (xray_exited, exited) = if let Some(proxy) = session.proxy_session.as_mut() {
+                proxy.exited()
             } else {
-                false
-            };
-            let exited = if xray_exited {
-                Some("Xray stopped".to_owned())
-            } else {
-                match session.process.as_mut() {
-                    Some(process) => match process.is_running() {
-                        Ok(true) => None,
-                        Ok(false) => Some("the engine process exited".to_owned()),
-                        Err(error) => Some(error.to_string()),
-                    },
-                    None => Some("the engine process is missing".to_owned()),
-                }
+                let xray_exited = if session.request.is_some() && session.xray_chain {
+                    match session.xray_process.as_mut() {
+                        Some(process) => !matches!(process.is_running(), Ok(true)),
+                        None => true,
+                    }
+                } else {
+                    false
+                };
+                let exited = if xray_exited {
+                    Some("Xray stopped".to_owned())
+                } else {
+                    match session.process.as_mut() {
+                        Some(process) => match process.is_running() {
+                            Ok(true) => None,
+                            Ok(false) => Some("the engine process exited".to_owned()),
+                            Err(error) => Some(error.to_string()),
+                        },
+                        None => Some("the engine process is missing".to_owned()),
+                    }
+                };
+                (xray_exited, exited)
             };
             if let Some(reason) = exited {
                 if xray_exited {
@@ -1060,8 +1108,10 @@ impl Helper {
                     tracing::warn!(%reason, protected, "the engine terminated itself");
                     if !protected {
                         session.teardown();
-                    } else if xray_exited && let Err(error) = session.stop_engine() {
-                        tracing::error!(%error, "failed to stop the engine after Xray stopped");
+                    } else if (xray_exited || session.proxy_session.is_some())
+                        && let Err(error) = session.stop_engine()
+                    {
+                        tracing::error!(%error, "failed to stop the remaining engine processes");
                     }
                     self.with_status(|status| {
                         let failure_kind =
@@ -2336,20 +2386,7 @@ impl Session {
             ));
         }
 
-        let shared_addresses = (self.shared_proxy_addresses)();
-        let local_proxy = local_proxy::listen_for(
-            settings,
-            local_proxy::sharing_allowed(&lockdown::read(&self.lockdown)),
-            &shared_addresses,
-            &self.cancelled,
-        )?;
-        #[cfg(test)]
-        let local_proxy = local_proxy.map(|listen| rosetun_engine::LocalProxyListen {
-            dns: self.test_local_dns.unwrap_or(listen.dns),
-            ..listen
-        });
-        // No adapter of ours is coming, and an old one that is still going away is in no way.
-        if local_proxy.is_none() {
+        if settings.connection_mode == rosetun_config::ConnectionMode::Tun {
             self.wait_for_previous_adapter(&settings.tun.name)?;
         }
 
@@ -2374,6 +2411,18 @@ impl Session {
                     "disconnect first to turn protection off",
                 ));
             }
+        }
+
+        if settings.connection_mode == rosetun_config::ConnectionMode::SystemProxy {
+            return self.start_proxy(
+                request,
+                StartOptions {
+                    mode,
+                    endpoint,
+                    extra_endpoints,
+                    dns_timeout,
+                },
+            );
         }
 
         // A fresh start has no tunnel up: the old guard was reverted above.
@@ -2438,10 +2487,7 @@ impl Session {
                 format!("engine {} is not registered", settings.engine.as_str()),
             )
         })?;
-        let dns_server = match local_proxy.as_ref() {
-            Some(listen) => Some(listen.dns),
-            None => backend.tunnel_dns_server(&settings.tun),
-        };
+        let dns_server = backend.tunnel_dns_server(&settings.tun);
         let outbounds = extra.outbounds(&socks);
         let control = match ControlEndpoint::local() {
             Ok(mut control) => {
@@ -2483,7 +2529,7 @@ impl Session {
                 lan_servers: private_exceptions,
                 control: control.as_ref(),
                 verbose_log: verbose_until.is_some(),
-                local_proxy: local_proxy.as_ref(),
+                local_proxy: None,
             },
         )?;
 
@@ -2517,26 +2563,19 @@ impl Session {
         if lockdown && !settings.kill_switch {
             tracing::info!("Lockdown is on: the kill switch is forced on");
         }
-        let shared_proxy = local_proxy::shared_port(settings, &lockdown::read(&self.lockdown));
         let scope = protection::protection_scope(
             mode,
             settings.kill_switch,
             dns_server.is_some(),
             lockdown,
-            local_proxy.is_some(),
-            shared_proxy.is_some(),
+            false,
+            false,
         );
-        // In the proxy mode nothing is authorized later: what goes up here is all there is.
         let tunnel = scope
-            .filter(|_| local_proxy.is_none())
             .map(|_| TunnelInterface::try_from(&settings.tun))
             .transpose()
             .map_err(|error| HelperError::new(ErrorCode::RoutingFailed, error.to_string()))?;
-        // A DNS lock has nothing to do without an adapter.
-        if scope.is_none() && local_proxy.is_some() {
-            self.protection.release("failed to remove the DNS lock");
-        }
-        if scope.is_none() && local_proxy.is_none() {
+        if scope.is_none() {
             tracing::warn!("the tunnel has no DNS address; connecting without the DNS lock");
             self.protection
                 .record_shortfall(ProtectionShortfallCode::NoTunnelDns);
@@ -2544,11 +2583,12 @@ impl Session {
 
         if let Some(scope) = scope {
             let plan = RoutingPlan {
+                proxy_application: None,
                 scope,
                 allow_lan: settings.allow_lan,
                 lan: lan.clone(),
                 lockdown,
-                shared_proxy,
+                shared_proxy: None,
             };
 
             match mode {
@@ -2572,7 +2612,6 @@ impl Session {
         // Without a guard there is no filter to authorize on the tunnel.
         let tunnel = tunnel.filter(|_| self.protection.is_active());
         self.lan.begin_session(lan, servers);
-        self.shared_addresses = shared_addresses;
         self.shared_address_watch = lan::LanWatch::default();
         let cold_start = self.cold_start;
 
@@ -2719,9 +2758,7 @@ impl Session {
             self.server_check_grace,
         );
         tracing::info!("engine startup readiness confirmed");
-        if local_proxy.is_none() {
-            self.bind_actual_tunnel_interface(&settings.tun);
-        }
+        self.bind_actual_tunnel_interface(&settings.tun);
         self.ensure_xray_running(ErrorCode::XrayStartFailed)?;
 
         if let Some(tunnel) = tunnel.as_ref() {
@@ -2758,7 +2795,7 @@ impl Session {
 
         // Without a guard the tunnel has not been validated yet; the first
         // supervisor tick after the connect does this if it is too early here.
-        if settings.allow_lan && local_proxy.is_none() {
+        if settings.allow_lan {
             self.lan.release_broadcast_route(&settings.tun);
         }
 
@@ -2892,7 +2929,7 @@ impl Session {
             self.tunnel_dns = Some(server);
             self.refresh_path_addresses();
             #[cfg(target_os = "macos")]
-            if !cfg!(test) && local_proxy.is_none() {
+            if !cfg!(test) {
                 let servers =
                     system_dns_macos::tunnel_dns_servers(server.ip(), settings.tun.ipv6.as_deref());
                 let dns = system_dns_macos::MacosSystemDns::install(&servers).map_err(|error| {
@@ -2934,13 +2971,14 @@ impl Session {
     }
 
     fn start_monitor(&mut self, kind: rosetun_config::EngineKind) {
-        let Some(control) = self.control.as_ref() else {
-            return;
+        let probe = if let Some(proxy) = &self.proxy_session {
+            Some(proxy.dataplane.traffic_probe())
+        } else {
+            self.control
+                .as_ref()
+                .and_then(|control| self.engines.get(kind)?.traffic_probe(control))
         };
-        let Some(backend) = self.engines.get(kind) else {
-            return;
-        };
-        if let Some(probe) = backend.traffic_probe(control) {
+        if let Some(probe) = probe {
             let mut hidden: Vec<PathBuf> = std::env::current_exe().into_iter().collect();
             if let Some(xray) = self.xray.as_ref()
                 && let Ok(binary) = xray.binary_path()
@@ -2995,18 +3033,31 @@ impl Session {
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .tunnel_dns_unregistered = true;
         }
-        match DnsWatchdog::start(
-            Arc::clone(&self.status),
-            server,
-            Arc::clone(&self.path_addresses),
-            self.watchdog_timing,
-        ) {
+        let watchdog = if let Some(proxy) = &self.proxy_session {
+            DnsWatchdog::start_proxy(
+                Arc::clone(&self.status),
+                server,
+                proxy.entry.clone(),
+                self.watchdog_timing,
+            )
+        } else {
+            DnsWatchdog::start(
+                Arc::clone(&self.status),
+                server,
+                Arc::clone(&self.path_addresses),
+                self.watchdog_timing,
+            )
+        };
+        match watchdog {
             Ok(watchdog) => self.watchdog = Some(watchdog),
             Err(error) => tracing::warn!(%error, "DNS watchdog is unavailable"),
         }
     }
 
     fn live_engine_running(&mut self) -> bool {
+        if let Some(proxy) = self.proxy_session.as_mut() {
+            return proxy.exited().1.is_none();
+        }
         let engine_running = self
             .process
             .as_mut()
@@ -3022,6 +3073,9 @@ impl Session {
     }
 
     fn check_live_tunnel(&mut self, timeout: Duration) -> Result<(), HelperError> {
+        if self.proxy_session.is_some() {
+            return self.check_proxy_dns(timeout);
+        }
         let server = self.tunnel_dns.ok_or_else(|| {
             HelperError::new(ErrorCode::DnsTimeout, "tunnel DNS server is unavailable")
         })?;
@@ -3165,6 +3219,24 @@ impl Session {
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .clear();
         }
+        if let Some(proxy) = self.proxy_session.as_mut() {
+            proxy.stop()?;
+            if let Some(scope) = self
+                .protection
+                .scope()
+                .filter(|scope| *scope == ProtectionScope::AllTraffic)
+            {
+                let plan = RoutingPlan {
+                    proxy_application: None,
+                    shared_proxy: None,
+                    scope,
+                    lockdown: lockdown::read(&self.lockdown).enabled,
+                    ..proxy.plan.clone()
+                };
+                self.protection.prepare_reconnect(&plan)?;
+            }
+        }
+        self.proxy_session.take();
         if let Some(process) = self.process.as_mut() {
             process
                 .stop()

@@ -239,6 +239,20 @@ impl<'a> ExtraNodes<'a> {
         self.nodes.len()
     }
 
+    pub(super) fn slots(&self) -> Vec<ExtraOutbound<'_>> {
+        self.nodes
+            .iter()
+            .zip(&self.identities)
+            .map(|((exit, node), (index, via))| ExtraOutbound {
+                index: *index,
+                via: *via,
+                exit,
+                node,
+                socks: None,
+            })
+            .collect()
+    }
+
     pub(super) fn outbounds<'s>(&'s self, socks: &'s XraySocks) -> Vec<ExtraOutbound<'s>> {
         self.nodes
             .iter()

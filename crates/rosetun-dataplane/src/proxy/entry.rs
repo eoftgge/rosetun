@@ -8,17 +8,16 @@
 use std::fmt;
 use std::io;
 use std::net::{SocketAddr, TcpListener};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, PoisonError, RwLock};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
 
 use rosetun_config::ExitId;
 use rosetun_engine::{DelayInbound, PROXY_TAG, SUBSCRIPTION_PROXY_USER};
 
 use super::Verdict;
 use super::router::Router;
-use super::server::wake_listener;
+use super::server::{ACCEPT_POLL, Clients};
 use super::socks::{self, Access, Account};
 use crate::conntable::ConnectionTable;
 
@@ -75,32 +74,6 @@ impl EntryAccount {
     }
 }
 
-struct EntrySlotGuard {
-    active: Arc<AtomicUsize>,
-}
-
-impl Drop for EntrySlotGuard {
-    fn drop(&mut self) {
-        self.active.fetch_sub(1, Ordering::AcqRel);
-    }
-}
-
-fn try_acquire_entry_slot(active: &AtomicUsize, limit: usize) -> bool {
-    let mut current = active.load(Ordering::Acquire);
-    while current < limit {
-        match active.compare_exchange_weak(
-            current,
-            current + 1,
-            Ordering::AcqRel,
-            Ordering::Acquire,
-        ) {
-            Ok(_) => return true,
-            Err(observed) => current = observed,
-        }
-    }
-    false
-}
-
 /// Running authenticated loopback SOCKS5 server for internal probes and
 /// subscription traffic.
 pub struct EntryServer {
@@ -108,6 +81,8 @@ pub struct EntryServer {
     table: ConnectionTable,
     shutdown: Arc<AtomicBool>,
     worker: Option<JoinHandle<()>>,
+    access: Arc<RwLock<Arc<Access>>>,
+    clients: Arc<Clients>,
 }
 
 impl fmt::Debug for EntryServer {
@@ -127,25 +102,15 @@ impl EntryServer {
         accounts: Vec<EntryAccount>,
     ) -> io::Result<Self> {
         let listener = TcpListener::bind(address)?;
+        listener.set_nonblocking(true)?;
         let local_addr = listener.local_addr()?;
         let table = ConnectionTable::with_limits(MAX_ENTRY_CONNECTIONS, 0);
         let shutdown = Arc::new(AtomicBool::new(false));
-        let active = Arc::new(AtomicUsize::new(0));
+        let clients = Arc::new(Clients::default());
+        let worker_clients = Arc::clone(&clients);
 
-        let access = Arc::new(Access::Accounts(
-            accounts
-                .into_iter()
-                .map(|account| Account {
-                    username: account.username,
-                    password: account.password,
-                    verdict: match account.target {
-                        EntryTarget::Proxy => Verdict::Proxy,
-                        EntryTarget::Exit(exit) => Verdict::Exit(exit),
-                    },
-                })
-                .collect(),
-        ));
-
+        let access = Arc::new(RwLock::new(entry_access(accounts)));
+        let worker_access = Arc::clone(&access);
         let worker_table = table.clone();
         let worker_shutdown = Arc::clone(&shutdown);
         let worker = thread::Builder::new()
@@ -156,26 +121,27 @@ impl EntryServer {
                         if worker_shutdown.load(Ordering::Acquire) {
                             break;
                         }
-                        thread::sleep(Duration::from_millis(10));
+                        thread::sleep(ACCEPT_POLL);
                         continue;
                     };
                     if worker_shutdown.load(Ordering::Acquire) {
                         break;
                     }
-                    if !try_acquire_entry_slot(&active, MAX_ENTRY_CONNECTIONS) {
+                    if stream.set_nonblocking(false).is_err() {
                         continue;
                     }
-                    let guard = EntrySlotGuard {
-                        active: Arc::clone(&active),
+                    let Some(client) = worker_clients.track(&stream, MAX_ENTRY_CONNECTIONS) else {
+                        continue;
                     };
                     let router = Arc::clone(&router);
-                    let access = Arc::clone(&access);
+                    let access =
+                        Arc::clone(&worker_access.read().unwrap_or_else(PoisonError::into_inner));
                     let table = worker_table.clone();
                     let shutdown = Arc::clone(&worker_shutdown);
                     let _ = thread::Builder::new()
                         .name("dataplane-entry-conn".to_owned())
                         .spawn(move || {
-                            let _guard = guard;
+                            let _client = client;
                             stream.set_nodelay(true).ok();
                             let _ = socks::serve(&router, stream, &access, &table, &shutdown);
                         });
@@ -187,7 +153,13 @@ impl EntryServer {
             table,
             shutdown,
             worker: Some(worker),
+            access,
+            clients,
         })
+    }
+
+    pub(crate) fn update_accounts(&self, accounts: Vec<EntryAccount>) {
+        *self.access.write().unwrap_or_else(PoisonError::into_inner) = entry_access(accounts);
     }
 
     pub fn local_addr(&self) -> SocketAddr {
@@ -200,11 +172,11 @@ impl EntryServer {
         if self.shutdown.swap(true, Ordering::AcqRel) {
             return;
         }
-        self.table.close_all();
-        wake_listener(self.address);
+        self.table.shutdown();
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
         }
+        self.clients.close_and_wait();
     }
 }
 
@@ -212,6 +184,22 @@ impl Drop for EntryServer {
     fn drop(&mut self) {
         self.shutdown();
     }
+}
+
+fn entry_access(accounts: Vec<EntryAccount>) -> Arc<Access> {
+    Arc::new(Access::Accounts(
+        accounts
+            .into_iter()
+            .map(|account| Account {
+                username: account.username,
+                password: account.password,
+                verdict: match account.target {
+                    EntryTarget::Proxy => Verdict::Proxy,
+                    EntryTarget::Exit(exit) => Verdict::Exit(exit),
+                },
+            })
+            .collect(),
+    ))
 }
 
 #[cfg(test)]

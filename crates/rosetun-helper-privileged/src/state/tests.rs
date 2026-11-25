@@ -8680,7 +8680,69 @@ fn the_proxy_mode_without_a_kill_switch_installs_nothing() {
 }
 
 #[test]
-fn the_proxy_mode_checks_the_session_through_the_engines_dns() {
+fn proxy_apply_reuses_listeners_and_only_restarts_workers_that_change() {
+    use super::dns::test_support::{Behavior, Server};
+
+    let dns = Server::new(Behavior::Noerror);
+    let (helper, controls) = ordered_helper();
+    helper.session().unwrap().test_local_dns = Some(dns.address());
+    let mut request = local_proxy_request(true);
+    helper.connect(&request).unwrap();
+    let bound = || {
+        let session = helper.session().unwrap();
+        let proxy = session.proxy_session.as_ref().unwrap();
+        (
+            proxy.dataplane.proxy_addrs().to_vec(),
+            proxy.dataplane.dns_addr(),
+            proxy.entry.clone(),
+        )
+    };
+    let (listeners, dns_addr, entry) = bound();
+    controls.events.lock().unwrap().clear();
+    request.rule_set.default_target = RuleTarget::Block;
+    request.settings.dns.path = Some("/dns-query".into());
+    helper.apply(&request).unwrap();
+    assert_eq!(controls.spawns.load(Ordering::Acquire), 1);
+    assert!(controls.events.lock().unwrap().is_empty());
+
+    request.node.server = "198.51.100.8".into();
+    helper.apply(&request).unwrap();
+    assert_eq!(controls.spawns.load(Ordering::Acquire), 2);
+    let (new_listeners, new_dns, new_entry) = bound();
+    assert_eq!(new_listeners, listeners);
+    assert_eq!(new_dns, dns_addr);
+    assert_eq!(new_entry, entry);
+    assert!(!controls.events.lock().unwrap().contains(&"revert"));
+}
+
+#[test]
+fn an_xray_only_proxy_session_skips_singbox_and_closes_the_proxy_when_xray_exits() {
+    use super::dns::test_support::{Behavior, Server};
+
+    let dns = Server::new(Behavior::Noerror);
+    let (helper, controls, runner, _, _, reverted) = xray_chain_helper();
+    helper.session().unwrap().test_local_dns = Some(dns.address());
+    let mut request = reality_request();
+    let local = local_proxy_request(true);
+    request.settings.connection_mode = local.settings.connection_mode;
+    request.settings.local_proxy = local.settings.local_proxy;
+    request.settings.auto_reconnect = false;
+    helper.connect(&request).unwrap();
+    assert_eq!(controls.spawns.load(Ordering::Acquire), 0);
+    assert_eq!(runner.endpoint_count.load(Ordering::Acquire), 1);
+    assert!(!runner.last_config().contains("sockopt"));
+    runner.kill();
+    helper.supervise(Instant::now());
+    assert!(matches!(
+        helper.status().state,
+        ConnectionState::FailedProtected { .. }
+    ));
+    assert!(helper.session().unwrap().proxy_session.is_none());
+    assert_eq!(reverted.load(Ordering::Acquire), 0);
+}
+
+#[test]
+fn the_proxy_mode_checks_the_session_through_its_dns_listener() {
     use super::dns::test_support::{Behavior, Server};
 
     let dns = Server::new(Behavior::Silent);
@@ -8761,7 +8823,7 @@ fn changing_the_mode_keeps_the_kill_switch_standing() {
     assert!(!events.contains(&"protect"), "the same guard: {events:?}");
     assert_eq!(
         events.iter().filter(|event| **event == "prepare").count(),
-        2,
+        3,
         "{events:?}"
     );
     assert_eq!(
@@ -9125,6 +9187,7 @@ fn a_lock_that_goes_in_later_takes_the_reason_away() {
         .install(
             &mut backend,
             &RoutingPlan {
+                proxy_application: None,
                 scope: ProtectionScope::DnsOnly,
                 allow_lan: false,
                 lan: Default::default(),

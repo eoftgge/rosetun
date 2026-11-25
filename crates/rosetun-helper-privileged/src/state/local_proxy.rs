@@ -1,9 +1,7 @@
-//! The proxy mode: what the engine listens on, found free before it starts.
+//! Listener addresses and port retries for the local proxy.
 
 use std::io;
-#[cfg(windows)]
-use std::net::Ipv6Addr;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, UdpSocket};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener};
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
@@ -57,31 +55,6 @@ fn try_bind(address: SocketAddr) -> Result<(), PortProblem> {
         .map_err(|error| PortProblem::of(&error))
 }
 
-/// What the local proxy listens on when `port` is free for it.
-///
-/// Shared on Windows it listens on `::` where the system has IPv6, which also
-/// serves IPv4 clients, and filters let in only the computer's own networks.
-#[cfg(windows)]
-fn free_addresses(port: u16, share: bool, _: &[IpAddr]) -> Result<Vec<SocketAddr>, PortProblem> {
-    let loopback = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
-    try_bind(loopback)?;
-    if !share {
-        return Ok(vec![loopback]);
-    }
-    let any_v4 = SocketAddr::from((Ipv4Addr::UNSPECIFIED, port));
-    try_bind(any_v4)?;
-    let any_v6 = SocketAddr::from((Ipv6Addr::UNSPECIFIED, port));
-    match try_bind(any_v6) {
-        Ok(()) => Ok(vec![any_v6]),
-        Err(PortProblem::NoAddress) => Ok(vec![any_v4]),
-        Err(problem) => Err(problem),
-    }
-}
-
-/// Shared on Linux it listens on loopback and `connected`, the private addresses
-/// of the physical interfaces: without Lockdown nothing else limits who gets in.
-/// An address that went away meanwhile only costs that address.
-#[cfg(not(windows))]
 fn free_addresses(
     port: u16,
     share: bool,
@@ -103,11 +76,15 @@ fn free_addresses(
     Ok(addresses)
 }
 
-/// A free loopback port for the engine's DNS. As with the control endpoint,
-/// another process could take it before the engine does, and then the engine
-/// fails to start, as any engine error.
-fn free_dns_address() -> io::Result<SocketAddr> {
-    UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))?.local_addr()
+pub(super) fn application() -> Result<std::path::PathBuf, HelperError> {
+    std::env::current_exe()
+        .and_then(std::fs::canonicalize)
+        .map_err(|_| {
+            HelperError::new(
+                ErrorCode::RoutingFailed,
+                "cannot identify the proxy service",
+            )
+        })
 }
 
 /// Whether other devices may reach a session's proxy now. Lockdown closes
@@ -161,13 +138,32 @@ pub(super) fn listen_for(
             }
         }
     };
-    let dns = free_dns_address().map_err(|error| {
-        HelperError::new(
-            ErrorCode::EngineFailed,
-            format!("cannot pick a port for the engine's DNS: {error}"),
-        )
-    })?;
+    let dns = SocketAddr::from((Ipv4Addr::LOCALHOST, 0));
     Ok(Some(LocalProxyListen { addresses, dns }))
+}
+
+pub(super) fn start(
+    port: u16,
+    cancelled: &AtomicBool,
+    mut bind: impl FnMut() -> Result<rosetun_dataplane::Dataplane, rosetun_dataplane::DataplaneError>,
+) -> Result<rosetun_dataplane::Dataplane, HelperError> {
+    use rosetun_dataplane::{DataplaneError, proxy::ServerError};
+
+    for attempt in 1.. {
+        match bind() {
+            Ok(dataplane) => return Ok(dataplane),
+            Err(DataplaneError::Proxy(ServerError::Bind { source }))
+                if PortProblem::of(&source) == PortProblem::Busy =>
+            {
+                if attempt == PORT_TRIES {
+                    return Err(HelperError::local_proxy_port_busy(port));
+                }
+                sleep_cancellable(PORT_RETRY_DELAY, cancelled)?;
+            }
+            Err(error) => return Err(HelperError::new(ErrorCode::EngineFailed, error.to_string())),
+        }
+    }
+    unreachable!("the last bind attempt returns its error")
 }
 
 #[cfg(test)]
@@ -220,7 +216,7 @@ mod tests {
     }
 
     #[test]
-    fn a_shared_proxy_listens_on_a_wildcard_address() {
+    fn sharing_without_a_connected_address_keeps_only_loopback() {
         let port = free_port();
         let listen = listen_for(
             &proxy_settings(port, true),
@@ -230,10 +226,6 @@ mod tests {
         )
         .unwrap()
         .unwrap();
-        #[cfg(windows)]
-        assert!(listen.addresses[0].ip().is_unspecified());
-        // Linux takes its addresses from `connected`, which is empty here.
-        #[cfg(not(windows))]
         assert_eq!(
             listen.addresses,
             [SocketAddr::from((Ipv4Addr::LOCALHOST, port))]

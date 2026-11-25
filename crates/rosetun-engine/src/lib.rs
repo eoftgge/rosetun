@@ -332,6 +332,9 @@ pub trait EngineBackend: Send + Sync + std::fmt::Debug {
     fn capabilities(&self) -> EngineCapabilities;
     fn tunnel_dns_server(&self, tun: &rosetun_config::TunSettings) -> Option<std::net::SocketAddr>;
     fn locate_binary(&self) -> Result<PathBuf, EngineError>;
+    fn locate_outbound_worker(&self) -> Result<PathBuf, EngineError> {
+        self.locate_binary()
+    }
     fn render(&self, request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError>;
 
     fn render_probe(
@@ -393,6 +396,7 @@ pub trait EngineBackend: Send + Sync + std::fmt::Debug {
 /// the service holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EngineRights {
+    OutboundWorker,
     Network,
     /// Also finds which program owns a connection, whichever account it runs as.
     NetworkAndProcesses,

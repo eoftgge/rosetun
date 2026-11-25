@@ -158,10 +158,7 @@ impl Helper {
                 "the subscription proxy is not connected",
             ));
         }
-        let entry = session
-            .control
-            .as_ref()
-            .and_then(|control| control.delay.as_ref());
+        let entry = session.delay_entry();
         let proxy = entry.and_then(|entry| {
             entry
                 .accounts
@@ -593,36 +590,58 @@ impl Helper {
                 "the tunnel is not connected",
             ));
         }
-        let control = session.control.clone().ok_or_else(|| {
-            HelperError::new(
+        let control = session.control.clone();
+        let entry = session.delay_entry().cloned();
+        let proxy = session.proxy_session.is_some();
+        if !proxy && control.is_none() {
+            return Err(HelperError::new(
                 ErrorCode::EngineFailed,
                 "the engine control API is unavailable",
-            )
-        })?;
+            ));
+        }
         let exit_tags = session.exit_tags.clone();
         drop(session);
-        let backend = self
-            .engines
-            .get_shared(engine.ok_or_else(|| {
+        let full_tunnel = if !proxy && mode == DelayMode::Full {
+            let backend = engine
+                .and_then(|engine| self.engines.get_shared(engine))
+                .ok_or_else(|| {
+                    HelperError::new(
+                        ErrorCode::EngineFailed,
+                        "the connected engine is unavailable",
+                    )
+                })?;
+            let control = control.ok_or_else(|| {
                 HelperError::new(
                     ErrorCode::EngineFailed,
-                    "the connected engine is unavailable",
-                )
-            })?)
-            .ok_or_else(|| {
-                HelperError::new(
-                    ErrorCode::EngineFailed,
-                    "the connected engine is unavailable",
+                    "the engine control API is unavailable",
                 )
             })?;
-        let measure = |target: UrlTestTarget<'_>| match mode {
-            DelayMode::Full => probe_outcome(url_test_any(
-                Arc::clone(&backend),
-                &control,
-                target,
-                PROBE_TIMEOUT,
-            )),
-            DelayMode::Repeated => repeated_outcome(control.delay.as_ref(), target),
+            Some((backend, control))
+        } else {
+            None
+        };
+        let measure = |target: UrlTestTarget<'_>| {
+            if let Some((backend, control)) = &full_tunnel {
+                return probe_outcome(url_test_any(
+                    Arc::clone(backend),
+                    control,
+                    target,
+                    PROBE_TIMEOUT,
+                ));
+            }
+            if let Some((entry, account)) = entry
+                .as_ref()
+                .and_then(|entry| Some((entry, entry.account(target)?)))
+                && mode == DelayMode::Full
+            {
+                return probe_outcome(super::repeated::full_delay_any(
+                    entry.address,
+                    account,
+                    &PROBE_URLS,
+                    PROBE_TIMEOUT,
+                ));
+            }
+            repeated_outcome(entry.as_ref(), target)
         };
         // The main node and every exit are checked at once, so the answer takes
         // as long as a single check.

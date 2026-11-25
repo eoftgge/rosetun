@@ -108,6 +108,7 @@ pub(crate) struct Rules<'a> {
     /// Lockdown's set at boot, before the unit has made its leaves: a rule
     /// naming a cgroup that does not exist cannot be loaded.
     pub(crate) engines: Option<&'a CgroupPath>,
+    pub(crate) proxy_helper: Option<&'a CgroupPath>,
     /// The hold after a crash, with the helper's own leaf: the helper may
     /// send DNS, to resolve a server name for the connect that lifts the
     /// hold, and nothing is forwarded.
@@ -262,6 +263,13 @@ fn output_chain(text: &mut String, rules: &Rules<'_>, lan: &LanLines) {
     }
     if let Some(engines) = rules.engines {
         let _ = writeln!(text, "\t\t{} accept", cgroup_match(engines));
+    }
+    if let Some(helper) = rules.proxy_helper {
+        let _ = writeln!(
+            text,
+            "\t\t{} meta l4proto {{ tcp, udp }} accept",
+            cgroup_match(helper)
+        );
     }
     if let Some(helper) = rules.hold {
         let _ = writeln!(
@@ -676,6 +684,7 @@ mod proxy_mode_tests {
             scope: ProtectionScope::AllTraffic,
             allow_lan,
             engines: Some(engines),
+            proxy_helper: None,
             hold: None,
             // The proxy mode's kill switch has no second phase.
             tunnel: None,
@@ -791,6 +800,7 @@ mod tests {
     fn phase_one_of_the_kill_switch_drops_everything_but_the_bootstrap() {
         let engines = engines();
         let text = replace(&Rules {
+            proxy_helper: None,
             lan: None,
             scope: ProtectionScope::AllTraffic,
             allow_lan: false,
@@ -825,6 +835,7 @@ mod tests {
         let engines = engines();
         let tunnel = InterfaceName::new("rosetun0").unwrap();
         let text = replace(&Rules {
+            proxy_helper: None,
             lan: None,
             scope: ProtectionScope::AllTraffic,
             allow_lan: false,
@@ -904,6 +915,7 @@ mod tests {
         let engines = engines();
         let tunnel = InterfaceName::new("rosetun0").unwrap();
         replace(&Rules {
+            proxy_helper: None,
             lan: Some(access),
             scope: ProtectionScope::AllTraffic,
             allow_lan: true,
@@ -1034,6 +1046,7 @@ mod tests {
             scope: ProtectionScope::AllTraffic,
             allow_lan: false,
             engines: Some(&engines),
+            proxy_helper: None,
             hold: None,
             tunnel: None,
             lockdown: Some(Lockdown {
@@ -1064,6 +1077,7 @@ mod tests {
         {
             // "Local network" does not apply to the DNS lock.
             let text = replace(&Rules {
+                proxy_helper: None,
                 lan: None,
                 scope: ProtectionScope::DnsOnly,
                 allow_lan: true,
@@ -1099,6 +1113,7 @@ mod tests {
         let engines = engines();
         let helper = helper();
         let text = replace(&Rules {
+            proxy_helper: None,
             lan: None,
             scope: ProtectionScope::AllTraffic,
             allow_lan: false,
@@ -1126,6 +1141,7 @@ mod tests {
         );
         let engines = engines();
         let text = replace(&Rules {
+            proxy_helper: None,
             lan: None,
             scope: ProtectionScope::DnsOnly,
             allow_lan: false,
@@ -1177,6 +1193,7 @@ mod tests {
                     (ProtectionScope::DnsOnly, None, LeftBehind::DnsLock),
                 ] {
                     let text = listing(&Rules {
+                        proxy_helper: None,
                         lan: None,
                         scope,
                         allow_lan,
@@ -1280,6 +1297,7 @@ mod tests {
         for scope in [ProtectionScope::AllTraffic, ProtectionScope::DnsOnly] {
             for allow_lan in [false, true] {
                 let text = replace(&Rules {
+                    proxy_helper: None,
                     lan: None,
                     scope,
                     allow_lan,
@@ -1335,6 +1353,7 @@ mod tests {
             scope: ProtectionScope::AllTraffic,
             allow_lan: false,
             engines: None,
+            proxy_helper: None,
             hold: None,
             tunnel: None,
             lockdown: Some(Lockdown {
@@ -1418,6 +1437,7 @@ mod tests {
             scope: ProtectionScope::AllTraffic,
             allow_lan: false,
             engines: Some(&engines),
+            proxy_helper: None,
             hold: None,
             tunnel: None,
             lockdown: Some(Lockdown {
@@ -1475,6 +1495,7 @@ mod tests {
             scope: ProtectionScope::DnsOnly,
             allow_lan,
             engines: Some(&engines),
+            proxy_helper: None,
             hold: None,
             tunnel,
             lockdown: Some(Lockdown {
@@ -1585,6 +1606,7 @@ mod tests {
                     scope: ProtectionScope::AllTraffic,
                     allow_lan: lan,
                     engines: Some(&engines),
+                    proxy_helper: None,
                     hold: None,
                     tunnel: Some(&tunnel),
                     lockdown: Some(Lockdown {

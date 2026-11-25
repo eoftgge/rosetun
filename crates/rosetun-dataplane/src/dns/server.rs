@@ -135,44 +135,44 @@ impl DnsServer {
             ready: Condvar::new(),
         });
         let tcp_tracker = Arc::new(TcpClientTracker::new());
-        let mut threads = Vec::new();
-
-        if !pairs.is_empty() {
-            for idx in 0..UDP_WORKER_COUNT {
-                let svc = Arc::clone(&service);
-                let queue = Arc::clone(&udp_queue);
-                let stop = Arc::clone(&shutdown);
-                let handle = thread::Builder::new()
-                    .name(format!("dns-udp-worker-{idx}"))
-                    .spawn(move || udp_worker_loop(&svc, &queue, &stop))?;
-                threads.push(handle);
-            }
-        }
-
-        for (idx, (udp, tcp)) in pairs.into_iter().enumerate() {
-            let queue = Arc::clone(&udp_queue);
-            let stop = Arc::clone(&shutdown);
-            let udp_handle = thread::Builder::new()
-                .name(format!("dns-udp-recv-{idx}"))
-                .spawn(move || udp_recv_loop(&udp, &queue, &stop))?;
-            threads.push(udp_handle);
-
-            let svc = Arc::clone(&service);
-            let stop = Arc::clone(&shutdown);
-            let tracker = Arc::clone(&tcp_tracker);
-            let tcp_handle = thread::Builder::new()
-                .name(format!("dns-tcp-accept-{idx}"))
-                .spawn(move || tcp_accept_loop(tcp, &svc, &tracker, &stop))?;
-            threads.push(tcp_handle);
-        }
-
-        Ok(Self {
+        let mut server = Self {
             addrs,
             shutdown,
             udp_queue,
             tcp_tracker,
-            threads,
-        })
+            threads: Vec::new(),
+        };
+
+        if !pairs.is_empty() {
+            for idx in 0..UDP_WORKER_COUNT {
+                let svc = Arc::clone(&service);
+                let queue = Arc::clone(&server.udp_queue);
+                let stop = Arc::clone(&server.shutdown);
+                let handle = thread::Builder::new()
+                    .name(format!("dns-udp-worker-{idx}"))
+                    .spawn(move || udp_worker_loop(&svc, &queue, &stop))?;
+                server.threads.push(handle);
+            }
+        }
+
+        for (idx, (udp, tcp)) in pairs.into_iter().enumerate() {
+            let queue = Arc::clone(&server.udp_queue);
+            let stop = Arc::clone(&server.shutdown);
+            let udp_handle = thread::Builder::new()
+                .name(format!("dns-udp-recv-{idx}"))
+                .spawn(move || udp_recv_loop(&udp, &queue, &stop))?;
+            server.threads.push(udp_handle);
+
+            let svc = Arc::clone(&service);
+            let stop = Arc::clone(&server.shutdown);
+            let tracker = Arc::clone(&server.tcp_tracker);
+            let tcp_handle = thread::Builder::new()
+                .name(format!("dns-tcp-accept-{idx}"))
+                .spawn(move || tcp_accept_loop(tcp, &svc, &tracker, &stop))?;
+            server.threads.push(tcp_handle);
+        }
+
+        Ok(server)
     }
 
     /// Local addresses the server is bound to (shared by UDP and TCP).

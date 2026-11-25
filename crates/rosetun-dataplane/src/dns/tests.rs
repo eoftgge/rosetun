@@ -1114,7 +1114,7 @@ fn redacted_debug_and_errors_never_leak_names_or_addresses() {
         assert!(!text.contains("8443"));
     }
 
-    // Also verify DnsService::new constructs with bundled webpki-roots.
+    // Also verify DnsService::new constructs with the system trust store.
     let prod_service = DnsService::new(
         &settings,
         Arc::new(DirectDialer::default()),

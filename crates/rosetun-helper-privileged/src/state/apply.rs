@@ -1,7 +1,7 @@
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 
-use rosetun_config::ConnectionState;
+use rosetun_config::{ConnectionMode, ConnectionState};
 use rosetun_engine::RenderRequest;
 use rosetun_ipc::{ConnectRequest, ErrorCode, HelperError};
 
@@ -67,60 +67,94 @@ impl Helper {
             )
         })?;
 
-        let backend = self.engines.get(request.settings.engine).ok_or_else(|| {
-            HelperError::new(
-                ErrorCode::EngineFailed,
-                format!(
-                    "engine {} is not registered",
-                    request.settings.engine.as_str()
-                ),
-            )
-        })?;
-        let prepared_node = node_with_endpoints(&request.node, &endpoint);
         let extra_endpoints = exits::apply_endpoints(
             &request.extra_nodes,
             &session.last_extra_endpoints,
             session.engine_lookup(),
         );
-        let effective = request.effective_rule_set();
-        let extra = exits::ExtraNodes::new(&request.extra_nodes, &extra_endpoints, &effective);
-        let socks = exits::XraySocks::new(&request.node, &extra, &request.settings)?;
-        render_config(
-            backend,
-            &RenderRequest {
-                node: &prepared_node,
-                socks: socks.main(),
-                extra: &extra.outbounds(&socks),
-                rules: extra.rules(&effective),
-                lists: &request.lists,
-                settings: &request.settings,
-                lan_segment: &[],
-                lan_servers: &[],
-                control: None,
-                verbose_log: false,
-                // Checks the rules and nodes; the listener does not change them.
-                local_proxy: None,
-            },
-        )?;
-        if socks.any() {
-            let interface =
-                (session.physical_interface)(session.effective_tun_name(&current.settings.tun))
-                    .ok_or_else(|| {
-                        HelperError::new(
-                            ErrorCode::XrayStartFailed,
-                            "physical interface is unavailable for Xray",
-                        )
-                    })?;
-            socks.render(
-                &prepared_node,
-                &extra,
-                &interface,
-                &request.settings.tls_fragment,
-                false,
-                request.settings.log_level,
-            )?;
+        if current.settings.connection_mode == ConnectionMode::SystemProxy
+            && request.settings.connection_mode == ConnectionMode::SystemProxy
+            && current.settings.local_proxy == request.settings.local_proxy
+        {
+            session.reserve_lists(request, Some(&current))?;
+            let previous_exit_tags = session.exit_tags.clone();
+            if let Err(error) = session.apply_proxy(&current, request, endpoint, &extra_endpoints) {
+                if error.code == ErrorCode::Cancelled {
+                    self.finish_cancelled(&mut session);
+                } else {
+                    session.pin_lists(&current.lists);
+                }
+                return Err(error);
+            }
+            session.request = Some(request.clone());
+            session.pin_lists(&request.lists);
+            let published = self.publish_terminal(|status| {
+                status.state = ConnectionState::Connected;
+                status.node = Some(request.node.id.clone());
+                status.record_chain(&request.node, &request.settings);
+            });
+            if published.is_err() {
+                self.finish_cancelled(&mut session);
+            } else if previous_exit_tags != session.exit_tags {
+                if let Some(monitor) = session.monitor.take() {
+                    monitor.stop();
+                }
+                session.start_monitor(request.settings.engine);
+            }
+            return published;
         }
-        drop(socks);
+
+        if request.settings.connection_mode == ConnectionMode::Tun {
+            let backend = self.engines.get(request.settings.engine).ok_or_else(|| {
+                HelperError::new(
+                    ErrorCode::EngineFailed,
+                    format!(
+                        "engine {} is not registered",
+                        request.settings.engine.as_str()
+                    ),
+                )
+            })?;
+            let prepared_node = node_with_endpoints(&request.node, &endpoint);
+            let effective = request.effective_rule_set();
+            let extra = exits::ExtraNodes::new(&request.extra_nodes, &extra_endpoints, &effective);
+            let socks = exits::XraySocks::new(&request.node, &extra, &request.settings)?;
+            render_config(
+                backend,
+                &RenderRequest {
+                    node: &prepared_node,
+                    socks: socks.main(),
+                    extra: &extra.outbounds(&socks),
+                    rules: extra.rules(&effective),
+                    lists: &request.lists,
+                    settings: &request.settings,
+                    lan_segment: &[],
+                    lan_servers: &[],
+                    control: None,
+                    verbose_log: false,
+                    // Checks the rules and nodes; the listener does not change them.
+                    local_proxy: None,
+                },
+            )?;
+            if socks.any() {
+                let interface =
+                    (session.physical_interface)(session.effective_tun_name(&current.settings.tun))
+                        .ok_or_else(|| {
+                            HelperError::new(
+                                ErrorCode::XrayStartFailed,
+                                "physical interface is unavailable for Xray",
+                            )
+                        })?;
+                socks.render(
+                    &prepared_node,
+                    &extra,
+                    &interface,
+                    &request.settings.tls_fragment,
+                    false,
+                    request.settings.log_level,
+                )?;
+            }
+            drop(socks);
+        }
 
         let previous_endpoint = protected_endpoints(&current.node, session.last_endpoint.as_ref())
             .map_err(|_| {

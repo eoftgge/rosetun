@@ -75,6 +75,8 @@ pub struct RulePlan {
     /// Number of leading entries in `rules.rules` that are temporary rules.
     pub temporary_count: usize,
     pub allow_lan: bool,
+    pub lan_segment: Vec<rosetun_config::IpPrefix>,
+    pub lan_servers: Vec<IpAddr>,
     pub private_networks: bool,
     /// Exits backed by a node; an exit rule whose exit is absent is skipped.
     pub exits: Vec<ExitId>,
@@ -233,6 +235,8 @@ pub struct RuleEngine {
     rules: Vec<CompiledRule>,
     lists: Vec<CompiledList>,
     allow_lan: bool,
+    lan_segment: Vec<rosetun_config::IpPrefix>,
+    lan_servers: Vec<IpAddr>,
     private_networks: bool,
     default_route: Route,
 }
@@ -342,6 +346,8 @@ impl RuleEngine {
             rules: compiled_rules,
             lists,
             allow_lan: plan.allow_lan,
+            lan_segment: plan.lan_segment.clone(),
+            lan_servers: plan.lan_servers.clone(),
             private_networks: plan.private_networks,
             default_route: Route::of(plan.rules.default_target, None),
         })
@@ -350,7 +356,13 @@ impl RuleEngine {
     /// Decides how to route `flow`, resolving `flow.domain` via `resolver` at
     /// most once if an IP-dependent rule or private-network check requires it.
     pub fn decide(&self, flow: &Flow<'_>, resolver: &dyn Resolve) -> Decision {
-        if self.allow_lan && flow.ip.is_some_and(private::is_link_local) {
+        if self.allow_lan
+            && flow.ip.is_some_and(|ip| {
+                !self.lan_servers.contains(&ip)
+                    && (private::is_link_local(ip)
+                        || self.lan_segment.iter().any(|prefix| prefix.contains(ip)))
+            })
+        {
             return Decision {
                 route: Route::Direct,
                 reason: Reason::LocalNetwork,
@@ -374,7 +386,11 @@ impl RuleEngine {
 
         if self.allow_lan
             && self.private_networks
-            && ctx.resolve_ips().iter().copied().any(private::is_private)
+            && ctx
+                .resolve_ips()
+                .iter()
+                .copied()
+                .any(|ip| !self.lan_servers.contains(&ip) && private::is_private(ip))
         {
             return Decision {
                 route: Route::Direct,
@@ -529,6 +545,8 @@ mod tests {
             rules: set,
             temporary_count: 0,
             allow_lan: false,
+            lan_segment: Vec::new(),
+            lan_servers: Vec::new(),
             private_networks: false,
             exits: Vec::new(),
             lists: Vec::new(),

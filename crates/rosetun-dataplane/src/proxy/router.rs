@@ -31,8 +31,7 @@ pub(crate) type Reply<'a> =
 /// Routes flows. Policy and outbounds can be replaced while it runs; a flow
 /// in progress keeps the ones it started with.
 pub struct Router {
-    policy: RwLock<Arc<dyn Policy>>,
-    outbounds: RwLock<Arc<Outbounds>>,
+    routing: RwLock<(Arc<dyn Policy>, Arc<Outbounds>)>,
     names: Option<Arc<dyn NameLookup>>,
     sniffing: Option<Arc<dyn Sniffing>>,
     table: ConnectionTable,
@@ -55,8 +54,7 @@ impl Router {
         config: RouterConfig,
     ) -> Self {
         Self {
-            policy: RwLock::new(policy),
-            outbounds: RwLock::new(outbounds),
+            routing: RwLock::new((policy, outbounds)),
             names: None,
             sniffing: None,
             table,
@@ -77,14 +75,21 @@ impl Router {
     }
 
     pub fn set_policy(&self, policy: Arc<dyn Policy>) {
-        *self.policy.write().unwrap_or_else(PoisonError::into_inner) = policy;
+        self.routing
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .0 = policy;
     }
 
     pub fn set_outbounds(&self, outbounds: Arc<Outbounds>) {
-        *self
-            .outbounds
+        self.routing
             .write()
-            .unwrap_or_else(PoisonError::into_inner) = outbounds;
+            .unwrap_or_else(PoisonError::into_inner)
+            .1 = outbounds;
+    }
+
+    pub(crate) fn set_routing(&self, policy: Arc<dyn Policy>, outbounds: Arc<Outbounds>) {
+        *self.routing.write().unwrap_or_else(PoisonError::into_inner) = (policy, outbounds);
     }
 
     pub fn table(&self) -> &ConnectionTable {
@@ -99,22 +104,13 @@ impl Router {
         self.sniffing.as_ref()
     }
 
-    pub(crate) fn outbounds(&self) -> Arc<Outbounds> {
-        Arc::clone(
-            &self
-                .outbounds
-                .read()
-                .unwrap_or_else(PoisonError::into_inner),
-        )
-    }
-
     /// The verdict for a flow to `target`, with the domain the rules saw.
     pub(crate) fn decide(
         &self,
         target: &Target,
         sniffed: Option<&str>,
         network: ConnectionNetwork,
-    ) -> (Verdict, Option<String>) {
+    ) -> (Verdict, Option<String>, Arc<Outbounds>) {
         let (domain, ip) = match &target.host {
             Host::Domain(name) => (sniffed.map_or_else(|| name.clone(), str::to_owned), None),
             Host::Ip(ip) => (
@@ -126,13 +122,17 @@ impl Router {
             ),
         };
         let domain = (!domain.is_empty()).then_some(domain);
-        let policy = Arc::clone(&self.policy.read().unwrap_or_else(PoisonError::into_inner));
+        let (policy, outbounds) = self
+            .routing
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
         let verdict = policy.decide(&Query {
             domain: domain.as_deref(),
             ip,
             network,
         });
-        (verdict, domain)
+        (verdict, domain, outbounds)
     }
 
     pub(crate) fn meta(
@@ -215,15 +215,25 @@ impl Router {
             sniffed = result.domain;
             buffered = result.buffered;
         }
-        let (verdict, domain) = match forced {
-            Some(verdict) => (verdict.clone(), None),
+        let (verdict, domain, outbounds) = match forced {
+            Some(verdict) => (
+                verdict.clone(),
+                None,
+                Arc::clone(
+                    &self
+                        .routing
+                        .read()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .1,
+                ),
+            ),
             None => self.decide(
                 target,
                 sniffed.as_deref().or(hint_domain),
                 ConnectionNetwork::Tcp,
             ),
         };
-        let Some((dialer, route)) = self.outbounds().select(&verdict) else {
+        let Some((dialer, route)) = outbounds.select(&verdict) else {
             if !early {
                 reply(&mut client, Err(ConnectError::Blocked))?;
             }

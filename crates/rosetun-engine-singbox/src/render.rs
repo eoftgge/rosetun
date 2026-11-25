@@ -258,6 +258,92 @@ fn delay_entry(delay: &DelayInbound, extra: &[ExtraOutbound<'_>]) -> Option<(Val
     Some((inbound, rules))
 }
 
+pub fn render_outbound_worker(
+    main: Option<&Node>,
+    extra: &[ExtraOutbound<'_>],
+    listeners: &[(&str, SocksProxy<'_>)],
+    verbose: bool,
+    log_level: LogLevel,
+) -> Result<RenderedConfig, EngineError> {
+    let mut inbounds = Vec::new();
+    let mut outbounds = Vec::new();
+    let mut endpoints = Vec::new();
+    let mut rules = Vec::new();
+    for (tag, socks) in listeners {
+        let inbound = format!("{tag}-in");
+        inbounds.push(json!({
+            "type": "socks",
+            "tag": inbound,
+            "listen": socks.address.ip().to_string(),
+            "listen_port": socks.address.port(),
+            "users": [{ "username": socks.username, "password": socks.password }],
+        }));
+        rules.push(json!({
+            "inbound": [inbound],
+            "auth_user": [socks.username],
+            "action": "route",
+            "outbound": tag,
+        }));
+    }
+    if let Some(node) = main {
+        if matches!(node.outbound, Outbound::WireGuard(_)) {
+            endpoints.push(wireguard_endpoint(node, TAG_PROXY)?);
+        } else {
+            outbounds.push(proxy_outbound(node, TAG_PROXY)?);
+        }
+    }
+    for entry in extra {
+        let tag = exit_tag(entry.index);
+        if entry.socks.is_none() && matches!(entry.node.outbound, Outbound::WireGuard(_)) {
+            endpoints.push(wireguard_endpoint(entry.node, &tag)?);
+            continue;
+        }
+        let mut outbound = match entry.socks {
+            Some(socks) => socks_outbound(socks, &tag),
+            None => proxy_outbound(entry.node, &tag)?,
+        };
+        if let Some(via) = entry.via {
+            let parent = extra
+                .iter()
+                .find(|entry| entry.exit == via)
+                .ok_or_else(|| EngineError::Unsupported("missing first hop".into()))?;
+            let tag = exit_tag(parent.index);
+            let detour = if parent.socks.is_none()
+                && matches!(parent.node.outbound, Outbound::WireGuard(_))
+            {
+                tag
+            } else {
+                format!("hop-{tag}")
+            };
+            outbound["detour"] = detour.into();
+            if matches!(entry.node.outbound, Outbound::Socks5(_)) {
+                outbound["network"] = "tcp".into();
+            }
+        }
+        if extra.iter().any(|child| child.via == Some(entry.exit)) {
+            let mut hop = outbound.clone();
+            hop["tag"] = format!("hop-{tag}").into();
+            outbounds.push(hop);
+        }
+        outbounds.push(outbound);
+    }
+    rules.push(json!({ "action": "reject" }));
+    let config = json!({
+        "log": engine_log(verbose, log_level),
+        "inbounds": inbounds,
+        "outbounds": outbounds,
+        "endpoints": endpoints,
+        "route": { "rules": rules },
+    });
+    Ok(RenderedConfig {
+        file_name: "worker.json".to_owned(),
+        body: serde_json::to_vec_pretty(&config)
+            .map_err(|error| EngineError::Render(error.to_string()))?,
+        unsupported: Vec::new(),
+        unsupported_probes: Vec::new(),
+    })
+}
+
 pub(crate) fn render_probe(
     request: &ProbeRenderRequest<'_>,
 ) -> Result<RenderedConfig, EngineError> {
@@ -347,8 +433,12 @@ fn dns_section(settings: &DnsSettings) -> Result<Value, EngineError> {
 }
 
 fn log_section(request: &RenderRequest<'_>) -> Value {
+    engine_log(request.verbose_log, request.settings.log_level)
+}
+
+fn engine_log(verbose: bool, log_level: LogLevel) -> Value {
     // Startup readiness needs the INFO message, so the engine must not go below INFO.
-    let level = match (request.verbose_log, request.settings.log_level) {
+    let level = match (verbose, log_level) {
         (false, _) => "info",
         (true, LogLevel::Trace) => "trace",
         (true, _) => "debug",

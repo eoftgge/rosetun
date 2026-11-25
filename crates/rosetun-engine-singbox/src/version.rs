@@ -96,8 +96,11 @@ struct Cache {
 
 static CACHE: LazyLock<Cache> = LazyLock::new(Cache::default);
 
-pub(super) fn check(binary: &Path) -> Result<(), EngineError> {
-    CACHE.check(binary, run)
+pub(super) fn check(
+    binary: &Path,
+    rights: rosetun_engine::EngineRights,
+) -> Result<(), EngineError> {
+    CACHE.check(binary, |binary| run(binary, rights))
 }
 
 impl Cache {
@@ -171,7 +174,7 @@ impl Drop for Running<'_> {
     }
 }
 
-fn run(binary: &Path) -> Result<(), CheckFailure> {
+fn run(binary: &Path, _rights: rosetun_engine::EngineRights) -> Result<(), CheckFailure> {
     let deadline = Instant::now() + CHECK_TIMEOUT;
     let mut command = Command::new(binary);
     command
@@ -180,7 +183,7 @@ fn run(binary: &Path) -> Result<(), CheckFailure> {
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    let spawned = rosetun_engine::process::spawn(command);
+    let spawned = rosetun_engine::process::spawn_with_rights(command, _rights);
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     let spawned = command.spawn();
     let mut child = spawned.map_err(|error| failure(binary, error))?;
