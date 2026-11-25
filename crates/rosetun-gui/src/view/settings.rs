@@ -38,6 +38,23 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
         SettingsSection::Service => service(ui, state, actions),
         SettingsSection::About => about(ui, state, actions),
     });
+    settings_reconnect_notice(ui.ctx(), state, actions);
+}
+
+fn settings_reconnect_notice(ctx: &egui::Context, state: &State, actions: &mut Vec<Action>) {
+    if !state.settings_need_reconnect() {
+        return;
+    }
+    let text = tr!("next-connect");
+    let reconnect = tr!("reconnect-now");
+    let choices = [widgets::NoticeAction {
+        label: &reconnect,
+        hint: None,
+        enabled: state.can_reconnect_settings(),
+    }];
+    if widgets::action_notice(ctx, "settings_reconnect_notice", &text, &choices).is_some() {
+        actions.push(Action::ReconnectWithSettings);
+    }
 }
 
 fn general(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
@@ -347,10 +364,7 @@ fn connection_mode(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
         )) && !proxy
         {
             let backend = state.config.settings.tun.backend;
-            let pending = state
-                .status
-                .tun_backend
-                .is_some_and(|running| running != backend);
+            let pending = state.tun_backend_next_connect();
             let detail = tr!("native-tun-requires-protection");
             card.row_with_title(
                 |ui| {
@@ -2703,6 +2717,34 @@ mod pending_notice_tests {
                 );
             });
         }
+    }
+
+    #[test]
+    fn settings_reconnect_notice_appears_when_settings_wait_and_clicks_reconnect() {
+        let (size, _) = WINDOWS[0];
+        let mut clean = connected(ConnectionState::Connected);
+        let mut actions = Vec::new();
+        let none = TestScreen::new(size).settle(|ui| {
+            settings_reconnect_notice(ui.ctx(), &clean, &mut actions);
+        });
+        assert!(!none.iter().any(|(text, _)| *text == tr!("reconnect-now")));
+
+        clean.config.settings.allow_lan = false;
+        assert!(clean.settings_need_reconnect());
+        let mut screen = TestScreen::new(size);
+        let shown = screen.settle(|ui| {
+            settings_reconnect_notice(ui.ctx(), &clean, &mut actions);
+        });
+        assert!(shown.iter().any(|(text, _)| *text == tr!("next-connect")));
+        assert!(shown.iter().any(|(text, _)| *text == tr!("reconnect-now")));
+        screen.click_text(&tr!("reconnect-now"), |ui| {
+            settings_reconnect_notice(ui.ctx(), &clean, &mut actions);
+        });
+        assert!(
+            actions
+                .iter()
+                .any(|action| matches!(action, Action::ReconnectWithSettings))
+        );
     }
 
     #[test]

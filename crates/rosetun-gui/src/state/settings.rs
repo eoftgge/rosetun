@@ -3,8 +3,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use rosetun_config::{
-    ConnectionState, DnsSettings, LocalProxySettings, Node, Outbound, Settings, TlsFragment,
-    TlsMode, XrayUse,
+    ConnectionMode, ConnectionState, DnsSettings, LocalProxySettings, Node, Outbound, Settings,
+    TlsFragment, TlsMode, XrayUse,
 };
 use rosetun_core::{DnsPreset, SettingChange};
 
@@ -47,6 +47,7 @@ pub(crate) struct SettingsScreen {
     pub(crate) local_proxy_port_dirty: bool,
     pub(crate) connect_after_xray_change: bool,
     pub(crate) xray_connect_ready: bool,
+    pub(crate) reconnect_after_disconnect: bool,
     pub(crate) config_folder: Option<PathBuf>,
     pub(crate) licenses_folder: Option<PathBuf>,
     #[cfg(any(windows, target_os = "linux"))]
@@ -211,6 +212,38 @@ impl State {
         self.differs_from_session(|running, saved| running.connection_mode != saved.connection_mode)
     }
 
+    pub(crate) fn tun_backend_next_connect(&self) -> bool {
+        self.session_up()
+            && self.config.settings.connection_mode == ConnectionMode::Tun
+            && self
+                .status
+                .tun_backend
+                .is_some_and(|running| running != self.config.settings.tun.backend)
+    }
+
+    pub(crate) fn settings_need_reconnect(&self) -> bool {
+        self.connection_mode_next_connect()
+            || self.tun_backend_next_connect()
+            || self.allow_lan_next_connect()
+            || self.private_networks_next_connect()
+            || self.auto_reconnect_next_connect()
+            || self.xray_next_connect()
+            || self.waits_for_next_connect(SessionPart::Protection)
+    }
+
+    pub(crate) fn can_reconnect_settings(&self) -> bool {
+        let saving = self.operations.rules
+            || self.operations.rules_edit
+            || self.operations.settings.is_some();
+        self.helper_available
+            && self.config_ready
+            && !self.operations.helper
+            && !saving
+            && self.settings_need_reconnect()
+            && matches!(self.status.state, ConnectionState::Connected)
+            && self.config.active_node().is_some()
+    }
+
     pub(crate) fn xray_next_connect(&self) -> bool {
         self.visible_status().is_some_and(|status| {
             matches!(
@@ -262,6 +295,23 @@ impl State {
             return None;
         }
         self.settings.screen.xray_connect_ready = false;
+        self.act_connection(Action::Primary)
+    }
+
+    pub(crate) fn take_reconnect_with_settings(&mut self) -> Option<Job> {
+        if !self.settings.screen.reconnect_after_disconnect
+            || !self.helper_available
+            || self.operations.helper
+            || !self.config_ready
+            || self.operations.settings.is_some()
+            || !matches!(
+                self.status.state,
+                ConnectionState::Disconnected | ConnectionState::Failed { .. }
+            )
+        {
+            return None;
+        }
+        self.settings.screen.reconnect_after_disconnect = false;
         self.act_connection(Action::Primary)
     }
 
@@ -644,6 +694,25 @@ impl State {
                 {
                     return self.start_settings(Job::Setting(SettingChange::TunBackend(backend)));
                 }
+            }
+            Action::ReconnectWithSettings => {
+                if !self.can_reconnect_settings() {
+                    return None;
+                }
+                let only_mode = self.connection_mode_next_connect()
+                    && !self.tun_backend_next_connect()
+                    && !self.allow_lan_next_connect()
+                    && !self.private_networks_next_connect()
+                    && !self.auto_reconnect_next_connect()
+                    && !self.xray_next_connect()
+                    && !self.waits_for_next_connect(SessionPart::Protection);
+                if only_mode && self.can_change_temporary() {
+                    return self.act(Action::ApplyConnectionMode);
+                }
+                self.settings.screen.reconnect_after_disconnect = true;
+                self.operations.helper = true;
+                self.operation_error = None;
+                return Some(Job::Disconnect);
             }
             Action::SetLocalProxyPort(port) => {
                 if self.can_edit_settings()

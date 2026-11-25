@@ -1,6 +1,6 @@
 use eframe::egui::{self, RichText};
 
-use super::{link, modal_frame};
+use super::{link_body, modal_frame};
 use crate::theme;
 
 pub(crate) struct NoticeAction<'a> {
@@ -25,16 +25,24 @@ pub(crate) fn action_notice(
         .order(egui::Order::Foreground)
         .show(ctx, |ui| {
             modal_frame()
-                .inner_margin(theme::margin::symmetric(theme::space::L, theme::space::M))
+                .inner_margin(theme::margin::symmetric(theme::space::XL, theme::space::L))
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 0.0;
-                        let color = theme::palette().text;
-                        ui.label(RichText::new(text).small().color(color));
+                        let palette = theme::palette();
+                        ui.label(
+                            RichText::new(text)
+                                .size(theme::font::BODY)
+                                .color(palette.text),
+                        );
                         let mut clicked = None;
                         for (index, action) in actions.iter().enumerate() {
-                            ui.label(RichText::new(tr!("apply-separator")).small().color(color));
-                            let response = link(ui, action.label, action.enabled);
+                            ui.label(
+                                RichText::new(tr!("apply-separator"))
+                                    .size(theme::font::BODY)
+                                    .color(palette.text_dim),
+                            );
+                            let response = link_body(ui, action.label, action.enabled);
                             let response = match action.hint {
                                 Some(hint) => response.on_hover_text(hint),
                                 None => response,

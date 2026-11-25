@@ -1473,3 +1473,39 @@ fn a_settings_caption_opens_the_screen_and_the_requested_section() {
     assert_eq!(state.screen, Screen::Settings);
     assert_eq!(state.settings.screen.section, SettingsSection::Connection);
 }
+
+#[test]
+fn reconnecting_with_settings_disconnects_and_reconnects_for_tun_backend_change() {
+    let mut state = connected_state_for_apply();
+    state.status.tun_backend = Some(rosetun_config::TunBackend::SingTun);
+    state.config.settings.tun.backend = rosetun_config::TunBackend::NativeMixed;
+    assert!(state.settings_need_reconnect());
+    assert!(state.can_reconnect_settings());
+    assert!(matches!(
+        state.act(Action::ReconnectWithSettings),
+        Some(Job::Disconnect)
+    ));
+    assert!(state.take_reconnect_with_settings().is_none());
+
+    state.reduce(WorkerEvent::Disconnect(Ok(())));
+    state.status.state = ConnectionState::Disconnected;
+    assert!(matches!(
+        state.take_reconnect_with_settings(),
+        Some(Job::Connect(_))
+    ));
+    assert!(state.take_reconnect_with_settings().is_none());
+}
+
+#[test]
+fn reconnecting_with_only_connection_mode_changed_uses_protected_apply() {
+    let mut state = connected_state_for_apply();
+    proxy_config(&mut state, 100);
+    assert!(state.settings_need_reconnect());
+    let Some(Job::Apply(request)) = state.act(Action::ReconnectWithSettings) else {
+        panic!("mode-only change keeps the protected apply path");
+    };
+    assert_eq!(
+        request.settings.connection_mode,
+        rosetun_config::ConnectionMode::SystemProxy
+    );
+}

@@ -242,8 +242,20 @@ fn compact_button(
 }
 
 pub(crate) fn link(ui: &mut egui::Ui, text: &str, enabled: bool) -> egui::Response {
+    link_styled(ui, RichText::new(text).small(), enabled)
+}
+
+pub(crate) fn link_body(ui: &mut egui::Ui, text: &str, enabled: bool) -> egui::Response {
+    link_styled(
+        ui,
+        RichText::new(text).font(theme::font::semibold(theme::font::BODY)),
+        enabled,
+    )
+}
+
+fn link_styled(ui: &mut egui::Ui, text: RichText, enabled: bool) -> egui::Response {
     let response = ui.add(
-        egui::Label::new(RichText::new(text).small().color(if enabled {
+        egui::Label::new(text.color(if enabled {
             theme::palette().accent_light
         } else {
             theme::palette().text_dim
