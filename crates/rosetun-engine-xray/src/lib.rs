@@ -459,7 +459,7 @@ mod tests {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
-        let mut child = start(command).unwrap();
+        let mut child = start(command, rosetun_engine::EngineRights::OutboundWorker).unwrap();
         // Wait until the shell has set its trap and said so.
         let mut line = String::new();
         BufReader::new(child.stdout.take().unwrap())
