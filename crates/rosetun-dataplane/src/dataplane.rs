@@ -26,6 +26,10 @@ use crate::proxy::{
 use crate::rules::{Flow, ListContent, ListInput, Route, RuleEngine, RulePlan, RulesError};
 use crate::sniff::{SniffLimits, sniff_quic_datagram, sniff_stream};
 
+use crate::tun::{
+    DeviceSettings, PacketDevice, PhysicalEgress, ProcessLookup, TunnelPolicy, TunnelRuntime,
+};
+
 /// Upper bound on reading one staged list file from disk.
 const MAX_LIST_FILE_BYTES: u64 = 128 * 1024 * 1024;
 
@@ -137,6 +141,8 @@ pub enum DataplaneError {
     Proxy(#[from] ServerError),
     #[error("DNS listener failed: {0}")]
     DnsListener(#[source] io::Error),
+    #[error("native tunnel startup failed: {0}")]
+    Tunnel(#[source] io::Error),
     #[error("internal entry listener failed: {0}")]
     EntryListener(#[source] io::Error),
     #[error("list file could not be read: {0}")]
@@ -231,15 +237,35 @@ pub struct Dataplane {
     direct_resolver: Arc<dyn Resolve>,
     dns_options: DnsOptions,
     dns_server: DnsServer,
-    proxy_server: ProxyServer,
+    proxy_server: Option<ProxyServer>,
+    native: Option<NativePlane>,
     entry_server: Option<EntryServer>,
     dns_addr: SocketAddr,
+}
+
+pub struct NativeTunnel {
+    pub device: Arc<dyn PacketDevice>,
+    pub settings: DeviceSettings,
+    pub egress: PhysicalEgress,
+    pub process: Arc<dyn ProcessLookup>,
+}
+
+impl fmt::Debug for NativeTunnel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("NativeTunnel").finish_non_exhaustive()
+    }
+}
+
+struct NativePlane {
+    runtime: TunnelRuntime,
+    policy: Arc<TunnelPolicy>,
+    egress: PhysicalEgress,
 }
 
 impl fmt::Debug for Dataplane {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Dataplane")
-            .field("proxy_listeners", &self.proxy_server.local_addrs().len())
+            .field("proxy_listeners", &self.proxy_addrs().len())
             .field("has_delay_entry", &self.entry_server.is_some())
             .field("active_connections", &self.router.table().active_count())
             .finish_non_exhaustive()
@@ -249,7 +275,7 @@ impl fmt::Debug for Dataplane {
 impl Dataplane {
     /// Starts the data plane with the system trust store for DoH TLS verification.
     pub fn start(config: DataplaneConfig) -> Result<Self, DataplaneError> {
-        Self::start_inner(config, None)
+        Self::start_inner(config, None, None)
     }
 
     /// Starts the data plane using custom root certificates for DoH TLS
@@ -258,12 +284,21 @@ impl Dataplane {
         config: DataplaneConfig,
         roots: Vec<CertificateDer<'static>>,
     ) -> Result<Self, DataplaneError> {
-        Self::start_inner(config, Some(roots))
+        Self::start_inner(config, Some(roots), None)
+    }
+
+    /// Only authenticated entry traffic and diagnostics listen on local sockets.
+    pub fn start_native(
+        config: DataplaneConfig,
+        tunnel: NativeTunnel,
+    ) -> Result<Self, DataplaneError> {
+        Self::start_inner(config, None, Some(tunnel))
     }
 
     fn start_inner(
         config: DataplaneConfig,
         roots: Option<Vec<CertificateDer<'static>>>,
+        tunnel: Option<NativeTunnel>,
     ) -> Result<Self, DataplaneError> {
         let engine = RuleEngine::compile(&config.rules)?;
 
@@ -285,21 +320,43 @@ impl Dataplane {
             .direct_resolver
             .unwrap_or_else(|| Arc::clone(&dns) as Arc<dyn Resolve>);
 
-        let outbounds = Arc::new(build_outbounds(
-            &config.outbounds,
-            Arc::clone(&direct_resolver),
-        ));
+        let binding = tunnel.as_ref().map(|tunnel| tunnel.egress);
+        let outbounds = build_outbounds(&config.outbounds, Arc::clone(&direct_resolver), binding);
+        let (policy, native): (Arc<dyn Policy>, Option<NativePlane>) = match tunnel {
+            Some(tunnel) => {
+                let policy = Arc::new(TunnelPolicy::new(
+                    engine,
+                    outbounds.clone(),
+                    Arc::clone(&dns),
+                    tunnel.process,
+                ));
+                let runtime =
+                    TunnelRuntime::start(tunnel.device, &tunnel.settings, Arc::clone(&policy))
+                        .map_err(DataplaneError::Tunnel)?;
+                (
+                    Arc::new(|_: &Query<'_>| Verdict::Block),
+                    Some(NativePlane {
+                        runtime,
+                        policy,
+                        egress: tunnel.egress,
+                    }),
+                )
+            }
+            None => (
+                Arc::new(RulePolicy {
+                    engine,
+                    resolver: Arc::clone(&dns) as Arc<dyn Resolve>,
+                }),
+                None,
+            ),
+        };
+        let outbounds = Arc::new(outbounds);
         let exit_tags: Vec<(String, ExitId)> = config
             .outbounds
             .exits
             .iter()
             .map(|exit| (exit.tag.clone(), exit.exit.clone()))
             .collect();
-
-        let policy: Arc<dyn Policy> = Arc::new(RulePolicy {
-            engine,
-            resolver: Arc::clone(&dns) as Arc<dyn Resolve>,
-        });
 
         let table = ConnectionTable::new();
         let router = Arc::new(
@@ -318,7 +375,14 @@ impl Dataplane {
             .next()
             .unwrap_or(config.listen.dns);
 
-        let proxy_server = ProxyServer::bind(Arc::clone(&router), &config.listen.addresses)?;
+        let proxy_server = if native.is_none() {
+            Some(ProxyServer::bind(
+                Arc::clone(&router),
+                &config.listen.addresses,
+            )?)
+        } else {
+            None
+        };
 
         let entry_server = match config.delay {
             Some(delay) => {
@@ -338,6 +402,7 @@ impl Dataplane {
             dns_options: config.dns_options,
             dns_server,
             proxy_server,
+            native,
             entry_server,
             dns_addr,
         })
@@ -345,7 +410,9 @@ impl Dataplane {
 
     /// Actual bound addresses of the local mixed proxy.
     pub fn proxy_addrs(&self) -> &[SocketAddr] {
-        self.proxy_server.local_addrs()
+        self.proxy_server
+            .as_ref()
+            .map_or(&[], ProxyServer::local_addrs)
     }
 
     /// Actual bound loopback address of the built-in UDP/TCP DNS listener.
@@ -364,11 +431,17 @@ impl Dataplane {
 
     /// Returns a [`TrafficProbe`] compatible with the helper's traffic monitor.
     pub fn traffic_probe(&self) -> Box<dyn TrafficProbe> {
+        if let Some(native) = &self.native {
+            return native.runtime.traffic_probe();
+        }
         Box::new(self.router.table().probe())
     }
 
     /// Actively shuts down an active connection by id.
     pub fn close_connection(&self, id: &str) -> bool {
+        if let Some(native) = &self.native {
+            return native.runtime.close_connection(id);
+        }
         self.router.table().close_connection(id)
     }
 
@@ -396,6 +469,7 @@ impl Dataplane {
         let outbounds = Arc::new(build_outbounds(
             &endpoints,
             Arc::clone(&self.direct_resolver),
+            None,
         ));
         self.router.set_outbounds(outbounds);
     }
@@ -421,19 +495,28 @@ impl Dataplane {
             .iter()
             .map(|exit| (exit.tag.clone(), exit.exit.clone()))
             .collect::<Vec<_>>();
-        let policy = Arc::new(RulePolicy {
-            engine,
-            resolver: Arc::clone(&self.dns) as Arc<dyn Resolve>,
-        });
-        let outbounds = Arc::new(build_outbounds(
-            &endpoints,
-            Arc::clone(&self.direct_resolver),
-        ));
-        self.router.set_routing(policy, outbounds);
+        let binding = self.native.as_ref().map(|native| native.egress);
+        let outbounds = build_outbounds(&endpoints, Arc::clone(&self.direct_resolver), binding);
+        if let Some(native) = &self.native {
+            native.policy.replace(engine, outbounds.clone());
+            self.router.set_outbounds(Arc::new(outbounds));
+        } else {
+            let policy = Arc::new(RulePolicy {
+                engine,
+                resolver: Arc::clone(&self.dns) as Arc<dyn Resolve>,
+            });
+            self.router.set_routing(policy, Arc::new(outbounds));
+        }
         if let Some(entry) = &self.entry_server {
             entry.update_accounts(EntryAccount::from_delay_inbound(delay, &exit_tags));
         }
         Ok(())
+    }
+
+    pub fn running(&self) -> bool {
+        self.native
+            .as_ref()
+            .is_none_or(|native| native.runtime.running())
     }
 
     /// Stops all listeners and closes active connections. Idempotent.
@@ -441,7 +524,14 @@ impl Dataplane {
         if let Some(entry) = &mut self.entry_server {
             entry.shutdown();
         }
-        self.proxy_server.shutdown();
+        if let Some(mut native) = self.native.take()
+            && let Err(error) = native.runtime.shutdown()
+        {
+            tracing::warn!(kind = ?error.kind(), "native packet pump stopped with an error");
+        }
+        if let Some(proxy) = &mut self.proxy_server {
+            proxy.shutdown();
+        }
         self.dns_server.shutdown();
     }
 }
@@ -452,7 +542,11 @@ impl Drop for Dataplane {
     }
 }
 
-fn build_outbounds(endpoints: &OutboundEndpoints, direct_resolver: Arc<dyn Resolve>) -> Outbounds {
+fn build_outbounds(
+    endpoints: &OutboundEndpoints,
+    direct_resolver: Arc<dyn Resolve>,
+    binding: Option<PhysicalEgress>,
+) -> Outbounds {
     let mut exits = HashMap::with_capacity(endpoints.exits.len());
     for exit in &endpoints.exits {
         exits.insert(
@@ -461,7 +555,10 @@ fn build_outbounds(endpoints: &OutboundEndpoints, direct_resolver: Arc<dyn Resol
         );
     }
     Outbounds {
-        direct: Arc::new(DirectDialer::new(direct_resolver)),
+        direct: Arc::new(match binding {
+            Some(binding) => DirectDialer::on_physical_network(direct_resolver, binding),
+            None => DirectDialer::new(direct_resolver),
+        }),
         proxy: endpoints.proxy.as_ref().map(UpstreamProxy::to_dialer),
         exits,
     }

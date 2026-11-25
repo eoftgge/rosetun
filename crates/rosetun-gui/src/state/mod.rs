@@ -325,6 +325,7 @@ pub(crate) enum Action {
     SetAutoReconnect(bool),
     SetAllowLan(bool),
     SetConnectionMode(ConnectionMode),
+    SetTunBackend(rosetun_config::TunBackend),
     ApplyConnectionMode,
     SetLocalProxyPort(u16),
     SetShareOnLan(bool),
@@ -913,6 +914,7 @@ impl State {
             | Action::SetAutoReconnect(_)
             | Action::SetAllowLan(_)
             | Action::SetConnectionMode(_)
+            | Action::SetTunBackend(_)
             | Action::SetLocalProxyPort(_)
             | Action::SetShareOnLan(_)
             | Action::SetPrivateNetworks(_)

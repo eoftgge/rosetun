@@ -134,6 +134,7 @@ pub(crate) fn legacy_config() -> AppConfig {
             private_networks: false,
             autostart: true,
             tun: TunSettings {
+                backend: rosetun_config::TunBackend::SingTun,
                 name: "rosetun-test".to_owned(),
                 mtu: 1420,
                 ipv4: "192.0.2.1/24".to_owned(),

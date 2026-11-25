@@ -128,6 +128,7 @@ fn waits_for_save(action: &Action) -> bool {
         | Action::SetAutoReconnect(_)
         | Action::SetAllowLan(_)
         | Action::SetConnectionMode(_)
+        | Action::SetTunBackend(_)
         | Action::SetLocalProxyPort(_)
         | Action::SetShareOnLan(_)
         | Action::SetPrivateNetworks(_)
@@ -630,6 +631,16 @@ impl State {
             Action::SetConnectionMode(mode) => {
                 if self.can_edit_settings() && self.config.settings.connection_mode != mode {
                     return self.start_settings(Job::Setting(SettingChange::ConnectionMode(mode)));
+                }
+            }
+            Action::SetTunBackend(backend) => {
+                if cfg!(target_os = "linux")
+                    && self.can_edit_settings()
+                    && self.config.settings.tun.backend != backend
+                    && (backend == rosetun_config::TunBackend::SingTun
+                        || self.config.settings.kill_switch)
+                {
+                    return self.start_settings(Job::Setting(SettingChange::TunBackend(backend)));
                 }
             }
             Action::SetLocalProxyPort(port) => {

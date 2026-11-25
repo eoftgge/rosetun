@@ -182,7 +182,7 @@ pub struct TrafficTotals {
 }
 
 /// Where the engine routed a connection, by the outbound tag it reports.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum EngineRoute {
     Proxy,
     Direct,

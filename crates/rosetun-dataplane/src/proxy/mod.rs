@@ -12,9 +12,9 @@
 
 mod entry;
 mod http;
-mod relay;
+pub(crate) mod relay;
 mod router;
-mod server;
+pub(crate) mod server;
 mod socks;
 mod udp;
 

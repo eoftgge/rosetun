@@ -149,11 +149,11 @@ wait_state() {
 
 # The lab's window markers (lab_mark, in lib.sh) do nothing without LAB_MARKER_ADDRESS.
 connect_with() {
-    local request=$1
+    local request=$1 source=${2:-"$ART/$1"}
     # A scenario that failed half-way may have left a session.
     [[ $(state_line) =~ ^Disconnected ]] || cli 60 disconnect
     lab_mark close
-    install -m 0600 -o "$(uid_of "$USER_A")" -g "$(gid_of "$USER_A")" -- "$ART/$request" "$RUN/work-$USER_A/$request"
+    install -m 0600 -o "$(uid_of "$USER_A")" -g "$(gid_of "$USER_A")" -- "$source" "$RUN/work-$USER_A/$request"
     lab_mark open
     cli 120 connect "$request"
     [ "$CLI_RC" -eq 0 ] || { fail_reason="connect with $request failed: $(cli_error)"; return 1; }
@@ -590,8 +590,19 @@ scenario_strict() {
 
 scenario_mode_change() {
     mode_change() {
-        connect_with request-kill-switch.json || return 1
-        install -m 0600 -o "$(uid_of "$USER_A")" -g "$(gid_of "$USER_A")" -- "$ART/request-proxy-strict.json" "$RUN/work-$USER_A/request-proxy-strict.json"
+        local tun="$STATE/native-tun.json" proxy="$STATE/native-proxy.json"
+        python3 - "$ART/request-kill-switch.json" "$tun" "$ART/request-proxy-strict.json" "$proxy" <<'PY' || return 1
+import json
+import sys
+from pathlib import Path
+for source, target in zip(sys.argv[1::2], sys.argv[2::2], strict=True):
+    request = json.loads(Path(source).read_text())
+    request["settings"].setdefault("tun", {})["backend"] = "native_mixed"
+    Path(target).write_text(json.dumps(request))
+PY
+        connect_with request-kill-switch.json "$tun" || return 1
+        expect_reached "HTTPS through NativeMixed" tunnel_https || return 1
+        install -m 0600 -o "$(uid_of "$USER_A")" -g "$(gid_of "$USER_A")" -- "$proxy" "$RUN/work-$USER_A/request-proxy-strict.json"
         cli 120 apply request-proxy-strict.json
         [ "$CLI_RC" -eq 0 ] || { fail_reason="apply failed: $(cli_error)"; return 1; }
         wait_state '^Connected' 30 || return 1
@@ -603,9 +614,10 @@ scenario_mode_change() {
         [ "$CLI_RC" -eq 0 ] || { fail_reason="apply back failed: $(cli_error)"; return 1; }
         wait_state '^Connected' 30 || return 1
         [ -e "/sys/class/net/$TUN_NAME" ] || { fail_reason="the adapter did not come back"; return 1; }
-        expect_blocked "HTTPS to $PROBE_ADDRESS on $PHYS" direct_https
+        expect_blocked "HTTPS to $PROBE_ADDRESS on $PHYS" direct_https || return 1
+        expect_reached "HTTPS after returning to NativeMixed" tunnel_https
     }
-    check mode.change "TUN to the proxy and back through apply, the table up throughout" mode_change
+    check mode.change "NativeMixed to the proxy and back through apply, the table up throughout" mode_change
 }
 
 scenario_share() {

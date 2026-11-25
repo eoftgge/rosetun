@@ -172,6 +172,13 @@ impl fmt::Debug for UdpPath {
 }
 
 impl UdpPath {
+    pub(crate) fn set_nonblocking(&self, enabled: bool) -> io::Result<()> {
+        for socket in self.v4.iter().chain(&self.v6) {
+            socket.set_nonblocking(enabled)?;
+        }
+        Ok(())
+    }
+
     pub fn set_read_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
         if let Some(socket) = &self.v4 {
             socket.set_read_timeout(timeout)?;
@@ -301,6 +308,7 @@ impl UdpPath {
 /// Dials from this computer's own network, resolving names with `resolver`.
 pub struct DirectDialer {
     resolver: Arc<dyn Resolve>,
+    binding: Option<crate::tun::PhysicalEgress>,
 }
 
 impl fmt::Debug for DirectDialer {
@@ -311,7 +319,36 @@ impl fmt::Debug for DirectDialer {
 
 impl DirectDialer {
     pub fn new(resolver: Arc<dyn Resolve>) -> Self {
-        Self { resolver }
+        Self {
+            resolver,
+            binding: None,
+        }
+    }
+
+    /// Uses only the requested physical egress. A failed socket option fails
+    /// the call instead of falling back into the captured default route.
+    pub fn on_physical_network(
+        resolver: Arc<dyn Resolve>,
+        binding: crate::tun::PhysicalEgress,
+    ) -> Self {
+        Self {
+            resolver,
+            binding: Some(binding),
+        }
+    }
+
+    fn tcp(&self, address: SocketAddr, timeout: Duration) -> io::Result<TcpStream> {
+        match self.binding {
+            Some(binding) => binding.connect(address, timeout),
+            None => TcpStream::connect_timeout(&address, timeout),
+        }
+    }
+
+    fn bind_udp(&self, address: SocketAddr) -> io::Result<UdpSocket> {
+        match self.binding {
+            Some(binding) => binding.bind_udp(address),
+            None => UdpSocket::bind(address),
+        }
     }
 }
 
@@ -329,7 +366,7 @@ impl Dialer for DirectDialer {
         };
         let mut last = io::Error::new(io::ErrorKind::NotFound, "no address to connect to");
         for ip in addresses {
-            match TcpStream::connect_timeout(&SocketAddr::new(ip, target.port), timeout) {
+            match self.tcp(SocketAddr::new(ip, target.port), timeout) {
                 Ok(stream) => {
                     stream.set_nodelay(true).ok();
                     return Ok(stream);
@@ -341,8 +378,8 @@ impl Dialer for DirectDialer {
     }
 
     fn udp(&self, _timeout: Duration) -> io::Result<UdpPath> {
-        let v4 = UdpSocket::bind(SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0)));
-        let v6 = UdpSocket::bind(SocketAddr::from((Ipv6Addr::UNSPECIFIED, 0)));
+        let v4 = self.bind_udp(SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0)));
+        let v6 = self.bind_udp(SocketAddr::from((Ipv6Addr::UNSPECIFIED, 0)));
         let (v4, v6) = match (v4, v6) {
             (Ok(s4), Ok(s6)) => (Some(s4), Some(s6)),
             (Ok(s4), Err(_)) => (Some(s4), None),
@@ -372,18 +409,12 @@ impl Dialer for DirectDialer {
         let (v4, v6, preferred) = if wants_v6 {
             (
                 None,
-                Some(UdpSocket::bind(SocketAddr::from((
-                    Ipv6Addr::UNSPECIFIED,
-                    0,
-                )))?),
+                Some(self.bind_udp(SocketAddr::from((Ipv6Addr::UNSPECIFIED, 0)))?),
                 6,
             )
         } else {
             (
-                Some(UdpSocket::bind(SocketAddr::from((
-                    Ipv4Addr::UNSPECIFIED,
-                    0,
-                )))?),
+                Some(self.bind_udp(SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0)))?),
                 None,
                 4,
             )

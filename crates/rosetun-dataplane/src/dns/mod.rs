@@ -26,7 +26,7 @@ mod cache;
 mod doh;
 mod server;
 #[cfg(test)]
-mod testcerts;
+pub(crate) mod testcerts;
 mod wire;
 
 use std::cell::Cell;

@@ -119,14 +119,14 @@ impl Drop for ProxyServer {
 }
 
 #[derive(Default)]
-pub(super) struct Clients {
+pub(crate) struct Clients {
     next: AtomicUsize,
     sockets: Mutex<HashMap<usize, TcpStream>>,
     finished: Condvar,
 }
 
 impl Clients {
-    pub(super) fn track(self: &Arc<Self>, stream: &TcpStream, limit: usize) -> Option<Client> {
+    pub(crate) fn track(self: &Arc<Self>, stream: &TcpStream, limit: usize) -> Option<Client> {
         let mut sockets = self.sockets.lock().unwrap_or_else(PoisonError::into_inner);
         if sockets.len() >= limit {
             return None;
@@ -139,7 +139,7 @@ impl Clients {
         })
     }
 
-    pub(super) fn close_and_wait(&self) {
+    pub(crate) fn close_and_wait(&self) {
         let sockets = self.sockets.lock().unwrap_or_else(PoisonError::into_inner);
         for stream in sockets.values() {
             let _ = stream.shutdown(Shutdown::Both);
@@ -151,7 +151,7 @@ impl Clients {
     }
 }
 
-pub(super) struct Client {
+pub(crate) struct Client {
     id: usize,
     clients: Arc<Clients>,
 }

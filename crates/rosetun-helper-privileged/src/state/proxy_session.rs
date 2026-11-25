@@ -33,6 +33,8 @@ pub(super) struct ProxySession {
     workers: Workers,
     outbounds: OutboundEndpoints,
     pub(super) plan: RoutingPlan,
+    #[cfg(target_os = "linux")]
+    native: Option<super::native_tun_linux::NativeTun>,
 }
 
 #[derive(Default)]
@@ -199,13 +201,21 @@ impl ProxySession {
             if xray {
                 Some("Xray stopped".to_owned())
             } else {
-                singbox.then(|| "sing-box outbound worker stopped".to_owned())
+                if self.dataplane.running() {
+                    singbox.then(|| "sing-box outbound worker stopped".to_owned())
+                } else {
+                    Some("native tunnel packet worker stopped".to_owned())
+                }
             },
         )
     }
 
     pub(super) fn stop(&mut self) -> Result<(), HelperError> {
         self.dataplane.shutdown();
+        #[cfg(target_os = "linux")]
+        if let Some(native) = self.native.as_mut() {
+            native.close()?;
+        }
         for worker in [&mut self.workers.singbox, &mut self.workers.xray]
             .into_iter()
             .flatten()
@@ -224,19 +234,27 @@ impl Session {
     ) -> Result<(), HelperError> {
         let settings = &request.settings;
         let state = lockdown::read(&self.lockdown);
+        let native_requested = super::native_tun_requested(request);
         let shared_addresses = (self.shared_proxy_addresses)();
-        let listen = local_proxy::listen_for(
+        let listener = local_proxy::listen_for(
             settings,
             local_proxy::sharing_allowed(&state),
             &shared_addresses,
             &self.cancelled,
-        )?
-        .ok_or_else(|| {
-            HelperError::new(
-                ErrorCode::InvalidState,
-                "local proxy listener is unavailable",
-            )
-        })?;
+        )?;
+        let listen = match listener {
+            Some(listen) => listen,
+            None if native_requested => rosetun_engine::LocalProxyListen {
+                addresses: Vec::new(),
+                dns: std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, 0)),
+            },
+            None => {
+                return Err(HelperError::new(
+                    ErrorCode::InvalidState,
+                    "local proxy listener is unavailable",
+                ));
+            }
+        };
         let lookup = NameLookup::new(state.enabled, false);
         let endpoint = match options.endpoint {
             Some(endpoint) => endpoint,
@@ -299,22 +317,52 @@ impl Session {
         if let Some(until) = verbose {
             self.gate.open_until(until);
         }
+        #[cfg(target_os = "linux")]
+        let mut native = if native_requested {
+            let native = super::native_tun_linux::NativeTun::open(&settings.tun)?;
+            let tun = rosetun_routing::TunnelInterface::try_from(&settings.tun)
+                .map_err(super::native_tun_linux::route_error)?;
+            self.protection
+                .authorize_tunnel(&tun)
+                .map_err(super::native_tun_linux::route_error)?;
+            Some(native)
+        } else {
+            None
+        };
         self.stage(ConnectStage::StartingEngine)?;
         self.spawn_workers(settings.engine, &mut update)?;
         let outbounds = update.outbounds(&workers, &tags);
         update.commit(&mut workers);
+        let config = || DataplaneConfig {
+            listen: listen.clone(),
+            dns: settings.dns.clone(),
+            dns_options: Default::default(),
+            rules: rules.clone(),
+            outbounds: outbounds.clone(),
+            delay: Some(entry.clone()),
+            router: Default::default(),
+            sniff: Default::default(),
+            direct_resolver: None,
+        };
+        #[cfg(target_os = "linux")]
+        let dataplane = if let Some(native) = &mut native {
+            let dataplane = Dataplane::start_native(config(), native.tunnel()?)
+                .map_err(super::native_tun_linux::route_error)?;
+            let bypass = if settings.allow_lan {
+                lan.segment.route_networks()
+            } else {
+                Vec::new()
+            };
+            native.capture(&bypass, &servers)?;
+            dataplane
+        } else {
+            local_proxy::start(settings.local_proxy.port, &self.cancelled, || {
+                Dataplane::start(config())
+            })?
+        };
+        #[cfg(not(target_os = "linux"))]
         let dataplane = local_proxy::start(settings.local_proxy.port, &self.cancelled, || {
-            Dataplane::start(DataplaneConfig {
-                listen: listen.clone(),
-                dns: settings.dns.clone(),
-                dns_options: Default::default(),
-                rules: rules.clone(),
-                outbounds: outbounds.clone(),
-                delay: Some(entry.clone()),
-                router: Default::default(),
-                sniff: Default::default(),
-                direct_resolver: None,
-            })
+            Dataplane::start(config())
         })?;
         let server = dataplane.dns_addr();
         let entry = DelayInbound {
@@ -327,6 +375,8 @@ impl Session {
             workers,
             outbounds,
             plan,
+            #[cfg(target_os = "linux")]
+            native,
         });
         #[cfg(test)]
         let server = self.test_local_dns.unwrap_or(server);
@@ -392,6 +442,11 @@ impl Session {
             let result = (|| {
                 if replace_guard {
                     self.protection.prepare_reconnect(&plan)?;
+                    self.authorize_native_after_apply(request)?;
+                }
+                #[cfg(target_os = "linux")]
+                if let Some(native) = proxy.native.as_mut() {
+                    native.ensure_endpoints(&servers)?;
                 }
                 self.spawn_workers(request.settings.engine, &mut update)?;
                 check_cancelled(&self.cancelled)?;
@@ -408,12 +463,19 @@ impl Session {
             })();
             if let Err(error) = result {
                 drop(update);
+                #[cfg(target_os = "linux")]
+                if let Some(native) = proxy.native.as_mut() {
+                    native.retain_endpoints(self.lan.servers());
+                }
                 self.protection.permit_binaries(&previous_binaries);
                 if replace_guard
-                    && let Err(restore) = self.protection.prepare_reconnect(&RoutingPlan {
-                        lan: self.lan.access().clone(),
-                        ..plan
-                    })
+                    && let Err(restore) = self
+                        .protection
+                        .prepare_reconnect(&RoutingPlan {
+                            lan: self.lan.access().clone(),
+                            ..plan
+                        })
+                        .and_then(|()| self.authorize_native_after_apply(current))
                 {
                     tracing::error!(code = ?restore.code, "failed to restore the previous proxy protection");
                 }
@@ -426,6 +488,10 @@ impl Session {
                 return Err(error);
             }
             update.commit(&mut proxy.workers);
+            #[cfg(target_os = "linux")]
+            if let Some(native) = proxy.native.as_mut() {
+                native.retain_endpoints(&servers);
+            }
             if let Some(until) = verbose {
                 self.gate.open_until(until);
             } else {
@@ -440,6 +506,18 @@ impl Session {
         })();
         self.proxy_session = Some(proxy);
         result
+    }
+
+    fn authorize_native_after_apply(&self, request: &ConnectRequest) -> Result<(), HelperError> {
+        if super::native_tun_requested(request) {
+            let error = |error: rosetun_routing::RoutingError| {
+                HelperError::new(ErrorCode::RoutingFailed, error.to_string())
+            };
+            let tunnel =
+                rosetun_routing::TunnelInterface::try_from(&request.settings.tun).map_err(error)?;
+            self.protection.authorize_tunnel(&tunnel).map_err(error)?;
+        }
+        Ok(())
     }
 
     fn proxy_rules(

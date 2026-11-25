@@ -341,6 +341,47 @@ fn connection_mode(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
                 });
             });
         }
+        if cfg!(target_os = "linux") && !proxy {
+            let backend = state.config.settings.tun.backend;
+            let pending = state
+                .status
+                .tun_backend
+                .is_some_and(|running| running != backend);
+            let hint = if pending {
+                tr!("next-connect")
+            } else {
+                tr!("native-tun-requires-protection")
+            };
+            card.row_with_title(
+                |ui| {
+                    ui.vertical(|ui| {
+                        ui.spacing_mut().item_spacing.y = theme::space::XXS;
+                        ui.label(RichText::new(tr!("tun-backend")).color(theme::palette().text));
+                        widgets::row_detail(ui, &hint, pending);
+                    });
+                },
+                None,
+                |ui| {
+                    use rosetun_config::TunBackend;
+                    let options = [
+                        (TunBackend::SingTun, tr!("tun-backend-sing")),
+                        (TunBackend::NativeMixed, tr!("tun-backend-native")),
+                    ];
+                    let supported =
+                        state.config.settings.kill_switch || backend == TunBackend::NativeMixed;
+                    if let Some(chosen) = widgets::segmented(
+                        ui,
+                        "tun_backend",
+                        backend,
+                        &options,
+                        false,
+                        editable && supported,
+                    ) {
+                        actions.push(Action::SetTunBackend(chosen));
+                    }
+                },
+            );
+        }
         // Closing rows stay on screen for a moment, and take no more input.
         let editable = editable && proxy;
         let form = &mut state.settings.screen;
@@ -718,7 +759,7 @@ fn dns(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
     });
 }
 
-/// "Not applied · Apply" under a setting that a running session can pick up right away.
+/// "Not applied В· Apply" under a setting that a running session can pick up right away.
 fn apply_note(ui: &mut egui::Ui, state: &State, part: SessionPart, actions: &mut Vec<Action>) {
     if !state.session_up() || !state.pending_reconnect(part) || !state.can_apply() {
         return;
@@ -1713,7 +1754,10 @@ mod update_status_tests {
             ("Couldn't check".into(), "You can check manually.".into(),)
         );
         state.updates.update_check_pending = true;
-        assert_eq!(update_status(&state, 200, Language::English).0, "Checking…");
+        assert_eq!(
+            update_status(&state, 200, Language::English).0,
+            "CheckingвЂ¦"
+        );
     }
 
     #[test]
@@ -1730,8 +1774,8 @@ mod update_status_tests {
         assert_eq!(
             update_status(&state, 200, Language::Russian),
             (
-                "Версия 999.0.0-alpha.4 пропущена".into(),
-                "Напомним, когда выйдет следующая. Проверено 2 минуты назад.".into(),
+                "Р’РµСЂСЃРёСЏ 999.0.0-alpha.4 РїСЂРѕРїСѓС‰РµРЅР°".into(),
+                "РќР°РїРѕРјРЅРёРј, РєРѕРіРґР° РІС‹Р№РґРµС‚ СЃР»РµРґСѓСЋС‰Р°СЏ. РџСЂРѕРІРµСЂРµРЅРѕ 2 РјРёРЅСѓС‚С‹ РЅР°Р·Р°Рґ.".into(),
             )
         );
     }

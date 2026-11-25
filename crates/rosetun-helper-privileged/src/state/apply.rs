@@ -72,9 +72,10 @@ impl Helper {
             &session.last_extra_endpoints,
             session.engine_lookup(),
         );
-        if current.settings.connection_mode == ConnectionMode::SystemProxy
+        if (current.settings.connection_mode == ConnectionMode::SystemProxy
             && request.settings.connection_mode == ConnectionMode::SystemProxy
-            && current.settings.local_proxy == request.settings.local_proxy
+            && current.settings.local_proxy == request.settings.local_proxy)
+            || (super::native_tun_requested(&current) && super::native_tun_requested(request))
         {
             session.reserve_lists(request, Some(&current))?;
             let previous_exit_tags = session.exit_tags.clone();
@@ -104,7 +105,9 @@ impl Helper {
             return published;
         }
 
-        if request.settings.connection_mode == ConnectionMode::Tun {
+        if request.settings.connection_mode == ConnectionMode::Tun
+            && !super::native_tun_requested(request)
+        {
             let backend = self.engines.get(request.settings.engine).ok_or_else(|| {
                 HelperError::new(
                     ErrorCode::EngineFailed,

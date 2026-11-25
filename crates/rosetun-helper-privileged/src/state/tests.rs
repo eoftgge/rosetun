@@ -8760,6 +8760,17 @@ fn the_proxy_mode_checks_the_session_through_its_dns_listener() {
 }
 
 #[test]
+fn unavailable_native_tun_is_refused_before_engine_or_firewall_changes() {
+    let (helper, controls) = ordered_helper();
+    let mut request = connect_request();
+    request.settings.tun.backend = rosetun_config::TunBackend::NativeMixed;
+    let error = helper.connect(&request).unwrap_err();
+    assert_eq!(error.code, ErrorCode::ProtectionUnavailable);
+    assert_eq!(controls.spawns.load(Ordering::SeqCst), 0);
+    assert!(controls.events.lock().unwrap().is_empty());
+}
+
+#[test]
 fn a_taken_proxy_port_fails_before_the_engine_and_protection() {
     let holder = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let (helper, controls) = ordered_helper();

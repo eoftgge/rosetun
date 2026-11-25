@@ -6,7 +6,7 @@
 //! No type here shows a destination, host, address, program path or
 //! credential in `Debug` or in a log line.
 
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 
 pub mod conntable;
 pub mod dataplane;
@@ -15,8 +15,9 @@ pub mod net;
 pub mod proxy;
 pub mod rules;
 pub mod sniff;
+pub mod tun;
 
 pub use dataplane::{
-    Dataplane, DataplaneConfig, DataplaneError, ExitUpstream, OutboundEndpoints, UpstreamProxy,
-    load_list_files,
+    Dataplane, DataplaneConfig, DataplaneError, ExitUpstream, NativeTunnel, OutboundEndpoints,
+    UpstreamProxy, load_list_files,
 };

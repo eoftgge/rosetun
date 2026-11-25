@@ -2,7 +2,7 @@ use std::net::IpAddr;
 
 use rosetun_config::{
     AccentPreset, ConnectionMode, DelayMode, DnsSettings, InterfaceSettings, LanguageSetting,
-    QuitAction, Settings, TlsFragment, XrayUse,
+    QuitAction, Settings, TlsFragment, TunBackend, XrayUse,
 };
 use url::Host;
 
@@ -62,6 +62,7 @@ pub enum SettingChange {
     AutoReconnect(bool),
     AllowLan(bool),
     ConnectionMode(ConnectionMode),
+    TunBackend(TunBackend),
     LocalProxyPort(u16),
     ShareOnLan(bool),
     /// "Private networks behind the router"; counts only with `AllowLan`.
@@ -88,6 +89,7 @@ pub fn change_setting(store: &Store, change: SettingChange) -> Result<(), Settin
             SettingChange::AutoReconnect(enabled) => config.settings.auto_reconnect = enabled,
             SettingChange::AllowLan(enabled) => config.settings.allow_lan = enabled,
             SettingChange::ConnectionMode(mode) => config.settings.connection_mode = mode,
+            SettingChange::TunBackend(backend) => config.settings.tun.backend = backend,
             SettingChange::LocalProxyPort(port) => config.settings.local_proxy.port = port,
             SettingChange::ShareOnLan(enabled) => {
                 config.settings.local_proxy.share_on_lan = enabled;

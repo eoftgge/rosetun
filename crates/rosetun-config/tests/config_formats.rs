@@ -28,6 +28,7 @@ const V10: &[u8] = include_bytes!("fixtures/v10.json");
 const V11: &[u8] = include_bytes!("fixtures/v11.json");
 const V12: &[u8] = include_bytes!("fixtures/v12.json");
 const V13: &[u8] = include_bytes!("fixtures/v13.json");
+const V14: &[u8] = include_bytes!("fixtures/v14.json");
 
 #[test]
 fn subscription_vpn_updates_are_enabled_when_migrating_released_settings() {
@@ -224,7 +225,7 @@ fn value(bytes: &[u8]) -> Value {
 #[test]
 fn released_configurations_migrate_to_the_expected_configuration() {
     assert_eq!(
-        CONFIG_VERSION, 13,
+        CONFIG_VERSION, 14,
         "update the current fixture when bumping the settings format"
     );
     let expected = expected_migrated_legacy_config();
@@ -457,7 +458,8 @@ fn current_configuration_fixture_guards_the_serialized_format() {
         target: RuleTarget::Proxy,
         exit: None,
     });
-    let (loaded, migrated_from) = from_json(V13).expect("current fixture should load");
+    expected.settings.tun.backend = rosetun_config::TunBackend::NativeMixed;
+    let (loaded, migrated_from) = from_json(V14).expect("current fixture should load");
 
     assert_eq!(migrated_from, None);
     assert_eq!(loaded, expected);
@@ -489,9 +491,23 @@ fn current_configuration_fixture_guards_the_serialized_format() {
     );
     assert_eq!(
         serde_json::to_value(&expected).expect("serialize expected configuration"),
-        value(V13),
+        value(V14),
         "the serialized configuration shape changed; keep the current fixture in sync"
     );
+}
+
+#[test]
+fn format_thirteen_keeps_sing_tun_even_if_an_unknown_backend_field_was_present() {
+    let (original, migrated_from) = from_json(V13).unwrap();
+    assert_eq!(migrated_from, Some(13));
+    assert_eq!(
+        original.settings.tun.backend,
+        rosetun_config::TunBackend::SingTun
+    );
+    let mut legacy = value(V13);
+    legacy["settings"]["tun"]["backend"] = json!("native_mixed");
+    let (loaded, _) = from_json(&serde_json::to_vec(&legacy).unwrap()).unwrap();
+    assert_eq!(loaded, original);
 }
 
 #[test]

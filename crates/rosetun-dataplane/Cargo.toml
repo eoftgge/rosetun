@@ -15,10 +15,20 @@ ring.workspace = true
 rosetun-config.workspace = true
 rosetun-engine.workspace = true
 rustls.workspace = true
+rustls-native-certs = "0.8"
 serde_json.workspace = true
+socket2 = { version = "0.6", features = ["all"] }
 thiserror.workspace = true
 tracing.workspace = true
-rustls-native-certs = "0.8"
+
+[target.'cfg(any(windows, target_os = "linux", target_os = "macos"))'.dependencies]
+tun-rs = { version = "=2.8.18", default-features = false, features = ["interruptible"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc.workspace = true
 
 [dev-dependencies]
 # Parity tests only: the data plane never depends on the client domain at run time.

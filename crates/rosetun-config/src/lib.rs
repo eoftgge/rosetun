@@ -52,7 +52,7 @@ pub use runtime::{
 };
 pub use settings::{
     ConnectionMode, DnsSettings, EngineKind, FragmentError, FragmentPackets, FragmentRange,
-    LocalProxySettings, LogLevel, Settings, TlsFragment, TunSettings, XrayUse,
+    LocalProxySettings, LogLevel, Settings, TlsFragment, TunBackend, TunSettings, XrayUse,
 };
 pub use subscription::{HwidScope, Selection, Subscription, SubscriptionInfo};
 pub use uploaded_list::{ListRef, UploadedListFormat, list_tag};
@@ -62,7 +62,7 @@ use serde_json::{Map, Value};
 
 /// Bump for every serialized format change, including defaulted fields older releases drop on save.
 /// Add a Value migration and a new fixture; never edit fixtures of released formats.
-pub const CONFIG_VERSION: u32 = 13;
+pub const CONFIG_VERSION: u32 = 14;
 
 pub const EXIT_TRACE_IP: &str = "1.1.1.1";
 pub const EXIT_TRACE_PORT: u16 = 443;
@@ -425,6 +425,7 @@ pub fn from_json(bytes: &[u8]) -> Result<(AppConfig, Option<u32>), FormatError> 
             10 => migrate_10_to_11(config),
             11 => migrate_11_to_12(config),
             12 => migrate_12_to_13(config),
+            13 => migrate_13_to_14(config),
             _ => return Err(FormatError::UnexpectedValue),
         }
         version += 1;
@@ -438,6 +439,18 @@ pub fn from_json(bytes: &[u8]) -> Result<(AppConfig, Option<u32>), FormatError> 
         config,
         (original_version < CONFIG_VERSION).then_some(original_version),
     ))
+}
+
+fn migrate_13_to_14(config: &mut Map<String, Value>) {
+    if let Some(tun) = config
+        .get_mut("settings")
+        .and_then(|settings| settings.get_mut("tun"))
+        .and_then(Value::as_object_mut)
+    {
+        // The old format treated this field as unknown. Its contents cannot
+        // select a backend during an upgrade.
+        tun.remove("backend");
+    }
 }
 
 fn migrate_12_to_13(_config: &mut Map<String, Value>) {

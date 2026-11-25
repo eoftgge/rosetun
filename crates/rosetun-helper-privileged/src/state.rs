@@ -7,6 +7,8 @@ mod exits;
 mod lan;
 mod local_proxy;
 mod lockdown;
+#[cfg(target_os = "linux")]
+mod native_tun_linux;
 mod path;
 mod probe;
 mod protection;
@@ -713,6 +715,9 @@ impl Helper {
                 ErrorCode::UnsupportedRules,
                 "rules by program are unavailable in local proxy mode",
             ));
+        }
+        if native_tun_requested(request) {
+            return Ok(());
         }
         let Some(reason) = self.process_rights_unavailable.as_deref() else {
             return Ok(());
@@ -1429,6 +1434,7 @@ impl Helper {
                 }
                 let protected = session.protection.keeps_protection()
                     && (mode == StartMode::ProtectedReconnect
+                        || native_tun_requested(request)
                         || error.code == ErrorCode::XrayStartFailed);
                 if protected {
                     if let Err(cleanup_error) = session.stop_engine() {
@@ -1707,7 +1713,26 @@ fn validate_tun_name(name: &str) -> Result<(), HelperError> {
     Ok(())
 }
 
+fn native_tun_requested(request: &ConnectRequest) -> bool {
+    request.settings.connection_mode == rosetun_config::ConnectionMode::Tun
+        && request.settings.tun.backend == rosetun_config::TunBackend::NativeMixed
+}
+
 fn validate_request(request: &ConnectRequest) -> Result<(), HelperError> {
+    if native_tun_requested(request) {
+        if !cfg!(target_os = "linux") {
+            return Err(HelperError::new(
+                ErrorCode::ProtectionUnavailable,
+                "native TUN is available on Linux",
+            ));
+        }
+        if !request.settings.kill_switch || !request.settings.tun.auto_route {
+            return Err(HelperError::new(
+                ErrorCode::ProtectionUnavailable,
+                "native TUN requires the kill switch and automatic routes",
+            ));
+        }
+    }
     for node in
         std::iter::once(&request.node).chain(request.extra_nodes.iter().map(|extra| &extra.node))
     {
@@ -2413,7 +2438,9 @@ impl Session {
             }
         }
 
-        if settings.connection_mode == rosetun_config::ConnectionMode::SystemProxy {
+        if settings.connection_mode == rosetun_config::ConnectionMode::SystemProxy
+            || native_tun_requested(request)
+        {
             return self.start_proxy(
                 request,
                 StartOptions {
@@ -2963,6 +2990,7 @@ impl Session {
     fn engine_lookup(&self) -> NameLookup {
         let proxy_mode = self.request.as_ref().is_some_and(|request| {
             request.settings.connection_mode == rosetun_config::ConnectionMode::SystemProxy
+                || native_tun_requested(request)
         });
         match self.tunnel_dns {
             Some(address) if proxy_mode => NameLookup::Engine(address),

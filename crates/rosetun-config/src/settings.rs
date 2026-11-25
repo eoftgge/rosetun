@@ -270,6 +270,8 @@ pub enum LogLevel {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TunSettings {
+    #[serde(default, skip_serializing_if = "TunBackend::is_sing_tun")]
+    pub backend: TunBackend,
     pub name: String,
     pub mtu: u16,
     pub ipv4: String,
@@ -282,12 +284,27 @@ pub struct TunSettings {
 impl Default for TunSettings {
     fn default() -> Self {
         Self {
+            backend: TunBackend::SingTun,
             name: "rosetun0".to_owned(),
             mtu: 1500,
             ipv4: "172.19.0.1/30".to_owned(),
             ipv6: None,
             auto_route: true,
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TunBackend {
+    #[default]
+    SingTun,
+    NativeMixed,
+}
+
+impl TunBackend {
+    fn is_sing_tun(&self) -> bool {
+        *self == Self::SingTun
     }
 }
 
