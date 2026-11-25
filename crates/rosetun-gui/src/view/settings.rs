@@ -1754,10 +1754,7 @@ mod update_status_tests {
             ("Couldn't check".into(), "You can check manually.".into(),)
         );
         state.updates.update_check_pending = true;
-        assert_eq!(
-            update_status(&state, 200, Language::English).0,
-            "CheckingвЂ¦"
-        );
+        assert_eq!(update_status(&state, 200, Language::English).0, "Checking…");
     }
 
     #[test]
