@@ -8,7 +8,11 @@ mod lan;
 mod local_proxy;
 mod lockdown;
 #[cfg(target_os = "linux")]
-mod native_tun_linux;
+#[path = "state/native_tun_linux.rs"]
+mod native_tun;
+#[cfg(all(windows, target_arch = "x86_64"))]
+#[path = "state/native_tun_windows.rs"]
+mod native_tun;
 mod path;
 mod probe;
 mod protection;
@@ -1720,10 +1724,13 @@ fn native_tun_requested(request: &ConnectRequest) -> bool {
 
 fn validate_request(request: &ConnectRequest) -> Result<(), HelperError> {
     if native_tun_requested(request) {
-        if !cfg!(target_os = "linux") {
+        if !cfg!(any(
+            target_os = "linux",
+            all(windows, target_arch = "x86_64")
+        )) {
             return Err(HelperError::new(
                 ErrorCode::ProtectionUnavailable,
-                "native TUN is available on Linux",
+                "native TUN is unavailable on this platform",
             ));
         }
         if !request.settings.kill_switch || !request.settings.tun.auto_route {

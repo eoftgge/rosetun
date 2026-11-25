@@ -634,8 +634,10 @@ impl State {
                 }
             }
             Action::SetTunBackend(backend) => {
-                if cfg!(target_os = "linux")
-                    && self.can_edit_settings()
+                if cfg!(any(
+                    target_os = "linux",
+                    all(windows, target_arch = "x86_64")
+                )) && self.can_edit_settings()
                     && self.config.settings.tun.backend != backend
                     && (backend == rosetun_config::TunBackend::SingTun
                         || self.config.settings.kill_switch)

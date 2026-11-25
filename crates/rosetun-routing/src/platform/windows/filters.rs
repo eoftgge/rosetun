@@ -1048,6 +1048,14 @@ mod tests {
         for lockdown in [false, true] {
             rules.extend(tunnel_authorization(7, lockdown));
         }
+        rules.extend(super::super::policy::native_listeners(
+            7,
+            &program,
+            &[
+                ("192.0.2.2".parse().unwrap(), 51000),
+                ("2001:db8::2".parse().unwrap(), 51001),
+            ],
+        ));
         rules.extend(probe_authorization(&program));
         for rule in &mut rules {
             for condition in &mut rule.conditions {

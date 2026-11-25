@@ -166,6 +166,7 @@ pub(super) struct WfpProtectionSession {
     bootstrap_filter_ids: Vec<u64>,
     tunnel_luid: Option<u64>,
     tunnel_filter_ids: Vec<u64>,
+    native_rules: Vec<policy::Rule>,
     probe_filter_ids: Vec<u64>,
     probe_binary: Option<std::path::PathBuf>,
 }
@@ -199,6 +200,7 @@ impl WfpProtectionSession {
             bootstrap_filter_ids,
             tunnel_luid: None,
             tunnel_filter_ids: Vec::new(),
+            native_rules: Vec::new(),
             probe_filter_ids: Vec::new(),
             probe_binary: None,
         })
@@ -251,6 +253,7 @@ impl ProtectionSession for WfpProtectionSession {
             self.bootstrap_filter_ids = replacement_ids;
         }
         self.tunnel_filter_ids.clear();
+        self.native_rules.clear();
         self.tunnel_luid = None;
         Ok(())
     }
@@ -304,6 +307,48 @@ impl ProtectionSession for WfpProtectionSession {
         Ok(())
     }
 
+    fn authorize_native_listeners(
+        &mut self,
+        application: &Path,
+        listeners: &[(std::net::IpAddr, u16)],
+    ) -> Result<(), RoutingError> {
+        let luid = self.tunnel_luid.ok_or_else(|| {
+            RoutingError::Route("the native listener needs an authorized tunnel".into())
+        })?;
+        if !(1..=2).contains(&listeners.len())
+            || listeners.iter().any(|(peer, port)| {
+                *port == 0 || peer.is_unspecified() || peer.is_loopback() || peer.is_multicast()
+            })
+            || !self.bootstrap_policy.rules.iter().any(|rule| {
+                rule.conditions
+                    .starts_with(&policy::engine_permit(application))
+            })
+        {
+            return Err(RoutingError::Unsupported);
+        }
+        let rules = policy::native_listeners(luid, application, listeners);
+        if self.native_rules == rules {
+            return Ok(());
+        }
+        if !self.native_rules.is_empty() {
+            return Err(RoutingError::Route(
+                "native listeners are already authorized".into(),
+            ));
+        }
+        let session = self.active_session()?;
+        let transaction = session.transaction()?;
+        let placement = Placement::session(self.lockdown);
+        let ids: Result<Vec<_>, _> = rules
+            .iter()
+            .map(|rule| filters::add_rule(session, rule, &placement))
+            .collect();
+        let ids = ids?;
+        transaction.commit()?;
+        self.tunnel_filter_ids.extend(ids);
+        self.native_rules = rules;
+        Ok(())
+    }
+
     fn remove_probe_binary(&mut self, binary: &Path) -> Result<(), RoutingError> {
         if self.probe_binary.as_deref() != Some(binary) {
             return Ok(());
@@ -324,10 +369,11 @@ impl ProtectionSession for WfpProtectionSession {
             return Ok(());
         }
         let placement = Placement::session(lockdown);
-        let tunnel_rules = self
+        let mut tunnel_rules = self
             .tunnel_luid
             .map(|luid| policy::tunnel_authorization(luid, lockdown))
             .unwrap_or_default();
+        tunnel_rules.extend(self.native_rules.iter().cloned());
         let probe_rules = self
             .probe_binary
             .as_deref()
@@ -372,6 +418,7 @@ impl ProtectionSession for WfpProtectionSession {
         self.probe_binary = None;
         self.bootstrap_filter_ids.clear();
         self.tunnel_filter_ids.clear();
+        self.native_rules.clear();
         self.tunnel_luid = None;
         Ok(())
     }

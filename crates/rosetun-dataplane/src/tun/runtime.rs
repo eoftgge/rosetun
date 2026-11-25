@@ -198,6 +198,7 @@ pub struct TunnelRuntime {
     thread: Option<JoinHandle<io::Result<()>>>,
     dns_threads: Vec<JoinHandle<()>>,
     clients: Arc<Clients>,
+    redirects: Vec<TcpRedirect>,
 }
 
 impl fmt::Debug for TunnelRuntime {
@@ -225,7 +226,7 @@ impl TunnelRuntime {
             });
             listeners.push(listener);
         }
-        let tcp = MixedTcp::new(redirects).map_err(io::Error::other)?;
+        let tcp = MixedTcp::new(redirects.iter().copied()).map_err(io::Error::other)?;
         let mut runtime = Self {
             device,
             table: ConnectionTable::new(),
@@ -233,6 +234,7 @@ impl TunnelRuntime {
             thread: None,
             dns_threads: Vec::new(),
             clients: Arc::new(Clients::default()),
+            redirects,
         };
         let mtu = usize::from(settings.mtu);
         let dns = runtime.start_dns_workers(&policy.dns, mtu)?;
@@ -305,6 +307,10 @@ impl TunnelRuntime {
         self.thread
             .as_ref()
             .is_some_and(|worker| !worker.is_finished())
+    }
+
+    pub fn redirects(&self) -> &[TcpRedirect] {
+        &self.redirects
     }
 
     pub fn traffic_probe(&self) -> Box<dyn TrafficProbe> {

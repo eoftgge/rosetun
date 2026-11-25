@@ -341,7 +341,11 @@ fn connection_mode(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
                 });
             });
         }
-        if cfg!(target_os = "linux") && !proxy {
+        if cfg!(any(
+            target_os = "linux",
+            all(windows, target_arch = "x86_64")
+        )) && !proxy
+        {
             let backend = state.config.settings.tun.backend;
             let pending = state
                 .status

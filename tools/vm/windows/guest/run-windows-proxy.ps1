@@ -515,6 +515,7 @@ function Write-ProxyRequests {
         $v = $variants[$name]
         $req = $baseJson | ConvertFrom-Json
         $req.settings | Add-Member -NotePropertyName connection_mode -NotePropertyValue $v.mode -Force
+        $req.settings.tun | Add-Member -NotePropertyName backend -NotePropertyValue 'native_mixed' -Force
         $req.settings | Add-Member -NotePropertyName kill_switch -NotePropertyValue $v.kill -Force
         $req.settings | Add-Member -NotePropertyName auto_reconnect -NotePropertyValue $true -Force
         $req.settings | Add-Member -NotePropertyName allow_lan -NotePropertyValue $v.lan -Force
@@ -525,6 +526,32 @@ function Write-ProxyRequests {
         })
         [IO.File]::WriteAllText((Join-Path $work $name), (ConvertTo-Json -InputObject $req -Depth 30), (New-Object Text.UTF8Encoding $false))
     }
+}
+
+function Install-LabWintun {
+    $length = 427552
+    $expected = 'E5DA8447DC2C320EDC0FC52FA01885C103DE8C118481F683643CACC3220DAFCE'
+    $engineBytes = [IO.File]::ReadAllBytes($singBoxPath)
+    $sha256 = [Security.Cryptography.SHA256]::Create()
+    try {
+        $offset = [Array]::IndexOf($engineBytes, [byte]0x4D, 0)
+        while ($offset -ge 0 -and $offset -le $engineBytes.Length - $length) {
+            if ($engineBytes[$offset + 1] -eq 0x5A) {
+                $hash = [BitConverter]::ToString($sha256.ComputeHash($engineBytes, $offset, $length)).Replace('-', '')
+                if ($hash -eq $expected) {
+                    $dll = [byte[]]::new($length)
+                    [Array]::Copy($engineBytes, $offset, $dll, 0, $length)
+                    [IO.File]::WriteAllBytes((Join-Path $bin 'wintun.dll'), $dll)
+                    return
+                }
+            }
+            $offset = [Array]::IndexOf($engineBytes, [byte]0x4D, $offset + 1)
+        }
+    }
+    finally {
+        $sha256.Dispose()
+    }
+    throw 'the supplied sing-box does not contain the pinned Wintun DLL'
 }
 
 $recorder = $null
@@ -581,6 +608,7 @@ try {
     Set-RosetunRecorder -Recorder $recorder
 
     Set-RosetunRunnerStep -Step 'helper'
+    Install-LabWintun
     $command = "set ROSETUN_LOG=debug&& `"$helperPath`" > `"$(Join-Path $logs 'helper.log')`" 2>&1"
     $action = New-ScheduledTaskAction -Execute 'cmd.exe' -Argument "/c $command" -WorkingDirectory $bin
     $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
@@ -671,7 +699,9 @@ try {
     }
 
     Set-RosetunRunnerStep -Step 'mode'
-    Test-Step -Id 'mode.tun' -Scenario 'mode' -Expectation 'connect TUN with kill switch' { Connect-ProxyVariant 'tun-strict.json' }
+    Test-Step -Id 'mode.tun' -Scenario 'mode' -Expectation 'connect NativeMixed with kill switch' {
+        (Connect-ProxyVariant 'tun-strict.json') -and (Wait-TunnelEgress)
+    }
     Start-ProxyEgressWatch
     $egressWatchActive = $true
     $watch = [pscustomobject]@{ Probes = 0; Leaks = 0 }

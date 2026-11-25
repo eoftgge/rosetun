@@ -108,6 +108,7 @@ Source: "{#BuildDir}\{#HelperExe}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\{#HelperExe}"; DestName: "{#TempHelperExe}"; Flags: dontcopy
 Source: "{#BuildDir}\rosetun.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SingBoxDir}\sing-box.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#SingBoxDir}\wintun.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#XrayDir}\xray.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#LicensesDir}\*"; DestDir: "{app}\licenses"; Flags: ignoreversion recursesubdirs
 

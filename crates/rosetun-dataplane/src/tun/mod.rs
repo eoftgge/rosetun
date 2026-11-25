@@ -31,9 +31,9 @@ pub use packet::{Packet, PacketError, Transport, udp_reply};
 pub use process_linux::LinuxProcessLookup;
 #[cfg(windows)]
 pub use process_windows::WindowsProcessLookup;
-#[cfg(windows)]
-pub use routes::InterfaceRoutes;
 pub use routes::{CaptureRoutes, RouteBackend, RouteLease};
+#[cfg(windows)]
+pub use routes::{InterfaceRoutes, WindowsRoutes};
 #[cfg(target_os = "linux")]
 pub use routes_linux::LinuxRoutes;
 #[cfg(target_os = "macos")]

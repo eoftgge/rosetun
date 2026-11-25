@@ -519,6 +519,12 @@ impl Dataplane {
             .is_none_or(|native| native.runtime.running())
     }
 
+    pub fn native_redirects(&self) -> &[crate::tun::TcpRedirect] {
+        self.native
+            .as_ref()
+            .map_or(&[], |native| native.runtime.redirects())
+    }
+
     /// Stops all listeners and closes active connections. Idempotent.
     pub fn shutdown(&mut self) {
         if let Some(entry) = &mut self.entry_server {

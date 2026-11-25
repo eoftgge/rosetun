@@ -352,6 +352,13 @@ pub(crate) trait ProtectionSession: std::fmt::Debug + Send {
         engine_binaries: &[&std::path::Path],
     ) -> Result<(), RoutingError>;
     fn authorize_tunnel(&mut self, tunnel: &TunnelInterface) -> Result<(), RoutingError>;
+    fn authorize_native_listeners(
+        &mut self,
+        _application: &std::path::Path,
+        _listeners: &[(std::net::IpAddr, u16)],
+    ) -> Result<(), RoutingError> {
+        Err(RoutingError::Unsupported)
+    }
     fn permit_probe_binary(&mut self, binary: &std::path::Path) -> Result<(), RoutingError>;
     fn remove_probe_binary(&mut self, binary: &std::path::Path) -> Result<(), RoutingError>;
     /// Moves every filter of the session into the Lockdown sublayer or back,
@@ -458,6 +465,18 @@ impl RoutingGuard {
             .as_mut()
             .ok_or_else(|| RoutingError::Route("routing protection is not active".to_owned()))?
             .permit_probe_binary(binary)
+    }
+
+    /// Authorizes only translated TCP from each configured synthetic peer.
+    pub fn authorize_native_listeners(
+        &mut self,
+        application: &std::path::Path,
+        listeners: &[(std::net::IpAddr, u16)],
+    ) -> Result<(), RoutingError> {
+        self.session
+            .as_mut()
+            .ok_or_else(|| RoutingError::Route("routing protection is not active".to_owned()))?
+            .authorize_native_listeners(application, listeners)
     }
 
     pub fn remove_probe_binary(&mut self, binary: &std::path::Path) -> Result<(), RoutingError> {

@@ -146,7 +146,7 @@ finally {
     Remove-Item -LiteralPath $xrayTemp -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-# Verify the embedded DLL without extracting or modifying the official executable.
+# Extract the pinned DLL from the unmodified official executable.
 $singBoxBytes = [IO.File]::ReadAllBytes($binary)
 $wintunFound = $false
 $sha256 = [Security.Cryptography.SHA256]::Create()
@@ -156,6 +156,9 @@ try {
         if ($singBoxBytes[$offset + 1] -eq 0x5A) {
             $candidateHash = [BitConverter]::ToString($sha256.ComputeHash($singBoxBytes, $offset, $wintunDllLength)).Replace('-', '')
             if ($candidateHash -eq $wintunDllHash) {
+                $wintunBytes = [byte[]]::new($wintunDllLength)
+                [Array]::Copy($singBoxBytes, $offset, $wintunBytes, 0, $wintunDllLength)
+                [IO.File]::WriteAllBytes((Join-Path $singBoxDir 'wintun.dll'), $wintunBytes)
                 $wintunFound = $true
                 break
             }
@@ -188,6 +191,7 @@ Set-Content -LiteralPath (Join-Path $licensesDir 'xray-source.txt') -Value $xray
 Copy-Item -LiteralPath (Join-Path $root 'installer/third-party/wintun-prebuilt-binaries-license.txt') -Destination $licensesDir
 $wintunNotice = @"
 The unmodified official sing-box $singBoxVersion executable embeds Wintun $wintunVersion.
+The NativeMixed backend loads a standalone copy of the same pinned DLL.
 The prebuilt Wintun DLL is copyrighted by WireGuard LLC and is distributed
 under the Wintun Prebuilt Binaries License; see wintun-prebuilt-binaries-license.txt.
 

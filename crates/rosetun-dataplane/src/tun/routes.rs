@@ -191,15 +191,171 @@ mod windows {
     use rosetun_config::IpPrefix;
     use windows_sys::Win32::Foundation::{ERROR_NOT_FOUND, NO_ERROR};
     use windows_sys::Win32::NetworkManagement::IpHelper::{
-        CreateIpForwardEntry2, DeleteIpForwardEntry2, IP_ADDRESS_PREFIX, InitializeIpForwardEntry,
-        MIB_IPFORWARD_ROW2,
+        CreateIpForwardEntry2, DeleteIpForwardEntry2, GetBestRoute2, IP_ADDRESS_PREFIX,
+        InitializeIpForwardEntry, MIB_IPFORWARD_ROW2,
     };
     use windows_sys::Win32::Networking::WinSock::{
         AF_INET, AF_INET6, IN_ADDR, IN_ADDR_0, IN6_ADDR, IN6_ADDR_0, SOCKADDR_IN, SOCKADDR_IN6,
         SOCKADDR_INET,
     };
 
+    use super::{CaptureRoutes, InterfaceRoutes, RouteLease};
+    use crate::tun::PhysicalEgress;
+
+    pub struct WindowsRoutes {
+        physical: PhysicalEgress,
+        ipv4: NonZeroU32,
+        ipv6: Option<NonZeroU32>,
+        capture: Option<RouteLease<InterfaceRoutes>>,
+        endpoints: Vec<(IpAddr, MIB_IPFORWARD_ROW2)>,
+    }
+
+    impl std::fmt::Debug for WindowsRoutes {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("WindowsRoutes").finish_non_exhaustive()
+        }
+    }
+
+    impl WindowsRoutes {
+        /// Looks up physical routes before the tunnel installs any routes.
+        pub fn before_capture() -> io::Result<Self> {
+            let ipv4 = interface_of(best_route(0, Ipv4Addr::new(203, 0, 113, 193).into())?)?;
+            let ipv6 = best_route(0, Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0x193).into())
+                .and_then(interface_of)
+                .ok();
+            Ok(Self {
+                physical: PhysicalEgress::new(Some(ipv4), ipv6),
+                ipv4,
+                ipv6,
+                capture: None,
+                endpoints: Vec::new(),
+            })
+        }
+
+        pub fn physical(&self) -> PhysicalEgress {
+            self.physical
+        }
+
+        pub fn capture(
+            &mut self,
+            interface: NonZeroU32,
+            plan: &CaptureRoutes,
+            endpoints: &[IpAddr],
+        ) -> io::Result<()> {
+            if self.capture.is_some() || self.ipv4 == interface || self.ipv6 == Some(interface) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "invalid native route interface",
+                ));
+            }
+            self.ensure_endpoints(endpoints)?;
+            self.capture = Some(RouteLease::install(InterfaceRoutes::new(interface), plan)?);
+            Ok(())
+        }
+
+        pub fn ensure_endpoints(&mut self, endpoints: &[IpAddr]) -> io::Result<()> {
+            for &address in endpoints {
+                if self
+                    .endpoints
+                    .iter()
+                    .any(|(existing, _)| *existing == address)
+                {
+                    continue;
+                }
+                let physical = if address.is_ipv4() {
+                    Some(self.ipv4)
+                } else {
+                    self.ipv6
+                }
+                .ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::NetworkUnreachable,
+                        "no physical route for server address family",
+                    )
+                })?;
+                let best = best_route(physical.get(), address)?;
+                let prefix = IpPrefix::new(address, if address.is_ipv4() { 32 } else { 128 })
+                    .ok_or_else(|| {
+                        io::Error::new(io::ErrorKind::InvalidInput, "invalid server route")
+                    })?;
+                // A pre-existing exact physical route has the precedence we
+                // need. It remains owned by the program that installed it.
+                if best.DestinationPrefix.PrefixLength == prefix.length() {
+                    continue;
+                }
+                let mut row = row_for(physical, prefix);
+                row.NextHop = best.NextHop;
+                apply(&row, true)?;
+                self.endpoints.push((address, row));
+            }
+            Ok(())
+        }
+
+        pub fn retain_endpoints(&mut self, endpoints: &[IpAddr]) -> io::Result<()> {
+            let mut index = 0;
+            while index < self.endpoints.len() {
+                let (address, row) = &self.endpoints[index];
+                if endpoints.contains(address) {
+                    index += 1;
+                } else {
+                    apply(row, false)?;
+                    self.endpoints.remove(index);
+                }
+            }
+            Ok(())
+        }
+
+        pub fn close(&mut self) -> io::Result<()> {
+            if let Some(capture) = self.capture.as_mut() {
+                capture.close()?;
+            }
+            self.capture.take();
+            self.retain_endpoints(&[])
+        }
+    }
+
+    impl Drop for WindowsRoutes {
+        fn drop(&mut self) {
+            if self.close().is_err() {
+                tracing::error!("could not remove the native Windows routes");
+            }
+        }
+    }
+
+    fn interface_of(row: MIB_IPFORWARD_ROW2) -> io::Result<NonZeroU32> {
+        NonZeroU32::new(row.InterfaceIndex).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NetworkUnreachable, "route has no interface")
+        })
+    }
+
+    fn best_route(interface: u32, target: IpAddr) -> io::Result<MIB_IPFORWARD_ROW2> {
+        let address = sockaddr(target);
+        let mut route = MIB_IPFORWARD_ROW2::default();
+        let mut source = SOCKADDR_INET::default();
+        // SAFETY: Destination and both output structs have the SDK layout.
+        // The API borrows them during this routing lookup and sends no packet.
+        let code = unsafe {
+            GetBestRoute2(
+                std::ptr::null(),
+                interface,
+                std::ptr::null(),
+                &raw const address,
+                0,
+                &raw mut route,
+                &raw mut source,
+            )
+        };
+        if code != NO_ERROR {
+            return Err(io::Error::from_raw_os_error(code as i32));
+        }
+        Ok(route)
+    }
+
     pub(super) fn change(interface: NonZeroU32, prefix: IpPrefix, add: bool) -> io::Result<()> {
+        apply(&row_for(interface, prefix), add)
+    }
+
+    fn row_for(interface: NonZeroU32, prefix: IpPrefix) -> MIB_IPFORWARD_ROW2 {
         let mut row = MIB_IPFORWARD_ROW2::default();
         // SAFETY: The row is initialized writable storage with the Windows ABI.
         // IP Helper fills its defaults synchronously before we use it.
@@ -215,12 +371,16 @@ mod windows {
             sockaddr(Ipv6Addr::UNSPECIFIED.into())
         };
         row.Metric = 0;
+        row
+    }
+
+    fn apply(row: &MIB_IPFORWARD_ROW2, add: bool) -> io::Result<()> {
         // SAFETY: The row owns all input values. Calls do not retain its pointer.
         let code = unsafe {
             if add {
-                CreateIpForwardEntry2(&raw const row)
+                CreateIpForwardEntry2(row)
             } else {
-                DeleteIpForwardEntry2(&raw const row)
+                DeleteIpForwardEntry2(row)
             }
         };
         match code {
@@ -255,6 +415,9 @@ mod windows {
         }
     }
 }
+
+#[cfg(windows)]
+pub use windows::WindowsRoutes;
 
 #[cfg(test)]
 mod tests {

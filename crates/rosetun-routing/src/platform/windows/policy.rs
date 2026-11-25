@@ -551,6 +551,32 @@ pub(super) fn tunnel_authorization(luid: u64, lockdown: bool) -> Vec<Rule> {
     rules
 }
 
+pub(super) fn native_listeners(
+    luid: u64,
+    application: &Path,
+    listeners: &[(IpAddr, u16)],
+) -> Vec<Rule> {
+    listeners
+        .iter()
+        .filter_map(|&(peer, port)| {
+            let prefix = IpPrefix::new(peer, if peer.is_ipv4() { 32 } else { 128 })?;
+            let subnet = Subnet::from(prefix);
+            let mut conditions = vec![Condition::RemoteSubnet(subnet)];
+            conditions.extend(engine_permit(application));
+            conditions.extend([
+                Condition::Protocol(TCP),
+                Condition::LocalPort(port),
+                Condition::LocalInterface(luid),
+            ]);
+            Some(
+                Rule::allow(subnet.family(), conditions, TUNNEL_WEIGHT)
+                    .inbound()
+                    .hard(),
+            )
+        })
+        .collect()
+}
+
 #[cfg(test)]
 pub(super) mod tests {
     use std::net::IpAddr;
