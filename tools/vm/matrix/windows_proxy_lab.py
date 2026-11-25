@@ -137,8 +137,13 @@ class ProxyProfile:
         return guest.after(text, proxy=True)
 
     def judge(self, config, lab_id, seen, plain):
+        node = lab_protocol.GATEWAYS[4]
+        port = config['lab']['tunnel']['node_port']
+        # The strict window includes NativeMixed, whose UDP associations
+        # can use the same authenticated Shadowsocks endpoint.
+        endpoints = {'strict': ((node, 'tcp', port), (node, 'udp', port))}
         lab.judge(config, lab_id, seen, plain, labels=self.labels, window_allowances=self.window_allowances,
-                  proxy_port=self.proxy_port)
+                  window_tunnel_endpoints=endpoints, proxy_port=self.proxy_port)
 
     def window_verdicts(self, verdict):
         windows = {row['label']: row for row in (verdict or {}).get('windows', []) if row['label'] in self.labels}
