@@ -658,7 +658,7 @@ fn apply_notice_centers_text_against_the_link() {
     theme::apply(&ctx);
     let mut output = ctx.run_ui(egui::RawInput::default(), |ctx| {
         egui::CentralPanel::default().show(ctx, |ui| {
-            let (label, link, revert) = apply_notice(ui, true, true);
+            let (label, link, revert) = apply_notice(ui, true, true, "hint");
             let link = link.expect("an applicable change shows the link");
             let revert = revert.expect("a revertible change shows the revert link");
             assert!(
@@ -679,7 +679,7 @@ fn apply_notice_has_no_link_when_the_change_waits_for_reconnect() {
     theme::apply(&ctx);
     let mut output = ctx.run_ui(egui::RawInput::default(), |ctx| {
         egui::CentralPanel::default().show(ctx, |ui| {
-            let (_, link, revert) = apply_notice(ui, false, false);
+            let (_, link, revert) = apply_notice(ui, false, false, "hint");
             assert!(link.is_none());
             assert!(revert.is_none());
         });

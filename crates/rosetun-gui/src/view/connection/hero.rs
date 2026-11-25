@@ -669,8 +669,13 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                                             .small()
                                             .color(theme::palette().accent_light),
                                     );
+                                    let hint = if state.apply_restarts_tunnel() {
+                                        tr!("apply-hint")
+                                    } else {
+                                        tr!("apply-hint-live")
+                                    };
                                     if widgets::link(ui, &tr!("apply"), true)
-                                        .on_hover_text(tr!("apply-hint"))
+                                        .on_hover_text(hint)
                                         .clicked()
                                     {
                                         actions.push(Action::Apply);

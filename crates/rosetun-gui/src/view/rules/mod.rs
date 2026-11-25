@@ -134,7 +134,11 @@ fn undo_notice(ctx: &egui::Context, state: &State, actions: &mut Vec<Action>) {
     };
     let undo = tr!("undo");
     let apply = tr!("apply");
-    let apply_hint = tr!("apply-hint");
+    let apply_hint = if state.apply_restarts_tunnel() {
+        tr!("apply-hint")
+    } else {
+        tr!("apply-hint-live")
+    };
     let mut choices = vec![widgets::NoticeAction {
         label: &undo,
         hint: None,
@@ -181,7 +185,12 @@ fn tab_body(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
     );
     if pending_apply {
         ui.add_space(theme::space::XS);
-        let (_, link, revert) = apply_notice(ui, can_apply, can_revert);
+        let apply_hint = if state.apply_restarts_tunnel() {
+            tr!("apply-hint")
+        } else {
+            tr!("apply-hint-live")
+        };
+        let (_, link, revert) = apply_notice(ui, can_apply, can_revert, &apply_hint);
         apply_clicked = link.is_some_and(|link| link.clicked());
         revert_clicked = revert.is_some_and(|revert| revert.clicked());
     }
@@ -310,6 +319,7 @@ fn apply_notice(
     ui: &mut egui::Ui,
     can_apply: bool,
     can_revert: bool,
+    apply_hint: &str,
 ) -> (
     egui::Response,
     Option<egui::Response>,
@@ -330,8 +340,8 @@ fn apply_notice(
                 .small()
                 .color(theme::palette().text_muted),
         );
-        let link = can_apply
-            .then(|| widgets::link(ui, &tr!("apply-now"), true).on_hover_text(tr!("apply-hint")));
+        let link =
+            can_apply.then(|| widgets::link(ui, &tr!("apply-now"), true).on_hover_text(apply_hint));
         let revert = can_revert.then(|| {
             widgets::link(ui, &tr!("revert-rules"), true).on_hover_text(tr!("revert-rules-hint"))
         });

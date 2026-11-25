@@ -720,6 +720,7 @@ apply-separator = { " " }·{ " " }
 not-applied = Not applied yet
 apply-on-leave = Applies when you leave this tab
 apply-hint = The tunnel restarts for a couple of seconds.
+apply-hint-live = Applies without reconnecting.
 apply-failed-restored-template = The rules could not be applied: { $reason }. The previous rules are back.
 apply-rollback-failed-template = The rules could not be applied: { $reason }. Could not restore the previous rules: { $error }
 restore-my-edits = Restore my edits

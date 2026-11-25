@@ -351,17 +351,13 @@ fn connection_mode(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
                 .status
                 .tun_backend
                 .is_some_and(|running| running != backend);
-            let hint = if pending {
-                tr!("next-connect")
-            } else {
-                tr!("native-tun-requires-protection")
-            };
+            let detail = tr!("native-tun-requires-protection");
             card.row_with_title(
                 |ui| {
                     ui.vertical(|ui| {
                         ui.spacing_mut().item_spacing.y = theme::space::XXS;
                         ui.label(RichText::new(tr!("tun-backend")).color(theme::palette().text));
-                        widgets::row_detail(ui, &hint, pending);
+                        widgets::row_detail(ui, &detail, pending);
                     });
                 },
                 None,
@@ -773,8 +769,13 @@ fn apply_note(ui: &mut egui::Ui, state: &State, part: SessionPart, actions: &mut
         ui.spacing_mut().item_spacing.x = 0.0;
         ui.label(RichText::new(tr!("apply-on-leave")).small().color(muted));
         ui.label(RichText::new(tr!("apply-separator")).small().color(muted));
+        let hint = if state.apply_restarts_tunnel() {
+            tr!("apply-hint")
+        } else {
+            tr!("apply-hint-live")
+        };
         if widgets::link(ui, &tr!("apply-now"), true)
-            .on_hover_text(tr!("apply-hint"))
+            .on_hover_text(hint)
             .clicked()
         {
             actions.push(Action::Apply);
@@ -2675,6 +2676,33 @@ mod pending_notice_tests {
                 tr!("next-connect-note")
             )]
         );
+    }
+
+    #[cfg(any(target_os = "linux", all(windows, target_arch = "x86_64")))]
+    #[test]
+    fn the_tun_backend_note_does_not_repeat_when_pending() {
+        for language in LANGUAGES {
+            i18n::in_language(language, || {
+                let (size, _) = WINDOWS[0];
+                let mut state = connected(ConnectionState::Connected);
+                state.status.tun_backend = Some(rosetun_config::TunBackend::SingTun);
+                state.config.settings.tun.backend = rosetun_config::TunBackend::NativeMixed;
+                let expected = format!(
+                    "{} {}",
+                    tr!("native-tun-requires-protection"),
+                    tr!("next-connect-note")
+                );
+                let shown = TestScreen::new(size)
+                    .settle(|ui| connection_mode(ui, &mut state, &mut Vec::new()));
+                let notes = with_note(&shown);
+                assert_eq!(notes, [expected]);
+                assert_eq!(
+                    notes[0].matches(&tr!("next-connect-note")).count(),
+                    1,
+                    "note must not duplicate"
+                );
+            });
+        }
     }
 
     #[test]

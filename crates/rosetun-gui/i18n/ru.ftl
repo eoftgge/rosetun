@@ -735,6 +735,7 @@ apply-separator = { " " }·{ " " }
 not-applied = Ещё не применено
 apply-on-leave = Применится, когда вы уйдёте с вкладки
 apply-hint = Туннель перезапустится на пару секунд.
+apply-hint-live = Применится без переподключения.
 apply-failed-restored-template = Правила не применились: { $reason }. Вернули прежние.
 apply-rollback-failed-template = Правила не применились: { $reason }. Не удалось вернуть прежние: { $error }
 restore-my-edits = Вернуть мои правки

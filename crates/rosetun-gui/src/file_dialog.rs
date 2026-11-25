@@ -42,7 +42,7 @@ pub(crate) fn pick_file(
     }
     #[cfg(not(any(windows, target_os = "linux")))]
     {
-        let _ = (title, filter);
+        let _ = (title, filter.map(|filter| (filter.name, filter.extensions)));
         Err(Unavailable)
     }
 }
