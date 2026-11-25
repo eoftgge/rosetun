@@ -190,7 +190,7 @@ function Record-NativeCounters {
         Select-Object -Last 1
     if ($null -eq $counterLine) { return }
     $plain = $counterLine.Line -replace '\x1b\[[0-9;]*m', ''
-    foreach ($name in @('frames', 'bad_checksum', 'tcp', 'written', 'write_errors', 'accepted')) {
+    foreach ($name in @('frames', 'bad_checksum', 'tcp', 'written', 'write_errors', 'accepted', 'relay_up', 'relay_down')) {
         if ($plain -match "(?:^|\s)$name=(\d+)") {
             Add-RosetunRunnerNote -Name "$Prefix-$name" -Value ([long]$Matches[1])
         }

@@ -202,6 +202,7 @@ struct PumpCounters {
 
 impl Drop for Pump {
     fn drop(&mut self) {
+        let totals = self.table.totals();
         tracing::debug!(
             frames = self.counters.frames,
             bad_checksum = self.counters.bad_checksum,
@@ -209,6 +210,8 @@ impl Drop for Pump {
             written = self.counters.written,
             write_errors = self.counters.write_errors,
             accepted = self.counters.accepted,
+            relay_up = totals.up,
+            relay_down = totals.down,
             "native packet pump counters"
         );
     }
@@ -442,7 +445,9 @@ impl Pump {
                     .name("rosetun-tun-tcp".into())
                     .spawn(move || {
                         let _client = client;
-                        let _ = tunnel_tcp(stream, flow, &policy, &table, &stopped);
+                        if let Err(error) = tunnel_tcp(stream, flow, &policy, &table, &stopped) {
+                            tracing::debug!(kind = ?error.kind(), "native TCP worker ended with an error");
+                        }
                         let _ = closed.send(peer);
                     })
                     .is_err()
