@@ -212,8 +212,8 @@ mod windows {
     use rosetun_config::IpPrefix;
     use windows_sys::Win32::Foundation::{ERROR_NOT_FOUND, NO_ERROR};
     use windows_sys::Win32::NetworkManagement::IpHelper::{
-        CreateIpForwardEntry2, DeleteIpForwardEntry2, GetBestRoute2, IP_ADDRESS_PREFIX,
-        InitializeIpForwardEntry, MIB_IPFORWARD_ROW2,
+        CreateIpForwardEntry2, DeleteIpForwardEntry2, FlushIpPathTable, GetBestRoute2,
+        IP_ADDRESS_PREFIX, InitializeIpForwardEntry, MIB_IPFORWARD_ROW2,
     };
     use windows_sys::Win32::Networking::WinSock::{
         AF_INET, AF_INET6, IN_ADDR, IN_ADDR_0, IN6_ADDR, IN6_ADDR_0, SOCKADDR_IN, SOCKADDR_IN6,
@@ -255,6 +255,16 @@ mod windows {
 
         pub fn physical(&self) -> PhysicalEgress {
             self.physical
+        }
+
+        pub fn refresh_paths(&self, ipv6: bool) -> io::Result<()> {
+            // Existing paths survive changes to the route table across a
+            // mode switch. Invalidate them before the new mode is published.
+            flush(AF_INET)?;
+            if ipv6 {
+                flush(AF_INET6)?;
+            }
+            Ok(())
         }
 
         pub fn capture(
@@ -350,6 +360,17 @@ mod windows {
         NonZeroU32::new(row.InterfaceIndex).ok_or_else(|| {
             io::Error::new(io::ErrorKind::NetworkUnreachable, "route has no interface")
         })
+    }
+
+    fn flush(family: u16) -> io::Result<()> {
+        // SAFETY: The caller supplies AF_INET or AF_INET6. The API takes
+        // the family by value and does not borrow or return memory.
+        let code = unsafe { FlushIpPathTable(family) };
+        if code == NO_ERROR {
+            Ok(())
+        } else {
+            Err(io::Error::from_raw_os_error(code as i32))
+        }
     }
 
     fn best_route(interface: u32, target: IpAddr) -> io::Result<MIB_IPFORWARD_ROW2> {

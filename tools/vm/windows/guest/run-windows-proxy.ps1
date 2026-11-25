@@ -731,7 +731,9 @@ try {
         Test-Step -Id 'mode.proxy' -Scenario 'mode' -Expectation 'proxy carries traffic after apply' { Wait-ProxyCarries }
         $toTun = Invoke-ProxyCli -Arguments @('apply', (Join-Path $work 'tun-strict.json')) -Seconds 60
         Test-Step -Id 'mode.to-tun' -Scenario 'mode' -Expectation 'apply proxy to TUN' -Note "exit $($toTun.ExitCode)" { $toTun.ExitCode -eq 0 }
+        $script:TunnelCurlExit = -1
         Test-Step -Id 'mode.tunnel' -Scenario 'mode' -Expectation 'TUN adapter returns and carries traffic' { Wait-TunnelEgress }
+        Add-RosetunRunnerNote -Name 'mode-native-reconnect-curl-exit' -Value $script:TunnelCurlExit
     }
     finally {
         $watch = Stop-ProxyEgressWatch
@@ -742,6 +744,7 @@ try {
         $watch.Probes -gt 0 -and $watch.Leaks -eq 0
     }
     [void](Disconnect-ProxySession)
+    Record-NativeCounters -Prefix 'mode-native-reconnect'
     [void](Send-RosetunMarker -Plan $plan -Label 'strict' -Word 'close')
     $openWindow = $null
 

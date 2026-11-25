@@ -83,6 +83,9 @@ impl NativeTun {
             )
             .map_err(route_error)?,
         );
+        self.routes
+            .refresh_paths(self.settings.ipv6.is_some())
+            .map_err(route_error)?;
         Ok(())
     }
 
@@ -98,7 +101,15 @@ impl NativeTun {
 
     pub(super) fn close(&mut self) -> Result<(), HelperError> {
         self.resolver.take();
-        self.routes.close().map_err(route_error)
+        self.routes.close().map_err(route_error)?;
+        if self
+            .routes
+            .refresh_paths(self.settings.ipv6.is_some())
+            .is_err()
+        {
+            tracing::warn!("could not refresh IP paths after closing the native tunnel");
+        }
+        Ok(())
     }
 }
 
