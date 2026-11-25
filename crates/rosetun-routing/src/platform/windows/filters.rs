@@ -405,6 +405,20 @@ impl FilterConditions {
                 let descriptor = account.insert(AccountDescriptor::current()?);
                 conditions.extend([application_condition(blob), account_condition(descriptor)]);
             }
+            // System proxy egress belongs to the helper and its service account.
+            [
+                Condition::Application(binary),
+                Condition::ServiceAccount,
+                Condition::Protocol(protocol),
+            ] => {
+                let blob = app_id.insert(AppIdBlob::from_path(binary)?);
+                let descriptor = account.insert(AccountDescriptor::current()?);
+                conditions.extend([
+                    application_condition(blob),
+                    account_condition(descriptor),
+                    protocol_condition(*protocol),
+                ]);
+            }
             [Condition::LocalInterface(_)] => {
                 conditions.push(interface_condition(&mut luids[0]));
             }
@@ -1013,6 +1027,9 @@ mod tests {
                         shared_proxy: Some(10808),
                     };
                     rules.extend(BootstrapPolicy::from_plan(&plan, &[&program, &program]).rules);
+                    let mut system_proxy = plan.clone();
+                    system_proxy.proxy_application = Some(program.clone());
+                    rules.extend(BootstrapPolicy::from_plan(&system_proxy, &[&program]).rules);
                     let mut around_servers = plan.clone();
                     around_servers.lan.segment =
                         around_servers.lan.segment.leaving_out(&server_addresses());
