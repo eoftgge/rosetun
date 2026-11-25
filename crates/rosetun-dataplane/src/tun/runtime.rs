@@ -19,9 +19,17 @@ use super::{
 use crate::conntable::{ConnectionMeta, ConnectionTable, Registration};
 use crate::dns::DnsService;
 use crate::net::{Dialer, Host, Target, UdpPath};
-use crate::proxy::{Outbounds, Verdict, relay::relay, server::Clients};
+#[cfg(not(windows))]
+use crate::proxy::relay::relay as native_relay;
+#[cfg(windows)]
+use crate::proxy::relay::relay_ready as native_relay;
+use crate::proxy::{Outbounds, Verdict, server::Clients};
 use crate::rules::{Flow, Route, RuleEngine};
-use crate::sniff::{SniffLimits, sniff_quic_datagram, sniff_stream};
+#[cfg(not(windows))]
+use crate::sniff::sniff_stream as native_sniff;
+#[cfg(windows)]
+use crate::sniff::sniff_stream_ready as native_sniff;
+use crate::sniff::{SniffLimits, sniff_quic_datagram};
 
 const PUMP_INTERVAL: Duration = Duration::from_millis(5);
 const FLOW_TIMEOUT: Duration = Duration::from_secs(5);
@@ -682,7 +690,7 @@ fn tunnel_tcp(
     if flow.destination.port() == 53 {
         return tcp_dns(&mut stream, policy.dns.as_ref(), stopped);
     }
-    let sniffed = sniff_stream(&mut stream, &SniffLimits::default())?;
+    let sniffed = native_sniff(&mut stream, &SniffLimits::default())?;
     let domain = sniffed.sniffed.and_then(|sniffed| sniffed.domain);
     let Some(selected) = policy.select(&flow, ConnectionNetwork::Tcp, domain) else {
         return Ok(());
@@ -694,7 +702,7 @@ fn tunnel_tcp(
     let upstream = selected
         .dialer
         .connect(&target(flow.destination), FLOW_TIMEOUT)?;
-    relay(&stream, &upstream, &registration, &sniffed.buffered);
+    native_relay(&stream, &upstream, &registration, &sniffed.buffered);
     Ok(())
 }
 

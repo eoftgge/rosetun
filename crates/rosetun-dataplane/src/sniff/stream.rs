@@ -65,10 +65,25 @@ impl Drop for RestoreReadTimeout<'_> {
 pub fn sniff_stream(stream: &mut TcpStream, limits: &SniffLimits) -> io::Result<StreamSniff> {
     let previous = stream.read_timeout().ok().flatten();
     let guard = RestoreReadTimeout { stream, previous };
-    sniff_stream_inner(guard.stream, limits)
+    sniff_stream_inner(guard.stream, limits, |stream, wait| {
+        stream.set_read_timeout(Some(wait)).map(|()| true)
+    })
 }
 
-fn sniff_stream_inner(stream: &mut TcpStream, limits: &SniffLimits) -> io::Result<StreamSniff> {
+#[cfg(windows)]
+pub(crate) fn sniff_stream_ready(
+    stream: &mut TcpStream,
+    limits: &SniffLimits,
+) -> io::Result<StreamSniff> {
+    stream.set_nonblocking(true)?;
+    sniff_stream_inner(stream, limits, crate::socket_ready::readable)
+}
+
+fn sniff_stream_inner(
+    stream: &mut TcpStream,
+    limits: &SniffLimits,
+    wait: impl Fn(&TcpStream, Duration) -> io::Result<bool>,
+) -> io::Result<StreamSniff> {
     if limits.max_bytes == 0 || limits.timeout.is_zero() {
         return Ok(StreamSniff {
             sniffed: None,
@@ -85,10 +100,9 @@ fn sniff_stream_inner(stream: &mut TcpStream, limits: &SniffLimits) -> io::Resul
             Some(end) => end.saturating_duration_since(Instant::now()),
             None => limits.timeout,
         };
-        if remaining.is_zero() {
+        if remaining.is_zero() || !wait(stream, remaining)? {
             break;
         }
-        stream.set_read_timeout(Some(remaining))?;
 
         let want = chunk.len().min(limits.max_bytes - buffered.len());
         match stream.read(&mut chunk[..want]) {

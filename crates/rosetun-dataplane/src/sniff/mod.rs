@@ -19,6 +19,8 @@ use std::fmt;
 
 pub use http::probe_http;
 pub use quic::{QuicProgress, QuicSniffer, sniff_quic_datagram};
+#[cfg(windows)]
+pub(crate) use stream::sniff_stream_ready;
 pub use stream::{SniffLimits, StreamSniff, sniff_stream};
 pub use tls::probe_tls;
 

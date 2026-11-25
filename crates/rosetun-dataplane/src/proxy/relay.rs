@@ -11,6 +11,48 @@ const BUFFER_BYTES: usize = 16 * 1024;
 // Windows can keep an in-flight receive blocked after shutdown on a cloned socket.
 const CANCELLATION_POLL: Duration = Duration::from_millis(250);
 
+#[derive(Clone, Copy)]
+enum SocketIo {
+    Timeouts,
+    #[cfg(windows)]
+    Readiness,
+}
+
+impl SocketIo {
+    fn configure(self, stream: &TcpStream) -> io::Result<()> {
+        match self {
+            Self::Timeouts => {
+                stream.set_read_timeout(Some(CANCELLATION_POLL))?;
+                stream.set_write_timeout(Some(CANCELLATION_POLL))
+            }
+            #[cfg(windows)]
+            Self::Readiness => stream.set_nonblocking(true),
+        }
+    }
+
+    fn retry(self, error: &io::Error, _stream: &TcpStream, _receiving: bool) -> bool {
+        match self {
+            Self::Timeouts => matches!(
+                error.kind(),
+                io::ErrorKind::Interrupted | io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+            ),
+            #[cfg(windows)]
+            Self::Readiness => match error.kind() {
+                io::ErrorKind::Interrupted => true,
+                io::ErrorKind::WouldBlock => {
+                    let wait = if _receiving {
+                        crate::socket_ready::readable
+                    } else {
+                        crate::socket_ready::writable
+                    };
+                    wait(_stream, CANCELLATION_POLL).is_ok()
+                }
+                _ => false,
+            },
+        }
+    }
+}
+
 /// Copies both directions until both sides finish. `preface` goes to the
 /// outbound first (bytes the sniffer or the HTTP parser already consumed).
 /// Closing the connection through the table shuts both sockets down, which
@@ -21,10 +63,28 @@ pub(crate) fn relay(
     registration: &Registration,
     preface: &[u8],
 ) {
+    relay_inner(client, upstream, registration, preface, SocketIo::Timeouts);
+}
+
+#[cfg(windows)]
+pub(crate) fn relay_ready(
+    client: &TcpStream,
+    upstream: &TcpStream,
+    registration: &Registration,
+    preface: &[u8],
+) {
+    relay_inner(client, upstream, registration, preface, SocketIo::Readiness);
+}
+
+fn relay_inner(
+    client: &TcpStream,
+    upstream: &TcpStream,
+    registration: &Registration,
+    preface: &[u8],
+    io: SocketIo,
+) {
     for stream in [client, upstream] {
-        if stream.set_read_timeout(Some(CANCELLATION_POLL)).is_err()
-            || stream.set_write_timeout(Some(CANCELLATION_POLL)).is_err()
-        {
+        if io.configure(stream).is_err() {
             shutdown_both(client, upstream);
             return;
         }
@@ -33,7 +93,7 @@ pub(crate) fn relay(
     let counters = registration.counters();
     let stopped = || registration.is_closed();
     if !preface.is_empty() {
-        if !write_cancellable(upstream, preface, &stopped) {
+        if !write_cancellable(upstream, preface, &stopped, io) {
             shutdown_both(client, upstream);
             return;
         }
@@ -43,30 +103,40 @@ pub(crate) fn relay(
         let down = thread::Builder::new()
             .name("dataplane-relay".to_owned())
             .spawn_scoped(scope, || {
-                pump(upstream, client, &stopped, |bytes| counters.add_down(bytes));
+                pump(upstream, client, &stopped, io, |bytes| {
+                    counters.add_down(bytes);
+                });
             });
         if down.is_err() {
             shutdown_both(client, upstream);
             return;
         }
-        pump(client, upstream, &stopped, |bytes| counters.add_up(bytes));
+        pump(client, upstream, &stopped, io, |bytes| {
+            counters.add_up(bytes);
+        });
     });
 }
 
-fn pump(from: &TcpStream, to: &TcpStream, stopped: &impl Fn() -> bool, count: impl Fn(u64)) {
+fn pump(
+    from: &TcpStream,
+    to: &TcpStream,
+    stopped: &impl Fn() -> bool,
+    io: SocketIo,
+    count: impl Fn(u64),
+) {
     let mut buffer = vec![0u8; BUFFER_BYTES];
     let mut reader = from;
     while !stopped() {
         match reader.read(&mut buffer) {
             Ok(0) => break,
             Ok(read) => {
-                if !write_cancellable(to, &buffer[..read], stopped) {
+                if !write_cancellable(to, &buffer[..read], stopped, io) {
                     shutdown_both(from, to);
                     return;
                 }
                 count(read as u64);
             }
-            Err(error) if retry(&error) => {}
+            Err(error) if io.retry(&error, from, true) => {}
             Err(_) => {
                 shutdown_both(from, to);
                 return;
@@ -76,23 +146,21 @@ fn pump(from: &TcpStream, to: &TcpStream, stopped: &impl Fn() -> bool, count: im
     to.shutdown(Shutdown::Write).ok();
 }
 
-fn write_cancellable(mut stream: &TcpStream, mut data: &[u8], stopped: &impl Fn() -> bool) -> bool {
+fn write_cancellable(
+    mut stream: &TcpStream,
+    mut data: &[u8],
+    stopped: &impl Fn() -> bool,
+    io: SocketIo,
+) -> bool {
     while !data.is_empty() && !stopped() {
         match stream.write(data) {
             Ok(0) => return false,
             Ok(written) => data = &data[written..],
-            Err(error) if retry(&error) => {}
+            Err(error) if io.retry(&error, stream, false) => {}
             Err(_) => return false,
         }
     }
     data.is_empty()
-}
-
-fn retry(error: &io::Error) -> bool {
-    matches!(
-        error.kind(),
-        io::ErrorKind::Interrupted | io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
-    )
 }
 
 fn shutdown_both(a: &TcpStream, b: &TcpStream) {

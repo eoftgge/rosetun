@@ -15,6 +15,12 @@ pub mod net;
 pub mod proxy;
 pub mod rules;
 pub mod sniff;
+#[cfg(windows)]
+#[expect(
+    unsafe_code,
+    reason = "socket readiness without timing out Windows TCP I/O"
+)]
+mod socket_ready;
 pub mod tun;
 
 pub use dataplane::{
