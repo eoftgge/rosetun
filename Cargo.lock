@@ -2930,6 +2930,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "rosetun-dataplane"
+version = "0.7.0"
+dependencies = [
+ "flate2",
+ "getrandom 0.4.3",
+ "regex-automata",
+ "ring",
+ "rosetun-config",
+ "rosetun-core",
+ "rosetun-engine",
+ "rosetun-ipc",
+ "rustls",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tracing",
+ "webpki-roots",
+]
+
+[[package]]
 name = "rosetun-dns"
 version = "0.7.0"
 dependencies = [

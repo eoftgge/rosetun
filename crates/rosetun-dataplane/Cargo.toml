@@ -1,0 +1,29 @@
+[package]
+name = "rosetun-dataplane"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+flate2.workspace = true
+getrandom.workspace = true
+regex-automata.workspace = true
+ring.workspace = true
+rosetun-config.workspace = true
+rosetun-engine.workspace = true
+rustls.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+webpki-roots.workspace = true
+
+[dev-dependencies]
+# Parity tests only: the data plane never depends on the client domain at run time.
+rosetun-core.workspace = true
+rosetun-ipc.workspace = true
+
+[lints]
+workspace = true
