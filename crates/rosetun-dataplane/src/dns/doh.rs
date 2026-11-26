@@ -23,6 +23,7 @@ const DEFAULT_PATH: &str = "/dns-query";
 const MAX_HEADER_BYTES: usize = 16 * 1024;
 const MAX_BODY_BYTES: usize = 64 * 1024;
 const MAX_CHUNK_LINE_BYTES: usize = 1024;
+const MAX_POOLED_CONNECTIONS: usize = 8;
 
 type TlsStream = StreamOwned<ClientConnection, TcpStream>;
 
@@ -46,7 +47,7 @@ pub struct DohClient {
     timeout: Duration,
     tls_config: Arc<ClientConfig>,
     dialer: RwLock<DialerState>,
-    pool: Mutex<Option<PooledConnection>>,
+    pool: Mutex<Vec<PooledConnection>>,
 }
 
 impl fmt::Debug for DohClient {
@@ -131,7 +132,7 @@ impl DohClient {
                 dialer,
                 generation: 0,
             }),
-            pool: Mutex::new(None),
+            pool: Mutex::new(Vec::new()),
         })
     }
 
@@ -140,8 +141,8 @@ impl DohClient {
             state.dialer = dialer;
             state.generation = state.generation.wrapping_add(1);
         }
-        if let Ok(mut slot) = self.pool.lock() {
-            *slot = None;
+        if let Ok(mut pool) = self.pool.lock() {
+            pool.clear();
         }
     }
 
@@ -183,13 +184,13 @@ impl DohClient {
     }
 
     fn take_pooled(&self, generation: u64) -> Option<TlsStream> {
-        let mut slot = self.pool.lock().ok()?;
-        let conn = slot.take()?;
-        if conn.generation == generation {
-            Some(conn.stream)
-        } else {
-            None
+        let mut pool = self.pool.lock().ok()?;
+        while let Some(conn) = pool.pop() {
+            if conn.generation == generation {
+                return Some(conn.stream);
+            }
         }
+        None
     }
 
     fn put_pooled(&self, stream: TlsStream, generation: u64) {
@@ -200,10 +201,11 @@ impl DohClient {
         if current_gen != generation {
             return;
         }
-        if let Ok(mut slot) = self.pool.lock()
-            && slot.is_none()
-        {
-            *slot = Some(PooledConnection { generation, stream });
+        if let Ok(mut pool) = self.pool.lock() {
+            pool.retain(|conn| conn.generation == generation);
+            if pool.len() < MAX_POOLED_CONNECTIONS {
+                pool.push(PooledConnection { generation, stream });
+            }
         }
     }
 

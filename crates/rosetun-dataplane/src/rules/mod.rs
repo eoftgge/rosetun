@@ -52,6 +52,7 @@ pub mod private;
 mod source;
 mod srs;
 
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::net::IpAddr;
@@ -314,9 +315,13 @@ impl RuleEngine {
                 RuleMatcher::Domain(DomainMatch::Keyword(keyword)) => {
                     CompiledMatcher::DomainKeyword(keyword.to_lowercase())
                 }
-                RuleMatcher::Process(ProcessMatch::Name(name)) => {
-                    CompiledMatcher::ProcessName(name.clone())
-                }
+                RuleMatcher::Process(ProcessMatch::Name(name)) => CompiledMatcher::ProcessName(
+                    if cfg!(windows) {
+                        name.to_lowercase()
+                    } else {
+                        name.clone()
+                    },
+                ),
                 RuleMatcher::Process(ProcessMatch::Path(path)) => {
                     CompiledMatcher::ProcessPath(path.to_string_lossy().into_owned())
                 }
@@ -369,7 +374,13 @@ impl RuleEngine {
             };
         }
 
-        let lowered_domain = flow.domain.map(str::to_lowercase);
+        let lowered_domain = flow.domain.map(|domain| {
+            if domain.is_ascii() && !domain.bytes().any(|b| b.is_ascii_uppercase()) {
+                Cow::Borrowed(domain)
+            } else {
+                Cow::Owned(domain.to_lowercase())
+            }
+        });
         let mut ctx = EvalCtx::new(lowered_domain.as_deref(), flow.ip, flow.process, resolver);
 
         for rule in &self.rules {
@@ -473,14 +484,24 @@ impl<'a, 'r> EvalCtx<'a, 'r> {
 
 /// Matches a rule by executable name against a full program path, matching
 /// case-insensitively on Windows only as `rosetun-core::explain` does.
+/// `name` is already lowercased at compile time on Windows.
 fn ends_with_program(path: &str, name: &str) -> bool {
-    let (path, name) = if cfg!(windows) {
-        (path.to_lowercase(), name.to_lowercase())
+    if cfg!(windows) {
+        if path.is_ascii() && name.is_ascii() {
+            let Some(split) = path.len().checked_sub(name.len()) else {
+                return false;
+            };
+            return (split == 0 || matches!(path.as_bytes()[split - 1], b'\\' | b'/'))
+                && path[split..].eq_ignore_ascii_case(name);
+        }
+        let lower = path.to_lowercase();
+        lower
+            .strip_suffix(name)
+            .is_some_and(|rest| rest.is_empty() || rest.ends_with(['\\', '/']))
     } else {
-        (path.to_owned(), name.to_owned())
-    };
-    path.strip_suffix(&name)
-        .is_some_and(|rest| rest.is_empty() || rest.ends_with(['\\', '/']))
+        path.strip_suffix(name)
+            .is_some_and(|rest| rest.is_empty() || rest.ends_with(['\\', '/']))
+    }
 }
 
 #[cfg(test)]

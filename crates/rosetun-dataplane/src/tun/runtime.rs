@@ -1,11 +1,11 @@
-use std::collections::HashMap;
 use std::collections::hash_map::Entry;
+use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError};
-use std::sync::{Arc, PoisonError, RwLock};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender};
+use std::sync::{Arc, Condvar, Mutex, PoisonError, RwLock};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -41,7 +41,7 @@ const UDP_QUEUE: usize = 512;
 const UDP_RECV_BUDGET: usize = 32;
 const MAX_CLIENTS: usize = 512;
 const DNS_WORKERS: usize = 4;
-const DNS_QUEUE: usize = 32;
+const DNS_QUEUE_CAPACITY: usize = 128;
 const PACKET_BUDGET: usize = 64;
 
 /// Determines the owner of the original, untranslated local connection.
@@ -196,6 +196,54 @@ struct Datagram {
     payload: Vec<u8>,
 }
 
+struct DnsQueue {
+    queries: Mutex<VecDeque<Datagram>>,
+    ready: Condvar,
+    capacity: usize,
+}
+
+impl DnsQueue {
+    fn new(capacity: usize) -> Self {
+        Self {
+            queries: Mutex::new(VecDeque::with_capacity(capacity)),
+            ready: Condvar::new(),
+            capacity,
+        }
+    }
+
+    fn try_push(&self, query: Datagram) -> bool {
+        let mut queries = self.queries.lock().unwrap_or_else(PoisonError::into_inner);
+        if queries.len() >= self.capacity {
+            return false;
+        }
+        queries.push_back(query);
+        self.ready.notify_one();
+        true
+    }
+
+    fn pop(&self, stopped: &AtomicBool) -> Option<Datagram> {
+        let mut queries = self.queries.lock().unwrap_or_else(PoisonError::into_inner);
+        loop {
+            if stopped.load(Ordering::Acquire) {
+                return None;
+            }
+            if let Some(query) = queries.pop_front() {
+                return Some(query);
+            }
+            queries = self
+                .ready
+                .wait(queries)
+                .unwrap_or_else(PoisonError::into_inner);
+        }
+    }
+
+    fn shutdown(&self) {
+        let mut queries = self.queries.lock().unwrap_or_else(PoisonError::into_inner);
+        queries.clear();
+        self.ready.notify_all();
+    }
+}
+
 struct Pump {
     device: Arc<dyn PacketDevice>,
     policy: Arc<TunnelPolicy>,
@@ -204,8 +252,7 @@ struct Pump {
     local_ips: Vec<IpAddr>,
     tcp: MixedTcp,
     udp: SyncSender<Datagram>,
-    dns: Vec<SyncSender<Datagram>>,
-    dns_worker: usize,
+    dns: Arc<DnsQueue>,
     clients: Arc<Clients>,
     stopped: Arc<AtomicBool>,
     mtu: usize,
@@ -257,6 +304,7 @@ pub struct TunnelRuntime {
     table: ConnectionTable,
     stopped: Arc<AtomicBool>,
     thread: Option<JoinHandle<io::Result<()>>>,
+    dns_queue: Arc<DnsQueue>,
     dns_threads: Vec<JoinHandle<()>>,
     udp_thread: Option<JoinHandle<()>>,
     clients: Arc<Clients>,
@@ -294,13 +342,14 @@ impl TunnelRuntime {
             table: ConnectionTable::new(),
             stopped: Arc::new(AtomicBool::new(false)),
             thread: None,
+            dns_queue: Arc::new(DnsQueue::new(DNS_QUEUE_CAPACITY)),
             dns_threads: Vec::new(),
             udp_thread: None,
             clients: Arc::new(Clients::default()),
             redirects,
         };
         let mtu = usize::from(settings.mtu);
-        let dns = runtime.start_dns_workers(&policy.dns, mtu)?;
+        runtime.start_dns_workers(&policy.dns, mtu)?;
         let udp = runtime.start_udp_worker(&policy, mtu)?;
         let mut pump = Pump {
             device: Arc::clone(&runtime.device),
@@ -316,8 +365,7 @@ impl TunnelRuntime {
             .collect(),
             tcp,
             udp,
-            dns,
-            dns_worker: 0,
+            dns: Arc::clone(&runtime.dns_queue),
             clients: Arc::clone(&runtime.clients),
             stopped: Arc::clone(&runtime.stopped),
             mtu,
@@ -356,14 +404,9 @@ impl TunnelRuntime {
         Ok(sender)
     }
 
-    fn start_dns_workers(
-        &mut self,
-        dns: &Arc<DnsService>,
-        mtu: usize,
-    ) -> io::Result<Vec<SyncSender<Datagram>>> {
-        let mut senders = Vec::new();
+    fn start_dns_workers(&mut self, dns: &Arc<DnsService>, mtu: usize) -> io::Result<()> {
         for _ in 0..DNS_WORKERS {
-            let (tx, rx) = mpsc::sync_channel::<Datagram>(DNS_QUEUE);
+            let queue = Arc::clone(&self.dns_queue);
             let device = Arc::clone(&self.device);
             let dns = Arc::clone(dns);
             let stopped = Arc::clone(&self.stopped);
@@ -372,12 +415,13 @@ impl TunnelRuntime {
                     .name("rosetun-tun-dns".into())
                     .spawn(move || {
                         let mut reply_packet = Vec::with_capacity(mtu);
-                        while let Ok(query) = rx.recv() {
-                            if stopped.load(Ordering::Acquire) {
-                                break;
-                            }
+                        while let Some(query) = queue.pop(&stopped) {
                             if let Ok(reply) = dns.exchange(&query.payload) {
-                                let header_overhead = if query.flow.source.is_ipv4() { 28 } else { 48 };
+                                let header_overhead = if query.flow.source.is_ipv4() {
+                                    28
+                                } else {
+                                    48
+                                };
                                 let max_payload = mtu.saturating_sub(header_overhead);
                                 let reply = crate::dns::truncate_udp_reply(
                                     &query.payload,
@@ -396,9 +440,8 @@ impl TunnelRuntime {
                         }
                     })?,
             );
-            senders.push(tx);
         }
-        Ok(senders)
+        Ok(())
     }
 
     pub fn running(&self) -> bool {
@@ -425,6 +468,7 @@ impl TunnelRuntime {
 
     pub fn shutdown(&mut self) -> io::Result<()> {
         self.stopped.store(true, Ordering::Release);
+        self.dns_queue.shutdown();
         let interrupted = self.device.interrupt();
         self.table.shutdown();
         let result = self.thread.take().map_or(Ok(()), |worker| {
@@ -570,21 +614,10 @@ impl Pump {
             destination: parsed.destination(),
         };
         if flow.destination.port() == 53 {
-            let query = Datagram {
+            let _ = self.dns.try_push(Datagram {
                 flow,
                 payload: payload.to_vec(),
-            };
-            let mut pending = query;
-            for _ in 0..self.dns.len() {
-                let index = self.dns_worker;
-                self.dns_worker = (index + 1) % self.dns.len();
-                match self.dns[index].try_send(pending) {
-                    Ok(()) => return,
-                    Err(TrySendError::Full(query) | TrySendError::Disconnected(query)) => {
-                        pending = query;
-                    }
-                }
-            }
+            });
             return;
         }
         // Opening a SOCKS association, looking up processes, and resolving
@@ -1010,8 +1043,7 @@ mod tests {
             }])
             .unwrap(),
             udp: sender,
-            dns: Vec::new(),
-            dns_worker: 0,
+            dns: Arc::new(DnsQueue::new(DNS_QUEUE_CAPACITY)),
             clients: Arc::new(Clients::default()),
             stopped: Arc::clone(&stopped),
             mtu: 1500,
