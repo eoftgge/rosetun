@@ -1110,6 +1110,9 @@ fn xray(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                 let node = state.running_node();
                 // No server name here: providers often name nodes by their address,
                 // and this screen ends up in screenshots.
+                let direct = status.protection.connection_mode
+                    == Some(ConnectionMode::SystemProxy)
+                    || status.tun_backend == Some(rosetun_config::TunBackend::NativeMixed);
                 let current = if status.xray {
                     match node {
                         Some(node)
@@ -1118,12 +1121,26 @@ fn xray(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                                 rosetun_config::Transport::Xhttp { .. }
                             ) =>
                         {
-                            tr!("xray-current-xhttp")
+                            if direct {
+                                tr!("xray-current-xhttp-direct")
+                            } else {
+                                tr!("xray-current-xhttp")
+                            }
                         }
                         Some(node) if matches!(&node.stream.tls, TlsMode::Reality(_)) => {
-                            tr!("xray-current-reality")
+                            if direct {
+                                tr!("xray-current-reality-direct")
+                            } else {
+                                tr!("xray-current-reality")
+                            }
                         }
-                        _ => tr!("xray-current-chained"),
+                        _ => {
+                            if direct {
+                                tr!("xray-current-direct")
+                            } else {
+                                tr!("xray-current-chained")
+                            }
+                        }
                     }
                 } else {
                     tr!("xray-current-singbox")

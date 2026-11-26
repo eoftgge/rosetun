@@ -826,12 +826,19 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                             detail_row(ui, tr!("engine"), |ui| {
                                 if visible_status.is_some_and(|status| status.xray) {
                                     ui.vertical(|ui| {
-                                        let label = if visible_status
-                                            .is_some_and(|status| status.fragmented)
-                                        {
-                                            tr!("fragment-engine-active")
-                                        } else {
-                                            tr!("xray-engine")
+                                        let direct = visible_status.is_some_and(|status| {
+                                            status.protection.connection_mode
+                                                == Some(rosetun_config::ConnectionMode::SystemProxy)
+                                                || status.tun_backend
+                                                    == Some(rosetun_config::TunBackend::NativeMixed)
+                                        });
+                                        let fragmented = visible_status
+                                            .is_some_and(|status| status.fragmented);
+                                        let label = match (direct, fragmented) {
+                                            (true, true) => tr!("fragment-engine-direct"),
+                                            (true, false) => tr!("xray-engine-direct"),
+                                            (false, true) => tr!("fragment-engine-active"),
+                                            (false, false) => tr!("xray-engine"),
                                         };
                                         ui.add(egui::Label::new(label).truncate())
                                             .on_hover_text(tr!("xray-engine-detail"));
