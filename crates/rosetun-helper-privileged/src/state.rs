@@ -16,7 +16,6 @@ mod native_tun;
 #[cfg(all(windows, target_arch = "x86_64"))]
 #[path = "state/native_tun_windows.rs"]
 mod native_tun;
-mod path;
 mod probe;
 mod protection;
 mod proxy_session;
@@ -31,7 +30,7 @@ mod tests;
 mod watchdog;
 
 use std::collections::HashMap;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs};
+use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -40,13 +39,11 @@ use std::time::{Duration, Instant, SystemTime};
 
 use rosetun_config::{
     ConnectionState, ExitId, ListRef, LiveConnection, LocalProxySettings, Node,
-    ProtectionCapabilities, ProtectionShortfallCode, Rule, RuleMatcher, RuleTarget, Status,
-    Traffic, fragments_tls, list_tag,
+    ProtectionCapabilities, Rule, RuleMatcher, RuleTarget, Status, Traffic, list_tag,
 };
 use rosetun_engine::{
-    ControlEndpoint, DelayInbound, EngineBackend, EngineProcess, EngineRegistry, EngineRights,
-    PROXY_TAG, RenderRequest, RenderedConfig, TrafficProbe, TrafficTotals, UrlTestTarget,
-    errors::EngineError, exit_tag, url_test_any,
+    EngineProcess, EngineRegistry, EngineRights, RenderedConfig, TrafficProbe, TrafficTotals,
+    errors::EngineError,
 };
 use rosetun_engine_xray::{SocksEndpoint, XrayHelper};
 use rosetun_ipc::transport::{AccountIdentity, PeerIdentity};
@@ -54,9 +51,7 @@ use rosetun_ipc::{
     ConnectRequest, ErrorCode, HelperError, ListFormat, MAX_EXTRA_NODES, MAX_TEMPORARY_RULES,
     SessionExit,
 };
-use rosetun_routing::{
-    LockdownApps, ProtectionScope, RoutingBackend, RoutingPlan, TunnelInterface,
-};
+use rosetun_routing::{LockdownApps, ProtectionScope, RoutingBackend, RoutingPlan};
 
 use crate::list_store::{ListChunk, ListStore, valid_hash, valid_tag};
 use crate::log_gate::VerboseGate;
@@ -69,7 +64,6 @@ const SLOW_START_READY_TIMEOUT: Duration = Duration::from_secs(45);
 const TUNNEL_READY_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const TUNNEL_DNS_TIMEOUT: Duration = Duration::from_secs(60);
 const TUNNEL_DNS_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(1);
-const PATH_LOOKUP_TIMEOUT: Duration = Duration::from_secs(1);
 const TRAFFIC_POLL_INTERVAL: Duration = Duration::from_secs(1);
 /// A connection that opens and closes between two polls is never seen, so
 /// the list is polled more often while someone reads it.
@@ -79,24 +73,14 @@ const WATCHED_POLL_INTERVAL: Duration = Duration::from_millis(250);
 /// poll's jitter does not skip a window.
 const RATE_WINDOW: Duration = Duration::from_millis(900);
 const MONITOR_TICK: Duration = Duration::from_millis(50);
-const SERVER_CHECK_INTERVAL: Duration = Duration::from_secs(4);
-const SERVER_CHECK_GRACE: Duration = Duration::from_secs(30);
-const SERVER_CHECK_TIMEOUT: Duration = Duration::from_secs(4);
-const SERVER_CHECK_FAILURES: u64 = 3;
 /// Starts repeated when the engine reports that Windows is still removing the
 /// previous tunnel adapter; the next start one or two seconds later succeeds.
-const ADAPTER_BUSY_RETRIES: u32 = 2;
-#[cfg(not(test))]
-const ADAPTER_BUSY_RETRY_DELAY: Duration = Duration::from_secs(2);
-#[cfg(test)]
-const ADAPTER_BUSY_RETRY_DELAY: Duration = Duration::from_millis(10);
 const WATCHDOG_TIMING: WatchdogTiming = WatchdogTiming {
     interval: Duration::from_secs(30),
     retry: Duration::from_secs(5),
     dns_timeout: Duration::from_secs(5),
     path_timeout: Duration::from_secs(5),
     failures: 3,
-    path_server: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)), 80),
 };
 /// Failed automatic attempts before the helper gives up.
 const RECONNECT_ATTEMPTS: u32 = 5;
@@ -201,8 +185,6 @@ pub struct Helper {
     protection: ProtectionCapabilities,
     /// Why the kill switch is missing, for the refusal of a connect.
     protection_unavailable: Option<String>,
-    /// Why engines cannot read programs here, if they cannot.
-    process_rights_unavailable: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -366,11 +348,9 @@ struct Session {
     routing: Box<dyn RoutingBackend>,
     gate: VerboseGate,
     status: Arc<Mutex<Status>>,
-    process: Option<Box<dyn EngineProcess>>,
-    xray_process: Option<Box<dyn EngineProcess>>,
     xray: Option<Arc<dyn XrayRunner>>,
     physical_interface: fn(&str) -> Option<String>,
-    control: Option<ControlEndpoint>,
+    tunnel_egress: Option<String>,
     proxy_session: Option<proxy_session::ProxySession>,
     monitor: Option<TrafficMonitor>,
     connections: Arc<Mutex<ConnectionBook>>,
@@ -380,19 +360,12 @@ struct Session {
     /// `utun6` on macOS when the configured name is `rosetun0`).
     active_tun_name: Option<String>,
     shared_active_tun: Arc<Mutex<Option<String>>>,
-    #[cfg(target_os = "macos")]
-    macos_dns: Option<system_dns_macos::MacosSystemDns>,
-    path_addresses: Arc<Mutex<Vec<Ipv4Addr>>>,
     protection: protection::ProtectionRuntime,
     last_endpoint: Option<SuccessfulEndpoint>,
     /// Last addresses of extra nodes by exit, for reconnects that cannot resolve.
     last_extra_endpoints: HashMap<ExitId, SuccessfulEndpoint>,
     /// Each exit's outbound tag in the running config, `None` without an address.
     exit_tags: Vec<(ExitId, Option<String>)>,
-    /// Whether the running session started Xray for any node.
-    xray_chain: bool,
-    /// Physical interface Xray's outbound sockets are bound to for this session.
-    xray_interface: Option<String>,
     request: Option<ConnectRequest>,
     owner: Arc<Mutex<Option<AccountIdentity>>>,
     reconnect: Option<Reconnect>,
@@ -402,11 +375,8 @@ struct Session {
     stopping: bool,
     dns_timeout: Duration,
     dns_attempt_timeout: Duration,
-    server_check_interval: Duration,
-    server_check_grace: Duration,
     watchdog_timing: WatchdogTiming,
     adapter_lookup: fn(&str) -> std::io::Result<bool>,
-    adapter_state: fn(&str) -> std::io::Result<Option<rosetun_routing::TunnelAdapterState>>,
     name_lookup: fn(&str, u16, NameLookup) -> Result<Vec<IpAddr>, Unresolved>,
     /// How long a connect waits for the network to look the server name up.
     network_wait: Duration,
@@ -434,6 +404,8 @@ struct Session {
     /// Stands in for the engine's loopback DNS in the proxy mode.
     #[cfg(test)]
     test_local_dns: Option<SocketAddr>,
+    #[cfg(test)]
+    test_tun_name: Option<String>,
 }
 
 impl std::fmt::Debug for Helper {
@@ -468,7 +440,6 @@ impl Helper {
         Self {
             protection,
             protection_unavailable,
-            process_rights_unavailable: None,
             lockdown: Arc::clone(&lockdown),
             protection_report: Arc::clone(&protection_report),
             status: Arc::clone(&status),
@@ -494,14 +465,12 @@ impl Helper {
                 routing,
                 gate,
                 status,
-                process: None,
-                xray_process: None,
                 xray: None,
                 #[cfg(not(test))]
                 physical_interface: rosetun_routing::physical_default_interface,
                 #[cfg(test)]
                 physical_interface: test_physical_interface,
-                control: None,
+                tunnel_egress: None,
                 proxy_session: None,
                 monitor: None,
                 connections,
@@ -509,15 +478,10 @@ impl Helper {
                 tunnel_dns: None,
                 active_tun_name: None,
                 shared_active_tun: active_tun,
-                #[cfg(target_os = "macos")]
-                macos_dns: None,
-                path_addresses: Arc::new(Mutex::new(Vec::new())),
                 protection: protection::ProtectionRuntime::new(protection_report),
                 last_endpoint: None,
                 last_extra_endpoints: HashMap::new(),
                 exit_tags: Vec::new(),
-                xray_chain: false,
-                xray_interface: None,
                 request: None,
                 owner,
                 reconnect: None,
@@ -527,8 +491,6 @@ impl Helper {
                 stopping: false,
                 dns_timeout: TUNNEL_DNS_TIMEOUT,
                 dns_attempt_timeout: TUNNEL_DNS_ATTEMPT_TIMEOUT,
-                server_check_interval: SERVER_CHECK_INTERVAL,
-                server_check_grace: SERVER_CHECK_GRACE,
                 watchdog_timing: WATCHDOG_TIMING,
                 cancelled,
                 lists: None,
@@ -548,14 +510,12 @@ impl Helper {
                 lan: lan::LanRuntime::default(),
                 #[cfg(test)]
                 test_local_dns: None,
+                #[cfg(test)]
+                test_tun_name: None,
                 #[cfg(not(test))]
                 adapter_lookup: rosetun_routing::tunnel_adapter_present,
                 #[cfg(test)]
                 adapter_lookup: |_| Ok(false),
-                #[cfg(not(test))]
-                adapter_state: rosetun_routing::tunnel_adapter_state,
-                #[cfg(test)]
-                adapter_state: |_| Ok(None),
                 name_lookup: lookup_name,
                 #[cfg(not(test))]
                 network_wait: NETWORK_WAIT,
@@ -615,15 +575,6 @@ impl Helper {
     #[cfg(any(target_os = "linux", test))]
     pub(crate) fn with_upgrade_marker(mut self, marker: PathBuf) -> Self {
         self.upgrade_marker = Some(marker);
-        self
-    }
-
-    #[cfg(any(target_os = "linux", test))]
-    pub(crate) fn with_process_rights_unavailable(mut self, reason: Option<String>) -> Self {
-        if let Some(reason) = reason.as_deref() {
-            tracing::warn!(reason, "rules by program are not available");
-        }
-        self.process_rights_unavailable = reason;
         self
     }
 
@@ -723,19 +674,7 @@ impl Helper {
                 "rules by program are unavailable in local proxy mode",
             ));
         }
-        if native_tun_requested(request) {
-            return Ok(());
-        }
-        let Some(reason) = self.process_rights_unavailable.as_deref() else {
-            return Ok(());
-        };
-        if EngineRights::for_rules(&request.effective_rule_set()) == EngineRights::Network {
-            return Ok(());
-        }
-        Err(HelperError::new(
-            ErrorCode::UnsupportedRules,
-            format!("rules by program are not available on this system: {reason}"),
-        ))
+        Ok(())
     }
 
     pub fn status(&self) -> Status {
@@ -827,36 +766,11 @@ impl Helper {
         }
         if let Some(proxy) = &session.proxy_session {
             proxy.dataplane.close_connection(id);
-            return Ok(());
         }
-        let Some(control) = session.control.clone() else {
-            return Ok(());
-        };
-        drop(session);
-        let unavailable = || {
-            HelperError::new(
-                ErrorCode::EngineFailed,
-                "the connected engine is unavailable",
-            )
-        };
-        let engine = self
-            .with_status(|status| status.engine)
-            .ok_or_else(unavailable)?;
-        let backend = self.engines.get_shared(engine).ok_or_else(unavailable)?;
-        // Neither the id nor the destination is logged: both identify what the
-        // user was doing.
-        if let Err(error) = backend.close_connection(&control, id) {
-            tracing::warn!(%error, "failed to close a connection on request");
-            return Err(HelperError::new(
-                ErrorCode::EngineFailed,
-                "the engine did not close the connection",
-            ));
-        }
-        tracing::info!("closed a connection on request");
         Ok(())
     }
 
-    /// `false` without a session owner, so there is nothing to show.
+    /// Returns false without a session owner, so there is nothing to show.
     fn check_connections_owner(&self, caller: &Caller) -> Result<bool, HelperError> {
         let owner = self.owner.lock().map_err(|_| access_denied())?;
         match owner.as_ref() {
@@ -867,11 +781,6 @@ impl Helper {
                 "only the account that connected the tunnel can read its connections",
             )),
         }
-    }
-
-    #[cfg(test)]
-    pub fn session_exits(&self) -> Result<Vec<SessionExit>, HelperError> {
-        self.session_exits_as(&test_caller())
     }
 
     #[cfg(test)]
@@ -1009,7 +918,7 @@ impl Helper {
             let expired = session
                 .missing_route_since
                 .is_some_and(|since| now.saturating_duration_since(since) >= NETWORK_GRACE);
-            let has_engine = session.process.is_some() || session.proxy_session.is_some();
+            let has_engine = session.proxy_session.is_some();
             let exited = has_engine && !session.live_engine_running();
             if has_engine && (expired || exited) {
                 tracing::info!(
@@ -1030,7 +939,11 @@ impl Helper {
                 .is_some_and(|reconnect| reconnect.cause == "network lost");
             if from_network_loss
                 && loss_duration.is_some_and(|duration| duration < NETWORK_GRACE)
-                && (session.process.is_some() || session.proxy_session.is_some())
+                && session.proxy_session.is_some()
+                && session
+                    .tunnel_egress
+                    .as_ref()
+                    .is_none_or(|interface| Some(interface) == current_physical.as_ref())
                 && session.live_engine_running()
             {
                 tracing::info!("checking live tunnel after physical network returned");
@@ -1086,31 +999,10 @@ impl Helper {
                 return;
             }
         } else {
-            let (xray_exited, exited) = if let Some(proxy) = session.proxy_session.as_mut() {
-                proxy.exited()
-            } else {
-                let xray_exited = if session.request.is_some() && session.xray_chain {
-                    match session.xray_process.as_mut() {
-                        Some(process) => !matches!(process.is_running(), Ok(true)),
-                        None => true,
-                    }
-                } else {
-                    false
-                };
-                let exited = if xray_exited {
-                    Some("Xray stopped".to_owned())
-                } else {
-                    match session.process.as_mut() {
-                        Some(process) => match process.is_running() {
-                            Ok(true) => None,
-                            Ok(false) => Some("the engine process exited".to_owned()),
-                            Err(error) => Some(error.to_string()),
-                        },
-                        None => Some("the engine process is missing".to_owned()),
-                    }
-                };
-                (xray_exited, exited)
-            };
+            let (xray_exited, exited) = session.proxy_session.as_mut().map_or_else(
+                || (false, Some("the dataplane is missing".to_owned())),
+                proxy_session::ProxySession::exited,
+            );
             if let Some(reason) = exited {
                 if xray_exited {
                     self.with_status(|status| status.xray_stopped = true);
@@ -1120,9 +1012,7 @@ impl Helper {
                     tracing::warn!(%reason, protected, "the engine terminated itself");
                     if !protected {
                         session.teardown();
-                    } else if (xray_exited || session.proxy_session.is_some())
-                        && let Err(error) = session.stop_engine()
-                    {
+                    } else if let Err(error) = session.stop_engine() {
                         tracing::error!(%error, "failed to stop the remaining engine processes");
                     }
                     self.with_status(|status| {
@@ -1186,23 +1076,15 @@ impl Helper {
                     next_at: now,
                     cause: "dns stalled",
                 });
-            } else if session.xray_chain
-                && session.xray_interface.is_some()
-                && current_physical != session.xray_interface
+            } else if session
+                .tunnel_egress
+                .as_ref()
+                .is_some_and(|interface| Some(interface) != current_physical.as_ref())
             {
                 if !auto_reconnect {
-                    tracing::warn!(
-                        previous = ?session.xray_interface,
-                        current = ?current_physical,
-                        "physical interface changed while Xray is bound to the old one; auto-reconnect is off"
-                    );
+                    tracing::warn!("the physical TUN egress changed; auto-reconnect is disabled");
                     return;
                 }
-                tracing::info!(
-                    previous = ?session.xray_interface,
-                    current = ?current_physical,
-                    "physical interface changed for Xray; reconnecting"
-                );
                 self.begin_attempt(ConnectionState::Reconnecting);
                 session.reconnect = Some(Reconnect {
                     failures: 0,
@@ -1259,12 +1141,12 @@ impl Helper {
                 self.publish_terminal(|status| {
                     status.state = ConnectionState::Connected;
                     status.reconnect_failure_kind = None;
-                    status.record_chain(&request.node, &request.settings);
+                    session.record_chain(status, &request);
                     status.since_unix.get_or_insert_with(now_unix);
                 })
             }) {
             Ok(()) => {
-                session.start_monitor(request.settings.engine);
+                session.start_monitor();
                 session.start_watchdog();
                 tracing::info!(cause = reconnect.cause, attempt, "tunnel reconnected");
             }
@@ -1410,7 +1292,7 @@ impl Helper {
                 status.state = ConnectionState::Connected;
                 status.node = Some(request.node.id.clone());
                 status.engine = Some(request.settings.engine);
-                status.record_chain(&request.node, &request.settings);
+                session.record_chain(status, request);
                 status.since_unix = Some(now_unix());
             })
         }) {
@@ -1423,7 +1305,7 @@ impl Helper {
                 if let Err(error) = session.release_upgrade_hold("connected") {
                     tracing::error!(%error, "could not lift the upgrade hold after connecting");
                 }
-                session.start_monitor(request.settings.engine);
+                session.start_monitor();
                 session.start_watchdog();
                 if caller.administrator
                     && previous_owner
@@ -1722,27 +1604,20 @@ fn validate_tun_name(name: &str) -> Result<(), HelperError> {
 
 fn native_tun_requested(request: &ConnectRequest) -> bool {
     request.settings.connection_mode == rosetun_config::ConnectionMode::Tun
-        && request.settings.tun.backend == rosetun_config::TunBackend::NativeMixed
 }
 
 fn validate_request(request: &ConnectRequest) -> Result<(), HelperError> {
-    if native_tun_requested(request) {
-        if !cfg!(any(
+    if native_tun_requested(request)
+        && !cfg!(any(
             target_os = "linux",
             target_os = "macos",
             all(windows, target_arch = "x86_64")
-        )) {
-            return Err(HelperError::new(
-                ErrorCode::ProtectionUnavailable,
-                "native TUN is unavailable on this platform",
-            ));
-        }
-        if !request.settings.tun.auto_route {
-            return Err(HelperError::new(
-                ErrorCode::ProtectionUnavailable,
-                "native TUN requires automatic routes",
-            ));
-        }
+        ))
+    {
+        return Err(HelperError::new(
+            ErrorCode::ProtectionUnavailable,
+            "native TUN is unavailable on this platform",
+        ));
     }
     for node in
         std::iter::once(&request.node).chain(request.extra_nodes.iter().map(|extra| &extra.node))
@@ -2067,50 +1942,6 @@ impl Session {
         self.active_tun_name.as_deref().unwrap_or(&tun.name)
     }
 
-    fn bind_actual_tunnel_interface(&mut self, tun: &rosetun_config::TunSettings) {
-        let actual = self
-            .process
-            .as_ref()
-            .and_then(|process| process.tunnel_interface());
-        #[cfg(target_os = "macos")]
-        let actual = actual.or_else(|| {
-            if cfg!(test) {
-                return None;
-            }
-            let ipv4 = tun
-                .ipv4
-                .split_once('/')
-                .and_then(|(address, _)| address.parse::<Ipv4Addr>().ok())?;
-            match rosetun_routing::tunnel_interface_by_ipv4(ipv4) {
-                Ok(found) => found,
-                Err(error) => {
-                    tracing::warn!(%error, "could not inspect macOS utun interfaces");
-                    None
-                }
-            }
-        });
-        if let Some(interface) = actual {
-            if interface != tun.name || cfg!(target_os = "macos") {
-                tracing::info!(
-                    interface = %interface,
-                    configured = %tun.name,
-                    "bound to actual TUN interface"
-                );
-            }
-            *self
-                .shared_active_tun
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(interface.clone());
-            self.active_tun_name = Some(interface);
-        } else {
-            *self
-                .shared_active_tun
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
-            self.active_tun_name = None;
-        }
-    }
-
     fn wait_for_previous_adapter(&self, alias: &str) -> Result<(), HelperError> {
         self.stage(rosetun_config::ConnectStage::WaitingForAdapter)?;
         wait_for_previous_adapter_cancellable(
@@ -2256,50 +2087,6 @@ impl Session {
         Ok(())
     }
 
-    fn stage_lists(&self, references: &[ListRef]) -> Result<(), HelperError> {
-        self.clear_staged_lists()?;
-        if references.is_empty() {
-            return Ok(());
-        }
-        let directory = self.list_run_dir.as_ref().ok_or_else(|| {
-            HelperError::new(ErrorCode::Internal, "list run directory is unavailable")
-        })?;
-        std::fs::create_dir_all(directory).map_err(|_| {
-            HelperError::new(ErrorCode::Internal, "cannot create the list run directory")
-        })?;
-        let lists = self.lists.as_ref().ok_or_else(|| {
-            HelperError::new(ErrorCode::ListMissing, "list storage is unavailable")
-        })?;
-        for reference in references {
-            let source = lists
-                .lock()
-                .map_err(|_| HelperError::new(ErrorCode::Internal, "list storage is unavailable"))?
-                .verified_path_for_staging(reference)?;
-            let name = format!("{}.{}", reference.tag, reference.format.extension());
-            let destination = directory.join(&name);
-            let temporary = directory.join(format!(".{name}.part"));
-            if let Err(error) = std::fs::copy(&source, &temporary) {
-                let _ = std::fs::remove_file(&temporary);
-                return Err(HelperError::new(
-                    if error.kind() == std::io::ErrorKind::NotFound {
-                        ErrorCode::ListMissing
-                    } else {
-                        ErrorCode::Internal
-                    },
-                    "cannot stage a required list",
-                ));
-            }
-            if std::fs::rename(&temporary, &destination).is_err() {
-                let _ = std::fs::remove_file(&temporary);
-                return Err(HelperError::new(
-                    ErrorCode::Internal,
-                    "cannot publish a staged list",
-                ));
-            }
-        }
-        Ok(())
-    }
-
     fn resolve_node_endpoints(
         &self,
         node: &Node,
@@ -2406,24 +2193,18 @@ impl Session {
             extra_endpoints,
             dns_timeout,
         } = options;
-        let node = &request.node;
-        let rules = &request.effective_rule_set();
-        let lists = request.lists.as_slice();
         let settings = &request.settings;
         // Dispose of the old process before borrowing the backend or spawning another.
         // A stop failure retains its handle and prevents a second engine from starting.
         self.stop_engine()?;
         self.protection.begin_attempt(settings);
-        let rights = EngineRights::for_rules(rules);
-        if (self.physical_interface)(&settings.tun.name).is_none() {
-            return Err(HelperError::new(
-                ErrorCode::NoNetwork,
-                "physical network is unavailable",
-            ));
-        }
+        let physical = (self.physical_interface)(&settings.tun.name).ok_or_else(|| {
+            HelperError::new(ErrorCode::NoNetwork, "physical network is unavailable")
+        })?;
 
         if settings.connection_mode == rosetun_config::ConnectionMode::Tun {
             self.wait_for_previous_adapter(&settings.tun.name)?;
+            self.tunnel_egress = Some(physical);
         }
 
         if mode == StartMode::Fresh {
@@ -2449,575 +2230,35 @@ impl Session {
             }
         }
 
-        if settings.connection_mode == rosetun_config::ConnectionMode::SystemProxy
-            || native_tun_requested(request)
-        {
-            return self.start_proxy(
-                request,
-                StartOptions {
-                    mode,
-                    endpoint,
-                    extra_endpoints,
-                    dns_timeout,
-                },
-            );
-        }
-
-        // A fresh start has no tunnel up: the old guard was reverted above.
-        let lookup = NameLookup::new(lockdown::read(&self.lockdown).enabled, false);
-        let endpoint = if endpoint.is_some() {
-            endpoint
-        } else if mode == StartMode::ProtectedReconnect {
-            Some(protected_endpoints(node, self.last_endpoint.as_ref())?)
-        } else if settings.engine == rosetun_config::EngineKind::SingBox {
-            Some(self.resolve_node_endpoints(node, lookup)?)
-        } else {
-            None
-        };
-
-        let resolved_node = endpoint
-            .as_ref()
-            .map(|resolved| node_with_endpoints(node, resolved));
-        let extra_endpoints = extra_endpoints.unwrap_or_else(|| {
-            exits::start_endpoints(
-                &request.extra_nodes,
+        self.start_proxy(
+            request,
+            StartOptions {
                 mode,
-                &self.last_extra_endpoints,
-                lookup,
-            )
-        });
-        let extra = exits::ExtraNodes::new(&request.extra_nodes, &extra_endpoints, rules);
-        let mut servers = Vec::new();
-        if let Some(resolved) = &endpoint {
-            resolved.push_unique_ips(&mut servers);
-        }
-        for resolved in extra_endpoints.iter().flatten() {
-            resolved.push_unique_ips(&mut servers);
-        }
-        let lan = self.lan.access_for(settings, &servers);
-        let lan_prefixes = lan.segment.route_networks();
-        self.follow_servers_in_lockdown(&servers)?;
-        let private_exceptions: &[IpAddr] = &lan.servers;
-        if extra.blocked_rules() > 0 {
-            tracing::warn!(
-                count = extra.blocked_rules(),
-                "exit rules blocked because their servers have no address"
-            );
-        }
-        let rules = extra.rules(rules);
-        let socks = exits::XraySocks::new(node, &extra, settings)?;
-        let chain = socks.any();
-        self.xray_chain = chain;
-        if settings.tls_fragment.enabled {
-            let fragment = &settings.tls_fragment;
-            tracing::info!(
-                applied = fragments_tls(node, settings),
-                xray = ?settings.xray,
-                packets = %fragment.packets,
-                length = %fragment.length,
-                interval_ms = %fragment.interval,
-                "TLS fragmentation of the server connection requested"
-            );
-        }
-        let backend = self.engines.get(settings.engine).ok_or_else(|| {
-            HelperError::new(
-                ErrorCode::EngineFailed,
-                format!("engine {} is not registered", settings.engine.as_str()),
-            )
-        })?;
-        let dns_server = backend.tunnel_dns_server(&settings.tun);
-        let outbounds = extra.outbounds(&socks);
-        let control = match ControlEndpoint::local() {
-            Ok(mut control) => {
-                // One account per outbound the repeated delay can time.
-                let tags = std::iter::once(PROXY_TAG.to_owned())
-                    .chain(outbounds.iter().map(|outbound| exit_tag(outbound.index)))
-                    .chain([rosetun_engine::SUBSCRIPTION_PROXY_USER.to_owned()]);
-                match DelayInbound::local(tags) {
-                    Ok(delay) => control.delay = Some(delay),
-                    Err(error) => tracing::warn!(%error, "repeated delay entry is unavailable"),
-                }
-                Some(control)
-            }
-            Err(error) => {
-                tracing::warn!(%error, "traffic control endpoint is unavailable");
-                None
-            }
-        };
-
-        let verbose_until = settings
-            .verbose_log_until
-            .filter(|until| now_unix() < *until);
-        if let Some(until) = verbose_until {
-            self.gate.open_until(until);
-            tracing::info!(until, "verbose engine log is on");
-        } else {
-            self.gate.close();
-        }
-        let config = render_config(
-            backend,
-            &RenderRequest {
-                node: resolved_node.as_ref().unwrap_or(node),
-                socks: socks.main(),
-                extra: &outbounds,
-                rules,
-                lists,
-                settings,
-                lan_segment: &lan_prefixes,
-                lan_servers: private_exceptions,
-                control: control.as_ref(),
-                verbose_log: verbose_until.is_some(),
-                local_proxy: None,
+                endpoint,
+                extra_endpoints,
+                dns_timeout,
             },
-        )?;
-
-        self.stage_lists(lists)?;
-
-        self.stage(rosetun_config::ConnectStage::CheckingEngine)?;
-        let binary = backend
-            .locate_binary()
-            .map_err(|error| HelperError::new(ErrorCode::EngineFailed, error.to_string()))?;
-        self.stage(rosetun_config::ConnectStage::StartingEngine)?;
-
-        tracing::debug!(
-            engine = %backend.kind().as_str(),
-            binary = %binary.display(),
-            "engine binary located"
-        );
-        let xray_path = if chain {
-            self.xray.as_ref().and_then(|xray| xray.binary_path().ok())
-        } else {
-            None
-        };
-        let xray_path = xray_path.and_then(|path| std::fs::canonicalize(path).ok());
-        let mut binaries = vec![binary.as_path()];
-        if let Some(path) = xray_path.as_ref() {
-            binaries.push(path.as_path());
-        }
-
-        self.protection.permit_binaries(&binaries);
-
-        let lockdown = lockdown::read(&self.lockdown).enabled;
-        if lockdown && !settings.kill_switch {
-            tracing::info!("Lockdown is on: the kill switch is forced on");
-        }
-        let scope = protection::protection_scope(
-            mode,
-            settings.kill_switch,
-            dns_server.is_some(),
-            lockdown,
-            false,
-            false,
-        );
-        let tunnel = scope
-            .map(|_| TunnelInterface::try_from(&settings.tun))
-            .transpose()
-            .map_err(|error| HelperError::new(ErrorCode::RoutingFailed, error.to_string()))?;
-        if scope.is_none() {
-            tracing::warn!("the tunnel has no DNS address; connecting without the DNS lock");
-            self.protection
-                .record_shortfall(ProtectionShortfallCode::NoTunnelDns);
-        }
-
-        if let Some(scope) = scope {
-            let plan = RoutingPlan {
-                proxy_application: None,
-                scope,
-                allow_lan: settings.allow_lan,
-                lan: lan.clone(),
-                lockdown,
-                shared_proxy: None,
-            };
-
-            match mode {
-                StartMode::Fresh => match self.protection.install(self.routing.as_mut(), &plan) {
-                    Ok(()) => tracing::info!(?scope, "routing protection installed"),
-                    Err(error) if scope == ProtectionScope::DnsOnly => {
-                        tracing::warn!(%error, "DNS lock is unavailable; connecting without it");
-                        self.protection
-                            .record_shortfall(protection::shortfall_of(&error));
-                    }
-                    Err(error) => {
-                        return Err(HelperError::new(
-                            ErrorCode::RoutingFailed,
-                            error.to_string(),
-                        ));
-                    }
-                },
-                StartMode::ProtectedReconnect => self.protection.prepare_reconnect(&plan)?,
-            }
-        }
-        // Without a guard there is no filter to authorize on the tunnel.
-        let tunnel = tunnel.filter(|_| self.protection.is_active());
-        self.lan.begin_session(lan, servers);
-        self.shared_address_watch = lan::LanWatch::default();
-        let cold_start = self.cold_start;
-
-        if chain {
-            let xray = self.xray.as_ref().ok_or_else(|| {
-                HelperError::new(ErrorCode::XrayStartFailed, "Xray helper is unavailable")
-            })?;
-            self.stage(rosetun_config::ConnectStage::CheckingEngine)?;
-            let xray_binary = xray
-                .locate_binary()
-                .map_err(|error| HelperError::new(ErrorCode::XrayStartFailed, error.to_string()))?;
-            self.stage(rosetun_config::ConnectStage::StartingEngine)?;
-            let interface = (self.physical_interface)(&settings.tun.name).ok_or_else(|| {
-                HelperError::new(
-                    ErrorCode::XrayStartFailed,
-                    "physical interface is unavailable for Xray",
-                )
-            })?;
-            let xray_config = socks.render(
-                resolved_node.as_ref().unwrap_or(node),
-                &extra,
-                &interface,
-                &settings.tls_fragment,
-                verbose_until.is_some(),
-                settings.log_level,
-            )?;
-            self.xray_interface = Some(interface);
-            tracing::info!(extra_nodes = extra.len(), "engine chain: sing-box + xray");
-            check_cancelled(&self.cancelled)?;
-            self.cold_start = false;
-            let spawned_at = Instant::now();
-            self.xray_process = Some(
-                xray.spawn(
-                    &xray_binary,
-                    &xray_config,
-                    &socks.endpoints(),
-                    self.gate.deadline(),
-                )
-                .map_err(|error| HelperError::new(ErrorCode::XrayStartFailed, error.to_string()))?,
-            );
-            wait_for_engine_ready_from(
-                self.xray_process
-                    .as_mut()
-                    .expect("Xray process stored before readiness")
-                    .as_mut(),
-                spawned_at,
-                cold_start,
-                &self.cancelled,
-            )
-            .map_err(|error| {
-                if error.code == ErrorCode::Cancelled {
-                    error
-                } else {
-                    HelperError::new(ErrorCode::XrayStartFailed, error.message)
-                }
-            })?;
-        } else {
-            tracing::info!(extra_nodes = extra.len(), "engine chain: sing-box");
-        }
-
-        let mut attempt = 1;
-        let spawned_at = loop {
-            // A retry starts a binary that has just run, so it is no longer cold.
-            let cold_start = cold_start && attempt == 1;
-            tracing::info!(
-                engine = %backend.kind().as_str(),
-                attempt,
-                cold_start,
-                ?rights,
-                "spawning tunnel engine"
-            );
-            let spawned_at = Instant::now();
-            check_cancelled(&self.cancelled)?;
-            self.cold_start = false;
-            self.process = Some(
-                backend
-                    .spawn_with_log_gate(&binary, &config, self.gate.deadline(), rights)
-                    .map_err(|error| {
-                        HelperError::new(ErrorCode::EngineFailed, error.to_string())
-                    })?,
-            );
-            let process = self
-                .process
-                .as_mut()
-                .expect("engine process was stored before readiness");
-            let error = match wait_for_engine_ready_from(
-                process.as_mut(),
-                spawned_at,
-                cold_start,
-                &self.cancelled,
-            ) {
-                Ok(()) => break spawned_at,
-                Err(error) => error,
-            };
-            let hints = process.startup_hints();
-            if error.code == ErrorCode::EngineFailed && hints.tunnel_address_in_use {
-                // Waiting does not clear it, and the system is left as it is: a
-                // retry would only meet the same address.
-                log_held_tunnel(
-                    &settings.tun.name,
-                    &settings.tun.ipv4,
-                    self.adapter_state,
-                    attempt,
-                );
-                return Err(HelperError::tunnel_address_in_use());
-            }
-            let adapter_busy =
-                error.code == ErrorCode::EngineFailed && hints.adapter_still_removing;
-            if !adapter_busy || attempt > ADAPTER_BUSY_RETRIES {
-                if adapter_busy {
-                    tracing::warn!(
-                        attempts = attempt,
-                        "engine start failed: the previous tunnel adapter is still being removed"
-                    );
-                } else if attempt > 1 {
-                    tracing::warn!(attempts = attempt, "engine start failed after retries");
-                }
-                return Err(error);
-            }
-            tracing::warn!(
-                attempt,
-                delay_ms = ADAPTER_BUSY_RETRY_DELAY.as_millis(),
-                "previous tunnel adapter is still being removed; retrying the engine start"
-            );
-            // The engine has exited; protection stays as it is for the next attempt.
-            if let Some(mut process) = self.process.take() {
-                process.stop().map_err(|error| {
-                    HelperError::new(ErrorCode::EngineFailed, error.to_string())
-                })?;
-            }
-            sleep_cancellable(ADAPTER_BUSY_RETRY_DELAY, &self.cancelled)?;
-            self.wait_for_previous_adapter(&settings.tun.name)?;
-            attempt += 1;
-        };
-        self.control = control;
-        let ready_at = Instant::now();
-        let grace_deadline = server_check_grace_deadline(
-            self.process
-                .as_ref()
-                .expect("engine process was stored before readiness")
-                .startup_hints(),
-            spawned_at,
-            ready_at,
-            self.server_check_grace,
-        );
-        tracing::info!("engine startup readiness confirmed");
-        self.bind_actual_tunnel_interface(&settings.tun);
-        self.ensure_xray_running(ErrorCode::XrayStartFailed)?;
-
-        if let Some(tunnel) = tunnel.as_ref() {
-            match self.wait_for_tunnel(tunnel) {
-                Ok(()) => {}
-                // A lock that cannot authorize the tunnel would block DNS into it as well.
-                Err(error)
-                    if mode == StartMode::Fresh
-                        && error.code == ErrorCode::RoutingFailed
-                        && self.protection.scope() == Some(ProtectionScope::DnsOnly) =>
-                {
-                    tracing::warn!(reason = %error.message, "DNS lock cannot authorize the tunnel; connecting without it");
-                    self.protection.release("failed to roll back DNS lock");
-                    self.protection
-                        .record_shortfall(ProtectionShortfallCode::TunnelNotPermitted);
-                }
-                Err(error) => return Err(error),
-            }
-
-            let running = self
-                .process
-                .as_mut()
-                .expect("engine process was stored before tunnel readiness")
-                .is_running()
-                .map_err(|error| HelperError::new(ErrorCode::EngineFailed, error.to_string()))?;
-
-            if !running {
-                return Err(HelperError::new(
-                    ErrorCode::EngineFailed,
-                    "engine exited during tunnel readiness",
-                ));
-            }
-        }
-
-        // Without a guard the tunnel has not been validated yet; the first
-        // supervisor tick after the connect does this if it is too early here.
-        if settings.allow_lan {
-            self.lan.release_broadcast_route(&settings.tun);
-        }
-
-        if let Some(server) = dns_server {
-            if grace_deadline.is_some() {
-                tracing::info!("slow tunnel adapter: server check grace 30 s");
-            }
-            self.stage(rosetun_config::ConnectStage::CheckingServer)?;
-            let engines = Arc::clone(&self.engines);
-            let backend = engines
-                .get_shared(settings.engine)
-                .expect("engine was registered before spawn");
-            let control = self.control.clone();
-            let interval = self.server_check_interval;
-            let started = AtomicBool::new(false);
-            let stopped = AtomicBool::new(false);
-            let failures = AtomicU64::new(0);
-            let cancelled = Arc::clone(&self.cancelled);
-            let dns_result = thread::scope(|scope| {
-                let _stop = StopServerCheck(&stopped);
-                let worker = control.and_then(|control| {
-                    let worker_started = &started;
-                    let worker_stopped = &stopped;
-                    let worker_cancelled = &cancelled;
-                    let worker_failures = &failures;
-                    match thread::Builder::new()
-                        .name("rosetun-server-check".to_owned())
-                        .spawn_scoped(scope, move || {
-                            check_server_outbound(
-                                backend,
-                                &control,
-                                interval,
-                                worker_started,
-                                worker_stopped,
-                                worker_cancelled,
-                                worker_failures,
-                            );
-                        }) {
-                        Ok(worker) => Some(worker),
-                        Err(error) => {
-                            tracing::warn!(%error, "server check worker is unavailable");
-                            None
-                        }
-                    }
-                });
-                let result = {
-                    let process = self
-                        .process
-                        .as_mut()
-                        .expect("engine process was stored before DNS check");
-                    let mut xray_process = self.xray_process.as_mut();
-                    dns::check_cancellable(
-                        server,
-                        dns_timeout,
-                        self.dns_attempt_timeout,
-                        grace_deadline,
-                        || {
-                            let running = process.is_running()?;
-                            let mut counters = process.outbound_failures();
-                            let xray_running = match xray_process.as_mut() {
-                                Some(xray) => {
-                                    let running = xray.is_running()?;
-                                    let xray_failures = xray.outbound_failures();
-                                    counters.unreachable = counters
-                                        .unreachable
-                                        .saturating_add(xray_failures.unreachable);
-                                    counters.rejected =
-                                        counters.rejected.saturating_add(xray_failures.rejected);
-                                    counters.closed =
-                                        counters.closed.saturating_add(xray_failures.closed);
-                                    running
-                                }
-                                None => true,
-                            };
-                            counters.unreachable = counters
-                                .unreachable
-                                .saturating_add(failures.load(Ordering::Acquire));
-                            // DNS must capture its baseline before the first check can fail.
-                            started.store(true, Ordering::Release);
-                            Ok((running && xray_running, counters))
-                        },
-                        || cancelled.load(Ordering::Acquire),
-                    )
-                };
-                stopped.store(true, Ordering::Release);
-                let mut engine_stopped = false;
-                if matches!(result, Err(ref error) if error.code == ErrorCode::Cancelled) {
-                    if let Err(error) = self.stop_engine() {
-                        tracing::error!(%error, "failed to stop engine after cancellation");
-                    }
-                    engine_stopped = true;
-                }
-                if let Some(worker) = worker {
-                    while !worker.is_finished() {
-                        if cancelled.load(Ordering::Acquire) && !engine_stopped {
-                            if let Err(error) = self.stop_engine() {
-                                tracing::error!(%error, "failed to stop engine after cancellation");
-                            }
-                            engine_stopped = true;
-                        }
-                        thread::sleep(Duration::from_millis(10));
-                    }
-                    if worker.join().is_err() {
-                        return Err(HelperError::new(
-                            ErrorCode::Internal,
-                            "server check worker panicked",
-                        ));
-                    }
-                }
-                check_cancelled(&cancelled)?;
-                let count = failures.load(Ordering::Acquire);
-                if count != 0 && result.is_err() {
-                    tracing::warn!(
-                        "server check during connect failed: {count} of {SERVER_CHECK_FAILURES}"
-                    );
-                }
-                result
-            });
-            self.ensure_xray_running(ErrorCode::XrayStartFailed)?;
-            dns_result.map_err(|error| {
-                if matches!(
-                    error.code,
-                    ErrorCode::ServerUnreachable | ErrorCode::DnsTimeout
-                ) && (self.physical_interface)(self.effective_tun_name(&settings.tun)).is_none()
-                {
-                    HelperError::new(ErrorCode::NoNetwork, "physical network is unavailable")
-                } else {
-                    error
-                }
-            })?;
-            self.tunnel_dns = Some(server);
-            self.refresh_path_addresses();
-            #[cfg(target_os = "macos")]
-            if !cfg!(test) {
-                let servers =
-                    system_dns_macos::tunnel_dns_servers(server.ip(), settings.tun.ipv6.as_deref());
-                let dns = system_dns_macos::MacosSystemDns::install(&servers).map_err(|error| {
-                    HelperError::new(
-                        ErrorCode::RoutingFailed,
-                        format!("failed to configure macOS system DNS: {error}"),
-                    )
-                })?;
-                self.macos_dns = Some(dns);
-            }
-        } else {
-            tracing::info!(
-                engine = %settings.engine.as_str(),
-                "backend does not provide a tunnel DNS server; skipping DNS check"
-            );
-        }
-
-        self.ensure_xray_running(ErrorCode::XrayStartFailed)?;
-        // Do not poison the successful endpoint cache with a failed attempt.
-        self.last_endpoint = endpoint.map(|resolved| resolved.into_successful(&node.server));
-        exits::remember(
-            &mut self.last_extra_endpoints,
-            &request.extra_nodes,
-            &extra_endpoints,
-        );
-        self.exit_tags = exits::exit_tags(&request.extra_nodes, &extra_endpoints);
-        check_cancelled(&self.cancelled)
+        )
     }
 
     /// Who looks a new server's name up during this session.
     fn engine_lookup(&self) -> NameLookup {
-        let proxy_mode = self.request.as_ref().is_some_and(|request| {
-            request.settings.connection_mode == rosetun_config::ConnectionMode::SystemProxy
-                || native_tun_requested(request)
-        });
-        match self.tunnel_dns {
-            Some(address) if proxy_mode => NameLookup::Engine(address),
-            _ => NameLookup::System,
-        }
+        self.tunnel_dns
+            .map_or(NameLookup::System, NameLookup::Engine)
     }
 
-    fn start_monitor(&mut self, kind: rosetun_config::EngineKind) {
-        let probe = if let Some(proxy) = &self.proxy_session {
-            Some(proxy.dataplane.traffic_probe())
-        } else {
-            self.control
-                .as_ref()
-                .and_then(|control| self.engines.get(kind)?.traffic_probe(control))
-        };
-        if let Some(probe) = probe {
+    fn record_chain(&self, status: &mut Status, request: &ConnectRequest) {
+        status.record_chain(&request.node, &request.settings);
+        status.xray = self
+            .proxy_session
+            .as_ref()
+            .is_some_and(proxy_session::ProxySession::main_uses_xray);
+        status.fragmented &= status.xray;
+    }
+
+    fn start_monitor(&mut self) {
+        if let Some(proxy) = &self.proxy_session {
+            let probe = proxy.dataplane.traffic_probe();
             let mut hidden: Vec<PathBuf> = std::env::current_exe().into_iter().collect();
             if let Some(xray) = self.xray.as_ref()
                 && let Ok(binary) = xray.binary_path()
@@ -3040,22 +2281,6 @@ impl Session {
         }
     }
 
-    fn refresh_path_addresses(&mut self) {
-        let Some(server) = self.tunnel_dns else {
-            return;
-        };
-        let addresses = dns::resolve_path_addresses(server, PATH_LOOKUP_TIMEOUT, || {
-            self.cancelled.load(Ordering::Acquire)
-        });
-        if addresses.is_empty() {
-            tracing::info!("path check: second target unavailable");
-        }
-        *self
-            .path_addresses
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = addresses;
-    }
-
     fn start_watchdog(&mut self) {
         let Some(server) = self.tunnel_dns else {
             return;
@@ -3072,21 +2297,15 @@ impl Session {
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .tunnel_dns_unregistered = true;
         }
-        let watchdog = if let Some(proxy) = &self.proxy_session {
-            DnsWatchdog::start_proxy(
-                Arc::clone(&self.status),
-                server,
-                proxy.entry.clone(),
-                self.watchdog_timing,
-            )
-        } else {
-            DnsWatchdog::start(
-                Arc::clone(&self.status),
-                server,
-                Arc::clone(&self.path_addresses),
-                self.watchdog_timing,
-            )
+        let Some(proxy) = &self.proxy_session else {
+            return;
         };
+        let watchdog = DnsWatchdog::start_proxy(
+            Arc::clone(&self.status),
+            server,
+            proxy.entry.clone(),
+            self.watchdog_timing,
+        );
         match watchdog {
             Ok(watchdog) => self.watchdog = Some(watchdog),
             Err(error) => tracing::warn!(%error, "DNS watchdog is unavailable"),
@@ -3094,145 +2313,23 @@ impl Session {
     }
 
     fn live_engine_running(&mut self) -> bool {
-        if let Some(proxy) = self.proxy_session.as_mut() {
-            return proxy.exited().1.is_none();
-        }
-        let engine_running = self
-            .process
+        self.proxy_session
             .as_mut()
-            .is_some_and(|process| matches!(process.is_running(), Ok(true)));
-        let xray_running = if self.request.is_some() && self.xray_chain {
-            self.xray_process
-                .as_mut()
-                .is_some_and(|process| matches!(process.is_running(), Ok(true)))
-        } else {
-            true
-        };
-        engine_running && xray_running
+            .is_some_and(|proxy| proxy.exited().1.is_none())
     }
 
     fn check_live_tunnel(&mut self, timeout: Duration) -> Result<(), HelperError> {
-        if self.proxy_session.is_some() {
-            return self.check_proxy_dns(timeout);
-        }
-        let server = self.tunnel_dns.ok_or_else(|| {
-            HelperError::new(ErrorCode::DnsTimeout, "tunnel DNS server is unavailable")
-        })?;
-        let process = self.process.as_mut().ok_or_else(|| {
-            HelperError::new(ErrorCode::EngineFailed, "engine process is missing")
-        })?;
-        let mut xray = self.xray_process.as_mut();
-        dns::check_cancellable(
-            server,
-            self.dns_timeout.min(timeout),
-            self.dns_attempt_timeout.min(timeout),
-            None,
-            || {
-                let running = process.is_running()?;
-                let mut counters = process.outbound_failures();
-                let xray_running = match xray.as_mut() {
-                    Some(process) => {
-                        let running = process.is_running()?;
-                        let failures = process.outbound_failures();
-                        counters.unreachable =
-                            counters.unreachable.saturating_add(failures.unreachable);
-                        counters.rejected = counters.rejected.saturating_add(failures.rejected);
-                        counters.closed = counters.closed.saturating_add(failures.closed);
-                        running
-                    }
-                    None => true,
-                };
-                Ok((running && xray_running, counters))
-            },
-            || self.cancelled.load(Ordering::Acquire),
-        )
-    }
-
-    fn wait_for_tunnel(&mut self, tunnel: &TunnelInterface) -> Result<(), HelperError> {
-        let deadline = Instant::now() + TUNNEL_READY_TIMEOUT;
-
-        loop {
-            check_cancelled(&self.cancelled)?;
-            self.ensure_xray_running(ErrorCode::XrayStartFailed)?;
-            let running = self
-                .process
-                .as_mut()
-                .ok_or_else(|| {
-                    HelperError::new(
-                        ErrorCode::EngineFailed,
-                        "engine process disappeared before tunnel readiness",
-                    )
-                })?
-                .is_running()
-                .map_err(|error| HelperError::new(ErrorCode::EngineFailed, error.to_string()))?;
-
-            if !running {
-                return Err(HelperError::new(
-                    ErrorCode::EngineFailed,
-                    "engine exited before creating its tunnel interface",
-                ));
-            }
-
-            match self.protection.authorize_tunnel(tunnel) {
-                Ok(()) => {
-                    tracing::info!(
-                        alias = %tunnel.alias,
-                        ipv4 = %tunnel.ipv4,
-                        "tunnel readiness authorization completed"
-                    );
-                    return Ok(());
-                }
-                Err(error) if error.is_tunnel_not_ready() && Instant::now() < deadline => {
-                    tracing::debug!(
-                        alias = %tunnel.alias,
-                        %error,
-                        "tunnel is not ready yet; retrying"
-                    );
-                    std::thread::sleep(TUNNEL_READY_POLL_INTERVAL);
-                }
-                Err(error) if error.is_tunnel_not_ready() => {
-                    return Err(HelperError::new(
-                        ErrorCode::RoutingFailed,
-                        format!(
-                            "tunnel interface {} did not become ready within {} seconds: {error}",
-                            tunnel.alias,
-                            TUNNEL_READY_TIMEOUT.as_secs()
-                        ),
-                    ));
-                }
-                Err(error) => {
-                    return Err(HelperError::new(
-                        ErrorCode::RoutingFailed,
-                        error.to_string(),
-                    ));
-                }
-            }
-        }
-    }
-
-    fn ensure_xray_running(&mut self, code: ErrorCode) -> Result<(), HelperError> {
-        if let Some(process) = self.xray_process.as_mut() {
-            match process.is_running() {
-                Ok(true) => {}
-                Ok(false) => return Err(HelperError::new(code, "Xray stopped")),
-                Err(_) => return Err(HelperError::new(code, "Xray stopped")),
-            }
-        }
-        Ok(())
+        self.check_proxy_dns(timeout)
     }
 
     fn stop_engine(&mut self) -> Result<(), HelperError> {
         self.bypass.reset();
+        self.tunnel_egress = None;
         self.active_tun_name = None;
         *self
             .shared_active_tun
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
-        self.xray_interface = None;
-        #[cfg(target_os = "macos")]
-        {
-            self.macos_dns.take();
-        }
         self.status
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -3242,10 +2339,6 @@ impl Session {
         if let Some(watchdog) = self.watchdog.take() {
             watchdog.stop();
         }
-        self.path_addresses
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clear();
         if let Some(monitor) = self.monitor.take() {
             monitor.stop();
         } else {
@@ -3258,6 +2351,7 @@ impl Session {
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .clear();
         }
+        let mut reconnect_plan = None;
         if let Some(proxy) = self.proxy_session.as_mut() {
             proxy.stop()?;
             if let Some(scope) = self
@@ -3272,23 +2366,13 @@ impl Session {
                     lockdown: lockdown::read(&self.lockdown).enabled,
                     ..proxy.plan.clone()
                 };
-                self.protection.prepare_reconnect(&plan)?;
+                reconnect_plan = Some(plan);
             }
         }
         self.proxy_session.take();
-        if let Some(process) = self.process.as_mut() {
-            process
-                .stop()
-                .map_err(|error| HelperError::new(ErrorCode::EngineFailed, error.to_string()))?;
+        if let Some(plan) = reconnect_plan {
+            self.protection.prepare_reconnect(&plan)?;
         }
-        self.process.take();
-        self.control.take();
-        if let Some(process) = self.xray_process.as_mut() {
-            process
-                .stop()
-                .map_err(|error| HelperError::new(ErrorCode::XrayStopped, error.to_string()))?;
-        }
-        self.xray_process.take();
         Ok(())
     }
 
@@ -3319,85 +2403,6 @@ impl Session {
     }
 }
 
-struct StopServerCheck<'a>(&'a AtomicBool);
-
-impl Drop for StopServerCheck<'_> {
-    fn drop(&mut self) {
-        self.0.store(true, Ordering::Release);
-    }
-}
-
-fn check_server_outbound(
-    backend: Arc<dyn EngineBackend>,
-    control: &ControlEndpoint,
-    interval: Duration,
-    started: &AtomicBool,
-    stopped: &AtomicBool,
-    cancelled: &AtomicBool,
-    failures: &AtomicU64,
-) {
-    while !started.load(Ordering::Acquire) && !stopped.load(Ordering::Acquire) {
-        thread::sleep(Duration::from_millis(10));
-    }
-
-    let mut next = Instant::now();
-    while !stopped.load(Ordering::Acquire) && !cancelled.load(Ordering::Acquire) {
-        let result = url_test_any(
-            Arc::clone(&backend),
-            control,
-            UrlTestTarget::Session,
-            SERVER_CHECK_TIMEOUT,
-        );
-        if stopped.load(Ordering::Acquire) || cancelled.load(Ordering::Acquire) {
-            return;
-        }
-        match result {
-            Ok(_) => {}
-            Err(rosetun_engine::errors::EngineError::Unsupported(_)) => return,
-            Err(_) => {
-                failures.fetch_add(1, Ordering::AcqRel);
-            }
-        }
-
-        next += interval;
-        while !stopped.load(Ordering::Acquire)
-            && !cancelled.load(Ordering::Acquire)
-            && Instant::now() < next
-        {
-            thread::sleep(
-                next.saturating_duration_since(Instant::now())
-                    .min(Duration::from_millis(20)),
-            );
-        }
-    }
-}
-
-fn render_config(
-    backend: &dyn EngineBackend,
-    request: &RenderRequest<'_>,
-) -> Result<RenderedConfig, HelperError> {
-    let config = backend
-        .render(request)
-        .map_err(|error| HelperError::new(ErrorCode::EngineFailed, error.to_string()))?;
-
-    if !config.unsupported.is_empty() {
-        let rule_ids = config
-            .unsupported
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join(", ");
-        return Err(HelperError::new(
-            ErrorCode::UnsupportedRules,
-            format!(
-                "engine {} cannot represent enabled rules: {rule_ids}",
-                backend.kind().as_str()
-            ),
-        ));
-    }
-    Ok(config)
-}
-
 #[cfg(test)]
 fn wait_for_previous_adapter(
     alias: &str,
@@ -3411,36 +2416,6 @@ fn wait_for_previous_adapter(
 /// Writes what is visible about a tunnel that Windows still holds, without
 /// changing anything. The node's address and the user's addresses are not
 /// part of it; the tunnel's own address is.
-fn log_held_tunnel(
-    alias: &str,
-    tunnel_address: &str,
-    lookup: fn(&str) -> std::io::Result<Option<rosetun_routing::TunnelAdapterState>>,
-    attempt: u32,
-) {
-    match lookup(alias) {
-        Ok(Some(adapter)) => tracing::warn!(
-            attempt,
-            tunnel_address,
-            adapter_present = true,
-            oper_status = adapter.oper_status,
-            description = %adapter.description,
-            "engine start failed: Windows still holds the tunnel address of a previous session"
-        ),
-        Ok(None) => tracing::warn!(
-            attempt,
-            tunnel_address,
-            adapter_present = false,
-            "engine start failed: Windows still holds the tunnel address of a previous session"
-        ),
-        Err(error) => tracing::warn!(
-            attempt,
-            tunnel_address,
-            %error,
-            "engine start failed: Windows still holds the tunnel address of a previous session; the adapter could not be read"
-        ),
-    }
-}
-
 fn failure_kind(error: &HelperError) -> Option<rosetun_config::FailureKind> {
     use rosetun_config::FailureKind;
     match error.code {
@@ -3534,17 +2509,6 @@ fn wait_for_previous_adapter_cancellable(
         }
         thread::sleep(interval.min(timeout.saturating_sub(elapsed)));
     }
-}
-
-fn server_check_grace_deadline(
-    hints: rosetun_engine::StartupHints,
-    spawned_at: Instant,
-    ready_at: Instant,
-    grace: Duration,
-) -> Option<Instant> {
-    (hints.slow_tunnel_creation
-        || ready_at.saturating_duration_since(spawned_at) > Duration::from_secs(5))
-    .then_some(ready_at + grace)
 }
 
 fn startup_timeout(hints: rosetun_engine::StartupHints, cold_start: bool) -> Duration {

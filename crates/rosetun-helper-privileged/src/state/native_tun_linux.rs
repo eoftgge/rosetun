@@ -56,12 +56,25 @@ impl NativeTun {
         &mut self,
         lan: &[IpPrefix],
         servers: &[IpAddr],
+        auto_route: bool,
     ) -> Result<(), HelperError> {
-        let plan = CaptureRoutes::plan(&self.settings, lan).map_err(route_error)?;
+        let plan = if auto_route {
+            CaptureRoutes::plan(&self.settings, lan).map_err(route_error)?
+        } else {
+            CaptureRoutes::manual()
+        };
         let name = self.device.name().map_err(route_error)?;
         self.routes = Some(
-            LinuxRoutes::install(&name, &plan, TABLE, MARK, PRIORITY, servers)
-                .map_err(route_error)?,
+            LinuxRoutes::install(
+                &name,
+                &plan,
+                TABLE,
+                MARK,
+                PRIORITY,
+                servers,
+                self.settings.ipv6.is_some(),
+            )
+            .map_err(route_error)?,
         );
         let index =
             i32::try_from(self.device.index().map_err(route_error)?).map_err(route_error)?;

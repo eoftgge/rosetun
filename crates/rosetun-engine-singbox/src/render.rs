@@ -1,7 +1,7 @@
 use rosetun_config::{
     DnsSettings, DomainMatch, EXIT_TRACE_IP, EXIT_TRACE_PORT, ExitId, IpPrefix, LINK_LOCAL_V4,
     LINK_LOCAL_V6, ListRef, LogLevel, Node, Outbound, ProcessMatch, Rule, RuleId, RuleMatcher,
-    RuleSet, RuleTarget, Settings, TlsMode, Transport, UploadedListFormat, list_tag,
+    RuleSet, RuleTarget, TlsMode, Transport, UploadedListFormat, list_tag,
 };
 use rosetun_engine::errors::EngineError;
 use rosetun_engine::{
@@ -162,10 +162,10 @@ pub fn render(request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError
         outbounds.push(outbound);
     }
     outbounds.push(json!({ "type": "direct", "tag": TAG_DIRECT }));
-    let mut inbounds = match request.local_proxy {
-        Some(listen) => local_proxy_inbounds(listen),
-        None => vec![tun_inbound(request.settings, lan)],
-    };
+    let mut inbounds = request
+        .local_proxy
+        .map(local_proxy_inbounds)
+        .unwrap_or_default();
     if let Some((inbound, rules)) = request
         .control
         .and_then(|control| control.delay.as_ref())
@@ -446,69 +446,6 @@ fn engine_log(verbose: bool, log_level: LogLevel) -> Value {
     json!({ "level": level, "timestamp": true })
 }
 
-fn darwin_tun_name_valid(name: &str) -> bool {
-    let Some(rest) = name.strip_prefix("utun") else {
-        return false;
-    };
-    !rest.is_empty() && rest.bytes().all(|byte| byte.is_ascii_digit())
-}
-
-fn tun_interface_name(configured: &str, darwin: bool) -> Option<&str> {
-    if darwin && !darwin_tun_name_valid(configured) {
-        None
-    } else {
-        Some(configured)
-    }
-}
-
-/// `lan` is the connected networks when "Local network" is on.
-fn tun_inbound(settings: &Settings, lan: Option<&[IpPrefix]>) -> Value {
-    let tun = &settings.tun;
-    let mut address = vec![Value::String(tun.ipv4.clone())];
-    if let Some(ipv6) = &tun.ipv6 {
-        address.push(Value::String(ipv6.clone()));
-    }
-    let mut inbound = json!({
-        "type": "tun",
-        "tag": "tun-in",
-        "address": address,
-        "mtu": tun.mtu,
-        // The system stack hands TUN connections back to sing-box through
-        // Windows, so a firewall that blocks inbound traffic to sing-box.exe
-        // silently drops all TCP. gVisor keeps TCP inside the process.
-        "stack": "gvisor",
-        "auto_route": tun.auto_route,
-        "strict_route": tun.auto_route,
-    });
-    // Darwin utun interfaces must be named `utun[0-9]+`. Omitting
-    // `interface_name` lets sing-tun pick the next free kernel `utunN`
-    // without colliding with macOS system tunnels (`utun0..`).
-    if let Some(name) = tun_interface_name(&tun.name, cfg!(target_os = "macos")) {
-        inbound["interface_name"] = Value::String(name.to_owned());
-    }
-    // sing-tun takes these out of the tunnel's routes, so Windows sends them
-    // by its own routes, on the adapter. IPv6 only when the tunnel has it:
-    // without an IPv6 address sing-tun installs no IPv6 routes at all.
-    // Multicast is not listed: Windows routes 224.0.0.0/4 on every adapter by
-    // itself, the tunnel's included. Measured with it listed and that route
-    // deleted, sockets still took the tunnel's address and nothing arrived.
-    if let Some(segment) = lan.filter(|_| tun.auto_route) {
-        let ipv6 = tun.ipv6.is_some();
-        let exclude: Vec<String> = segment
-            .iter()
-            .copied()
-            .chain([LINK_LOCAL_V4[0], LINK_LOCAL_V6[0]])
-            .filter(|prefix| prefix.is_ipv4() || ipv6)
-            .map(|prefix| prefix.to_string())
-            .collect();
-        inbound["route_exclude_address"] = json!(exclude);
-    }
-    inbound
-}
-
-/// With the wildcard `::` Go opens one dual-stack socket (sing's
-/// `NetworkFromNetAddr` leaves "tcp" as it is), so IPv4 clients are served too,
-/// and a second inbound on 0.0.0.0 would fail on Linux as already in use.
 fn local_proxy_inbounds(listen: &LocalProxyListen) -> Vec<Value> {
     let mut inbounds: Vec<Value> = listen
         .addresses
@@ -1139,6 +1076,7 @@ fn exit_outbound(exit: &ExitId, extra: &[ExtraOutbound<'_>]) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use rosetun_config::Settings;
     use rosetun_config::{
         AnyTlsParams, ExitId, Hysteria2Params, ListId, NodeId, RealityParams, Rule, RuleSetId,
         RuleTemplate, StreamSettings, TlsParams, TuicCongestionControl, TuicParams,
@@ -1674,7 +1612,7 @@ mod tests {
         };
         let rendered = render(&request).unwrap();
         assert!(rendered.unsupported.is_empty());
-        assert_golden_tun(&rendered.body, GOLDEN_FULL);
+        assert_golden_session(&rendered.body, GOLDEN_FULL);
 
         let chained = render(&RenderRequest {
             extra: &[],
@@ -1687,20 +1625,16 @@ mod tests {
         })
         .unwrap();
         assert!(chained.unsupported.is_empty());
-        assert_golden_tun(&chained.body, GOLDEN_XRAY_CHAIN);
+        assert_golden_session(&chained.body, GOLDEN_XRAY_CHAIN);
     }
 
-    fn assert_golden_tun(actual: &[u8], expected: &[u8]) {
+    fn assert_golden_session(actual: &[u8], expected: &[u8]) {
         #[cfg(not(target_os = "macos"))]
         assert_eq!(actual, expected);
 
         #[cfg(target_os = "macos")]
         {
             let mut expected: Value = serde_json::from_slice(expected).unwrap();
-            expected["inbounds"][0]
-                .as_object_mut()
-                .unwrap()
-                .remove("interface_name");
             let rules = expected["route"]["rules"].as_array_mut().unwrap();
             let has_exit_trace = rules
                 .iter()
@@ -1720,37 +1654,6 @@ mod tests {
             let actual: Value = serde_json::from_slice(actual).unwrap();
             assert_eq!(actual, expected);
         }
-    }
-
-    #[test]
-    fn darwin_tun_interface_name_keeps_explicit_utun_and_omits_non_utun() {
-        assert_eq!(tun_interface_name("rosetun0", false), Some("rosetun0"));
-        assert_eq!(tun_interface_name("rosetun0", true), None);
-        assert_eq!(tun_interface_name("utun", true), None);
-        assert_eq!(tun_interface_name("utun6a", true), None);
-        assert_eq!(tun_interface_name("utun0", true), Some("utun0"));
-        assert_eq!(tun_interface_name("utun12", true), Some("utun12"));
-    }
-
-    #[test]
-    fn tun_inbound_renders_ipv4_and_ipv6_addresses_with_lan_exclusions() {
-        let mut settings = Settings::default();
-        settings.tun.name = "utun7".to_owned();
-        settings.tun.ipv6 = Some("fdfe:dcba:9876::1/126".to_owned());
-        let lan = [
-            IpPrefix::new("192.168.1.0".parse().unwrap(), 24).unwrap(),
-            IpPrefix::new("fd00::".parse().unwrap(), 64).unwrap(),
-        ];
-        let inbound = tun_inbound(&settings, Some(&lan));
-        assert_eq!(inbound["interface_name"], "utun7");
-        assert_eq!(
-            inbound["address"],
-            json!(["172.19.0.1/30", "fdfe:dcba:9876::1/126"])
-        );
-        assert_eq!(
-            inbound["route_exclude_address"],
-            json!(["192.168.1.0/24", "fd00::/64", "169.254.0.0/16", "fe80::/10"])
-        );
     }
 
     fn shadowsocks_node(id: &str, server: &str) -> Node {
@@ -1894,7 +1797,7 @@ mod tests {
         })
         .unwrap();
         assert!(rendered.unsupported.is_empty());
-        assert_golden_tun(&rendered.body, GOLDEN_EXTRA_EXITS);
+        assert_golden_session(&rendered.body, GOLDEN_EXTRA_EXITS);
 
         let value: Value = serde_json::from_slice(&rendered.body).unwrap();
         let tags = value["outbounds"]

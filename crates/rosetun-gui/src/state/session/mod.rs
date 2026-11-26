@@ -467,12 +467,6 @@ impl State {
         self.can_change_temporary() && !self.saving_config_shown() && self.has_pending_apply()
     }
 
-    /// Whether applying rule or DNS changes restarts the engine tunnel.
-    pub(crate) fn apply_restarts_tunnel(&self) -> bool {
-        !(self.status.running_local_proxy().is_some()
-            || self.status.tun_backend == Some(rosetun_config::TunBackend::NativeMixed))
-    }
-
     pub(super) fn start_apply(&mut self, temporary_before: Option<Vec<Rule>>) {
         self.operations.helper = true;
         self.session.flow = ApplyFlow::Applying {

@@ -279,7 +279,7 @@ impl fmt::Debug for Dataplane {
 impl Dataplane {
     /// Starts the data plane with the system trust store for DoH TLS verification.
     pub fn start(config: DataplaneConfig) -> Result<Self, DataplaneError> {
-        Self::start_inner(config, None, None)
+        Self::start_inner(config, None, None, None)
     }
 
     /// Starts the data plane using custom root certificates for DoH TLS
@@ -288,7 +288,7 @@ impl Dataplane {
         config: DataplaneConfig,
         roots: Vec<CertificateDer<'static>>,
     ) -> Result<Self, DataplaneError> {
-        Self::start_inner(config, Some(roots), None)
+        Self::start_inner(config, Some(roots), None, None)
     }
 
     /// Only authenticated entry traffic and diagnostics listen on local sockets.
@@ -296,15 +296,28 @@ impl Dataplane {
         config: DataplaneConfig,
         tunnel: NativeTunnel,
     ) -> Result<Self, DataplaneError> {
-        Self::start_inner(config, None, Some(tunnel))
+        Self::start_inner(config, None, Some(tunnel), None)
+    }
+
+    /// Starts with the rule table the session validated before bringing up its outbounds.
+    pub fn start_prepared(
+        config: DataplaneConfig,
+        tunnel: Option<NativeTunnel>,
+        engine: RuleEngine,
+    ) -> Result<Self, DataplaneError> {
+        Self::start_inner(config, None, tunnel, Some(engine))
     }
 
     fn start_inner(
         config: DataplaneConfig,
         roots: Option<Vec<CertificateDer<'static>>>,
         tunnel: Option<NativeTunnel>,
+        engine: Option<RuleEngine>,
     ) -> Result<Self, DataplaneError> {
-        let engine = RuleEngine::compile(&config.rules)?;
+        let engine = match engine {
+            Some(engine) => engine,
+            None => RuleEngine::compile(&config.rules)?,
+        };
 
         // Route DoH through the main proxy when available; otherwise direct via
         // literal IP (the system resolver is never invoked for literal IPs).

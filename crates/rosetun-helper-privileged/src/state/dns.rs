@@ -150,20 +150,6 @@ fn parse_a_addresses(packet: &[u8], id: u16, question: &[u8]) -> Option<Vec<Ipv4
     })
 }
 
-/// Resolves the optional HTTP path through the tunnel's DNS server, never the OS resolver.
-pub(super) fn resolve_path_addresses(
-    server: SocketAddr,
-    timeout: Duration,
-    stopped: impl Fn() -> bool,
-) -> Vec<Ipv4Addr> {
-    resolve_labels(
-        server,
-        &[b"connectivitycheck", b"gstatic", b"com"],
-        timeout,
-        stopped,
-    )
-}
-
 /// The A records of `name`, asked of `server`.
 pub(super) fn resolve_name(server: SocketAddr, name: &str, timeout: Duration) -> Vec<Ipv4Addr> {
     let labels = name
@@ -531,8 +517,6 @@ pub(crate) mod test_support {
     pub(crate) enum Behavior {
         Noerror,
         Addresses,
-        AnswerAfter(usize),
-        DelayedNoerror,
         Nxdomain,
         Servfail,
         Silent,
@@ -557,7 +541,6 @@ pub(crate) mod test_support {
             let worker_stop = Arc::clone(&stop);
             let worker = thread::spawn(move || {
                 let mut buffer = [0u8; 512];
-                let mut requests = 0;
                 while !worker_stop.load(Ordering::Acquire) {
                     let (length, peer) = match socket.recv_from(&mut buffer) {
                         Ok(received) => received,
@@ -575,14 +558,8 @@ pub(crate) mod test_support {
                         Err(error) => panic!("test DNS receive failed: {error}"),
                     };
 
-                    requests += 1;
-                    if matches!(behavior, Behavior::Silent)
-                        || matches!(behavior, Behavior::AnswerAfter(unanswered) if requests <= unanswered)
-                    {
+                    if matches!(behavior, Behavior::Silent) {
                         continue;
-                    }
-                    if matches!(behavior, Behavior::DelayedNoerror) {
-                        thread::sleep(Duration::from_millis(50));
                     }
 
                     let mut response = buffer[..length].to_vec();
@@ -748,20 +725,6 @@ mod tests {
         packet[2] = 0x81;
         packet[3] = 0x80 | rcode;
         packet
-    }
-
-    #[test]
-    fn path_addresses_are_read_from_the_tunnel_resolver() {
-        let server = Server::new(Behavior::Addresses);
-        assert_eq!(
-            resolve_path_addresses(server.address(), Duration::from_millis(200), || false),
-            [Ipv4Addr::new(192, 0, 2, 1), Ipv4Addr::new(192, 0, 2, 2)]
-        );
-        let server = Server::new(Behavior::Noerror);
-        assert!(
-            resolve_path_addresses(server.address(), Duration::from_millis(200), || false)
-                .is_empty()
-        );
     }
 
     #[test]

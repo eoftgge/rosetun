@@ -535,6 +535,19 @@ pub(super) fn probe_authorization(binary: &Path) -> [Rule; 2] {
         .map(|family| Rule::allow(family, engine_permit(binary), BOOTSTRAP_ALLOW_WEIGHT))
 }
 
+pub(super) fn native_tun_routes(luid: u64, ipv6: bool, binaries: &[&Path]) -> Vec<Rule> {
+    let mut rules = BootstrapPolicy::dns_only(binaries).rules;
+    rules.extend(
+        tunnel_authorization(luid, false)
+            .into_iter()
+            .filter(|rule| ipv6 || rule.family == AddressFamily::Ipv4),
+    );
+    if !ipv6 {
+        rules.push(Rule::block(AddressFamily::Ipv6, Vec::new(), BLOCK_WEIGHT));
+    }
+    rules
+}
+
 /// Builds the phase-2 authorization added after the TUN adapter has been
 /// discovered and validated. This is intentionally separate from bootstrap
 /// policy because its LUID does not exist before the engine starts.
@@ -1457,6 +1470,38 @@ pub(super) mod tests {
         };
         assert!(!has(false));
         assert!(has(true));
+    }
+
+    #[test]
+    fn native_tun_routes_confine_dns_and_block_unconfigured_ipv6() {
+        let worker = Path::new(r"C:\sing-box.exe");
+        let route_rules = |ipv6| super::native_tun_routes(123, ipv6, &[worker]);
+        let ipv4_only = route_rules(false);
+        let rules = ipv4_only.iter().collect::<Vec<_>>();
+        assert_eq!(decide(&rules, [192, 0, 2, 1], 17, 53, 999), Action::Block);
+        assert_eq!(decide(&rules, [192, 0, 2, 1], 17, 53, 123), Action::Allow);
+
+        let blocks_all_ipv6 = |rule: &Rule| {
+            rule.family == AddressFamily::Ipv6
+                && rule.action == Action::Block
+                && rule.conditions.is_empty()
+        };
+        let authorizes_ipv6_tun = |rule: &Rule| {
+            rule.family == AddressFamily::Ipv6
+                && rule.action == Action::Allow
+                && rule.conditions.contains(&Condition::LocalInterface(123))
+        };
+        assert!(ipv4_only.iter().any(blocks_all_ipv6));
+        assert!(!ipv4_only.iter().any(authorizes_ipv6_tun));
+        assert!(ipv4_only.iter().any(|rule| {
+            rule.family == AddressFamily::Ipv6
+                && rule.action == Action::Allow
+                && rule.conditions == super::engine_permit(worker)
+        }));
+
+        let dual_stack = route_rules(true);
+        assert!(!dual_stack.iter().any(blocks_all_ipv6));
+        assert!(dual_stack.iter().any(authorizes_ipv6_tun));
     }
 
     #[test]

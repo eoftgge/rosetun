@@ -52,7 +52,7 @@ pub use runtime::{
 };
 pub use settings::{
     ConnectionMode, DnsSettings, EngineKind, FragmentError, FragmentPackets, FragmentRange,
-    LocalProxySettings, LogLevel, Settings, TlsFragment, TunBackend, TunSettings, XrayUse,
+    LocalProxySettings, LogLevel, Settings, TlsFragment, TunSettings, XrayUse,
 };
 pub use subscription::{HwidScope, Selection, Subscription, SubscriptionInfo};
 pub use uploaded_list::{ListRef, UploadedListFormat, list_tag};

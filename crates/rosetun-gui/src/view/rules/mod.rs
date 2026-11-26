@@ -136,11 +136,7 @@ fn undo_notice(ctx: &egui::Context, state: &State, actions: &mut Vec<Action>) ->
     };
     let undo = tr!("undo");
     let apply = tr!("apply");
-    let apply_hint = if state.apply_restarts_tunnel() {
-        tr!("apply-hint")
-    } else {
-        tr!("apply-hint-live")
-    };
+    let apply_hint = tr!("apply-hint-live");
     let mut choices = vec![widgets::NoticeAction {
         label: &undo,
         hint: None,
@@ -173,11 +169,7 @@ fn pending_apply_notice(ctx: &egui::Context, state: &State, actions: &mut Vec<Ac
     if !pending_apply {
         return;
     }
-    let apply_hint = if state.apply_restarts_tunnel() {
-        tr!("apply-hint")
-    } else {
-        tr!("apply-hint-live")
-    };
+    let apply_hint = tr!("apply-hint-live");
     show_apply_notice(
         ctx,
         state.can_apply(),

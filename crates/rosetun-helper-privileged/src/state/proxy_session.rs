@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::PoisonError;
 use std::time::Instant;
 
 use rosetun_config::{ConnectStage, EngineKind, ExitId, Settings, uses_xray};
@@ -156,6 +157,13 @@ struct WorkerUpdate {
 }
 
 impl WorkerUpdate {
+    fn keeping() -> Self {
+        Self {
+            singbox: WorkerChange::Keep,
+            xray: WorkerChange::Keep,
+        }
+    }
+
     fn binaries<'a>(&'a self, previous: &'a Workers) -> Vec<&'a std::path::Path> {
         self.singbox
             .candidate(&previous.singbox)
@@ -197,6 +205,27 @@ impl WorkerUpdate {
 }
 
 impl ProxySession {
+    pub(super) fn main_uses_xray(&self) -> bool {
+        self.workers
+            .xray
+            .as_ref()
+            .is_some_and(|worker| worker.sockets.contains_key(PROXY_TAG))
+    }
+
+    fn outbound_failures(&self) -> rosetun_engine::OutboundFailures {
+        let mut totals = rosetun_engine::OutboundFailures::default();
+        for process in [&self.workers.singbox, &self.workers.xray]
+            .into_iter()
+            .filter_map(|worker| worker.as_ref()?.process.as_deref())
+        {
+            let failures = process.outbound_failures();
+            totals.unreachable = totals.unreachable.saturating_add(failures.unreachable);
+            totals.rejected = totals.rejected.saturating_add(failures.rejected);
+            totals.closed = totals.closed.saturating_add(failures.closed);
+        }
+        totals
+    }
+
     pub(super) fn exited(&mut self) -> (bool, Option<String>) {
         let xray = self.workers.xray.as_mut().is_some_and(Worker::stopped);
         let singbox = self.workers.singbox.as_mut().is_some_and(Worker::stopped);
@@ -253,7 +282,14 @@ impl Session {
         let listen = match listener {
             Some(listen) => listen,
             None if native_requested => rosetun_engine::LocalProxyListen {
-                addresses: Vec::new(),
+                addresses: if cfg!(test) {
+                    vec![std::net::SocketAddr::from((
+                        std::net::Ipv4Addr::LOCALHOST,
+                        0,
+                    ))]
+                } else {
+                    Vec::new()
+                },
                 dns: std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, 0)),
             },
             None => {
@@ -282,10 +318,20 @@ impl Session {
         let (lan, servers) = self.proxy_lan(settings, &endpoint, &extra_endpoints);
         self.follow_servers_in_lockdown(&servers)?;
         let shared_proxy = local_proxy::shared_port(settings, &state);
+        #[cfg(test)]
+        let test_dns = self.test_local_dns.or_else(|| {
+            self.engines
+                .get(settings.engine)?
+                .tunnel_dns_server(&settings.tun)
+        });
+        #[cfg(test)]
+        let tunnel_dns = !native_requested || test_dns.is_some();
+        #[cfg(not(test))]
+        let tunnel_dns = true;
         let scope = protection::protection_scope(
             options.mode,
             settings.kill_switch,
-            true,
+            tunnel_dns,
             state.enabled,
             !native_requested,
             shared_proxy.is_some(),
@@ -302,6 +348,7 @@ impl Session {
         let tags = exits::exit_tags(&request.extra_nodes, &extra_endpoints);
         let entry = delay_entry(None, &[], &tags)?;
         let rules = self.proxy_rules(request, &extra_endpoints, &lan)?;
+        let mut engine = Some(RuleEngine::compile(&rules).map_err(rule_error)?);
         let verbose = settings
             .verbose_log_until
             .filter(|until| now_unix() < *until);
@@ -348,54 +395,31 @@ impl Session {
             target_os = "macos",
             all(windows, target_arch = "x86_64")
         ))]
-        let mut native = if native_requested {
-            let native = super::native_tun::NativeTun::open(&settings.tun)?;
-            let actual_name = native.name()?;
+        let mut native = if native_requested && !cfg!(test) {
+            Some(super::native_tun::NativeTun::open(&settings.tun)?)
+        } else {
+            None
+        };
+        #[cfg(any(
+            target_os = "linux",
+            target_os = "macos",
+            all(windows, target_arch = "x86_64")
+        ))]
+        if native_requested {
+            let actual_name = native.as_ref().map_or_else(
+                || Ok(settings.tun.name.clone()),
+                super::native_tun::NativeTun::name,
+            )?;
+            #[cfg(test)]
+            let actual_name = self.test_tun_name.clone().unwrap_or(actual_name);
             self.active_tun_name = Some(actual_name.clone());
             *self
                 .shared_active_tun
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(actual_name);
-            if self.protection.is_active() {
-                let deadline = Instant::now() + super::TUNNEL_READY_TIMEOUT;
-                let tun = rosetun_routing::TunnelInterface::try_from(&settings.tun)
-                    .map_err(super::native_tun::route_error)?;
-                loop {
-                    match self.protection.authorize_tunnel(&tun) {
-                        Ok(()) => break,
-                        Err(error) if error.is_tunnel_not_ready() && Instant::now() < deadline => {
-                            super::sleep_cancellable(
-                                super::TUNNEL_READY_POLL_INTERVAL,
-                                &self.cancelled,
-                            )?;
-                        }
-                        Err(error)
-                            if options.mode == StartMode::Fresh
-                                && self.protection.scope()
-                                    == Some(rosetun_routing::ProtectionScope::DnsOnly) =>
-                        {
-                            tracing::warn!(
-                                %error,
-                                "DNS lock cannot authorize native TUN; connecting without it"
-                            );
-                            self.protection.release("failed to roll back DNS lock");
-                            self.protection.record_shortfall(
-                                rosetun_config::ProtectionShortfallCode::TunnelNotPermitted,
-                            );
-                            break;
-                        }
-                        Err(error) => return Err(super::native_tun::route_error(error)),
-                    }
-                }
-            }
-            Some(native)
-        } else {
-            None
-        };
-        self.stage(ConnectStage::StartingEngine)?;
-        self.spawn_workers(settings.engine, &mut update)?;
+                .unwrap_or_else(PoisonError::into_inner) = Some(actual_name);
+            self.authorize_native_tunnel(&settings.tun, options.mode)?;
+        }
         let outbounds = update.outbounds(&workers, &tags);
-        update.commit(&mut workers);
         let config = || DataplaneConfig {
             listen: listen.clone(),
             dns: settings.dns.clone(),
@@ -407,38 +431,57 @@ impl Session {
             sniff: Default::default(),
             direct_resolver: None,
         };
+        let mut start = |tunnel| match engine.take() {
+            Some(engine) => Dataplane::start_prepared(config(), tunnel, engine),
+            None => Dataplane::start(config()),
+        };
         #[cfg(any(
             target_os = "linux",
             target_os = "macos",
             all(windows, target_arch = "x86_64")
         ))]
-        let dataplane = if let Some(native) = &mut native {
-            let dataplane = Dataplane::start_native(config(), native.tunnel()?)
-                .map_err(super::native_tun::route_error)?;
-            let bypass = if settings.allow_lan {
-                lan.segment.route_networks()
-            } else {
-                Vec::new()
-            };
+        let dataplane = if let Some(native) = &native {
+            let dataplane =
+                start(Some(native.tunnel()?)).map_err(super::native_tun::route_error)?;
             #[cfg(all(windows, target_arch = "x86_64"))]
             if self.protection.is_active() {
                 self.authorize_native_listeners(&dataplane)?;
             }
-            native.capture(&bypass, &servers)?;
             dataplane
         } else {
-            local_proxy::start(settings.local_proxy.port, &self.cancelled, || {
-                Dataplane::start(config())
-            })?
+            local_proxy::start(settings.local_proxy.port, &self.cancelled, || start(None))?
         };
         #[cfg(not(any(
             target_os = "linux",
             target_os = "macos",
             all(windows, target_arch = "x86_64")
         )))]
-        let dataplane = local_proxy::start(settings.local_proxy.port, &self.cancelled, || {
-            Dataplane::start(config())
-        })?;
+        let dataplane =
+            local_proxy::start(settings.local_proxy.port, &self.cancelled, || start(None))?;
+        self.stage(ConnectStage::StartingEngine)?;
+        self.spawn_workers(settings.engine, &mut update)?;
+        update.commit(&mut workers);
+        #[cfg(any(
+            target_os = "linux",
+            target_os = "macos",
+            all(windows, target_arch = "x86_64")
+        ))]
+        if let Some(native) = &mut native {
+            let bypass = if settings.allow_lan {
+                lan.segment.route_networks()
+            } else {
+                Vec::new()
+            };
+            #[cfg(windows)]
+            {
+                let workers_kept = WorkerUpdate::keeping();
+                let mut binaries = workers_kept.binaries(&workers);
+                binaries.extend(plan.proxy_application.as_deref());
+                native.capture(&bypass, &servers, settings.tun.auto_route, &binaries)?;
+            }
+            #[cfg(not(windows))]
+            native.capture(&bypass, &servers, settings.tun.auto_route)?;
+        }
         let server = dataplane.dns_addr();
         let entry = DelayInbound {
             address: dataplane.delay_addr().unwrap_or(entry.address),
@@ -457,16 +500,62 @@ impl Session {
             ))]
             native,
         });
+        #[cfg(not(test))]
+        let server = Some(server);
         #[cfg(test)]
-        let server = self.test_local_dns.unwrap_or(server);
-        self.tunnel_dns = Some(server);
-        self.stage(ConnectStage::CheckingServer)?;
-        self.check_live_tunnel(options.dns_timeout)?;
+        let server = test_dns.or_else(|| (!native_requested).then_some(server));
+        self.tunnel_dns = server;
+        if server.is_some() {
+            self.stage(ConnectStage::CheckingServer)?;
+            self.check_live_tunnel(options.dns_timeout)?;
+        }
         self.lan.begin_session(lan, servers);
+        if native_requested && settings.allow_lan {
+            self.lan.release_broadcast_route(&settings.tun);
+        }
         self.shared_addresses = shared_addresses;
         self.shared_address_watch = lan::LanWatch::default();
         self.remember_proxy_endpoints(request, endpoint, &extra_endpoints, tags);
         check_cancelled(&self.cancelled)
+    }
+
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "macos",
+        all(windows, target_arch = "x86_64")
+    ))]
+    fn authorize_native_tunnel(
+        &mut self,
+        settings: &rosetun_config::TunSettings,
+        mode: StartMode,
+    ) -> Result<(), HelperError> {
+        if !self.protection.is_active() {
+            return Ok(());
+        }
+        let deadline = Instant::now() + super::TUNNEL_READY_TIMEOUT;
+        let tun = rosetun_routing::TunnelInterface::try_from(settings)
+            .map_err(super::native_tun::route_error)?;
+        loop {
+            match self.protection.authorize_tunnel(&tun) {
+                Ok(()) => return Ok(()),
+                Err(error) if error.is_tunnel_not_ready() && Instant::now() < deadline => {
+                    super::sleep_cancellable(super::TUNNEL_READY_POLL_INTERVAL, &self.cancelled)?;
+                }
+                Err(error)
+                    if mode == StartMode::Fresh
+                        && self.protection.scope()
+                            == Some(rosetun_routing::ProtectionScope::DnsOnly) =>
+                {
+                    tracing::warn!(%error, "DNS lock cannot authorize native TUN; connecting without it");
+                    self.protection.release("failed to roll back DNS lock");
+                    self.protection.record_shortfall(
+                        rosetun_config::ProtectionShortfallCode::TunnelNotPermitted,
+                    );
+                    return Ok(());
+                }
+                Err(error) => return Err(super::native_tun::route_error(error)),
+            }
+        }
     }
 
     pub(super) fn apply_proxy(
@@ -504,14 +593,12 @@ impl Session {
                 shared_proxy: local_proxy::shared_port(&request.settings, &state),
                 ..proxy.plan.clone()
             };
-            let previous = WorkerUpdate {
-                singbox: WorkerChange::Keep,
-                xray: WorkerChange::Keep,
-            };
+            let previous = WorkerUpdate::keeping();
             let previous_binaries = previous.binaries(&proxy.workers);
             let next_binaries = update.binaries(&proxy.workers);
-            let replace_guard = self.protection.is_active()
-                && (previous_binaries != next_binaries || proxy.plan != plan);
+            let binaries_changed = previous_binaries != next_binaries;
+            let replace_guard =
+                self.protection.is_active() && (binaries_changed || proxy.plan != plan);
             let replace_lockdown_lan = servers != self.lan.servers();
             if replace_lockdown_lan {
                 self.follow_servers_in_lockdown(&servers)?;
@@ -530,6 +617,19 @@ impl Session {
                 ))]
                 if let Some(native) = proxy.native.as_mut() {
                     native.ensure_endpoints(&servers)?;
+                }
+                #[cfg(all(windows, target_arch = "x86_64"))]
+                if binaries_changed && let Some(native) = proxy.native.as_mut() {
+                    let mut binaries = previous_binaries.clone();
+                    binaries.extend(
+                        update
+                            .binaries(&proxy.workers)
+                            .iter()
+                            .copied()
+                            .filter(|path| !previous_binaries.contains(path)),
+                    );
+                    binaries.extend(plan.proxy_application.as_deref());
+                    native.permit_workers(&binaries)?;
                 }
                 self.spawn_workers(request.settings.engine, &mut update)?;
                 check_cancelled(&self.cancelled)?;
@@ -554,6 +654,14 @@ impl Session {
                 if let Some(native) = proxy.native.as_mut() {
                     native.retain_endpoints(self.lan.servers());
                 }
+                #[cfg(all(windows, target_arch = "x86_64"))]
+                if binaries_changed && let Some(native) = proxy.native.as_mut() {
+                    let mut binaries = previous_binaries.clone();
+                    binaries.extend(plan.proxy_application.as_deref());
+                    if let Err(error) = native.permit_workers(&binaries) {
+                        tracing::error!(code = ?error.code, "failed to restore the native TUN worker permits");
+                    }
+                }
                 self.protection.permit_binaries(&previous_binaries);
                 if replace_guard
                     && let Err(restore) = self
@@ -575,6 +683,14 @@ impl Session {
                 return Err(error);
             }
             update.commit(&mut proxy.workers);
+            #[cfg(all(windows, target_arch = "x86_64"))]
+            if binaries_changed && let Some(native) = proxy.native.as_mut() {
+                let mut binaries = previous.binaries(&proxy.workers);
+                binaries.extend(plan.proxy_application.as_deref());
+                if let Err(error) = native.permit_workers(&binaries) {
+                    tracing::error!(code = ?error.code, "failed to retire old native TUN worker permits");
+                }
+            }
             #[cfg(any(
                 target_os = "linux",
                 target_os = "macos",
@@ -612,7 +728,9 @@ impl Session {
                 rosetun_routing::TunnelInterface::try_from(&request.settings.tun).map_err(error)?;
             self.protection.authorize_tunnel(&tunnel).map_err(error)?;
             #[cfg(all(windows, target_arch = "x86_64"))]
-            self.authorize_native_listeners(_dataplane)?;
+            if !cfg!(test) {
+                self.authorize_native_listeners(_dataplane)?;
+            }
         }
         Ok(())
     }
@@ -900,14 +1018,7 @@ impl Session {
     }
 
     pub(super) fn delay_entry(&self) -> Option<&DelayInbound> {
-        self.proxy_session
-            .as_ref()
-            .map(|proxy| &proxy.entry)
-            .or_else(|| {
-                self.control
-                    .as_ref()
-                    .and_then(|control| control.delay.as_ref())
-            })
+        self.proxy_session.as_ref().map(|proxy| &proxy.entry)
     }
 
     pub(super) fn check_proxy_dns(
@@ -925,7 +1036,7 @@ impl Session {
             self.dns_timeout.min(timeout),
             self.dns_attempt_timeout.min(timeout),
             None,
-            || Ok((proxy.exited().1.is_none(), Default::default())),
+            || Ok((proxy.exited().1.is_none(), proxy.outbound_failures())),
             || self.cancelled.load(std::sync::atomic::Ordering::Acquire),
         )
     }

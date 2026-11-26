@@ -20,7 +20,6 @@
     "private_networks": false,
     "autostart": true,
     "tun": {
-      "backend": "native_mixed",
       "name": "rosetun-test",
       "mtu": 1420,
       "ipv4": "192.0.2.1/24",

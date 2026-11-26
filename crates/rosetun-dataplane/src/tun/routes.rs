@@ -25,6 +25,12 @@ impl fmt::Debug for CaptureRoutes {
 }
 
 impl CaptureRoutes {
+    pub fn manual() -> Self {
+        Self {
+            prefixes: Vec::new(),
+        }
+    }
+
     pub fn plan(settings: &DeviceSettings, lan: &[IpPrefix]) -> io::Result<Self> {
         let mut prefixes = vec![IpPrefix::v4([0; 4], 1), IpPrefix::v4([128, 0, 0, 0], 1)];
         if settings.ipv6.is_some() {

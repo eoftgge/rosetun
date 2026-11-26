@@ -139,7 +139,7 @@ class ProxyProfile:
     def judge(self, config, lab_id, seen, plain):
         node = lab_protocol.GATEWAYS[4]
         port = config['lab']['tunnel']['node_port']
-        # The strict window includes NativeMixed, whose UDP associations
+        # The strict window includes native TUN, whose UDP associations
         # can use the same authenticated Shadowsocks endpoint.
         endpoints = {'strict': ((node, 'tcp', port), (node, 'udp', port))}
         lab.judge(config, lab_id, seen, plain, labels=self.labels, window_allowances=self.window_allowances,

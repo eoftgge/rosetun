@@ -51,8 +51,13 @@ impl NativeTun {
         &mut self,
         lan: &[IpPrefix],
         servers: &[IpAddr],
+        auto_route: bool,
     ) -> Result<(), HelperError> {
-        let plan = CaptureRoutes::plan(&self.settings, lan).map_err(route_error)?;
+        let plan = if auto_route {
+            CaptureRoutes::plan(&self.settings, lan).map_err(route_error)?
+        } else {
+            CaptureRoutes::manual()
+        };
         self.routes
             .capture(&self.interface_name, &plan, servers)
             .map_err(route_error)?;

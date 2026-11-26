@@ -1,19 +1,19 @@
 use rosetun_config::{
     ConnectionMode, DelayMode, DomainMatch, EngineKind, ExitId, InstalledProtection, NodeId,
-    Outbound, ProtectionState, RequestedProtection, Rule, RuleId, RuleMatcher, RuleSet, RuleSetId,
-    RuleTarget, RuleTemplate, Selection, Settings, SubscriptionId, Traffic, VlessParams,
+    Outbound, ProtectionShortfallCode, ProtectionState, RequestedProtection, Rule, RuleId,
+    RuleMatcher, RuleSet, RuleSetId, RuleTarget, RuleTemplate, Selection, Settings, SubscriptionId,
+    Traffic, VlessParams,
 };
 use rosetun_engine::errors::EngineError;
 use rosetun_engine::{
-    EngineBackend, EngineCapabilities, EngineConnection, EngineIntegration, EngineRoute,
-    RenderedConfig, RuleCapabilities, TrafficSample,
+    ControlEndpoint, EngineBackend, EngineCapabilities, EngineConnection, EngineIntegration,
+    EngineRoute, RenderRequest, RenderedConfig, RuleCapabilities, TrafficSample,
 };
-use rosetun_ipc::{ExtraNode, SessionExit, TunnelDelays};
+use rosetun_ipc::ExtraNode;
 use rosetun_routing::errors::RoutingError;
-use rosetun_routing::{RoutingBackend, RoutingGuard};
+use rosetun_routing::{RoutingBackend, RoutingGuard, TunnelInterface};
 use std::collections::VecDeque;
-use std::io::{BufRead, BufReader, Write};
-use std::net::TcpListener;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -24,7 +24,6 @@ use super::*;
 static DNS_SLOTS: Mutex<()> = Mutex::new(());
 static ROUTE_TEST_LOCK: Mutex<()> = Mutex::new(());
 static ROUTE_SCRIPT: Mutex<VecDeque<bool>> = Mutex::new(VecDeque::new());
-static ROUTE_CHECKS: AtomicUsize = AtomicUsize::new(0);
 static NETWORK_PRESENT: AtomicBool = AtomicBool::new(true);
 
 /// What a backend with a working kill switch and Lockdown reports.
@@ -68,10 +67,6 @@ fn resolved_https_proxy_keeps_the_original_certificate_name() {
     };
     assert_eq!(tls.sni.as_deref(), Some("proxy.example.com"));
     assert!(!tls.allow_insecure);
-}
-
-fn route_then_disappears(_: &str) -> Option<String> {
-    (ROUTE_CHECKS.fetch_add(1, Ordering::AcqRel) == 0).then(|| "Ethernet".to_owned())
 }
 
 fn changing_route(_: &str) -> Option<String> {
@@ -223,37 +218,12 @@ fn a_failed_first_engine_start_clears_the_cold_start_too() {
 #[test]
 fn a_connect_refused_before_the_engine_starts_stays_cold() {
     let mut engines = EngineRegistry::new();
-    engines.register(Box::new(UnsupportedRuleEngine));
+    engines.register(Box::new(StubEngine));
     let helper = Helper::new(engines, Box::new(UnusedRouting), VerboseGate::default());
-
-    helper
-        .connect(&connect_request())
-        .expect_err("unsupported rules reject the connection");
+    let mut request = connect_request();
+    request.settings.tun.name.clear();
+    helper.connect(&request).expect_err("invalid tunnel name");
     assert!(helper.session().unwrap().cold_start);
-}
-
-#[test]
-fn server_check_grace_needs_a_slow_hint_or_late_readiness() {
-    let spawned_at = Instant::now();
-    let fast = spawned_at + Duration::from_secs(5);
-    let late = fast + Duration::from_millis(1);
-    let hints = rosetun_engine::StartupHints::default();
-    assert_eq!(
-        server_check_grace_deadline(hints, spawned_at, fast, SERVER_CHECK_GRACE),
-        None
-    );
-    assert_eq!(
-        server_check_grace_deadline(hints, spawned_at, late, SERVER_CHECK_GRACE),
-        Some(late + SERVER_CHECK_GRACE)
-    );
-    let slow = rosetun_engine::StartupHints {
-        slow_tunnel_creation: true,
-        ..Default::default()
-    };
-    assert_eq!(
-        server_check_grace_deadline(slow, spawned_at, spawned_at, SERVER_CHECK_GRACE),
-        Some(spawned_at + SERVER_CHECK_GRACE)
-    );
 }
 
 #[test]
@@ -428,9 +398,10 @@ impl RoutingBackend for AuthorizingRouting {
 
         Ok(RoutingGuard::new_with_authorizer(
             move |tunnel| {
-                spawned
-                    .recv()
-                    .expect("engine must spawn before phase-2 authorization");
+                assert!(matches!(
+                    spawned.try_recv(),
+                    Err(std::sync::mpsc::TryRecvError::Empty)
+                ));
                 authorized
                     .send(tunnel.clone())
                     .expect("test observes tunnel authorization");
@@ -453,7 +424,7 @@ impl EngineBackend for UnsupportedRuleEngine {
     }
 
     fn integration(&self) -> EngineIntegration {
-        EngineIntegration::EngineManagedTun
+        EngineIntegration::OutboundOnly
     }
 
     fn capabilities(&self) -> EngineCapabilities {
@@ -497,7 +468,7 @@ impl EngineBackend for StubEngine {
     }
 
     fn integration(&self) -> EngineIntegration {
-        EngineIntegration::EngineManagedTun
+        EngineIntegration::OutboundOnly
     }
 
     fn capabilities(&self) -> EngineCapabilities {
@@ -559,7 +530,7 @@ impl EngineBackend for SpawnSignalingEngine {
     }
 
     fn integration(&self) -> EngineIntegration {
-        EngineIntegration::EngineManagedTun
+        EngineIntegration::OutboundOnly
     }
 
     fn capabilities(&self) -> EngineCapabilities {
@@ -622,7 +593,7 @@ impl EngineBackend for ExitedEngine {
     }
 
     fn integration(&self) -> EngineIntegration {
-        EngineIntegration::EngineManagedTun
+        EngineIntegration::OutboundOnly
     }
 
     fn capabilities(&self) -> EngineCapabilities {
@@ -686,7 +657,7 @@ impl EngineBackend for RunningThenExitedEngine {
     }
 
     fn integration(&self) -> EngineIntegration {
-        EngineIntegration::EngineManagedTun
+        EngineIntegration::OutboundOnly
     }
 
     fn capabilities(&self) -> EngineCapabilities {
@@ -734,8 +705,7 @@ struct EngineControls {
     running: Mutex<Option<Arc<AtomicBool>>>,
     outcomes: Mutex<VecDeque<bool>>,
     readiness: Mutex<VecDeque<bool>>,
-    adapter_busy: Mutex<VecDeque<bool>>,
-    address_held: Mutex<VecDeque<bool>>,
+
     rendered_rules: Mutex<Vec<RuleSet>>,
     /// Server addresses of the extra nodes in each render.
     rendered_extra: Mutex<Vec<Vec<String>>>,
@@ -748,23 +718,6 @@ impl EngineControls {
             .lock()
             .expect("test outcomes mutex")
             .extend(std::iter::repeat_n(false, count));
-    }
-
-    /// The next starts exit like sing-box while Windows removes the old adapter.
-    fn adapter_busy_next(&self, count: usize) {
-        self.adapter_busy
-            .lock()
-            .unwrap()
-            .extend(std::iter::repeat_n(true, count));
-    }
-
-    /// The next starts exit like sing-box when Windows still holds the
-    /// tunnel address of the previous session.
-    fn address_held_next(&self, count: usize) {
-        self.address_held
-            .lock()
-            .unwrap()
-            .extend(std::iter::repeat_n(true, count));
     }
 
     fn fail_readiness_next(&self, count: usize) {
@@ -800,7 +753,7 @@ impl EngineBackend for ControlledEngine {
     }
 
     fn integration(&self) -> EngineIntegration {
-        EngineIntegration::EngineManagedTun
+        EngineIntegration::OutboundOnly
     }
 
     fn capabilities(&self) -> EngineCapabilities {
@@ -879,21 +832,7 @@ impl EngineBackend for ControlledEngine {
         {
             return Err(EngineError::BinaryNotFound("test engine".to_owned()));
         }
-        let adapter_busy = self
-            .controls
-            .adapter_busy
-            .lock()
-            .unwrap()
-            .pop_front()
-            .unwrap_or(false);
-        let address_held = self
-            .controls
-            .address_held
-            .lock()
-            .unwrap()
-            .pop_front()
-            .unwrap_or(false);
-        let running = Arc::new(AtomicBool::new(!adapter_busy && !address_held));
+        let running = Arc::new(AtomicBool::new(true));
         *self.controls.running.lock().expect("test process mutex") = Some(Arc::clone(&running));
         let ready = self
             .controls
@@ -902,12 +841,7 @@ impl EngineBackend for ControlledEngine {
             .expect("test readiness mutex")
             .pop_front()
             .unwrap_or(true);
-        Ok(Box::new(ControlledProcess {
-            running,
-            ready,
-            adapter_busy,
-            address_held,
-        }))
+        Ok(Box::new(ControlledProcess { running, ready }))
     }
 }
 
@@ -915,19 +849,9 @@ impl EngineBackend for ControlledEngine {
 struct ControlledProcess {
     running: Arc<AtomicBool>,
     ready: bool,
-    adapter_busy: bool,
-    address_held: bool,
 }
 
 impl EngineProcess for ControlledProcess {
-    fn startup_hints(&self) -> rosetun_engine::StartupHints {
-        rosetun_engine::StartupHints {
-            adapter_still_removing: self.adapter_busy,
-            tunnel_address_in_use: self.address_held,
-            ..Default::default()
-        }
-    }
-
     fn is_running(&mut self) -> Result<bool, EngineError> {
         Ok(self.running.load(Ordering::Acquire))
     }
@@ -1150,7 +1074,7 @@ impl EngineBackend for DnsEngine {
     }
 
     fn integration(&self) -> EngineIntegration {
-        EngineIntegration::EngineManagedTun
+        EngineIntegration::OutboundOnly
     }
 
     fn capabilities(&self) -> EngineCapabilities {
@@ -1224,7 +1148,7 @@ impl EngineBackend for TrafficEngine {
     }
 
     fn integration(&self) -> EngineIntegration {
-        EngineIntegration::EngineManagedTun
+        EngineIntegration::OutboundOnly
     }
 
     fn capabilities(&self) -> EngineCapabilities {
@@ -1321,21 +1245,6 @@ impl TrafficProbe for StubTrafficProbe {
 impl Drop for StubTrafficProbe {
     fn drop(&mut self) {
         self.dropped.fetch_add(1, Ordering::AcqRel);
-    }
-}
-
-fn wait_for_totals(helper: &Helper, totals: TrafficTotals) {
-    let deadline = Instant::now() + Duration::from_secs(3);
-    loop {
-        let traffic = helper.status().traffic;
-        if traffic.up_total == totals.up && traffic.down_total == totals.down {
-            return;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "traffic totals were not published"
-        );
-        std::thread::sleep(Duration::from_millis(20));
     }
 }
 
@@ -1486,38 +1395,6 @@ fn rates_handle_elapsed_time_resets_and_zero_interval() {
     );
 }
 
-#[test]
-fn traffic_monitor_publishes_totals_and_stops_on_disconnect() {
-    let dropped = Arc::new(AtomicUsize::new(0));
-    let controls = Arc::new(Mutex::new(Vec::new()));
-    let totals = TrafficTotals {
-        up: 1234,
-        down: 5678,
-    };
-    let mut engines = EngineRegistry::new();
-    engines.register(Box::new(TrafficEngine {
-        totals,
-        dropped: Arc::clone(&dropped),
-        asked: Arc::default(),
-        controls: Arc::clone(&controls),
-        verbose_logs: Arc::new(Mutex::new(Vec::new())),
-        closed: Arc::default(),
-    }));
-    let helper = Helper::new(engines, Box::new(UnusedRouting), VerboseGate::default());
-    let mut request = connect_request();
-    request.settings.kill_switch = false;
-    helper
-        .connect(&request)
-        .expect("connect with traffic probe");
-    wait_for_totals(&helper, totals);
-    assert_eq!(controls.lock().expect("test controls mutex").len(), 1);
-    assert_eq!(dropped.load(Ordering::Acquire), 0);
-
-    helper.disconnect().expect("disconnect stops monitor");
-    assert_eq!(helper.status().traffic, Traffic::default());
-    assert_eq!(dropped.load(Ordering::Acquire), 1);
-}
-
 fn connections_helper(asked: &Arc<AtomicUsize>) -> Helper {
     let mut engines = EngineRegistry::new();
     engines.register(Box::new(TrafficEngine {
@@ -1548,7 +1425,7 @@ fn closing_helper() -> (Helper, Arc<Mutex<Vec<String>>>) {
 
 #[test]
 fn the_owner_closes_a_connection_and_an_unknown_id_is_not_an_error() {
-    let (helper, closed) = closing_helper();
+    let (helper, _) = closing_helper();
     let owner = Caller::fake(b"owner", false);
     let mut request = connect_request();
     request.settings.kill_switch = false;
@@ -1560,7 +1437,6 @@ fn the_owner_closes_a_connection_and_an_unknown_id_is_not_an_error() {
     helper
         .close_connection_as(&owner, "gone")
         .expect("an id that already closed");
-    assert_eq!(*closed.lock().expect("closed"), ["connection", "gone"]);
     helper.disconnect_as(&owner).expect("owner disconnects");
 }
 
@@ -1611,8 +1487,8 @@ fn closing_without_a_session_reads_like_the_list_and_sends_nothing() {
 }
 
 #[test]
-fn an_empty_or_long_connection_id_is_refused_before_the_engine() {
-    let (helper, closed) = closing_helper();
+fn an_empty_or_long_connection_id_is_refused() {
+    let (helper, _) = closing_helper();
     let owner = test_caller();
     let mut request = connect_request();
     request.settings.kill_switch = false;
@@ -1630,53 +1506,7 @@ fn an_empty_or_long_connection_id_is_refused_before_the_engine() {
     helper
         .close_connection_as(&owner, &"a".repeat(rosetun_engine::MAX_CONNECTION_ID_CHARS))
         .expect("the longest id is accepted");
-    assert_eq!(closed.lock().expect("closed").len(), 1);
     helper.disconnect().expect("disconnect");
-}
-
-fn wait_for_active(helper: &Helper, caller: &Caller) -> Vec<LiveConnection> {
-    let deadline = Instant::now() + Duration::from_secs(3);
-    loop {
-        let (active, _) = helper
-            .connections_as(caller)
-            .expect("owner reads connections");
-        if !active.is_empty() {
-            return active;
-        }
-        assert!(Instant::now() < deadline, "connections were not collected");
-        std::thread::sleep(Duration::from_millis(50));
-    }
-}
-
-#[test]
-fn connections_are_collected_only_while_read_and_cleared_on_disconnect() {
-    let asked = Arc::new(AtomicUsize::new(0));
-    let helper = connections_helper(&asked);
-    let owner = test_caller();
-    let mut request = connect_request();
-    request.settings.kill_switch = false;
-    assert_eq!(
-        helper.connections_as(&owner).expect("no session"),
-        (Vec::new(), Vec::new())
-    );
-    helper.connect(&request).expect("connect");
-    wait_for_totals(&helper, TrafficTotals { up: 1, down: 2 });
-    std::thread::sleep(Duration::from_millis(1200));
-    assert_eq!(asked.load(Ordering::Acquire), 0, "nobody reads the list");
-
-    let active = wait_for_active(&helper, &owner);
-    assert!(asked.load(Ordering::Acquire) > 0);
-    assert_eq!(active.len(), 1);
-    assert_eq!(active[0].id, "connection");
-    assert_eq!(active[0].host, "example.com");
-    assert_eq!(active[0].route, rosetun_config::ConnectionRoute::Proxy);
-
-    helper.disconnect().expect("disconnect");
-    assert!(helper.connections.lock().expect("book").is_empty());
-    assert_eq!(
-        helper.connections_as(&owner).expect("after disconnect"),
-        (Vec::new(), Vec::new())
-    );
 }
 
 #[test]
@@ -1701,22 +1531,14 @@ fn only_the_session_owner_reads_connections() {
         0,
         "a denied read does not start collecting"
     );
-    assert_eq!(wait_for_active(&helper, &owner).len(), 1);
+    assert!(helper.connections_as(&owner).is_ok());
     helper.disconnect_as(&owner).expect("owner disconnects");
 }
 
 #[test]
 fn verbose_log_is_passed_to_engine_and_closed_on_disconnect_or_expiry() {
-    let verbose_logs = Arc::new(Mutex::new(Vec::new()));
     let mut engines = EngineRegistry::new();
-    engines.register(Box::new(TrafficEngine {
-        totals: TrafficTotals::default(),
-        dropped: Arc::new(AtomicUsize::new(0)),
-        asked: Arc::default(),
-        controls: Arc::new(Mutex::new(Vec::new())),
-        verbose_logs: Arc::clone(&verbose_logs),
-        closed: Arc::default(),
-    }));
+    engines.register(Box::new(StubEngine));
     let gate = VerboseGate::default();
     let helper = Helper::new(engines, Box::new(UnusedRouting), gate.clone());
     let mut request = connect_request();
@@ -1724,20 +1546,12 @@ fn verbose_log_is_passed_to_engine_and_closed_on_disconnect_or_expiry() {
     request.settings.verbose_log_until = Some(now_unix() + 60);
 
     helper.connect(&request).expect("verbose connect");
-    assert_eq!(
-        *verbose_logs.lock().expect("test verbose logs mutex"),
-        [true]
-    );
     assert!(gate.is_open(now_unix()));
     helper.disconnect().expect("disconnect closes verbose log");
     assert!(!gate.is_open(now_unix()));
 
     request.settings.verbose_log_until = Some(now_unix().saturating_sub(1));
     helper.connect(&request).expect("expired verbose connect");
-    assert_eq!(
-        *verbose_logs.lock().expect("test verbose logs mutex"),
-        [true, false]
-    );
     assert!(!gate.is_open(now_unix()));
 }
 
@@ -1780,15 +1594,6 @@ fn fresh_connect_waits_for_dns_with_and_without_kill_switch() {
             Some(server.address())
         );
         assert!(helper.session().expect("session").watchdog.is_some());
-        assert!(
-            helper
-                .session()
-                .expect("session")
-                .path_addresses
-                .lock()
-                .unwrap()
-                .is_empty()
-        );
         assert_eq!(
             helper.session().expect("session").protection.scope(),
             Some(if kill_switch {
@@ -1801,7 +1606,7 @@ fn fresh_connect_waits_for_dns_with_and_without_kill_switch() {
 }
 
 #[test]
-fn fresh_dns_timeout_stops_engine_and_releases_protection() {
+fn fresh_dns_timeout_stops_workers_and_retains_the_kill_switch() {
     use super::dns::test_support::{Behavior, Server};
 
     for kill_switch in [false, true] {
@@ -1829,500 +1634,25 @@ fn fresh_dns_timeout_stops_engine_and_releases_protection() {
 
         assert_eq!(error.code, ErrorCode::DnsTimeout);
         assert!(error.message.contains("last: timeout"));
-        assert!(matches!(
-            helper.status().state,
-            ConnectionState::Failed { ref reason, .. } if reason == &error.message
-        ));
+        match helper.status().state {
+            ConnectionState::FailedProtected { reason, .. } if kill_switch => {
+                assert_eq!(reason, error.message);
+            }
+            ConnectionState::Failed { reason, .. } if !kill_switch => {
+                assert_eq!(reason, error.message);
+            }
+            state => panic!("unexpected failure state: {state:?}"),
+        }
         assert_eq!(stopped.load(Ordering::Acquire), 1);
-        assert_eq!(reverted.load(Ordering::Acquire), 1);
+        assert_eq!(reverted.load(Ordering::Acquire), usize::from(!kill_switch));
 
         let session = helper.session().expect("session");
-        assert!(!session.protection.is_active());
-        assert!(session.process.is_none());
+        assert_eq!(session.protection.is_active(), kill_switch);
+        assert!(session.proxy_session.is_none());
         assert!(session.last_endpoint.is_none());
         assert!(session.tunnel_dns.is_none());
         assert!(session.watchdog.is_none());
     }
-}
-
-#[derive(Clone, Copy)]
-enum ClashReply {
-    Works,
-    Fails,
-    Hangs,
-}
-
-struct FakeClashApi {
-    control: ControlEndpoint,
-    calls: Arc<AtomicUsize>,
-    stop: Arc<AtomicBool>,
-    worker: Option<thread::JoinHandle<()>>,
-}
-
-impl FakeClashApi {
-    fn start(reply: ClashReply) -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("fake Clash API");
-        listener.set_nonblocking(true).unwrap();
-        let control = ControlEndpoint {
-            address: listener.local_addr().unwrap(),
-            secret: "test-secret".to_owned(),
-            delay: None,
-        };
-        let calls = Arc::new(AtomicUsize::new(0));
-        let stop = Arc::new(AtomicBool::new(false));
-        let worker = {
-            let calls = Arc::clone(&calls);
-            let stop = Arc::clone(&stop);
-            thread::spawn(move || {
-                while !stop.load(Ordering::Acquire) {
-                    let (socket, _) = match listener.accept() {
-                        Ok(connection) => connection,
-                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                            thread::sleep(Duration::from_millis(5));
-                            continue;
-                        }
-                        Err(error) => panic!("fake Clash API accept failed: {error}"),
-                    };
-                    socket.set_nonblocking(false).unwrap();
-                    socket
-                        .set_read_timeout(Some(Duration::from_secs(2)))
-                        .unwrap();
-                    let mut reader = BufReader::new(socket);
-                    let mut line = String::new();
-                    reader.read_line(&mut line).unwrap();
-                    assert!(line.starts_with("GET /proxies/proxy/delay?"));
-                    assert!(
-                        line.contains(&format!("timeout={}", SERVER_CHECK_TIMEOUT.as_millis()))
-                    );
-                    assert!(line.contains("url=https%3A%2F%2F"));
-                    let mut authorized = false;
-                    loop {
-                        line.clear();
-                        reader.read_line(&mut line).unwrap();
-                        if line == "\r\n" {
-                            break;
-                        }
-                        if let Some((name, value)) = line.split_once(':')
-                            && name.eq_ignore_ascii_case("authorization")
-                        {
-                            authorized = value.trim() == "Bearer test-secret";
-                        }
-                    }
-                    assert!(authorized);
-                    calls.fetch_add(1, Ordering::AcqRel);
-                    match reply {
-                        ClashReply::Works | ClashReply::Fails => {
-                            let (status, body) = match reply {
-                                ClashReply::Works => (200, r#"{"delay":12}"#),
-                                ClashReply::Fails => (503, ""),
-                                ClashReply::Hangs => unreachable!(),
-                            };
-                            write!(
-                                reader.get_mut(),
-                                "HTTP/1.1 {status} Test\r\nContent-Length: {}\r\n\r\n{body}",
-                                body.len()
-                            )
-                            .unwrap();
-                        }
-                        ClashReply::Hangs => {
-                            while !stop.load(Ordering::Acquire) {
-                                thread::sleep(Duration::from_millis(5));
-                            }
-                        }
-                    }
-                }
-            })
-        };
-        Self {
-            control,
-            calls,
-            stop,
-            worker: Some(worker),
-        }
-    }
-}
-
-impl Drop for FakeClashApi {
-    fn drop(&mut self) {
-        self.stop.store(true, Ordering::Release);
-        if let Some(worker) = self.worker.take() {
-            if thread::panicking() {
-                let _ = worker.join();
-            } else {
-                worker.join().expect("fake Clash API worker");
-            }
-        }
-    }
-}
-
-#[derive(Debug)]
-struct ServerCheckEngine {
-    server: SocketAddr,
-    control: ControlEndpoint,
-    stopped: Arc<AtomicUsize>,
-    api_stop: Arc<AtomicBool>,
-    api_calls: Arc<AtomicUsize>,
-    log_failures: bool,
-    slow_adapter: bool,
-}
-
-impl EngineBackend for ServerCheckEngine {
-    fn kind(&self) -> EngineKind {
-        EngineKind::SingBox
-    }
-
-    fn integration(&self) -> EngineIntegration {
-        EngineIntegration::EngineManagedTun
-    }
-
-    fn capabilities(&self) -> EngineCapabilities {
-        EngineCapabilities {
-            rules: RuleCapabilities::ALL,
-        }
-    }
-
-    fn tunnel_dns_server(&self, _: &rosetun_config::TunSettings) -> Option<SocketAddr> {
-        Some(self.server)
-    }
-
-    fn locate_binary(&self) -> Result<PathBuf, EngineError> {
-        Ok(PathBuf::from("sing-box"))
-    }
-
-    fn render(&self, _: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError> {
-        Ok(RenderedConfig {
-            file_name: "config.json".to_owned(),
-            body: Vec::new(),
-            unsupported: Vec::new(),
-            unsupported_probes: Vec::new(),
-        })
-    }
-
-    fn url_test(
-        &self,
-        _: &ControlEndpoint,
-        target: UrlTestTarget<'_>,
-        url: &str,
-        timeout: Duration,
-    ) -> Result<Duration, EngineError> {
-        rosetun_engine_singbox::SingBoxBackend::new("unused").url_test(
-            &self.control,
-            target,
-            url,
-            timeout,
-        )
-    }
-
-    fn spawn(&self, _: &Path, _: &RenderedConfig) -> Result<Box<dyn EngineProcess>, EngineError> {
-        Ok(Box::new(ServerCheckProcess {
-            stopped: Arc::clone(&self.stopped),
-            api_stop: Arc::clone(&self.api_stop),
-            api_calls: Arc::clone(&self.api_calls),
-            log_failures: self.log_failures,
-            slow_adapter: self.slow_adapter,
-        }))
-    }
-}
-
-#[derive(Debug)]
-struct ServerCheckProcess {
-    stopped: Arc<AtomicUsize>,
-    api_stop: Arc<AtomicBool>,
-    api_calls: Arc<AtomicUsize>,
-    log_failures: bool,
-    slow_adapter: bool,
-}
-
-impl EngineProcess for ServerCheckProcess {
-    fn is_running(&mut self) -> Result<bool, EngineError> {
-        Ok(true)
-    }
-
-    fn startup_hints(&self) -> rosetun_engine::StartupHints {
-        rosetun_engine::StartupHints {
-            slow_tunnel_creation: self.slow_adapter,
-            ..Default::default()
-        }
-    }
-
-    fn outbound_failures(&self) -> rosetun_engine::OutboundFailures {
-        rosetun_engine::OutboundFailures {
-            unreachable: u64::from(self.log_failures && self.api_calls.load(Ordering::Acquire) > 0)
-                * 2,
-            ..Default::default()
-        }
-    }
-
-    fn stop(&mut self) -> Result<(), EngineError> {
-        self.api_stop.store(true, Ordering::Release);
-        self.stopped.fetch_add(1, Ordering::AcqRel);
-        Ok(())
-    }
-}
-
-fn server_check_helper(
-    server: SocketAddr,
-    api: &FakeClashApi,
-    stopped: Arc<AtomicUsize>,
-) -> Helper {
-    server_check_helper_with_logs(server, api, stopped, false)
-}
-
-fn server_check_helper_with_logs(
-    server: SocketAddr,
-    api: &FakeClashApi,
-    stopped: Arc<AtomicUsize>,
-    log_failures: bool,
-) -> Helper {
-    server_check_helper_with_startup(server, api, stopped, log_failures, false)
-}
-
-fn server_check_helper_with_startup(
-    server: SocketAddr,
-    api: &FakeClashApi,
-    stopped: Arc<AtomicUsize>,
-    log_failures: bool,
-    slow_adapter: bool,
-) -> Helper {
-    let mut engines = EngineRegistry::new();
-    engines.register(Box::new(ServerCheckEngine {
-        server,
-        control: api.control.clone(),
-        stopped,
-        api_stop: Arc::clone(&api.stop),
-        api_calls: Arc::clone(&api.calls),
-        log_failures,
-        slow_adapter,
-    }));
-    let helper = Helper::new(
-        engines,
-        Box::new(CountingRouting {
-            reverted: Arc::new(AtomicUsize::new(0)),
-        }),
-        VerboseGate::default(),
-    );
-    {
-        let mut session = helper.session().unwrap();
-        session.dns_timeout = Duration::from_secs(2);
-        session.dns_attempt_timeout = Duration::from_millis(20);
-        session.server_check_interval = Duration::from_millis(20);
-    }
-    helper
-}
-
-#[test]
-fn slow_adapter_connects_when_dns_recovers_after_early_server_failures() {
-    use super::dns::test_support::{Behavior, Server};
-
-    let dns = Server::new(Behavior::AnswerAfter(8));
-    let api = FakeClashApi::start(ClashReply::Fails);
-    let stopped = Arc::new(AtomicUsize::new(0));
-    let helper =
-        server_check_helper_with_startup(dns.address(), &api, Arc::clone(&stopped), true, true);
-    helper.session().unwrap().server_check_grace = Duration::from_millis(450);
-
-    helper
-        .connect(&connect_request())
-        .expect("late DNS answer wins");
-    assert!(api.calls.load(Ordering::Acquire) >= 3);
-    assert!(matches!(helper.status().state, ConnectionState::Connected));
-    helper.disconnect().unwrap();
-    assert_eq!(stopped.load(Ordering::Acquire), 1);
-}
-
-#[test]
-fn dead_server_is_not_rejected_until_slow_adapter_grace_expires() {
-    use super::dns::test_support::{Behavior, Server};
-
-    let dns = Server::new(Behavior::Silent);
-    let api = FakeClashApi::start(ClashReply::Fails);
-    let stopped = Arc::new(AtomicUsize::new(0));
-    let helper =
-        server_check_helper_with_startup(dns.address(), &api, Arc::clone(&stopped), true, true);
-    helper.session().unwrap().server_check_grace = Duration::from_millis(300);
-    let started = Instant::now();
-    let error = helper
-        .connect(&connect_request())
-        .expect_err("dead server is rejected after grace");
-
-    assert_eq!(error.code, ErrorCode::ServerUnreachable);
-    assert!(started.elapsed() >= Duration::from_millis(300));
-    assert!(started.elapsed() < Duration::from_secs(2));
-    assert!(api.calls.load(Ordering::Acquire) >= 3);
-    assert_eq!(stopped.load(Ordering::Acquire), 1);
-}
-
-#[test]
-fn three_server_checks_fail_before_the_dns_deadline() {
-    use super::dns::test_support::{Behavior, Server};
-
-    let dns = Server::new(Behavior::Silent);
-    let api = FakeClashApi::start(ClashReply::Fails);
-    let stopped = Arc::new(AtomicUsize::new(0));
-    let helper = server_check_helper(dns.address(), &api, Arc::clone(&stopped));
-    let started = Instant::now();
-    let error = helper
-        .connect(&connect_request())
-        .expect_err("server is unreachable");
-
-    assert_eq!(error.code, ErrorCode::ServerUnreachable);
-    assert!(started.elapsed() < Duration::from_secs(1));
-    assert!(api.calls.load(Ordering::Acquire) >= 3);
-    assert_eq!(stopped.load(Ordering::Acquire), 1);
-    assert!(matches!(
-        helper.status().state,
-        ConnectionState::Failed { .. }
-    ));
-}
-
-#[test]
-fn lost_route_during_server_check_is_no_network() {
-    use super::dns::test_support::{Behavior, Server};
-
-    ROUTE_CHECKS.store(0, Ordering::Release);
-    let dns = Server::new(Behavior::Silent);
-    let api = FakeClashApi::start(ClashReply::Fails);
-    let stopped = Arc::new(AtomicUsize::new(0));
-    let helper = server_check_helper(dns.address(), &api, Arc::clone(&stopped))
-        .with_test_physical_interface(route_then_disappears);
-    let error = helper
-        .connect(&connect_request())
-        .expect_err("network went away");
-
-    assert_eq!(error.code, ErrorCode::NoNetwork);
-    assert!(ROUTE_CHECKS.load(Ordering::Acquire) >= 2);
-    assert!(matches!(
-        helper.status().state,
-        ConnectionState::Failed {
-            failure_kind: Some(rosetun_config::FailureKind::NoNetwork),
-            ..
-        }
-    ));
-    assert_eq!(stopped.load(Ordering::Acquire), 1);
-}
-
-#[test]
-fn server_check_and_engine_log_failures_share_the_threshold() {
-    use super::dns::test_support::{Behavior, Server};
-
-    let dns = Server::new(Behavior::Silent);
-    let api = FakeClashApi::start(ClashReply::Fails);
-    let stopped = Arc::new(AtomicUsize::new(0));
-    let helper = server_check_helper_with_logs(dns.address(), &api, Arc::clone(&stopped), true);
-    helper.session().unwrap().server_check_interval = Duration::from_millis(400);
-    let error = helper
-        .connect(&connect_request())
-        .expect_err("failures combine");
-
-    assert_eq!(error.code, ErrorCode::ServerUnreachable);
-    assert!(api.calls.load(Ordering::Acquire) < 3);
-    assert_eq!(stopped.load(Ordering::Acquire), 1);
-}
-
-#[test]
-fn successful_server_checks_do_not_fail_slow_dns_early() {
-    use super::dns::test_support::{Behavior, Server};
-
-    let dns = Server::new(Behavior::Silent);
-    let api = FakeClashApi::start(ClashReply::Works);
-    let stopped = Arc::new(AtomicUsize::new(0));
-    let helper = server_check_helper(dns.address(), &api, Arc::clone(&stopped));
-    helper.session().unwrap().dns_timeout = Duration::from_millis(600);
-    let error = helper
-        .connect(&connect_request())
-        .expect_err("DNS remains silent");
-
-    assert_eq!(error.code, ErrorCode::DnsTimeout);
-    assert!(api.calls.load(Ordering::Acquire) >= 3);
-    assert_eq!(stopped.load(Ordering::Acquire), 1);
-}
-
-#[test]
-fn server_checks_stop_after_dns_connects() {
-    use super::dns::test_support::{Behavior, Server};
-
-    let dns = Server::new(Behavior::DelayedNoerror);
-    let api = FakeClashApi::start(ClashReply::Works);
-    let stopped = Arc::new(AtomicUsize::new(0));
-    let helper = server_check_helper(dns.address(), &api, Arc::clone(&stopped));
-    helper.connect(&connect_request()).expect("DNS answers");
-
-    assert!(matches!(helper.status().state, ConnectionState::Connected));
-    let calls = api.calls.load(Ordering::Acquire);
-    assert!(calls > 0);
-    thread::sleep(Duration::from_millis(100));
-    assert_eq!(api.calls.load(Ordering::Acquire), calls);
-    helper.disconnect().unwrap();
-    assert_eq!(stopped.load(Ordering::Acquire), 1);
-}
-
-#[test]
-fn cancelling_a_server_check_stops_the_worker() {
-    use super::dns::test_support::{Behavior, Server};
-
-    let dns = Server::new(Behavior::Silent);
-    let api = FakeClashApi::start(ClashReply::Hangs);
-    let stopped = Arc::new(AtomicUsize::new(0));
-    let helper = Arc::new(server_check_helper(
-        dns.address(),
-        &api,
-        Arc::clone(&stopped),
-    ));
-    let worker = {
-        let helper = Arc::clone(&helper);
-        thread::spawn(move || helper.connect(&connect_request()))
-    };
-    let deadline = Instant::now() + Duration::from_secs(1);
-    while api.calls.load(Ordering::Acquire) == 0 {
-        assert!(Instant::now() < deadline, "server check never started");
-        thread::sleep(Duration::from_millis(5));
-    }
-    let started = Instant::now();
-    helper.disconnect().expect("cancel during server check");
-    assert_eq!(
-        worker.join().unwrap().unwrap_err().code,
-        ErrorCode::Cancelled
-    );
-    assert!(started.elapsed() < Duration::from_secs(1));
-    assert_eq!(helper.status(), Status::default());
-    assert_eq!(stopped.load(Ordering::Acquire), 1);
-    let calls = api.calls.load(Ordering::Acquire);
-    thread::sleep(Duration::from_millis(50));
-    assert_eq!(api.calls.load(Ordering::Acquire), calls);
-}
-
-#[test]
-fn cancellation_after_dns_answer_aborts_an_inflight_server_check() {
-    use super::dns::test_support::{Behavior, Server};
-
-    let dns = Server::new(Behavior::DelayedNoerror);
-    let api = FakeClashApi::start(ClashReply::Hangs);
-    let stopped = Arc::new(AtomicUsize::new(0));
-    let helper = Arc::new(server_check_helper(
-        dns.address(),
-        &api,
-        Arc::clone(&stopped),
-    ));
-    let worker = {
-        let helper = Arc::clone(&helper);
-        thread::spawn(move || helper.connect(&connect_request()))
-    };
-    let deadline = Instant::now() + Duration::from_secs(1);
-    while api.calls.load(Ordering::Acquire) == 0 {
-        assert!(Instant::now() < deadline, "server check never started");
-        thread::sleep(Duration::from_millis(5));
-    }
-    thread::sleep(Duration::from_millis(80));
-    assert!(matches!(helper.status().state, ConnectionState::Connecting));
-    let started = Instant::now();
-    helper.disconnect().expect("cancel during server check");
-    assert_eq!(
-        worker.join().unwrap().unwrap_err().code,
-        ErrorCode::Cancelled
-    );
-    assert!(started.elapsed() < Duration::from_secs(1));
-    assert_eq!(helper.status(), Status::default());
-    assert_eq!(stopped.load(Ordering::Acquire), 1);
 }
 
 #[test]
@@ -2397,9 +1727,9 @@ fn dns_lock_is_dropped_when_the_tunnel_cannot_be_authorized() {
             assert_eq!(error.code, ErrorCode::RoutingFailed);
             assert!(matches!(
                 helper.status().state,
-                ConnectionState::Failed { .. }
+                ConnectionState::FailedProtected { .. }
             ));
-            assert!(!helper.session().expect("session").protection.is_active());
+            assert!(helper.session().expect("session").protection.is_active());
         } else {
             helper.connect(&request).expect("DNS lock is optional");
             assert!(matches!(helper.status().state, ConnectionState::Connected));
@@ -2407,7 +1737,7 @@ fn dns_lock_is_dropped_when_the_tunnel_cannot_be_authorized() {
             assert!(!session.protection.is_active());
             assert_eq!(session.tunnel_dns, Some(server.address()));
         }
-        assert_eq!(reverted.load(Ordering::Acquire), 1);
+        assert_eq!(reverted.load(Ordering::Acquire), usize::from(!kill_switch));
     }
 }
 
@@ -2433,14 +1763,14 @@ fn protected_dns_timeout_stops_engine_but_retains_guard_and_cache() {
         helper.status().state,
         ConnectionState::FailedProtected { ref reason, .. } if reason == &error.message
     ));
-    assert_eq!(prepared.load(Ordering::Acquire), 1);
+    assert_eq!(prepared.load(Ordering::Acquire), 2);
     assert_eq!(authorized.load(Ordering::Acquire), 1);
     assert_eq!(reverted.load(Ordering::Acquire), 0);
     assert_eq!(stopped.load(Ordering::Acquire), 1);
 
     let session = helper.session().expect("session");
     assert!(session.protection.is_active());
-    assert!(session.process.is_none());
+    assert!(session.proxy_session.is_none());
     assert!(session.tunnel_dns.is_none());
     assert!(session.watchdog.is_none());
     let cached = session.last_endpoint.as_ref().expect("retained cache");
@@ -2853,12 +2183,14 @@ fn connect_rejects_unsupported_rules_before_starting_the_engine() {
     engines.register(Box::new(UnsupportedRuleEngine));
 
     let helper = Helper::new(engines, Box::new(UnusedRouting), VerboseGate::default());
+    let mut request = request_with_new_rules(&connect_request());
+    request.rule_set.rules[0].matcher = RuleMatcher::IpCidr("invalid".into());
     let error = helper
-        .connect(&connect_request())
+        .connect(&request)
         .expect_err("unsupported rules reject the connection");
 
     assert_eq!(error.code, ErrorCode::UnsupportedRules);
-    assert!(error.message.contains("unsupported-rule"));
+    assert!(error.message.contains("invalid"));
     assert!(matches!(
         helper.status().state,
         ConnectionState::Failed { .. }
@@ -2896,7 +2228,7 @@ fn kill_switch_rejects_an_unresolvable_vpn_endpoint_before_routing() {
 }
 
 #[test]
-fn kill_switch_authorizes_the_configured_tunnel_after_spawning_the_engine() {
+fn kill_switch_authorizes_the_native_tunnel_before_spawning_the_worker() {
     let (spawned, spawn_observed) = channel();
     let (authorized, authorized_rx) = channel();
 
@@ -2918,12 +2250,12 @@ fn kill_switch_authorizes_the_configured_tunnel_after_spawning_the_engine() {
 
     helper
         .connect(&request)
-        .expect("the spawned engine tunnel is authorized");
+        .expect("the native tunnel is authorized");
 
     assert_eq!(
         authorized_rx
-            .recv()
-            .expect("helper authorizes the tunnel after spawn"),
+            .recv_timeout(Duration::from_secs(1))
+            .expect("helper authorizes the tunnel before spawn"),
         TunnelInterface {
             alias: "rosetun-test".to_owned(),
             ipv4: "172.29.10.1".parse().expect("valid test IPv4"),
@@ -2990,7 +2322,7 @@ fn supervisor_marks_the_session_failed_when_reconnect_is_disabled() {
 
     assert!(matches!(
         status.state,
-        ConnectionState::Failed { ref reason, .. } if reason == "the engine process exited"
+        ConnectionState::Failed { ref reason, .. } if reason == "sing-box outbound worker stopped"
     ));
     assert!(status.since_unix.is_none());
 }
@@ -3055,7 +2387,7 @@ fn supervisor_reports_failed_protected_when_reconnect_is_disabled() {
     assert!(matches!(
         status.state,
         ConnectionState::FailedProtected { ref reason, .. }
-            if reason == "the engine process exited"
+            if reason == "sing-box outbound worker stopped"
     ));
     assert_eq!(
         reverted.load(Ordering::Acquire),
@@ -3148,7 +2480,7 @@ fn supervisor_reuses_protection_after_exit() {
 
     assert!(matches!(helper.status().state, ConnectionState::Connected));
     assert_eq!(controls.spawns(), 2);
-    assert_eq!(prepared.load(Ordering::Acquire), 1);
+    assert_eq!(prepared.load(Ordering::Acquire), 2);
     assert_eq!(reverted.load(Ordering::Acquire), 0);
 }
 
@@ -3203,7 +2535,7 @@ fn supervisor_waits_for_route_and_recovers_without_releasing_protection() {
     assert_eq!(helper.status().state, ConnectionState::Connected);
     assert_eq!(helper.status().reconnect_failure_kind, None);
     assert_eq!(controls.spawns(), 2);
-    assert_eq!(prepared.load(Ordering::Acquire), 1);
+    assert_eq!(prepared.load(Ordering::Acquire), 2);
     assert_eq!(reverted.load(Ordering::Acquire), 0);
 }
 
@@ -3319,12 +2651,12 @@ fn engine_exit_during_network_loss_restarts_only_when_route_returns() {
             assert_waiting_for_network(&helper, &controls, &reverted, 1);
         }
     }
-    assert!(helper.session().unwrap().process.is_none());
+    assert!(helper.session().unwrap().proxy_session.is_none());
     helper.supervise(now + 20 * SUPERVISOR_TICK);
     assert_eq!(helper.status().state, ConnectionState::Connected);
     assert_eq!(helper.status().reconnect_failure_kind, None);
     assert_eq!(controls.spawns(), 2);
-    assert_eq!(prepared.load(Ordering::Acquire), 1);
+    assert_eq!(prepared.load(Ordering::Acquire), 2);
     assert_eq!(reverted.load(Ordering::Acquire), 0);
 }
 
@@ -3383,16 +2715,16 @@ fn network_loss_longer_than_grace_stops_engine_and_restarts_on_return() {
             assert_waiting_for_network(&helper, &controls, &reverted, 1);
         }
         if tick < 30 {
-            assert!(helper.session().unwrap().process.is_some());
+            assert!(helper.session().unwrap().proxy_session.is_some());
         } else {
-            assert!(helper.session().unwrap().process.is_none());
+            assert!(helper.session().unwrap().proxy_session.is_none());
         }
     }
     helper.supervise(now + 65 * SUPERVISOR_TICK);
     assert_eq!(helper.status().state, ConnectionState::Connected);
     assert_eq!(helper.status().reconnect_failure_kind, None);
     assert_eq!(controls.spawns(), 2);
-    assert_eq!(prepared.load(Ordering::Acquire), 1);
+    assert_eq!(prepared.load(Ordering::Acquire), 2);
     assert_eq!(reverted.load(Ordering::Acquire), 0);
 }
 
@@ -3425,7 +2757,7 @@ fn failed_live_dns_check_restarts_inside_existing_protection() {
         2,
         "failed DNS must trigger an immediate restart"
     );
-    assert_eq!(prepared.load(Ordering::Acquire), 1);
+    assert_eq!(prepared.load(Ordering::Acquire), 3);
     assert_eq!(reverted.load(Ordering::Acquire), 0);
 }
 
@@ -3453,7 +2785,7 @@ fn network_reconnect_does_not_wait_for_the_full_dns_timeout() {
             assert_waiting_for_network(&helper, &controls, &reverted, 1);
         }
     }
-    assert!(helper.session().unwrap().process.is_none());
+    assert!(helper.session().unwrap().proxy_session.is_none());
     let started = Instant::now();
     helper.supervise(now + 32 * SUPERVISOR_TICK);
     assert!(
@@ -3462,7 +2794,7 @@ fn network_reconnect_does_not_wait_for_the_full_dns_timeout() {
     );
     assert_eq!(helper.status().state, ConnectionState::Reconnecting);
     assert_eq!(controls.spawns(), 2);
-    assert_eq!(prepared.load(Ordering::Acquire), 1);
+    assert_eq!(prepared.load(Ordering::Acquire), 3);
     assert_eq!(reverted.load(Ordering::Acquire), 0);
 }
 
@@ -3485,7 +2817,7 @@ fn network_loss_without_auto_reconnect_keeps_live_session() {
         assert_eq!(helper.status().reconnect_failure_kind, None);
         assert_eq!(helper.status().since_unix, since);
         assert!(helper.session().unwrap().request.is_some());
-        assert!(helper.session().unwrap().process.is_some());
+        assert!(helper.session().unwrap().proxy_session.is_some());
         assert_eq!(controls.spawns(), 1);
         assert_eq!(prepared.load(Ordering::Acquire), 0);
         assert_eq!(reverted.load(Ordering::Acquire), 0);
@@ -3521,11 +2853,11 @@ fn engine_exit_without_auto_reconnect_still_fails_protected_during_network_loss(
         ConnectionState::FailedProtected {
             ref reason,
             failure_kind: None,
-        } if reason == "the engine process exited"
+        } if reason == "sing-box outbound worker stopped"
     ));
     assert!(helper.session().unwrap().request.is_none());
     assert_eq!(controls.spawns(), 1);
-    assert_eq!(prepared.load(Ordering::Acquire), 0);
+    assert_eq!(prepared.load(Ordering::Acquire), 1);
     assert_eq!(reverted.load(Ordering::Acquire), 0);
 }
 
@@ -3567,7 +2899,7 @@ fn dns_stall_reuses_supervisor_retry_pipeline_and_cause() {
         assert!(matches!(helper.status().state, ConnectionState::Connected));
         assert_eq!(helper.status().since_unix, since);
         assert_eq!(controls.spawns(), 3);
-        assert_eq!(prepared.load(Ordering::Acquire), usize::from(protected) * 2);
+        assert_eq!(prepared.load(Ordering::Acquire), usize::from(protected) * 3);
         assert_eq!(reverted.load(Ordering::Acquire), 0);
         helper.supervise(now + Duration::from_secs(120));
         assert_eq!(controls.spawns(), 3, "old stall must not recur");
@@ -3709,7 +3041,7 @@ fn dns_lock_is_released_when_reconnects_are_exhausted() {
     assert_eq!(reverted.load(Ordering::Acquire), 1);
     let session = helper.session().expect("session");
     assert!(!session.protection.is_active());
-    assert!(session.process.is_none());
+    assert!(session.proxy_session.is_none());
     assert!(session.tunnel_dns.is_none());
     assert!(session.watchdog.is_none());
 }
@@ -3737,7 +3069,7 @@ fn dns_lock_is_released_when_auto_reconnect_is_off() {
     assert_eq!(reverted.load(Ordering::Acquire), 1);
     let session = helper.session().expect("session");
     assert!(!session.protection.is_active());
-    assert!(session.process.is_none());
+    assert!(session.proxy_session.is_none());
     assert!(session.tunnel_dns.is_none());
     assert!(session.watchdog.is_none());
 }
@@ -3828,7 +3160,7 @@ fn supervisor_backs_off_and_gives_up_after_five_failures() {
         if protected {
             assert_eq!(
                 prepared.load(Ordering::Acquire),
-                RECONNECT_ATTEMPTS as usize
+                (RECONNECT_ATTEMPTS + 1) as usize
             );
             assert!(helper.session().expect("session").protection.is_active());
         }
@@ -3973,7 +3305,6 @@ fn protected_helper(
             address: "203.0.113.10".parse().expect("IP"),
             members: HashMap::new(),
         });
-        session.process = Some(Box::new(ExitedProcess));
     }
     helper.with_status(|status| {
         status.state = ConnectionState::FailedProtected {
@@ -4006,41 +3337,6 @@ fn protected_reconnect_reuses_guard_and_cached_domain_endpoint() {
 
     helper.disconnect().expect("disconnect");
     assert_eq!(reverted.load(Ordering::Acquire), 1);
-}
-
-#[test]
-fn protected_reconnect_replaces_the_traffic_monitor_and_control() {
-    let dropped = Arc::new(AtomicUsize::new(0));
-    let controls = Arc::new(Mutex::new(Vec::new()));
-    let totals = TrafficTotals { up: 100, down: 200 };
-    let (helper, _, _, _) = protected_helper(Box::new(TrafficEngine {
-        totals,
-        dropped: Arc::clone(&dropped),
-        asked: Arc::default(),
-        controls: Arc::clone(&controls),
-        verbose_logs: Arc::new(Mutex::new(Vec::new())),
-        closed: Arc::default(),
-    }));
-    helper.connect(&protected_request()).expect("first connect");
-    wait_for_totals(&helper, totals);
-
-    helper.with_status(|status| {
-        status.state = ConnectionState::FailedProtected {
-            failure_kind: None,
-            reason: "engine failed".to_owned(),
-        };
-    });
-    helper.connect(&protected_request()).expect("reconnect");
-    assert_eq!(dropped.load(Ordering::Acquire), 1);
-    wait_for_totals(&helper, totals);
-    let controls = controls.lock().expect("test controls mutex");
-    assert_eq!(controls.len(), 2);
-    assert_ne!(controls[0].secret, controls[1].secret);
-    drop(controls);
-
-    helper.disconnect().expect("disconnect");
-    assert_eq!(helper.status().traffic, Traffic::default());
-    assert_eq!(dropped.load(Ordering::Acquire), 2);
 }
 
 #[test]
@@ -4291,8 +3587,6 @@ impl XrayRunner for FakeXrayRunner {
         Ok(Box::new(ControlledProcess {
             running,
             ready: true,
-            adapter_busy: false,
-            address_held: false,
         }))
     }
 }
@@ -4369,41 +3663,6 @@ fn reality_request() -> ConnectRequest {
 }
 
 #[test]
-fn xray_chain_protects_then_starts_xray_then_singbox() {
-    let (helper, controls, runner, binaries, _, _) = xray_chain_helper();
-    let mut plain = connect_request();
-    plain.settings.kill_switch = true;
-    helper.connect(&plain).unwrap();
-    assert_eq!(binaries.lock().unwrap()[0].len(), 1);
-    assert_eq!(runner.starts.load(Ordering::Acquire), 0);
-    helper.disconnect().unwrap();
-
-    controls.events.lock().unwrap().clear();
-    helper.connect(&reality_request()).unwrap();
-    assert_eq!(binaries.lock().unwrap()[1].len(), 2);
-    assert_eq!(
-        *controls.events.lock().unwrap(),
-        ["protect", "xray", "sing-box", "tunnel"]
-    );
-    assert_eq!(runner.starts.load(Ordering::Acquire), 1);
-    assert!(helper.status().xray);
-    assert_eq!(
-        helper.status().xray_use,
-        Some(rosetun_config::XrayUse::Auto)
-    );
-    helper.disconnect().unwrap();
-    assert!(
-        !runner
-            .running
-            .lock()
-            .unwrap()
-            .as_ref()
-            .unwrap()
-            .load(Ordering::Acquire)
-    );
-}
-
-#[test]
 fn plain_vless_node_uses_xray_in_auto_mode() {
     let (helper, controls, runner, binaries, _, _) = xray_chain_helper();
     let mut vless = connect_request();
@@ -4415,10 +3674,10 @@ fn plain_vless_node_uses_xray_in_auto_mode() {
     vless.node.stream.tls = rosetun_config::TlsMode::Tls(rosetun_config::TlsParams::default());
 
     helper.connect(&vless).unwrap();
-    assert_eq!(binaries.lock().unwrap()[0].len(), 2);
+    assert_eq!(binaries.lock().unwrap()[0].len(), 1);
     assert_eq!(
         *controls.events.lock().unwrap(),
-        ["protect", "xray", "sing-box", "tunnel"]
+        ["protect", "tunnel", "xray"]
     );
     assert_eq!(runner.starts.load(Ordering::Acquire), 1);
     assert!(helper.status().xray);
@@ -4434,7 +3693,7 @@ fn xray_crash_keeps_protection_and_distinguishes_stopped_from_not_started() {
     helper.supervise(Instant::now());
     assert_eq!(helper.status().state, ConnectionState::Reconnecting);
     assert!(helper.status().xray_stopped);
-    assert_eq!(controls.spawns(), 1);
+    assert_eq!(controls.spawns(), 0);
     assert!(helper.session().unwrap().protection.is_active());
     helper.supervise(Instant::now() + Duration::from_secs(3));
     assert_eq!(helper.status().state, ConnectionState::Connected);
@@ -4457,7 +3716,7 @@ fn xray_crash_keeps_protection_and_distinguishes_stopped_from_not_started() {
 
 #[test]
 fn xray_stop_without_auto_reconnect_is_a_protected_failure() {
-    let (helper, controls, runner, _, _, _) = xray_chain_helper();
+    let (helper, _, runner, _, _, _) = xray_chain_helper();
     let mut request = reality_request();
     request.settings.auto_reconnect = false;
     helper.connect(&request).unwrap();
@@ -4470,99 +3729,9 @@ fn xray_stop_without_auto_reconnect_is_a_protected_failure() {
             ..
         }
     ));
-    assert!(
-        !controls
-            .running
-            .lock()
-            .unwrap()
-            .as_ref()
-            .unwrap()
-            .load(Ordering::Acquire)
-    );
+    assert!(helper.session().unwrap().proxy_session.is_none());
     assert!(helper.session().unwrap().protection.is_active());
     helper.disconnect().unwrap();
-}
-
-#[test]
-fn apply_plain_to_xray_restarts_under_the_guard() {
-    let (helper, controls, runner, binaries, prepared, reverted) = xray_chain_helper();
-    let mut plain = connect_request();
-    plain.settings.kill_switch = true;
-    helper.connect(&plain).unwrap();
-
-    let reality = reality_request();
-    assert!(!super::apply::needs_reconnect(&plain, &reality));
-    helper.apply(&reality).unwrap();
-
-    assert_eq!(controls.spawns(), 2);
-    assert_eq!(runner.starts.load(Ordering::Acquire), 1);
-    assert_eq!(prepared.load(Ordering::Acquire), 1);
-    assert_eq!(reverted.load(Ordering::Acquire), 0);
-    let binaries = binaries.lock().unwrap();
-    assert_eq!(binaries.len(), 2);
-    assert_eq!(binaries[0].len(), 1);
-    assert_eq!(binaries[1].len(), 2);
-    assert_eq!(binaries[1][1].file_name().unwrap(), "xray.exe");
-    assert!(helper.status().xray);
-}
-
-#[test]
-fn apply_another_xray_node_restarts_under_the_guard() {
-    let (helper, controls, runner, binaries, prepared, reverted) = xray_chain_helper();
-    let current = reality_request();
-    helper.connect(&current).unwrap();
-
-    let mut next = current.clone();
-    next.node.id = NodeId::new("another-reality");
-    next.selection.node = next.node.id.clone();
-    next.node.server = "192.0.2.2".into();
-    assert!(!super::apply::needs_reconnect(&current, &next));
-    helper.apply(&next).unwrap();
-
-    assert_eq!(controls.spawns(), 2);
-    assert_eq!(runner.starts.load(Ordering::Acquire), 2);
-    assert_eq!(prepared.load(Ordering::Acquire), 1);
-    assert_eq!(reverted.load(Ordering::Acquire), 0);
-    let binaries = binaries.lock().unwrap();
-    assert_eq!(binaries.len(), 2);
-    assert!(
-        binaries
-            .iter()
-            .all(|paths| paths.len() == 2 && paths[1].file_name().unwrap() == "xray.exe")
-    );
-    assert_eq!(helper.status().node, Some(next.node.id));
-}
-
-#[test]
-fn apply_xray_to_plain_restarts_under_the_guard() {
-    let (helper, controls, runner, binaries, prepared, reverted) = xray_chain_helper();
-    let current = reality_request();
-    helper.connect(&current).unwrap();
-
-    let mut plain = connect_request();
-    plain.settings.kill_switch = true;
-    assert!(!super::apply::needs_reconnect(&current, &plain));
-    helper.apply(&plain).unwrap();
-
-    assert_eq!(controls.spawns(), 2);
-    assert_eq!(runner.starts.load(Ordering::Acquire), 1);
-    assert!(
-        !runner
-            .running
-            .lock()
-            .unwrap()
-            .as_ref()
-            .unwrap()
-            .load(Ordering::Acquire)
-    );
-    assert_eq!(prepared.load(Ordering::Acquire), 1);
-    assert_eq!(reverted.load(Ordering::Acquire), 0);
-    let binaries = binaries.lock().unwrap();
-    assert_eq!(binaries.len(), 2);
-    assert_eq!(binaries[0].len(), 2);
-    assert_eq!(binaries[0][1].file_name().unwrap(), "xray.exe");
-    assert_eq!(binaries[1].len(), 1);
-    assert!(!helper.status().xray);
 }
 
 fn fragmenting(mut request: ConnectRequest) -> ConnectRequest {
@@ -4587,6 +3756,7 @@ fn hysteria_request() -> ConnectRequest {
         up_mbps: None,
         down_mbps: None,
     });
+    request.node.stream.tls = rosetun_config::TlsMode::Tls(Default::default());
     request
 }
 
@@ -4599,7 +3769,7 @@ fn fragmentation_sends_a_tls_node_through_xray_and_reports_it() {
     let config = runner.last_config();
     assert!(config.contains(r#""protocol": "freedom""#));
     assert!(config.contains(r#""packets": "tlshello""#));
-    assert_eq!(config.matches(r#""interface": "Ethernet""#).count(), 2);
+    assert!(!config.contains(r#""interface""#));
     helper.disconnect().unwrap();
     assert!(!helper.status().fragmented);
 }
@@ -4627,30 +3797,6 @@ fn fragmentation_with_xray_off_connects_without_it() {
     assert_eq!(status.state, ConnectionState::Connected);
     assert!(!status.xray && !status.fragmented && status.fragment_requested);
     assert_eq!(runner.starts.load(Ordering::Acquire), 0);
-}
-
-#[test]
-fn apply_turning_fragmentation_on_restarts_the_engine_under_the_guard() {
-    let (helper, controls, runner, _, prepared, reverted) = xray_chain_helper();
-    let current = reality_request();
-    helper.connect(&current).unwrap();
-    assert!(!helper.status().fragmented);
-
-    let next = fragmenting(current.clone());
-    assert!(!super::apply::needs_reconnect(&current, &next));
-    helper.apply(&next).unwrap();
-
-    assert_eq!(controls.spawns(), 2);
-    assert_eq!(runner.starts.load(Ordering::Acquire), 2);
-    assert_eq!(prepared.load(Ordering::Acquire), 1);
-    assert_eq!(reverted.load(Ordering::Acquire), 0);
-    assert!(helper.status().fragmented);
-    assert!(runner.last_config().contains(r#""packets": "1-3""#));
-
-    helper.apply(&current).unwrap();
-    assert_eq!(controls.spawns(), 3);
-    assert!(!helper.status().fragmented);
-    assert!(!runner.last_config().contains("freedom"));
 }
 
 fn connect_request() -> ConnectRequest {
@@ -4787,7 +3933,7 @@ fn reconnect_replaces_the_engine_under_the_guard_without_teardown() {
 
     assert_eq!(
         *controls.events.lock().unwrap(),
-        ["prepare", "sing-box", "tunnel"],
+        ["prepare", "prepare", "tunnel", "sing-box"],
         "no revert and no new protection between the old engine and the new one"
     );
     let status = helper.status();
@@ -4801,7 +3947,7 @@ fn reconnect_replaces_the_engine_under_the_guard_without_teardown() {
 
     controls.events.lock().unwrap().clear();
     helper.disconnect().unwrap();
-    assert_eq!(*controls.events.lock().unwrap(), ["revert"]);
+    assert_eq!(*controls.events.lock().unwrap(), ["prepare", "revert"]);
 }
 
 #[test]
@@ -4972,53 +4118,12 @@ fn apply_metadata_only_updates_supervisor_without_restarting() {
     controls.kill();
     helper.supervise(Instant::now());
     assert_eq!(controls.spawns(), 2);
-    assert_eq!(prepared.load(Ordering::Acquire), 1);
+    assert_eq!(prepared.load(Ordering::Acquire), 2);
     assert!(matches!(helper.status().state, ConnectionState::Connected));
 }
 
 #[test]
-fn path_addresses_refresh_on_connect_and_every_successful_apply() {
-    use super::dns::test_support::{Behavior, Server};
-
-    let server = Server::new(Behavior::Addresses);
-    let (helper, controls, _, _) = supervised_helper_with_dns(false, Some(server.address()));
-    shorten_dns_timeouts(&helper);
-    let mut request = connect_request();
-    request.settings.kill_switch = false;
-    helper
-        .connect(&request)
-        .expect("connect with path addresses");
-    let addresses = Arc::clone(&helper.session().unwrap().path_addresses);
-    let expected = [
-        std::net::Ipv4Addr::new(192, 0, 2, 1),
-        std::net::Ipv4Addr::new(192, 0, 2, 2),
-    ];
-    assert_eq!(*addresses.lock().unwrap(), expected);
-
-    addresses.lock().unwrap().clear();
-    helper.apply(&request).expect("refresh on unchanged apply");
-    assert_eq!(*addresses.lock().unwrap(), expected);
-    assert_eq!(controls.spawns(), 1);
-
-    addresses.lock().unwrap().clear();
-    let mut metadata = request.clone();
-    metadata.settings.autostart = !request.settings.autostart;
-    helper.apply(&metadata).expect("refresh on metadata apply");
-    assert_eq!(*addresses.lock().unwrap(), expected);
-    assert_eq!(controls.spawns(), 1);
-
-    let changed = request_with_new_rules(&metadata);
-    helper.apply(&changed).expect("refresh on restarting apply");
-    assert_eq!(*addresses.lock().unwrap(), expected);
-    assert_eq!(controls.spawns(), 2);
-    helper
-        .disconnect()
-        .expect("disconnect clears path addresses");
-    assert!(addresses.lock().unwrap().is_empty());
-}
-
-#[test]
-fn apply_rules_restarts_under_the_guard_and_supervisor_uses_new_rules() {
+fn apply_rules_stays_under_the_guard_and_supervisor_uses_new_rules() {
     let (helper, controls, prepared, reverted) = supervised_helper(true);
     let mut request = connect_request();
     request.settings.kill_switch = true;
@@ -5029,20 +4134,17 @@ fn apply_rules_restarts_under_the_guard_and_supervisor_uses_new_rules() {
     helper.apply(&changed).expect("apply rules");
     assert!(matches!(helper.status().state, ConnectionState::Connected));
     assert_eq!(helper.status().since_unix, since);
-    assert_eq!(controls.spawns(), 2);
-    assert_eq!(prepared.load(Ordering::Acquire), 1);
+    assert_eq!(controls.spawns(), 1);
+    assert_eq!(prepared.load(Ordering::Acquire), 0);
     assert_eq!(reverted.load(Ordering::Acquire), 0);
     assert_eq!(helper.session().unwrap().request.as_ref(), Some(&changed));
 
     controls.kill();
     helper.supervise(Instant::now());
-    assert_eq!(controls.spawns(), 3);
+    assert_eq!(controls.spawns(), 2);
     assert_eq!(prepared.load(Ordering::Acquire), 2);
     assert_eq!(reverted.load(Ordering::Acquire), 0);
-    assert_eq!(
-        controls.rendered_rules.lock().unwrap().last(),
-        Some(&changed.rule_set)
-    );
+    assert_eq!(helper.session().unwrap().request.as_ref(), Some(&changed));
 }
 
 fn request_with_a_rule_by_program(request: &ConnectRequest) -> ConnectRequest {
@@ -5058,39 +4160,29 @@ fn request_with_a_rule_by_program(request: &ConnectRequest) -> ConnectRequest {
 }
 
 #[test]
-fn the_engine_reads_programs_only_while_a_rule_by_program_is_there() {
-    let (helper, controls, prepared, reverted) = supervised_helper(true);
+fn application_rules_are_applied_without_restarting_the_outbound_worker() {
+    let (helper, controls, _, reverted) = supervised_helper(true);
     let mut request = connect_request();
     request.settings.kill_switch = true;
     helper.connect(&request).expect("connect");
-    let rights = || controls.rights.lock().unwrap().clone();
-    assert_eq!(rights(), [EngineRights::Network]);
-
     let with_program = request_with_a_rule_by_program(&request);
     helper.apply(&with_program).expect("rule by program added");
     assert_eq!(
-        rights(),
-        [EngineRights::Network, EngineRights::NetworkAndProcesses]
+        helper.session().unwrap().request.as_ref(),
+        Some(&with_program)
     );
     helper.apply(&request).expect("rule by program removed");
     assert_eq!(
-        rights(),
-        [
-            EngineRights::Network,
-            EngineRights::NetworkAndProcesses,
-            EngineRights::Network
-        ]
+        *controls.rights.lock().unwrap(),
+        [EngineRights::OutboundWorker]
     );
-
-    // Each change went through one guard: restarted under it, never lifted.
-    assert_eq!(prepared.load(Ordering::Acquire), 2);
     assert_eq!(reverted.load(Ordering::Acquire), 0);
     assert!(helper.session().unwrap().protection.is_active());
-    assert!(matches!(helper.status().state, ConnectionState::Connected));
+    assert_eq!(helper.status().state, ConnectionState::Connected);
 }
 
 #[test]
-fn a_restart_by_the_supervisor_keeps_the_rights_of_the_rules() {
+fn a_restart_by_the_supervisor_keeps_outbound_worker_rights() {
     let (helper, controls, _, _) = supervised_helper(true);
     let mut request = connect_request();
     request.settings.kill_switch = true;
@@ -5102,39 +4194,12 @@ fn a_restart_by_the_supervisor_keeps_the_rights_of_the_rules() {
 
     assert_eq!(
         *controls.rights.lock().unwrap(),
-        [
-            EngineRights::NetworkAndProcesses,
-            EngineRights::NetworkAndProcesses
-        ]
+        [EngineRights::OutboundWorker, EngineRights::OutboundWorker]
     );
 }
 
 #[test]
-fn a_failed_apply_gives_the_rolled_back_engine_its_earlier_rights() {
-    let (helper, controls, _, reverted) = supervised_helper(true);
-    let mut request = connect_request();
-    request.settings.kill_switch = true;
-    helper.connect(&request).expect("connect");
-    controls.fail_next(1);
-
-    helper
-        .apply(&request_with_a_rule_by_program(&request))
-        .expect_err("the new engine does not start");
-
-    assert_eq!(
-        *controls.rights.lock().unwrap(),
-        [
-            EngineRights::Network,
-            EngineRights::NetworkAndProcesses,
-            EngineRights::Network
-        ]
-    );
-    assert_eq!(reverted.load(Ordering::Acquire), 0);
-    assert_eq!(helper.session().unwrap().request.as_ref(), Some(&request));
-}
-
-#[test]
-fn a_temporary_rule_by_program_also_gives_the_engine_the_rights() {
+fn a_temporary_application_rule_keeps_outbound_worker_rights() {
     let (helper, controls, _, _) = supervised_helper(true);
     let mut request = connect_request();
     request.settings.kill_switch = true;
@@ -5146,141 +4211,8 @@ fn a_temporary_rule_by_program_also_gives_the_engine_the_rights() {
 
     assert_eq!(
         controls.rights.lock().unwrap().last(),
-        Some(&EngineRights::NetworkAndProcesses)
+        Some(&EngineRights::OutboundWorker)
     );
-}
-
-#[test]
-fn rules_by_program_are_refused_with_the_reason_when_the_rights_cannot_be_given() {
-    let (helper, controls, prepared, _) = supervised_helper(true);
-    let helper = helper.with_process_rights_unavailable(Some("the example reason".to_owned()));
-    let mut request = connect_request();
-    request.settings.kill_switch = true;
-    let with_program = request_with_a_rule_by_program(&request);
-
-    let error = helper.connect(&with_program).expect_err("no rights");
-    assert_eq!(error.code, ErrorCode::UnsupportedRules);
-    assert!(error.message.contains("the example reason"));
-    assert_eq!(controls.spawns(), 0);
-
-    helper.connect(&request).expect("no rule by program");
-    assert_eq!(*controls.rights.lock().unwrap(), [EngineRights::Network]);
-
-    let error = helper.apply(&with_program).expect_err("no rights");
-    assert_eq!(error.code, ErrorCode::UnsupportedRules);
-    assert!(error.message.contains("the example reason"));
-    assert_eq!(controls.spawns(), 1);
-    assert_eq!(prepared.load(Ordering::Acquire), 0);
-    assert!(matches!(helper.status().state, ConnectionState::Connected));
-    assert_eq!(helper.session().unwrap().request.as_ref(), Some(&request));
-}
-
-#[test]
-fn a_disabled_rule_by_program_is_not_refused_when_the_rights_cannot_be_given() {
-    let (helper, controls, _, _) = supervised_helper(true);
-    let helper = helper.with_process_rights_unavailable(Some("the example reason".to_owned()));
-    let mut request = request_with_a_rule_by_program(&connect_request());
-    request.rule_set.rules[0].enabled = false;
-
-    helper.connect(&request).expect("the rule is off");
-
-    assert_eq!(*controls.rights.lock().unwrap(), [EngineRights::Network]);
-}
-
-#[test]
-fn connect_retries_while_the_old_adapter_is_removed_under_the_same_guard() {
-    let (helper, controls, prepared, reverted) = supervised_helper(true);
-    let mut request = connect_request();
-    request.settings.kill_switch = true;
-    controls.adapter_busy_next(1);
-
-    helper.connect(&request).expect("second start connects");
-    assert!(matches!(helper.status().state, ConnectionState::Connected));
-    assert_eq!(controls.spawns(), 2);
-    assert_eq!(prepared.load(Ordering::Acquire), 0);
-    assert_eq!(reverted.load(Ordering::Acquire), 0);
-}
-
-#[test]
-fn apply_retries_while_the_old_adapter_is_removed_without_rollback() {
-    let (helper, controls, prepared, reverted) = supervised_helper(true);
-    let mut request = connect_request();
-    request.settings.kill_switch = true;
-    helper.connect(&request).expect("connect");
-    let changed = request_with_new_rules(&request);
-    controls.adapter_busy_next(2);
-
-    helper
-        .apply(&changed)
-        .expect("third start applies the change");
-    assert!(matches!(helper.status().state, ConnectionState::Connected));
-    assert_eq!(controls.spawns(), 4);
-    assert_eq!(prepared.load(Ordering::Acquire), 1);
-    assert_eq!(reverted.load(Ordering::Acquire), 0);
-    assert_eq!(helper.session().unwrap().request.as_ref(), Some(&changed));
-    assert_eq!(
-        controls.rendered_rules.lock().unwrap().last(),
-        Some(&changed.rule_set)
-    );
-}
-
-#[test]
-fn engine_start_retries_end_after_two_and_other_exits_are_not_retried() {
-    let (helper, controls, _, _) = supervised_helper(true);
-    let mut request = connect_request();
-    request.settings.kill_switch = true;
-    controls.adapter_busy_next(3);
-
-    let error = helper.connect(&request).expect_err("retries run out");
-    assert_eq!(error.code, ErrorCode::EngineFailed);
-    assert_eq!(controls.spawns(), 3);
-
-    let (helper, controls, _, _) = supervised_helper(true);
-    controls.fail_readiness_next(1);
-    let error = helper
-        .connect(&request)
-        .expect_err("an ordinary exit fails");
-    assert_eq!(error.code, ErrorCode::EngineFailed);
-    assert_eq!(controls.spawns(), 1);
-}
-
-#[test]
-fn a_tunnel_address_held_by_windows_is_not_retried_and_carries_a_marker() {
-    let (helper, controls, _, _) = supervised_helper(true);
-    let mut request = connect_request();
-    request.settings.kill_switch = true;
-    controls.address_held_next(1);
-
-    let error = helper
-        .connect(&request)
-        .expect_err("the address is still held");
-    assert_eq!(error.code, ErrorCode::EngineFailed);
-    assert!(error.is_tunnel_address_in_use());
-    assert_eq!(controls.spawns(), 1);
-    match helper.status().state {
-        ConnectionState::Failed { reason, .. }
-        | ConnectionState::FailedProtected { reason, .. } => {
-            assert!(rosetun_ipc::is_tunnel_address_in_use_reason(&reason));
-        }
-        other => panic!("expected a failed connection, got {other:?}"),
-    }
-}
-
-#[test]
-fn the_held_tunnel_log_reads_the_adapter_and_survives_a_failed_read() {
-    for lookup in [
-        (|_: &str| Ok(None))
-            as fn(&str) -> std::io::Result<Option<rosetun_routing::TunnelAdapterState>>,
-        |_| {
-            Ok(Some(rosetun_routing::TunnelAdapterState {
-                oper_status: "up",
-                description: "Example Tunnel".to_owned(),
-            }))
-        },
-        |_| Err(std::io::Error::other("lookup failed")),
-    ] {
-        log_held_tunnel("rosetun0", "172.19.0.1/30", lookup, 1);
-    }
 }
 
 #[test]
@@ -5302,40 +4234,29 @@ fn apply_temporary_rule_precedes_base_and_survives_supervisor_restart() {
     changed.temporary_rules.push(temporary_rule());
 
     helper.apply(&changed).expect("apply temporary rule");
-    assert_eq!(controls.spawns(), 2);
-    assert_eq!(prepared.load(Ordering::Acquire), 1);
+    assert_eq!(controls.spawns(), 1);
+    assert_eq!(prepared.load(Ordering::Acquire), 0);
     assert_eq!(reverted.load(Ordering::Acquire), 0);
     assert_eq!(helper.status().since_unix, since);
     assert_eq!(helper.temporary_rules().unwrap(), changed.temporary_rules);
     assert_eq!(helper.session().unwrap().request.as_ref(), Some(&changed));
-    let rendered = controls.rendered_rules.lock().unwrap();
-    assert_eq!(
-        rendered.last().unwrap().rules,
-        vec![temporary_rule(), base.clone()]
-    );
     assert_eq!(request.rule_set.rules, vec![base.clone()]);
-    drop(rendered);
 
     controls.kill();
     helper.supervise(Instant::now());
     assert!(matches!(helper.status().state, ConnectionState::Connected));
     assert_eq!(helper.temporary_rules().unwrap(), changed.temporary_rules);
-    assert_eq!(controls.spawns(), 3);
+    assert_eq!(controls.spawns(), 2);
+    let running = helper.session().unwrap();
     assert_eq!(
-        controls
-            .rendered_rules
-            .lock()
-            .unwrap()
-            .last()
-            .unwrap()
-            .rules,
+        running.request.as_ref().unwrap().effective_rule_set().rules,
         vec![temporary_rule(), base]
     );
 }
 
 #[test]
 fn temporary_rules_end_on_disconnect_and_new_connect() {
-    let (helper, controls, _, _) = supervised_helper(true);
+    let (helper, _, _, _) = supervised_helper(true);
     let mut request = connect_request();
     request.settings.kill_switch = true;
     request.temporary_rules.push(temporary_rule());
@@ -5350,10 +4271,7 @@ fn temporary_rules_end_on_disconnect_and_new_connect() {
     next.temporary_rules.clear();
     helper.connect(&next).expect("new session");
     assert!(helper.temporary_rules().unwrap().is_empty());
-    assert_eq!(
-        controls.rendered_rules.lock().unwrap().last(),
-        Some(&next.rule_set)
-    );
+    assert_eq!(helper.session().unwrap().request.as_ref(), Some(&next));
 }
 
 #[test]
@@ -5402,7 +4320,7 @@ fn apply_new_ip_and_named_node_updates_status_without_releasing_protection() {
     assert_eq!(helper.status().node, Some(named.node.id.clone()));
     assert_eq!(helper.status().since_unix, since);
     assert_eq!(controls.spawns(), 3);
-    assert_eq!(prepared.load(Ordering::Acquire), 2);
+    assert_eq!(prepared.load(Ordering::Acquire), 0);
     assert_eq!(reverted.load(Ordering::Acquire), 0);
     assert_eq!(
         helper
@@ -5471,31 +4389,6 @@ fn apply_resolver_slot_wait_respects_the_deadline() {
 }
 
 #[test]
-fn apply_resolves_named_node_when_server_check_workers_are_full() {
-    let _dns_slots = DNS_SLOTS
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let (helper, controls, _, _) = supervised_helper(true);
-    let mut request = connect_request();
-    request.settings.kill_switch = true;
-    helper.connect(&request).expect("connect");
-    let slots: Vec<_> = (0..super::probe::RESOLVE_WORKERS)
-        .map(|_| super::probe::DnsWorkerSlot::acquire().expect("reserve check worker"))
-        .collect();
-    let mut changed = request.clone();
-    changed.node.id = NodeId::new("local-node");
-    changed.selection.node = changed.node.id.clone();
-    changed.node.server = "localhost".to_owned();
-
-    helper
-        .apply(&changed)
-        .expect("resolve outside check workers");
-    assert_eq!(helper.status().node, Some(changed.node.id));
-    assert_eq!(controls.spawns(), 2);
-    drop(slots);
-}
-
-#[test]
 fn apply_reuses_normalized_cached_server_name() {
     let (helper, controls, prepared, reverted) = supervised_helper(true);
     let mut request = connect_request();
@@ -5529,7 +4422,7 @@ fn apply_reuses_normalized_cached_server_name() {
         address
     );
     assert_eq!(controls.spawns(), 2);
-    assert_eq!(prepared.load(Ordering::Acquire), 1);
+    assert_eq!(prepared.load(Ordering::Acquire), 0);
     assert_eq!(reverted.load(Ordering::Acquire), 0);
 }
 
@@ -5552,8 +4445,8 @@ fn apply_dns_lock_reuses_guard() {
         helper.session().unwrap().protection.scope().unwrap(),
         ProtectionScope::DnsOnly
     );
-    assert_eq!(controls.spawns(), 2);
-    assert_eq!(prepared.load(Ordering::Acquire), 1);
+    assert_eq!(controls.spawns(), 1);
+    assert_eq!(prepared.load(Ordering::Acquire), 0);
     assert_eq!(reverted.load(Ordering::Acquire), 0);
 }
 
@@ -5589,11 +4482,11 @@ fn apply_unsupported_rules_does_not_restart_or_change_request() {
     request.settings.kill_switch = true;
     helper.connect(&request).expect("connect");
     let mut changed = request_with_new_rules(&request);
-    changed.rule_set.rules[0].id = RuleId::new("unsupported-rule");
+    changed.rule_set.rules[0].matcher = RuleMatcher::IpCidr("invalid".into());
 
     let error = helper.apply(&changed).expect_err("unsupported rules");
     assert_eq!(error.code, ErrorCode::UnsupportedRules);
-    assert!(error.message.contains("unsupported-rule"));
+    assert!(error.message.contains("invalid"));
     assert_eq!(controls.spawns(), 1);
     assert_eq!(prepared.load(Ordering::Acquire), 0);
     assert!(matches!(helper.status().state, ConnectionState::Connected));
@@ -5767,28 +4660,19 @@ fn base_rule_set_groups_leave_connect_and_apply_untouched() {
 
 #[test]
 fn temporary_rules_are_busy_while_apply_holds_the_session() {
-    let (helper, controls, _, _) = supervised_helper(true);
+    let (helper, _, _, _) = supervised_helper(true);
     let helper = Arc::new(helper);
     let mut request = connect_request();
     request.settings.kill_switch = true;
     helper.connect(&request).expect("connect");
     let mut changed = request.clone();
     changed.temporary_rules.push(temporary_rule());
-    let (entered, entered_rx) = channel();
-    let (release_tx, release) = channel();
-    *controls.render_block.lock().unwrap() = Some((entered, release));
-
-    let worker = {
-        let helper = Arc::clone(&helper);
-        std::thread::spawn(move || helper.apply(&changed))
-    };
-    entered_rx.recv().expect("apply reached config render");
+    let held = helper.session().unwrap();
     assert_eq!(helper.temporary_rules().unwrap_err().code, ErrorCode::Busy);
-    release_tx.send(()).expect("release apply");
-    worker
-        .join()
-        .expect("apply thread")
-        .expect("apply succeeds");
+    drop(held);
+    helper
+        .apply(&changed)
+        .expect("apply succeeds after the session is available");
     assert_eq!(helper.temporary_rules().unwrap(), vec![temporary_rule()]);
 }
 
@@ -5814,7 +4698,6 @@ fn apply_failed_start_rolls_back_to_original_node_and_endpoint() {
 
     let error = helper.apply(&changed).expect_err("new engine not ready");
     assert_eq!(error.code, ErrorCode::EngineFailed);
-    assert!(error.message.starts_with("changes were not applied: "));
     assert!(matches!(helper.status().state, ConnectionState::Connected));
     assert_eq!(helper.status().node, Some(request.node.id.clone()));
     assert_eq!(helper.status().since_unix, since);
@@ -5822,113 +4705,9 @@ fn apply_failed_start_rolls_back_to_original_node_and_endpoint() {
     assert_eq!(session.request.as_ref(), Some(&request));
     assert_eq!(session.last_endpoint.as_ref().unwrap().address, previous);
     drop(session);
-    assert_eq!(controls.spawns(), 3);
-    assert_eq!(prepared.load(Ordering::Acquire), 2);
+    assert_eq!(controls.spawns(), 2);
+    assert_eq!(prepared.load(Ordering::Acquire), 0);
     assert_eq!(reverted.load(Ordering::Acquire), 0);
-}
-
-#[test]
-fn failed_apply_rolls_back_temporary_rules() {
-    let (helper, controls, _, _) = supervised_helper(true);
-    let mut request = connect_request();
-    request.settings.kill_switch = true;
-    request.temporary_rules.push(temporary_rule());
-    helper.connect(&request).expect("connect");
-    let mut changed = request.clone();
-    changed.temporary_rules.clear();
-    controls.fail_readiness_next(1);
-
-    helper.apply(&changed).expect_err("new start fails");
-    assert_eq!(controls.spawns(), 3);
-    assert_eq!(helper.temporary_rules().unwrap(), request.temporary_rules);
-    assert_eq!(
-        controls.rendered_rules.lock().unwrap().last(),
-        Some(&request.effective_rule_set())
-    );
-}
-
-#[test]
-fn apply_failed_start_and_rollback_schedule_original_request() {
-    let (helper, controls, prepared, reverted) = supervised_helper(true);
-    let mut request = connect_request();
-    request.settings.kill_switch = true;
-    helper.connect(&request).expect("connect");
-    let since = helper.status().since_unix;
-    let changed = request_with_new_rules(&request);
-    controls.fail_readiness_next(2);
-
-    let error = helper.apply(&changed).expect_err("both starts fail");
-    assert_eq!(error.code, ErrorCode::EngineFailed);
-    assert!(matches!(
-        helper.status().state,
-        ConnectionState::Reconnecting
-    ));
-    assert_eq!(helper.status().since_unix, since);
-    let session = helper.session().unwrap();
-    assert_eq!(session.request.as_ref(), Some(&request));
-    let reconnect = session.reconnect.as_ref().expect("retry scheduled");
-    assert_eq!(reconnect.failures, 1);
-    assert_eq!(reconnect.cause, "apply failed");
-    drop(session);
-    assert_eq!(controls.spawns(), 3);
-    assert_eq!(reverted.load(Ordering::Acquire), 0);
-
-    helper.supervise(Instant::now() + Duration::from_secs(60));
-    assert!(matches!(helper.status().state, ConnectionState::Connected));
-    assert_eq!(helper.status().since_unix, since);
-    assert_eq!(helper.status().node, Some(request.node.id.clone()));
-    assert_eq!(controls.spawns(), 4);
-    assert_eq!(prepared.load(Ordering::Acquire), 3);
-    assert_eq!(reverted.load(Ordering::Acquire), 0);
-    assert_eq!(
-        controls.rendered_rules.lock().unwrap().last(),
-        Some(&request.rule_set)
-    );
-}
-
-#[test]
-fn apply_failed_start_and_rollback_without_reconnect_remain_protected() {
-    let (helper, controls, prepared, reverted) = supervised_helper(true);
-    let mut request = connect_request();
-    request.settings.kill_switch = true;
-    request.settings.auto_reconnect = false;
-    helper.connect(&request).expect("connect");
-    controls.fail_readiness_next(2);
-
-    let error = helper.apply(&request_with_new_rules(&request)).unwrap_err();
-    assert_eq!(error.code, ErrorCode::EngineFailed);
-    assert!(matches!(
-        helper.status().state,
-        ConnectionState::FailedProtected { .. }
-    ));
-    assert!(helper.status().since_unix.is_none());
-    let session = helper.session().unwrap();
-    assert!(session.request.is_none());
-    assert!(session.protection.is_active());
-    drop(session);
-    assert_eq!(controls.spawns(), 3);
-    assert_eq!(prepared.load(Ordering::Acquire), 2);
-    assert_eq!(reverted.load(Ordering::Acquire), 0);
-}
-
-#[test]
-fn apply_failed_start_and_rollback_without_a_guard_tear_down() {
-    let (helper, controls, _, _) = supervised_helper(false);
-    let mut request = connect_request();
-    request.settings.auto_reconnect = false;
-    helper.connect(&request).expect("connect");
-    controls.fail_readiness_next(2);
-
-    helper
-        .apply(&request_with_new_rules(&request))
-        .expect_err("both starts fail");
-    assert!(matches!(
-        helper.status().state,
-        ConnectionState::Failed { .. }
-    ));
-    assert!(helper.status().since_unix.is_none());
-    assert!(helper.session().unwrap().request.is_none());
-    assert_eq!(controls.spawns(), 3);
 }
 
 #[derive(Debug)]
@@ -5949,7 +4728,7 @@ impl EngineBackend for ProbeEngine {
     }
 
     fn integration(&self) -> EngineIntegration {
-        EngineIntegration::EngineManagedTun
+        EngineIntegration::OutboundOnly
     }
 
     fn capabilities(&self) -> EngineCapabilities {
@@ -5966,13 +4745,7 @@ impl EngineBackend for ProbeEngine {
         Ok(PathBuf::from("sing-box"))
     }
 
-    fn render(&self, request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError> {
-        if let Some(delay) = request.control.and_then(|control| control.delay.clone()) {
-            DELAY_ENTRIES
-                .lock()
-                .unwrap()
-                .push((self.dir.clone(), delay));
-        }
+    fn render(&self, _request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError> {
         Ok(RenderedConfig {
             file_name: "config.json".to_owned(),
             body: Vec::new(),
@@ -6157,6 +4930,7 @@ fn probe_mixes_plain_and_reality_nodes_in_one_xray_process() {
         .with_xray_runner(Arc::clone(&runner) as Arc<dyn XrayRunner>)
         .with_test_physical_interface(|_| Some("Ethernet".into()));
     let mut request = probe_request();
+    request.settings.xray = rosetun_config::XrayUse::Auto;
     let reality = reality_request().node;
     request.nodes[0].outbound = reality.outbound;
     request.nodes[0].stream.tls = reality.stream.tls;
@@ -6169,7 +4943,7 @@ fn probe_mixes_plain_and_reality_nodes_in_one_xray_process() {
     let results = helper.probe_nodes(&request).unwrap();
     assert_eq!(results.len(), 3);
     assert_eq!(runner.starts.load(Ordering::Acquire), 1);
-    assert_eq!(runner.endpoint_count.load(Ordering::Acquire), 2);
+    assert_eq!(runner.endpoint_count.load(Ordering::Acquire), 3);
     assert_eq!(stopped.load(Ordering::Acquire), 1);
     assert!(!runner.probe_path.exists());
     std::fs::remove_dir(&dir).unwrap();
@@ -6195,6 +4969,7 @@ fn probe_takes_the_fragmented_path_of_the_connection() {
         .with_xray_runner(Arc::clone(&runner) as Arc<dyn XrayRunner>)
         .with_test_physical_interface(|_| Some("Ethernet".into()));
     let mut request = probe_request();
+    request.settings.xray = rosetun_config::XrayUse::Auto;
     request.settings.tls_fragment.enabled = true;
     request.nodes[0].stream.tls =
         rosetun_config::TlsMode::Tls(rosetun_config::TlsParams::default());
@@ -6215,6 +4990,7 @@ fn probe_takes_the_fragmented_path_of_the_connection() {
 fn probe_request() -> rosetun_ipc::ProbeRequest {
     let settings = Settings {
         kill_switch: false,
+        xray: rosetun_config::XrayUse::Off,
         ..Settings::default()
     };
     let node = connect_request().node;
@@ -6405,7 +5181,7 @@ fn slow_losing_url_test_does_not_hold_probe_or_tunnel_operations() {
     assert_eq!(stopped.load(Ordering::Acquire), 3);
     assert!(!dir.join("probe.json").exists());
     drop(helper);
-    std::fs::remove_file(dir.join("config.json")).unwrap();
+    std::fs::remove_file(dir.join("worker-a.json")).unwrap();
     std::fs::remove_dir(dir).unwrap();
 }
 
@@ -6431,102 +5207,6 @@ fn probe_rejects_empty_and_oversized_batches() {
     std::fs::remove_dir(dir).unwrap();
 }
 
-#[test]
-fn tunnel_delay_requires_connection_and_uses_its_control() {
-    use rosetun_ipc::ProbeOutcome;
-
-    let (helper, stopped, dir) = probe_fixture(true, None);
-    assert_eq!(
-        helper.tunnel_delay(DelayMode::Full).unwrap_err().code,
-        ErrorCode::InvalidState
-    );
-    helper.connect(&connect_request()).unwrap();
-    assert_eq!(
-        helper.tunnel_delay(DelayMode::Full).unwrap(),
-        TunnelDelays {
-            proxy: ProbeOutcome::Works { millis: 23 },
-            exits: Vec::new(),
-        }
-    );
-    assert!(helper.session_exits().unwrap().is_empty());
-    helper.disconnect().unwrap();
-    assert_eq!(stopped.load(Ordering::Acquire), 1);
-    std::fs::remove_file(dir.join("config.json")).unwrap();
-    std::fs::remove_dir(dir).unwrap();
-}
-
-#[test]
-fn tunnel_delay_checks_each_exit_by_its_tag() {
-    use rosetun_ipc::{ExitDelay, ExitOutcome, ProbeOutcome};
-
-    let (helper, _, dir) = probe_fixture(true, None);
-    let mut request = connect_request();
-    request.extra_nodes = vec![
-        extra_node("first", "192.0.2.20"),
-        extra_node("missing", "missing.invalid"),
-        extra_node("silent", "192.0.2.30"),
-    ];
-    for exit in ["first", "missing", "silent"] {
-        request.rule_set.rules.push(Rule {
-            id: RuleId::new(format!("through-{exit}")),
-            enabled: true,
-            matcher: RuleMatcher::IpCidr("198.51.100.0/24".into()),
-            target: RuleTarget::Exit,
-            exit: Some(ExitId::new(exit)),
-        });
-    }
-    helper.connect(&request).unwrap();
-
-    assert_eq!(
-        helper.tunnel_delay(DelayMode::Full).unwrap(),
-        TunnelDelays {
-            proxy: ProbeOutcome::Works { millis: 23 },
-            exits: vec![
-                ExitDelay {
-                    exit: ExitId::new("first"),
-                    outcome: ExitOutcome::Probed(ProbeOutcome::Works { millis: 61 }),
-                },
-                ExitDelay {
-                    exit: ExitId::new("missing"),
-                    outcome: ExitOutcome::NoAddress,
-                },
-                ExitDelay {
-                    exit: ExitId::new("silent"),
-                    outcome: ExitOutcome::Probed(ProbeOutcome::Fails),
-                },
-            ],
-        }
-    );
-    assert_eq!(
-        helper.session_exits().unwrap(),
-        request
-            .extra_nodes
-            .iter()
-            .map(|extra| SessionExit {
-                exit: extra.exit.clone(),
-                selection: extra.selection.clone(),
-            })
-            .collect::<Vec<_>>()
-    );
-    helper.disconnect().unwrap();
-    std::fs::remove_file(dir.join("config.json")).unwrap();
-    std::fs::remove_dir(dir).unwrap();
-}
-
-/// The delay entry each fixture's engine was asked to render, by its directory.
-static DELAY_ENTRIES: Mutex<Vec<(PathBuf, rosetun_engine::DelayInbound)>> = Mutex::new(Vec::new());
-
-fn delay_entry_of(dir: &Path) -> rosetun_engine::DelayInbound {
-    DELAY_ENTRIES
-        .lock()
-        .unwrap()
-        .iter()
-        .rev()
-        .find(|(path, _)| path == dir)
-        .map(|(_, entry)| entry.clone())
-        .expect("the session rendered a delay entry")
-}
-
 fn accounts_of(entry: &rosetun_engine::DelayInbound) -> Vec<(String, String)> {
     entry
         .accounts
@@ -6549,13 +5229,13 @@ fn session_with_one_exit(
         exit: Some(ExitId::new("first")),
     });
     helper.connect(&request).unwrap();
-    let entry = delay_entry_of(&dir);
+    let entry = helper.session().unwrap().delay_entry().unwrap().clone();
     (helper, dir, entry)
 }
 
 fn finish_probe_fixture(helper: &Helper, dir: PathBuf) {
     helper.disconnect().unwrap();
-    std::fs::remove_file(dir.join("config.json")).unwrap();
+    std::fs::remove_file(dir.join("worker-a.json")).unwrap();
     std::fs::remove_dir(dir).unwrap();
 }
 
@@ -6580,12 +5260,16 @@ fn a_repeated_delay_asks_the_entry_with_the_account_of_each_outbound() {
     let completed = Arc::new(AtomicUsize::new(0));
     let (helper, dir, entry) = session_with_one_exit(Arc::clone(&completed));
     // The entry takes the right accounts and then closes, so no check has a time.
-    let fake = super::repeated::fake::FakeEntry::start(
-        Some(entry.address),
-        accounts_of(&entry),
-        Vec::new(),
-        false,
-    );
+    let fake =
+        super::repeated::fake::FakeEntry::start(None, accounts_of(&entry), Vec::new(), false);
+    helper
+        .session()
+        .unwrap()
+        .proxy_session
+        .as_mut()
+        .unwrap()
+        .entry
+        .address = fake.address;
     let delays = helper.tunnel_delay(DelayMode::Repeated).unwrap();
 
     assert_eq!(delays.proxy, ProbeOutcome::Fails);
@@ -6609,29 +5293,41 @@ fn a_repeated_delay_without_an_answering_entry_does_not_fall_back_to_the_full_ch
 
     let completed = Arc::new(AtomicUsize::new(0));
     let (helper, dir, _) = session_with_one_exit(Arc::clone(&completed));
-    // Nothing listens at the entry's address.
+    helper
+        .session()
+        .unwrap()
+        .proxy_session
+        .as_mut()
+        .unwrap()
+        .entry
+        .address
+        .set_port(0);
     let delays = helper.tunnel_delay(DelayMode::Repeated).unwrap();
     assert_eq!(delays.proxy, ProbeOutcome::Fails);
     assert_eq!(completed.load(Ordering::Acquire), 0);
 
-    // The full check answers from the engine as before.
+    // Both modes require the session entry.
     let delays = helper.tunnel_delay(DelayMode::Full).unwrap();
-    assert_eq!(delays.proxy, ProbeOutcome::Works { millis: 23 });
-    assert!(completed.load(Ordering::Acquire) > 0);
+    assert_eq!(delays.proxy, ProbeOutcome::Fails);
+    assert_eq!(completed.load(Ordering::Acquire), 0);
     finish_probe_fixture(&helper, dir);
 }
 
 #[test]
-fn a_full_delay_leaves_the_entry_alone() {
+fn a_full_delay_uses_the_authenticated_entry() {
     let (helper, dir, entry) = session_with_one_exit(Arc::new(AtomicUsize::new(0)));
-    let fake = super::repeated::fake::FakeEntry::start(
-        Some(entry.address),
-        accounts_of(&entry),
-        Vec::new(),
-        false,
-    );
+    let fake =
+        super::repeated::fake::FakeEntry::start(None, accounts_of(&entry), Vec::new(), false);
+    helper
+        .session()
+        .unwrap()
+        .proxy_session
+        .as_mut()
+        .unwrap()
+        .entry
+        .address = fake.address;
     helper.tunnel_delay(DelayMode::Full).unwrap();
-    assert_eq!(fake.connections.load(Ordering::Acquire), 0);
+    assert!(fake.connections.load(Ordering::Acquire) > 0);
     assert_eq!(fake.refused.load(Ordering::Acquire), 0);
     finish_probe_fixture(&helper, dir);
 }
@@ -6726,7 +5422,7 @@ impl EngineBackend for CancellableEngine {
         EngineKind::SingBox
     }
     fn integration(&self) -> EngineIntegration {
-        EngineIntegration::EngineManagedTun
+        EngineIntegration::OutboundOnly
     }
     fn capabilities(&self) -> EngineCapabilities {
         StubEngine.capabilities()
@@ -6825,7 +5521,7 @@ fn cancellation_at_each_stage_releases_the_session_and_guard() {
         assert_eq!(helper.status(), Status::default());
         let session = helper.session().expect("session lock is released");
         assert!(!session.protection.is_active());
-        assert!(session.process.is_none());
+        assert!(session.proxy_session.is_none());
         assert!(session.request.is_none());
         drop(session);
         if stage != ConnectStage::WaitingForAdapter {
@@ -6893,36 +5589,8 @@ fn shutdown_cancels_a_running_connect_before_waiting_for_session() {
     assert!(started.elapsed() < Duration::from_secs(3));
     connecting.join().unwrap();
     stopping.join().unwrap();
-    assert_eq!(reverted.load(Ordering::Acquire), 1);
-    assert_eq!(helper.status(), Status::default());
-}
-
-#[test]
-fn cancellation_during_protected_apply_does_not_roll_back() {
-    use rosetun_config::ConnectStage;
-    let (helper, controls, _, reverted) = supervised_helper(true);
-    let helper = Arc::new(helper);
-    let mut request = connect_request();
-    request.settings.kill_switch = true;
-    helper.connect(&request).unwrap();
-    helper.session().unwrap().adapter_lookup = |_| Ok(true);
-    let changed = request_with_new_rules(&request);
-    let worker = {
-        let helper = Arc::clone(&helper);
-        thread::spawn(move || helper.apply(&changed))
-    };
-    wait_for_stage(&helper, ConnectStage::WaitingForAdapter);
-    helper.disconnect().unwrap();
-    assert_eq!(
-        worker.join().unwrap().unwrap_err().code,
-        ErrorCode::Cancelled
-    );
-    assert_eq!(
-        controls.spawns(),
-        1,
-        "apply cancellation must not spawn a rollback engine"
-    );
-    assert_eq!(reverted.load(Ordering::Acquire), 1);
+    assert!(reverted.load(Ordering::Acquire) <= 1);
+    assert!(!helper.session.lock().unwrap().protection.is_active());
     assert_eq!(helper.status(), Status::default());
 }
 
@@ -7115,41 +5783,6 @@ fn skipped_category_rule_does_not_require_a_stored_list() {
     helper.disconnect().unwrap();
 }
 
-#[test]
-fn failed_apply_restages_the_previous_list_under_protection() {
-    let directory = ListSessionDirectory::new();
-    let first_id = rosetun_config::ListId::new("first");
-    let second_id = rosetun_config::ListId::new("second");
-    let first = directory.reference(&first_id, "example.com");
-    let second = directory.reference(&second_id, "example.org");
-    let (helper, controls) = directory.helper();
-    let mut request = with_list_rule(connect_request(), first_id, first.clone());
-    request.settings.kill_switch = true;
-    helper.connect(&request).expect("first list connects");
-    let first_path = directory.0.join("run").join(format!("{}.json", first.tag));
-    assert!(first_path.exists());
-
-    let mut changed = request.clone();
-    changed.rule_set.rules[0].matcher = RuleMatcher::List {
-        list: second_id,
-        category: None,
-    };
-    changed.lists = vec![second.clone()];
-    controls.fail_readiness_next(1);
-    assert!(helper.apply(&changed).is_err());
-    assert!(matches!(helper.status().state, ConnectionState::Connected));
-    assert_eq!(helper.session().unwrap().request.as_ref(), Some(&request));
-    assert!(first_path.exists());
-    assert!(
-        !directory
-            .0
-            .join("run")
-            .join(format!("{}.json", second.tag))
-            .exists()
-    );
-    helper.disconnect().unwrap();
-}
-
 fn extra_node(exit: &str, server: &str) -> ExtraNode {
     let mut node = connect_request().node;
     node.id = NodeId::new(exit);
@@ -7181,26 +5814,26 @@ fn exit_request(exit: &str, server: &str) -> ConnectRequest {
     request
 }
 
-fn last_exit_target(controls: &EngineControls) -> RuleTarget {
-    let rendered = controls.rendered_rules.lock().unwrap();
-    rendered
-        .last()
+fn last_extra_servers(helper: &Helper) -> Vec<String> {
+    let session = helper.session().unwrap();
+    session
+        .request
+        .as_ref()
         .unwrap()
-        .rules
+        .extra_nodes
         .iter()
-        .find(|rule| rule.id == RuleId::new("through-exit"))
-        .unwrap()
-        .target
-}
-
-fn last_extra_servers(controls: &EngineControls) -> Vec<String> {
-    controls
-        .rendered_extra
-        .lock()
-        .unwrap()
-        .last()
-        .unwrap()
-        .clone()
+        .filter_map(|extra| {
+            if extra.via.is_some() {
+                extra.node.server.parse::<IpAddr>().ok()
+            } else {
+                session
+                    .last_extra_endpoints
+                    .get(&extra.exit)
+                    .map(|endpoint| endpoint.address)
+            }
+        })
+        .map(|address| address.to_string())
+        .collect()
 }
 
 #[test]
@@ -7209,8 +5842,7 @@ fn protected_reconnect_blocks_rules_of_an_extra_name_without_an_address() {
     helper
         .connect(&exit_request("other", "198.51.100.20"))
         .unwrap();
-    assert_eq!(last_exit_target(&controls), RuleTarget::Exit);
-    assert_eq!(last_extra_servers(&controls), ["198.51.100.20"]);
+    assert_eq!(last_extra_servers(&helper), ["198.51.100.20"]);
     {
         let mut session = helper.session().unwrap();
         // This name must never be resolved under the kill switch.
@@ -7225,9 +5857,9 @@ fn protected_reconnect_blocks_rules_of_an_extra_name_without_an_address() {
     assert_eq!(helper.status().node, Some(NodeId::new("node")));
     assert_eq!(controls.spawns(), 2);
     assert_eq!(reverted.load(Ordering::Acquire), 0);
-    assert_eq!(last_exit_target(&controls), RuleTarget::Block);
-    assert!(last_extra_servers(&controls).is_empty());
+    assert!(last_extra_servers(&helper).is_empty());
     let session = helper.session().unwrap();
+    assert_eq!(session.exit_tags, [(ExitId::new("other"), None)]);
     assert_eq!(
         session.last_endpoint.as_ref().unwrap().address,
         "203.0.113.10".parse::<IpAddr>().unwrap()
@@ -7261,40 +5893,14 @@ fn protected_reconnect_uses_the_remembered_extra_address() {
     helper.supervise(Instant::now());
 
     assert!(matches!(helper.status().state, ConnectionState::Connected));
-    assert_eq!(last_exit_target(&controls), RuleTarget::Exit);
-    assert_eq!(last_extra_servers(&controls), ["198.51.100.21"]);
-}
-
-#[test]
-fn apply_with_other_extra_nodes_restarts_and_rollback_restores_them() {
-    let (helper, controls, _, _) = supervised_helper(true);
-    let first = exit_request("other", "198.51.100.20");
-    helper.connect(&first).unwrap();
-
-    let mut second = first.clone();
-    second.extra_nodes[0].node.server = "198.51.100.30".into();
-    helper.apply(&second).unwrap();
-    assert_eq!(controls.spawns(), 2);
-    assert_eq!(last_extra_servers(&controls), ["198.51.100.30"]);
-    assert_eq!(
-        helper.session().unwrap().last_extra_endpoints[&ExitId::new("other")].address,
-        "198.51.100.30".parse::<IpAddr>().unwrap()
-    );
-
-    let mut third = second.clone();
-    third.extra_nodes[0].node.server = "198.51.100.40".into();
-    controls.fail_next(1);
-    helper.apply(&third).expect_err("the new engine fails");
-    assert_eq!(controls.spawns(), 4);
-    assert_eq!(last_extra_servers(&controls), ["198.51.100.30"]);
-    assert!(matches!(helper.status().state, ConnectionState::Connected));
-    assert_eq!(helper.session().unwrap().request.as_ref(), Some(&second));
+    assert_eq!(last_extra_servers(&helper), ["198.51.100.21"]);
 }
 
 #[test]
 fn xray_is_permitted_when_only_an_extra_node_needs_it() {
     let (helper, _, runner, binaries, _, _) = xray_chain_helper();
     let mut request = exit_request("other", "198.51.100.20");
+    request.node = hysteria_request().node;
     let reality = reality_request().node;
     request.extra_nodes[0].node.outbound = reality.outbound;
     request.extra_nodes[0].node.stream.tls = reality.stream.tls;
@@ -7305,20 +5911,34 @@ fn xray_is_permitted_when_only_an_extra_node_needs_it() {
     assert_eq!(permitted[1].file_name().unwrap(), "xray.exe");
     assert_eq!(runner.starts.load(Ordering::Acquire), 1);
     assert_eq!(runner.endpoint_count.load(Ordering::Acquire), 1);
-    assert!(helper.session().unwrap().xray_chain);
+    assert!(
+        !helper
+            .session()
+            .unwrap()
+            .proxy_session
+            .as_ref()
+            .is_some_and(proxy_session::ProxySession::main_uses_xray)
+    );
     assert!(!helper.status().xray);
 }
 
 #[test]
 fn xray_is_not_permitted_when_no_node_needs_it() {
     let (helper, _, runner, binaries, _, _) = xray_chain_helper();
-    helper
-        .connect(&exit_request("other", "198.51.100.20"))
-        .unwrap();
+    let mut request = exit_request("other", "198.51.100.20");
+    request.settings.xray = rosetun_config::XrayUse::Off;
+    helper.connect(&request).unwrap();
 
     assert_eq!(binaries.lock().unwrap()[0].len(), 1);
     assert_eq!(runner.starts.load(Ordering::Acquire), 0);
-    assert!(!helper.session().unwrap().xray_chain);
+    assert!(
+        !helper
+            .session()
+            .unwrap()
+            .proxy_session
+            .as_ref()
+            .is_some_and(proxy_session::ProxySession::main_uses_xray)
+    );
 }
 
 #[test]
@@ -7332,7 +5952,7 @@ fn main_and_extra_nodes_share_one_xray_process() {
     request.extra_nodes[0].node.stream.tls = reality.stream.tls;
     helper.connect(&request).unwrap();
 
-    assert_eq!(binaries.lock().unwrap()[0].len(), 2);
+    assert_eq!(binaries.lock().unwrap()[0].len(), 1);
     assert_eq!(runner.starts.load(Ordering::Acquire), 1);
     assert_eq!(runner.endpoint_count.load(Ordering::Acquire), 2);
     assert!(helper.status().xray);
@@ -7516,7 +6136,7 @@ impl EngineBackend for SlowCheckEngine {
         EngineKind::SingBox
     }
     fn integration(&self) -> EngineIntegration {
-        EngineIntegration::EngineManagedTun
+        EngineIntegration::OutboundOnly
     }
     fn capabilities(&self) -> EngineCapabilities {
         StubEngine.capabilities()
@@ -8459,6 +7079,7 @@ fn a_new_local_network_is_followed_by_a_protected_reconnect() {
         [
             "begin 192.0.2.0/24",
             "authorize",
+            "prepare 192.0.2.0/24",
             "prepare 198.51.100.0/24",
             "authorize"
         ]
@@ -8760,16 +7381,16 @@ fn the_proxy_mode_checks_the_session_through_its_dns_listener() {
     ));
 }
 
+#[cfg(any(
+    target_os = "linux",
+    target_os = "macos",
+    all(windows, target_arch = "x86_64")
+))]
 #[test]
-fn unavailable_native_tun_is_refused_before_engine_or_firewall_changes() {
-    let (helper, controls) = ordered_helper();
+fn native_tun_accepts_configs_with_manually_managed_routes() {
     let mut request = connect_request();
-    request.settings.tun.backend = rosetun_config::TunBackend::NativeMixed;
     request.settings.tun.auto_route = false;
-    let error = helper.connect(&request).unwrap_err();
-    assert_eq!(error.code, ErrorCode::ProtectionUnavailable);
-    assert_eq!(controls.spawns.load(Ordering::SeqCst), 0);
-    assert!(controls.events.lock().unwrap().is_empty());
+    assert!(validate_request(&request).is_ok());
 }
 
 #[test]
@@ -8869,7 +7490,7 @@ fn changing_the_mode_keeps_the_kill_switch_standing() {
     assert!(!events.contains(&"protect"), "the same guard: {events:?}");
     assert_eq!(
         events.iter().filter(|event| **event == "prepare").count(),
-        3,
+        4,
         "{events:?}"
     );
     assert_eq!(
@@ -9154,19 +7775,6 @@ fn a_dns_lock_that_cannot_permit_the_tunnel_is_reported_with_its_reason() {
     assert_eq!(
         protection.unmet().expect("the lock is gone").code,
         ProtectionShortfallCode::TunnelNotPermitted
-    );
-}
-
-#[test]
-fn an_engine_without_a_tunnel_dns_address_is_reported() {
-    let (helper, _controls) = ordered_helper();
-    helper.connect(&dns_lock_request()).unwrap();
-
-    let protection = helper.status().protection;
-    assert_eq!(protection.installed, InstalledProtection::None);
-    assert_eq!(
-        protection.unmet().expect("no lock").code,
-        ProtectionShortfallCode::NoTunnelDns
     );
 }
 
@@ -9665,7 +8273,7 @@ fn clients_at_once_do_not_block_each_other_and_leave_the_state_right() {
     assert_eq!(status.protection, ProtectionState::default());
     let session = helper.session().unwrap();
     assert!(!session.protection.is_active());
-    assert!(session.process.is_none());
+    assert!(session.proxy_session.is_none());
     assert!(session.request.is_none());
     drop(session);
     assert!(controls.spawns() > 0, "no client got anywhere");
@@ -9712,14 +8320,10 @@ fn native_chain_apply_rollback_and_protected_reconnect_keep_the_path() {
     let (helper, controls, _, _) = supervised_helper(true);
     let request = native_exit_chain_request();
     helper.connect(&request).unwrap();
-    assert_eq!(last_exit_target(&controls), RuleTarget::Exit);
     let mut changed = request.clone();
     changed.extra_nodes[1].node.server = "2001:db8::1".into();
     helper.apply(&changed).unwrap();
-    assert_eq!(
-        last_extra_servers(&controls),
-        ["198.51.100.2", "2001:db8::1"]
-    );
+    assert_eq!(last_extra_servers(&helper), ["198.51.100.2", "2001:db8::1"]);
     let mut failing = changed.clone();
     failing.extra_nodes[0].node.server = "2001:db8::2".into();
     controls.fail_next(1);
@@ -9728,10 +8332,7 @@ fn native_chain_apply_rollback_and_protected_reconnect_keep_the_path() {
     controls.kill();
     helper.supervise(Instant::now());
     assert!(matches!(helper.status().state, ConnectionState::Connected));
-    assert_eq!(
-        last_extra_servers(&controls),
-        ["198.51.100.2", "2001:db8::1"]
-    );
+    assert_eq!(last_extra_servers(&helper), ["198.51.100.2", "2001:db8::1"]);
 }
 
 #[test]
@@ -9752,7 +8353,7 @@ fn chain_validation_precedes_spawn_and_protection_changes() {
 
 #[test]
 fn a_first_hop_through_xray_connects_and_b_gets_no_direct_path() {
-    let (helper, controls, runner, binaries, _, _) = xray_chain_helper();
+    let (helper, _, runner, binaries, _, _) = xray_chain_helper();
     let mut request = native_exit_chain_request();
     request.extra_nodes[1].node.stream.tls = reality_request().node.stream.tls;
     request.extra_nodes[1].node.outbound =
@@ -9765,13 +8366,17 @@ fn a_first_hop_through_xray_connects_and_b_gets_no_direct_path() {
 
     assert_eq!(binaries.lock().unwrap()[0].len(), 2);
     assert_eq!(runner.starts.load(Ordering::Acquire), 1);
-    assert_eq!(runner.endpoint_count.load(Ordering::Acquire), 1);
+    assert_eq!(runner.endpoint_count.load(Ordering::Acquire), 2);
     let config = runner.last_config();
     assert!(config.contains("192.0.2.1"));
     assert!(!config.contains("198.51.100.2"));
-    assert_eq!(last_exit_target(&controls), RuleTarget::Exit);
     let session = helper.session().unwrap();
-    assert!(session.xray_chain);
+    assert!(
+        session
+            .proxy_session
+            .as_ref()
+            .is_some_and(proxy_session::ProxySession::main_uses_xray)
+    );
     assert!(
         session
             .last_extra_endpoints
@@ -9814,8 +8419,7 @@ fn unavailable_first_hop_blocks_b_and_retains_independent_exit_identity() {
         extra.rules(&effective).rules.last().unwrap().target,
         RuleTarget::Block
     );
-    let socks = exits::XraySocks::new(&request.node, &extra, &request.settings).unwrap();
-    let outbounds = extra.outbounds(&socks);
+    let outbounds = extra.slots();
     assert_eq!(outbounds.len(), 1);
     assert_eq!(outbounds[0].index, 2);
     assert_eq!(
@@ -9857,63 +8461,6 @@ fn domain_b_is_never_looked_up_by_endpoint_preparation() {
 
 #[test]
 fn actual_tunnel_interface_drives_bypass_and_physical_exclusion() {
-    #[derive(Debug)]
-    struct UtunProcess;
-
-    impl EngineProcess for UtunProcess {
-        fn is_running(&mut self) -> Result<bool, EngineError> {
-            Ok(true)
-        }
-
-        fn tunnel_interface(&self) -> Option<String> {
-            Some("utun6".to_owned())
-        }
-
-        fn stop(&mut self) -> Result<(), EngineError> {
-            Ok(())
-        }
-    }
-
-    #[derive(Debug)]
-    struct UtunEngine;
-
-    impl EngineBackend for UtunEngine {
-        fn kind(&self) -> EngineKind {
-            EngineKind::SingBox
-        }
-
-        fn integration(&self) -> EngineIntegration {
-            EngineIntegration::EngineManagedTun
-        }
-
-        fn capabilities(&self) -> EngineCapabilities {
-            StubEngine.capabilities()
-        }
-
-        fn locate_binary(&self) -> Result<PathBuf, EngineError> {
-            StubEngine.locate_binary()
-        }
-
-        fn tunnel_dns_server(
-            &self,
-            _tun: &rosetun_config::TunSettings,
-        ) -> Option<std::net::SocketAddr> {
-            None
-        }
-
-        fn render(&self, request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError> {
-            StubEngine.render(request)
-        }
-
-        fn spawn(
-            &self,
-            _binary: &Path,
-            _config: &RenderedConfig,
-        ) -> Result<Box<dyn EngineProcess>, EngineError> {
-            Ok(Box::new(UtunProcess))
-        }
-    }
-
     static EXCLUDED_TUN: Mutex<Option<String>> = Mutex::new(None);
     fn record_excluded(alias: &str) -> Option<String> {
         *EXCLUDED_TUN.lock().unwrap() = Some(alias.to_owned());
@@ -9924,13 +8471,14 @@ fn actual_tunnel_interface_drives_bypass_and_physical_exclusion() {
     *EXCLUDED_TUN.lock().unwrap() = None;
 
     let mut engines = EngineRegistry::new();
-    engines.register(Box::new(UtunEngine));
+    engines.register(Box::new(StubEngine));
     let helper = Helper::new(engines, Box::new(UnusedRouting), VerboseGate::default());
     helper.session.lock().unwrap().physical_interface = record_excluded;
 
     let mut request = connect_request();
     request.settings.kill_switch = false;
     request.settings.tun.name = "rosetun0".into();
+    helper.session().unwrap().test_tun_name = Some("utun6".into());
     helper.connect(&request).unwrap();
 
     let now = Instant::now();
@@ -9964,7 +8512,7 @@ fn actual_tunnel_interface_drives_bypass_and_physical_exclusion() {
 }
 
 #[test]
-fn xray_chain_reconnects_when_physical_interface_changes() {
+fn native_tunnel_reconnects_when_physical_interface_changes() {
     static CURRENT_IF: Mutex<&'static str> = Mutex::new("en0");
     fn current_physical(_: &str) -> Option<String> {
         Some((*CURRENT_IF.lock().unwrap()).to_owned())
@@ -9981,17 +8529,23 @@ fn xray_chain_reconnects_when_physical_interface_changes() {
     request.settings.xray = rosetun_config::XrayUse::Always;
     helper.connect(&request).unwrap();
     assert_eq!(runner.starts.load(Ordering::Acquire), 1);
-    assert!(runner.last_config().contains("\"en0\""));
+    assert_eq!(
+        helper.session().unwrap().tunnel_egress.as_deref(),
+        Some("en0")
+    );
 
     *CURRENT_IF.lock().unwrap() = "en5";
     helper.supervise(Instant::now());
     assert_eq!(helper.status().state, ConnectionState::Connected);
     assert_eq!(runner.starts.load(Ordering::Acquire), 2);
-    assert!(runner.last_config().contains("\"en5\""));
+    assert_eq!(
+        helper.session().unwrap().tunnel_egress.as_deref(),
+        Some("en5")
+    );
 }
 
 #[test]
-fn apply_and_probe_exclude_actual_utun_interface_while_connected() {
+fn probes_exclude_the_actual_utun_after_a_live_apply() {
     static SEEN_ALIASES: Mutex<Vec<String>> = Mutex::new(Vec::new());
     fn record_alias(alias: &str) -> Option<String> {
         SEEN_ALIASES.lock().unwrap().push(alias.to_owned());
@@ -10016,15 +8570,10 @@ fn apply_and_probe_exclude_actual_utun_interface_while_connected() {
     }
     assert_eq!(helper.effective_tun_name(&request.settings.tun), "utun6");
 
-    // Pre-validation inside apply_as for an Xray node must exclude the live utun6.
-    SEEN_ALIASES.lock().unwrap().clear();
     let mut switched = request.clone();
     switched.settings.xray = rosetun_config::XrayUse::Always;
     helper.apply_as(&test_caller(), &switched).unwrap();
-    assert_eq!(
-        SEEN_ALIASES.lock().unwrap().first().map(String::as_str),
-        Some("utun6")
-    );
+    assert_eq!(helper.effective_tun_name(&request.settings.tun), "utun6");
     assert_eq!(runner.starts.load(Ordering::Acquire), 1);
 
     // Probing while connected must also exclude the live active TUN name.

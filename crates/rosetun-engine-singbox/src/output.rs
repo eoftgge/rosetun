@@ -200,54 +200,9 @@ pub(super) fn is_connection_line(line: &str) -> bool {
         && age.starts_with(|first: char| first.is_ascii_digit())
 }
 
-/// The FATAL sing-box prints when Wintun still holds the adapter of a killed
-/// predecessor: creating it collides with the old device that Windows has
-/// not removed yet, and opening it fails because the interface is gone.
-pub(super) fn is_adapter_busy_message(line: &str) -> bool {
-    let plain = strip_ansi_csi(line);
-    let fatal = plain
-        .split_whitespace()
-        .take(4)
-        .any(|word| word.split_once('[').map_or(word, |(prefix, _)| prefix) == "FATAL");
-    let Some((_, configure)) = plain.split_once("configure tun interface:") else {
-        return false;
-    };
-    let Some((_, create)) = configure.split_once("create adapter:") else {
-        return false;
-    };
-    let create = create.split([')', '|']).next().unwrap_or_default();
-    fatal && create.contains("already exists")
-}
-
-/// The FATAL sing-box prints when the adapter is there but Windows refuses
-/// to give it the tunnel address because that address is still configured,
-/// as after a fast startup that kept the previous session's adapter. Unlike
-/// `is_adapter_busy_message`, waiting does not clear it.
-pub(super) fn is_address_conflict_message(line: &str) -> bool {
-    let plain = strip_ansi_csi(line);
-    let fatal = plain
-        .split_whitespace()
-        .take(4)
-        .any(|word| word.split_once('[').map_or(word, |(prefix, _)| prefix) == "FATAL");
-    let Some((_, configure)) = plain.split_once("configure tun interface:") else {
-        return false;
-    };
-    fatal
-        && ["set ipv4 address:", "set ipv6 address:"]
-            .iter()
-            .filter_map(|step| configure.split_once(step))
-            .any(|(_, cause)| {
-                cause
-                    .split([')', '|'])
-                    .next()
-                    .unwrap_or_default()
-                    .contains("already exists")
-            })
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{LineLevel, is_adapter_busy_message, is_address_conflict_message, line_level};
+    use super::{LineLevel, line_level};
 
     #[test]
     fn hides_destinations_and_the_server_but_not_the_failure_cause() {
@@ -458,50 +413,6 @@ mod tests {
             "",
         ] {
             assert!(!super::is_connection_line(line), "{line}");
-        }
-    }
-
-    #[test]
-    fn recognizes_an_adapter_still_being_removed() {
-        const FATAL: &str = "FATAL[0015] start service: start inbound/tun[tun-in]: configure tun interface: (create adapter: Cannot create a file when that file already exists. | open existing adapter: Element not found.)";
-        assert!(is_adapter_busy_message(FATAL));
-        assert!(is_adapter_busy_message(&format!(
-            "+0900 2026-10-19 12:00:00 \x1b[31m{}",
-            FATAL.replacen("FATAL", "FATAL\x1b[0m", 1)
-        )));
-        for line in [
-            "FATAL[0015] start service: start inbound/tun[tun-in]: configure tun interface: (create adapter: Access is denied. | open existing adapter: Element not found.)",
-            "FATAL[0015] start service: start inbound/tun[tun-in]: configure tun interface: (create adapter: Access is denied. | open existing adapter: already exists)",
-            "ERROR[0015] start service: start inbound/tun[tun-in]: configure tun interface: (create adapter: Cannot create a file when that file already exists.)",
-            "FATAL[0015] start service: create adapter: Cannot create a file when that file already exists.",
-            "WARN inbound/tun[tun-in]: open interface take too much time to finish!",
-        ] {
-            assert!(!is_adapter_busy_message(line), "{line}");
-        }
-    }
-
-    #[test]
-    fn recognizes_a_tunnel_address_left_by_a_previous_session() {
-        const FATAL: &str = "FATAL[0000] start service: start inbound/tun[tun-in]: configure tun interface: set ipv4 address: The object already exists.";
-        assert!(is_address_conflict_message(FATAL));
-        assert!(is_address_conflict_message(&format!(
-            "+0900 2026-11-10 09:00:00 \x1b[31m{}",
-            FATAL.replacen("FATAL", "FATAL\x1b[0m", 1)
-        )));
-        assert!(is_address_conflict_message(&FATAL.replace("ipv4", "ipv6")));
-    }
-
-    #[test]
-    fn an_address_conflict_needs_a_fatal_set_address_step_that_already_exists() {
-        for line in [
-            "ERROR[0000] start service: start inbound/tun[tun-in]: configure tun interface: set ipv4 address: The object already exists.",
-            "FATAL[0000] start service: start inbound/tun[tun-in]: configure tun interface: set ipv4 address: Access is denied.",
-            "FATAL[0000] start service: start inbound/tun[tun-in]: set ipv4 address: The object already exists.",
-            "FATAL[0000] start service: start inbound/tun[tun-in]: configure tun interface: set mtu: The object already exists.",
-            "FATAL[0000] start service: start inbound/tun[tun-in]: configure tun interface: (create adapter: Cannot create a file when that file already exists. | open existing adapter: Element not found.)",
-            "FATAL[0000] start service: start inbound/tun[tun-in]: configure tun interface: (set ipv4 address: Access is denied. | open existing adapter: already exists)",
-        ] {
-            assert!(!is_address_conflict_message(line), "{line}");
         }
     }
 }

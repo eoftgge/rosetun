@@ -252,7 +252,7 @@ pub trait TrafficProbe: Send + std::fmt::Debug {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EngineIntegration {
-    EngineManagedTun,
+    OutboundOnly,
     /// The backend is a placeholder and cannot provide network integration.
     Unavailable,
 }
@@ -330,7 +330,12 @@ pub trait EngineBackend: Send + Sync + std::fmt::Debug {
     fn kind(&self) -> EngineKind;
     fn integration(&self) -> EngineIntegration;
     fn capabilities(&self) -> EngineCapabilities;
-    fn tunnel_dns_server(&self, tun: &rosetun_config::TunSettings) -> Option<std::net::SocketAddr>;
+    fn tunnel_dns_server(
+        &self,
+        _tun: &rosetun_config::TunSettings,
+    ) -> Option<std::net::SocketAddr> {
+        None
+    }
     fn locate_binary(&self) -> Result<PathBuf, EngineError>;
     fn locate_outbound_worker(&self) -> Result<PathBuf, EngineError> {
         self.locate_binary()

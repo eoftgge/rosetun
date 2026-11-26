@@ -309,7 +309,7 @@ pub trait RoutingBackend: std::fmt::Debug + Send {
     }
 }
 
-/// An engine-owned tunnel interface that has passed engine readiness checks.
+/// A tunnel interface that the routing backend can authorize.
 ///
 /// Platform routing discovers the concrete OS identity itself. On Windows this
 /// means resolving `alias` to an interface LUID and validating `ipv4` before

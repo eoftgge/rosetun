@@ -3,30 +3,18 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{ConnectionMode, CountryCode, NodeId, Settings, TunBackend, XrayUse};
+use crate::{CountryCode, NodeId, Settings, XrayUse};
 
 /// Whether Xray carries this node. Every caller asks here, so a connect, an apply and a server
 /// check always agree.
 pub fn uses_xray(node: &Node, settings: &Settings) -> bool {
-    let native_dataplane = settings.connection_mode == ConnectionMode::SystemProxy
-        || settings.tun.backend == TunBackend::NativeMixed;
     match settings.xray {
         XrayUse::Off => false,
         // Balancers and finalmask are Xray-only features.
         _ if node.requires_xray() => true,
         // Splitting the packets to the server is Xray's feature, so a node it can run goes there.
         _ if settings.tls_fragment.applies_to(node) => true,
-        // In native dataplane modes (NativeMixed TUN and SystemProxy), rosetun-dataplane handles
-        // TUN/proxy/DNS/rules directly, so routing every Xray-supported protocol straight to Xray
-        // avoids spawning a second sing-box worker unnecessarily.
-        XrayUse::Auto if native_dataplane => xray_supports(&node.outbound),
-        // VLESS is Xray's native protocol (including REALITY, where sing-box#4520 breaks on Xray
-        // 26.9.8+), and sing-box has no XHTTP transport.
-        XrayUse::Auto if matches!(node.stream.transport, Transport::Xhttp { .. }) => {
-            xray_supports(&node.outbound)
-        }
-        XrayUse::Auto => matches!(&node.outbound, Outbound::Vless(_)),
-        XrayUse::Always => xray_supports(&node.outbound),
+        XrayUse::Auto | XrayUse::Always => xray_supports(&node.outbound),
     }
 }
 
@@ -1502,17 +1490,12 @@ mod tests {
                 reality.clone(),
             ] {
                 node.stream.tls = tls;
-                let auto = matches!(node.outbound, Outbound::Vless(_));
-                assert_eq!(uses_xray(&node, &with_xray(XrayUse::Auto)), auto);
+                assert_eq!(uses_xray(&node, &with_xray(XrayUse::Auto)), supported);
                 assert!(!uses_xray(&node, &with_xray(XrayUse::Off)));
                 assert_eq!(uses_xray(&node, &with_xray(XrayUse::Always)), supported);
 
-                let mut native_tun = with_xray(XrayUse::Auto);
-                native_tun.tun.backend = TunBackend::NativeMixed;
-                assert_eq!(uses_xray(&node, &native_tun), supported);
-
                 let mut system_proxy = with_xray(XrayUse::Auto);
-                system_proxy.connection_mode = ConnectionMode::SystemProxy;
+                system_proxy.connection_mode = crate::ConnectionMode::SystemProxy;
                 assert_eq!(uses_xray(&node, &system_proxy), supported);
             }
         }
@@ -1654,11 +1637,11 @@ mod tests {
     }
 
     #[test]
-    fn the_hello_mode_leaves_a_node_without_tls_on_sing_box() {
+    fn the_hello_mode_disables_fragmentation_for_plain_vmess() {
         let vmess = every_outbound().remove(1).0;
         let node = example_node(vmess, TlsMode::Plain);
         let hello = with_fragment(XrayUse::Auto, "tlshello");
-        assert!(!uses_xray(&node, &hello));
+        assert!(uses_xray(&node, &hello));
         assert!(!fragments_tls(&node, &hello));
         let range = with_fragment(XrayUse::Auto, "1-3");
         assert!(uses_xray(&node, &range));

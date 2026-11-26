@@ -664,11 +664,7 @@ fn initialize(
         .with_xray(xray)
         .with_list_store(lists, run_dir.join("sing-box"));
     #[cfg(target_os = "linux")]
-    let helper = helper
-        .with_upgrade_marker(UPGRADE_MARKER.into())
-        .with_process_rights_unavailable(rosetun_engine::process::rights_unavailable(
-            rosetun_engine::EngineRights::NetworkAndProcesses,
-        ));
+    let helper = helper.with_upgrade_marker(UPGRADE_MARKER.into());
     let helper = Arc::new(helper);
     helper.restore_lockdown();
     state::spawn_list_reaper(Arc::clone(&helper))

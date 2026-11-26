@@ -1,4 +1,5 @@
 use std::ffi::c_void;
+use std::num::NonZeroU32;
 use std::path::Path;
 use std::ptr;
 use windows_sys::Win32::Foundation::HANDLE;
@@ -6,6 +7,9 @@ use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::{
     FWP_BYTE_BLOB, FWPM_DISPLAY_DATA0, FWPM_PROVIDER0, FWPM_SESSION_FLAG_DYNAMIC, FWPM_SESSION0,
     FWPM_SUBLAYER0, FwpmEngineClose0, FwpmProviderAdd0, FwpmSubLayerAdd0, FwpmTransactionAbort0,
     FwpmTransactionBegin0, FwpmTransactionCommit0,
+};
+use windows_sys::Win32::NetworkManagement::{
+    IpHelper::ConvertInterfaceIndexToLuid, Ndis::NET_LUID_LH,
 };
 use windows_sys::core::GUID;
 
@@ -92,14 +96,25 @@ impl Engine {
     }
 
     pub(super) fn add_provider_and_sublayer(&self) -> Result<(), RoutingError> {
+        self.add_policy_layer(
+            &Placement::session(false),
+            SUBLAYER_WEIGHT,
+            "Rosetun kill switch",
+        )
+    }
+
+    fn add_policy_layer(
+        &self,
+        placement: &Placement,
+        weight: u16,
+        name: &str,
+    ) -> Result<(), RoutingError> {
         let provider_name = wide("Rosetun");
-        let provider_description = wide("Rosetun dynamic kill-switch policy");
-        let sublayer_name = wide("Rosetun kill switch");
-        let sublayer_description = wide("Rosetun dynamic outbound protection layer");
+        let sublayer_name = wide(name);
 
         let provider = FWPM_PROVIDER0 {
-            providerKey: PROVIDER_KEY,
-            displayData: display_data(&provider_name, &provider_description),
+            providerKey: placement.provider,
+            displayData: display_data(&provider_name, &sublayer_name),
             flags: 0,
             providerData: empty_blob(),
             serviceName: ptr::null_mut(),
@@ -113,12 +128,12 @@ impl Engine {
 
         tracing::debug!("Rosetun WFP provider added");
         let sublayer = FWPM_SUBLAYER0 {
-            subLayerKey: SUBLAYER_KEY,
-            displayData: display_data(&sublayer_name, &sublayer_description),
+            subLayerKey: placement.sublayer,
+            displayData: display_data(&sublayer_name, &sublayer_name),
             flags: 0,
-            providerKey: (&PROVIDER_KEY as *const GUID).cast_mut(),
+            providerKey: (&placement.provider as *const GUID).cast_mut(),
             providerData: empty_blob(),
-            weight: SUBLAYER_WEIGHT,
+            weight,
         };
 
         tracing::debug!("adding Rosetun WFP sublayer");
@@ -144,6 +159,83 @@ impl Drop for Engine {
             }
             self.handle = ptr::null_mut();
         }
+    }
+}
+
+const NATIVE_TUN_PLACEMENT: Placement = Placement {
+    provider: GUID::from_u128(0x7b048f8c_76c2_46bc_a253_bd4d9f98f82c),
+    sublayer: GUID::from_u128(0x2bc0f04d_6fa2_4766_84be_d5af782747fd),
+    key: None,
+    flags: 0,
+    name: "Rosetun native TUN route filter",
+};
+const NATIVE_TUN_SUBLAYER_WEIGHT: u16 = 0x9000;
+
+/// Route protection tied to the lifetime of an automatically routed native TUN.
+/// Its WFP objects are independent from the helper's standing protection.
+#[derive(Debug)]
+pub struct NativeTunGuard {
+    engine: Engine,
+    luid: u64,
+    ipv6: bool,
+    rules: Vec<policy::Rule>,
+    filter_ids: Vec<u64>,
+}
+
+// SAFETY: The dynamic engine handle is used only through this guard and its
+// transactions require mutable access to the guard.
+unsafe impl Send for NativeTunGuard {}
+
+impl NativeTunGuard {
+    pub fn begin(index: NonZeroU32, ipv6: bool, binaries: &[&Path]) -> Result<Self, RoutingError> {
+        let mut luid = NET_LUID_LH::default();
+        // SAFETY: luid is writable for the synchronous call.
+        let status = unsafe { ConvertInterfaceIndexToLuid(index.get(), &mut luid) };
+        if status != 0 {
+            return Err(wfp_error(status, "resolving the native TUN interface"));
+        }
+        // SAFETY: On success ConvertInterfaceIndexToLuid initialized the value.
+        let luid = unsafe { luid.Value };
+        let engine = Engine::dynamic()?;
+        let transaction = engine.transaction()?;
+        engine.add_policy_layer(
+            &NATIVE_TUN_PLACEMENT,
+            NATIVE_TUN_SUBLAYER_WEIGHT,
+            "Rosetun native TUN routes",
+        )?;
+        let rules = policy::native_tun_routes(luid, ipv6, binaries);
+        let filter_ids = Self::add_rules(&engine, &rules)?;
+        transaction.commit()?;
+        Ok(Self {
+            engine,
+            luid,
+            ipv6,
+            rules,
+            filter_ids,
+        })
+    }
+
+    pub fn permit_workers(&mut self, binaries: &[&Path]) -> Result<(), RoutingError> {
+        let rules = policy::native_tun_routes(self.luid, self.ipv6, binaries);
+        if self.rules == rules {
+            return Ok(());
+        }
+        let transaction = self.engine.transaction()?;
+        for &id in &self.filter_ids {
+            filters::delete_rule(&self.engine, id)?;
+        }
+        let filter_ids = Self::add_rules(&self.engine, &rules)?;
+        transaction.commit()?;
+        self.rules = rules;
+        self.filter_ids = filter_ids;
+        Ok(())
+    }
+
+    fn add_rules(engine: &Engine, rules: &[policy::Rule]) -> Result<Vec<u64>, RoutingError> {
+        rules
+            .iter()
+            .map(|rule| filters::add_rule(engine, rule, &NATIVE_TUN_PLACEMENT))
+            .collect()
     }
 }
 

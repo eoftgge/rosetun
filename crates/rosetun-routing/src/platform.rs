@@ -4,6 +4,8 @@ mod linux;
 pub(crate) mod macos;
 #[cfg(windows)]
 mod windows;
+#[cfg(windows)]
+pub use windows::NativeTunGuard;
 
 #[cfg(not(any(windows, target_os = "linux")))]
 use crate::{ProtectionCapabilities, RoutingBackend, RoutingError, RoutingGuard, RoutingPlan};

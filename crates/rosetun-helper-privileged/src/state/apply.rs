@@ -2,13 +2,11 @@ use std::sync::atomic::Ordering;
 use std::time::Instant;
 
 use rosetun_config::{ConnectionMode, ConnectionState};
-use rosetun_engine::RenderRequest;
 use rosetun_ipc::{ConnectRequest, ErrorCode, HelperError};
 
 use super::{
     Caller, Helper, NameLookup, RECONNECT_BACKOFF, Reconnect, Session, SessionHolder, StartMode,
-    exits, node_with_endpoints, probe::resolve_node_for_apply, protected_endpoints, render_config,
-    validate_request,
+    exits, probe::resolve_node_for_apply, protected_endpoints, validate_request,
 };
 
 impl Helper {
@@ -36,7 +34,6 @@ impl Helper {
             HelperError::new(ErrorCode::InvalidState, "the tunnel is not connected")
         })?;
         if current == *request {
-            session.refresh_path_addresses();
             return Ok(());
         }
         if needs_reconnect(&current, request) {
@@ -51,7 +48,6 @@ impl Helper {
         metadata_only.settings.autostart = request.settings.autostart;
         if metadata_only == *request {
             session.request = Some(request.clone());
-            session.refresh_path_addresses();
             return Ok(());
         }
 
@@ -92,7 +88,7 @@ impl Helper {
             let published = self.publish_terminal(|status| {
                 status.state = ConnectionState::Connected;
                 status.node = Some(request.node.id.clone());
-                status.record_chain(&request.node, &request.settings);
+                session.record_chain(status, request);
             });
             if published.is_err() {
                 self.finish_cancelled(&mut session);
@@ -100,63 +96,9 @@ impl Helper {
                 if let Some(monitor) = session.monitor.take() {
                     monitor.stop();
                 }
-                session.start_monitor(request.settings.engine);
+                session.start_monitor();
             }
             return published;
-        }
-
-        if request.settings.connection_mode == ConnectionMode::Tun
-            && !super::native_tun_requested(request)
-        {
-            let backend = self.engines.get(request.settings.engine).ok_or_else(|| {
-                HelperError::new(
-                    ErrorCode::EngineFailed,
-                    format!(
-                        "engine {} is not registered",
-                        request.settings.engine.as_str()
-                    ),
-                )
-            })?;
-            let prepared_node = node_with_endpoints(&request.node, &endpoint);
-            let effective = request.effective_rule_set();
-            let extra = exits::ExtraNodes::new(&request.extra_nodes, &extra_endpoints, &effective);
-            let socks = exits::XraySocks::new(&request.node, &extra, &request.settings)?;
-            render_config(
-                backend,
-                &RenderRequest {
-                    node: &prepared_node,
-                    socks: socks.main(),
-                    extra: &extra.outbounds(&socks),
-                    rules: extra.rules(&effective),
-                    lists: &request.lists,
-                    settings: &request.settings,
-                    lan_segment: &[],
-                    lan_servers: &[],
-                    control: None,
-                    verbose_log: false,
-                    // Checks the rules and nodes; the listener does not change them.
-                    local_proxy: None,
-                },
-            )?;
-            if socks.any() {
-                let interface =
-                    (session.physical_interface)(session.effective_tun_name(&current.settings.tun))
-                        .ok_or_else(|| {
-                            HelperError::new(
-                                ErrorCode::XrayStartFailed,
-                                "physical interface is unavailable for Xray",
-                            )
-                        })?;
-                socks.render(
-                    &prepared_node,
-                    &extra,
-                    &interface,
-                    &request.settings.tls_fragment,
-                    false,
-                    request.settings.log_level,
-                )?;
-            }
-            drop(socks);
         }
 
         let previous_endpoint = protected_endpoints(&current.node, session.last_endpoint.as_ref())
@@ -194,14 +136,14 @@ impl Helper {
                 self.publish_terminal(|status| {
                     status.state = ConnectionState::Connected;
                     status.node = Some(request.node.id.clone());
-                    status.record_chain(&request.node, &request.settings);
+                    session.record_chain(status, request);
                 })
             }) {
             Ok(()) => {
                 session.request = Some(request.clone());
                 session.pin_lists(&request.lists);
                 self.resumed.store(false, Ordering::Release);
-                session.start_monitor(request.settings.engine);
+                session.start_monitor();
                 session.start_watchdog();
                 tracing::info!("session changes applied");
                 Ok(())
@@ -224,14 +166,14 @@ impl Helper {
                         self.publish_terminal(|status| {
                             status.state = ConnectionState::Connected;
                             status.node = Some(current.node.id.clone());
-                            status.record_chain(&current.node, &current.settings);
+                            session.record_chain(status, &current);
                         })
                     });
                 match rollback {
                     Ok(()) => {
                         session.pin_lists(&current.lists);
                         self.resumed.store(false, Ordering::Release);
-                        session.start_monitor(current.settings.engine);
+                        session.start_monitor();
                         session.start_watchdog();
                         Err(HelperError::new(
                             error.code,
@@ -282,12 +224,12 @@ impl Helper {
         match session.start(&request, mode, None, None).and_then(|()| {
             self.publish_terminal(|status| {
                 status.state = ConnectionState::Connected;
-                status.record_chain(&request.node, &request.settings);
+                session.record_chain(status, &request);
             })
         }) {
             Ok(()) => {
                 self.resumed.store(false, Ordering::Release);
-                session.start_monitor(request.settings.engine);
+                session.start_monitor();
                 session.start_watchdog();
                 tracing::info!("tunnel reconnected at the client's request");
                 Ok(())

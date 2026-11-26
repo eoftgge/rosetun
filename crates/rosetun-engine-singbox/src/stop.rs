@@ -1,7 +1,4 @@
-//! Graceful stop with a kill fallback. A killed sing-box leaves its Wintun
-//! adapter for Windows to remove in the background, and the next start can
-//! then fail with "already exists"; on an interrupt sing-tun closes the
-//! adapter and its WFP session itself.
+//! Graceful shutdown of the sing-box worker with a kill fallback.
 
 use std::io;
 use std::process::Child;

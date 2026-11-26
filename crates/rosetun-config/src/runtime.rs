@@ -1,8 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    ConnectionMode, EngineKind, ExitId, Node, NodeId, Settings, TunBackend, XrayUse, fragments_tls,
-    uses_xray,
+    ConnectionMode, EngineKind, ExitId, Node, NodeId, Settings, XrayUse, fragments_tls, uses_xray,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -293,9 +292,6 @@ pub struct Status {
     /// Set with `record_chain`; read it through `running_local_proxy`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub local_proxy_port: Option<u16>,
-    /// The backend selected when the running TUN session was established.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tun_backend: Option<TunBackend>,
     /// What is installed now and what is missing (protocol 20).
     #[serde(default)]
     pub protection: ProtectionState,
@@ -311,8 +307,6 @@ impl Status {
         self.fragment_requested = settings.tls_fragment.enabled;
         self.local_proxy_port = (settings.connection_mode == ConnectionMode::SystemProxy)
             .then_some(settings.local_proxy.port);
-        self.tun_backend =
-            (settings.connection_mode == ConnectionMode::Tun).then_some(settings.tun.backend);
     }
 
     /// The local proxy's port while the session that listens on it is up.

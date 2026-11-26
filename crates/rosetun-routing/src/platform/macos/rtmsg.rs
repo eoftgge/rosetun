@@ -171,7 +171,7 @@ mod tests {
         mask[4..8].copy_from_slice(&[255, 255, 255, 0]);
         assert!(!is_zero_netmask(Some(&mask)));
         assert!(!is_zero_netmask(None));
-        // Compact /1 split route (128.0.0.0) installed by sing-tun.
+        // Compact /1 split route (128.0.0.0).
         assert!(!is_zero_netmask(Some(&[5, libc::AF_INET as u8, 0, 0, 128])));
     }
 

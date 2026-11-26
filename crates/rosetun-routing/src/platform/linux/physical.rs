@@ -1,7 +1,7 @@
 //! The physical default route on Linux: the interface of the main table's
 //! default route with the lowest metric, never loopback or the tunnel.
-//! sing-tun puts its own routes in a table of its own (and policy rules),
-//! so the main table keeps showing the physical path while a tunnel runs.
+//! Capture routes use a separate table, so the main table keeps showing the
+//! physical path while a tunnel runs.
 
 const RTF_UP: u32 = 0x1;
 

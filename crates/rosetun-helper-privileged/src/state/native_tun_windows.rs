@@ -11,6 +11,8 @@ use rosetun_dataplane::tun::{
     WindowsProcessLookup, WindowsRoutes,
 };
 use rosetun_ipc::{ErrorCode, HelperError};
+use rosetun_routing::platform::NativeTunGuard;
+use std::path::Path;
 
 const WINTUN_AMD64_SHA256: [u8; 32] = [
     0xe5, 0xda, 0x84, 0x47, 0xdc, 0x2c, 0x32, 0x0e, 0xdc, 0x0f, 0xc5, 0x2f, 0xa0, 0x18, 0x85, 0xc1,
@@ -20,6 +22,7 @@ const WINTUN_AMD64_SHA256: [u8; 32] = [
 pub(super) struct NativeTun {
     resolver: Option<resolver::Resolver>,
     routes: WindowsRoutes,
+    guard: Option<NativeTunGuard>,
     device: Arc<NativeDevice>,
     settings: DeviceSettings,
 }
@@ -45,6 +48,7 @@ impl NativeTun {
         Ok(Self {
             resolver: None,
             routes,
+            guard: None,
             device: Arc::new(device),
             settings,
         })
@@ -67,10 +71,22 @@ impl NativeTun {
         &mut self,
         lan: &[IpPrefix],
         servers: &[IpAddr],
+        auto_route: bool,
+        binaries: &[&Path],
     ) -> Result<(), HelperError> {
-        let plan = CaptureRoutes::plan(&self.settings, lan).map_err(route_error)?;
+        let plan = if auto_route {
+            CaptureRoutes::plan(&self.settings, lan).map_err(route_error)?
+        } else {
+            CaptureRoutes::manual()
+        };
         let index = NonZeroU32::new(self.device.index().map_err(route_error)?)
             .ok_or_else(|| route_error("native tunnel has no interface index"))?;
+        if auto_route {
+            self.guard = Some(
+                NativeTunGuard::begin(index, self.settings.ipv6.is_some(), binaries)
+                    .map_err(route_error)?,
+            );
+        }
         let interface = InterfaceRoutes::with_peers(
             index,
             self.settings.ipv4.peer,
@@ -97,6 +113,13 @@ impl NativeTun {
         self.routes.ensure_endpoints(servers).map_err(route_error)
     }
 
+    pub(super) fn permit_workers(&mut self, binaries: &[&Path]) -> Result<(), HelperError> {
+        if let Some(guard) = &mut self.guard {
+            guard.permit_workers(binaries).map_err(route_error)?;
+        }
+        Ok(())
+    }
+
     pub(super) fn retain_endpoints(&mut self, servers: &[IpAddr]) {
         if self.routes.retain_endpoints(servers).is_err() {
             tracing::warn!("could not remove a retired native worker route");
@@ -106,6 +129,7 @@ impl NativeTun {
     pub(super) fn close(&mut self) -> Result<(), HelperError> {
         self.resolver.take();
         self.routes.close().map_err(route_error)?;
+        self.guard.take();
         if self
             .routes
             .refresh_paths(self.settings.ipv6.is_some())

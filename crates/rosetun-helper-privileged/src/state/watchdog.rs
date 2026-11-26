@@ -1,5 +1,5 @@
 use std::io;
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use rosetun_config::{ConnectionState, Status};
 
-use super::{dns, path};
+use super::dns;
 
 const WAIT_SLICE: Duration = Duration::from_millis(100);
 
@@ -18,7 +18,6 @@ pub(super) struct WatchdogTiming {
     pub dns_timeout: Duration,
     pub path_timeout: Duration,
     pub failures: u32,
-    pub path_server: SocketAddr,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -112,28 +111,6 @@ pub(super) struct DnsWatchdog {
 }
 
 impl DnsWatchdog {
-    pub(super) fn start(
-        status: Arc<Mutex<Status>>,
-        server: SocketAddr,
-        path_addresses: Arc<Mutex<Vec<Ipv4Addr>>>,
-        timing: WatchdogTiming,
-    ) -> io::Result<Self> {
-        Self::start_with_probes(
-            status,
-            timing,
-            move |stopped| dns::probe(server, timing.dns_timeout, stopped),
-            move |stopped| {
-                let targets = path_addresses
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .iter()
-                    .map(|address| SocketAddr::from((*address, 80)))
-                    .collect::<Vec<_>>();
-                path::probe_any(timing.path_server, &targets, timing.path_timeout, stopped)
-            },
-        )
-    }
-
     pub(super) fn start_proxy(
         status: Arc<Mutex<Status>>,
         server: SocketAddr,
@@ -291,7 +268,6 @@ mod tests {
             dns_timeout: Duration::from_millis(10),
             path_timeout: Duration::from_millis(10),
             failures: 3,
-            path_server: "127.0.0.1:80".parse().expect("test address"),
         }
     }
 

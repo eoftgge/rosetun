@@ -3,8 +3,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use rosetun_config::{
-    ConnectionMode, ConnectionState, DnsSettings, LocalProxySettings, Node, Outbound, Settings,
-    TlsFragment, TlsMode, XrayUse,
+    ConnectionState, DnsSettings, LocalProxySettings, Node, Outbound, Settings, TlsFragment,
+    TlsMode, XrayUse,
 };
 use rosetun_core::{DnsPreset, SettingChange};
 
@@ -128,7 +128,6 @@ fn waits_for_save(action: &Action) -> bool {
         | Action::SetAutoReconnect(_)
         | Action::SetAllowLan(_)
         | Action::SetConnectionMode(_)
-        | Action::SetTunBackend(_)
         | Action::SetLocalProxyPort(_)
         | Action::SetShareOnLan(_)
         | Action::SetPrivateNetworks(_)
@@ -212,18 +211,8 @@ impl State {
         self.differs_from_session(|running, saved| running.connection_mode != saved.connection_mode)
     }
 
-    pub(crate) fn tun_backend_next_connect(&self) -> bool {
-        self.session_up()
-            && self.config.settings.connection_mode == ConnectionMode::Tun
-            && self
-                .status
-                .tun_backend
-                .is_some_and(|running| running != self.config.settings.tun.backend)
-    }
-
     pub(crate) fn settings_need_reconnect(&self) -> bool {
         self.connection_mode_next_connect()
-            || self.tun_backend_next_connect()
             || self.allow_lan_next_connect()
             || self.private_networks_next_connect()
             || self.auto_reconnect_next_connect()
@@ -654,17 +643,6 @@ impl State {
             Action::SetConnectionMode(mode) => {
                 if self.can_edit_settings() && self.config.settings.connection_mode != mode {
                     return self.start_settings(Job::Setting(SettingChange::ConnectionMode(mode)));
-                }
-            }
-            Action::SetTunBackend(backend) => {
-                if cfg!(any(
-                    target_os = "linux",
-                    target_os = "macos",
-                    all(windows, target_arch = "x86_64")
-                )) && self.can_edit_settings()
-                    && self.config.settings.tun.backend != backend
-                {
-                    return self.start_settings(Job::Setting(SettingChange::TunBackend(backend)));
                 }
             }
             Action::SetLocalProxyPort(port) => {

@@ -20,24 +20,7 @@
       "secret": "fixture-secret"
     }
   },
-  "inbounds": [
-    {
-      "address": [
-        "198.51.100.1/30"
-      ],
-      "auto_route": true,
-      "interface_name": "rosetun0",
-      "mtu": 1500,
-      "route_exclude_address": [
-        "203.0.113.0/24",
-        "169.254.0.0/16"
-      ],
-      "stack": "gvisor",
-      "strict_route": true,
-      "tag": "tun-in",
-      "type": "tun"
-    }
-  ],
+  "inbounds": [],
   "log": {
     "level": "info",
     "timestamp": true

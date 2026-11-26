@@ -90,6 +90,7 @@ impl LinuxRoutes {
         mark: NonZeroU32,
         first_priority: u16,
         endpoints: &[IpAddr],
+        ipv6: bool,
     ) -> io::Result<Self> {
         if interface.is_empty()
             || interface.len() >= 16
@@ -124,13 +125,13 @@ impl LinuxRoutes {
         };
         lease.capture = Some(RouteLease::install(lease.backend.clone(), routes)?);
         for ipv4 in [true, false] {
-            if !routes
-                .prefixes()
-                .iter()
-                .any(|prefix| prefix.is_ipv4() == ipv4)
-            {
+            if !ipv4 && !ipv6 {
                 continue;
             }
+            let capture = routes
+                .prefixes()
+                .iter()
+                .any(|prefix| prefix.is_ipv4() == ipv4);
             lease.check_free_priority(&Rule {
                 ipv4,
                 priority: lease.endpoint_priority,
@@ -141,6 +142,9 @@ impl LinuxRoutes {
                 (1, Lookup::Unreachable),
                 (3, Lookup::Capture),
             ] {
+                if !capture && matches!(lookup, Lookup::Capture) {
+                    continue;
+                }
                 let rule = Rule {
                     ipv4,
                     priority: first_priority + offset,

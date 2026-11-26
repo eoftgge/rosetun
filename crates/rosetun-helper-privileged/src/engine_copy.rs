@@ -1,9 +1,6 @@
-//! sing-box runs from a copy in `data\engines` that only SYSTEM and
-//! Administrators can open. With `strict_route`, sing-tun adds a hard WFP
-//! permit for its own executable by app ID alone, with no account
-//! condition, that our blocks cannot override; while a session is up, a
-//! standard account starting the installed `sing-box.exe` would get it.
-//! A hard link would not help: the DACL belongs to the file, not the name.
+//! The service runs its outbound worker from a copy in `data\engines`.
+//! Only SYSTEM and Administrators can open the service's copy. A hard link
+//! would share the installed file's DACL.
 
 use std::fs::{self, File};
 use std::io::{self, Read};

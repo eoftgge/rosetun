@@ -258,19 +258,19 @@ mod tests {
         for language in [Language::English, Language::Russian] {
             i18n::in_language(language, || {
                 let applied = engine_row(true, true, true, XrayUse::Auto);
-                assert!(applied.contains(&tr!("fragment-engine-active")));
+                assert!(applied.contains(&tr!("fragment-engine-direct")));
                 assert!(!applied.contains(&tr!("fragment-engine-none")));
 
                 let unsupported = engine_row(false, false, true, XrayUse::Auto);
                 assert!(unsupported.contains(&tr!("fragment-engine-none")));
-                assert!(!unsupported.contains(&tr!("fragment-engine-active")));
+                assert!(!unsupported.contains(&tr!("fragment-engine-direct")));
 
                 let off = engine_row(false, false, false, XrayUse::Auto);
                 assert!(!off.contains(&tr!("fragment-engine-none")));
-                assert!(!off.contains(&tr!("fragment-engine-active")));
+                assert!(!off.contains(&tr!("fragment-engine-direct")));
 
                 let plain = engine_row(true, false, false, XrayUse::Auto);
-                assert!(plain.contains(&tr!("xray-engine")));
+                assert!(plain.contains(&tr!("xray-engine-direct")));
             });
         }
     }
@@ -669,11 +669,7 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                                             .small()
                                             .color(theme::palette().accent_light),
                                     );
-                                    let hint = if state.apply_restarts_tunnel() {
-                                        tr!("apply-hint")
-                                    } else {
-                                        tr!("apply-hint-live")
-                                    };
+                                    let hint = tr!("apply-hint-live");
                                     if widgets::link(ui, &tr!("apply"), true)
                                         .on_hover_text(hint)
                                         .clicked()
@@ -826,19 +822,12 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                             detail_row(ui, tr!("engine"), |ui| {
                                 if visible_status.is_some_and(|status| status.xray) {
                                     ui.vertical(|ui| {
-                                        let direct = visible_status.is_some_and(|status| {
-                                            status.protection.connection_mode
-                                                == Some(rosetun_config::ConnectionMode::SystemProxy)
-                                                || status.tun_backend
-                                                    == Some(rosetun_config::TunBackend::NativeMixed)
-                                        });
                                         let fragmented =
                                             visible_status.is_some_and(|status| status.fragmented);
-                                        let label = match (direct, fragmented) {
-                                            (true, true) => tr!("fragment-engine-direct"),
-                                            (true, false) => tr!("xray-engine-direct"),
-                                            (false, true) => tr!("fragment-engine-active"),
-                                            (false, false) => tr!("xray-engine"),
+                                        let label = if fragmented {
+                                            tr!("fragment-engine-direct")
+                                        } else {
+                                            tr!("xray-engine-direct")
                                         };
                                         ui.add(egui::Label::new(label).truncate())
                                             .on_hover_text(tr!("xray-engine-detail"));

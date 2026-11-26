@@ -459,7 +459,7 @@ fn xray_warning_and_status_texts_are_localized() {
                 connection_failure(FailureKind::XrayStartFailed, None, XrayUse::Auto, false);
             let stopped = connection_failure(FailureKind::XrayStopped, None, XrayUse::Auto, false);
             assert_ne!(start, stopped);
-            assert!(!tr!("xray-engine").is_empty());
+            assert!(!tr!("xray-engine-direct").is_empty());
             assert!(!tr!("xray-badge").is_empty());
         });
     }

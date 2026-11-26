@@ -2317,8 +2317,7 @@ Test-Step 'dns lock' 'state is Connected' { Wait-RosetunState 'Connected' }
 $egress = Wait-RosetunTunnelEgress
 Test-Step 'dns lock' 'tunnel carries traffic' -Note (Format-Egress $egress) { $egress.Ok }
 Test-Step 'dns lock' 'direct DNS is blocked' { -not (Test-RosetunDirectDns) }
-# Without the kill switch only sing-box's strict route blocks IPv6: the TUN
-# has no IPv6 address, so sing-tun blocks every IPv6 connect (its strict route).
+# The native TUN blocks IPv6 without an IPv6 address, independently of the kill switch.
 Test-Step 'dns lock' 'IPv6 outside the tunnel is blocked without the kill switch' {
     -not (Test-RosetunIpv6Egress)
 }
@@ -2425,8 +2424,8 @@ try {
     Test-Step 'dns lock unavailable' 'status names the missing lock and its reason' -Note $status.Output {
         $status.Output -match '(?m)^protection missing: DNS lock: \S'
     }
-    # sing-box's strict route closes port 53 outside the tunnel by itself while it runs.
-    Test-Step 'dns lock unavailable' "sing-box's own filter still closes direct DNS" { -not (Test-RosetunDirectDns) }
+    # The native TUN owns its connected-state DNS filter independently of the helper DNS lock.
+    Test-Step 'dns lock unavailable' 'the native tunnel still closes direct DNS' { -not (Test-RosetunDirectDns) }
     # The expected leak, written down: while the engine restarts nothing holds DNS
     # back, and what is checked is that the status keeps saying so.
     Set-RosetunEngineAvailable $false

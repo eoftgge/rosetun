@@ -583,68 +583,40 @@ impl Helper {
         self.check_owner(caller)?;
         let session = self.session_for(SessionHolder::Probe)?;
         self.check_owner(caller)?;
-        let (state, engine) = self.with_status(|status| (status.state.clone(), status.engine));
-        if !matches!(state, ConnectionState::Connected) {
+        if self.with_status(|status| status.state != ConnectionState::Connected) {
             return Err(HelperError::new(
                 ErrorCode::InvalidState,
                 "the tunnel is not connected",
             ));
         }
-        let control = session.control.clone();
-        let entry = session.delay_entry().cloned();
-        let proxy = session.proxy_session.is_some();
-        if !proxy && control.is_none() {
-            return Err(HelperError::new(
+        let entry = session.delay_entry().cloned().ok_or_else(|| {
+            HelperError::new(
                 ErrorCode::EngineFailed,
-                "the engine control API is unavailable",
-            ));
-        }
+                "the session probe entry is unavailable",
+            )
+        })?;
         let exit_tags = session.exit_tags.clone();
         drop(session);
-        let full_tunnel = if !proxy && mode == DelayMode::Full {
-            let backend = engine
-                .and_then(|engine| self.engines.get_shared(engine))
-                .ok_or_else(|| {
-                    HelperError::new(
-                        ErrorCode::EngineFailed,
-                        "the connected engine is unavailable",
-                    )
-                })?;
-            let control = control.ok_or_else(|| {
-                HelperError::new(
-                    ErrorCode::EngineFailed,
-                    "the engine control API is unavailable",
-                )
-            })?;
-            Some((backend, control))
-        } else {
-            None
-        };
         let measure = |target: UrlTestTarget<'_>| {
-            if let Some((backend, control)) = &full_tunnel {
-                return probe_outcome(url_test_any(
-                    Arc::clone(backend),
-                    control,
-                    target,
-                    PROBE_TIMEOUT,
-                ));
-            }
-            if let Some((entry, account)) = entry
-                .as_ref()
-                .and_then(|entry| Some((entry, entry.account(target)?)))
-                && mode == DelayMode::Full
-            {
-                return probe_outcome(super::repeated::full_delay_any(
+            let Some(account) = entry.account(target) else {
+                return repeated_outcome(Some(&entry), target);
+            };
+            probe_outcome(match mode {
+                DelayMode::Full => super::repeated::full_delay_any(
                     entry.address,
                     account,
                     &PROBE_URLS,
                     PROBE_TIMEOUT,
-                ));
-            }
-            repeated_outcome(entry.as_ref(), target)
+                ),
+                DelayMode::Repeated => super::repeated::repeated_delay_any(
+                    entry.address,
+                    account,
+                    &PROBE_URLS,
+                    PROBE_TIMEOUT,
+                ),
+            })
         };
-        // The main node and every exit are checked at once, so the answer takes
-        // as long as a single check.
+        // The main node and every exit are checked at once.
         let delays = thread::scope(|scope| {
             let exits = exit_tags
                 .iter()

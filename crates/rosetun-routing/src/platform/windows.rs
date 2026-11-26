@@ -26,6 +26,7 @@ pub(super) fn release_broadcast_route(tunnel: &crate::TunnelInterface) -> crate:
 }
 
 use session::Engine;
+pub use session::NativeTunGuard;
 
 pub(super) fn physical_default_interface(exclude_alias: &str) -> Option<String> {
     physical::physical_default_interface(exclude_alias)

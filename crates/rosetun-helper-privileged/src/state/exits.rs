@@ -7,19 +7,16 @@
 use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 
-use rosetun_config::{ExitId, Node, RuleSet, RuleTarget, Settings, uses_xray};
-use rosetun_engine::{ExtraOutbound, RenderedConfig, SocksProxy, exit_tag};
+use rosetun_config::{ExitId, Node, RuleSet, RuleTarget};
+use rosetun_engine::{ExtraOutbound, SocksProxy, exit_tag};
 use rosetun_engine_xray::SocksEndpoint;
-use rosetun_ipc::{ErrorCode, ExtraNode, HelperError};
+use rosetun_ipc::ExtraNode;
 
 use super::{
     NameLookup, ResolvedNodeEndpoints, StartMode, SuccessfulEndpoint, node_with_endpoints,
     normalize_server, probe::resolve_node_for_apply, protected_endpoints, resolve_quiet,
     select_endpoint,
 };
-
-/// The main node's Xray outbound tag.
-const TAG_MAIN: &str = "proxy";
 
 fn resolve_fresh_node(node: &Node, lookup: NameLookup) -> Option<ResolvedNodeEndpoints> {
     let rosetun_config::Outbound::XrayBalancer(balancer) = &node.outbound else {
@@ -231,12 +228,9 @@ impl<'a> ExtraNodes<'a> {
         self.blocked.as_ref().unwrap_or(rules)
     }
 
+    #[cfg(test)]
     pub(super) fn blocked_rules(&self) -> usize {
         self.blocked_rules
-    }
-
-    pub(super) fn len(&self) -> usize {
-        self.nodes.len()
     }
 
     pub(super) fn slots(&self) -> Vec<ExtraOutbound<'_>> {
@@ -251,104 +245,6 @@ impl<'a> ExtraNodes<'a> {
                 socks: None,
             })
             .collect()
-    }
-
-    pub(super) fn outbounds<'s>(&'s self, socks: &'s XraySocks) -> Vec<ExtraOutbound<'s>> {
-        self.nodes
-            .iter()
-            .zip(&socks.extra)
-            .enumerate()
-            .map(|(index, ((exit, node), socks))| ExtraOutbound {
-                index: self.identities[index].0,
-                via: self.identities[index].1,
-                exit,
-                node,
-                socks: socks.as_ref().map(socks_proxy),
-            })
-            .collect()
-    }
-}
-
-/// Loopback SOCKS endpoints for the nodes that run through Xray. All of them
-/// share one Xray process.
-#[derive(Debug)]
-pub(super) struct XraySocks {
-    main: Option<SocksEndpoint>,
-    extra: Vec<Option<SocksEndpoint>>,
-}
-
-impl XraySocks {
-    pub(super) fn new(
-        node: &Node,
-        extra: &ExtraNodes<'_>,
-        settings: &Settings,
-    ) -> Result<Self, HelperError> {
-        let chain = |node: &Node| {
-            settings.engine == rosetun_config::EngineKind::SingBox && uses_xray(node, settings)
-        };
-        let endpoint = |node: &Node| {
-            if !chain(node) {
-                return Ok(None);
-            }
-            SocksEndpoint::local().map(Some).map_err(|_| {
-                HelperError::new(
-                    ErrorCode::XrayStartFailed,
-                    "Xray SOCKS endpoint is unavailable",
-                )
-            })
-        };
-        Ok(Self {
-            main: endpoint(node)?,
-            extra: extra
-                .nodes
-                .iter()
-                .map(|(_, node)| endpoint(node))
-                .collect::<Result<_, _>>()?,
-        })
-    }
-
-    /// Whether any node, main or extra, needs Xray.
-    pub(super) fn any(&self) -> bool {
-        self.main.is_some() || self.extra.iter().any(Option::is_some)
-    }
-
-    pub(super) fn main(&self) -> Option<SocksProxy<'_>> {
-        self.main.as_ref().map(socks_proxy)
-    }
-
-    pub(super) fn endpoints(&self) -> Vec<&SocksEndpoint> {
-        self.main
-            .iter()
-            .chain(self.extra.iter().flatten())
-            .collect()
-    }
-
-    /// The Xray configuration: the main node as `proxy`, each extra node under
-    /// the tag its sing-box outbound uses.
-    pub(super) fn render(
-        &self,
-        node: &Node,
-        extra: &ExtraNodes<'_>,
-        interface: &str,
-        fragment: &rosetun_config::TlsFragment,
-        verbose: bool,
-        log_level: rosetun_config::LogLevel,
-    ) -> Result<RenderedConfig, HelperError> {
-        let mut tagged = Vec::new();
-        if let Some(socks) = self.main.as_ref() {
-            tagged.push((TAG_MAIN.to_owned(), node, socks));
-        }
-        for (index, ((_, node), socks)) in extra.nodes.iter().zip(&self.extra).enumerate() {
-            if let Some(socks) = socks {
-                tagged.push((exit_tag(extra.identities[index].0), node, socks));
-            }
-        }
-        let nodes = tagged
-            .iter()
-            .map(|(tag, node, socks)| (tag.as_str(), *node, *socks))
-            .collect::<Vec<_>>();
-        rosetun_engine_xray::render(&nodes, interface, fragment, verbose, log_level)
-            .map_err(|error| HelperError::new(ErrorCode::XrayStartFailed, error.to_string()))
     }
 }
 

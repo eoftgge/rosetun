@@ -341,37 +341,6 @@ fn connection_mode(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
                 });
             });
         }
-        if cfg!(any(
-            target_os = "linux",
-            target_os = "macos",
-            all(windows, target_arch = "x86_64")
-        )) && !proxy
-        {
-            let backend = state.config.settings.tun.backend;
-            let detail = tr!("native-tun-requires-protection");
-            card.row_with_title(
-                |ui| {
-                    ui.vertical(|ui| {
-                        ui.spacing_mut().item_spacing.y = theme::space::XXS;
-                        ui.label(RichText::new(tr!("tun-backend")).color(theme::palette().text));
-                        widgets::row_detail(ui, &detail, false);
-                    });
-                },
-                None,
-                |ui| {
-                    use rosetun_config::TunBackend;
-                    let options = [
-                        (TunBackend::SingTun, tr!("tun-backend-sing")),
-                        (TunBackend::NativeMixed, tr!("tun-backend-native")),
-                    ];
-                    if let Some(chosen) =
-                        widgets::segmented(ui, "tun_backend", backend, &options, false, editable)
-                    {
-                        actions.push(Action::SetTunBackend(chosen));
-                    }
-                },
-            );
-        }
         // Closing rows stay on screen for a moment, and take no more input.
         let editable = editable && proxy;
         let form = &mut state.settings.screen;
@@ -772,11 +741,7 @@ fn apply_note(ui: &mut egui::Ui, state: &State, part: SessionPart, actions: &mut
         ui.spacing_mut().item_spacing.x = 0.0;
         ui.label(RichText::new(tr!("apply-on-leave")).small().color(muted));
         ui.label(RichText::new(tr!("apply-separator")).small().color(muted));
-        let hint = if state.apply_restarts_tunnel() {
-            tr!("apply-hint")
-        } else {
-            tr!("apply-hint-live")
-        };
+        let hint = tr!("apply-hint-live");
         if widgets::link(ui, &tr!("apply-now"), true)
             .on_hover_text(hint)
             .clicked()
@@ -1111,8 +1076,6 @@ fn xray(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                 let node = state.running_node();
                 // No server name here: providers often name nodes by their address,
                 // and this screen ends up in screenshots.
-                let direct = status.protection.connection_mode == Some(ConnectionMode::SystemProxy)
-                    || status.tun_backend == Some(rosetun_config::TunBackend::NativeMixed);
                 let current = if status.xray {
                     match node {
                         Some(node)
@@ -1121,25 +1084,13 @@ fn xray(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                                 rosetun_config::Transport::Xhttp { .. }
                             ) =>
                         {
-                            if direct {
-                                tr!("xray-current-xhttp-direct")
-                            } else {
-                                tr!("xray-current-xhttp")
-                            }
+                            tr!("xray-current-xhttp-direct")
                         }
                         Some(node) if matches!(&node.stream.tls, TlsMode::Reality(_)) => {
-                            if direct {
-                                tr!("xray-current-reality-direct")
-                            } else {
-                                tr!("xray-current-reality")
-                            }
+                            tr!("xray-current-reality-direct")
                         }
                         _ => {
-                            if direct {
-                                tr!("xray-current-direct")
-                            } else {
-                                tr!("xray-current-chained")
-                            }
+                            tr!("xray-current-direct")
                         }
                     }
                 } else {
@@ -2655,23 +2606,6 @@ mod pending_notice_tests {
         state.config.settings.xray = XrayUse::Off;
         assert_eq!(with_note(&shown(&state)), Vec::<String>::new());
         assert!(state.settings_need_reconnect());
-    }
-
-    #[cfg(any(target_os = "linux", all(windows, target_arch = "x86_64")))]
-    #[test]
-    fn the_tun_backend_note_does_not_repeat_when_pending() {
-        for language in LANGUAGES {
-            i18n::in_language(language, || {
-                let (size, _) = WINDOWS[0];
-                let mut state = connected(ConnectionState::Connected);
-                state.status.tun_backend = Some(rosetun_config::TunBackend::SingTun);
-                state.config.settings.tun.backend = rosetun_config::TunBackend::NativeMixed;
-                let shown = TestScreen::new(size)
-                    .settle(|ui| connection_mode(ui, &mut state, &mut Vec::new()));
-                assert_eq!(with_note(&shown), Vec::<String>::new());
-                assert!(state.settings_need_reconnect());
-            });
-        }
     }
 
     #[test]

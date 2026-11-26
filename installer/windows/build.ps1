@@ -191,7 +191,7 @@ Set-Content -LiteralPath (Join-Path $licensesDir 'xray-source.txt') -Value $xray
 Copy-Item -LiteralPath (Join-Path $root 'installer/third-party/wintun-prebuilt-binaries-license.txt') -Destination $licensesDir
 $wintunNotice = @"
 The unmodified official sing-box $singBoxVersion executable embeds Wintun $wintunVersion.
-The NativeMixed backend loads a standalone copy of the same pinned DLL.
+Rosetun's native TUN loads a standalone copy of the same pinned DLL.
 The prebuilt Wintun DLL is copyrighted by WireGuard LLC and is distributed
 under the Wintun Prebuilt Binaries License; see wintun-prebuilt-binaries-license.txt.
 

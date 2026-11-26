@@ -529,7 +529,6 @@ function Write-ProxyRequests {
         $v = $variants[$name]
         $req = $baseJson | ConvertFrom-Json
         $req.settings | Add-Member -NotePropertyName connection_mode -NotePropertyValue $v.mode -Force
-        $req.settings.tun | Add-Member -NotePropertyName backend -NotePropertyValue 'native_mixed' -Force
         $req.settings | Add-Member -NotePropertyName kill_switch -NotePropertyValue $v.kill -Force
         $req.settings | Add-Member -NotePropertyName auto_reconnect -NotePropertyValue $true -Force
         $req.settings | Add-Member -NotePropertyName allow_lan -NotePropertyValue $v.lan -Force
@@ -714,7 +713,7 @@ try {
 
     Set-RosetunRunnerStep -Step 'mode'
     $script:TunnelCurlExit = -1
-    Test-Step -Id 'mode.tun' -Scenario 'mode' -Expectation 'connect NativeMixed with kill switch' {
+    Test-Step -Id 'mode.tun' -Scenario 'mode' -Expectation 'connect native TUN with kill switch' {
         $toNative = Invoke-ProxyCli -Arguments @('apply', (Join-Path $work 'tun-strict.json')) -Seconds 60
         $toNative.ExitCode -eq 0 -and (Wait-TunnelEgress)
     }

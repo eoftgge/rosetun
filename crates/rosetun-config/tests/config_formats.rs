@@ -460,7 +460,6 @@ fn current_configuration_fixture_guards_the_serialized_format() {
         target: RuleTarget::Proxy,
         exit: None,
     });
-    expected.settings.tun.backend = rosetun_config::TunBackend::NativeMixed;
     expected.interface.auto_update_lists = false;
     expected.lists[0].auto_update = false;
     let (loaded, migrated_from) = from_json(V14).expect("current fixture should load");
@@ -501,17 +500,18 @@ fn current_configuration_fixture_guards_the_serialized_format() {
 }
 
 #[test]
-fn format_thirteen_keeps_sing_tun_even_if_an_unknown_backend_field_was_present() {
-    let (original, migrated_from) = from_json(V13).unwrap();
-    assert_eq!(migrated_from, Some(13));
-    assert_eq!(
-        original.settings.tun.backend,
-        rosetun_config::TunBackend::SingTun
-    );
-    let mut legacy = value(V13);
-    legacy["settings"]["tun"]["backend"] = json!("native_mixed");
-    let (loaded, _) = from_json(&serde_json::to_vec(&legacy).unwrap()).unwrap();
-    assert_eq!(loaded, original);
+fn saved_tun_backend_names_are_ignored() {
+    for fixture in [V13, V14] {
+        let (expected, migration) = from_json(fixture).unwrap();
+        for name in ["sing_tun", "native_mixed"] {
+            let mut legacy = value(fixture);
+            legacy["settings"]["tun"]["backend"] = json!(name);
+            let (loaded, loaded_migration) =
+                from_json(&serde_json::to_vec(&legacy).unwrap()).unwrap();
+            assert_eq!(loaded_migration, migration);
+            assert_eq!(loaded, expected);
+        }
+    }
 }
 
 #[test]

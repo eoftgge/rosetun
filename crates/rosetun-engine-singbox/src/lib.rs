@@ -20,7 +20,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::Sender;
 use std::sync::{
     Arc,
-    atomic::{AtomicBool, AtomicU64, Ordering},
+    atomic::{AtomicU64, Ordering},
 };
 use std::thread;
 use std::time::Duration;
@@ -112,7 +112,7 @@ impl EngineBackend for SingBoxBackend {
     }
 
     fn integration(&self) -> EngineIntegration {
-        EngineIntegration::EngineManagedTun
+        EngineIntegration::OutboundOnly
     }
 
     fn capabilities(&self) -> EngineCapabilities {
@@ -121,32 +121,8 @@ impl EngineBackend for SingBoxBackend {
         }
     }
 
-    fn tunnel_dns_server(&self, tun: &rosetun_config::TunSettings) -> Option<std::net::SocketAddr> {
-        let (address, prefix) = tun.ipv4.split_once('/')?;
-        let address = u32::from(address.parse::<std::net::Ipv4Addr>().ok()?);
-        let prefix = prefix.parse::<u32>().ok()?;
-        if prefix > 32 {
-            return None;
-        }
-
-        let mask = u32::MAX.checked_shl(32 - prefix).unwrap_or(0);
-        let next = address.checked_add(1)?;
-        let network = address & mask;
-        let broadcast = network | !mask;
-
-        if next & mask != network || next == broadcast {
-            return None;
-        }
-
-        // sing-tun intercepts DNS sent to the address immediately after the TUN address.
-        Some(std::net::SocketAddr::from((
-            std::net::Ipv4Addr::from(next),
-            53,
-        )))
-    }
-
     fn locate_binary(&self) -> Result<PathBuf, EngineError> {
-        self.locate_with_rights(EngineRights::Network)
+        self.locate_with_rights(EngineRights::OutboundWorker)
     }
     fn locate_outbound_worker(&self) -> Result<PathBuf, EngineError> {
         self.locate_with_rights(EngineRights::OutboundWorker)
@@ -254,7 +230,7 @@ impl EngineBackend for SingBoxBackend {
             binary,
             config,
             Arc::new(AtomicU64::new(0)),
-            EngineRights::Network,
+            EngineRights::OutboundWorker,
         )
     }
 
@@ -295,7 +271,6 @@ impl EngineBackend for SingBoxBackend {
         let mut child = command.spawn()?;
 
         let (ready_sender, readiness) = Readiness::new();
-        let hints = Arc::new(HintFlags::default());
         let failures = Arc::new(output::FailureCounters::default());
 
         if let Some(stdout) = child.stdout.take()
@@ -304,7 +279,6 @@ impl EngineBackend for SingBoxBackend {
                 "stdout",
                 None,
                 probe,
-                None,
                 Arc::clone(&failures),
                 Arc::clone(&verbose_until_unix),
             )
@@ -323,7 +297,6 @@ impl EngineBackend for SingBoxBackend {
             "stderr",
             Some(ready_sender),
             probe,
-            Some(Arc::clone(&hints)),
             Arc::clone(&failures),
             verbose_until_unix,
         ) {
@@ -337,7 +310,6 @@ impl EngineBackend for SingBoxBackend {
         Ok(Box::new(SingBoxProcess {
             child,
             readiness,
-            hints,
             stderr_drain: Some(stderr_drain),
             failures,
             probe,
@@ -442,7 +414,6 @@ fn spawn_output_drain<R>(
     stream: &'static str,
     mut ready_sender: Option<Sender<()>>,
     probe: bool,
-    hints: Option<Arc<HintFlags>>,
     failures: Arc<output::FailureCounters>,
     verbose_until_unix: Arc<AtomicU64>,
 ) -> std::io::Result<thread::JoinHandle<()>>
@@ -456,9 +427,6 @@ where
                 match line {
                     Ok(line) => {
                         failures.observe(&line);
-                        if let Some(hints) = &hints {
-                            hints.observe(&line);
-                        }
                         if ready_sender.is_some()
                             && readiness::is_startup_message(&line)
                             && let Some(sender) = ready_sender.take()
@@ -535,58 +503,10 @@ fn find_in_neighbours() -> Option<PathBuf> {
     candidate.is_file().then_some(candidate)
 }
 
-/// Latched startup diagnostics, set by the stderr drain.
-#[derive(Debug, Default)]
-struct HintFlags {
-    slow_tunnel: AtomicBool,
-    tunnel_created: AtomicBool,
-    tunnel_interface: std::sync::Mutex<Option<String>>,
-    adapter_still_removing: AtomicBool,
-    tunnel_address_in_use: AtomicBool,
-}
-
-impl HintFlags {
-    fn observe(&self, line: &str) {
-        if let Some(interface) = readiness::tunnel_created_interface(line) {
-            let mut slot = self
-                .tunnel_interface
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if slot.is_none() {
-                *slot = Some(interface.clone());
-            }
-            drop(slot);
-            if !self.tunnel_created.swap(true, Ordering::AcqRel) {
-                tracing::debug!(
-                    interface = %interface,
-                    "TUN created; waiting for engine post-start readiness"
-                );
-            }
-        }
-        if readiness::is_slow_tunnel_message(line) {
-            self.slow_tunnel.store(true, Ordering::Release);
-        }
-        if output::is_adapter_busy_message(line) {
-            self.adapter_still_removing.store(true, Ordering::Release);
-        }
-        if output::is_address_conflict_message(line) {
-            self.tunnel_address_in_use.store(true, Ordering::Release);
-        }
-    }
-
-    fn tunnel_interface(&self) -> Option<String> {
-        self.tunnel_interface
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
-    }
-}
-
 #[derive(Debug)]
 struct SingBoxProcess {
     child: Child,
     readiness: Readiness,
-    hints: Arc<HintFlags>,
     stderr_drain: Option<thread::JoinHandle<()>>,
     failures: Arc<output::FailureCounters>,
     probe: bool,
@@ -594,7 +514,7 @@ struct SingBoxProcess {
 
 impl SingBoxProcess {
     /// The exit can be seen before the drain has read the last lines, and the
-    /// FATAL that explains it is one of them: let the hints latch first.
+    /// FATAL that explains it is one of them.
     fn settle_stderr(&mut self) {
         let Some(drain) = self.stderr_drain.take() else {
             return;
@@ -612,17 +532,6 @@ impl SingBoxProcess {
 impl EngineProcess for SingBoxProcess {
     fn outbound_failures(&self) -> rosetun_engine::OutboundFailures {
         self.failures.snapshot()
-    }
-    fn startup_hints(&self) -> rosetun_engine::StartupHints {
-        rosetun_engine::StartupHints {
-            slow_tunnel_creation: self.hints.slow_tunnel.load(Ordering::Acquire),
-            tunnel_created: self.hints.tunnel_created.load(Ordering::Acquire),
-            adapter_still_removing: self.hints.adapter_still_removing.load(Ordering::Acquire),
-            tunnel_address_in_use: self.hints.tunnel_address_in_use.load(Ordering::Acquire),
-        }
-    }
-    fn tunnel_interface(&self) -> Option<String> {
-        self.hints.tunnel_interface()
     }
     fn is_running(&mut self) -> Result<bool, EngineError> {
         match self.child.try_wait()? {
@@ -748,22 +657,6 @@ mod tests {
         assert!(!safe.contains("198.51.100.20"));
         assert!(!safe.contains("203.0.113.10"));
         assert!(safe.contains("dial tcp [hidden]:443: i/o timeout"));
-    }
-
-    #[test]
-    fn tunnel_progress_is_latched_without_logging_destinations() {
-        let hints = super::HintFlags::default();
-        hints.observe("INFO[0000] inbound/tun[tun-in]: started at rosetun0");
-        assert!(
-            hints
-                .tunnel_created
-                .load(std::sync::atomic::Ordering::Acquire)
-        );
-        assert!(!hints.slow_tunnel.load(std::sync::atomic::Ordering::Acquire));
-        hints.observe(
-            "WARN[0010] inbound/tun[tun-in]: starting tun stack take too much time to finish!",
-        );
-        assert!(hints.slow_tunnel.load(std::sync::atomic::Ordering::Acquire));
     }
 
     #[test]
@@ -1502,36 +1395,6 @@ mod tests {
     }
 
     #[test]
-    fn tunnel_dns_server_uses_the_next_tun_address() {
-        let backend = SingBoxBackend::new("unused");
-        assert_eq!(
-            backend.tunnel_dns_server(&rosetun_config::TunSettings::default()),
-            Some("172.19.0.2:53".parse().expect("DNS address")),
-        );
-    }
-
-    #[test]
-    fn tunnel_dns_server_rejects_unusable_next_addresses() {
-        let backend = SingBoxBackend::new("unused");
-
-        for ipv4 in [
-            "172.19.0.1/32",
-            "172.19.0.1/31",
-            "172.19.0.2/30",
-            "172.19.0.3/30",
-            "255.255.255.255/0",
-            "172.19.0.1/33",
-            "invalid",
-        ] {
-            let tun = rosetun_config::TunSettings {
-                ipv4: ipv4.to_owned(),
-                ..Default::default()
-            };
-            assert_eq!(backend.tunnel_dns_server(&tun), None, "{ipv4}");
-        }
-    }
-
-    #[test]
     fn reality_lands_inside_tls() {
         let config = rendered();
         let tls = &config["outbounds"][0]["tls"];
@@ -1932,29 +1795,6 @@ mod tests {
     }
 
     #[test]
-    fn tun_settings_reach_the_inbound() {
-        let config = rendered();
-        let inbound = &config["inbounds"][0];
-        assert_eq!(inbound["type"], "tun");
-        assert_eq!(inbound["stack"], "gvisor");
-        if cfg!(target_os = "macos") {
-            assert!(inbound.get("interface_name").is_none());
-        } else {
-            assert_eq!(inbound["interface_name"], "rosetun0");
-        }
-        assert_eq!(inbound["address"][0], "172.19.0.1/30");
-    }
-
-    #[test]
-    fn hint_flags_latch_actual_tunnel_interface() {
-        let hints = HintFlags::default();
-        assert_eq!(hints.tunnel_interface(), None);
-        hints.observe("+0900 2026-11-21 12:00:00 INFO inbound/tun[tun-in]: started at utun6");
-        assert!(hints.tunnel_created.load(Ordering::Acquire));
-        assert_eq!(hints.tunnel_interface().as_deref(), Some("utun6"));
-    }
-
-    #[test]
     fn unknown_protocol_is_rejected() {
         let mut node = node();
         node.outbound = Outbound::Unknown {
@@ -2138,54 +1978,6 @@ mod tests {
     }
 
     #[test]
-    fn the_segment_leaves_the_tunnels_routes_and_ipv6_only_with_an_ipv6_tunnel() {
-        let segment = [
-            IpPrefix::new("192.0.2.0".parse().unwrap(), 24).unwrap(),
-            IpPrefix::new("2001:db8:1::".parse().unwrap(), 64).unwrap(),
-        ];
-        let node = node();
-        let rules = rules();
-        let exclude = |allow_lan, ipv6: Option<&str>| {
-            let mut settings = Settings {
-                allow_lan,
-                private_networks: true,
-                ..Settings::default()
-            };
-            settings.tun.ipv6 = ipv6.map(str::to_owned);
-            let rendered = render::render(&RenderRequest {
-                extra: &[],
-                node: &node,
-                socks: None,
-                rules: &rules,
-                lists: &[],
-                settings: &settings,
-                lan_segment: &segment,
-                lan_servers: &[],
-                control: None,
-                verbose_log: false,
-                local_proxy: None,
-            })
-            .expect("rendered");
-            let config: Value = serde_json::from_slice(&rendered.body).expect("JSON");
-            config["inbounds"][0]["route_exclude_address"].clone()
-        };
-        assert_eq!(exclude(false, None), Value::Null);
-        assert_eq!(
-            exclude(true, None),
-            serde_json::json!(["192.0.2.0/24", "169.254.0.0/16"])
-        );
-        assert_eq!(
-            exclude(true, Some("fdfe:dcba:9876::1/126")),
-            serde_json::json!([
-                "192.0.2.0/24",
-                "2001:db8:1::/64",
-                "169.254.0.0/16",
-                "fe80::/10"
-            ])
-        );
-    }
-
-    #[test]
     fn a_vpn_server_inside_the_local_network_stays_in_the_tunnel_and_off_the_direct_rule() {
         let server: std::net::IpAddr = "192.0.2.10".parse().unwrap();
         let segment = IpPrefix::new("192.0.2.0".parse().unwrap(), 24)
@@ -2212,27 +2004,7 @@ mod tests {
         })
         .expect("rendered");
         let config: Value = serde_json::from_slice(&rendered.body).expect("JSON");
-
-        let exclude = config["inbounds"][0]["route_exclude_address"]
-            .as_array()
-            .expect("the excluded networks");
-        let route = config["route"]["rules"].as_array().expect("rules");
-        let direct = route
-            .iter()
-            .find(|rule| rule["ip_cidr"][0] == "192.0.2.0/29")
-            .expect("the direct rule of the local network");
-        for list in [exclude, direct["ip_cidr"].as_array().expect("networks")] {
-            let listed: Vec<IpPrefix> = list
-                .iter()
-                .map(|value| {
-                    let (address, length) = value.as_str().unwrap().split_once('/').unwrap();
-                    IpPrefix::new(address.parse().unwrap(), length.parse().unwrap()).unwrap()
-                })
-                .collect();
-            assert!(listed.iter().all(|prefix| !prefix.contains(server)));
-            assert!(listed.contains(&IpPrefix::new("192.0.2.11".parse().unwrap(), 32).unwrap()));
-            assert!(listed.contains(&IpPrefix::new("192.0.2.128".parse().unwrap(), 25).unwrap()));
-        }
+        assert!(config["inbounds"].as_array().unwrap().is_empty());
     }
 
     #[test]
