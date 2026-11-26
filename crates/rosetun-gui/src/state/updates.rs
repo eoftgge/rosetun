@@ -24,6 +24,9 @@ pub(crate) struct UpdatesState {
     pub(super) cancel: Arc<AtomicBool>,
     /// "Install and restart" waits for this confirmation while a session is up.
     pub(crate) confirm_install: bool,
+    /// Set when a package installer finishes with code 0 so the host can relaunch.
+    #[cfg(any(target_os = "linux", target_os = "macos", test))]
+    pub(super) installed: bool,
 }
 
 /// The offered version's installer, from the first click to the installer starting.
@@ -50,10 +53,16 @@ pub(crate) enum UpdateDownload {
 pub(crate) enum UpdateFailure {
     Download(UpdateDownloadError),
     /// The user declined the administrator prompt.
-    #[cfg_attr(not(any(windows, test)), expect(dead_code, reason = "Windows only"))]
+    #[cfg_attr(
+        not(any(windows, target_os = "linux", target_os = "macos", test)),
+        expect(dead_code, reason = "used on desktop installer platforms")
+    )]
     Declined,
-    /// Setup ended with this exit code without installing.
-    #[cfg_attr(not(any(windows, test)), expect(dead_code, reason = "Windows only"))]
+    /// Installer ended with this exit code without installing.
+    #[cfg_attr(
+        not(any(windows, target_os = "linux", target_os = "macos", test)),
+        expect(dead_code, reason = "used on desktop installer platforms")
+    )]
     Installer(u32),
     /// The installer could not be started.
     Start,
@@ -101,7 +110,28 @@ impl State {
 
     /// Whether this build downloads and runs an installer itself.
     pub(crate) fn can_install_updates() -> bool {
-        cfg!(windows)
+        #[cfg(test)]
+        {
+            true
+        }
+        #[cfg(all(not(test), windows))]
+        {
+            true
+        }
+        #[cfg(all(not(test), any(target_os = "linux", target_os = "macos")))]
+        {
+            static SUPPORTED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+            *SUPPORTED.get_or_init(rosetun_shell::can_install_updates)
+        }
+        #[cfg(all(not(test), not(any(windows, target_os = "linux", target_os = "macos"))))]
+        {
+            false
+        }
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos", test))]
+    pub(crate) fn take_update_installed(&mut self) -> bool {
+        std::mem::take(&mut self.updates.installed)
     }
 
     pub(super) fn reduce_update_download(&mut self, event: WorkerEvent) {
@@ -141,7 +171,13 @@ impl State {
                     return;
                 };
                 self.updates.download = match failure {
-                    None => UpdateDownload::Idle,
+                    None => {
+                        #[cfg(any(target_os = "linux", target_os = "macos", test))]
+                        {
+                            self.updates.installed = true;
+                        }
+                        UpdateDownload::Idle
+                    }
                     // Declining the prompt changes nothing; the file stays checked.
                     Some(UpdateFailure::Declined) => UpdateDownload::Ready(update.clone()),
                     Some(failure) => UpdateDownload::Failed {

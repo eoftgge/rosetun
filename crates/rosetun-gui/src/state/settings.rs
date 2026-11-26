@@ -659,6 +659,7 @@ impl State {
             Action::SetTunBackend(backend) => {
                 if cfg!(any(
                     target_os = "linux",
+                    target_os = "macos",
                     all(windows, target_arch = "x86_64")
                 )) && self.can_edit_settings()
                     && self.config.settings.tun.backend != backend

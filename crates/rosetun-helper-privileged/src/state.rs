@@ -10,6 +10,9 @@ mod lockdown;
 #[cfg(target_os = "linux")]
 #[path = "state/native_tun_linux.rs"]
 mod native_tun;
+#[cfg(target_os = "macos")]
+#[path = "state/native_tun_macos.rs"]
+mod native_tun;
 #[cfg(all(windows, target_arch = "x86_64"))]
 #[path = "state/native_tun_windows.rs"]
 mod native_tun;
@@ -1726,6 +1729,7 @@ fn validate_request(request: &ConnectRequest) -> Result<(), HelperError> {
     if native_tun_requested(request) {
         if !cfg!(any(
             target_os = "linux",
+            target_os = "macos",
             all(windows, target_arch = "x86_64")
         )) {
             return Err(HelperError::new(

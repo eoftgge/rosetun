@@ -343,6 +343,7 @@ fn connection_mode(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
         }
         if cfg!(any(
             target_os = "linux",
+            target_os = "macos",
             all(windows, target_arch = "x86_64")
         )) && !proxy
         {

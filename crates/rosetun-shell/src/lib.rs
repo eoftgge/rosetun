@@ -130,6 +130,8 @@ mod wininet;
 mod desktop_proxy;
 #[cfg(target_os = "linux")]
 mod desktop_proxy_linux;
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
+mod updater;
 
 #[cfg(windows)]
 pub use autostart::{
@@ -180,6 +182,10 @@ pub use system_info::{local_report_timestamp, windows_build};
 pub use system_info_linux::{local_report_timestamp, os_description};
 #[cfg(windows)]
 pub use tray_notice::tray_notice;
+#[cfg(target_os = "macos")]
+pub use updater::relaunch_installed_app;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub use updater::{can_install_updates, install_verified_update};
 #[cfg(windows)]
 pub use window::{
     SavedWindow, WindowActivity, cloak_on_show, cloak_window, paint_window_surface, place_window,

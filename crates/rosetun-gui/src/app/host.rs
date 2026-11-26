@@ -194,10 +194,11 @@ impl App {
         self
     }
 
-    /// The service answered: if a package upgrade has replaced this program
-    /// by now, the new one takes over, whichever protocol the service speaks.
+    /// The service answered or an in-app package upgrade finished: if the
+    /// installed program was replaced by now, the new one takes over.
     pub(super) fn relaunch_if_replaced(&mut self) {
-        if self.state.take_helper_answered() && relaunch::binary_replaced() {
+        let trigger = self.state.take_helper_answered() || self.state.take_update_installed();
+        if trigger && relaunch::binary_replaced() {
             let error = relaunch::exec(!self.life.has_window);
             tracing::warn!(%error, "could not start the upgraded GUI");
         }

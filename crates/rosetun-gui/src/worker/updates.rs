@@ -118,10 +118,41 @@ fn update_directory() -> Option<PathBuf> {
         std::env::var_os("LOCALAPPDATA")
             .map(|base| PathBuf::from(base).join("Rosetun").join("updates"))
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    {
+        linux_update_directory(
+            std::env::var_os("XDG_CACHE_HOME").map(PathBuf::from),
+            std::env::var_os("HOME").map(PathBuf::from),
+        )
+    }
+    #[cfg(target_os = "macos")]
+    {
+        macos_update_directory(std::env::var_os("HOME").map(PathBuf::from))
+    }
+    #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
     {
         None
     }
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn linux_update_directory(xdg_cache: Option<PathBuf>, home: Option<PathBuf>) -> Option<PathBuf> {
+    let base = xdg_cache.filter(|path| path.is_absolute()).or_else(|| {
+        home.filter(|path| path.is_absolute())
+            .map(|h| h.join(".cache"))
+    })?;
+    Some(base.join("rosetun").join("updates"))
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn macos_update_directory(home: Option<PathBuf>) -> Option<PathBuf> {
+    let home = home.filter(|path| path.is_absolute())?;
+    Some(
+        home.join("Library")
+            .join("Caches")
+            .join("io.github.eoftgge.rosetun")
+            .join("updates"),
+    )
 }
 
 /// Runs the checked installer. Setup normally ends this process before it
@@ -139,7 +170,21 @@ fn install(update: &rosetun_core::DownloadedUpdate) -> Option<UpdateFailure> {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn install(update: &rosetun_core::DownloadedUpdate) -> Option<UpdateFailure> {
+    if let Err(error) = update.verify() {
+        return Some(UpdateFailure::Download(error));
+    }
+    let expected = update.sha256_hex();
+    match rosetun_shell::install_verified_update(&update.path, &expected) {
+        Ok(Some(0)) => None,
+        Ok(Some(code)) => Some(UpdateFailure::Installer(code)),
+        Ok(None) => Some(UpdateFailure::Declined),
+        Err(_) => Some(UpdateFailure::Start),
+    }
+}
+
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
 fn install(_update: &rosetun_core::DownloadedUpdate) -> Option<UpdateFailure> {
     Some(UpdateFailure::Start)
 }
@@ -159,5 +204,41 @@ mod tests {
         assert!(unknown.due(1, None));
         assert!(!unknown.due(PROGRESS_STEP_BYTES - 1, None));
         assert!(unknown.due(PROGRESS_STEP_BYTES, None));
+    }
+
+    #[test]
+    fn unix_update_directories_require_absolute_user_paths() {
+        let abs_home = if cfg!(windows) {
+            PathBuf::from(r"C:\Users\alice")
+        } else {
+            PathBuf::from("/home/alice")
+        };
+        let abs_xdg = if cfg!(windows) {
+            PathBuf::from(r"C:\Users\alice\Cache")
+        } else {
+            PathBuf::from("/run/user/1000/cache")
+        };
+        assert_eq!(
+            linux_update_directory(Some(PathBuf::from("relative")), Some(abs_home.clone())),
+            Some(abs_home.join(".cache").join("rosetun").join("updates"))
+        );
+        assert_eq!(
+            linux_update_directory(Some(abs_xdg.clone()), Some(abs_home.clone())),
+            Some(abs_xdg.join("rosetun").join("updates"))
+        );
+        assert_eq!(
+            macos_update_directory(Some(PathBuf::from("relative"))),
+            None
+        );
+        assert_eq!(
+            macos_update_directory(Some(abs_home.clone())),
+            Some(
+                abs_home
+                    .join("Library")
+                    .join("Caches")
+                    .join("io.github.eoftgge.rosetun")
+                    .join("updates")
+            )
+        );
     }
 }

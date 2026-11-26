@@ -35,6 +35,10 @@ impl NativeTun {
         })
     }
 
+    pub(super) fn name(&self) -> Result<String, HelperError> {
+        self.device.name().map_err(route_error)
+    }
+
     pub(super) fn tunnel(&self) -> Result<NativeTunnel, HelperError> {
         // Linux egress uses the policy rule and mark rather than the interface
         // index. A positive device index also confirms that it exists.

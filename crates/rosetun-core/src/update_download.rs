@@ -1,9 +1,9 @@
-//! Downloads a release's Windows installer and proves it is the one the
+//! Downloads a release's installer or package and proves it is the one the
 //! maintainer signed: the minisign signature over `SHA256SUMS.txt`, the
-//! version in its trusted comment, then the installer's SHA-256 from that
-//! list. Nothing is kept unless every step passes.
+//! version in its trusted comment, then the asset's SHA-256 from that list.
+//! Nothing is kept unless every step passes.
 
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -36,6 +36,28 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 /// A stalled transfer ends the download; a slow one does not.
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
 const CHUNK_BYTES: usize = 64 * 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UpdatePlatform {
+    WindowsX64,
+    LinuxX64Deb,
+    MacosArm64Pkg,
+    Unsupported,
+}
+
+impl UpdatePlatform {
+    const fn current() -> Self {
+        if cfg!(all(windows, target_arch = "x86_64")) || cfg!(windows) {
+            Self::WindowsX64
+        } else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+            Self::LinuxX64Deb
+        } else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+            Self::MacosArm64Pkg
+        } else {
+            Self::Unsupported
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum UpdateDownloadError {
@@ -86,6 +108,12 @@ impl DownloadedUpdate {
         }
     }
 
+    /// Lowercase hexadecimal SHA-256 of the verified installer, for privileged
+    /// installers that re-check a root-owned copy before executing it.
+    pub fn sha256_hex(&self) -> String {
+        rosetun_config::digest_hex(&self.sha256)
+    }
+
     /// Hashes the file again right before it runs: another program of the
     /// same user may have replaced it since the download.
     pub fn verify(&self) -> Result<(), UpdateDownloadError> {
@@ -106,8 +134,7 @@ impl DownloadedUpdate {
     }
 }
 
-/// The Windows installer's file name in the release `version`.
-pub fn installer_name(version: &str) -> Result<String, UpdateDownloadError> {
+fn validate_version(version: &str) -> Result<(), UpdateDownloadError> {
     let valid = !version.is_empty()
         && version.len() <= MAX_VERSION_CHARS
         && version.starts_with(|character: char| character.is_ascii_digit())
@@ -115,10 +142,54 @@ pub fn installer_name(version: &str) -> Result<String, UpdateDownloadError> {
             .chars()
             .all(|character| character.is_ascii_alphanumeric() || matches!(character, '.' | '-'));
     if valid {
-        Ok(format!("rosetun-{version}-setup.exe"))
+        Ok(())
     } else {
         Err(UpdateDownloadError::InvalidVersion)
     }
+}
+
+fn installer_candidates(
+    version: &str,
+    platform: UpdatePlatform,
+) -> Result<Vec<String>, UpdateDownloadError> {
+    validate_version(version)?;
+    match platform {
+        UpdatePlatform::WindowsX64 => Ok(vec![format!("rosetun-{version}-setup.exe")]),
+        UpdatePlatform::LinuxX64Deb => Ok(vec![format!("rosetun_{version}_amd64.deb")]),
+        UpdatePlatform::MacosArm64Pkg => Ok(vec![
+            format!("rosetun-{version}-macos-arm64.pkg"),
+            format!("rosetun-{version}-macos-arm64-experimental.pkg"),
+        ]),
+        UpdatePlatform::Unsupported => Err(UpdateDownloadError::NotListed),
+    }
+}
+
+/// Primary installer file name for the current platform in release `version`.
+pub fn installer_name(version: &str) -> Result<String, UpdateDownloadError> {
+    let mut candidates = installer_candidates(version, UpdatePlatform::current())?;
+    // While macOS builds carry `-experimental`, return that canonical asset name
+    // when inspected directly; `select_listed_installer` accepts both.
+    if UpdatePlatform::current() == UpdatePlatform::MacosArm64Pkg {
+        Ok(candidates.pop().expect("macOS candidate list is non-empty"))
+    } else {
+        Ok(candidates.swap_remove(0))
+    }
+}
+
+fn select_listed_installer(
+    sums: &[u8],
+    version: &str,
+    platform: UpdatePlatform,
+) -> Result<(String, [u8; 32]), UpdateDownloadError> {
+    let candidates = installer_candidates(version, platform)?;
+    for candidate in candidates {
+        match listed_hash(sums, &candidate) {
+            Ok(hash) => return Ok((candidate, hash)),
+            Err(UpdateDownloadError::NotListed) => continue,
+            Err(other) => return Err(other),
+        }
+    }
+    Err(UpdateDownloadError::NotListed)
 }
 
 /// Downloads the installer of `version` into `directory` and checks it.
@@ -132,7 +203,8 @@ pub fn download_update(
     cancelled: &AtomicBool,
     mut progress: impl FnMut(u64, Option<u64>),
 ) -> Result<DownloadedUpdate, UpdateDownloadError> {
-    let name = installer_name(version)?;
+    let platform = UpdatePlatform::current();
+    let _ = installer_candidates(version, platform)?;
     let vpn = if via_vpn {
         crate::fetch::helper_vpn_proxy("rosetun-update")
             .map_err(|_| UpdateDownloadError::VpnRequest)?
@@ -158,12 +230,13 @@ pub fn download_update(
     let sums =
         get_small(&agent, &asset_url(version, SUMS_FILE), MAX_SUMS_BYTES).map_err(network)?;
     verify_sums(&sums, &signature, RELEASE_KEY, version)?;
-    let expected = listed_hash(&sums, &name)?;
+    let (name, expected) = select_listed_installer(&sums, version, platform)?;
 
-    fs::create_dir_all(directory).map_err(|_| UpdateDownloadError::Save)?;
+    create_private_dir(directory)?;
     remove_stale(directory, &name);
     let target = directory.join(&name);
     let partial = directory.join(format!("{name}.partial"));
+    let _ = fs::remove_file(&partial);
     let result = (|| {
         let mut response = open(&agent, &asset_url(version, &name)).map_err(network)?;
         let total = response
@@ -174,7 +247,7 @@ pub fn download_update(
         if total.is_some_and(|total| total > MAX_INSTALLER_BYTES) {
             return Err(UpdateDownloadError::TooLarge);
         }
-        let mut file = File::create(&partial).map_err(|_| UpdateDownloadError::Save)?;
+        let mut file = create_private_file(&partial)?;
         let digest = hash_copy(
             &mut response.body_mut().as_reader(),
             Some(&mut file),
@@ -199,6 +272,36 @@ pub fn download_update(
         path: target,
         sha256: expected,
     })
+}
+
+fn create_private_dir(directory: &Path) -> Result<(), UpdateDownloadError> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+        fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(directory)
+            .map_err(|_| UpdateDownloadError::Save)?;
+        fs::set_permissions(directory, fs::Permissions::from_mode(0o700))
+            .map_err(|_| UpdateDownloadError::Save)?;
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        fs::create_dir_all(directory).map_err(|_| UpdateDownloadError::Save)
+    }
+}
+
+fn create_private_file(path: &Path) -> Result<File, UpdateDownloadError> {
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options.open(path).map_err(|_| UpdateDownloadError::Save)
 }
 
 fn asset_url(version: &str, file: &str) -> String {
@@ -376,6 +479,15 @@ fn hash_copy(
     Ok(hasher.finalize().into())
 }
 
+fn is_rosetun_installer_artifact(name: &str) -> bool {
+    let base = name.strip_suffix(".partial").unwrap_or(name);
+    (base.starts_with("rosetun-") && base.ends_with("-setup.exe"))
+        || (base.starts_with("rosetun_") && base.ends_with("_amd64.deb"))
+        || (base.starts_with("rosetun-")
+            && (base.ends_with("-macos-arm64.pkg")
+                || base.ends_with("-macos-arm64-experimental.pkg")))
+}
+
 /// Older installers and unfinished downloads in the folder are only Rosetun's own.
 fn remove_stale(directory: &Path, keep: &str) {
     let Ok(entries) = fs::read_dir(directory) else {
@@ -386,9 +498,7 @@ fn remove_stale(directory: &Path, keep: &str) {
         let Some(name) = name.to_str() else {
             continue;
         };
-        let ours = name.starts_with("rosetun-")
-            && (name.ends_with("-setup.exe") || name.ends_with("-setup.exe.partial"));
-        if ours && name != keep {
+        if is_rosetun_installer_artifact(name) && name != keep {
             let _ = fs::remove_file(entry.path());
         }
     }
@@ -488,10 +598,21 @@ mod tests {
     }
 
     #[test]
-    fn only_plain_release_versions_name_an_installer() {
+    fn only_plain_release_versions_name_an_installer_across_platforms() {
         assert_eq!(
-            installer_name("0.7.0-beta.1").as_deref(),
-            Ok("rosetun-0.7.0-beta.1-setup.exe")
+            installer_candidates("0.8.0-beta.1", UpdatePlatform::WindowsX64),
+            Ok(vec!["rosetun-0.8.0-beta.1-setup.exe".to_owned()])
+        );
+        assert_eq!(
+            installer_candidates("0.8.0-beta.1", UpdatePlatform::LinuxX64Deb),
+            Ok(vec!["rosetun_0.8.0-beta.1_amd64.deb".to_owned()])
+        );
+        assert_eq!(
+            installer_candidates("0.8.0-beta.1", UpdatePlatform::MacosArm64Pkg),
+            Ok(vec![
+                "rosetun-0.8.0-beta.1-macos-arm64.pkg".to_owned(),
+                "rosetun-0.8.0-beta.1-macos-arm64-experimental.pkg".to_owned(),
+            ])
         );
         for version in ["", "v0.7.0", "0.7.0/../x", "0.7.0\\x", "0.7 0", "0.7.0?x"] {
             assert_eq!(
@@ -500,6 +621,35 @@ mod tests {
                 "{version:?}"
             );
         }
+    }
+
+    #[test]
+    fn selects_deb_and_macos_pkg_assets_from_signed_sums() {
+        let sums = format!(
+            "{}  rosetun_0.8.0_amd64.deb\n{}  rosetun-0.8.0-macos-arm64-experimental.pkg\n",
+            "11".repeat(32),
+            "22".repeat(32),
+        );
+        assert_eq!(
+            select_listed_installer(sums.as_bytes(), "0.8.0", UpdatePlatform::LinuxX64Deb),
+            Ok(("rosetun_0.8.0_amd64.deb".to_owned(), [0x11; 32]))
+        );
+        assert_eq!(
+            select_listed_installer(sums.as_bytes(), "0.8.0", UpdatePlatform::MacosArm64Pkg),
+            Ok((
+                "rosetun-0.8.0-macos-arm64-experimental.pkg".to_owned(),
+                [0x22; 32]
+            ))
+        );
+        let stable_macos = format!("{}  rosetun-1.0.0-macos-arm64.pkg\n", "33".repeat(32));
+        assert_eq!(
+            select_listed_installer(
+                stable_macos.as_bytes(),
+                "1.0.0",
+                UpdatePlatform::MacosArm64Pkg
+            ),
+            Ok(("rosetun-1.0.0-macos-arm64.pkg".to_owned(), [0x33; 32]))
+        );
     }
 
     #[test]
@@ -556,6 +706,8 @@ mod tests {
             path: path.clone(),
             sha256: Sha256::digest(b"installer").into(),
         };
+        assert_eq!(update.sha256_hex().len(), 64);
+        assert_eq!(parse_hex(&update.sha256_hex()), Some(update.sha256));
         assert_eq!(update.verify(), Ok(()));
         fs::write(&path, b"replaced").unwrap();
         assert_eq!(update.verify(), Err(UpdateDownloadError::Mismatch));
@@ -572,6 +724,10 @@ mod tests {
         for name in [
             "rosetun-0.6.0-setup.exe",
             "rosetun-0.7.0-setup.exe.partial",
+            "rosetun_0.6.0_amd64.deb",
+            "rosetun_0.7.0_amd64.deb.partial",
+            "rosetun-0.6.0-macos-arm64-experimental.pkg",
+            "rosetun-0.7.0-macos-arm64.pkg.partial",
             "rosetun-0.7.0-setup.exe",
             "notes.txt",
         ] {

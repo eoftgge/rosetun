@@ -33,7 +33,11 @@ pub(super) struct ProxySession {
     workers: Workers,
     outbounds: OutboundEndpoints,
     pub(super) plan: RoutingPlan,
-    #[cfg(any(target_os = "linux", all(windows, target_arch = "x86_64")))]
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "macos",
+        all(windows, target_arch = "x86_64")
+    ))]
     native: Option<super::native_tun::NativeTun>,
 }
 
@@ -212,7 +216,11 @@ impl ProxySession {
 
     pub(super) fn stop(&mut self) -> Result<(), HelperError> {
         self.dataplane.shutdown();
-        #[cfg(any(target_os = "linux", all(windows, target_arch = "x86_64")))]
+        #[cfg(any(
+            target_os = "linux",
+            target_os = "macos",
+            all(windows, target_arch = "x86_64")
+        ))]
         if let Some(native) = self.native.as_mut() {
             native.close()?;
         }
@@ -308,31 +316,76 @@ impl Session {
         self.protection.permit_binaries(&update.binaries(&workers));
         match (scope, options.mode) {
             (Some(_), StartMode::ProtectedReconnect) => self.protection.prepare_reconnect(&plan)?,
-            (Some(_), StartMode::Fresh) => self
-                .protection
-                .install(self.routing.as_mut(), &plan)
-                .map_err(|error| HelperError::new(ErrorCode::RoutingFailed, error.to_string()))?,
+            (Some(requested_scope), StartMode::Fresh) => {
+                match self.protection.install(self.routing.as_mut(), &plan) {
+                    Ok(()) => {}
+                    Err(error)
+                        if native_requested
+                            && requested_scope == rosetun_routing::ProtectionScope::DnsOnly =>
+                    {
+                        tracing::warn!(
+                            %error,
+                            "DNS lock is unavailable for native TUN; connecting without it"
+                        );
+                        self.protection
+                            .record_shortfall(protection::shortfall_of(&error));
+                    }
+                    Err(error) => {
+                        return Err(HelperError::new(
+                            ErrorCode::RoutingFailed,
+                            error.to_string(),
+                        ));
+                    }
+                }
+            }
             (None, _) => self.protection.release("failed to remove the DNS lock"),
         }
         if let Some(until) = verbose {
             self.gate.open_until(until);
         }
-        #[cfg(any(target_os = "linux", all(windows, target_arch = "x86_64")))]
+        #[cfg(any(
+            target_os = "linux",
+            target_os = "macos",
+            all(windows, target_arch = "x86_64")
+        ))]
         let mut native = if native_requested {
             let native = super::native_tun::NativeTun::open(&settings.tun)?;
-            let deadline = Instant::now() + super::TUNNEL_READY_TIMEOUT;
-            let tun = rosetun_routing::TunnelInterface::try_from(&settings.tun)
-                .map_err(super::native_tun::route_error)?;
-            loop {
-                match self.protection.authorize_tunnel(&tun) {
-                    Ok(()) => break,
-                    Err(error) if error.is_tunnel_not_ready() && Instant::now() < deadline => {
-                        super::sleep_cancellable(
-                            super::TUNNEL_READY_POLL_INTERVAL,
-                            &self.cancelled,
-                        )?;
+            let actual_name = native.name()?;
+            self.active_tun_name = Some(actual_name.clone());
+            *self
+                .shared_active_tun
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(actual_name);
+            if self.protection.is_active() {
+                let deadline = Instant::now() + super::TUNNEL_READY_TIMEOUT;
+                let tun = rosetun_routing::TunnelInterface::try_from(&settings.tun)
+                    .map_err(super::native_tun::route_error)?;
+                loop {
+                    match self.protection.authorize_tunnel(&tun) {
+                        Ok(()) => break,
+                        Err(error) if error.is_tunnel_not_ready() && Instant::now() < deadline => {
+                            super::sleep_cancellable(
+                                super::TUNNEL_READY_POLL_INTERVAL,
+                                &self.cancelled,
+                            )?;
+                        }
+                        Err(error)
+                            if options.mode == StartMode::Fresh
+                                && self.protection.scope()
+                                    == Some(rosetun_routing::ProtectionScope::DnsOnly) =>
+                        {
+                            tracing::warn!(
+                                %error,
+                                "DNS lock cannot authorize native TUN; connecting without it"
+                            );
+                            self.protection.release("failed to roll back DNS lock");
+                            self.protection.record_shortfall(
+                                rosetun_config::ProtectionShortfallCode::TunnelNotPermitted,
+                            );
+                            break;
+                        }
+                        Err(error) => return Err(super::native_tun::route_error(error)),
                     }
-                    Err(error) => return Err(super::native_tun::route_error(error)),
                 }
             }
             Some(native)
@@ -354,7 +407,11 @@ impl Session {
             sniff: Default::default(),
             direct_resolver: None,
         };
-        #[cfg(any(target_os = "linux", all(windows, target_arch = "x86_64")))]
+        #[cfg(any(
+            target_os = "linux",
+            target_os = "macos",
+            all(windows, target_arch = "x86_64")
+        ))]
         let dataplane = if let Some(native) = &mut native {
             let dataplane = Dataplane::start_native(config(), native.tunnel()?)
                 .map_err(super::native_tun::route_error)?;
@@ -364,7 +421,9 @@ impl Session {
                 Vec::new()
             };
             #[cfg(all(windows, target_arch = "x86_64"))]
-            self.authorize_native_listeners(&dataplane)?;
+            if self.protection.is_active() {
+                self.authorize_native_listeners(&dataplane)?;
+            }
             native.capture(&bypass, &servers)?;
             dataplane
         } else {
@@ -372,7 +431,11 @@ impl Session {
                 Dataplane::start(config())
             })?
         };
-        #[cfg(not(any(target_os = "linux", all(windows, target_arch = "x86_64"))))]
+        #[cfg(not(any(
+            target_os = "linux",
+            target_os = "macos",
+            all(windows, target_arch = "x86_64")
+        )))]
         let dataplane = local_proxy::start(settings.local_proxy.port, &self.cancelled, || {
             Dataplane::start(config())
         })?;
@@ -387,7 +450,11 @@ impl Session {
             workers,
             outbounds,
             plan,
-            #[cfg(any(target_os = "linux", all(windows, target_arch = "x86_64")))]
+            #[cfg(any(
+                target_os = "linux",
+                target_os = "macos",
+                all(windows, target_arch = "x86_64")
+            ))]
             native,
         });
         #[cfg(test)]
@@ -456,7 +523,11 @@ impl Session {
                     self.protection.prepare_reconnect(&plan)?;
                     self.authorize_native_after_apply(request, &proxy.dataplane)?;
                 }
-                #[cfg(any(target_os = "linux", all(windows, target_arch = "x86_64")))]
+                #[cfg(any(
+                    target_os = "linux",
+                    target_os = "macos",
+                    all(windows, target_arch = "x86_64")
+                ))]
                 if let Some(native) = proxy.native.as_mut() {
                     native.ensure_endpoints(&servers)?;
                 }
@@ -475,7 +546,11 @@ impl Session {
             })();
             if let Err(error) = result {
                 drop(update);
-                #[cfg(any(target_os = "linux", all(windows, target_arch = "x86_64")))]
+                #[cfg(any(
+                    target_os = "linux",
+                    target_os = "macos",
+                    all(windows, target_arch = "x86_64")
+                ))]
                 if let Some(native) = proxy.native.as_mut() {
                     native.retain_endpoints(self.lan.servers());
                 }
@@ -500,7 +575,11 @@ impl Session {
                 return Err(error);
             }
             update.commit(&mut proxy.workers);
-            #[cfg(any(target_os = "linux", all(windows, target_arch = "x86_64")))]
+            #[cfg(any(
+                target_os = "linux",
+                target_os = "macos",
+                all(windows, target_arch = "x86_64")
+            ))]
             if let Some(native) = proxy.native.as_mut() {
                 native.retain_endpoints(&servers);
             }

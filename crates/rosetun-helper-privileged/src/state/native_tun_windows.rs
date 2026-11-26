@@ -50,6 +50,10 @@ impl NativeTun {
         })
     }
 
+    pub(super) fn name(&self) -> Result<String, HelperError> {
+        self.device.name().map_err(route_error)
+    }
+
     pub(super) fn tunnel(&self) -> Result<NativeTunnel, HelperError> {
         Ok(NativeTunnel {
             device: self.device.clone(),

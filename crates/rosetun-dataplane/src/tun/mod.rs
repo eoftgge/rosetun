@@ -8,6 +8,9 @@ mod packet;
 #[cfg(target_os = "linux")]
 #[expect(unsafe_code, reason = "Linux socket-diagnostic netlink syscalls")]
 mod process_linux;
+#[cfg(target_os = "macos")]
+#[expect(unsafe_code, reason = "Darwin libproc socket and process path queries")]
+mod process_macos;
 #[cfg(windows)]
 #[expect(unsafe_code, reason = "IP Helper and limited process image queries")]
 mod process_windows;
@@ -15,6 +18,10 @@ mod routes;
 #[cfg(target_os = "linux")]
 mod routes_linux;
 #[cfg(target_os = "macos")]
+#[expect(
+    unsafe_code,
+    reason = "Darwin sysctl routing dump and interface index queries"
+)]
 mod routes_macos;
 mod runtime;
 
@@ -29,6 +36,8 @@ pub use nat::{FullConeNat, MappingError, MappingKey};
 pub use packet::{Packet, PacketError, Transport, udp_reply};
 #[cfg(target_os = "linux")]
 pub use process_linux::LinuxProcessLookup;
+#[cfg(target_os = "macos")]
+pub use process_macos::MacosProcessLookup;
 #[cfg(windows)]
 pub use process_windows::WindowsProcessLookup;
 pub use routes::{CaptureRoutes, RouteBackend, RouteLease};

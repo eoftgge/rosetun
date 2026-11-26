@@ -482,4 +482,15 @@ fn installing_asks_first_during_a_session_and_a_declined_prompt_keeps_the_file()
             failure: UpdateFailure::Installer(5),
         }
     );
+
+    state.act(Action::DownloadUpdate);
+    downloaded(&mut state, "999.0.0");
+    assert!(matches!(
+        state.act(Action::InstallUpdate),
+        Some(Job::InstallUpdate(_))
+    ));
+    state.reduce(WorkerEvent::UpdateInstall(None));
+    assert_eq!(state.offer_download(), &UpdateDownload::Idle);
+    assert!(state.take_update_installed());
+    assert!(!state.take_update_installed());
 }

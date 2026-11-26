@@ -30,16 +30,20 @@ use crate::{brand, display, i18n, motion, system_fonts, theme, view};
 pub(crate) const OFFSCREEN: egui::Pos2 = egui::pos2(-32000.0, -32000.0);
 
 /// How the window goes away.
-#[cfg(any(windows, target_os = "linux"))]
+#[cfg(any(windows, target_os = "linux", target_os = "macos"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Leave {
     /// Out of sight, still running (the tray, or a quit waiting for the service).
+    #[cfg_attr(
+        target_os = "macos",
+        expect(dead_code, reason = "macOS closes directly without hiding to tray")
+    )]
     Hide,
     Close,
 }
 
 /// Cloaks the window with `cloak`, then asks for it to be hidden or closed.
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 fn send_leaving(ctx: &egui::Context, how: Leave, cloak: impl FnOnce()) {
     cloak();
     ctx.send_viewport_cmd(match how {
@@ -361,6 +365,12 @@ impl App {
     #[cfg(windows)]
     fn leave_window(&self, ctx: &egui::Context, how: Leave) {
         send_leaving(ctx, how, || self.cloak_before_leaving());
+    }
+
+    #[cfg(target_os = "macos")]
+    fn leave_window(&self, ctx: &egui::Context, how: Leave) {
+        self.workers.restore_system_proxy();
+        send_leaving(ctx, how, || {});
     }
 
     #[cfg(windows)]
@@ -742,6 +752,13 @@ impl App {
         }
         #[cfg(target_os = "linux")]
         self.relaunch_if_replaced();
+        #[cfg(target_os = "macos")]
+        if self.state.take_update_installed() {
+            match rosetun_shell::relaunch_installed_app() {
+                Ok(()) => self.leave_window(ctx, Leave::Close),
+                Err(error) => tracing::warn!(%error, "could not start the upgraded macOS app"),
+            }
+        }
         while let Some(job) = self.state.take_queued_setting() {
             self.dispatch(job);
         }
