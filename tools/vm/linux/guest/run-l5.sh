@@ -136,11 +136,11 @@ wait_state() {
 
 # The lab's window markers (lab_mark, in lib.sh) do nothing without LAB_MARKER_ADDRESS.
 connect_with() {
-    local request=$1
+    local request=$1 source=${2:-"$ART/$1"}
     # A scenario that failed half-way may have left a session.
     [[ $(state_line) =~ ^Disconnected ]] || cli 60 disconnect
     lab_mark close
-    install -m 0600 -o "$(uid_of "$USER_A")" -g "$(gid_of "$USER_A")" -- "$ART/$request" "$RUN/work-$USER_A/$request"
+    install -m 0600 -o "$(uid_of "$USER_A")" -g "$(gid_of "$USER_A")" -- "$source" "$RUN/work-$USER_A/$request"
     lab_mark open
     cli 120 connect "$request"
     [ "$CLI_RC" -eq 0 ] || { fail_reason="connect with $request failed: $(cli_error)"; return 1; }
