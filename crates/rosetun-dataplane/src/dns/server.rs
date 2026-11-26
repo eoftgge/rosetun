@@ -425,15 +425,23 @@ fn handle_tcp_client(mut stream: TcpStream, service: &DnsService, shutdown: &Ato
             let Ok(fb_len) = u16::try_from(fallback.len()) else {
                 break;
             };
-            if !write_all_interruptible(&mut stream, &fb_len.to_be_bytes(), TCP_IO_TIMEOUT, shutdown)
-                || !write_all_interruptible(&mut stream, &fallback, TCP_IO_TIMEOUT, shutdown)
+            if !write_all_interruptible(
+                &mut stream,
+                &fb_len.to_be_bytes(),
+                TCP_IO_TIMEOUT,
+                shutdown,
+            ) || !write_all_interruptible(&mut stream, &fallback, TCP_IO_TIMEOUT, shutdown)
             {
                 break;
             }
             continue;
         };
-        if !write_all_interruptible(&mut stream, &reply_len.to_be_bytes(), TCP_IO_TIMEOUT, shutdown)
-            || !write_all_interruptible(&mut stream, &response, TCP_IO_TIMEOUT, shutdown)
+        if !write_all_interruptible(
+            &mut stream,
+            &reply_len.to_be_bytes(),
+            TCP_IO_TIMEOUT,
+            shutdown,
+        ) || !write_all_interruptible(&mut stream, &response, TCP_IO_TIMEOUT, shutdown)
         {
             break;
         }

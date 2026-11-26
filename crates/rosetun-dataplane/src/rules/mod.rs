@@ -315,13 +315,13 @@ impl RuleEngine {
                 RuleMatcher::Domain(DomainMatch::Keyword(keyword)) => {
                     CompiledMatcher::DomainKeyword(keyword.to_lowercase())
                 }
-                RuleMatcher::Process(ProcessMatch::Name(name)) => CompiledMatcher::ProcessName(
-                    if cfg!(windows) {
+                RuleMatcher::Process(ProcessMatch::Name(name)) => {
+                    CompiledMatcher::ProcessName(if cfg!(windows) {
                         name.to_lowercase()
                     } else {
                         name.clone()
-                    },
-                ),
+                    })
+                }
                 RuleMatcher::Process(ProcessMatch::Path(path)) => {
                     CompiledMatcher::ProcessPath(path.to_string_lossy().into_owned())
                 }

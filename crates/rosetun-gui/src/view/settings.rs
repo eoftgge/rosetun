@@ -938,13 +938,7 @@ fn fragment(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
             tr!("fragment-detail")
         };
         if card
-            .toggle(
-                tr!("fragment-title"),
-                None,
-                detail,
-                &mut on,
-                editable,
-            )
+            .toggle(tr!("fragment-title"), None, detail, &mut on, editable)
             .changed()
         {
             actions.push(Action::SetTlsFragment(on));
@@ -1110,8 +1104,7 @@ fn xray(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                 let node = state.running_node();
                 // No server name here: providers often name nodes by their address,
                 // and this screen ends up in screenshots.
-                let direct = status.protection.connection_mode
-                    == Some(ConnectionMode::SystemProxy)
+                let direct = status.protection.connection_mode == Some(ConnectionMode::SystemProxy)
                     || status.tun_backend == Some(rosetun_config::TunBackend::NativeMixed);
                 let current = if status.xray {
                     match node {
