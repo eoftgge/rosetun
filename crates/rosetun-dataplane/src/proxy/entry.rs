@@ -140,10 +140,12 @@ impl EntryServer {
                     let shutdown = Arc::clone(&worker_shutdown);
                     let _ = thread::Builder::new()
                         .name("dataplane-entry-conn".to_owned())
+                        .stack_size(256 * 1024)
                         .spawn(move || {
-                            let _client = client;
-                            stream.set_nodelay(true).ok();
-                            let _ = socks::serve(&router, stream, &access, &table, &shutdown);
+                            super::relay::with_handoff_guard(client, || {
+                                stream.set_nodelay(true).ok();
+                                let _ = socks::serve(&router, stream, &access, &table, &shutdown);
+                            });
                         });
                 }
             })?;

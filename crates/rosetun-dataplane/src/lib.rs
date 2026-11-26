@@ -12,13 +12,18 @@ pub mod conntable;
 pub mod dataplane;
 pub mod dns;
 pub mod net;
+#[expect(
+    unsafe_code,
+    reason = "polling requires registered sources to be deleted before drop, enforced by RAII wrappers"
+)]
+mod poller;
 pub mod proxy;
 pub mod rules;
 pub mod sniff;
-#[cfg(any(windows, target_os = "linux"))]
+#[cfg(windows)]
 #[expect(
     unsafe_code,
-    reason = "socket readiness without timing out Windows TCP I/O or spawning a thread per UDP mapping"
+    reason = "socket readiness without timing out Windows TCP I/O"
 )]
 mod socket_ready;
 pub mod tun;

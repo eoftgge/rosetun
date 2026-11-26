@@ -1143,3 +1143,62 @@ fn redacted_debug_and_errors_never_leak_names_or_addresses() {
 
     server.shutdown();
 }
+
+#[test]
+fn concurrent_identical_queries_coalesce_into_single_upstream_request() {
+    let entered = Arc::new(std::sync::Barrier::new(2));
+    let release = Arc::new(std::sync::Barrier::new(2));
+    let entered_h = Arc::clone(&entered);
+    let release_h = Arc::clone(&release);
+
+    let doh = MockDohServer::start(Arc::new(move |query| {
+        entered_h.wait();
+        release_h.wait();
+        (
+            canned_a_response(query, Ipv4Addr::new(192, 0, 2, 88), 120),
+            false,
+        )
+    }));
+
+    let service = Arc::new(
+        DnsService::with_roots(
+            &doh.settings(),
+            Arc::new(DirectDialer::default()),
+            DnsOptions {
+                max_in_flight: 1,
+                ..DnsOptions::default()
+            },
+            vec![ca_cert()],
+        )
+        .unwrap(),
+    );
+
+    let svc1 = Arc::clone(&service);
+    let leader = thread::spawn(move || {
+        let q = wire::build_query(0x1111, "coalesce.example.com", wire::TYPE_A).unwrap();
+        svc1.exchange(&q).unwrap()
+    });
+
+    entered.wait();
+
+    // Even with max_in_flight = 1, an identical concurrent query joins the
+    // leader instead of failing with SERVFAIL or issuing a second DoH call.
+    let svc2 = Arc::clone(&service);
+    let follower = thread::spawn(move || {
+        let q = wire::build_query(0x2222, "coalesce.example.com", wire::TYPE_A).unwrap();
+        svc2.exchange(&q).unwrap()
+    });
+
+    // Give the follower a moment to register on the shared flight before releasing.
+    thread::sleep(Duration::from_millis(20));
+    release.wait();
+
+    let r1 = leader.join().unwrap();
+    let r2 = follower.join().unwrap();
+
+    assert_eq!(wire::message_id(&r1), Some(0x1111));
+    assert_eq!(wire::message_id(&r2), Some(0x2222));
+    assert_eq!(wire::rcode_of(&r1), Some(wire::RCODE_NOERROR));
+    assert_eq!(wire::rcode_of(&r2), Some(wire::RCODE_NOERROR));
+    assert_eq!(doh.request_count(), 1);
+}

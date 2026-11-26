@@ -10,6 +10,7 @@ publish.workspace = true
 [dependencies]
 flate2.workspace = true
 getrandom.workspace = true
+polling.workspace = true
 regex-automata.workspace = true
 ring.workspace = true
 rosetun-config.workspace = true

@@ -30,11 +30,12 @@ pub(crate) mod testcerts;
 mod wire;
 
 use std::cell::Cell;
+use std::collections::HashMap;
 use std::fmt;
 use std::io;
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use rosetun_config::DnsSettings;
@@ -166,6 +167,87 @@ impl Drop for InFlightGuard<'_> {
     }
 }
 
+#[derive(Clone)]
+enum FlightOutcome {
+    Wire(Vec<u8>),
+    ServFail,
+    Dial(io::ErrorKind),
+    Io(io::ErrorKind),
+    HttpStatus(u16),
+    BadHttpResponse,
+    ResponseTooLarge,
+    BadResponse,
+}
+
+impl FlightOutcome {
+    fn from_error(error: &DnsError) -> Self {
+        match error {
+            DnsError::Dial(err) => Self::Dial(err.kind()),
+            DnsError::Io(err) => Self::Io(err.kind()),
+            DnsError::HttpStatus(code) => Self::HttpStatus(*code),
+            DnsError::BadHttpResponse => Self::BadHttpResponse,
+            DnsError::ResponseTooLarge => Self::ResponseTooLarge,
+            DnsError::BadResponse => Self::BadResponse,
+            _ => Self::Io(io::ErrorKind::Other),
+        }
+    }
+
+    fn into_result(self, query: &[u8], id: u16, rd: bool) -> Result<Vec<u8>, DnsError> {
+        match self {
+            Self::Wire(mut reply) => {
+                wire::set_id(&mut reply, id);
+                wire::set_recursion_desired(&mut reply, rd);
+                Ok(reply)
+            }
+            Self::ServFail => Ok(wire::error_response(query, wire::RCODE_SERVFAIL)),
+            Self::Dial(kind) => Err(DnsError::Dial(io::Error::from(kind))),
+            Self::Io(kind) => Err(DnsError::Io(io::Error::from(kind))),
+            Self::HttpStatus(code) => Err(DnsError::HttpStatus(code)),
+            Self::BadHttpResponse => Err(DnsError::BadHttpResponse),
+            Self::ResponseTooLarge => Err(DnsError::ResponseTooLarge),
+            Self::BadResponse => Err(DnsError::BadResponse),
+        }
+    }
+}
+
+struct SharedFlight {
+    outcome: Mutex<Option<FlightOutcome>>,
+    ready: Condvar,
+}
+
+impl SharedFlight {
+    fn new() -> Self {
+        Self {
+            outcome: Mutex::new(None),
+            ready: Condvar::new(),
+        }
+    }
+
+    fn finish(&self, result: FlightOutcome) {
+        let mut slot = self.outcome.lock().unwrap_or_else(PoisonError::into_inner);
+        if slot.is_none() {
+            *slot = Some(result);
+            self.ready.notify_all();
+        }
+    }
+}
+
+struct FlightLeaderGuard<'a> {
+    flights: &'a Mutex<HashMap<CacheKey, Arc<SharedFlight>>>,
+    key: CacheKey,
+    flight: Arc<SharedFlight>,
+}
+
+impl Drop for FlightLeaderGuard<'_> {
+    fn drop(&mut self) {
+        self.flights
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&self.key);
+        self.flight.finish(FlightOutcome::Io(io::ErrorKind::Other));
+    }
+}
+
 /// Thread-safe DNS resolver backed by DoH with forward and reverse TTL caches.
 pub struct DnsService {
     resolver: std::sync::RwLock<Arc<DnsResolver>>,
@@ -178,6 +260,7 @@ struct DnsResolver {
     doh: DohClient,
     cache: Mutex<TtlCache<CacheKey, CachedResponse>>,
     reverse: Mutex<TtlCache<IpAddr, String>>,
+    flights: Mutex<HashMap<CacheKey, Arc<SharedFlight>>>,
     in_flight: AtomicUsize,
     clock: Clock,
 }
@@ -240,6 +323,7 @@ impl DnsService {
                 doh,
                 cache: Mutex::new(TtlCache::new(options.cache_entries)),
                 reverse: Mutex::new(TtlCache::new(options.reverse_entries)),
+                flights: Mutex::new(HashMap::new()),
                 in_flight: AtomicUsize::new(0),
                 clock,
             })),
@@ -345,22 +429,71 @@ impl DnsResolver {
             return Ok(reply);
         }
 
+        let leader_guard = {
+            let mut flights = self.flights.lock().unwrap_or_else(PoisonError::into_inner);
+            if let Some(existing) = flights.get(&key).cloned() {
+                drop(flights);
+                let guard = existing
+                    .outcome
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner);
+                let (guard, _) = existing
+                    .ready
+                    .wait_timeout_while(guard, self.options.timeout, |out| out.is_none())
+                    .unwrap_or_else(PoisonError::into_inner);
+                let outcome = guard
+                    .clone()
+                    .unwrap_or(FlightOutcome::Io(io::ErrorKind::TimedOut));
+                return outcome.into_result(query, parsed.id, parsed.recursion_desired);
+            }
+            // Re-check the cache under the flights lock so a follower arriving
+            // right as the previous leader finished still hits the cache.
+            if let Some(cached) = self.lookup_cache(&key, now) {
+                let mut reply = cached.wire;
+                let elapsed =
+                    u32::try_from(now.saturating_duration_since(cached.stored_at).as_secs())
+                        .unwrap_or(u32::MAX);
+                wire::set_id(&mut reply, parsed.id);
+                wire::set_recursion_desired(&mut reply, parsed.recursion_desired);
+                let _ = wire::rewrite_ttls(&mut reply, |ttl| ttl.saturating_sub(elapsed).max(1));
+                return Ok(reply);
+            }
+            let flight = Arc::new(SharedFlight::new());
+            flights.insert(key.clone(), Arc::clone(&flight));
+            FlightLeaderGuard {
+                flights: &self.flights,
+                key: key.clone(),
+                flight,
+            }
+        };
+
         let Some(_slot) = self.try_acquire_in_flight() else {
             debug!("dns in-flight limit reached");
+            leader_guard.flight.finish(FlightOutcome::ServFail);
             return Ok(wire::error_response(query, wire::RCODE_SERVFAIL));
         };
 
-        let response = {
-            let _guard = ExchangeGuard::enter()?;
-            self.doh.exchange(query)?
+        let response = match ExchangeGuard::enter().and_then(|_guard| self.doh.exchange(query)) {
+            Ok(response) => response,
+            Err(error) => {
+                leader_guard
+                    .flight
+                    .finish(FlightOutcome::from_error(&error));
+                return Err(error);
+            }
         };
 
-        let answer = wire::parse_response(&response, &parsed.question.name)
-            .map_err(|_| DnsError::BadResponse)?;
+        let Ok(answer) = wire::parse_response(&response, &parsed.question.name) else {
+            leader_guard.flight.finish(FlightOutcome::BadResponse);
+            return Err(DnsError::BadResponse);
+        };
         let finish = (self.clock)();
 
         self.record_reverse(&parsed.question.name, &answer, finish);
         self.store_cache(key, &response, &answer, finish);
+        leader_guard
+            .flight
+            .finish(FlightOutcome::Wire(response.clone()));
 
         Ok(response)
     }

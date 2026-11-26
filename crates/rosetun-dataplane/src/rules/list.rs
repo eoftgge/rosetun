@@ -91,12 +91,14 @@ impl DefaultListRule {
             || !self.cidrs.is_empty()
     }
 
-    pub(crate) fn has_any_condition(&self) -> bool {
-        self.has_address()
-            || self.process_names.is_some()
+    pub(crate) fn has_process(&self) -> bool {
+        self.process_names.is_some()
             || self.process_paths.is_some()
             || self.process_path_regexes.is_some()
-            || self.has_unmatchable
+    }
+
+    pub(crate) fn has_any_condition(&self) -> bool {
+        self.has_address() || self.has_process() || self.has_unmatchable
     }
 
     /// Evaluates the rule using 3-valued logic: `None` means the rule contains
@@ -110,13 +112,14 @@ impl DefaultListRule {
             return Some(false);
         }
 
-        // Check process conditions before touching DNS resolution so a process
-        // mismatch never triggers a lookup.
-        if !self.matches_process(ctx.process) {
+        // Check process conditions lazily and before touching DNS resolution so
+        // non-process rules never query the OS process table and a process
+        // mismatch never triggers a DNS lookup.
+        if self.has_process() && !self.matches_process(ctx.process()) {
             return Some(self.invert);
         }
 
-        let address_matched = if !self.has_address() || self.matches_domain(ctx.domain) {
+        let address_matched = if !self.has_address() || self.matches_domain(ctx.domain()) {
             true
         } else if !self.cidrs.is_empty() {
             ctx.resolve_ips()

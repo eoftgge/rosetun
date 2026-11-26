@@ -179,21 +179,16 @@ impl UdpPath {
         Ok(())
     }
 
-    #[cfg(any(windows, target_os = "linux"))]
-    pub(crate) fn recv_socket(&self) -> Option<&UdpSocket> {
+    pub(crate) fn recv_sockets(&self) -> (Option<&UdpSocket>, Option<&UdpSocket>) {
         match self.relay {
             Some(relay) => {
                 if relay.is_ipv4() {
-                    self.v4.as_ref()
+                    (self.v4.as_ref(), None)
                 } else {
-                    self.v6.as_ref()
+                    (None, self.v6.as_ref())
                 }
             }
-            None => match self.preferred.load(Ordering::Acquire) {
-                6 => self.v6.as_ref().or(self.v4.as_ref()),
-                4 => self.v4.as_ref().or(self.v6.as_ref()),
-                _ => self.v4.as_ref().or(self.v6.as_ref()),
-            },
+            None => (self.v4.as_ref(), self.v6.as_ref()),
         }
     }
 

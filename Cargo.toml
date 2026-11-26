@@ -59,6 +59,7 @@ windows-sys = { version = "0.61.2", features = [
 url = "2.5.8"
 base64 = "0.23.1"
 percent-encoding = "2.3.2"
+polling = "3.11.0"
 eframe = { version = "0.37", default-features = false, features = ["glow", "default_fonts", "accesskit", "clipboard", "links", "x11", "wayland"] }
 epaint = { version = "0.37", default-features = false, features = ["color_fonts"] }
 wgpu = { version = "30", default-features = false }

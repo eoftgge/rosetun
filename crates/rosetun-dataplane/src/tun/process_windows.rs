@@ -24,15 +24,19 @@ const MAX_TABLE_BYTES: u32 = 4 * 1024 * 1024;
 const CACHE_SIZE: usize = 512;
 const IMAGE_TTL: Duration = Duration::from_secs(1);
 const UDP_OWNER_TTL: Duration = Duration::from_millis(250);
+const TCP_TABLE_TTL: Duration = Duration::from_millis(50);
 
 type OwnerTable = unsafe extern "system" fn(*mut c_void, *mut u32, i32, u32, i32, u32) -> u32;
 type Images = HashMap<u32, (Instant, Option<String>)>;
 type UdpOwners = HashMap<SocketAddr, (Instant, Option<u32>)>;
+type TcpSnapshot = Option<(Instant, HashMap<TcpFlow, Option<u32>>)>;
 
 #[derive(Default)]
 pub struct WindowsProcessLookup {
     images: Mutex<Images>,
     udp_owners: Mutex<UdpOwners>,
+    tcp_v4: Mutex<TcpSnapshot>,
+    tcp_v6: Mutex<TcpSnapshot>,
 }
 
 impl fmt::Debug for WindowsProcessLookup {
@@ -46,7 +50,7 @@ impl ProcessLookup for WindowsProcessLookup {
     fn image(&self, flow: &TcpFlow, network: ConnectionNetwork) -> Option<String> {
         let now = Instant::now();
         let pid = match network {
-            ConnectionNetwork::Tcp => owner(flow, network)?,
+            ConnectionNetwork::Tcp => self.tcp_owner_cached(flow, now)?,
             ConnectionNetwork::Udp => self.udp_owner_cached(flow, now)?,
         };
         if let Some((at, path)) = self.images.lock().ok()?.get(&pid)
@@ -65,13 +69,36 @@ impl ProcessLookup for WindowsProcessLookup {
 }
 
 impl WindowsProcessLookup {
+    fn tcp_owner_cached(&self, flow: &TcpFlow, now: Instant) -> Option<u32> {
+        let slot = if flow.source.is_ipv4() {
+            &self.tcp_v4
+        } else {
+            &self.tcp_v6
+        };
+        if let Ok(guard) = slot.lock()
+            && let Some((captured_at, map)) = guard.as_ref()
+            && now.saturating_duration_since(*captured_at) < TCP_TABLE_TTL
+            && let Some(&pid) = map.get(flow)
+        {
+            return pid;
+        }
+        // Refresh the snapshot on expiry or on miss so a newly created socket
+        // is never missed while subsequent sockets in the same burst hit O(1).
+        let fresh = build_tcp_snapshot(flow.source.is_ipv4())?;
+        let pid = fresh.get(flow).copied().flatten();
+        if let Ok(mut guard) = slot.lock() {
+            *guard = Some((now, fresh));
+        }
+        pid
+    }
+
     fn udp_owner_cached(&self, flow: &TcpFlow, now: Instant) -> Option<u32> {
         if let Some((at, pid)) = self.udp_owners.lock().ok()?.get(&flow.source)
             && now.saturating_duration_since(*at) < UDP_OWNER_TTL
         {
             return *pid;
         }
-        let pid = owner(flow, ConnectionNetwork::Udp);
+        let pid = owner_udp(flow.source);
         if let Ok(mut cache) = self.udp_owners.lock() {
             cache.retain(|_, (at, _)| now.saturating_duration_since(*at) < UDP_OWNER_TTL);
             if cache.len() < CACHE_SIZE {
@@ -82,51 +109,60 @@ impl WindowsProcessLookup {
     }
 }
 
-fn owner(flow: &TcpFlow, network: ConnectionNetwork) -> Option<u32> {
-    let family = if flow.source.is_ipv4() {
-        AF_INET
-    } else {
-        AF_INET6
+fn build_tcp_snapshot(ipv4: bool) -> Option<HashMap<TcpFlow, Option<u32>>> {
+    let family = u32::from(if ipv4 { AF_INET } else { AF_INET6 });
+    let table = read_table(GetExtendedTcpTable, family, TCP_TABLE_OWNER_PID_ALL)?;
+    let mut map: HashMap<TcpFlow, Option<u32>> = HashMap::new();
+    let mut record = |flow: TcpFlow, pid: u32| {
+        map.entry(flow)
+            .and_modify(|existing| {
+                if *existing != Some(pid) {
+                    *existing = None;
+                }
+            })
+            .or_insert_with(|| (pid != 0).then_some(pid));
     };
-    match network {
-        ConnectionNetwork::Tcp => {
-            let table = read_table(
-                GetExtendedTcpTable,
-                u32::from(family),
-                TCP_TABLE_OWNER_PID_ALL,
-            )?;
-            if flow.source.is_ipv4() {
-                unique(table_rows::<6>(&table)?.iter().filter_map(|row| {
-                    (endpoint(v4(row[1]), row[2]) == flow.source
-                        && endpoint(v4(row[3]), row[4]) == flow.destination)
-                        .then_some(row[5])
-                }))
-            } else {
-                unique(table_rows::<14>(&table)?.iter().filter_map(|row| {
-                    (endpoint(v6(&row[..4]), row[5]) == flow.source
-                        && endpoint(v6(&row[6..10]), row[11]) == flow.destination)
-                        .then_some(row[13])
-                }))
-            }
+    if ipv4 {
+        for row in table_rows::<6>(&table)? {
+            record(
+                TcpFlow {
+                    source: endpoint(v4(row[1]), row[2]),
+                    destination: endpoint(v4(row[3]), row[4]),
+                },
+                row[5],
+            );
         }
-        ConnectionNetwork::Udp => {
-            let table = read_table(GetExtendedUdpTable, u32::from(family), UDP_TABLE_OWNER_PID)?;
-            if flow.source.is_ipv4() {
-                udp_owner(
-                    flow.source,
-                    table_rows::<3>(&table)?
-                        .iter()
-                        .map(|row| (endpoint(v4(row[0]), row[1]), row[2])),
-                )
-            } else {
-                udp_owner(
-                    flow.source,
-                    table_rows::<7>(&table)?
-                        .iter()
-                        .map(|row| (endpoint(v6(&row[..4]), row[5]), row[6])),
-                )
-            }
+    } else {
+        for row in table_rows::<14>(&table)? {
+            record(
+                TcpFlow {
+                    source: endpoint(v6(&row[..4]), row[5]),
+                    destination: endpoint(v6(&row[6..10]), row[11]),
+                },
+                row[13],
+            );
         }
+    }
+    Some(map)
+}
+
+fn owner_udp(source: SocketAddr) -> Option<u32> {
+    let family = if source.is_ipv4() { AF_INET } else { AF_INET6 };
+    let table = read_table(GetExtendedUdpTable, u32::from(family), UDP_TABLE_OWNER_PID)?;
+    if source.is_ipv4() {
+        udp_owner(
+            source,
+            table_rows::<3>(&table)?
+                .iter()
+                .map(|row| (endpoint(v4(row[0]), row[1]), row[2])),
+        )
+    } else {
+        udp_owner(
+            source,
+            table_rows::<7>(&table)?
+                .iter()
+                .map(|row| (endpoint(v6(&row[..4]), row[5]), row[6])),
+        )
     }
 }
 
@@ -268,14 +304,11 @@ mod tests {
             source: connection.local_addr().unwrap(),
             destination: connection.peer_addr().unwrap(),
         };
+        let lookup = WindowsProcessLookup::default();
         assert_eq!(
-            owner(&flow, ConnectionNetwork::Tcp),
+            lookup.tcp_owner_cached(&flow, Instant::now()),
             Some(std::process::id())
         );
-        assert!(
-            WindowsProcessLookup::default()
-                .image(&flow, ConnectionNetwork::Tcp)
-                .is_some()
-        );
+        assert!(lookup.image(&flow, ConnectionNetwork::Tcp).is_some());
     }
 }

@@ -129,6 +129,14 @@ impl<'a> Packet<'a> {
         self.transport == Transport::Tcp && self.bytes[self.offset + 13] & 0x17 == 0x02
     }
 
+    pub fn tcp_is_rst(&self) -> bool {
+        self.transport == Transport::Tcp && self.bytes[self.offset + 13] & 0x04 != 0
+    }
+
+    pub fn tcp_is_fin(&self) -> bool {
+        self.transport == Transport::Tcp && self.bytes[self.offset + 13] & 0x01 != 0
+    }
+
     /// Changes addresses and ports while preserving TCP sequence numbers, options and flags.
     pub fn rewrite(
         &self,

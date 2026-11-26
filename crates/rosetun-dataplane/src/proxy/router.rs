@@ -7,10 +7,7 @@ use std::sync::{Arc, PoisonError, RwLock};
 
 use rosetun_config::ConnectionNetwork;
 
-#[cfg(not(windows))]
 use super::relay::relay;
-#[cfg(windows)]
-use super::relay::relay_ready as relay;
 use super::{NameLookup, Outbounds, Policy, Query, RouterConfig, Sniffing, Verdict};
 use crate::conntable::{ConnectionMeta, ConnectionTable};
 use crate::net::{Host, Target};
@@ -268,7 +265,7 @@ impl Router {
         let mut head = Vec::with_capacity(preface.len() + buffered.len());
         head.extend_from_slice(preface);
         head.extend_from_slice(&buffered);
-        relay(&client, &upstream, &registration, &head);
+        relay(client, upstream, registration, head);
         Ok(())
     }
 

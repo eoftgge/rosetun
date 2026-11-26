@@ -113,6 +113,20 @@ pub(super) fn wrap_tls_records_split(payload: &[u8], split_at: usize) -> Vec<u8>
     out
 }
 
+pub(crate) fn quic_v1_initial_datagram(sni: &str) -> Vec<u8> {
+    let ch = build_client_hello_message(Some(sni.as_bytes()));
+    let crypto = encode_crypto_frame(0, &ch);
+    encode_quic_initial(
+        QuicVersion::V1,
+        &[1, 2, 3, 4, 5, 6, 7, 8],
+        &[9, 10, 11, 12],
+        0,
+        2,
+        &crypto,
+        1200,
+    )
+}
+
 pub(super) fn encode_crypto_frame(offset: usize, data: &[u8]) -> Vec<u8> {
     let mut out = Vec::new();
     out.push(0x06);

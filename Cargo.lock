@@ -3055,6 +3055,7 @@ dependencies = [
  "flate2",
  "getrandom 0.4.3",
  "libc",
+ "polling",
  "regex-automata",
  "ring",
  "rosetun-config",

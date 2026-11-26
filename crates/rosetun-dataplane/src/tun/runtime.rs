@@ -3,14 +3,14 @@ use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream};
-#[cfg(any(windows, target_os = "linux"))]
-use std::net::{Ipv4Addr, UdpSocket};
+use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender};
 use std::sync::{Arc, Condvar, Mutex, PoisonError, RwLock};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use polling::{Events, Poller};
 use rosetun_config::ConnectionNetwork;
 use rosetun_engine::{EngineRoute, TrafficProbe};
 
@@ -22,10 +22,8 @@ use super::{
 use crate::conntable::{ConnectionMeta, ConnectionTable, Registration};
 use crate::dns::DnsService;
 use crate::net::{Dialer, Host, Target, UdpPath};
-#[cfg(not(windows))]
-use crate::proxy::relay::relay as native_relay;
-#[cfg(windows)]
-use crate::proxy::relay::relay_ready as native_relay;
+use crate::poller::PolledUdpPath;
+use crate::proxy::relay::{relay as native_relay, with_handoff_guard};
 use crate::proxy::{Outbounds, Verdict, server::Clients};
 use crate::rules::{Flow, Route, RuleEngine};
 #[cfg(not(windows))]
@@ -37,17 +35,14 @@ use crate::sniff::{SniffLimits, sniff_quic_datagram};
 const PUMP_INTERVAL: Duration = Duration::from_millis(5);
 const FLOW_TIMEOUT: Duration = Duration::from_secs(5);
 const UDP_IDLE: Duration = Duration::from_secs(60);
-#[cfg(not(any(windows, target_os = "linux")))]
-const UDP_READ_TIMEOUT: Duration = Duration::from_millis(50);
-#[cfg(any(windows, target_os = "linux"))]
 const UDP_REACTOR_TIMEOUT: Duration = Duration::from_millis(250);
 const UDP_SWEEP_INTERVAL: Duration = Duration::from_millis(100);
 const UDP_MAPPINGS: usize = 512;
 const UDP_PEERS: usize = 32;
 const UDP_QUEUE: usize = 512;
-#[cfg(any(windows, target_os = "linux"))]
 const UDP_RECV_BUDGET: usize = 32;
 const UDP_FLOW_CACHE_LIMIT: usize = 4096;
+const UDP_RECLASSIFY_PACKETS: u8 = 8;
 const UDP_BUFFER_POOL: usize = 64;
 const UDP_POOL_MAX_CAPACITY: usize = 2048;
 const WORKER_STACK_BYTES: usize = 256 * 1024;
@@ -153,13 +148,55 @@ impl TunnelPolicy {
         };
         let ip = flow.destination.ip();
         let domain = domain.or_else(|| self.dns.domain_for(ip));
-        let process = self.process.image(flow, network);
+        let (decision, resolved_process) =
+            rules.decide_lazy(domain.as_deref(), Some(ip), self.dns.as_ref(), &mut || {
+                self.process.image(flow, network)
+            });
+        let verdict = match decision.route {
+            Route::Direct => Verdict::Direct,
+            Route::Proxy => Verdict::Proxy,
+            Route::Exit(exit) => Verdict::Exit(exit),
+            Route::Block => return None,
+        };
+        let (dialer, route) = outbounds.select(&verdict)?;
+        let process = resolved_process.unwrap_or_else(|| self.process.image(flow, network));
+        let domain_known = domain.is_some();
+        Some(Selected {
+            generation,
+            dialer,
+            domain_known,
+            meta: ConnectionMeta {
+                process,
+                host: domain.unwrap_or_else(|| ip.to_string()),
+                ip: Some(ip),
+                port: flow.destination.port(),
+                network,
+                route,
+            },
+        })
+    }
+
+    fn reclassify_udp(
+        &self,
+        flow: &TcpFlow,
+        domain: String,
+        known_process: Option<String>,
+    ) -> Option<Selected> {
+        let (rules, outbounds, generation) = {
+            let policy = self.policy.read().unwrap_or_else(PoisonError::into_inner);
+            (
+                Arc::clone(&policy.rules),
+                Arc::clone(&policy.outbounds),
+                policy.generation,
+            )
+        };
+        let ip = flow.destination.ip();
         let verdict = match rules
             .decide(
                 &Flow {
-                    domain: domain.as_deref(),
+                    domain: Some(&domain),
                     ip: Some(ip),
-                    process: process.as_deref(),
+                    process: known_process.as_deref(),
                 },
                 self.dns.as_ref(),
             )
@@ -174,12 +211,13 @@ impl TunnelPolicy {
         Some(Selected {
             generation,
             dialer,
+            domain_known: true,
             meta: ConnectionMeta {
-                process,
-                host: domain.unwrap_or_else(|| ip.to_string()),
+                process: known_process,
+                host: domain,
                 ip: Some(ip),
                 port: flow.destination.port(),
-                network,
+                network: ConnectionNetwork::Udp,
                 route,
             },
         })
@@ -189,6 +227,7 @@ impl TunnelPolicy {
 struct Selected {
     generation: u64,
     dialer: Arc<dyn Dialer>,
+    domain_known: bool,
     meta: ConnectionMeta,
 }
 
@@ -199,28 +238,22 @@ struct UdpEgress {
 }
 
 struct UdpMapping {
-    #[cfg(any(windows, target_os = "linux"))]
     id: u64,
     path: Arc<UdpPath>,
     peers: Arc<Mutex<HashMap<SocketAddr, Registration>>>,
     received: Arc<AtomicBool>,
     closed: Arc<AtomicBool>,
-    #[cfg(any(windows, target_os = "linux"))]
     reactor: UdpReactorHandle,
-    #[cfg(not(any(windows, target_os = "linux")))]
-    reader: Option<JoinHandle<()>>,
 }
 
 impl Drop for UdpMapping {
     fn drop(&mut self) {
         self.closed.store(true, Ordering::Release);
-        #[cfg(any(windows, target_os = "linux"))]
         self.reactor.remove(self.id);
     }
 }
 
 struct UdpSlot {
-    #[cfg(any(windows, target_os = "linux"))]
     id: u64,
     key: MappingKey<UdpEgress>,
     path: Arc<UdpPath>,
@@ -229,29 +262,25 @@ struct UdpSlot {
     closed: Arc<AtomicBool>,
 }
 
-#[cfg(any(windows, target_os = "linux"))]
 enum ReactorCommand {
     Add(UdpSlot),
     Remove(u64),
     Shutdown,
 }
 
-#[cfg(any(windows, target_os = "linux"))]
 #[derive(Clone)]
 struct UdpReactorHandle {
     commands: Arc<Mutex<VecDeque<ReactorCommand>>>,
-    waker_tx: Arc<UdpSocket>,
-    waker_addr: SocketAddr,
+    poller: Arc<Poller>,
 }
 
-#[cfg(any(windows, target_os = "linux"))]
 impl UdpReactorHandle {
     fn push(&self, command: ReactorCommand) {
         self.commands
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .push_back(command);
-        let _ = self.waker_tx.send_to(&[1], self.waker_addr);
+        let _ = self.poller.notify();
     }
 
     fn add(&self, slot: UdpSlot) {
@@ -267,13 +296,11 @@ impl UdpReactorHandle {
     }
 }
 
-#[cfg(any(windows, target_os = "linux"))]
 struct UdpReactor {
     handle: UdpReactorHandle,
     thread: Option<JoinHandle<()>>,
 }
 
-#[cfg(any(windows, target_os = "linux"))]
 impl UdpReactor {
     fn start(
         device: Arc<dyn PacketDevice>,
@@ -282,22 +309,17 @@ impl UdpReactor {
         stopped: Arc<AtomicBool>,
         mtu: usize,
     ) -> io::Result<Self> {
-        let waker_rx = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))?;
-        waker_rx.set_nonblocking(true)?;
-        let waker_addr = waker_rx.local_addr()?;
-        let waker_tx = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))?;
-        waker_tx.set_nonblocking(true)?;
+        let poller = Arc::new(Poller::new()?);
         let commands = Arc::new(Mutex::new(VecDeque::new()));
         let handle = UdpReactorHandle {
             commands: Arc::clone(&commands),
-            waker_tx: Arc::new(waker_tx),
-            waker_addr,
+            poller: Arc::clone(&poller),
         };
         let thread = thread::Builder::new()
             .name("rosetun-tun-udp-in".into())
             .stack_size(WORKER_STACK_BYTES)
             .spawn(move || {
-                run_udp_reactor(waker_rx, commands, device, policy, table, stopped, mtu);
+                run_udp_reactor(poller, commands, device, policy, table, stopped, mtu);
             })?;
         Ok(Self {
             handle,
@@ -352,10 +374,16 @@ impl BufferPool {
 struct CachedUdpFlow {
     generation: u64,
     path: Arc<UdpPath>,
+    peers: Arc<Mutex<HashMap<SocketAddr, Registration>>>,
     counters: crate::conntable::Counters,
     closed: Arc<AtomicBool>,
     mapping_key: MappingKey<UdpEgress>,
     last_touch: Instant,
+    domain_known: bool,
+    reclassify_budget: u8,
+    route: EngineRoute,
+    process: Option<String>,
+    conn_id: String,
 }
 
 struct DnsQueue {
@@ -423,22 +451,16 @@ struct Pump {
 }
 
 struct UdpPump {
-    #[cfg(not(any(windows, target_os = "linux")))]
-    device: Arc<dyn PacketDevice>,
     policy: Arc<TunnelPolicy>,
     table: ConnectionTable,
     udp: FullConeNat<UdpEgress, UdpMapping>,
     flow_cache: HashMap<TcpFlow, CachedUdpFlow>,
     pool: Arc<BufferPool>,
     stopped: Arc<AtomicBool>,
-    #[cfg(any(windows, target_os = "linux"))]
     reactor: UdpReactor,
-    #[cfg(any(windows, target_os = "linux"))]
     next_mapping_id: u64,
     last_generation: u64,
     last_sweep: Instant,
-    #[cfg(not(any(windows, target_os = "linux")))]
-    mtu: usize,
 }
 
 impl UdpPump {
@@ -452,31 +474,24 @@ impl UdpPump {
         mtu: usize,
     ) -> io::Result<Self> {
         let generation = policy.generation();
-        #[cfg(any(windows, target_os = "linux"))]
         let reactor = UdpReactor::start(
-            Arc::clone(&device),
+            device,
             Arc::clone(&policy),
             table.clone(),
             Arc::clone(&stopped),
             mtu,
         )?;
         Ok(Self {
-            #[cfg(not(any(windows, target_os = "linux")))]
-            device,
             policy,
             table,
             udp: FullConeNat::new(capacity, UDP_IDLE),
             flow_cache: HashMap::new(),
             pool,
             stopped,
-            #[cfg(any(windows, target_os = "linux"))]
             reactor,
-            #[cfg(any(windows, target_os = "linux"))]
             next_mapping_id: 1,
             last_generation: generation,
             last_sweep: Instant::now(),
-            #[cfg(not(any(windows, target_os = "linux")))]
-            mtu,
         })
     }
 }
@@ -768,11 +783,27 @@ impl Pump {
                     .name("rosetun-tun-tcp".into())
                     .stack_size(WORKER_STACK_BYTES)
                     .spawn(move || {
-                        let _client = client;
-                        if let Err(error) = tunnel_tcp(stream, flow, &policy, &table, &stopped) {
-                            tracing::debug!(kind = ?error.kind(), "native TCP worker ended with an error");
+                        struct PeerCloseGuard {
+                            _client: crate::proxy::server::Client,
+                            closed: mpsc::Sender<SocketAddr>,
+                            peer: SocketAddr,
                         }
-                        let _ = closed.send(peer);
+                        impl Drop for PeerCloseGuard {
+                            fn drop(&mut self) {
+                                let _ = self.closed.send(self.peer);
+                            }
+                        }
+                        let guard = PeerCloseGuard {
+                            _client: client,
+                            closed,
+                            peer,
+                        };
+                        with_handoff_guard(guard, || {
+                            if let Err(error) = tunnel_tcp(stream, flow, &policy, &table, &stopped)
+                            {
+                                tracing::debug!(kind = ?error.kind(), "native TCP worker ended with an error");
+                            }
+                        });
                     })
                     .is_err()
                 {
@@ -800,11 +831,13 @@ impl Pump {
                 destination: parsed.destination(),
             };
             let starts_connection = parsed.tcp_starts_connection();
+            let is_rst = parsed.tcp_is_rst();
             if let Ok(true) = self.tcp.redirect_in_place(
                 &mut frame[..length],
                 offset,
                 flow,
                 starts_connection,
+                is_rst,
                 now,
             ) {
                 if self.device.send(&frame[..length]).is_ok() {
@@ -910,26 +943,10 @@ impl UdpPump {
 
     fn shutdown_readers(&mut self) {
         self.flow_cache.clear();
-        #[cfg(any(windows, target_os = "linux"))]
-        {
-            for mapping in self.udp.drain() {
-                drop(mapping);
-            }
-            self.reactor.shutdown();
+        for mapping in self.udp.drain() {
+            drop(mapping);
         }
-        #[cfg(not(any(windows, target_os = "linux")))]
-        {
-            let mut handles = Vec::new();
-            for mut mapping in self.udp.drain() {
-                mapping.closed.store(true, Ordering::Release);
-                if let Some(handle) = mapping.reader.take() {
-                    handles.push(handle);
-                }
-            }
-            for handle in handles {
-                let _ = handle.join();
-            }
-        }
+        self.reactor.shutdown();
     }
 
     fn send(&mut self, datagram: &Datagram, now: Instant) {
@@ -937,6 +954,7 @@ impl UdpPump {
         let payload = &datagram.payload;
         let remote = target(flow.destination);
         let generation = self.policy.generation();
+        let mut preselected: Option<Selected> = None;
         if let Some(cached) = self.flow_cache.get_mut(&flow) {
             let valid = cached.generation == generation
                 && !cached.closed.load(Ordering::Acquire)
@@ -946,16 +964,64 @@ impl UdpPump {
                     self.udp.touch(&cached.mapping_key, now)
                 });
             if valid {
-                if cached.path.send_to(payload, &remote).is_ok() {
-                    cached.counters.add_up(payload.len() as u64);
+                let mut switch_route = false;
+                if !cached.domain_known && cached.reclassify_budget > 0 {
+                    cached.reclassify_budget -= 1;
+                    let discovered = sniff_quic_datagram(payload)
+                        .and_then(|s| s.domain)
+                        .or_else(|| self.policy.dns.domain_for(flow.destination.ip()));
+                    if let Some(domain) = discovered {
+                        match self
+                            .policy
+                            .reclassify_udp(&flow, domain, cached.process.clone())
+                        {
+                            None => {
+                                let conn_id = cached.conn_id.clone();
+                                let peers = Arc::clone(&cached.peers);
+                                self.flow_cache.remove(&flow);
+                                self.table.close_connection(&conn_id);
+                                peers
+                                    .lock()
+                                    .unwrap_or_else(PoisonError::into_inner)
+                                    .remove(&flow.destination);
+                                return;
+                            }
+                            Some(selected) if selected.meta.route == cached.route => {
+                                cached.domain_known = true;
+                                cached.reclassify_budget = 0;
+                                self.table.set_host(&cached.conn_id, selected.meta.host);
+                            }
+                            Some(selected) => {
+                                cached
+                                    .peers
+                                    .lock()
+                                    .unwrap_or_else(PoisonError::into_inner)
+                                    .remove(&flow.destination);
+                                preselected = Some(selected);
+                                switch_route = true;
+                            }
+                        }
+                    }
                 }
-                return;
+                if !switch_route {
+                    if cached.path.send_to(payload, &remote).is_ok() {
+                        cached.counters.add_up(payload.len() as u64);
+                    }
+                    return;
+                }
             }
             self.flow_cache.remove(&flow);
         }
-        let domain = sniff_quic_datagram(payload).and_then(|sniffed| sniffed.domain);
-        let Some(selected) = self.policy.select(&flow, ConnectionNetwork::Udp, domain) else {
-            return;
+        let selected = match preselected {
+            Some(selected) => selected,
+            None => {
+                let domain = sniff_quic_datagram(payload).and_then(|sniffed| sniffed.domain);
+                let Some(selected) = self.policy.select(&flow, ConnectionNetwork::Udp, domain)
+                else {
+                    return;
+                };
+                selected
+            }
         };
         let key = MappingKey {
             source: flow.source,
@@ -966,82 +1032,40 @@ impl UdpPump {
         };
         let cache_key = key.clone();
         let reader_key = key.clone();
-        #[cfg(any(windows, target_os = "linux"))]
         let (reactor_handle, next_id) = {
             let id = self.next_mapping_id;
             self.next_mapping_id = self.next_mapping_id.wrapping_add(1);
             (self.reactor.handle.clone(), id)
         };
-        #[cfg(not(any(windows, target_os = "linux")))]
-        let (device, policy, table, stopped, mtu) = (
-            Arc::clone(&self.device),
-            Arc::clone(&self.policy),
-            self.table.clone(),
-            Arc::clone(&self.stopped),
-            self.mtu,
-        );
         let Ok(mapping) = self.udp.path(key, now, || -> io::Result<UdpMapping> {
             let path = selected.dialer.udp_for(&remote, FLOW_TIMEOUT)?;
-            #[cfg(any(windows, target_os = "linux"))]
-            {
-                path.set_nonblocking(true)?;
-                let path = Arc::new(path);
-                let peers = Arc::new(Mutex::new(HashMap::new()));
-                let received = Arc::new(AtomicBool::new(false));
-                let closed = Arc::new(AtomicBool::new(false));
-                reactor_handle.add(UdpSlot {
-                    id: next_id,
-                    key: reader_key,
-                    path: Arc::clone(&path),
-                    peers: Arc::clone(&peers),
-                    received: Arc::clone(&received),
-                    closed: Arc::clone(&closed),
-                });
-                Ok(UdpMapping {
-                    id: next_id,
-                    path,
-                    peers,
-                    received,
-                    closed,
-                    reactor: reactor_handle,
-                })
-            }
-            #[cfg(not(any(windows, target_os = "linux")))]
-            {
-                path.set_nonblocking(false)?;
-                path.set_read_timeout(Some(UDP_READ_TIMEOUT))?;
-                let path = Arc::new(path);
-                let peers = Arc::new(Mutex::new(HashMap::new()));
-                let received = Arc::new(AtomicBool::new(false));
-                let closed = Arc::new(AtomicBool::new(false));
-                let slot = UdpSlot {
-                    key: reader_key,
-                    path: Arc::clone(&path),
-                    peers: Arc::clone(&peers),
-                    received: Arc::clone(&received),
-                    closed: Arc::clone(&closed),
-                };
-                let delivery = UdpDelivery {
-                    device,
-                    policy,
-                    table,
-                    mtu,
-                };
-                let reader = thread::Builder::new()
-                    .name("rosetun-tun-udp-in".into())
-                    .stack_size(WORKER_STACK_BYTES)
-                    .spawn(move || run_udp_reader(slot, delivery, stopped))?;
-                Ok(UdpMapping {
-                    path,
-                    peers,
-                    received,
-                    closed,
-                    reader: Some(reader),
-                })
-            }
+            path.set_nonblocking(true)?;
+            let path = Arc::new(path);
+            let peers = Arc::new(Mutex::new(HashMap::new()));
+            let received = Arc::new(AtomicBool::new(false));
+            let closed = Arc::new(AtomicBool::new(false));
+            reactor_handle.add(UdpSlot {
+                id: next_id,
+                key: reader_key,
+                path: Arc::clone(&path),
+                peers: Arc::clone(&peers),
+                received: Arc::clone(&received),
+                closed: Arc::clone(&closed),
+            });
+            Ok(UdpMapping {
+                id: next_id,
+                path,
+                peers,
+                received,
+                closed,
+                reactor: reactor_handle,
+            })
         }) else {
             return;
         };
+        let domain_known = selected.domain_known;
+        let route = selected.meta.route.clone();
+        let process = selected.meta.process.clone();
         let registration = {
             let mut peers = mapping.peers.lock().unwrap_or_else(PoisonError::into_inner);
             if peers
@@ -1050,12 +1074,13 @@ impl UdpPump {
             {
                 peers.remove(&flow.destination);
             }
-            udp_registration(&mut peers, flow.destination, &self.table, selected.meta)
+            udp_registration_with_id(&mut peers, flow.destination, &self.table, selected.meta)
         };
-        let Some(registration) = registration else {
+        let Some((registration, conn_id)) = registration else {
             return;
         };
         let path = Arc::clone(&mapping.path);
+        let peers = Arc::clone(&mapping.peers);
         let closed = Arc::clone(&mapping.closed);
         if path.send_to(payload, &remote).is_ok() {
             registration.add_up(payload.len() as u64);
@@ -1073,10 +1098,20 @@ impl UdpPump {
                 CachedUdpFlow {
                     generation: selected.generation,
                     path,
+                    peers,
                     counters: registration,
                     closed,
                     mapping_key: cache_key,
                     last_touch: now,
+                    domain_known,
+                    reclassify_budget: if domain_known {
+                        0
+                    } else {
+                        UDP_RECLASSIFY_PACKETS
+                    },
+                    route,
+                    process,
+                    conn_id,
                 },
             );
         }
@@ -1090,9 +1125,13 @@ struct UdpDelivery {
     mtu: usize,
 }
 
-#[cfg(any(windows, target_os = "linux"))]
+struct ActiveUdpSlot {
+    polled: PolledUdpPath,
+    slot: UdpSlot,
+}
+
 fn run_udp_reactor(
-    waker_rx: UdpSocket,
+    poller: Arc<Poller>,
     commands: Arc<Mutex<VecDeque<ReactorCommand>>>,
     device: Arc<dyn PacketDevice>,
     policy: Arc<TunnelPolicy>,
@@ -1106,50 +1145,44 @@ fn run_udp_reactor(
         table,
         mtu,
     };
-    let mut slots: Vec<UdpSlot> = Vec::new();
-    let mut ready = Vec::new();
-    let mut dead = Vec::new();
+    let mut slots: HashMap<usize, ActiveUdpSlot> = HashMap::new();
+    let mut events = Events::with_capacity(NonZeroUsize::new(128).unwrap());
+    let mut dead: Vec<usize> = Vec::new();
     let mut response = vec![0; mtu + 1];
     let mut scratch = Vec::new();
     let mut reply_packet = Vec::with_capacity(mtu);
-    let mut wake_buf = [0; 64];
 
     while !stopped.load(Ordering::Acquire) {
-        if apply_reactor_commands(&commands, &mut slots) {
+        if apply_reactor_commands(&poller, &commands, &mut slots) {
             break;
         }
-        let mut sockets: Vec<&UdpSocket> = Vec::with_capacity(slots.len() + 1);
-        sockets.push(&waker_rx);
-        for slot in &slots {
-            if let Some(socket) = slot.path.recv_socket() {
-                sockets.push(socket);
-            }
-        }
-        if crate::socket_ready::poll_udp_readable(&sockets, UDP_REACTOR_TIMEOUT, &mut ready)
-            .is_err()
-        {
+        let timeout = (!slots.is_empty()).then_some(UDP_REACTOR_TIMEOUT);
+        events.clear();
+        if poller.wait(&mut events, timeout).is_err() {
             thread::sleep(Duration::from_millis(1));
             continue;
         }
         dead.clear();
-        for &index in &ready {
-            if index == 0 {
-                while waker_rx.recv(&mut wake_buf).is_ok() {}
-                continue;
-            }
-            let slot_index = index - 1;
-            let Some(slot) = slots.get(slot_index) else {
+        for ev in events.iter() {
+            let slot_id = ev.key / 2;
+            let is_v6 = ev.key % 2 == 1;
+            let Some(active) = slots.get(&slot_id) else {
                 continue;
             };
-            if slot.closed.load(Ordering::Acquire) {
-                dead.push(slot_index);
+            if active.slot.closed.load(Ordering::Acquire) {
+                dead.push(slot_id);
                 continue;
             }
+            let mut failed = false;
             for _ in 0..UDP_RECV_BUDGET {
-                match slot.path.recv_from_into(&mut response, &mut scratch) {
+                match active
+                    .polled
+                    .path()
+                    .recv_from_into(&mut response, &mut scratch)
+                {
                     Ok((length, Some(remote))) => {
                         deliver_udp_datagram(
-                            slot,
+                            &active.slot,
                             remote,
                             &response[..length],
                             &delivery,
@@ -1174,74 +1207,57 @@ fn run_udp_reactor(
                         continue;
                     }
                     Err(_) => {
-                        dead.push(slot_index);
+                        failed = true;
                         break;
                     }
                 }
             }
-        }
-        for slot_index in dead.drain(..).rev() {
-            if slot_index < slots.len() {
-                slots.swap_remove(slot_index);
+            if failed || active.polled.rearm(is_v6).is_err() {
+                dead.push(slot_id);
             }
+        }
+        for slot_id in dead.drain(..) {
+            slots.remove(&slot_id);
         }
     }
 }
 
-#[cfg(any(windows, target_os = "linux"))]
 fn apply_reactor_commands(
+    poller: &Arc<Poller>,
     commands: &Mutex<VecDeque<ReactorCommand>>,
-    slots: &mut Vec<UdpSlot>,
+    slots: &mut HashMap<usize, ActiveUdpSlot>,
 ) -> bool {
     let mut queue = commands.lock().unwrap_or_else(PoisonError::into_inner);
     while let Some(command) = queue.pop_front() {
         match command {
             ReactorCommand::Add(slot) => {
-                if slot.path.recv_socket().is_some() && !slot.closed.load(Ordering::Acquire) {
-                    slots.push(slot);
+                if slot.closed.load(Ordering::Acquire) {
+                    continue;
+                }
+                let Ok(slot_id) = usize::try_from(slot.id) else {
+                    continue;
+                };
+                let Some(key_v4) = slot_id.checked_mul(2) else {
+                    continue;
+                };
+                let Some(key_v6) = key_v4.checked_add(1) else {
+                    continue;
+                };
+                if let Ok(Some(polled)) =
+                    PolledUdpPath::new(Arc::clone(poller), Arc::clone(&slot.path), key_v4, key_v6)
+                {
+                    slots.insert(slot_id, ActiveUdpSlot { polled, slot });
                 }
             }
             ReactorCommand::Remove(id) => {
-                if let Some(position) = slots.iter().position(|slot| slot.id == id) {
-                    slots.swap_remove(position);
+                if let Ok(slot_id) = usize::try_from(id) {
+                    slots.remove(&slot_id);
                 }
             }
             ReactorCommand::Shutdown => return true,
         }
     }
     false
-}
-
-#[cfg(not(any(windows, target_os = "linux")))]
-fn run_udp_reader(slot: UdpSlot, delivery: UdpDelivery, stopped: Arc<AtomicBool>) {
-    let mut response = vec![0; delivery.mtu + 1];
-    let mut scratch = Vec::new();
-    let mut reply_packet = Vec::with_capacity(delivery.mtu);
-    while !stopped.load(Ordering::Acquire) && !slot.closed.load(Ordering::Acquire) {
-        let (length, remote) = match slot.path.recv_from_into(&mut response, &mut scratch) {
-            Ok((length, Some(remote))) => (length, remote),
-            Ok((_, None)) => continue,
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    io::ErrorKind::WouldBlock
-                        | io::ErrorKind::TimedOut
-                        | io::ErrorKind::Interrupted
-                        | io::ErrorKind::ConnectionReset
-                ) || error.raw_os_error() == Some(10040) =>
-            {
-                continue;
-            }
-            Err(_) => break,
-        };
-        deliver_udp_datagram(
-            &slot,
-            remote,
-            &response[..length],
-            &delivery,
-            &mut reply_packet,
-        );
-    }
 }
 
 fn deliver_udp_datagram(
@@ -1311,13 +1327,22 @@ fn udp_registration(
     table: &ConnectionTable,
     meta: ConnectionMeta,
 ) -> Option<crate::conntable::Counters> {
+    udp_registration_with_id(peers, peer, table, meta).map(|(counters, _)| counters)
+}
+
+fn udp_registration_with_id(
+    peers: &mut HashMap<SocketAddr, Registration>,
+    peer: SocketAddr,
+    table: &ConnectionTable,
+    meta: ConnectionMeta,
+) -> Option<(crate::conntable::Counters, String)> {
     let at_capacity = peers.len() >= UDP_PEERS;
     let registration = match peers.entry(peer) {
         Entry::Occupied(entry) => entry.into_mut(),
         Entry::Vacant(entry) if !at_capacity => entry.insert(table.register(meta).ok()?),
         Entry::Vacant(_) => return None,
     };
-    Some(registration.counters())
+    Some((registration.counters(), registration.id().to_owned()))
 }
 
 fn tunnel_tcp(
@@ -1346,7 +1371,7 @@ fn tunnel_tcp(
     let upstream = selected
         .dialer
         .connect(&target(flow.destination), FLOW_TIMEOUT)?;
-    native_relay(&stream, &upstream, &registration, &sniffed.buffered);
+    native_relay(stream, upstream, registration, sniffed.buffered);
     Ok(())
 }
 
@@ -1719,5 +1744,94 @@ mod tests {
             worker.join().unwrap().unwrap_err().kind(),
             io::ErrorKind::UnexpectedEof
         );
+    }
+
+    #[test]
+    fn udp_flow_cache_reclassifies_when_later_datagram_carries_quic_sni() {
+        let server = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        server
+            .set_read_timeout(Some(Duration::from_millis(200)))
+            .unwrap();
+        let destination = server.local_addr().unwrap();
+        let client: SocketAddr = "192.0.2.1:50000".parse().unwrap();
+
+        // Default is Direct, but `blocked.example.com` is explicitly Blocked.
+        let mut rules = RuleSet::new(RuleSetId::new("reclass"), "Reclass", RuleTarget::Direct);
+        rules.rules.push(Rule {
+            id: RuleId::new("block-quic"),
+            enabled: true,
+            matcher: RuleMatcher::Domain(rosetun_config::DomainMatch::Exact(
+                "blocked.example.com".into(),
+            )),
+            target: RuleTarget::Block,
+            exit: None,
+        });
+        let compiled = RuleEngine::compile(&RulePlan {
+            rules,
+            temporary_count: 0,
+            allow_lan: false,
+            lan_segment: Vec::new(),
+            lan_servers: Vec::new(),
+            private_networks: false,
+            exits: Vec::new(),
+            lists: Vec::new(),
+        })
+        .unwrap();
+        let base_policy = policy(false);
+        let test_policy = Arc::new(TunnelPolicy::new(
+            compiled,
+            outbounds(),
+            Arc::clone(&base_policy.dns),
+            Arc::new(|_: &TcpFlow, _| None),
+        ));
+
+        let device: Arc<dyn PacketDevice> = Arc::new(MockTun::default());
+        let table = ConnectionTable::new();
+        let stopped = Arc::new(AtomicBool::new(false));
+        let mut udp = UdpPump::new(
+            device,
+            test_policy,
+            table.clone(),
+            UDP_MAPPINGS,
+            Arc::new(BufferPool::default()),
+            Arc::clone(&stopped),
+            1500,
+        )
+        .unwrap();
+
+        let flow = TcpFlow {
+            source: client,
+            destination,
+        };
+        let now = Instant::now();
+
+        // 1st packet has no SNI -> cached as Direct and delivered to `server`.
+        udp.send(
+            &Datagram {
+                flow,
+                payload: b"stun-probe".to_vec(),
+            },
+            now,
+        );
+        let mut buf = [0u8; 64];
+        assert_eq!(server.recv(&mut buf).unwrap(), 10);
+        assert_eq!(table.active_count(), 1);
+
+        // 2nd packet on the SAME cached flow carries QUIC Initial SNI for
+        // `blocked.example.com` -> flow cache reclassifies to Block, drops the
+        // packet, and closes the active connection!
+        let quic = crate::sniff::testing::quic_v1_initial_datagram("blocked.example.com");
+        udp.send(
+            &Datagram {
+                flow,
+                payload: quic,
+            },
+            now,
+        );
+        assert!(server.recv(&mut buf).is_err());
+        assert_eq!(table.active_count(), 0);
+
+        stopped.store(true, Ordering::Release);
+        udp.shutdown_readers();
     }
 }

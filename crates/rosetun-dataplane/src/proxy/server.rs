@@ -198,9 +198,11 @@ fn accept_loop(
         let shutdown = Arc::clone(&shutdown);
         let _ = thread::Builder::new()
             .name("dataplane-conn".to_owned())
+            .stack_size(256 * 1024)
             .spawn(move || {
-                let _client = client;
-                handle_client(router, stream, &shutdown);
+                super::relay::with_handoff_guard(client, || {
+                    handle_client(router, stream, &shutdown);
+                });
             });
     }
 }

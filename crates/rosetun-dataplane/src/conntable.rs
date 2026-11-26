@@ -212,6 +212,14 @@ impl ConnectionTable {
         }
     }
 
+    /// Updates the displayed destination host of an active connection (for
+    /// example when a UDP flow's domain is discovered after its first packet).
+    pub fn set_host(&self, id: &str, host: String) {
+        if let Some(entry) = lock(&self.inner.active).get_mut(id) {
+            entry.meta.host = host;
+        }
+    }
+
     /// Shuts down every active connection.
     pub fn close_all(&self) {
         let all: Vec<Arc<Shared>> = lock(&self.inner.active)
@@ -382,6 +390,7 @@ impl Shared {
         for socket in lock(&self.sockets).iter() {
             socket.shutdown(Shutdown::Both).ok();
         }
+        crate::proxy::relay::notify_cancellation();
     }
 }
 

@@ -5,10 +5,12 @@ use std::time::{Duration, Instant};
 
 use super::packet::{Packet, PacketError, Transport, rewrite_endpoints_in_place};
 
-const FIRST_PORT: u16 = 49152;
-const FLOW_LIMIT: usize = 4096;
+const FIRST_PORT: u16 = 1024;
+const FLOW_LIMIT: usize = 16_384;
+const HANDSHAKE_UNANSWERED: Duration = Duration::from_secs(15);
 const HANDSHAKE_IDLE: Duration = Duration::from_secs(60);
-const PORT_REUSE_DELAY: Duration = Duration::from_secs(120);
+const RST_COOLDOWN: Duration = Duration::from_secs(5);
+const PORT_REUSE_DELAY: Duration = Duration::from_secs(60);
 
 /// A listener on the local TUN address and the peer whose route leads back to TUN.
 #[derive(Clone, Copy)]
@@ -53,13 +55,14 @@ pub enum RedirectError {
 struct Mapping {
     peer: SocketAddr,
     opened: Instant,
+    saw_reply: bool,
     state: State,
 }
 
 enum State {
     Pending,
     Accepted,
-    Closed(Instant),
+    Closed { until: Instant },
 }
 
 pub trait TcpStack {
@@ -134,24 +137,30 @@ impl MixedTcp {
         self.reap_at = now.checked_add(Duration::from_secs(1));
         self.flows.retain(|_, mapping| {
             let live = match mapping.state {
-                State::Pending => now.saturating_duration_since(mapping.opened) < HANDSHAKE_IDLE,
+                State::Pending => {
+                    let limit = if mapping.saw_reply {
+                        HANDSHAKE_IDLE
+                    } else {
+                        HANDSHAKE_UNANSWERED
+                    };
+                    now.saturating_duration_since(mapping.opened) < limit
+                }
                 State::Accepted => true,
-                State::Closed(at) => now.saturating_duration_since(at) < PORT_REUSE_DELAY,
+                State::Closed { until } => now < until,
             };
             if !live {
                 self.by_peer.remove(&mapping.peer);
             }
             live
         });
-        self.cooldown
-            .retain(|_, at| now.saturating_duration_since(*at) < PORT_REUSE_DELAY);
+        self.cooldown.retain(|_, until| now < *until);
     }
 
     fn evict_closed_flows(&mut self) {
         self.flows.retain(|_, mapping| {
-            if let State::Closed(at) = mapping.state {
+            if let State::Closed { until } = mapping.state {
                 self.by_peer.remove(&mapping.peer);
-                self.cooldown.insert(mapping.peer, at);
+                self.cooldown.insert(mapping.peer, until);
                 false
             } else {
                 true
@@ -159,7 +168,7 @@ impl MixedTcp {
         });
     }
 
-    fn allocate_peer(&mut self, ip: IpAddr) -> Result<SocketAddr, RedirectError> {
+    fn allocate_peer(&mut self, ip: IpAddr, now: Instant) -> Result<SocketAddr, RedirectError> {
         if self.flows.len() >= FLOW_LIMIT {
             self.evict_closed_flows();
             if self.flows.len() >= FLOW_LIMIT {
@@ -170,9 +179,27 @@ impl MixedTcp {
             let port = self.next_port;
             self.next_port = port.checked_add(1).unwrap_or(FIRST_PORT);
             let candidate = SocketAddr::new(ip, port);
-            if !self.by_peer.contains_key(&candidate) && !self.cooldown.contains_key(&candidate) {
-                return Ok(candidate);
+            if self.by_peer.contains_key(&candidate) {
+                continue;
             }
+            if let Some(&until) = self.cooldown.get(&candidate) {
+                if now < until {
+                    continue;
+                }
+                self.cooldown.remove(&candidate);
+            }
+            return Ok(candidate);
+        }
+        // Under heavy port churn, reclaim the oldest cooled-down peer port
+        // instead of failing new connections while inactive ports sit in TIME_WAIT.
+        if let Some((&oldest_peer, _)) = self
+            .cooldown
+            .iter()
+            .filter(|(peer, _)| peer.ip() == ip && !self.by_peer.contains_key(peer))
+            .min_by_key(|(_, until)| *until)
+        {
+            self.cooldown.remove(&oldest_peer);
+            return Ok(oldest_peer);
         }
         Err(RedirectError::Capacity)
     }
@@ -181,6 +208,7 @@ impl MixedTcp {
         &mut self,
         flow: TcpFlow,
         starts_connection: bool,
+        is_rst: bool,
         now: Instant,
     ) -> Result<Option<(SocketAddr, SocketAddr)>, RedirectError> {
         self.reap(now);
@@ -192,10 +220,22 @@ impl MixedTcp {
         .ok_or(RedirectError::Family)?;
         if flow.source == redirect.listener {
             // Only this listener can send a segment on the reverse mapping.
-            return Ok(self
-                .by_peer
-                .get(&flow.destination)
-                .map(|original| (original.destination, original.source)));
+            let Some(&original) = self.by_peer.get(&flow.destination) else {
+                return Ok(None);
+            };
+            if let Some(mapping) = self.flows.get_mut(&original) {
+                mapping.saw_reply = true;
+                if is_rst {
+                    let rst_until = now + RST_COOLDOWN;
+                    mapping.state = match mapping.state {
+                        State::Closed { until } => State::Closed {
+                            until: until.min(rst_until),
+                        },
+                        State::Pending | State::Accepted => State::Closed { until: rst_until },
+                    };
+                }
+            }
+            return Ok(Some((original.destination, original.source)));
         }
         if flow.source.ip() != redirect.listener.ip()
             || flow.destination.ip() == redirect.peer
@@ -204,30 +244,41 @@ impl MixedTcp {
         {
             return Ok(None);
         }
-        if let Some(mapped) = self.flows.get(&flow) {
-            if let State::Closed(closed_at) = mapped.state {
+        if let Some(mapped) = self.flows.get_mut(&flow) {
+            let peer = mapped.peer;
+            if let State::Closed { until } = mapped.state {
                 if starts_connection {
-                    let old_peer = mapped.peer;
                     self.flows.remove(&flow);
-                    self.by_peer.remove(&old_peer);
-                    self.cooldown.insert(old_peer, closed_at);
+                    self.by_peer.remove(&peer);
+                    self.cooldown.insert(peer, until);
                 } else {
-                    return Ok(Some((mapped.peer, redirect.listener)));
+                    if is_rst {
+                        mapped.state = State::Closed {
+                            until: until.min(now + RST_COOLDOWN),
+                        };
+                    }
+                    return Ok(Some((peer, redirect.listener)));
                 }
             } else {
-                return Ok(Some((mapped.peer, redirect.listener)));
+                if is_rst {
+                    mapped.state = State::Closed {
+                        until: now + RST_COOLDOWN,
+                    };
+                }
+                return Ok(Some((peer, redirect.listener)));
             }
         }
         if !starts_connection {
             return Ok(None);
         }
-        let peer = self.allocate_peer(redirect.peer)?;
+        let peer = self.allocate_peer(redirect.peer, now)?;
         self.by_peer.insert(peer, flow);
         self.flows.insert(
             flow,
             Mapping {
                 peer,
                 opened: now,
+                saw_reply: false,
                 state: State::Pending,
             },
         );
@@ -241,10 +292,11 @@ impl MixedTcp {
         offset: usize,
         flow: TcpFlow,
         starts_connection: bool,
+        is_rst: bool,
         now: Instant,
     ) -> Result<bool, RedirectError> {
         let Some((new_source, new_destination)) =
-            self.plan_redirect(flow, starts_connection, now)?
+            self.plan_redirect(flow, starts_connection, is_rst, now)?
         else {
             return Ok(false);
         };
@@ -274,8 +326,12 @@ impl TcpStack for MixedTcp {
             source: packet.source(),
             destination: packet.destination(),
         };
-        let Some((new_source, new_destination)) =
-            self.plan_redirect(flow, packet.tcp_starts_connection(), now)?
+        let Some((new_source, new_destination)) = self.plan_redirect(
+            flow,
+            packet.tcp_starts_connection(),
+            packet.tcp_is_rst(),
+            now,
+        )?
         else {
             return Ok(None);
         };
@@ -297,7 +353,13 @@ impl TcpStack for MixedTcp {
         if let Some(flow) = self.by_peer.get(&peer)
             && let Some(mapping) = self.flows.get_mut(flow)
         {
-            mapping.state = State::Closed(now);
+            let until = now + PORT_REUSE_DELAY;
+            mapping.state = match mapping.state {
+                State::Closed { until: existing } => State::Closed {
+                    until: existing.min(until),
+                },
+                State::Pending | State::Accepted => State::Closed { until },
+            };
         }
     }
 }
@@ -431,5 +493,53 @@ mod tests {
                 destination
             })
         );
+    }
+
+    #[test]
+    fn rst_segment_shortens_cooldown_and_unanswered_syn_expires_promptly() {
+        let client = "192.0.2.1:25000".parse().unwrap();
+        let destination = "198.51.100.1:443".parse().unwrap();
+        let listener = "192.0.2.1:45000".parse().unwrap();
+        let mut nat = MixedTcp::new([TcpRedirect {
+            listener,
+            peer: "192.0.2.2".parse().unwrap(),
+        }])
+        .unwrap();
+        let start = Instant::now();
+
+        let syn = tcp_test_packet(client, destination, 0x02);
+        let peer = Packet::parse(
+            &nat.redirect(&Packet::parse(&syn).unwrap(), start)
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap()
+        .source();
+
+        // Unanswered SYN expires after HANDSHAKE_UNANSWERED (15s), well before 60s.
+        let after_unanswered = start + Duration::from_secs(16);
+        let probe_syn = tcp_test_packet("192.0.2.1:25001".parse().unwrap(), destination, 0x02);
+        let _ = nat
+            .redirect(&Packet::parse(&probe_syn).unwrap(), after_unanswered)
+            .unwrap();
+        assert!(nat.accept(peer).is_none());
+
+        // RST from client transitions flow to short cooldown (5s instead of 60s).
+        let peer2 = Packet::parse(
+            &nat.redirect(&Packet::parse(&syn).unwrap(), after_unanswered)
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap()
+        .source();
+        let rst = tcp_test_packet(client, destination, 0x04);
+        let _ = nat
+            .redirect(&Packet::parse(&rst).unwrap(), after_unanswered)
+            .unwrap();
+        let after_rst = after_unanswered + Duration::from_secs(6);
+        let _ = nat
+            .redirect(&Packet::parse(&probe_syn).unwrap(), after_rst)
+            .unwrap();
+        assert!(!nat.by_peer.contains_key(&peer2));
     }
 }

@@ -361,8 +361,27 @@ impl RuleEngine {
     /// Decides how to route `flow`, resolving `flow.domain` via `resolver` at
     /// most once if an IP-dependent rule or private-network check requires it.
     pub fn decide(&self, flow: &Flow<'_>, resolver: &dyn Resolve) -> Decision {
+        let mut ctx = EvalCtx::new(flow.domain, flow.ip, flow.process, resolver);
+        self.decide_with_ctx(&mut ctx)
+    }
+
+    /// Like [`Self::decide`], invoking `lookup_process` at most once and only
+    /// when evaluation reaches a process-dependent rule.
+    pub fn decide_lazy(
+        &self,
+        domain: Option<&str>,
+        ip: Option<IpAddr>,
+        resolver: &dyn Resolve,
+        lookup_process: &mut dyn FnMut() -> Option<String>,
+    ) -> (Decision, Option<Option<String>>) {
+        let mut ctx = EvalCtx::new_lazy(domain, ip, resolver, lookup_process);
+        let decision = self.decide_with_ctx(&mut ctx);
+        (decision, ctx.into_resolved_process())
+    }
+
+    fn decide_with_ctx(&self, ctx: &mut EvalCtx<'_, '_>) -> Decision {
         if self.allow_lan
-            && flow.ip.is_some_and(|ip| {
+            && ctx.initial_ip().is_some_and(|ip| {
                 !self.lan_servers.contains(&ip)
                     && (private::is_link_local(ip)
                         || self.lan_segment.iter().any(|prefix| prefix.contains(ip)))
@@ -374,17 +393,8 @@ impl RuleEngine {
             };
         }
 
-        let lowered_domain = flow.domain.map(|domain| {
-            if domain.is_ascii() && !domain.bytes().any(|b| b.is_ascii_uppercase()) {
-                Cow::Borrowed(domain)
-            } else {
-                Cow::Owned(domain.to_lowercase())
-            }
-        });
-        let mut ctx = EvalCtx::new(lowered_domain.as_deref(), flow.ip, flow.process, resolver);
-
         for rule in &self.rules {
-            if self.matches_rule(&rule.matcher, &mut ctx) {
+            if self.matches_rule(&rule.matcher, ctx) {
                 return Decision {
                     route: rule.route.clone(),
                     reason: Reason::Rule {
@@ -417,17 +427,17 @@ impl RuleEngine {
 
     fn matches_rule(&self, matcher: &CompiledMatcher, ctx: &mut EvalCtx<'_, '_>) -> bool {
         match matcher {
-            CompiledMatcher::DomainExact(expected) => ctx.domain == Some(expected.as_str()),
-            CompiledMatcher::DomainSuffix(suffix) => {
-                ctx.domain.is_some_and(|domain| has_suffix(domain, suffix))
-            }
+            CompiledMatcher::DomainExact(expected) => ctx.domain() == Some(expected.as_str()),
+            CompiledMatcher::DomainSuffix(suffix) => ctx
+                .domain()
+                .is_some_and(|domain| has_suffix(domain, suffix)),
             CompiledMatcher::DomainKeyword(keyword) => ctx
-                .domain
+                .domain()
                 .is_some_and(|domain| domain.contains(keyword.as_str())),
             CompiledMatcher::ProcessName(name) => ctx
-                .process
+                .process()
                 .is_some_and(|path| ends_with_program(path, name)),
-            CompiledMatcher::ProcessPath(path) => ctx.process == Some(path.as_str()),
+            CompiledMatcher::ProcessPath(path) => ctx.process() == Some(path.as_str()),
             CompiledMatcher::IpCidr(tree) => ctx.resolve_ips().iter().any(|ip| tree.contains(*ip)),
             CompiledMatcher::List(idx) => self.lists[*idx].matches(ctx),
         }
@@ -435,16 +445,34 @@ impl RuleEngine {
 }
 
 pub(crate) struct EvalCtx<'a, 'r> {
-    pub(crate) domain: Option<&'a str>,
-    pub(crate) process: Option<&'a str>,
+    pub(crate) domain: Option<Cow<'a, str>>,
+    process_state: ProcessState<'a, 'r>,
     ip_state: IpState,
     resolver: &'r dyn Resolve,
+}
+
+enum ProcessState<'a, 'r> {
+    Provided(Option<&'a str>),
+    Lazy {
+        lookup: &'r mut dyn FnMut() -> Option<String>,
+        resolved: Option<Option<String>>,
+    },
 }
 
 enum IpState {
     Provided([IpAddr; 1]),
     Unresolved,
     Resolved(Vec<IpAddr>),
+}
+
+fn lower_domain(domain: Option<&str>) -> Option<Cow<'_, str>> {
+    domain.map(|domain| {
+        if domain.is_ascii() && !domain.bytes().any(|b| b.is_ascii_uppercase()) {
+            Cow::Borrowed(domain)
+        } else {
+            Cow::Owned(domain.to_lowercase())
+        }
+    })
 }
 
 impl<'a, 'r> EvalCtx<'a, 'r> {
@@ -459,10 +487,58 @@ impl<'a, 'r> EvalCtx<'a, 'r> {
             None => IpState::Unresolved,
         };
         Self {
-            domain,
-            process,
+            domain: lower_domain(domain),
+            process_state: ProcessState::Provided(process),
             ip_state,
             resolver,
+        }
+    }
+
+    pub(crate) fn new_lazy(
+        domain: Option<&'a str>,
+        ip: Option<IpAddr>,
+        resolver: &'r dyn Resolve,
+        lookup: &'r mut dyn FnMut() -> Option<String>,
+    ) -> Self {
+        let ip_state = match ip {
+            Some(addr) => IpState::Provided([addr]),
+            None => IpState::Unresolved,
+        };
+        Self {
+            domain: lower_domain(domain),
+            process_state: ProcessState::Lazy {
+                lookup,
+                resolved: None,
+            },
+            ip_state,
+            resolver,
+        }
+    }
+
+    pub(crate) fn domain(&self) -> Option<&str> {
+        self.domain.as_deref()
+    }
+
+    fn initial_ip(&self) -> Option<IpAddr> {
+        match &self.ip_state {
+            IpState::Provided([addr]) => Some(*addr),
+            IpState::Unresolved | IpState::Resolved(_) => None,
+        }
+    }
+
+    pub(crate) fn process(&mut self) -> Option<&str> {
+        match &mut self.process_state {
+            ProcessState::Provided(proc) => *proc,
+            ProcessState::Lazy { lookup, resolved } => {
+                resolved.get_or_insert_with(&mut *lookup).as_deref()
+            }
+        }
+    }
+
+    fn into_resolved_process(self) -> Option<Option<String>> {
+        match self.process_state {
+            ProcessState::Provided(_) => None,
+            ProcessState::Lazy { resolved, .. } => resolved,
         }
     }
 
@@ -470,6 +546,7 @@ impl<'a, 'r> EvalCtx<'a, 'r> {
         if matches!(self.ip_state, IpState::Unresolved) {
             let resolved = self
                 .domain
+                .as_deref()
                 .and_then(|name| self.resolver.resolve(name).ok())
                 .unwrap_or_default();
             self.ip_state = IpState::Resolved(resolved);
@@ -900,5 +977,48 @@ mod tests {
             assert!(!engine_dbg.contains(secret), "engine leaked {secret}");
             assert!(!flow_dbg.contains(secret), "flow leaked {secret}");
         }
+    }
+
+    #[test]
+    fn decide_lazy_skips_process_lookup_until_a_process_rule_is_reached() {
+        let rule_plan = plan(vec![
+            make_rule(
+                "domain-first",
+                RuleMatcher::Domain(DomainMatch::Suffix("example.com".into())),
+                RuleTarget::Direct,
+            ),
+            make_rule(
+                "proc-second",
+                RuleMatcher::Process(ProcessMatch::Name("game.exe".into())),
+                RuleTarget::Proxy,
+            ),
+        ]);
+        let engine = RuleEngine::compile(&rule_plan).unwrap();
+        let resolver = CountingResolver::failing();
+
+        // Matched by earlier domain rule -> process lookup is never called!
+        let mut calls = 0usize;
+        let (decision, proc_res) =
+            engine.decide_lazy(Some("sub.example.com"), None, &resolver, &mut || {
+                calls += 1;
+                Some(r"C:\Games\game.exe".into())
+            });
+        assert_eq!(decision.route, Route::Direct);
+        assert_eq!(calls, 0);
+        assert!(proc_res.is_none());
+
+        // Domain rule misses -> reaches process rule -> lookup called exactly once.
+        let (decision, proc_res) =
+            engine.decide_lazy(Some("other.org"), None, &resolver, &mut || {
+                calls += 1;
+                Some(if cfg!(windows) {
+                    r"C:\Games\game.exe".into()
+                } else {
+                    "/usr/bin/game.exe".into()
+                })
+            });
+        assert_eq!(decision.route, Route::Proxy);
+        assert_eq!(calls, 1);
+        assert!(proc_res.flatten().is_some());
     }
 }
