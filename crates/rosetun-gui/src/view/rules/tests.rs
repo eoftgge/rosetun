@@ -926,7 +926,7 @@ fn exit_rules_read_through_their_exit_in_their_own_colour() {
     };
     assert_eq!(
         rule_label(&rule, std::slice::from_ref(&exit)),
-        "Through VPN · Example exit"
+        "Through VPN • Example exit"
     );
     assert_eq!(rule_label(&rule, &[]), "Through an exit");
     let destination = RuleDestination::of(&rule);
@@ -955,7 +955,7 @@ fn exit_button_shows_the_exit_name_without_truncation() {
     let exits = std::slice::from_ref(&exit);
     let current = TargetChoice::of(RuleDestination::Exit(exit.id.clone()), exits);
     assert_eq!(current.button, "Нидерланды");
-    assert_eq!(current.label, "Through VPN · Нидерланды");
+    assert_eq!(current.label, "Through VPN • Нидерланды");
     assert_eq!(
         TargetChoice::plain(RuleTarget::Direct).button,
         tr!("direct")

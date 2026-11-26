@@ -96,14 +96,14 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
             );
         });
     ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = theme::space::XS;
+        ui.spacing_mut().item_spacing.x = theme::space::S;
         ui.label(
             RichText::new(tr!("subscriptions-title"))
                 .color(theme::palette().text)
                 .font(theme::font::semibold(theme::font::BODY)),
         );
         ui.label(
-            RichText::new(format!("· {}", state.config.subscriptions.len()))
+            RichText::new(state.config.subscriptions.len().to_string())
                 .color(theme::palette().text_dim),
         );
     });

@@ -37,11 +37,17 @@ pub(crate) fn action_notice(
                         );
                         let mut clicked = None;
                         for (index, action) in actions.iter().enumerate() {
-                            ui.label(
-                                RichText::new(tr!("apply-separator"))
-                                    .size(theme::font::BODY)
-                                    .color(palette.text_dim),
+                            ui.add_space(theme::space::M);
+                            let (sep, _) = ui.allocate_exact_size(
+                                egui::vec2(theme::stroke::HAIRLINE, 14.0),
+                                egui::Sense::hover(),
                             );
+                            ui.painter().vline(
+                                sep.center().x,
+                                sep.y_range(),
+                                egui::Stroke::new(theme::stroke::HAIRLINE, palette.border_strong),
+                            );
+                            ui.add_space(theme::space::M);
                             let response = link_body(ui, action.label, action.enabled);
                             let response = match action.hint {
                                 Some(hint) => response.on_hover_text(hint),

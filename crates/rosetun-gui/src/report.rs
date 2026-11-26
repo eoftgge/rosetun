@@ -229,7 +229,7 @@ impl ReportSnapshot {
         if fragment.enabled {
             let _ = write!(
                 text,
-                " · {} · {} · {}",
+                " • {} • {} • {}",
                 fragment.packets, fragment.length, fragment.interval
             );
         }

@@ -1300,11 +1300,11 @@ mod tests {
         let held = ClientError::Helper(HelperError::tunnel_address_in_use());
         assert_eq!(
             client(Language::English, &held),
-            "Windows still holds the tunnel of the last session · restart the computer"
+            "Windows still holds the tunnel of the last session • restart the computer"
         );
         assert_eq!(
             client(Language::Russian, &held),
-            "Windows ещё держит туннель прошлой сессии · перезагрузите компьютер"
+            "Windows ещё держит туннель прошлой сессии • перезагрузите компьютер"
         );
         let other = ClientError::Helper(HelperError::new(ErrorCode::EngineFailed, "exited"));
         assert_ne!(

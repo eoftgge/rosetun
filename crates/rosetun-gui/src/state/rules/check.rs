@@ -268,7 +268,7 @@ impl State {
         }
     }
 
-    /// "Japan · list “Videos” · rule 13" without the input, for a hint.
+    /// "Japan • list “Videos” • rule 13" without the input, for a hint.
     fn outcome_text(&self, reason: &Reason, route: &ExplainedRoute) -> String {
         let why = self.why(reason);
         let why = match why {

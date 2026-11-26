@@ -91,15 +91,15 @@ fn traffic_labels_format_both_directions_and_caption() {
             Language::English,
             "1 MiB/s",
             "2 MiB/s",
-            "↓ 1 MiB/s · ↑ 2 MiB/s",
-            "Last 5 min · peak 2 MiB/s",
+            "↓ 1 MiB/s • ↑ 2 MiB/s",
+            "Last 5 min • peak 2 MiB/s",
         ),
         (
             Language::Russian,
             "1 МБ/с",
             "2 МБ/с",
-            "↓ 1 МБ/с · ↑ 2 МБ/с",
-            "За 5 мин · пик 2 МБ/с",
+            "↓ 1 МБ/с • ↑ 2 МБ/с",
+            "За 5 мин • пик 2 МБ/с",
         ),
     ] {
         in_language(language, || {
@@ -185,7 +185,7 @@ fn about_version_includes_the_service_only_when_known() {
     );
     assert_eq!(
         in_language(Language::English, || about_version("0.9.0", Some("0.9.1"))),
-        "Version 0.9.0 · service 0.9.1"
+        "Version 0.9.0 • service 0.9.1"
     );
     assert_eq!(
         in_language(Language::Russian, || about_version("0.9.0", None)),
@@ -193,7 +193,7 @@ fn about_version_includes_the_service_only_when_known() {
     );
     assert_eq!(
         in_language(Language::Russian, || about_version("0.9.0", Some("0.9.1"))),
-        "Версия 0.9.0 · служба 0.9.1"
+        "Версия 0.9.0 • служба 0.9.1"
     );
 }
 
@@ -410,14 +410,14 @@ fn no_network_text_distinguishes_retry_from_automatic_wait() {
             "No network connection",
             "Check the cable or Wi-Fi.",
             "Rosetun will reconnect when the network returns.",
-            "Network lost · internet stays blocked until it returns.",
+            "Network lost • internet stays blocked until it returns.",
         ),
         (
             Language::Russian,
             "Нет подключения к сети",
             "Проверьте кабель или Wi-Fi.",
             "Rosetun подключится, когда сеть появится.",
-            "Сеть пропала · интернет закрыт, пока она не вернётся.",
+            "Сеть пропала • интернет закрыт, пока она не вернётся.",
         ),
     ] {
         in_language(language, || {

@@ -666,7 +666,7 @@ pub(crate) fn group_editor_dialog(
                                         .cloned()
                                         .unwrap_or_else(|| list.as_str().to_owned());
                                     let full = match category {
-                                        Some(cat) => format!("{base} · {cat}"),
+                                        Some(cat) => format!("{base} • {cat}"),
                                         None => base,
                                     };
                                     (full, tr!("caption-list"))

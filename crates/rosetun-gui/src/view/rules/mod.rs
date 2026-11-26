@@ -612,7 +612,7 @@ pub(crate) fn target_color(target: RuleTarget) -> Color32 {
     }
 }
 
-/// "Through VPN · <exit name>" for an exit, the plain target's word otherwise.
+/// "Through VPN • <exit name>" for an exit, the plain target's word otherwise.
 pub(crate) fn destination_label(destination: &RuleDestination, exits: &[Exit]) -> String {
     let name = match destination {
         RuleDestination::Proxy => return target_label(RuleTarget::Proxy),

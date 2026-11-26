@@ -1127,7 +1127,7 @@ pub(super) fn caption_text(caption: &RuleCaption) -> String {
             if preview.is_empty() {
                 count_text
             } else {
-                format!("{count_text} · {preview}")
+                format!("{count_text} • {preview}")
             }
         }
     }

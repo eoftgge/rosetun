@@ -10,8 +10,8 @@ use super::{Language, tr_in};
 pub(crate) fn tray_tooltip(status: &str, server: Option<&str>, warning: Option<&str>) -> String {
     let title = crate::constants::TITLE;
     let mut tooltip = match server {
-        Some(server) => format!("{title} · {status}\n{server}"),
-        None => format!("{title} · {status}"),
+        Some(server) => format!("{title} • {status}\n{server}"),
+        None => format!("{title} • {status}"),
     };
     if let Some(warning) = warning {
         tooltip.push('\n');
@@ -49,7 +49,7 @@ pub(crate) fn filter_count(label: &str, count: usize) -> String {
 }
 
 pub(crate) fn node_details(protocol: &str, tls: &str, transport: &str) -> String {
-    format!("{protocol} · {tls} · {transport}")
+    format!("{protocol} • {tls} • {transport}")
 }
 
 pub(crate) fn server_tooltip(name: &str, details: &str, address: &str) -> String {

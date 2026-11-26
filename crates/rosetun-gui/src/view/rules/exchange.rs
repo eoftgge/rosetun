@@ -160,7 +160,7 @@ pub(crate) fn show(ctx: &egui::Context, state: &mut State, actions: &mut Vec<Act
                 );
                 widgets::appear(ui, shown, |ui| {
                     ui.label(format!(
-                        "{} {} · {} {} · {} {} · {} {}",
+                        "{} {} • {} {} • {} {} • {} {}",
                         tr!("rules-transfer-add"),
                         import.add.rules.len(),
                         tr!("rules-transfer-duplicates"),

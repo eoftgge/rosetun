@@ -215,7 +215,7 @@ pub(super) fn subscription_card(
                             if let Some(expire) =
                                 subscription.info.as_ref().and_then(|info| info.expire_unix)
                             {
-                                summary.append(" · ", 0.0, muted.clone());
+                                summary.append(" • ", 0.0, muted.clone());
                                 let (term, _) = crate::i18n::term_left(expire, now);
                                 summary.append(
                                     &term,
@@ -864,11 +864,11 @@ mod tests {
             let subscription = manual_proxy(uri);
             assert_eq!(
                 menu_title(i18n::Language::English, &subscription),
-                format!("Proxy · {protocol}")
+                format!("Proxy • {protocol}")
             );
             assert_eq!(
                 menu_title(i18n::Language::Russian, &subscription),
-                format!("Прокси · {protocol}")
+                format!("Прокси • {protocol}")
             );
             for language in [i18n::Language::English, i18n::Language::Russian] {
                 let title = menu_title(language, &subscription);

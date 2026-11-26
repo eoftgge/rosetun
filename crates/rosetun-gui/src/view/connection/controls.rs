@@ -471,7 +471,7 @@ mod tests {
     const FILE_NAME: &str = "ExampleClientServices.exe";
     /// As long as a target can be and still leave a few characters of the value in the
     /// narrowest two-column card.
-    const EXIT_NAME: &str = "Berlin 2";
+    const EXIT_NAME: &str = "Berlin";
 
     /// The first column's width where `control_cards` still uses two columns.
     const TWO_COLUMN_WIDTH: f32 = 520.0;

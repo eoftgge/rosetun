@@ -48,7 +48,7 @@ fn exit_detail(
             Some(code.as_str().to_owned()),
         ),
     };
-    (format!("{kind} · {now}"), warning, country)
+    (format!("{kind} • {now}"), warning, country)
 }
 
 fn header_has_add_button(state: &State) -> bool {
@@ -916,22 +916,22 @@ mod tests {
         let netherlands = i18n::country_name(&country("NL"));
         for (expected, color) in [
             (
-                format!("{country_kind} · {}", tr!("exit-now", node = "One")),
+                format!("{country_kind} • {}", tr!("exit-now", node = "One")),
                 theme::palette().text_muted,
             ),
             (
-                format!("{node_kind} · {}", tr!("exit-now", node = "One")),
+                format!("{node_kind} • {}", tr!("exit-now", node = "One")),
                 theme::palette().text_muted,
             ),
             (
                 format!(
-                    "{node_kind} · {}",
+                    "{node_kind} • {}",
                     tr!("exit-now-fallback", country = netherlands.clone())
                 ),
                 theme::palette().text_muted,
             ),
             (
-                format!("{node_kind} · {}", tr!("exit-now-gone")),
+                format!("{node_kind} • {}", tr!("exit-now-gone")),
                 theme::warning(),
             ),
             (

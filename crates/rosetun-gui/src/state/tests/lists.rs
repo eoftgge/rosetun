@@ -436,7 +436,7 @@ fn missing_categories_expose_fallback_and_disabled_states_then_clear() {
             "rule-category-last-good",
             &fluent_bundle::FluentArgs::new()
         ),
-        "Категории больше нет в списке · используется прошлая версия"
+        "Категории больше нет в списке • используется прошлая версия"
     );
     state.lists.missing[0].last_good = false;
     assert!(
@@ -451,7 +451,7 @@ fn missing_categories_expose_fallback_and_disabled_states_then_clear() {
             "rule-category-disabled",
             &fluent_bundle::FluentArgs::new()
         ),
-        "Category no longer in list · rule does not work"
+        "Category no longer in list • rule does not work"
     );
     state.config.rule_sets[1].rules[0].matcher = RuleMatcher::List {
         list: ListId::new("1"),

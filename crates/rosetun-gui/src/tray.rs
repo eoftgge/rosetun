@@ -84,7 +84,7 @@ pub(crate) fn tray_view(state: &State, window_shown: bool) -> TrayView {
     let menu_server = server.as_deref().map(menu_label);
     let status_label = match (icon, &menu_server) {
         (TrayState::Blocked, _) => tr!("tray-blocked"),
-        (TrayState::Connected, Some(server)) => format!("{status} · {server}"),
+        (TrayState::Connected, Some(server)) => format!("{status} • {server}"),
         _ => status.clone(),
     };
     let primary_action = state.primary_action();
@@ -335,7 +335,7 @@ mod tests {
 
     #[test]
     fn tooltip_fits_windows_utf16_limit() {
-        assert_eq!(fit_tooltip("Rosetun · Connected"), "Rosetun · Connected");
+        assert_eq!(fit_tooltip("Rosetun • Connected"), "Rosetun • Connected");
         assert_eq!(fit_tooltip(&"A".repeat(127)), "A".repeat(127));
         assert_eq!(
             fit_tooltip(&format!("{}😀X", "A".repeat(125))),
@@ -462,7 +462,7 @@ mod tests {
             (
                 ConnectionState::Connected,
                 false,
-                format!("{} · Server Blue", tr!("connected")),
+                format!("{} • Server Blue", tr!("connected")),
             ),
             (ConnectionState::Connecting, false, tr!("connecting")),
             (ConnectionState::Reconnecting, false, tr!("reconnecting")),
