@@ -653,38 +653,24 @@ fn ctrl_z_undoes_and_ctrl_shift_z_or_ctrl_y_redo() {
 }
 
 #[test]
-fn apply_notice_centers_text_against_the_link() {
-    let ctx = egui::Context::default();
-    theme::apply(&ctx);
-    let mut output = ctx.run_ui(egui::RawInput::default(), |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| {
-            let (label, link, revert) = apply_notice(ui, true, true, "hint");
-            let link = link.expect("an applicable change shows the link");
-            let revert = revert.expect("a revertible change shows the revert link");
-            assert!(
-                (label.rect.center().y - link.rect.center().y).abs() < 1.0,
-                "text: {:?}, link: {:?}",
-                label.rect,
-                link.rect
-            );
-            assert!(revert.rect.left() > link.rect.right());
-        });
-    });
-    output.textures_delta.clear();
-}
+fn pending_apply_notice_shows_apply_and_revert_in_bottom_pill() {
+    let mut screen = crate::test_ui::TestScreen::new(egui::vec2(960.0, 640.0));
+    let mut actions = Vec::new();
+    let shown = screen.settle(|ui| show_apply_notice(ui.ctx(), true, true, "hint", &mut actions));
+    assert!(shown.iter().any(|(text, _)| *text == tr!("apply-on-leave")));
+    assert!(shown.iter().any(|(text, _)| *text == tr!("apply-now")));
+    assert!(shown.iter().any(|(text, _)| *text == tr!("revert-rules")));
 
-#[test]
-fn apply_notice_has_no_link_when_the_change_waits_for_reconnect() {
-    let ctx = egui::Context::default();
-    theme::apply(&ctx);
-    let mut output = ctx.run_ui(egui::RawInput::default(), |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| {
-            let (_, link, revert) = apply_notice(ui, false, false, "hint");
-            assert!(link.is_none());
-            assert!(revert.is_none());
-        });
+    screen.click_text(&tr!("apply-now"), |ui| {
+        show_apply_notice(ui.ctx(), true, true, "hint", &mut actions);
     });
-    output.textures_delta.clear();
+    assert!(matches!(actions.as_slice(), [Action::Apply]));
+
+    actions.clear();
+    let shown = screen.settle(|ui| show_apply_notice(ui.ctx(), false, false, "hint", &mut actions));
+    assert!(shown.iter().any(|(text, _)| *text == tr!("next-connect")));
+    assert!(!shown.iter().any(|(text, _)| *text == tr!("apply-now")));
+    assert!(!shown.iter().any(|(text, _)| *text == tr!("revert-rules")));
 }
 
 #[test]

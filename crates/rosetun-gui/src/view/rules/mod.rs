@@ -111,14 +111,14 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
         state.config.interface.reduce_motion,
     );
     widgets::appear(ui, shown, |ui| tab_body(ui, state, actions));
-    if state.rules.exchange.notice.is_none() {
-        undo_notice(ui.ctx(), state, actions);
+    if state.rules.exchange.notice.is_none() && !undo_notice(ui.ctx(), state, actions) {
+        pending_apply_notice(ui.ctx(), state, actions);
     }
 }
 
-fn undo_notice(ctx: &egui::Context, state: &State, actions: &mut Vec<Action>) {
+fn undo_notice(ctx: &egui::Context, state: &State, actions: &mut Vec<Action>) -> bool {
     let Some((notice, left)) = state.rule_notice() else {
-        return;
+        return false;
     };
     ctx.request_repaint_after(left);
     let text = match notice {
@@ -144,7 +144,6 @@ fn undo_notice(ctx: &egui::Context, state: &State, actions: &mut Vec<Action>) {
         hint: None,
         enabled: state.can_undo_rules(),
     }];
-    // The change waits for the running connection, as the line under the title says.
     if state.can_apply() && state.pending_reconnect(SessionPart::Rules) {
         choices.push(widgets::NoticeAction {
             label: &apply,
@@ -157,6 +156,76 @@ fn undo_notice(ctx: &egui::Context, state: &State, actions: &mut Vec<Action>) {
         Some(_) => actions.push(Action::Apply),
         None => {}
     }
+    true
+}
+
+fn pending_apply_notice(ctx: &egui::Context, state: &State, actions: &mut Vec<Action>) {
+    let pending_apply = state.lists.tab == RulesTab::Rules
+        && state.config_ready
+        && state
+            .visible_status()
+            .is_some_and(|status| status.state.is_active() || status.state.is_transitional())
+        && state.rules.screen.selected_set.is_some()
+        && state.config.active_rule_set == state.rules.screen.selected_set
+        && state.pending_reconnect(SessionPart::Rules);
+    if !pending_apply {
+        return;
+    }
+    let apply_hint = if state.apply_restarts_tunnel() {
+        tr!("apply-hint")
+    } else {
+        tr!("apply-hint-live")
+    };
+    show_apply_notice(
+        ctx,
+        state.can_apply(),
+        state.can_revert_rules(),
+        &apply_hint,
+        actions,
+    );
+}
+
+fn show_apply_notice(
+    ctx: &egui::Context,
+    can_apply: bool,
+    can_revert: bool,
+    apply_hint: &str,
+    actions: &mut Vec<Action>,
+) {
+    let text = if can_apply {
+        tr!("apply-on-leave")
+    } else {
+        tr!("next-connect")
+    };
+    let apply_now = tr!("apply-now");
+    let revert = tr!("revert-rules");
+    let revert_hint = tr!("revert-rules-hint");
+    let mut choices = Vec::new();
+    let mut apply_index = None;
+    let mut revert_index = None;
+    if can_apply {
+        apply_index = Some(choices.len());
+        choices.push(widgets::NoticeAction {
+            label: &apply_now,
+            hint: Some(apply_hint),
+            enabled: true,
+        });
+    }
+    if can_revert {
+        revert_index = Some(choices.len());
+        choices.push(widgets::NoticeAction {
+            label: &revert,
+            hint: Some(&revert_hint),
+            enabled: true,
+        });
+    }
+    if let Some(clicked) = widgets::action_notice(ctx, "rules_apply_notice", &text, &choices) {
+        if apply_index == Some(clicked) {
+            actions.push(Action::Apply);
+        } else if revert_index == Some(clicked) {
+            actions.push(Action::RevertRules);
+        }
+    }
 }
 
 fn tab_body(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
@@ -167,39 +236,11 @@ fn tab_body(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
     }
     let text_edit_focused = ui.ctx().text_edit_focused();
     let reveal = std::mem::take(&mut state.rules.screen.reveal_selection);
-    let pending_apply = state.config_ready
-        && state
-            .visible_status()
-            .is_some_and(|status| status.state.is_active() || status.state.is_transitional())
-        && state.rules.screen.selected_set.is_some()
-        && state.config.active_rule_set == state.rules.screen.selected_set
-        && state.pending_reconnect(SessionPart::Rules);
-    let can_apply = state.can_apply();
-    let can_revert = state.can_revert_rules();
-    let mut apply_clicked = false;
-    let mut revert_clicked = false;
     ui.heading(tr!("rules-tab-title"));
     ui.add(
         egui::Label::new(RichText::new(tr!("rules-subtitle")).color(theme::palette().text_muted))
             .wrap(),
     );
-    if pending_apply {
-        ui.add_space(theme::space::XS);
-        let apply_hint = if state.apply_restarts_tunnel() {
-            tr!("apply-hint")
-        } else {
-            tr!("apply-hint-live")
-        };
-        let (_, link, revert) = apply_notice(ui, can_apply, can_revert, &apply_hint);
-        apply_clicked = link.is_some_and(|link| link.clicked());
-        revert_clicked = revert.is_some_and(|revert| revert.clicked());
-    }
-    if apply_clicked {
-        actions.push(Action::Apply);
-    }
-    if revert_clicked {
-        actions.push(Action::RevertRules);
-    }
     ui.add_space(theme::space::XL);
     if !state.config_ready {
         ui.colored_label(theme::palette().text_dim, tr!("loading"));
@@ -313,41 +354,6 @@ fn tab_body(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
     scroll_rules_while_dragging(ui);
     clear_selection_on_click_away(ui.ctx(), state, &selection_regions, actions);
     selection_shortcuts(ui.ctx(), state, text_edit_focused, actions);
-}
-
-fn apply_notice(
-    ui: &mut egui::Ui,
-    can_apply: bool,
-    can_revert: bool,
-    apply_hint: &str,
-) -> (
-    egui::Response,
-    Option<egui::Response>,
-    Option<egui::Response>,
-) {
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = theme::space::S;
-        let (dot, _) = ui.allocate_exact_size(egui::vec2(6.0, 6.0), egui::Sense::hover());
-        ui.painter()
-            .circle_filled(dot.center(), 3.0, theme::palette().accent_light);
-        let text = if can_apply {
-            tr!("apply-on-leave")
-        } else {
-            tr!("next-connect")
-        };
-        let label = ui.label(
-            RichText::new(text)
-                .small()
-                .color(theme::palette().text_muted),
-        );
-        let link =
-            can_apply.then(|| widgets::link(ui, &tr!("apply-now"), true).on_hover_text(apply_hint));
-        let revert = can_revert.then(|| {
-            widgets::link(ui, &tr!("revert-rules"), true).on_hover_text(tr!("revert-rules-hint"))
-        });
-        (label, link, revert)
-    })
-    .inner
 }
 
 fn filter_controls(
