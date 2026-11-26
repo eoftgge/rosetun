@@ -15,10 +15,10 @@ pub mod net;
 pub mod proxy;
 pub mod rules;
 pub mod sniff;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 #[expect(
     unsafe_code,
-    reason = "socket readiness without timing out Windows TCP I/O"
+    reason = "socket readiness without timing out Windows TCP I/O or spawning a thread per UDP mapping"
 )]
 mod socket_ready;
 pub mod tun;

@@ -179,6 +179,24 @@ impl UdpPath {
         Ok(())
     }
 
+    #[cfg(any(windows, target_os = "linux"))]
+    pub(crate) fn recv_socket(&self) -> Option<&UdpSocket> {
+        match self.relay {
+            Some(relay) => {
+                if relay.is_ipv4() {
+                    self.v4.as_ref()
+                } else {
+                    self.v6.as_ref()
+                }
+            }
+            None => match self.preferred.load(Ordering::Acquire) {
+                6 => self.v6.as_ref().or(self.v4.as_ref()),
+                4 => self.v4.as_ref().or(self.v6.as_ref()),
+                _ => self.v4.as_ref().or(self.v6.as_ref()),
+            },
+        }
+    }
+
     pub fn set_read_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
         if let Some(socket) = &self.v4 {
             socket.set_read_timeout(timeout)?;

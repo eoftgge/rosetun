@@ -3,6 +3,8 @@ use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream};
+#[cfg(any(windows, target_os = "linux"))]
+use std::net::{Ipv4Addr, UdpSocket};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender};
 use std::sync::{Arc, Condvar, Mutex, PoisonError, RwLock};
@@ -35,14 +37,20 @@ use crate::sniff::{SniffLimits, sniff_quic_datagram};
 const PUMP_INTERVAL: Duration = Duration::from_millis(5);
 const FLOW_TIMEOUT: Duration = Duration::from_secs(5);
 const UDP_IDLE: Duration = Duration::from_secs(60);
+#[cfg(not(any(windows, target_os = "linux")))]
 const UDP_READ_TIMEOUT: Duration = Duration::from_millis(50);
+#[cfg(any(windows, target_os = "linux"))]
+const UDP_REACTOR_TIMEOUT: Duration = Duration::from_millis(250);
 const UDP_SWEEP_INTERVAL: Duration = Duration::from_millis(100);
 const UDP_MAPPINGS: usize = 512;
 const UDP_PEERS: usize = 32;
 const UDP_QUEUE: usize = 512;
+#[cfg(any(windows, target_os = "linux"))]
+const UDP_RECV_BUDGET: usize = 32;
 const UDP_FLOW_CACHE_LIMIT: usize = 4096;
 const UDP_BUFFER_POOL: usize = 64;
 const UDP_POOL_MAX_CAPACITY: usize = 2048;
+const WORKER_STACK_BYTES: usize = 256 * 1024;
 const MAX_CLIENTS: usize = 512;
 const DNS_WORKERS: usize = 4;
 const DNS_QUEUE_CAPACITY: usize = 128;
@@ -191,30 +199,118 @@ struct UdpEgress {
 }
 
 struct UdpMapping {
+    #[cfg(any(windows, target_os = "linux"))]
+    id: u64,
     path: Arc<UdpPath>,
     peers: Arc<Mutex<HashMap<SocketAddr, Registration>>>,
     received: Arc<AtomicBool>,
     closed: Arc<AtomicBool>,
+    #[cfg(any(windows, target_os = "linux"))]
+    reactor: UdpReactorHandle,
+    #[cfg(not(any(windows, target_os = "linux")))]
     reader: Option<JoinHandle<()>>,
 }
 
 impl Drop for UdpMapping {
     fn drop(&mut self) {
         self.closed.store(true, Ordering::Release);
+        #[cfg(any(windows, target_os = "linux"))]
+        self.reactor.remove(self.id);
     }
 }
 
-struct UdpReader {
+struct UdpSlot {
+    #[cfg(any(windows, target_os = "linux"))]
+    id: u64,
     key: MappingKey<UdpEgress>,
     path: Arc<UdpPath>,
     peers: Arc<Mutex<HashMap<SocketAddr, Registration>>>,
     received: Arc<AtomicBool>,
     closed: Arc<AtomicBool>,
-    device: Arc<dyn PacketDevice>,
-    policy: Arc<TunnelPolicy>,
-    table: ConnectionTable,
-    stopped: Arc<AtomicBool>,
-    mtu: usize,
+}
+
+#[cfg(any(windows, target_os = "linux"))]
+enum ReactorCommand {
+    Add(UdpSlot),
+    Remove(u64),
+    Shutdown,
+}
+
+#[cfg(any(windows, target_os = "linux"))]
+#[derive(Clone)]
+struct UdpReactorHandle {
+    commands: Arc<Mutex<VecDeque<ReactorCommand>>>,
+    waker_tx: Arc<UdpSocket>,
+    waker_addr: SocketAddr,
+}
+
+#[cfg(any(windows, target_os = "linux"))]
+impl UdpReactorHandle {
+    fn push(&self, command: ReactorCommand) {
+        self.commands
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push_back(command);
+        let _ = self.waker_tx.send_to(&[1], self.waker_addr);
+    }
+
+    fn add(&self, slot: UdpSlot) {
+        self.push(ReactorCommand::Add(slot));
+    }
+
+    fn remove(&self, id: u64) {
+        self.push(ReactorCommand::Remove(id));
+    }
+
+    fn shutdown(&self) {
+        self.push(ReactorCommand::Shutdown);
+    }
+}
+
+#[cfg(any(windows, target_os = "linux"))]
+struct UdpReactor {
+    handle: UdpReactorHandle,
+    thread: Option<JoinHandle<()>>,
+}
+
+#[cfg(any(windows, target_os = "linux"))]
+impl UdpReactor {
+    fn start(
+        device: Arc<dyn PacketDevice>,
+        policy: Arc<TunnelPolicy>,
+        table: ConnectionTable,
+        stopped: Arc<AtomicBool>,
+        mtu: usize,
+    ) -> io::Result<Self> {
+        let waker_rx = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))?;
+        waker_rx.set_nonblocking(true)?;
+        let waker_addr = waker_rx.local_addr()?;
+        let waker_tx = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))?;
+        waker_tx.set_nonblocking(true)?;
+        let commands = Arc::new(Mutex::new(VecDeque::new()));
+        let handle = UdpReactorHandle {
+            commands: Arc::clone(&commands),
+            waker_tx: Arc::new(waker_tx),
+            waker_addr,
+        };
+        let thread = thread::Builder::new()
+            .name("rosetun-tun-udp-in".into())
+            .stack_size(WORKER_STACK_BYTES)
+            .spawn(move || {
+                run_udp_reactor(waker_rx, commands, device, policy, table, stopped, mtu);
+            })?;
+        Ok(Self {
+            handle,
+            thread: Some(thread),
+        })
+    }
+
+    fn shutdown(&mut self) {
+        self.handle.shutdown();
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
 }
 
 struct Datagram {
@@ -327,6 +423,7 @@ struct Pump {
 }
 
 struct UdpPump {
+    #[cfg(not(any(windows, target_os = "linux")))]
     device: Arc<dyn PacketDevice>,
     policy: Arc<TunnelPolicy>,
     table: ConnectionTable,
@@ -334,9 +431,54 @@ struct UdpPump {
     flow_cache: HashMap<TcpFlow, CachedUdpFlow>,
     pool: Arc<BufferPool>,
     stopped: Arc<AtomicBool>,
+    #[cfg(any(windows, target_os = "linux"))]
+    reactor: UdpReactor,
+    #[cfg(any(windows, target_os = "linux"))]
+    next_mapping_id: u64,
     last_generation: u64,
     last_sweep: Instant,
+    #[cfg(not(any(windows, target_os = "linux")))]
     mtu: usize,
+}
+
+impl UdpPump {
+    fn new(
+        device: Arc<dyn PacketDevice>,
+        policy: Arc<TunnelPolicy>,
+        table: ConnectionTable,
+        capacity: usize,
+        pool: Arc<BufferPool>,
+        stopped: Arc<AtomicBool>,
+        mtu: usize,
+    ) -> io::Result<Self> {
+        let generation = policy.generation();
+        #[cfg(any(windows, target_os = "linux"))]
+        let reactor = UdpReactor::start(
+            Arc::clone(&device),
+            Arc::clone(&policy),
+            table.clone(),
+            Arc::clone(&stopped),
+            mtu,
+        )?;
+        Ok(Self {
+            #[cfg(not(any(windows, target_os = "linux")))]
+            device,
+            policy,
+            table,
+            udp: FullConeNat::new(capacity, UDP_IDLE),
+            flow_cache: HashMap::new(),
+            pool,
+            stopped,
+            #[cfg(any(windows, target_os = "linux"))]
+            reactor,
+            #[cfg(any(windows, target_os = "linux"))]
+            next_mapping_id: 1,
+            last_generation: generation,
+            last_sweep: Instant::now(),
+            #[cfg(not(any(windows, target_os = "linux")))]
+            mtu,
+        })
+    }
 }
 
 #[derive(Default)]
@@ -457,23 +599,19 @@ impl TunnelRuntime {
         mtu: usize,
     ) -> io::Result<SyncSender<Datagram>> {
         let (sender, receiver) = mpsc::sync_channel(UDP_QUEUE);
-        let stopped = Arc::clone(&self.stopped);
-        let generation = policy.generation();
-        let mut pump = UdpPump {
-            device: Arc::clone(&self.device),
-            policy: Arc::clone(policy),
-            table: self.table.clone(),
-            udp: FullConeNat::new(UDP_MAPPINGS, UDP_IDLE),
-            flow_cache: HashMap::new(),
+        let mut pump = UdpPump::new(
+            Arc::clone(&self.device),
+            Arc::clone(policy),
+            self.table.clone(),
+            UDP_MAPPINGS,
             pool,
-            stopped,
-            last_generation: generation,
-            last_sweep: Instant::now(),
+            Arc::clone(&self.stopped),
             mtu,
-        };
+        )?;
         self.udp_thread = Some(
             thread::Builder::new()
                 .name("rosetun-tun-udp".into())
+                .stack_size(WORKER_STACK_BYTES)
                 .spawn(move || pump.run(&receiver))?,
         );
         Ok(sender)
@@ -488,6 +626,7 @@ impl TunnelRuntime {
             self.dns_threads.push(
                 thread::Builder::new()
                     .name("rosetun-tun-dns".into())
+                    .stack_size(WORKER_STACK_BYTES)
                     .spawn(move || {
                         let mut reply_packet = Vec::with_capacity(mtu);
                         while let Some(query) = queue.pop(&stopped) {
@@ -627,6 +766,7 @@ impl Pump {
                 let closed = closed.clone();
                 if thread::Builder::new()
                     .name("rosetun-tun-tcp".into())
+                    .stack_size(WORKER_STACK_BYTES)
                     .spawn(move || {
                         let _client = client;
                         if let Err(error) = tunnel_tcp(stream, flow, &policy, &table, &stopped) {
@@ -770,15 +910,25 @@ impl UdpPump {
 
     fn shutdown_readers(&mut self) {
         self.flow_cache.clear();
-        let mut handles = Vec::new();
-        for mut mapping in self.udp.drain() {
-            mapping.closed.store(true, Ordering::Release);
-            if let Some(handle) = mapping.reader.take() {
-                handles.push(handle);
+        #[cfg(any(windows, target_os = "linux"))]
+        {
+            for mapping in self.udp.drain() {
+                drop(mapping);
             }
+            self.reactor.shutdown();
         }
-        for handle in handles {
-            let _ = handle.join();
+        #[cfg(not(any(windows, target_os = "linux")))]
+        {
+            let mut handles = Vec::new();
+            for mut mapping in self.udp.drain() {
+                mapping.closed.store(true, Ordering::Release);
+                if let Some(handle) = mapping.reader.take() {
+                    handles.push(handle);
+                }
+            }
+            for handle in handles {
+                let _ = handle.join();
+            }
         }
     }
 
@@ -816,41 +966,79 @@ impl UdpPump {
         };
         let cache_key = key.clone();
         let reader_key = key.clone();
-        let device = Arc::clone(&self.device);
-        let policy = Arc::clone(&self.policy);
-        let table = self.table.clone();
-        let stopped = Arc::clone(&self.stopped);
-        let mtu = self.mtu;
+        #[cfg(any(windows, target_os = "linux"))]
+        let (reactor_handle, next_id) = {
+            let id = self.next_mapping_id;
+            self.next_mapping_id = self.next_mapping_id.wrapping_add(1);
+            (self.reactor.handle.clone(), id)
+        };
+        #[cfg(not(any(windows, target_os = "linux")))]
+        let (device, policy, table, stopped, mtu) = (
+            Arc::clone(&self.device),
+            Arc::clone(&self.policy),
+            self.table.clone(),
+            Arc::clone(&self.stopped),
+            self.mtu,
+        );
         let Ok(mapping) = self.udp.path(key, now, || -> io::Result<UdpMapping> {
             let path = selected.dialer.udp_for(&remote, FLOW_TIMEOUT)?;
-            path.set_nonblocking(false)?;
-            path.set_read_timeout(Some(UDP_READ_TIMEOUT))?;
-            let path = Arc::new(path);
-            let peers = Arc::new(Mutex::new(HashMap::new()));
-            let received = Arc::new(AtomicBool::new(false));
-            let closed = Arc::new(AtomicBool::new(false));
-            let reader_context = UdpReader {
-                key: reader_key,
-                path: Arc::clone(&path),
-                peers: Arc::clone(&peers),
-                received: Arc::clone(&received),
-                closed: Arc::clone(&closed),
-                device,
-                policy,
-                table,
-                stopped,
-                mtu,
-            };
-            let reader = thread::Builder::new()
-                .name("rosetun-tun-udp-in".into())
-                .spawn(move || run_udp_reader(reader_context))?;
-            Ok(UdpMapping {
-                path,
-                peers,
-                received,
-                closed,
-                reader: Some(reader),
-            })
+            #[cfg(any(windows, target_os = "linux"))]
+            {
+                path.set_nonblocking(true)?;
+                let path = Arc::new(path);
+                let peers = Arc::new(Mutex::new(HashMap::new()));
+                let received = Arc::new(AtomicBool::new(false));
+                let closed = Arc::new(AtomicBool::new(false));
+                reactor_handle.add(UdpSlot {
+                    id: next_id,
+                    key: reader_key,
+                    path: Arc::clone(&path),
+                    peers: Arc::clone(&peers),
+                    received: Arc::clone(&received),
+                    closed: Arc::clone(&closed),
+                });
+                Ok(UdpMapping {
+                    id: next_id,
+                    path,
+                    peers,
+                    received,
+                    closed,
+                    reactor: reactor_handle,
+                })
+            }
+            #[cfg(not(any(windows, target_os = "linux")))]
+            {
+                path.set_nonblocking(false)?;
+                path.set_read_timeout(Some(UDP_READ_TIMEOUT))?;
+                let path = Arc::new(path);
+                let peers = Arc::new(Mutex::new(HashMap::new()));
+                let received = Arc::new(AtomicBool::new(false));
+                let closed = Arc::new(AtomicBool::new(false));
+                let slot = UdpSlot {
+                    key: reader_key,
+                    path: Arc::clone(&path),
+                    peers: Arc::clone(&peers),
+                    received: Arc::clone(&received),
+                    closed: Arc::clone(&closed),
+                };
+                let delivery = UdpDelivery {
+                    device,
+                    policy,
+                    table,
+                    mtu,
+                };
+                let reader = thread::Builder::new()
+                    .name("rosetun-tun-udp-in".into())
+                    .stack_size(WORKER_STACK_BYTES)
+                    .spawn(move || run_udp_reader(slot, delivery, stopped))?;
+                Ok(UdpMapping {
+                    path,
+                    peers,
+                    received,
+                    closed,
+                    reader: Some(reader),
+                })
+            }
         }) else {
             return;
         };
@@ -895,12 +1083,142 @@ impl UdpPump {
     }
 }
 
-fn run_udp_reader(reader: UdpReader) {
-    let mut response = vec![0; reader.mtu + 1];
+struct UdpDelivery {
+    device: Arc<dyn PacketDevice>,
+    policy: Arc<TunnelPolicy>,
+    table: ConnectionTable,
+    mtu: usize,
+}
+
+#[cfg(any(windows, target_os = "linux"))]
+fn run_udp_reactor(
+    waker_rx: UdpSocket,
+    commands: Arc<Mutex<VecDeque<ReactorCommand>>>,
+    device: Arc<dyn PacketDevice>,
+    policy: Arc<TunnelPolicy>,
+    table: ConnectionTable,
+    stopped: Arc<AtomicBool>,
+    mtu: usize,
+) {
+    let delivery = UdpDelivery {
+        device,
+        policy,
+        table,
+        mtu,
+    };
+    let mut slots: Vec<UdpSlot> = Vec::new();
+    let mut ready = Vec::new();
+    let mut dead = Vec::new();
+    let mut response = vec![0; mtu + 1];
     let mut scratch = Vec::new();
-    let mut reply_packet = Vec::with_capacity(reader.mtu);
-    while !reader.stopped.load(Ordering::Acquire) && !reader.closed.load(Ordering::Acquire) {
-        let (length, remote) = match reader.path.recv_from_into(&mut response, &mut scratch) {
+    let mut reply_packet = Vec::with_capacity(mtu);
+    let mut wake_buf = [0; 64];
+
+    while !stopped.load(Ordering::Acquire) {
+        if apply_reactor_commands(&commands, &mut slots) {
+            break;
+        }
+        let mut sockets: Vec<&UdpSocket> = Vec::with_capacity(slots.len() + 1);
+        sockets.push(&waker_rx);
+        for slot in &slots {
+            if let Some(socket) = slot.path.recv_socket() {
+                sockets.push(socket);
+            }
+        }
+        if crate::socket_ready::poll_udp_readable(&sockets, UDP_REACTOR_TIMEOUT, &mut ready)
+            .is_err()
+        {
+            thread::sleep(Duration::from_millis(1));
+            continue;
+        }
+        dead.clear();
+        for &index in &ready {
+            if index == 0 {
+                while waker_rx.recv(&mut wake_buf).is_ok() {}
+                continue;
+            }
+            let slot_index = index - 1;
+            let Some(slot) = slots.get(slot_index) else {
+                continue;
+            };
+            if slot.closed.load(Ordering::Acquire) {
+                dead.push(slot_index);
+                continue;
+            }
+            for _ in 0..UDP_RECV_BUDGET {
+                match slot.path.recv_from_into(&mut response, &mut scratch) {
+                    Ok((length, Some(remote))) => {
+                        deliver_udp_datagram(
+                            slot,
+                            remote,
+                            &response[..length],
+                            &delivery,
+                            &mut reply_packet,
+                        );
+                    }
+                    Ok((_, None)) => continue,
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                        ) =>
+                    {
+                        break;
+                    }
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            io::ErrorKind::Interrupted | io::ErrorKind::ConnectionReset
+                        ) || error.raw_os_error() == Some(10040) =>
+                    {
+                        continue;
+                    }
+                    Err(_) => {
+                        dead.push(slot_index);
+                        break;
+                    }
+                }
+            }
+        }
+        for slot_index in dead.drain(..).rev() {
+            if slot_index < slots.len() {
+                slots.swap_remove(slot_index);
+            }
+        }
+    }
+}
+
+#[cfg(any(windows, target_os = "linux"))]
+fn apply_reactor_commands(
+    commands: &Mutex<VecDeque<ReactorCommand>>,
+    slots: &mut Vec<UdpSlot>,
+) -> bool {
+    let mut queue = commands.lock().unwrap_or_else(PoisonError::into_inner);
+    while let Some(command) = queue.pop_front() {
+        match command {
+            ReactorCommand::Add(slot) => {
+                if slot.path.recv_socket().is_some() && !slot.closed.load(Ordering::Acquire) {
+                    slots.push(slot);
+                }
+            }
+            ReactorCommand::Remove(id) => {
+                if let Some(position) = slots.iter().position(|slot| slot.id == id) {
+                    slots.swap_remove(position);
+                }
+            }
+            ReactorCommand::Shutdown => return true,
+        }
+    }
+    false
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
+fn run_udp_reader(slot: UdpSlot, delivery: UdpDelivery, stopped: Arc<AtomicBool>) {
+    let mut response = vec![0; delivery.mtu + 1];
+    let mut scratch = Vec::new();
+    let mut reply_packet = Vec::with_capacity(delivery.mtu);
+    while !stopped.load(Ordering::Acquire) && !slot.closed.load(Ordering::Acquire) {
+        let (length, remote) = match slot.path.recv_from_into(&mut response, &mut scratch) {
             Ok((length, Some(remote))) => (length, remote),
             Ok((_, None)) => continue,
             Err(error)
@@ -916,59 +1234,74 @@ fn run_udp_reader(reader: UdpReader) {
             }
             Err(_) => break,
         };
-        if length > reader.mtu
-            || remote.port() == 53
-            || remote.is_ipv4() != reader.key.source.is_ipv4()
-        {
-            continue;
-        }
-        let registration = {
-            let mut peers = reader.peers.lock().unwrap_or_else(PoisonError::into_inner);
-            match peers.get(&remote) {
-                Some(registration) if registration.is_closed() => {
-                    peers.remove(&remote);
-                    continue;
-                }
-                Some(registration) => Some(registration.counters()),
-                None => None,
-            }
-        };
-        let registration = match registration {
-            Some(counters) => counters,
-            None => {
-                let flow = TcpFlow {
-                    source: reader.key.source,
-                    destination: remote,
-                };
-                let Some(selected) = reader.policy.select(&flow, ConnectionNetwork::Udp, None)
-                else {
-                    continue;
-                };
-                if selected.generation != reader.key.egress.generation
-                    || selected.meta.route != reader.key.egress.route
-                {
-                    continue;
-                }
-                let mut peers = reader.peers.lock().unwrap_or_else(PoisonError::into_inner);
-                let Some(counters) =
-                    udp_registration(&mut peers, remote, &reader.table, selected.meta)
-                else {
-                    continue;
-                };
-                counters
-            }
-        };
-        if write_reply_into(
-            reader.device.as_ref(),
+        deliver_udp_datagram(
+            &slot,
             remote,
-            reader.key.source,
             &response[..length],
-            reader.mtu,
+            &delivery,
             &mut reply_packet,
-        ) {
-            registration.add_down(length as u64);
-            reader.received.store(true, Ordering::Release);
+        );
+    }
+}
+
+fn deliver_udp_datagram(
+    slot: &UdpSlot,
+    remote: SocketAddr,
+    payload: &[u8],
+    delivery: &UdpDelivery,
+    reply_packet: &mut Vec<u8>,
+) {
+    if payload.len() > delivery.mtu
+        || remote.port() == 53
+        || remote.is_ipv4() != slot.key.source.is_ipv4()
+    {
+        return;
+    }
+    let registration = {
+        let mut peers = slot.peers.lock().unwrap_or_else(PoisonError::into_inner);
+        match peers.get(&remote) {
+            Some(registration) if registration.is_closed() => {
+                peers.remove(&remote);
+                return;
+            }
+            Some(registration) => Some(registration.counters()),
+            None => None,
         }
+    };
+    let registration = match registration {
+        Some(counters) => counters,
+        None => {
+            let flow = TcpFlow {
+                source: slot.key.source,
+                destination: remote,
+            };
+            let Some(selected) = delivery.policy.select(&flow, ConnectionNetwork::Udp, None) else {
+                return;
+            };
+            if selected.generation != slot.key.egress.generation
+                || selected.meta.route != slot.key.egress.route
+            {
+                return;
+            }
+            let mut peers = slot.peers.lock().unwrap_or_else(PoisonError::into_inner);
+            let Some(counters) =
+                udp_registration(&mut peers, remote, &delivery.table, selected.meta)
+            else {
+                return;
+            };
+            counters
+        }
+    };
+    if write_reply_into(
+        delivery.device.as_ref(),
+        remote,
+        slot.key.source,
+        payload,
+        delivery.mtu,
+        reply_packet,
+    ) {
+        registration.add_down(payload.len() as u64);
+        slot.received.store(true, Ordering::Release);
     }
 }
 
@@ -1148,20 +1481,16 @@ mod tests {
         let client: SocketAddr = "192.0.2.1:49151".parse().unwrap();
         let tun = Arc::new(MockTun::default());
         let stopped = Arc::new(AtomicBool::new(false));
-        let test_policy = policy(true);
-        let generation = test_policy.generation();
-        let mut pump = UdpPump {
-            device: tun.clone(),
-            policy: test_policy,
-            table: ConnectionTable::new(),
-            udp: FullConeNat::new(8, UDP_IDLE),
-            flow_cache: HashMap::new(),
-            pool: Arc::new(BufferPool::default()),
-            stopped: Arc::clone(&stopped),
-            last_generation: generation,
-            last_sweep: Instant::now(),
-            mtu: 1500,
-        };
+        let mut pump = UdpPump::new(
+            tun.clone(),
+            policy(true),
+            ConnectionTable::new(),
+            8,
+            Arc::new(BufferPool::default()),
+            Arc::clone(&stopped),
+            1500,
+        )
+        .unwrap();
         let datagram = Datagram {
             flow: TcpFlow {
                 source: client,
@@ -1225,18 +1554,16 @@ mod tests {
             }),
         ));
         let stopped = Arc::new(AtomicBool::new(false));
-        let mut pump = UdpPump {
-            device: Arc::new(MockTun::default()),
-            policy: Arc::clone(&test_policy),
-            table: ConnectionTable::new(),
-            udp: FullConeNat::new(8, UDP_IDLE),
-            flow_cache: HashMap::new(),
-            pool: Arc::new(BufferPool::default()),
-            stopped: Arc::clone(&stopped),
-            last_generation: test_policy.generation(),
-            last_sweep: Instant::now(),
-            mtu: 1500,
-        };
+        let mut pump = UdpPump::new(
+            Arc::new(MockTun::default()),
+            Arc::clone(&test_policy),
+            ConnectionTable::new(),
+            8,
+            Arc::new(BufferPool::default()),
+            Arc::clone(&stopped),
+            1500,
+        )
+        .unwrap();
         let datagram = Datagram {
             flow: TcpFlow {
                 source: client,
@@ -1311,20 +1638,17 @@ mod tests {
         let stopped = Arc::new(AtomicBool::new(false));
         let (sender, receiver) = mpsc::sync_channel(UDP_QUEUE);
         let table = ConnectionTable::new();
-        let generation = policy.generation();
         let udp_pool = Arc::new(BufferPool::default());
-        let mut udp = UdpPump {
-            device: device.clone(),
-            policy: Arc::clone(&policy),
-            table: table.clone(),
-            udp: FullConeNat::new(8, UDP_IDLE),
-            flow_cache: HashMap::new(),
-            pool: Arc::clone(&udp_pool),
-            stopped: Arc::clone(&stopped),
-            last_generation: generation,
-            last_sweep: Instant::now(),
-            mtu: 1500,
-        };
+        let mut udp = UdpPump::new(
+            device.clone(),
+            Arc::clone(&policy),
+            table.clone(),
+            8,
+            Arc::clone(&udp_pool),
+            Arc::clone(&stopped),
+            1500,
+        )
+        .unwrap();
         let mut pump = Pump {
             device: device.clone(),
             policy,
