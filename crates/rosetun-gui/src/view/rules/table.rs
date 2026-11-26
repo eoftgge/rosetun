@@ -222,11 +222,6 @@ fn target_picker(
             } else {
                 theme::disabled()
             };
-            ui.painter().circle_filled(
-                egui::pos2(rect.left() + TARGET_DOT_X, rect.center().y),
-                3.5,
-                color,
-            );
             let text = if full_field {
                 &current.label
             } else {
@@ -241,10 +236,27 @@ fn target_picker(
                 rect.width() - TARGET_TEXT_X - TARGET_CHEVRON_SPACE,
             );
             let galley = ui.painter().layout_job(job);
+            let (dot_x, text_x) = if full_field {
+                (rect.left() + TARGET_DOT_X, rect.left() + TARGET_TEXT_X)
+            } else {
+                let dot_to_text = TARGET_TEXT_X - TARGET_DOT_X;
+                let group_width = TARGET_DOT_RADIUS + dot_to_text + galley.size().x;
+                let area_left = rect.left() + theme::space::S;
+                let area_right = rect.right() - TARGET_CHEVRON_SPACE;
+                let group_left = (area_left + (area_right - area_left - group_width) / 2.0)
+                    .max(rect.left() + TARGET_DOT_X - TARGET_DOT_RADIUS);
+                let dot_x = group_left + TARGET_DOT_RADIUS;
+                (dot_x, dot_x + dot_to_text)
+            };
+            ui.painter().circle_filled(
+                egui::pos2(dot_x, rect.center().y),
+                TARGET_DOT_RADIUS,
+                color,
+            );
             ui.painter().galley(
                 egui::pos2(
-                    rect.left() + TARGET_TEXT_X,
-                    rect.center().y - galley.size().y / 2.0,
+                    text_x,
+                    rect.center().y - galley.size().y / 2.0 - TARGET_TEXT_OPTICAL_Y,
                 ),
                 galley,
                 color,

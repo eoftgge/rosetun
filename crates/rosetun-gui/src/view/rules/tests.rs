@@ -965,6 +965,55 @@ fn exit_button_shows_the_exit_name_without_truncation() {
     assert_eq!(texts, ["Нидерланды"]);
 }
 
+#[test]
+fn target_button_centres_dot_and_label_in_the_area_before_the_chevron() {
+    let ctx = egui::Context::default();
+    theme::apply(&ctx);
+    let current = TargetChoice::plain(RuleTarget::Direct);
+    let mut button_rect = egui::Rect::NOTHING;
+    let mut output = ctx.run_ui(egui::RawInput::default(), |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            button_rect = ui
+                .scope(|ui| {
+                    target_button(ui, "centred_target", &current, &[], true);
+                })
+                .response
+                .rect;
+        });
+    });
+    output.textures_delta.clear();
+    let dot_x = output
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::Shape::Circle(circle) => Some(circle.center.x),
+            _ => None,
+        })
+        .expect("target button paints a dot");
+    let text_rect = output
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) => Some(text.galley.rect.translate(text.pos.to_vec2())),
+            _ => None,
+        })
+        .expect("target button paints a label");
+    let area_left = button_rect.left() + theme::space::S;
+    let area_right = button_rect.right() - TARGET_CHEVRON_SPACE;
+    let group_left = dot_x - TARGET_DOT_RADIUS;
+    let group_right = text_rect.right();
+    let left_gap = group_left - area_left;
+    let right_gap = area_right - group_right;
+    assert!(
+        (left_gap - right_gap).abs() < 1.0,
+        "expected dot+label centred horizontally: left_gap={left_gap}, right_gap={right_gap}"
+    );
+    assert!(
+        (text_rect.center().y - (button_rect.center().y - TARGET_TEXT_OPTICAL_Y)).abs() < 1.0,
+        "expected label optically centred vertically"
+    );
+}
+
 fn check_line(rule: Option<(String, RuleId)>) -> crate::state::CheckLine {
     crate::state::CheckLine {
         text: tr!(
