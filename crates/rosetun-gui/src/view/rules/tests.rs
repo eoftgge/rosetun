@@ -1208,6 +1208,7 @@ fn group_editor_dialog_renders_all_item_kinds_in_both_languages() {
                     original_name: "geosite.dat".into(),
                 },
                 categories: vec!["youtube".into(), "ru".into()],
+                auto_update: true,
                 size: Some(100),
                 updated_at: None,
                 sha256: Some("abc".into()),

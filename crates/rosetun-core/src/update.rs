@@ -2,7 +2,7 @@ use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet};
 
 use rosetun_config::{AppConfig, SubscriptionId};
-use rosetun_subscription::{Parsed, SkipReason, Skipped, protocol_display_name};
+use rosetun_subscription::{HappRouting, Parsed, SkipReason, Skipped, protocol_display_name};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct UnsupportedProtocolCounts {
@@ -27,6 +27,7 @@ pub struct UpdateReport {
     pub skipped: BTreeMap<SkipReason, usize>,
     pub unsupported_protocols: UnsupportedProtocolCounts,
     pub notices: Vec<String>,
+    pub routing: Option<Box<HappRouting>>,
 }
 
 pub fn group_skipped(skipped: &[Skipped]) -> BTreeMap<SkipReason, usize> {
@@ -96,6 +97,7 @@ pub(crate) fn apply_update(
         skipped: group_skipped(&parsed.skipped),
         unsupported_protocols: group_unsupported_protocols(&parsed.skipped),
         notices: parsed.meta.notices.clone(),
+        routing: parsed.meta.routing.map(Box::new),
     };
 
     subscription.nodes = parsed.nodes;
@@ -453,6 +455,7 @@ mod tests {
                 web_page_url: Some("https://panel.example.com/".to_owned()),
                 announce: Some("New announcement".to_owned()),
                 notices: vec!["New notice".to_owned()],
+                routing: None,
             },
         }
     }

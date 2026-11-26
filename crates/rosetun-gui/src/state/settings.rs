@@ -138,6 +138,7 @@ fn waits_for_save(action: &Action) -> bool {
         | Action::EnableXrayAutoAndConnect
         | Action::SetSubscriptionsViaVpn(_)
         | Action::SetAutoUpdateSubscriptions(_)
+        | Action::SetAutoUpdateLists(_)
         | Action::SetCheckUpdates(_)
         | Action::SaveDns
         | Action::SetDnsPreset(_)
@@ -758,6 +759,12 @@ impl State {
                     return self.start_settings(Job::Setting(
                         SettingChange::AutoUpdateSubscriptions(enabled),
                     ));
+                }
+            }
+            Action::SetAutoUpdateLists(enabled) => {
+                if self.can_edit_settings() && self.config.interface.auto_update_lists != enabled {
+                    return self
+                        .start_settings(Job::Setting(SettingChange::AutoUpdateLists(enabled)));
                 }
             }
             Action::SetSubscriptionsViaVpn(enabled) => {

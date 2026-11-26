@@ -67,7 +67,8 @@ pub(in crate::state) fn update_due(
 }
 
 pub(in crate::state) fn list_update_due(list: &List, now: u64, last_attempt: Option<u64>) -> bool {
-    matches!(&list.source, ListSource::Url(_))
+    list.auto_update
+        && matches!(&list.source, ListSource::Url(_))
         && list
             .updated_at
             .is_none_or(|updated| now.saturating_sub(updated) >= AUTO_UPDATE_HOURS * 60 * 60)
@@ -306,18 +307,21 @@ pub(crate) struct SubscriptionsState {
 
 impl State {
     pub(in crate::state) fn auto_update_due(&self) -> Option<u64> {
-        (self.config_ready && self.config.interface.auto_update_subscriptions)
+        (self.config_ready
+            && (self.config.interface.auto_update_subscriptions
+                || self.config.interface.auto_update_lists))
             .then_some(self.subscriptions.next_auto_update_check)
     }
 
-    /// Starts at most one due subscription on each schedule check.
+    /// Starts at most one due subscription or list on each schedule check.
     pub(crate) fn take_auto_update(&mut self, now: u64) -> Option<Job> {
         if now < self.subscriptions.next_auto_update_check {
             return None;
         }
         self.subscriptions.next_auto_update_check = now.saturating_add(AUTO_UPDATE_CHECK);
         if !self.config_ready
-            || !self.config.interface.auto_update_subscriptions
+            || (!self.config.interface.auto_update_subscriptions
+                && !self.config.interface.auto_update_lists)
             || self.operations.update_all
             || !self.operations.updating_lists.is_empty()
             || self.operations.helper
@@ -330,22 +334,23 @@ impl State {
         {
             return None;
         }
-        if let Some(id) = self
-            .config
-            .subscriptions
-            .iter()
-            .find(|subscription| {
-                !self.subscription_busy(&subscription.id)
-                    && update_due(
-                        subscription,
-                        now,
-                        self.subscriptions
-                            .auto_update_attempts
-                            .get(&subscription.id)
-                            .copied(),
-                    )
-            })
-            .map(|subscription| subscription.id.clone())
+        if self.config.interface.auto_update_subscriptions
+            && let Some(id) = self
+                .config
+                .subscriptions
+                .iter()
+                .find(|subscription| {
+                    !self.subscription_busy(&subscription.id)
+                        && update_due(
+                            subscription,
+                            now,
+                            self.subscriptions
+                                .auto_update_attempts
+                                .get(&subscription.id)
+                                .copied(),
+                        )
+                })
+                .map(|subscription| subscription.id.clone())
         {
             self.subscriptions
                 .auto_update_attempts
@@ -355,6 +360,9 @@ impl State {
             return Some(Job::Update(id));
         }
 
+        if !self.config.interface.auto_update_lists {
+            return None;
+        }
         let id = self
             .config
             .lists
@@ -452,7 +460,13 @@ impl State {
         result: Result<(rosetun_config::Subscription, UpdateReport), UpdateSubscriptionError>,
     ) {
         let outcome = match result {
-            Ok((_, report)) => UpdateOutcome::Success(report),
+            Ok((subscription, report)) => {
+                if let Some(routing) = report.routing.as_deref().cloned() {
+                    self.lists.pending_happ_routing =
+                        Some((self.text(&subscription.name), routing));
+                }
+                UpdateOutcome::Success(report)
+            }
             Err(error) => UpdateOutcome::Error(error),
         };
         self.subscriptions.outcomes.insert(id, outcome);
@@ -462,6 +476,10 @@ impl State {
         match event {
             WorkerEvent::Add(result) => match result {
                 Ok((subscription, report)) => {
+                    if let Some(routing) = report.routing.as_deref().cloned() {
+                        self.lists.pending_happ_routing =
+                            Some((self.text(&subscription.name), routing));
+                    }
                     self.subscriptions.expanded.insert(subscription.id.clone());
                     self.subscriptions
                         .outcomes
@@ -648,6 +666,23 @@ impl State {
                         });
                         return None;
                     }
+                    if let Some((routing, activate)) =
+                        rosetun_core::parse_happ_routing_uri(&dialog.url)
+                    {
+                        let fallback_name = if dialog.name.trim().is_empty() {
+                            "Happ".to_owned()
+                        } else {
+                            dialog.name.trim().to_owned()
+                        };
+                        self.subscriptions.add = None;
+                        self.lists.importing_happ_routing = true;
+                        self.operation_error = None;
+                        return Some(Job::ImportHappRouting {
+                            routing: Box::new(routing),
+                            fallback_name,
+                            activate,
+                        });
+                    }
                     match rosetun_core::normalize_subscription_url(&dialog.url) {
                         Ok(input) => {
                             dialog.busy = true;
@@ -815,6 +850,11 @@ impl State {
         // A page must not replace what the user is typing.
         if self.subscriptions.add.is_some() {
             return None;
+        }
+        if let Some((routing, _)) = rosetun_core::parse_happ_routing_uri(&link.0) {
+            self.lists.pending_happ_routing = Some(("Happ".to_owned(), routing));
+            self.lists.tab = super::lists::RulesTab::Rules;
+            return self.show_screen(Screen::Rules);
         }
         let Ok(opened) = rosetun_core::parse_open_link(&link.0) else {
             self.subscriptions.add = Some(AddDialog {

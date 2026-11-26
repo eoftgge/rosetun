@@ -3,11 +3,11 @@ use std::collections::BTreeMap;
 use rosetun_config::{ConfigError, ListCategoryError};
 use rosetun_core::{
     AddFromUrlError, AddSubscriptionError, DnsInputError, ExitError, FetchError,
-    FragmentInputError, ListError, ListParseError, ListPreparationError, MoveSubscriptionError,
-    ParseError, RemoveSubscriptionError, RenameSubscriptionError, RuleInputError, RuleSetError,
-    SelectNodeError, SelectRuleSetError, SettingsError, SkipReason, StoreError,
-    SubscriptionUrlError, TextErrorKind, UnsupportedProtocolCounts, UnsupportedTransport,
-    UpdateSubscriptionError,
+    FragmentInputError, HappImportError, ListError, ListParseError, ListPreparationError,
+    MoveSubscriptionError, ParseError, RemoveSubscriptionError, RenameSubscriptionError,
+    RuleInputError, RuleSetError, SelectNodeError, SelectRuleSetError, SettingsError, SkipReason,
+    StoreError, SubscriptionUrlError, TextErrorKind, UnsupportedProtocolCounts,
+    UnsupportedTransport, UpdateSubscriptionError,
 };
 use rosetun_ipc::{ClientError, ConnectRequestError, ErrorCode};
 use rosetun_processes::ProcessListError;
@@ -76,6 +76,16 @@ pub(crate) fn store(language: Language, error: &StoreError) -> String {
                 ("detail", &config(language, source)),
             ]),
         ),
+    }
+}
+
+pub(crate) fn happ_import(language: Language, error: &HappImportError) -> String {
+    match error {
+        HappImportError::NoSupportedRules => {
+            tr_in(language, "error-happ-routing-empty", &FluentArgs::new())
+        }
+        HappImportError::List(error) => list(language, error),
+        HappImportError::Store(error) => store(language, error),
     }
 }
 

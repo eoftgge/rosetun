@@ -160,9 +160,36 @@ impl WorkerDispatcher {
         });
     }
 
+    pub(crate) fn set_list_auto_update(&self, id: ListId, enabled: bool) {
+        self.spawn_complete("rosetun-list-auto-update", move |store| {
+            WorkerEvent::SetListAutoUpdate(set_list_auto_update(store, &id, enabled))
+        });
+    }
+
     pub(crate) fn remove_list(&self, id: ListId) {
         self.spawn_complete("rosetun-remove-list", move |store| {
             WorkerEvent::RemoveList(remove_list(store, &id))
+        });
+    }
+
+    pub(crate) fn import_happ_routing(
+        &self,
+        routing: HappRouting,
+        fallback_name: String,
+        activate: bool,
+    ) {
+        self.spawn_complete("rosetun-import-happ-routing", move |store| {
+            let result = import_happ_routing(
+                store,
+                &routing,
+                &fallback_name,
+                activate,
+                Timeouts::default(),
+            );
+            if let Err(error) = &result {
+                subscriptions::log_list_error("happ routing import", error);
+            }
+            WorkerEvent::ImportHappRouting(result)
         });
     }
 }

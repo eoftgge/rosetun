@@ -45,6 +45,7 @@ fn list_state() -> State {
             original_name: "videos.json".into(),
         },
         format: ListFormat::SingBoxSource,
+        auto_update: true,
         updated_at: Some(100),
         size: Some(12),
         sha256: Some("a".repeat(64)),

@@ -34,6 +34,7 @@ fn report() -> UpdateReport {
         skipped: BTreeMap::new(),
         unsupported_protocols: Default::default(),
         notices: vec![],
+        routing: None,
     }
 }
 

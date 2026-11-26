@@ -668,6 +668,7 @@ mod tests {
                 web_page_url: subscription.web_page_url.clone(),
                 announce: subscription.announce.clone(),
                 notices: subscription.notices.clone(),
+                routing: None,
             },
         }
     }

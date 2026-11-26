@@ -335,6 +335,7 @@ pub(crate) enum Action {
     SaveTlsFragment,
     EnableXrayAutoAndConnect,
     SetAutoUpdateSubscriptions(bool),
+    SetAutoUpdateLists(bool),
     SetSubscriptionsViaVpn(bool),
     SetCheckUpdates(bool),
     CheckUpdatesNow,
@@ -371,6 +372,10 @@ pub(crate) enum Action {
     SubmitAddList,
     UpdateListManual(ListId),
     UpdateListFile(ListId),
+    SetListAutoUpdate(ListId, bool),
+    AddListPreset(&'static str),
+    ImportHappRouting,
+    DismissHappRouting,
     OpenRenameList(ListId),
     CancelRenameList,
     SubmitRenameList,
@@ -637,7 +642,13 @@ pub(crate) enum Job {
         temporary: Vec<rosetun_config::Rule>,
     },
     RenameList(ListId, String),
+    SetListAutoUpdate(ListId, bool),
     RemoveList(ListId),
+    ImportHappRouting {
+        routing: Box<rosetun_core::HappRouting>,
+        fallback_name: String,
+        activate: bool,
+    },
     Ping(SubscriptionId),
     PingNode(SubscriptionId, NodeId),
     FullCheck(SubscriptionId),
@@ -845,7 +856,9 @@ impl State {
             | WorkerEvent::UpdateList { .. }
             | WorkerEvent::FileListUpdateCancelled(_)
             | WorkerEvent::RenameList(_)
-            | WorkerEvent::RemoveList(_)) => self.reduce_lists(event),
+            | WorkerEvent::SetListAutoUpdate(_)
+            | WorkerEvent::RemoveList(_)
+            | WorkerEvent::ImportHappRouting(_)) => self.reduce_lists(event),
         }
     }
 
@@ -926,6 +939,7 @@ impl State {
             | Action::EnableXrayAutoAndConnect
             | Action::SetSubscriptionsViaVpn(_)
             | Action::SetAutoUpdateSubscriptions(_)
+            | Action::SetAutoUpdateLists(_)
             | Action::SetCheckUpdates(_)
             | Action::SaveDns
             | Action::SelectCustomDns
@@ -967,6 +981,10 @@ impl State {
             | Action::SubmitAddList
             | Action::UpdateListManual(_)
             | Action::UpdateListFile(_)
+            | Action::SetListAutoUpdate(_, _)
+            | Action::AddListPreset(_)
+            | Action::ImportHappRouting
+            | Action::DismissHappRouting
             | Action::OpenRenameList(_)
             | Action::CancelRenameList
             | Action::SubmitRenameList

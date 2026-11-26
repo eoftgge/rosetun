@@ -591,6 +591,7 @@ pub fn preview(
                     size: None,
                     sha256: None,
                     categories: Vec::new(),
+                    auto_update: true,
                 });
             }
             id
@@ -917,6 +918,7 @@ mod tests {
             size: Some(123),
             sha256: Some("private-hash".into()),
             categories: vec![],
+            auto_update: true,
         });
         let mut original = set();
         original.rules.push(rule(RuleMatcher::List {

@@ -367,6 +367,7 @@ mod tests {
             name: "Sites".into(),
             source: ListSource::Url("https://lists.example.com/private-token".into()),
             format: ListFormat::Text,
+            auto_update: true,
             updated_at: None,
             size: None,
             sha256: None,

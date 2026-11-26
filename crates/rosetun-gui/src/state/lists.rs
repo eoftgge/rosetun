@@ -2,9 +2,9 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use rosetun_config::{AppConfig, ListFormat, ListId, ListSource, Rule, RuleMatcher};
-use rosetun_core::{ListError, MissingListCategory};
+use rosetun_core::{HappRouting, ListError, MissingListCategory};
 
-use super::{Action, Job, State};
+use super::{Action, Job, Screen, State};
 use crate::errors;
 use crate::worker::WorkerEvent;
 
@@ -108,6 +108,9 @@ pub(crate) enum ListOutcome {
 pub(crate) struct ListsState {
     pub(crate) tab: RulesTab,
     pub(crate) add: Option<AddListDialog>,
+    pub(crate) adding_preset: Option<&'static str>,
+    pub(crate) pending_happ_routing: Option<(String, HappRouting)>,
+    pub(crate) importing_happ_routing: bool,
     pub(crate) rename: Option<RenameListDialog>,
     pub(crate) remove: Option<RemoveListDialog>,
     pub(crate) outcomes: BTreeMap<ListId, ListOutcome>,
@@ -286,7 +289,12 @@ impl State {
                 }
             }
             WorkerEvent::AddList(result) => {
-                if let Some(dialog) = &mut self.lists.add {
+                if self.lists.adding_preset.take().is_some() {
+                    if let Err(error) = result {
+                        self.lists.error =
+                            Some(self.text(&errors::list(crate::i18n::language(), &error)));
+                    }
+                } else if let Some(dialog) = &mut self.lists.add {
                     dialog.busy = false;
                     match result {
                         Ok((list, entries)) => {
@@ -330,6 +338,12 @@ impl State {
                     }
                 }
             }
+            WorkerEvent::SetListAutoUpdate(result) => {
+                if let Err(error) = result {
+                    self.lists.error =
+                        Some(self.text(&errors::list(crate::i18n::language(), &error)));
+                }
+            }
             WorkerEvent::RemoveList(result) => {
                 let result = result
                     .map_err(|error| self.text(&errors::list(crate::i18n::language(), &error)));
@@ -338,6 +352,22 @@ impl State {
                     match result {
                         Ok(()) => self.lists.remove = None,
                         Err(error) => dialog.error = Some(error),
+                    }
+                }
+            }
+            WorkerEvent::ImportHappRouting(result) => {
+                self.lists.importing_happ_routing = false;
+                match result {
+                    Ok(report) => {
+                        self.lists.pending_happ_routing = None;
+                        self.rules.screen.selected_set = Some(report.rule_set.id);
+                        self.screen = Screen::Rules;
+                        self.lists.tab = RulesTab::Rules;
+                        self.request_list_inspection();
+                    }
+                    Err(error) => {
+                        self.operation_error =
+                            Some(self.text(&errors::happ_import(crate::i18n::language(), &error)));
                     }
                 }
             }
@@ -496,6 +526,56 @@ impl State {
                     dialog.busy = true;
                     dialog.error = None;
                     return Some(Job::RemoveList(dialog.id.clone()));
+                }
+            }
+            Action::SetListAutoUpdate(id, enabled) => {
+                if self.config_ready
+                    && self.config.lists.iter().any(|list| {
+                        list.id == id
+                            && matches!(list.source, ListSource::Url(_))
+                            && list.auto_update != enabled
+                    })
+                {
+                    self.lists.error = None;
+                    return Some(Job::SetListAutoUpdate(id, enabled));
+                }
+            }
+            Action::AddListPreset(preset_id) => {
+                if self.config_ready
+                    && self.lists.adding_preset.is_none()
+                    && self.lists.add.is_none()
+                    && let Some(preset) = rosetun_core::LIST_PRESETS
+                        .iter()
+                        .find(|preset| preset.id == preset_id)
+                    && !self.config.lists.iter().any(
+                        |list| matches!(&list.source, ListSource::Url(url) if url == preset.url),
+                    )
+                {
+                    self.lists.adding_preset = Some(preset.id);
+                    self.lists.error = None;
+                    return Some(Job::AddListUrl(
+                        preset.url.to_owned(),
+                        preset.name.to_owned(),
+                    ));
+                }
+            }
+            Action::ImportHappRouting => {
+                if self.config_ready
+                    && !self.lists.importing_happ_routing
+                    && let Some((name, routing)) = self.lists.pending_happ_routing.clone()
+                {
+                    self.lists.importing_happ_routing = true;
+                    self.operation_error = None;
+                    return Some(Job::ImportHappRouting {
+                        routing: Box::new(routing),
+                        fallback_name: name,
+                        activate: false,
+                    });
+                }
+            }
+            Action::DismissHappRouting => {
+                if !self.lists.importing_happ_routing {
+                    self.lists.pending_happ_routing = None;
                 }
             }
             Action::DismissListsError => self.lists.error = None,

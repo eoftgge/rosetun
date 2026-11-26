@@ -41,6 +41,7 @@
     "close_to_tray": false,
     "connect_on_start": true,
     "auto_update_subscriptions": false,
+    "auto_update_lists": false,
     "subscriptions_via_vpn": true,
     "check_updates": false,
     "skipped_version": "v9.9.9-test",
@@ -714,7 +715,8 @@
       "updated_at": 1700000004,
       "size": 12,
       "sha256": "391196688aa55d3321deffa736f8d103b4813470952b748e9c2c9deb17fa60f5",
-      "categories": []
+      "categories": [],
+      "auto_update": false
     },
     {
       "id": "2",

@@ -78,6 +78,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
         ui.colored_label(theme::palette().text_dim, tr!("loading"));
         return;
     }
+    base_lists_section(ui, state, actions);
     if state.config.lists.is_empty() {
         ui.add_space(theme::space::M);
         widgets::card_frame().show(ui, |ui| {
@@ -107,6 +108,49 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                 });
             }
         });
+}
+
+fn base_lists_section(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
+    widgets::card_frame()
+        .stroke(Stroke::new(
+            theme::stroke::HAIRLINE,
+            theme::palette().border,
+        ))
+        .show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.label(RichText::new(tr!("lists-base-title")).strong());
+            ui.add(
+                egui::Label::new(
+                    RichText::new(tr!("lists-base-detail"))
+                        .small()
+                        .color(theme::palette().text_muted),
+                )
+                .wrap(),
+            );
+            ui.add_space(theme::space::S);
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = egui::vec2(theme::space::S, theme::space::S);
+                for preset in rosetun_core::LIST_PRESETS {
+                    let added = state.config.lists.iter().any(
+                        |list| matches!(&list.source, ListSource::Url(url) if url == preset.url),
+                    );
+                    let downloading = state.lists.adding_preset == Some(preset.id);
+                    let enabled =
+                        !added && state.lists.adding_preset.is_none() && state.lists.add.is_none();
+                    let label = if downloading {
+                        tr!("lists-base-downloading", name = preset.name)
+                    } else if added {
+                        tr!("lists-base-added", name = preset.name)
+                    } else {
+                        preset.name.to_owned()
+                    };
+                    if widgets::outline_button(ui, &label, enabled).clicked() {
+                        actions.push(Action::AddListPreset(preset.id));
+                    }
+                }
+            });
+        });
+    ui.add_space(theme::space::S);
 }
 
 fn list_card(
@@ -292,6 +336,28 @@ fn list_menu(
                 ListSource::File { .. } => Action::UpdateListFile(list.id.clone()),
             });
             ui.close();
+        }
+        if matches!(list.source, ListSource::Url(_)) {
+            let note = (!state.config.interface.auto_update_lists)
+                .then(|| tr!("list-auto-update-global-off"));
+            if widgets::menu_item(
+                ui,
+                widgets::MenuItem {
+                    label: &tr!("list-auto-update"),
+                    enabled: !busy,
+                    selected: list.auto_update,
+                    danger: false,
+                    note: note.as_deref(),
+                },
+            )
+            .clicked()
+            {
+                actions.push(Action::SetListAutoUpdate(
+                    list.id.clone(),
+                    !list.auto_update,
+                ));
+                ui.close();
+            }
         }
         if widgets::menu_item(
             ui,
@@ -513,6 +579,7 @@ mod tests {
             name: "Example".into(),
             source: ListSource::Url("https://example.com/list.txt".into()),
             format: ListFormat::Text,
+            auto_update: true,
             updated_at: None,
             size: None,
             sha256: None,
@@ -530,6 +597,7 @@ mod tests {
             name: "Example".into(),
             source: ListSource::Url("https://example.com/lists/sites.txt".into()),
             format: ListFormat::Text,
+            auto_update: true,
             updated_at: None,
             size: Some(12),
             sha256: None,

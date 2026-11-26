@@ -27,7 +27,77 @@ pub use prepare::{
 };
 
 pub const MAX_LIST_BYTES: usize = 128 * 1024 * 1024;
+/// How often background auto-update refreshes URL-backed rule lists.
+pub const LIST_AUTO_UPDATE_SECS: u64 = 24 * 60 * 60;
 static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
+
+/// Built-in base list source offered in the Lists catalog for 1-click download.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ListPreset {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub url: &'static str,
+    pub format: ListFormat,
+}
+
+pub const LIST_PRESETS: &[ListPreset] = &[
+    ListPreset {
+        id: "v2fly-geosite",
+        name: "v2fly Geosite",
+        url: "https://github.com/v2fly/domain-list-community/releases/latest/download/dlc.dat",
+        format: ListFormat::GeoSite,
+    },
+    ListPreset {
+        id: "v2fly-geoip",
+        name: "v2fly GeoIP",
+        url: "https://github.com/v2fly/geoip/releases/latest/download/geoip.dat",
+        format: ListFormat::GeoIp,
+    },
+    ListPreset {
+        id: "runetfreedom-geosite",
+        name: "Runetfreedom Geosite",
+        url: "https://raw.githubusercontent.com/runetfreedom/russia-v2ray-rules-dat/release/geosite.dat",
+        format: ListFormat::GeoSite,
+    },
+    ListPreset {
+        id: "runetfreedom-geoip",
+        name: "Runetfreedom GeoIP",
+        url: "https://raw.githubusercontent.com/runetfreedom/russia-v2ray-rules-dat/release/geoip.dat",
+        format: ListFormat::GeoIp,
+    },
+];
+
+pub fn set_list_auto_update(store: &Store, id: &ListId, enabled: bool) -> Result<List, ListError> {
+    let mut updated = None;
+    store.modify(|config| {
+        let Some(list) = config.lists.iter_mut().find(|item| &item.id == id) else {
+            return Ok::<_, StoreError>(());
+        };
+        list.auto_update = enabled;
+        updated = Some(list.clone());
+        Ok(())
+    })?;
+    updated.ok_or(ListError::NotFound)
+}
+
+/// URL-backed lists that are eligible for background auto-update at `now_unix`.
+pub fn lists_due_for_auto_update(config: &rosetun_config::AppConfig, now_unix: u64) -> Vec<ListId> {
+    if !config.interface.auto_update_lists {
+        return Vec::new();
+    }
+    config
+        .lists
+        .iter()
+        .filter(|list| {
+            list.auto_update
+                && matches!(list.source, ListSource::Url(_))
+                && list
+                    .updated_at
+                    .is_none_or(|at| now_unix.saturating_sub(at) >= LIST_AUTO_UPDATE_SECS)
+        })
+        .map(|list| list.id.clone())
+        .collect()
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum ListError {
@@ -454,6 +524,7 @@ fn commit_list(
                 .as_ref()
                 .map_or_else(|| next_id(config), |item| item.id.clone());
             let name = previous.as_ref().map_or(name, |item| item.name.clone());
+            let auto_update = previous.as_ref().is_none_or(|item| item.auto_update);
             let current = List {
                 id,
                 name,
@@ -463,6 +534,7 @@ fn commit_list(
                 size: Some(size),
                 sha256: Some(sha256),
                 categories,
+                auto_update,
             };
             if let Some(previous) = &previous {
                 let index = config

@@ -644,6 +644,7 @@ fn connection(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
             actions.push(Action::SetAutoReconnect(auto_reconnect));
         }
         let mut auto_update_subscriptions = state.config.interface.auto_update_subscriptions;
+        let mut auto_update_lists = state.config.interface.auto_update_lists;
         let mut subscriptions_via_vpn = state.config.interface.subscriptions_via_vpn;
         if card
             .toggle(
@@ -670,6 +671,18 @@ fn connection(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
             actions.push(Action::SetAutoUpdateSubscriptions(
                 auto_update_subscriptions,
             ));
+        }
+        if card
+            .toggle(
+                tr!("auto-update-lists"),
+                None,
+                tr!("auto-update-lists-detail"),
+                &mut auto_update_lists,
+                editable,
+            )
+            .changed()
+        {
+            actions.push(Action::SetAutoUpdateLists(auto_update_lists));
         }
     });
 }

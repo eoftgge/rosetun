@@ -230,6 +230,55 @@ fn show_apply_notice(
     }
 }
 
+fn happ_routing_notice(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
+    let Some((name, _)) = &state.lists.pending_happ_routing else {
+        return;
+    };
+    let importing = state.lists.importing_happ_routing;
+    widgets::card_frame()
+        .stroke(Stroke::new(
+            theme::stroke::HAIRLINE,
+            theme::palette().accent_light,
+        ))
+        .show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            egui::Sides::new().shrink_left().wrap().show(
+                ui,
+                |ui| {
+                    ui.vertical(|ui| {
+                        ui.label(
+                            RichText::new(tr!("happ-routing-offer", name = name.as_str())).strong(),
+                        );
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(tr!("happ-routing-offer-detail"))
+                                    .small()
+                                    .color(theme::palette().text_muted),
+                            )
+                            .wrap(),
+                        );
+                    });
+                },
+                |ui| {
+                    ui.horizontal(|ui| {
+                        let import_label = if importing {
+                            tr!("happ-routing-importing")
+                        } else {
+                            tr!("happ-routing-import")
+                        };
+                        if widgets::button_fill(ui, import_label, !importing).clicked() {
+                            actions.push(Action::ImportHappRouting);
+                        }
+                        if widgets::outline_button(ui, tr!("hide-details"), !importing).clicked() {
+                            actions.push(Action::DismissHappRouting);
+                        }
+                    });
+                },
+            );
+        });
+    ui.add_space(theme::space::M);
+}
+
 fn tab_body(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
     match state.lists.tab {
         RulesTab::Rules => {}
@@ -248,6 +297,7 @@ fn tab_body(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
         ui.colored_label(theme::palette().text_dim, tr!("loading"));
         return;
     }
+    happ_routing_notice(ui, state, actions);
     if state.config.rule_sets.is_empty() {
         ui.colored_label(theme::palette().text_muted, tr!("no-rule-sets"));
         ui.add_space(theme::space::M);

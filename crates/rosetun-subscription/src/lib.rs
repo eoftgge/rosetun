@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod common;
+mod happ;
 mod json;
 mod links;
 mod meta;
@@ -13,6 +14,9 @@ use std::fmt;
 
 use rosetun_config::{Node, SubscriptionInfo};
 
+pub use happ::{
+    HappBucket, HappRouteOrder, HappRouting, parse_happ_routing_base64, parse_happ_routing_uri,
+};
 pub use proxy::parse_proxy_uri;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,6 +54,7 @@ pub struct SubscriptionMeta {
     pub web_page_url: Option<String>,
     pub announce: Option<String>,
     pub notices: Vec<String>,
+    pub routing: Option<HappRouting>,
 }
 
 impl fmt::Debug for SubscriptionMeta {
@@ -62,6 +67,7 @@ impl fmt::Debug for SubscriptionMeta {
             .field("has_web_page_url", &self.web_page_url.is_some())
             .field("has_announce", &self.announce.is_some())
             .field("notice_count", &self.notices.len())
+            .field("has_routing", &self.routing.is_some())
             .finish()
     }
 }

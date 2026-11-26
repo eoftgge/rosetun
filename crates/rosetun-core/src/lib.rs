@@ -5,6 +5,7 @@ mod exit;
 mod exits;
 mod explain;
 mod fetch;
+mod happ;
 mod lists;
 mod ping;
 mod resolve;
@@ -38,17 +39,21 @@ pub use explain::{
 pub use fetch::{
     DEFAULT_USER_AGENT, FetchError, HAPP_USER_AGENT, Timeouts, fetch, is_valid_user_agent,
 };
+pub use happ::{HappImportError, HappImportReport, import_happ_routing};
 pub use lists::{
-    ListError, ListOperation, ListParseError, ListPayload, ListPreparationError, ListUpdateResult,
-    MAX_LIST_BYTES, MissingListCategory, PayloadFormat, PreparedConnection, PreparedListPayload,
-    TextErrorKind, TextLineError, UpdateListError, add_list_from_bytes, add_list_from_url,
-    inspect_missing_categories, list_payload, prepare_lists, reconcile_lists, remove_list,
-    rename_list, send_prepared, text_entry_count, update_all_lists, update_list,
+    LIST_AUTO_UPDATE_SECS, LIST_PRESETS, ListError, ListOperation, ListParseError, ListPayload,
+    ListPreparationError, ListPreset, ListUpdateResult, MAX_LIST_BYTES, MissingListCategory,
+    PayloadFormat, PreparedConnection, PreparedListPayload, TextErrorKind, TextLineError,
+    UpdateListError, add_list_from_bytes, add_list_from_url, inspect_missing_categories,
+    list_payload, lists_due_for_auto_update, prepare_lists, reconcile_lists, remove_list,
+    rename_list, send_prepared, set_list_auto_update, text_entry_count, update_all_lists,
+    update_list,
 };
 pub use ping::{PING_PARALLEL, PING_TIMEOUT, Ping, ping_all, tcp_ping};
 pub use resolve::{follow_service_status, lan_address};
 pub use rosetun_subscription::{
-    ParseError, SkipReason, Skipped, UnsupportedTransport, parse_proxy_uri,
+    HappRouting, ParseError, SkipReason, Skipped, UnsupportedTransport, parse_happ_routing_uri,
+    parse_proxy_uri,
 };
 pub use rules::{
     AddedRules, AppliedSnapshot, DomainLineError, DomainLines, IpCidrError, IpLineError, IpLines,

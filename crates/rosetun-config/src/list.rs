@@ -71,6 +71,12 @@ pub struct List {
     pub sha256: Option<String>,
     #[serde(default)]
     pub categories: Vec<String>,
+    /// Format 14: whether background auto-update refreshes this URL list.
+    #[serde(
+        default = "crate::default_true",
+        skip_serializing_if = "crate::is_true"
+    )]
+    pub auto_update: bool,
 }
 
 impl fmt::Debug for List {
@@ -84,6 +90,7 @@ impl fmt::Debug for List {
             .field("size", &self.size)
             .field("sha256", &self.sha256)
             .field("categories", &self.categories)
+            .field("auto_update", &self.auto_update)
             .finish()
     }
 }
@@ -154,6 +161,7 @@ mod tests {
             } else {
                 vec![]
             },
+            auto_update: true,
         }
     }
 

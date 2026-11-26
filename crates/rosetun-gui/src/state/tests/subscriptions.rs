@@ -154,12 +154,16 @@ fn list_update_due_uses_default_interval_retries_failures_and_skips_files() {
         name: "Example".into(),
         source: rosetun_config::ListSource::Url("https://example.com/list".into()),
         format: rosetun_config::ListFormat::Text,
+        auto_update: true,
         updated_at: None,
         size: None,
         sha256: None,
         categories: vec![],
     };
     assert!(list_update_due(&list, now, None));
+    list.auto_update = false;
+    assert!(!list_update_due(&list, now, None));
+    list.auto_update = true;
     list.updated_at = Some(now - 11 * 60 * 60);
     assert!(!list_update_due(&list, now, None));
     list.updated_at = Some(now - 12 * 60 * 60);
@@ -180,6 +184,7 @@ fn automatic_list_update_runs_only_after_subscriptions_and_once_per_check() {
         name: "Example".into(),
         source: rosetun_config::ListSource::Url("https://example.com/list".into()),
         format: rosetun_config::ListFormat::Text,
+        auto_update: true,
         updated_at: None,
         size: None,
         sha256: None,
@@ -193,7 +198,7 @@ fn automatic_list_update_runs_only_after_subscriptions_and_once_per_check() {
     let mut state = State {
         config_ready: true,
         config: AppConfig {
-            lists: state.config.lists,
+            lists: state.config.lists.clone(),
             ..AppConfig::default()
         },
         ..State::default()
@@ -202,6 +207,21 @@ fn automatic_list_update_runs_only_after_subscriptions_and_once_per_check() {
         matches!(state.take_auto_update(now), Some(Job::UpdateList(id)) if id == ListId::new("1"))
     );
     assert!(state.take_auto_update(now).is_none());
+
+    // Turning off global list auto-update skips URL lists even when subscription auto-update is on.
+    let mut disabled = State {
+        config_ready: true,
+        config: AppConfig {
+            lists: state.config.lists,
+            interface: rosetun_config::InterfaceSettings {
+                auto_update_lists: false,
+                ..rosetun_config::InterfaceSettings::default()
+            },
+            ..AppConfig::default()
+        },
+        ..State::default()
+    };
+    assert!(disabled.take_auto_update(now).is_none());
 }
 
 #[test]

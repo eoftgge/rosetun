@@ -229,6 +229,7 @@ fn lists_are_read_once_for_the_session_and_forgotten_on_disconnect() {
             original_name: "list.dat".into(),
         },
         format: rosetun_config::ListFormat::GeoSite,
+        auto_update: true,
         updated_at: None,
         size: None,
         sha256: None,

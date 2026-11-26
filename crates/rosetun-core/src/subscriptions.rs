@@ -513,6 +513,7 @@ pub fn save_proxy(
             skipped: Default::default(),
             unsupported_protocols: Default::default(),
             notices: Vec::new(),
+            routing: None,
         };
         if let Some(id) = id {
             let subscription = config

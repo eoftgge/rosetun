@@ -12,6 +12,7 @@ const KEYS: &[&str] = &[
     "support-url",
     "profile-web-page-url",
     "announce",
+    "routing",
 ];
 
 pub(crate) fn from_headers(header: &dyn Fn(&str) -> Option<String>) -> SubscriptionMeta {
@@ -57,6 +58,10 @@ fn apply(meta: &mut SubscriptionMeta, key: &str, value: &str) {
         }
         "support-url" => replace_if_some(&mut meta.support_url, http_url(value)),
         "profile-web-page-url" => replace_if_some(&mut meta.web_page_url, http_url(value)),
+        "routing" => replace_if_some(
+            &mut meta.routing,
+            crate::happ::parse_happ_routing_base64(value),
+        ),
         "content-disposition" if meta.title.is_none() => {
             replace_if_some(&mut meta.title, filename(value));
         }

@@ -11,6 +11,7 @@ fn list(id: &str, source: ListSource) -> List {
         name: "Example".into(),
         source,
         format: ListFormat::Text,
+        auto_update: true,
         updated_at: Some(100),
         size: Some(12),
         sha256: Some("a".repeat(64)),
@@ -707,4 +708,63 @@ fn list_update_failures_stay_local_and_unrelated_success_does_not_clear_them() {
         state.lists.outcomes.get(&id),
         Some(ListOutcome::Failed(_))
     ));
+}
+
+#[test]
+fn base_list_preset_and_per_list_auto_update_dispatch_jobs() {
+    let mut state = State {
+        config_ready: true,
+        ..State::default()
+    };
+    let preset = &rosetun_core::LIST_PRESETS[0];
+
+    let job = state.act(Action::AddListPreset(preset.id));
+    assert!(matches!(
+        job,
+        Some(Job::AddListUrl(ref url, ref name)) if url == preset.url && name == preset.name
+    ));
+    assert_eq!(state.lists.adding_preset, Some(preset.id));
+    // While downloading, another preset click is ignored.
+    assert!(state.act(Action::AddListPreset(preset.id)).is_none());
+
+    let added = list("geo", ListSource::Url(preset.url.to_owned()));
+    state.config.lists.push(added.clone());
+    state.reduce(WorkerEvent::AddList(Ok((added, None))));
+    assert!(state.lists.adding_preset.is_none());
+    // Already-added preset is ignored.
+    assert!(state.act(Action::AddListPreset(preset.id)).is_none());
+
+    // Per-list auto-update toggle dispatches a job for URL lists.
+    assert!(matches!(
+        state.act(Action::SetListAutoUpdate(ListId::new("geo"), false)),
+        Some(Job::SetListAutoUpdate(id, false)) if id == ListId::new("geo")
+    ));
+    assert!(
+        state
+            .act(Action::SetListAutoUpdate(ListId::new("geo"), true))
+            .is_none()
+    );
+}
+
+#[test]
+fn subscription_happ_routing_offers_import_without_overwriting_rules() {
+    let mut state = state_with_rules();
+    let (routing, _) = rosetun_core::parse_happ_routing_uri(
+        "happ://routing/add/eyJOYW1lIjoiUnUgVGVzdCIsIkRpcmVjdFNpdGVzIjpbImdlb3NpdGU6cnUiXX0=",
+    )
+    .expect("valid happ routing");
+    let mut update = report();
+    update.routing = Some(Box::new(routing));
+    state.reduce(WorkerEvent::Add(Ok((subscription("sub1"), update))));
+
+    assert!(state.lists.pending_happ_routing.is_some());
+    let job = state.act(Action::ImportHappRouting);
+    assert!(matches!(
+        job,
+        Some(Job::ImportHappRouting {
+            activate: false,
+            ..
+        })
+    ));
+    assert!(state.lists.importing_happ_routing);
 }

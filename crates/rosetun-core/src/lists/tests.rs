@@ -702,6 +702,7 @@ fn stale_download_cannot_replace_a_changed_list_source() {
                 size: Some(bytes.len() as u64),
                 sha256: Some(checksum(bytes)),
                 categories: Vec::new(),
+                auto_update: true,
             });
             Ok::<_, StoreError>(())
         })
@@ -841,6 +842,7 @@ fn refresh_keeps_a_name_changed_during_download() {
                 size: Some(bytes.len() as u64),
                 sha256: Some(checksum(bytes)),
                 categories: Vec::new(),
+                auto_update: true,
             });
             Ok::<_, StoreError>(())
         })
@@ -885,6 +887,7 @@ fn updating_all_skips_files_and_continues_after_a_url_failure() {
                     size: Some(original.len() as u64),
                     sha256: Some(checksum(original)),
                     categories: Vec::new(),
+                    auto_update: true,
                 });
             }
             Ok::<_, StoreError>(())

@@ -84,6 +84,7 @@ fn current_config() -> AppConfig {
                 "391196688aa55d3321deffa736f8d103b4813470952b748e9c2c9deb17fa60f5".to_owned(),
             ),
             categories: Vec::new(),
+            auto_update: true,
         },
         List {
             id: ListId::new("2"),
@@ -96,6 +97,7 @@ fn current_config() -> AppConfig {
             size: Some(7),
             sha256: Some("a".repeat(64)),
             categories: vec!["example".to_owned()],
+            auto_update: true,
         },
     ];
     config.rule_sets[0].rules.push(Rule {
@@ -459,6 +461,8 @@ fn current_configuration_fixture_guards_the_serialized_format() {
         exit: None,
     });
     expected.settings.tun.backend = rosetun_config::TunBackend::NativeMixed;
+    expected.interface.auto_update_lists = false;
+    expected.lists[0].auto_update = false;
     let (loaded, migrated_from) = from_json(V14).expect("current fixture should load");
 
     assert_eq!(migrated_from, None);

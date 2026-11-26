@@ -1704,6 +1704,7 @@ mod tests {
                 original_name: "geosite.dat".into(),
             },
             format: ListFormat::GeoSite,
+            auto_update: true,
             updated_at: None,
             size: None,
             sha256: None,

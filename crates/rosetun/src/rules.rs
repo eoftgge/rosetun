@@ -469,6 +469,7 @@ mod tests {
                 size: None,
                 sha256: None,
                 categories: Vec::new(),
+                auto_update: true,
             }],
             ..AppConfig::default()
         }

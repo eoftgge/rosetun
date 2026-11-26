@@ -584,7 +584,15 @@ impl App {
                 temporary,
             } => self.workers.inspect_list_categories(revision, temporary),
             Job::RenameList(id, name) => self.workers.rename_list(id, name),
+            Job::SetListAutoUpdate(id, enabled) => self.workers.set_list_auto_update(id, enabled),
             Job::RemoveList(id) => self.workers.remove_list(id),
+            Job::ImportHappRouting {
+                routing,
+                fallback_name,
+                activate,
+            } => self
+                .workers
+                .import_happ_routing(*routing, fallback_name, activate),
             Job::Ping(id) => self.workers.ping(id, None),
             Job::PingNode(id, node) => self.workers.ping(id, Some(node)),
             Job::FullCheck(id) => self.workers.full_check(id, None),
