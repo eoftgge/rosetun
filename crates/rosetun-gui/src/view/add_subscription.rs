@@ -536,12 +536,18 @@ fn qr_menu(ui: &mut egui::Ui, reading: bool, enabled: bool, actions: &mut Vec<Ac
 fn qr_status(ui: &mut egui::Ui, dialog: &AddDialog, actions: &mut Vec<Action>) {
     if matches!(dialog.qr.stage, QrStage::ScreenClip(_)) {
         ui.add_space(theme::space::XS);
-        ui.horizontal(|ui| {
-            ui.colored_label(theme::palette().text_muted, tr!("qr-select-region"));
-            if widgets::outline_button(ui, tr!("cancel"), true).clicked() {
-                actions.push(Action::CancelQr);
-            }
-        });
+        ui.allocate_ui_with_layout(
+            egui::vec2(ui.available_width(), 28.0),
+            egui::Layout::right_to_left(egui::Align::Center),
+            |ui| {
+                if widgets::outline_button_compact(ui, &tr!("cancel"), true).clicked() {
+                    actions.push(Action::CancelQr);
+                }
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    ui.colored_label(theme::palette().text_muted, tr!("qr-select-region"));
+                });
+            },
+        );
     }
     if let Some(error) = dialog.qr.error {
         ui.add(
