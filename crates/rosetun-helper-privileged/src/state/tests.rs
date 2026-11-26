@@ -8634,6 +8634,7 @@ fn local_proxy_request(kill_switch: bool) -> ConnectRequest {
     request.settings.auto_reconnect = false;
     request.settings.connection_mode = rosetun_config::ConnectionMode::SystemProxy;
     request.settings.local_proxy.port = free_local_port();
+    request.settings.xray = rosetun_config::XrayUse::Off;
     request
 }
 
@@ -8818,6 +8819,7 @@ fn changing_the_mode_keeps_the_kill_switch_standing() {
 
     request.settings.connection_mode = rosetun_config::ConnectionMode::SystemProxy;
     request.settings.local_proxy.port = free_local_port();
+    request.settings.xray = rosetun_config::XrayUse::Off;
     helper.apply(&request).expect("TUN to the proxy");
     assert_eq!(helper.status().state, ConnectionState::Connected);
     assert_eq!(
@@ -8860,6 +8862,7 @@ fn changing_to_the_proxy_without_a_kill_switch_drops_the_dns_lock() {
 
     request.settings.connection_mode = rosetun_config::ConnectionMode::SystemProxy;
     request.settings.local_proxy.port = free_local_port();
+    request.settings.xray = rosetun_config::XrayUse::Off;
     helper.apply(&request).expect("TUN to the proxy");
 
     assert_eq!(helper.status().state, ConnectionState::Connected);
