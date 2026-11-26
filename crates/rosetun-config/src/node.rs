@@ -3,17 +3,23 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{CountryCode, NodeId, Settings, XrayUse};
+use crate::{ConnectionMode, CountryCode, NodeId, Settings, TunBackend, XrayUse};
 
 /// Whether Xray carries this node. Every caller asks here, so a connect, an apply and a server
 /// check always agree.
 pub fn uses_xray(node: &Node, settings: &Settings) -> bool {
+    let native_dataplane = settings.connection_mode == ConnectionMode::SystemProxy
+        || settings.tun.backend == TunBackend::NativeMixed;
     match settings.xray {
         XrayUse::Off => false,
         // Balancers and finalmask are Xray-only features.
         _ if node.requires_xray() => true,
         // Splitting the packets to the server is Xray's feature, so a node it can run goes there.
         _ if settings.tls_fragment.applies_to(node) => true,
+        // In native dataplane modes (NativeMixed TUN and SystemProxy), rosetun-dataplane handles
+        // TUN/proxy/DNS/rules directly, so routing every Xray-supported protocol straight to Xray
+        // avoids spawning a second sing-box worker unnecessarily.
+        XrayUse::Auto if native_dataplane => xray_supports(&node.outbound),
         // VLESS is Xray's native protocol (including REALITY, where sing-box#4520 breaks on Xray
         // 26.9.8+), and sing-box has no XHTTP transport.
         XrayUse::Auto if matches!(node.stream.transport, Transport::Xhttp { .. }) => {
@@ -1500,6 +1506,14 @@ mod tests {
                 assert_eq!(uses_xray(&node, &with_xray(XrayUse::Auto)), auto);
                 assert!(!uses_xray(&node, &with_xray(XrayUse::Off)));
                 assert_eq!(uses_xray(&node, &with_xray(XrayUse::Always)), supported);
+
+                let mut native_tun = with_xray(XrayUse::Auto);
+                native_tun.tun.backend = TunBackend::NativeMixed;
+                assert_eq!(uses_xray(&node, &native_tun), supported);
+
+                let mut system_proxy = with_xray(XrayUse::Auto);
+                system_proxy.connection_mode = ConnectionMode::SystemProxy;
+                assert_eq!(uses_xray(&node, &system_proxy), supported);
             }
         }
     }
