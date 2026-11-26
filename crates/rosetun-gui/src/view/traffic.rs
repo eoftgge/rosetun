@@ -430,7 +430,7 @@ fn displayed_heights(ctx: &egui::Context, chart: &Chart) -> Vec<(f32, f32)> {
         bars.push(bar);
     }
     let settling = bars.iter().any(|bar| !bar.settled(now));
-    if chart.frames && (settling || chart.travel.is_some_and(|progress| progress < 1.0)) {
+    if chart.frames && (settling || chart.travel.is_some()) {
         ctx.request_repaint();
     }
     ctx.data_mut(|data| {

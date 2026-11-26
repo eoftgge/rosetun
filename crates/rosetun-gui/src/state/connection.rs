@@ -559,50 +559,9 @@ impl State {
                 self.cancelled_connect = true;
                 self.deferred_connect = None;
             }
-            WorkerEvent::Status(status) => {
-                if status.state.is_transitional() && !self.status.state.is_transitional() {
-                    self.reset_system_failure();
-                }
-                if (status.state.is_transitional() && !self.status.state.is_transitional())
-                    || (matches!(
-                        status.state,
-                        ConnectionState::Connected
-                            | ConnectionState::Disconnected
-                            | ConnectionState::Failed { .. }
-                            | ConnectionState::FailedProtected { .. }
-                    ) && self.status.state != status.state)
-                {
-                    self.reset_failure_interference();
-                }
-                if (!self.helper_available || !matches!(status.state, ConnectionState::Connected))
-                    && let Some(dialog) = &mut self.rules.screen.add
-                {
-                    dialog.temporary_only = false;
-                }
-                if !self.helper_available
-                    || !matches!(status.state, ConnectionState::Connected)
-                    || status.since_unix != self.status.since_unix
-                {
-                    self.tunnel_delay = TunnelDelay::Idle;
-                    self.delay_last_auto = None;
-                }
-                #[cfg(any(target_os = "linux", test))]
-                if std::mem::take(&mut self.relaunched) && status.upgrade_hold {
-                    self.start_after_upgrade();
-                }
-                self.status_received = true;
-                self.reduce_session_status(&status);
-                self.reduce_traffic_status(&status);
-                if !matches!(status.state, ConnectionState::FailedProtected { .. })
-                    && !self.operations.helper
-                {
-                    self.protection_confirmation = false;
-                }
-                if self.status.state != status.state {
-                    self.failure_details_open = false;
-                }
-                self.status = status;
-            }
+            #[cfg(test)]
+            WorkerEvent::Status(status) => self.reduce_status_event(status, None),
+            WorkerEvent::StatusAt(status, at_ms) => self.reduce_status_event(status, Some(at_ms)),
             WorkerEvent::FailureInterference { request, hints } => {
                 if self.failure_interference_checked
                     && request == self.failure_interference_request
@@ -808,6 +767,51 @@ impl State {
             }
             _ => unreachable!("only connection events are dispatched here"),
         }
+    }
+
+    fn reduce_status_event(&mut self, status: Status, at_ms: Option<u64>) {
+        if status.state.is_transitional() && !self.status.state.is_transitional() {
+            self.reset_system_failure();
+        }
+        if (status.state.is_transitional() && !self.status.state.is_transitional())
+            || (matches!(
+                status.state,
+                ConnectionState::Connected
+                    | ConnectionState::Disconnected
+                    | ConnectionState::Failed { .. }
+                    | ConnectionState::FailedProtected { .. }
+            ) && self.status.state != status.state)
+        {
+            self.reset_failure_interference();
+        }
+        if (!self.helper_available || !matches!(status.state, ConnectionState::Connected))
+            && let Some(dialog) = &mut self.rules.screen.add
+        {
+            dialog.temporary_only = false;
+        }
+        if !self.helper_available
+            || !matches!(status.state, ConnectionState::Connected)
+            || status.since_unix != self.status.since_unix
+        {
+            self.tunnel_delay = TunnelDelay::Idle;
+            self.delay_last_auto = None;
+        }
+        #[cfg(any(target_os = "linux", test))]
+        if std::mem::take(&mut self.relaunched) && status.upgrade_hold {
+            self.start_after_upgrade();
+        }
+        self.status_received = true;
+        self.reduce_session_status(&status);
+        self.reduce_traffic_status(&status, at_ms);
+        if !matches!(status.state, ConnectionState::FailedProtected { .. })
+            && !self.operations.helper
+        {
+            self.protection_confirmation = false;
+        }
+        if self.status.state != status.state {
+            self.failure_details_open = false;
+        }
+        self.status = status;
     }
 
     pub(super) fn act_connection(&mut self, action: Action) -> Option<Job> {

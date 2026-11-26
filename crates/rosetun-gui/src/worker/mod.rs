@@ -140,7 +140,9 @@ pub(crate) enum WorkerEvent {
         protection: ProtectionCapabilities,
     },
     HelperUnavailable(ClientError),
+    #[cfg(test)]
     Status(Status),
+    StatusAt(Status, u64),
     FailureInterference {
         request: u64,
         hints: FailureInterference,
@@ -510,7 +512,10 @@ pub(crate) fn start(store: Store, tx: Sender<WorkerEvent>, repaint: Repaint) -> 
                                         || status_changed(last_status.as_ref(), &status);
                                     quiet = if wake { 0 } else { quiet + 1 };
                                     last_status = Some(status.clone());
-                                    let event = WorkerEvent::Status(status);
+                                    let event = WorkerEvent::StatusAt(
+                                        status,
+                                        crate::display::monotonic_ms(),
+                                    );
                                     let sent = if wake {
                                         emit(&tx, &repaint, event)
                                     } else {

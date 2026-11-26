@@ -736,9 +736,11 @@ impl State {
             WorkerEvent::SystemChecks { request, results } => {
                 self.reduce_system_checks(request, results);
             }
+            #[cfg(test)]
+            event @ WorkerEvent::Status(_) => self.reduce_connection(event),
             event @ (WorkerEvent::HelperAvailable { .. }
             | WorkerEvent::HelperUnavailable(_)
-            | WorkerEvent::Status(_)
+            | WorkerEvent::StatusAt(_, _)
             | WorkerEvent::FailureInterference { .. }
             | WorkerEvent::Exit { .. }
             | WorkerEvent::ConnectSnapshot(_)

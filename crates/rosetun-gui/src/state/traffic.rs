@@ -383,7 +383,7 @@ pub(crate) struct TrafficState {
 }
 
 impl State {
-    pub(super) fn reduce_traffic_status(&mut self, status: &Status) {
+    pub(super) fn reduce_traffic_status(&mut self, status: &Status, at_ms: Option<u64>) {
         if self.helper_available
             && matches!(
                 status.state,
@@ -396,7 +396,7 @@ impl State {
             if self.traffic.traffic_history.len() > TRAFFIC_HISTORY {
                 self.traffic.traffic_history.pop_front();
             }
-            let now = self.frame_time();
+            let now = at_ms.unwrap_or_else(|| self.frame_time());
             // Samples reduced together after a pause say nothing about the pace.
             if let Some(gap) = self
                 .traffic

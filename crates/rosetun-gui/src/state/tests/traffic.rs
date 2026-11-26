@@ -50,6 +50,35 @@ fn samples_remember_their_arrival_and_pace_until_the_tunnel_stops() {
 }
 
 #[test]
+fn queued_timestamped_statuses_keep_their_real_arrival_time_and_pace() {
+    let mut state = State {
+        helper_available: true,
+        ..State::default()
+    };
+    let connected = |at_ms| {
+        WorkerEvent::StatusAt(
+            Status {
+                state: ConnectionState::Connected,
+                ..Status::default()
+            },
+            at_ms,
+        )
+    };
+    // Samples queued while the user was on another tab are drained together on tab switch.
+    state.set_frame_time(12_400);
+    state.reduce(connected(10_000));
+    state.reduce(connected(11_000));
+    state.reduce(connected(12_000));
+    assert_eq!(state.traffic.sample_arrived_ms, Some(12_000));
+    assert_eq!(state.traffic.sample_interval_ms, Some(1_000));
+    // Next sample arrives 600 ms after the tab switch, which is still 1_000 ms after 12_000.
+    state.set_frame_time(13_000);
+    state.reduce(connected(13_000));
+    assert_eq!(state.traffic.sample_arrived_ms, Some(13_000));
+    assert_eq!(state.traffic.sample_interval_ms, Some(1_000));
+}
+
+#[test]
 fn traffic_history_tracks_15_minutes_and_clears_when_tunnel_or_helper_stops() {
     let mut state = State {
         helper_available: true,
