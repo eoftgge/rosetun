@@ -247,6 +247,7 @@ impl SettingsCard<'_> {
         } else {
             theme::palette().text_muted
         };
+        let nested = options.nested;
         let row = self.row_parts(
             |ui| {
                 title_with_tag(ui, RichText::new(title).color(title_color).into(), tag);
@@ -256,6 +257,12 @@ impl SettingsCard<'_> {
             |ui| {
                 switch = ui.allocate_exact_size(TOGGLE_SIZE, egui::Sense::hover()).0;
             },
+        );
+        let content_top = row.top() + if nested { 0.0 } else { theme::space::L };
+        let content_bottom = row.bottom() - theme::space::L;
+        let switch = egui::Rect::from_center_size(
+            egui::pos2(switch.center().x, 0.5 * (content_top + content_bottom)),
+            TOGGLE_SIZE,
         );
         let mut response = self.ui.interact(
             row,
