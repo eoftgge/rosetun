@@ -47,7 +47,7 @@ pub use lists::{
     UpdateListError, add_list_from_bytes, add_list_from_url, inspect_missing_categories,
     list_payload, lists_due_for_auto_update, prepare_lists, reconcile_lists, remove_list,
     rename_list, send_prepared, set_list_auto_update, text_entry_count, update_all_lists,
-    update_list,
+    update_list, update_list_settings,
 };
 pub use ping::{PING_PARALLEL, PING_TIMEOUT, Ping, ping_all, tcp_ping};
 pub use resolve::{follow_service_status, lan_address};

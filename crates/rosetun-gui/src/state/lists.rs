@@ -87,7 +87,11 @@ fn suggested_url_name(input: &str) -> Option<String> {
 
 pub(crate) struct RenameListDialog {
     pub(crate) id: ListId,
+    pub(crate) original_name: String,
     pub(crate) name: String,
+    pub(crate) original_auto_update: bool,
+    pub(crate) auto_update: bool,
+    pub(crate) is_url: bool,
     pub(crate) focus: bool,
     pub(crate) busy: bool,
     pub(crate) error: Option<String>,
@@ -108,6 +112,7 @@ pub(crate) enum ListOutcome {
 pub(crate) struct ListsState {
     pub(crate) tab: RulesTab,
     pub(crate) add: Option<AddListDialog>,
+    pub(crate) confirm_preset: Option<&'static str>,
     pub(crate) adding_preset: Option<&'static str>,
     pub(crate) pending_happ_routing: Option<(String, HappRouting)>,
     pub(crate) importing_happ_routing: bool,
@@ -338,12 +343,6 @@ impl State {
                     }
                 }
             }
-            WorkerEvent::SetListAutoUpdate(result) => {
-                if let Err(error) = result {
-                    self.lists.error =
-                        Some(self.text(&errors::list(crate::i18n::language(), &error)));
-                }
-            }
             WorkerEvent::RemoveList(result) => {
                 let result = result
                     .map_err(|error| self.text(&errors::list(crate::i18n::language(), &error)));
@@ -465,9 +464,14 @@ impl State {
                 if self.lists.rename.is_none()
                     && let Some(list) = self.config.lists.iter().find(|list| list.id == id)
                 {
+                    let is_url = matches!(list.source, ListSource::Url(_));
                     self.lists.rename = Some(RenameListDialog {
                         id,
+                        original_name: list.name.clone(),
                         name: list.name.clone(),
+                        original_auto_update: list.auto_update,
+                        auto_update: list.auto_update,
+                        is_url,
                         focus: true,
                         busy: false,
                         error: None,
@@ -488,12 +492,20 @@ impl State {
                 if let Some(dialog) = &mut self.lists.rename
                     && !dialog.busy
                 {
-                    dialog.busy = true;
-                    dialog.error = None;
-                    return Some(Job::RenameList(
-                        dialog.id.clone(),
-                        dialog.name.trim().to_owned(),
-                    ));
+                    let name = dialog.name.trim();
+                    if name == dialog.original_name.trim()
+                        && (!dialog.is_url || dialog.auto_update == dialog.original_auto_update)
+                    {
+                        self.lists.rename = None;
+                    } else {
+                        dialog.busy = true;
+                        dialog.error = None;
+                        return Some(Job::RenameList(
+                            dialog.id.clone(),
+                            name.to_owned(),
+                            dialog.auto_update,
+                        ));
+                    }
                 }
             }
             Action::OpenRemoveList(id) => {
@@ -528,22 +540,28 @@ impl State {
                     return Some(Job::RemoveList(dialog.id.clone()));
                 }
             }
-            Action::SetListAutoUpdate(id, enabled) => {
-                if self.config_ready
-                    && self.config.lists.iter().any(|list| {
-                        list.id == id
-                            && matches!(list.source, ListSource::Url(_))
-                            && list.auto_update != enabled
-                    })
-                {
-                    self.lists.error = None;
-                    return Some(Job::SetListAutoUpdate(id, enabled));
-                }
-            }
-            Action::AddListPreset(preset_id) => {
+            Action::RequestListPreset(preset_id) => {
                 if self.config_ready
                     && self.lists.adding_preset.is_none()
+                    && self.lists.confirm_preset.is_none()
                     && self.lists.add.is_none()
+                    && let Some(preset) = rosetun_core::LIST_PRESETS
+                        .iter()
+                        .find(|preset| preset.id == preset_id)
+                    && !self.config.lists.iter().any(
+                        |list| matches!(&list.source, ListSource::Url(url) if url == preset.url),
+                    )
+                {
+                    self.lists.confirm_preset = Some(preset.id);
+                }
+            }
+            Action::CancelListPreset => {
+                self.lists.confirm_preset = None;
+            }
+            Action::ConfirmListPreset => {
+                if self.config_ready
+                    && self.lists.adding_preset.is_none()
+                    && let Some(preset_id) = self.lists.confirm_preset.take()
                     && let Some(preset) = rosetun_core::LIST_PRESETS
                         .iter()
                         .find(|preset| preset.id == preset_id)

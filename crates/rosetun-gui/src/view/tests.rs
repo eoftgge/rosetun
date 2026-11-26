@@ -169,7 +169,11 @@ fn cases() -> Vec<Case> {
             show: |ctx, state| {
                 state.lists.rename = Some(RenameListDialog {
                     id: ListId::new("list"),
+                    original_name: String::from("Ads"),
                     name: String::from("Ads"),
+                    original_auto_update: true,
+                    auto_update: true,
+                    is_url: false,
                     focus: false,
                     busy: false,
                     error: None,

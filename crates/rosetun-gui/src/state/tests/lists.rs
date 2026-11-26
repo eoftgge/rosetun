@@ -711,39 +711,47 @@ fn list_update_failures_stay_local_and_unrelated_success_does_not_clear_them() {
 }
 
 #[test]
-fn base_list_preset_and_per_list_auto_update_dispatch_jobs() {
+fn base_list_preset_requires_confirmation_and_list_settings_updates_auto_update() {
     let mut state = State {
         config_ready: true,
         ..State::default()
     };
     let preset = &rosetun_core::LIST_PRESETS[0];
 
-    let job = state.act(Action::AddListPreset(preset.id));
+    // Requesting a base list opens confirmation without starting download yet.
+    assert!(state.act(Action::RequestListPreset(preset.id)).is_none());
+    assert_eq!(state.lists.confirm_preset, Some(preset.id));
+
+    // Confirming starts the download.
+    let job = state.act(Action::ConfirmListPreset);
     assert!(matches!(
         job,
         Some(Job::AddListUrl(ref url, ref name)) if url == preset.url && name == preset.name
     ));
+    assert!(state.lists.confirm_preset.is_none());
     assert_eq!(state.lists.adding_preset, Some(preset.id));
-    // While downloading, another preset click is ignored.
-    assert!(state.act(Action::AddListPreset(preset.id)).is_none());
+    assert!(state.act(Action::RequestListPreset(preset.id)).is_none());
 
     let added = list("geo", ListSource::Url(preset.url.to_owned()));
     state.config.lists.push(added.clone());
     state.reduce(WorkerEvent::AddList(Ok((added, None))));
     assert!(state.lists.adding_preset.is_none());
-    // Already-added preset is ignored.
-    assert!(state.act(Action::AddListPreset(preset.id)).is_none());
+    assert!(state.act(Action::RequestListPreset(preset.id)).is_none());
 
-    // Per-list auto-update toggle dispatches a job for URL lists.
-    assert!(matches!(
-        state.act(Action::SetListAutoUpdate(ListId::new("geo"), false)),
-        Some(Job::SetListAutoUpdate(id, false)) if id == ListId::new("geo")
-    ));
+    // List settings dialog combines renaming and per-list auto-update.
     assert!(
         state
-            .act(Action::SetListAutoUpdate(ListId::new("geo"), true))
+            .act(Action::OpenRenameList(ListId::new("geo")))
             .is_none()
     );
+    let dialog = state.lists.rename.as_mut().expect("settings dialog open");
+    assert!(dialog.is_url);
+    assert!(dialog.auto_update);
+    dialog.auto_update = false;
+    assert!(matches!(
+        state.act(Action::SubmitRenameList),
+        Some(Job::RenameList(id, name, false)) if id == ListId::new("geo") && name == "Example"
+    ));
 }
 
 #[test]

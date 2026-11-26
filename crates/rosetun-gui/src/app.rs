@@ -583,8 +583,9 @@ impl App {
                 revision,
                 temporary,
             } => self.workers.inspect_list_categories(revision, temporary),
-            Job::RenameList(id, name) => self.workers.rename_list(id, name),
-            Job::SetListAutoUpdate(id, enabled) => self.workers.set_list_auto_update(id, enabled),
+            Job::RenameList(id, name, auto_update) => {
+                self.workers.rename_list(id, name, auto_update);
+            }
             Job::RemoveList(id) => self.workers.remove_list(id),
             Job::ImportHappRouting {
                 routing,

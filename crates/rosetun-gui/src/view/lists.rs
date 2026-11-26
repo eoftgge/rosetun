@@ -135,8 +135,10 @@ fn base_lists_section(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action
                         |list| matches!(&list.source, ListSource::Url(url) if url == preset.url),
                     );
                     let downloading = state.lists.adding_preset == Some(preset.id);
-                    let enabled =
-                        !added && state.lists.adding_preset.is_none() && state.lists.add.is_none();
+                    let enabled = !added
+                        && state.lists.adding_preset.is_none()
+                        && state.lists.confirm_preset.is_none()
+                        && state.lists.add.is_none();
                     let label = if downloading {
                         tr!("lists-base-downloading", name = preset.name)
                     } else if added {
@@ -145,7 +147,7 @@ fn base_lists_section(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action
                         preset.name.to_owned()
                     };
                     if widgets::outline_button(ui, &label, enabled).clicked() {
-                        actions.push(Action::AddListPreset(preset.id));
+                        actions.push(Action::RequestListPreset(preset.id));
                     }
                 }
             });
@@ -337,32 +339,15 @@ fn list_menu(
             });
             ui.close();
         }
-        if matches!(list.source, ListSource::Url(_)) {
-            let note = (!state.config.interface.auto_update_lists)
-                .then(|| tr!("list-auto-update-global-off"));
-            if widgets::menu_item(
-                ui,
-                widgets::MenuItem {
-                    label: &tr!("list-auto-update"),
-                    enabled: !busy,
-                    selected: list.auto_update,
-                    danger: false,
-                    note: note.as_deref(),
-                },
-            )
-            .clicked()
-            {
-                actions.push(Action::SetListAutoUpdate(
-                    list.id.clone(),
-                    !list.auto_update,
-                ));
-                ui.close();
-            }
-        }
+        let configure_label = if matches!(list.source, ListSource::Url(_)) {
+            tr!("configure-list")
+        } else {
+            tr!("rename")
+        };
         if widgets::menu_item(
             ui,
             widgets::MenuItem {
-                label: &tr!("rename"),
+                label: &configure_label,
                 enabled: !busy && state.lists.rename.is_none(),
                 selected: false,
                 danger: false,
@@ -499,26 +484,129 @@ pub(crate) fn add_dialog(
 }
 
 pub(crate) fn rename_dialog(ctx: &egui::Context, state: &mut State, actions: &mut Vec<Action>) {
+    let global_auto_update = state.config.interface.auto_update_lists;
     let Some(dialog) = &mut state.lists.rename else {
         return;
     };
-    let choice = widgets::name_modal(
+    if !dialog.is_url {
+        let choice = widgets::name_modal(
+            ctx,
+            widgets::NameModal {
+                id: "rename_list",
+                title: tr!("rename-list"),
+                label: tr!("name"),
+                submit: tr!("rename"),
+                name: &mut dialog.name,
+                focus: &mut dialog.focus,
+                error: &mut dialog.error,
+                busy: dialog.busy,
+                char_limit: None,
+            },
+        );
+        match choice {
+            widgets::ModalChoice::Cancel => actions.push(Action::CancelRenameList),
+            widgets::ModalChoice::Confirm => actions.push(Action::SubmitRenameList),
+            widgets::ModalChoice::None => {}
+        }
+        return;
+    }
+
+    let busy = dialog.busy;
+    let response =
+        widgets::Dialog::new("list_settings", widgets::DialogWidth::Standard).show(ctx, |ui| {
+            ui.heading(tr!("list-settings-title"));
+            ui.add_space(theme::space::L);
+            ui.label(tr!("name"));
+            let input = ui.add(widgets::TextField::new(&mut dialog.name).enabled(!busy));
+            if dialog.focus {
+                input.request_focus();
+                dialog.focus = false;
+            }
+            if input.changed() {
+                dialog.error = None;
+            }
+            let submitted =
+                input.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
+            ui.add_space(theme::space::L);
+            widgets::checkbox(ui, &mut dialog.auto_update, tr!("list-auto-update"), !busy);
+            ui.add(
+                egui::Label::new(
+                    RichText::new(if global_auto_update {
+                        tr!("list-auto-update-detail")
+                    } else {
+                        tr!("list-auto-update-global-off-detail")
+                    })
+                    .small()
+                    .color(theme::palette().text_muted),
+                )
+                .wrap(),
+            );
+            if let Some(error) = &dialog.error {
+                ui.add_space(theme::space::S);
+                ui.add(egui::Label::new(RichText::new(error).color(theme::error())).wrap());
+            }
+            let can_save = !busy && !dialog.name.trim().is_empty();
+            let footer = widgets::DialogFooter::new(
+                if busy { tr!("saving") } else { tr!("save") },
+                tr!("cancel"),
+            )
+            .primary_enabled(can_save)
+            .busy(busy);
+            match widgets::dialog_footer(ui, footer).choice() {
+                widgets::FooterChoice::Primary => actions.push(Action::SubmitRenameList),
+                widgets::FooterChoice::Cancel => actions.push(Action::CancelRenameList),
+                widgets::FooterChoice::Other | widgets::FooterChoice::None => {
+                    if submitted && can_save {
+                        actions.push(Action::SubmitRenameList);
+                    }
+                }
+            }
+        });
+    if !busy && response.should_close() {
+        actions.push(Action::CancelRenameList);
+    }
+}
+
+pub(crate) fn preset_confirm_dialog(ctx: &egui::Context, state: &State, actions: &mut Vec<Action>) {
+    let Some(preset_id) = state.lists.confirm_preset else {
+        return;
+    };
+    let Some(preset) = rosetun_core::LIST_PRESETS
+        .iter()
+        .find(|preset| preset.id == preset_id)
+    else {
+        return;
+    };
+    let host = url::Url::parse(preset.url)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_owned))
+        .unwrap_or_else(|| "github.com".to_owned());
+    let choice = widgets::confirm_modal(
         ctx,
-        widgets::NameModal {
-            id: "rename_list",
-            title: tr!("rename-list"),
-            label: tr!("name"),
-            submit: tr!("rename"),
-            name: &mut dialog.name,
-            focus: &mut dialog.focus,
-            error: &mut dialog.error,
-            busy: dialog.busy,
-            char_limit: None,
+        widgets::ConfirmModal {
+            id: "confirm_list_preset",
+            title: tr!("lists-preset-confirm-title"),
+            cancel: tr!("cancel"),
+            confirm: tr!("lists-preset-confirm-download"),
+            busy: false,
+            confirm_enabled: true,
+            width: widgets::DialogWidth::Standard,
+        },
+        |ui| {
+            ui.label(RichText::new(preset.name).strong());
+            ui.add_space(theme::space::S);
+            ui.add(
+                egui::Label::new(
+                    RichText::new(tr!("lists-preset-confirm-body", host = host))
+                        .color(theme::palette().text_muted),
+                )
+                .wrap(),
+            );
         },
     );
     match choice {
-        widgets::ModalChoice::Cancel => actions.push(Action::CancelRenameList),
-        widgets::ModalChoice::Confirm => actions.push(Action::SubmitRenameList),
+        widgets::ModalChoice::Cancel => actions.push(Action::CancelListPreset),
+        widgets::ModalChoice::Confirm => actions.push(Action::ConfirmListPreset),
         widgets::ModalChoice::None => {}
     }
 }

@@ -372,8 +372,9 @@ pub(crate) enum Action {
     SubmitAddList,
     UpdateListManual(ListId),
     UpdateListFile(ListId),
-    SetListAutoUpdate(ListId, bool),
-    AddListPreset(&'static str),
+    RequestListPreset(&'static str),
+    CancelListPreset,
+    ConfirmListPreset,
     ImportHappRouting,
     DismissHappRouting,
     OpenRenameList(ListId),
@@ -641,8 +642,7 @@ pub(crate) enum Job {
         revision: u64,
         temporary: Vec<rosetun_config::Rule>,
     },
-    RenameList(ListId, String),
-    SetListAutoUpdate(ListId, bool),
+    RenameList(ListId, String, bool),
     RemoveList(ListId),
     ImportHappRouting {
         routing: Box<rosetun_core::HappRouting>,
@@ -856,7 +856,6 @@ impl State {
             | WorkerEvent::UpdateList { .. }
             | WorkerEvent::FileListUpdateCancelled(_)
             | WorkerEvent::RenameList(_)
-            | WorkerEvent::SetListAutoUpdate(_)
             | WorkerEvent::RemoveList(_)
             | WorkerEvent::ImportHappRouting(_)) => self.reduce_lists(event),
         }
@@ -981,8 +980,9 @@ impl State {
             | Action::SubmitAddList
             | Action::UpdateListManual(_)
             | Action::UpdateListFile(_)
-            | Action::SetListAutoUpdate(_, _)
-            | Action::AddListPreset(_)
+            | Action::RequestListPreset(_)
+            | Action::CancelListPreset
+            | Action::ConfirmListPreset
             | Action::ImportHappRouting
             | Action::DismissHappRouting
             | Action::OpenRenameList(_)

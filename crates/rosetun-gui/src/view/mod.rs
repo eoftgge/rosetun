@@ -157,6 +157,9 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
     if let Some(dialog) = &mut state.lists.add {
         lists::add_dialog(ctx, dialog, &mut actions);
     }
+    if state.lists.confirm_preset.is_some() {
+        lists::preset_confirm_dialog(ctx, state, &mut actions);
+    }
     if state.lists.rename.is_some() {
         lists::rename_dialog(ctx, state, &mut actions);
     }

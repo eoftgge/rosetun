@@ -2,7 +2,7 @@ use std::io::Read;
 
 use rosetun_core::{
     MAX_LIST_BYTES, add_list_from_bytes, add_list_from_url, inspect_missing_categories,
-    remove_list, rename_list, text_entry_count,
+    remove_list, text_entry_count,
 };
 
 use super::*;
@@ -154,15 +154,9 @@ impl WorkerDispatcher {
         });
     }
 
-    pub(crate) fn rename_list(&self, id: ListId, name: String) {
+    pub(crate) fn rename_list(&self, id: ListId, name: String, auto_update: bool) {
         self.spawn_complete("rosetun-rename-list", move |store| {
-            WorkerEvent::RenameList(rename_list(store, &id, &name))
-        });
-    }
-
-    pub(crate) fn set_list_auto_update(&self, id: ListId, enabled: bool) {
-        self.spawn_complete("rosetun-list-auto-update", move |store| {
-            WorkerEvent::SetListAutoUpdate(set_list_auto_update(store, &id, enabled))
+            WorkerEvent::RenameList(update_list_settings(store, &id, &name, auto_update))
         });
     }
 

@@ -24,9 +24,9 @@ use rosetun_core::{
     ping_all, prepare_subscription, reconcile_lists, remove_group_item, remove_rule, remove_rules,
     remove_subscription, rename_exit, rename_rule_set, reset_settings, restore_rule_sets,
     restore_rules_and_dns, save_exit, select_node, select_rule_set, set_accent, set_default_target,
-    set_dns, set_interface_scale, set_kill_switch, set_language, set_list_auto_update,
-    set_rule_enabled, set_rule_target, set_verbose_log, ungroup_rule, update_all, update_all_lists,
-    update_list, update_rule, update_subscription, update_subscription_settings,
+    set_dns, set_interface_scale, set_kill_switch, set_language, set_rule_enabled, set_rule_target,
+    set_verbose_log, ungroup_rule, update_all, update_all_lists, update_list, update_list_settings,
+    update_rule, update_subscription, update_subscription_settings,
 };
 use rosetun_ipc::{
     ClientError, ConnectRequest, ConnectRequestError, HelperClient, MAX_PROBE_NODES, ProbeRequest,
@@ -263,7 +263,6 @@ pub(crate) enum WorkerEvent {
         result: Result<Vec<MissingListCategory>, ListError>,
     },
     RenameList(Result<List, ListError>),
-    SetListAutoUpdate(Result<List, ListError>),
     RemoveList(Result<(), ListError>),
     ImportHappRouting(Result<HappImportReport, HappImportError>),
     FileListUpdateCancelled(ListId),

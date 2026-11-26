@@ -767,6 +767,30 @@ pub fn rename_list(store: &Store, id: &ListId, name: &str) -> Result<List, ListE
     })
 }
 
+pub fn update_list_settings(
+    store: &Store,
+    id: &ListId,
+    name: &str,
+    auto_update: bool,
+) -> Result<List, ListError> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(ListError::EmptyName);
+    }
+    store.modify(|config| {
+        let list = config
+            .lists
+            .iter_mut()
+            .find(|item| &item.id == id)
+            .ok_or(ListError::NotFound)?;
+        list.name = name.to_owned();
+        if matches!(list.source, ListSource::Url(_)) {
+            list.auto_update = auto_update;
+        }
+        Ok(list.clone())
+    })
+}
+
 fn publish_removal(directory: &Path, list: &List) -> Result<(), ListError> {
     let path = list_path(directory, list);
     let metadata = http_path(&path);
