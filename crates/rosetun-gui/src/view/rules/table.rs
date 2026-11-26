@@ -236,17 +236,13 @@ fn target_picker(
                 rect.width() - TARGET_TEXT_X - TARGET_CHEVRON_SPACE,
             );
             let galley = ui.painter().layout_job(job);
-            let (dot_x, text_x) = if full_field {
-                (rect.left() + TARGET_DOT_X, rect.left() + TARGET_TEXT_X)
+            let dot_x = rect.left() + TARGET_DOT_X;
+            let text_x = if full_field {
+                rect.left() + TARGET_TEXT_X
             } else {
-                let dot_to_text = TARGET_TEXT_X - TARGET_DOT_X;
-                let group_width = TARGET_DOT_RADIUS + dot_to_text + galley.size().x;
-                let area_left = rect.left() + theme::space::S;
+                let area_left = rect.left() + TARGET_TEXT_X;
                 let area_right = rect.right() - TARGET_CHEVRON_SPACE;
-                let group_left = (area_left + (area_right - area_left - group_width) / 2.0)
-                    .max(rect.left() + TARGET_DOT_X - TARGET_DOT_RADIUS);
-                let dot_x = group_left + TARGET_DOT_RADIUS;
-                (dot_x, dot_x + dot_to_text)
+                (area_left + (area_right - area_left - galley.size().x) / 2.0).max(area_left)
             };
             ui.painter().circle_filled(
                 egui::pos2(dot_x, rect.center().y),
