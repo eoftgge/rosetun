@@ -617,7 +617,11 @@ fn connection(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
             .toggle_with(
                 tr!("private-networks"),
                 None,
-                tr!("private-networks-detail"),
+                if lan_on {
+                    tr!("private-networks-detail")
+                } else {
+                    tr!("private-networks-needs-lan")
+                },
                 widgets::RowOptions {
                     pending: state.private_networks_next_connect(),
                     nested: true,

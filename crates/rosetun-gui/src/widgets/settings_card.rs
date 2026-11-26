@@ -242,9 +242,21 @@ impl SettingsCard<'_> {
         let enabled = enabled && self.ui.is_enabled();
         let id = self.ui.next_auto_id();
         let mut switch = egui::Rect::NOTHING;
-        let row = self.row_inner(title, tag, Some(detail), options, |ui| {
-            switch = ui.allocate_exact_size(TOGGLE_SIZE, egui::Sense::hover()).0;
-        });
+        let title_color = if enabled {
+            theme::palette().text
+        } else {
+            theme::palette().text_muted
+        };
+        let row = self.row_parts(
+            |ui| {
+                title_with_tag(ui, RichText::new(title).color(title_color).into(), tag);
+            },
+            Some(detail),
+            options,
+            |ui| {
+                switch = ui.allocate_exact_size(TOGGLE_SIZE, egui::Sense::hover()).0;
+            },
+        );
         let mut response = self.ui.interact(
             row,
             id,
