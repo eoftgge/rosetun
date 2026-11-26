@@ -18,6 +18,8 @@ pub struct ExitInfo {
 
 #[derive(Debug, thiserror::Error)]
 pub enum ExitInfoError {
+    #[error("the VPN exit proxy is unavailable")]
+    VpnUnavailable,
     #[error("request failed: {0}")]
     Request(String),
     #[error("HTTP status {0}")]
@@ -28,11 +30,33 @@ pub enum ExitInfoError {
 
 /// Asks Cloudflare's trace endpoint.
 pub fn exit_info(timeout: Duration) -> Result<ExitInfo, ExitInfoError> {
+    request_exit_info(timeout, crate::resolve::agent_proxy())
+}
+
+/// Looks up the connected session's main VPN exit through its authenticated entry.
+pub fn exit_info_via_vpn(timeout: Duration) -> Result<ExitInfo, ExitInfoError> {
+    exit_info_via_vpn_with(timeout, || crate::fetch::helper_vpn_proxy("rosetun-exit"))
+}
+
+fn exit_info_via_vpn_with(
+    timeout: Duration,
+    vpn_proxy: impl FnOnce() -> Result<Option<ureq::Proxy>, crate::FetchError>,
+) -> Result<ExitInfo, ExitInfoError> {
+    let proxy = vpn_proxy()
+        .map_err(|_| ExitInfoError::VpnUnavailable)?
+        .ok_or(ExitInfoError::VpnUnavailable)?;
+    request_exit_info(timeout, Some(proxy))
+}
+
+fn request_exit_info(
+    timeout: Duration,
+    proxy: Option<ureq::Proxy>,
+) -> Result<ExitInfo, ExitInfoError> {
     let tls = TlsConfig::builder()
         .root_certs(RootCerts::PlatformVerifier)
         .build();
     let agent: ureq::Agent = ureq::Agent::config_builder()
-        .proxy(crate::resolve::agent_proxy())
+        .proxy(proxy)
         .tls_config(tls)
         .timeout_global(Some(timeout))
         .max_redirects(0)
@@ -88,8 +112,19 @@ fn parse_trace(body: &str) -> Option<ExitInfo> {
 #[cfg(test)]
 mod tests {
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+    use std::time::Duration;
 
-    use super::{ExitInfo, parse_trace};
+    use super::{ExitInfo, ExitInfoError, exit_info_via_vpn_with, parse_trace};
+
+    #[test]
+    fn an_unavailable_vpn_proxy_never_starts_a_direct_exit_lookup() {
+        for proxy in [Ok(None), Err(crate::FetchError::VpnUnavailable)] {
+            assert!(matches!(
+                exit_info_via_vpn_with(Duration::from_secs(1), || proxy),
+                Err(ExitInfoError::VpnUnavailable)
+            ));
+        }
+    }
 
     #[test]
     fn parses_a_trace_response() {

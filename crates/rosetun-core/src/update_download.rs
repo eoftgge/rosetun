@@ -134,7 +134,8 @@ pub fn download_update(
 ) -> Result<DownloadedUpdate, UpdateDownloadError> {
     let name = installer_name(version)?;
     let vpn = if via_vpn {
-        crate::fetch::helper_vpn_proxy().map_err(|_| UpdateDownloadError::VpnRequest)?
+        crate::fetch::helper_vpn_proxy("rosetun-update")
+            .map_err(|_| UpdateDownloadError::VpnRequest)?
     } else {
         None
     };

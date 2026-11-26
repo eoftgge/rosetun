@@ -256,7 +256,11 @@ impl WorkerDispatcher {
 
     pub(crate) fn lookup_exit(&self, generation: u64, route: ExitRoute) {
         self.spawn_task("rosetun-lookup-exit", move |publisher| {
-            let result = rosetun_core::exit_info(Duration::from_secs(5));
+            let timeout = Duration::from_secs(5);
+            let result = match route {
+                ExitRoute::Direct => rosetun_core::exit_info(timeout),
+                ExitRoute::Tunnel => rosetun_core::exit_info_via_vpn(timeout),
+            };
             emit(
                 &publisher.tx,
                 &publisher.repaint,

@@ -25,7 +25,7 @@ mod update_download;
 mod updates;
 
 pub use check::{Answer, InputError, Subject, Unknown, check};
-pub use exit::{ExitInfo, ExitInfoError, exit_info};
+pub use exit::{ExitInfo, ExitInfoError, exit_info, exit_info_via_vpn};
 pub use exits::{
     ExitError, NewExit, change_exit_target, change_exit_via, create_exit, create_exit_via,
     delete_exit, exit_for_country, exit_for_node, exit_rule_count, rename_exit, resolve_exits,
