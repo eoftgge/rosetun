@@ -38,23 +38,15 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
         SettingsSection::Service => service(ui, state, actions),
         SettingsSection::About => about(ui, state, actions),
     });
-    settings_reconnect_notice(ui.ctx(), state, actions);
+    settings_reconnect_notice(ui.ctx(), state);
 }
 
-fn settings_reconnect_notice(ctx: &egui::Context, state: &State, actions: &mut Vec<Action>) {
+fn settings_reconnect_notice(ctx: &egui::Context, state: &State) {
     if !state.settings_need_reconnect() {
         return;
     }
     let text = tr!("next-connect");
-    let reconnect = tr!("reconnect-now");
-    let choices = [widgets::NoticeAction {
-        label: &reconnect,
-        hint: None,
-        enabled: state.can_reconnect_settings(),
-    }];
-    if widgets::action_notice(ctx, "settings_reconnect_notice", &text, &choices).is_some() {
-        actions.push(Action::ReconnectWithSettings);
-    }
+    widgets::action_notice(ctx, "settings_reconnect_notice", &text, &[]);
 }
 
 fn general(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
@@ -274,13 +266,6 @@ fn desktop(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     });
 }
 
-fn pending(pending: bool) -> widgets::RowOptions {
-    widgets::RowOptions {
-        pending,
-        ..widgets::RowOptions::default()
-    }
-}
-
 /// Wide enough for five digits.
 const LOCAL_PROXY_PORT_WIDTH: f32 = 96.0;
 
@@ -291,8 +276,6 @@ fn connection_mode(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
     let editable = state.can_edit_settings();
     let mode = state.config.settings.connection_mode;
     let proxy = mode == ConnectionMode::SystemProxy;
-    let waits = !state.connection_mode_next_connect()
-        && state.waits_for_next_connect(SessionPart::LocalProxy);
     let reduce_motion = state.config.interface.reduce_motion;
     let id = egui::Id::unique("connection_mode");
     let rows_id = id.with("proxy_rows");
@@ -321,7 +304,7 @@ fn connection_mode(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
                     ui.spacing_mut().item_spacing.y = theme::space::XXS;
                     ui.label(RichText::new(tr!("connection-mode")).color(theme::palette().text));
                     widgets::appear(ui, detail_shown, |ui| {
-                        widgets::row_detail(ui, &detail, waits);
+                        widgets::row_detail(ui, &detail, false);
                     });
                 });
             },
@@ -364,14 +347,13 @@ fn connection_mode(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
         )) && !proxy
         {
             let backend = state.config.settings.tun.backend;
-            let pending = state.tun_backend_next_connect();
             let detail = tr!("native-tun-requires-protection");
             card.row_with_title(
                 |ui| {
                     ui.vertical(|ui| {
                         ui.spacing_mut().item_spacing.y = theme::space::XXS;
                         ui.label(RichText::new(tr!("tun-backend")).color(theme::palette().text));
-                        widgets::row_detail(ui, &detail, pending);
+                        widgets::row_detail(ui, &detail, false);
                     });
                 },
                 None,
@@ -563,7 +545,7 @@ fn connection(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                 } else {
                     state.kill_switch_detail()
                 },
-                pending(state.waits_for_next_connect(SessionPart::Protection)),
+                widgets::RowOptions::default(),
                 &mut kill_switch,
                 state.config_ready
                     && !kill_switch_unavailable
@@ -598,11 +580,10 @@ fn connection(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
         }
         let mut allow_lan = state.config.settings.allow_lan;
         if card
-            .toggle_with(
+            .toggle(
                 tr!("allow-lan"),
                 None,
                 tr!("allow-lan-detail"),
-                pending(state.allow_lan_next_connect()),
                 &mut allow_lan,
                 editable,
             )
@@ -623,7 +604,6 @@ fn connection(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                     tr!("private-networks-needs-lan")
                 },
                 widgets::RowOptions {
-                    pending: state.private_networks_next_connect(),
                     nested: true,
                     ..widgets::RowOptions::default()
                 },
@@ -659,11 +639,10 @@ fn connection(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
         }
         let mut auto_reconnect = state.config.settings.auto_reconnect;
         if card
-            .toggle_with(
+            .toggle(
                 tr!("auto-reconnect"),
                 None,
                 tr!("auto-reconnect-detail"),
-                pending(state.auto_reconnect_next_connect()),
                 &mut auto_reconnect,
                 editable,
             )
@@ -704,10 +683,9 @@ fn connection(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
 
 fn dns(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
     widgets::settings_card(ui, |card| {
-        card.row_with(
+        card.row(
             tr!("dns-through-tunnel"),
             Some(&tr!("dns-explanation")),
-            pending(state.waits_for_next_connect(SessionPart::Dns)),
             |_| {},
         );
         card.body(|ui| {
@@ -960,11 +938,10 @@ fn fragment(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
             tr!("fragment-detail")
         };
         if card
-            .toggle_with(
+            .toggle(
                 tr!("fragment-title"),
                 None,
                 detail,
-                pending(state.waits_for_next_connect(SessionPart::Fragment)),
                 &mut on,
                 editable,
             )
@@ -1064,12 +1041,7 @@ fn fragment_form(ui: &mut egui::Ui, state: &mut State, editable: bool, actions: 
 
 fn xray(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     widgets::settings_card(ui, |card| {
-        card.row_with(
-            tr!("xray-title"),
-            Some(&tr!("xray-detail")),
-            pending(state.xray_next_connect()),
-            |_| {},
-        );
+        card.row(tr!("xray-title"), Some(&tr!("xray-detail")), |_| {});
         card.body(|ui| {
             let selected = state.config.settings.xray;
             for (index, setting, title, detail) in [
@@ -2630,39 +2602,16 @@ mod pending_notice_tests {
     }
 
     #[test]
-    fn the_note_follows_the_caption_of_the_changed_setting_only() {
+    fn row_captions_do_not_duplicate_the_next_connect_notice() {
         for language in LANGUAGES {
             i18n::in_language(language, || {
                 let (size, nav) = WINDOWS[0];
-                let note = tr!("next-connect-note");
                 let mut state = connected(ConnectionState::Connected);
-                assert_eq!(with_note(&drawn(&state, size, nav)), Vec::<String>::new());
-                assert!(
-                    drawn(&state, size, nav)
-                        .iter()
-                        .any(|(text, _)| *text == tr!("auto-reconnect-detail")),
-                    "the caption of the reconnect setting stands alone"
-                );
-
                 state.config.settings.private_networks = true;
-                assert_eq!(
-                    with_note(&drawn(&state, size, nav)),
-                    [format!("{} {note}", tr!("private-networks-detail"))]
-                );
-
-                state.config.settings.private_networks = false;
                 state.config.settings.auto_reconnect = false;
-                assert_eq!(
-                    with_note(&drawn(&state, size, nav)),
-                    [format!("{} {note}", tr!("auto-reconnect-detail"))]
-                );
-
-                state.config.settings.auto_reconnect = true;
                 state.config.settings.allow_lan = false;
-                assert_eq!(
-                    with_note(&drawn(&state, size, nav)),
-                    [format!("{} {note}", tr!("allow-lan-detail"))]
-                );
+                assert_eq!(with_note(&drawn(&state, size, nav)), Vec::<String>::new());
+                assert!(state.settings_need_reconnect());
             });
         }
     }
@@ -2674,10 +2623,11 @@ mod pending_notice_tests {
         state.config.settings.private_networks = true;
         state.config.settings.auto_reconnect = false;
         assert_eq!(with_note(&drawn(&state, size, nav)), Vec::<String>::new());
+        assert!(!state.settings_need_reconnect());
     }
 
     #[test]
-    fn the_xray_note_shows_only_while_the_session_runs_another_mode() {
+    fn the_xray_caption_does_not_duplicate_the_next_connect_notice() {
         let mut state = connected(ConnectionState::Connected);
         state.status.xray_use = Some(state.config.settings.xray);
         let shown = |state: &State| {
@@ -2686,14 +2636,8 @@ mod pending_notice_tests {
         };
         assert_eq!(with_note(&shown(&state)), Vec::<String>::new());
         state.config.settings.xray = XrayUse::Off;
-        assert_eq!(
-            with_note(&shown(&state)),
-            [format!(
-                "{} {}",
-                tr!("xray-detail"),
-                tr!("next-connect-note")
-            )]
-        );
+        assert_eq!(with_note(&shown(&state)), Vec::<String>::new());
+        assert!(state.settings_need_reconnect());
     }
 
     #[cfg(any(target_os = "linux", all(windows, target_arch = "x86_64")))]
@@ -2705,50 +2649,30 @@ mod pending_notice_tests {
                 let mut state = connected(ConnectionState::Connected);
                 state.status.tun_backend = Some(rosetun_config::TunBackend::SingTun);
                 state.config.settings.tun.backend = rosetun_config::TunBackend::NativeMixed;
-                let expected = format!(
-                    "{} {}",
-                    tr!("native-tun-requires-protection"),
-                    tr!("next-connect-note")
-                );
                 let shown = TestScreen::new(size)
                     .settle(|ui| connection_mode(ui, &mut state, &mut Vec::new()));
-                let notes = with_note(&shown);
-                assert_eq!(notes, [expected]);
-                assert_eq!(
-                    notes[0].matches(&tr!("next-connect-note")).count(),
-                    1,
-                    "note must not duplicate"
-                );
+                assert_eq!(with_note(&shown), Vec::<String>::new());
+                assert!(state.settings_need_reconnect());
             });
         }
     }
 
     #[test]
-    fn settings_reconnect_notice_appears_when_settings_wait_and_clicks_reconnect() {
+    fn settings_reconnect_notice_appears_without_reconnect_action() {
         let (size, _) = WINDOWS[0];
         let mut clean = connected(ConnectionState::Connected);
-        let mut actions = Vec::new();
         let none = TestScreen::new(size).settle(|ui| {
-            settings_reconnect_notice(ui.ctx(), &clean, &mut actions);
+            settings_reconnect_notice(ui.ctx(), &clean);
         });
-        assert!(!none.iter().any(|(text, _)| *text == tr!("reconnect-now")));
+        assert!(!none.iter().any(|(text, _)| *text == tr!("next-connect")));
 
         clean.config.settings.allow_lan = false;
         assert!(clean.settings_need_reconnect());
-        let mut screen = TestScreen::new(size);
-        let shown = screen.settle(|ui| {
-            settings_reconnect_notice(ui.ctx(), &clean, &mut actions);
+        let shown = TestScreen::new(size).settle(|ui| {
+            settings_reconnect_notice(ui.ctx(), &clean);
         });
         assert!(shown.iter().any(|(text, _)| *text == tr!("next-connect")));
-        assert!(shown.iter().any(|(text, _)| *text == tr!("reconnect-now")));
-        screen.click_text(&tr!("reconnect-now"), |ui| {
-            settings_reconnect_notice(ui.ctx(), &clean, &mut actions);
-        });
-        assert!(
-            actions
-                .iter()
-                .any(|action| matches!(action, Action::ReconnectWithSettings))
-        );
+        assert!(!shown.iter().any(|(text, _)| *text == tr!("reconnect-now")));
     }
 
     #[test]

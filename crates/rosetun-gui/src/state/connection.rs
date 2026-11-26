@@ -502,9 +502,6 @@ impl State {
     }
 
     pub(super) fn helper_result(&mut self, result: Result<(), HelperCommandError>) {
-        if result.is_err() {
-            self.settings.screen.reconnect_after_disconnect = false;
-        }
         self.operation_error = result
             .err()
             .map(|error| self.text(&errors::helper_command(crate::i18n::language(), &error)));
@@ -825,7 +822,6 @@ impl State {
                     PrimaryAction::Disabled => return None,
                 };
                 self.connect_in_flight = matches!(job, Job::Connect(_));
-                self.settings.screen.reconnect_after_disconnect = false;
                 if self.connect_in_flight {
                     self.reset_failure_interference();
                     self.reset_system_failure();
@@ -859,7 +855,6 @@ impl State {
                     && self.status.state.is_transitional()
                     && !self.cancel_in_flight
                 {
-                    self.settings.screen.reconnect_after_disconnect = false;
                     self.cancel_in_flight = true;
                     self.cancelled_connect = true;
                     self.operations.helper = true;

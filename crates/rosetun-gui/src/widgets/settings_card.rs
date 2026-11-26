@@ -70,17 +70,6 @@ impl SettingsCard<'_> {
         self.row_inner(title.as_ref(), None, detail, RowOptions::default(), control);
     }
 
-    /// `row` with `RowOptions`.
-    pub(crate) fn row_with(
-        &mut self,
-        title: impl AsRef<str>,
-        detail: Option<&str>,
-        options: RowOptions,
-        control: impl FnOnce(&mut egui::Ui),
-    ) {
-        self.row_inner(title.as_ref(), None, detail, options, control);
-    }
-
     /// `row` whose control is a text field.
     pub(crate) fn field_row(
         &mut self,

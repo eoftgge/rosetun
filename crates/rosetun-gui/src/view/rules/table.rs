@@ -266,15 +266,37 @@ fn target_picker(
         let response = response
             .on_hover_cursor(egui::CursorIcon::PointingHand)
             .on_hover_text(&current.label);
-        let width = if full_field {
-            rect.width().max(TARGET_MENU_WIDTH)
-        } else if choices.len() > 3 {
-            TARGET_MENU_WIDTH
-        } else {
-            TARGET_WIDTH
-        };
         let mut selected = None;
         widgets::menu_popup(&response).show(|ui| {
+            let trigger_inner = (rect.width() - ui.spacing().menu_margin.sum().x).max(0.0);
+            let font = egui::TextStyle::Button.resolve(ui.style());
+            let section_font = egui::TextStyle::Small.resolve(ui.style());
+            let mut needed = trigger_inner;
+            for choice in choices {
+                let label_w = ui
+                    .painter()
+                    .layout_no_wrap(choice.label.clone(), font.clone(), choice.color)
+                    .size()
+                    .x;
+                needed = needed.max(TARGET_TEXT_X + label_w + 34.0);
+                if let Some(section) = &choice.section {
+                    let section_w = ui
+                        .painter()
+                        .layout_no_wrap(
+                            section.clone(),
+                            section_font.clone(),
+                            theme::palette().text_dim,
+                        )
+                        .size()
+                        .x;
+                    needed = needed.max(section_w + 16.0);
+                }
+            }
+            let width = if full_field {
+                needed.max(trigger_inner)
+            } else {
+                needed.min(TARGET_MENU_WIDTH)
+            };
             ui.set_min_width(width);
             for choice in choices {
                 if let Some(section) = &choice.section {

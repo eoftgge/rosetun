@@ -758,9 +758,6 @@ impl App {
         if let Some(job) = self.state.take_xray_connect() {
             self.dispatch(job);
         }
-        if let Some(job) = self.state.take_reconnect_with_settings() {
-            self.dispatch(job);
-        }
         if let Some(job) = self.state.take_temporary_load(display::now_unix()) {
             self.dispatch(job);
         }

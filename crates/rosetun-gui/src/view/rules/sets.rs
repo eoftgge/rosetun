@@ -225,7 +225,8 @@ fn set_picker(ui: &mut egui::Ui, state: &State, set: &RuleSet, actions: &mut Vec
         .response
         .on_hover_cursor(egui::CursorIcon::PointingHand);
     widgets::menu_popup(&response).show(|ui| {
-        ui.set_min_width(width);
+        let inner_width = (width - ui.spacing().menu_margin.sum().x).max(0.0);
+        ui.set_min_width(inner_width);
         for item in &state.config.rule_sets {
             let selected = item.id == set.id;
             let is_active = state.config.active_rule_set.as_ref() == Some(&item.id);
