@@ -203,30 +203,7 @@ pub(crate) fn paint(painter: &egui::Painter, center: egui::Pos2, icon: Icon, col
                 stroke,
             );
         }
-        Icon::Globe => {
-            painter.circle_stroke(center, 6.5, stroke);
-            painter.line_segment(
-                [
-                    center + egui::vec2(-6.5, 0.0),
-                    center + egui::vec2(6.5, 0.0),
-                ],
-                stroke,
-            );
-            painter.line_segment(
-                [
-                    center + egui::vec2(0.0, -6.5),
-                    center + egui::vec2(0.0, 6.5),
-                ],
-                stroke,
-            );
-            let points = (0..16)
-                .map(|index| {
-                    let angle = index as f32 * std::f32::consts::TAU / 16.0;
-                    center + egui::vec2(3.0 * angle.cos(), 6.5 * angle.sin())
-                })
-                .collect();
-            painter.add(egui::Shape::line(points, stroke));
-        }
+        Icon::Globe => paint_globe(painter, center, 6.5, 3.0, stroke),
         Icon::Stack => {
             for y in [-4.0, 0.0, 4.0] {
                 painter.rect_filled(
@@ -397,4 +374,55 @@ pub(crate) fn paint(painter: &egui::Painter, center: egui::Pos2, icon: Icon, col
             ));
         }
     }
+}
+
+/// Compact variant for small surfaces like address chips where the standard
+/// 13 px globe crowds the 24 px chip height.
+pub(crate) fn paint_compact(
+    painter: &egui::Painter,
+    center: egui::Pos2,
+    icon: Icon,
+    color: Color32,
+) {
+    match icon {
+        Icon::Globe => paint_globe(
+            painter,
+            center,
+            5.0,
+            2.3,
+            egui::Stroke::new(theme::stroke::HAIRLINE, color),
+        ),
+        _ => paint(painter, center, icon, color),
+    }
+}
+
+fn paint_globe(
+    painter: &egui::Painter,
+    center: egui::Pos2,
+    radius: f32,
+    meridian: f32,
+    stroke: egui::Stroke,
+) {
+    painter.circle_stroke(center, radius, stroke);
+    painter.line_segment(
+        [
+            center + egui::vec2(-radius, 0.0),
+            center + egui::vec2(radius, 0.0),
+        ],
+        stroke,
+    );
+    painter.line_segment(
+        [
+            center + egui::vec2(0.0, -radius),
+            center + egui::vec2(0.0, radius),
+        ],
+        stroke,
+    );
+    let points = (0..16)
+        .map(|index| {
+            let angle = index as f32 * std::f32::consts::TAU / 16.0;
+            center + egui::vec2(meridian * angle.cos(), radius * angle.sin())
+        })
+        .collect();
+    painter.add(egui::Shape::line(points, stroke));
 }

@@ -319,6 +319,19 @@ fn tab_body(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
         unresolved: &unresolved,
         running: running_programs(state),
     };
+    let reduce_motion = state.config.interface.reduce_motion;
+    let filter_active = state.rules.screen.filter.is_active();
+    let rule_ids: Vec<RuleId> = visible.iter().map(|(_, rule)| rule.id.clone()).collect();
+    let motion_id = ui.scope_id().with(("rules_list_motion", set.id.as_str()));
+    let frame_nr = ui.ctx().cumulative_frame_nr();
+    let now = ui.ctx().input(|input| input.time);
+    let mut list_motion = ui
+        .ctx()
+        .data_mut(|data| data.get_temp::<RulesListMotion>(motion_id))
+        .unwrap_or_default();
+    list_motion.sync(frame_nr, now, &rule_ids, filter_active, reduce_motion);
+    let mut any_motion = false;
+    let mut measured_pitch: Option<f32> = None;
     ui.scope(|ui| {
         ui.spacing_mut().item_spacing.y = theme::space::S;
         for (_, rule) in visible_temporary {
@@ -327,9 +340,32 @@ fn tab_body(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
             });
         }
         for (index, rule) in visible {
+            let (slide_dy, sliding) = list_motion.slide_offset(&rule.id, now, reduce_motion);
+            any_motion |= sliding;
+            let layer = ui.layer_id();
+            let start_shape = (slide_dy.abs() > 0.25).then(|| {
+                ui.ctx().graphics(|graphics| {
+                    graphics
+                        .get(layer)
+                        .map_or(egui::layers::ShapeIdx(0), egui::layers::PaintList::next_idx)
+                })
+            });
             let row = ui.push_id((set.id.as_str(), rule.id.as_str()), |ui| {
                 rule_row(ui, state, &rows, rule, Some(index), value_width, actions);
             });
+            let group_expanded = matches!(rule.matcher, RuleMatcher::Group { .. })
+                && state.rules.screen.expanded_groups.contains(&rule.id);
+            if !group_expanded && row.response.rect.height() > 0.0 {
+                measured_pitch = Some(row.response.rect.height() + theme::space::S);
+            }
+            if let Some(start_shape) = start_shape {
+                let shift = egui::emath::TSTransform::from_translation(egui::vec2(0.0, slide_dy));
+                ui.ctx().graphics_mut(|graphics| {
+                    let list = graphics.entry(layer);
+                    let end_shape = list.next_idx();
+                    list.transform_range(start_shape, end_shape, shift);
+                });
+            }
             if reveal && state.rules.screen.selection_anchor.as_ref() == Some(&rule.id) {
                 row.response.scroll_to_me(None);
             }
@@ -353,6 +389,14 @@ fn tab_body(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
         }
         default_rule(ui, state, set, value_width, actions);
     });
+    if let Some(pitch) = measured_pitch {
+        list_motion.row_pitch = pitch;
+    }
+    ui.ctx()
+        .data_mut(|data| data.insert_temp(motion_id, list_motion));
+    if any_motion {
+        ui.ctx().request_repaint();
+    }
     scroll_rules_while_dragging(ui);
     clear_selection_on_click_away(ui.ctx(), state, &selection_regions, actions);
     selection_shortcuts(ui.ctx(), state, text_edit_focused, actions);
@@ -648,6 +692,80 @@ pub(crate) fn destination_color(destination: &RuleDestination) -> Color32 {
 
 pub(crate) fn rule_label(rule: &Rule, exits: &[Exit]) -> String {
     destination_label(&RuleDestination::of(rule), exits)
+}
+
+const MAX_RULE_SLIDE_ROWS: f32 = 4.0;
+
+#[derive(Clone, Default)]
+struct RulesListMotion {
+    last_frame: u64,
+    row_pitch: f32,
+    indices: std::collections::HashMap<RuleId, usize>,
+    slides: std::collections::HashMap<RuleId, (f32, f64)>,
+}
+
+impl RulesListMotion {
+    fn sync(
+        &mut self,
+        frame: u64,
+        now: f64,
+        keys: &[RuleId],
+        filter_active: bool,
+        reduce_motion: bool,
+    ) {
+        if self.last_frame == frame {
+            return;
+        }
+        if self.last_frame == 0 || self.last_frame + 1 < frame || filter_active || reduce_motion {
+            self.slides.clear();
+            self.indices.clear();
+            self.indices
+                .extend(keys.iter().enumerate().map(|(i, k)| (k.clone(), i)));
+            self.last_frame = frame;
+            return;
+        }
+
+        let pitch = if self.row_pitch > 0.0 {
+            self.row_pitch
+        } else {
+            theme::RULE_ROW + theme::space::S
+        };
+        let max_slide = pitch * MAX_RULE_SLIDE_ROWS;
+        let present: std::collections::HashSet<&RuleId> = keys.iter().collect();
+        self.slides.retain(|k, (_, started)| {
+            present.contains(k) && now - *started < f64::from(crate::motion::FAST)
+        });
+
+        for (idx, key) in keys.iter().enumerate() {
+            if let Some(&prev_idx) = self.indices.get(key)
+                && prev_idx != idx
+            {
+                let current_dy = self.slide_offset(key, now, false).0;
+                let delta = (prev_idx as f32 - idx as f32) * pitch;
+                let start_dy = (current_dy + delta).clamp(-max_slide, max_slide);
+                self.slides.insert(key.clone(), (start_dy, now));
+            }
+        }
+
+        self.indices.clear();
+        self.indices
+            .extend(keys.iter().enumerate().map(|(i, k)| (k.clone(), i)));
+        self.last_frame = frame;
+    }
+
+    fn slide_offset(&self, key: &RuleId, now: f64, reduce_motion: bool) -> (f32, bool) {
+        if reduce_motion {
+            return (0.0, false);
+        }
+        if let Some(&(start_dy, started)) = self.slides.get(key) {
+            let t = ((now - started).max(0.0) / f64::from(crate::motion::FAST)) as f32;
+            if t < 1.0 {
+                let dy = start_dy * (1.0 - crate::motion::ease_out(t));
+                return (dy, true);
+            }
+        }
+        (0.0, false)
+    }
 }
 
 #[cfg(test)]

@@ -15,7 +15,7 @@ const CHIP_HEIGHT: f32 = 24.0;
 const CHIP_GAP: f32 = theme::space::XS;
 /// Inside a chip, at its ends and between its parts.
 const CHIP_PADDING: f32 = theme::space::S;
-const CHIP_ICON: f32 = 14.0;
+const CHIP_ICON: f32 = 12.0;
 const CHIP_CLOSE: f32 = CROSS_BUTTON;
 /// The side of a cross that removes something.
 pub(crate) const CROSS_BUTTON: f32 = 14.0;
@@ -347,7 +347,7 @@ fn paint_chip(
         rect.left() + CHIP_PADDING + CHIP_ICON / 2.0,
         rect.center().y,
     );
-    icons::paint(&painter, icon_center, chip.icon, text);
+    icons::paint_compact(&painter, icon_center, chip.icon, text);
     let text_left = rect.left() + CHIP_PADDING + CHIP_ICON + CHIP_PADDING / 2.0;
     let close_center = egui::pos2(
         rect.right() - CHIP_PADDING - CHIP_CLOSE / 2.0,

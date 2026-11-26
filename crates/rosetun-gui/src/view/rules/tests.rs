@@ -1013,6 +1013,38 @@ fn target_button_aligns_dot_and_label_on_the_left_and_centres_label_vertically()
     );
 }
 
+#[test]
+fn rules_list_motion_slides_reordered_rows_and_honours_reduce_motion() {
+    let a = RuleId::new("a");
+    let b = RuleId::new("b");
+    let c = RuleId::new("c");
+    let mut motion = RulesListMotion {
+        row_pitch: 66.0,
+        ..Default::default()
+    };
+    motion.sync(1, 1.0, &[a.clone(), b.clone(), c.clone()], false, false);
+    assert_eq!(motion.slide_offset(&a, 1.0, false), (0.0, false));
+
+    // Swap a and b on consecutive frame.
+    motion.sync(2, 1.016, &[b.clone(), a.clone(), c.clone()], false, false);
+    let (dy_b, sliding_b) = motion.slide_offset(&b, 1.016, false);
+    let (dy_a, sliding_a) = motion.slide_offset(&a, 1.016, false);
+    assert!(
+        sliding_b && dy_b > 60.0,
+        "b should slide up from +66: {dy_b}"
+    );
+    assert!(
+        sliding_a && dy_a < -60.0,
+        "a should slide down from -66: {dy_a}"
+    );
+    assert_eq!(motion.slide_offset(&c, 1.016, false), (0.0, false));
+    // Settled after motion::FAST.
+    let after = 1.016 + f64::from(crate::motion::FAST) + 0.01;
+    assert_eq!(motion.slide_offset(&b, after, false), (0.0, false));
+    // Reduce motion makes it instant.
+    assert_eq!(motion.slide_offset(&b, 1.016, true), (0.0, false));
+}
+
 fn check_line(rule: Option<(String, RuleId)>) -> crate::state::CheckLine {
     crate::state::CheckLine {
         text: tr!(
