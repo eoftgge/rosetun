@@ -40,6 +40,9 @@ const UDP_SWEEP_INTERVAL: Duration = Duration::from_millis(100);
 const UDP_MAPPINGS: usize = 512;
 const UDP_PEERS: usize = 32;
 const UDP_QUEUE: usize = 512;
+const UDP_FLOW_CACHE_LIMIT: usize = 4096;
+const UDP_BUFFER_POOL: usize = 64;
+const UDP_POOL_MAX_CAPACITY: usize = 2048;
 const MAX_CLIENTS: usize = 512;
 const DNS_WORKERS: usize = 4;
 const DNS_QUEUE_CAPACITY: usize = 128;
@@ -219,6 +222,46 @@ struct Datagram {
     payload: Vec<u8>,
 }
 
+/// Non-blocking pool of reusable UDP payload buffers between the TUN reader
+/// and the UDP sender worker so steady-state gaming/QUIC traffic avoids
+/// per-packet heap allocations.
+#[derive(Default)]
+struct BufferPool(Mutex<Vec<Vec<u8>>>);
+
+impl BufferPool {
+    fn take(&self, payload: &[u8]) -> Vec<u8> {
+        if let Ok(mut pool) = self.0.try_lock()
+            && let Some(mut buffer) = pool.pop()
+        {
+            buffer.clear();
+            buffer.extend_from_slice(payload);
+            return buffer;
+        }
+        payload.to_vec()
+    }
+
+    fn put(&self, mut buffer: Vec<u8>) {
+        if buffer.capacity() > UDP_POOL_MAX_CAPACITY {
+            return;
+        }
+        if let Ok(mut pool) = self.0.try_lock()
+            && pool.len() < UDP_BUFFER_POOL
+        {
+            buffer.clear();
+            pool.push(buffer);
+        }
+    }
+}
+
+struct CachedUdpFlow {
+    generation: u64,
+    path: Arc<UdpPath>,
+    counters: crate::conntable::Counters,
+    closed: Arc<AtomicBool>,
+    mapping_key: MappingKey<UdpEgress>,
+    last_touch: Instant,
+}
+
 struct DnsQueue {
     queries: Mutex<VecDeque<Datagram>>,
     ready: Condvar,
@@ -275,6 +318,7 @@ struct Pump {
     local_ips: Vec<IpAddr>,
     tcp: MixedTcp,
     udp: SyncSender<Datagram>,
+    udp_pool: Arc<BufferPool>,
     dns: Arc<DnsQueue>,
     clients: Arc<Clients>,
     stopped: Arc<AtomicBool>,
@@ -287,6 +331,8 @@ struct UdpPump {
     policy: Arc<TunnelPolicy>,
     table: ConnectionTable,
     udp: FullConeNat<UdpEgress, UdpMapping>,
+    flow_cache: HashMap<TcpFlow, CachedUdpFlow>,
+    pool: Arc<BufferPool>,
     stopped: Arc<AtomicBool>,
     last_generation: u64,
     last_sweep: Instant,
@@ -373,7 +419,8 @@ impl TunnelRuntime {
         };
         let mtu = usize::from(settings.mtu);
         runtime.start_dns_workers(&policy.dns, mtu)?;
-        let udp = runtime.start_udp_worker(&policy, mtu)?;
+        let udp_pool = Arc::new(BufferPool::default());
+        let udp = runtime.start_udp_worker(&policy, Arc::clone(&udp_pool), mtu)?;
         let mut pump = Pump {
             device: Arc::clone(&runtime.device),
             policy,
@@ -388,6 +435,7 @@ impl TunnelRuntime {
             .collect(),
             tcp,
             udp,
+            udp_pool,
             dns: Arc::clone(&runtime.dns_queue),
             clients: Arc::clone(&runtime.clients),
             stopped: Arc::clone(&runtime.stopped),
@@ -405,6 +453,7 @@ impl TunnelRuntime {
     fn start_udp_worker(
         &mut self,
         policy: &Arc<TunnelPolicy>,
+        pool: Arc<BufferPool>,
         mtu: usize,
     ) -> io::Result<SyncSender<Datagram>> {
         let (sender, receiver) = mpsc::sync_channel(UDP_QUEUE);
@@ -415,6 +464,8 @@ impl TunnelRuntime {
             policy: Arc::clone(policy),
             table: self.table.clone(),
             udp: FullConeNat::new(UDP_MAPPINGS, UDP_IDLE),
+            flow_cache: HashMap::new(),
+            pool,
             stopped,
             last_generation: generation,
             last_sweep: Instant::now(),
@@ -643,10 +694,15 @@ impl Pump {
         }
         // Opening a SOCKS association, looking up processes, and resolving
         // rule addresses can block. The device reader only queues a datagram.
-        let _ = self.udp.try_send(Datagram {
-            flow,
-            payload: payload.to_vec(),
-        });
+        let buffered = self.udp_pool.take(payload);
+        if let Err(mpsc::TrySendError::Full(dropped) | mpsc::TrySendError::Disconnected(dropped)) =
+            self.udp.try_send(Datagram {
+                flow,
+                payload: buffered,
+            })
+        {
+            self.udp_pool.put(dropped.payload);
+        }
     }
 }
 
@@ -658,12 +714,19 @@ impl UdpPump {
                     let now = Instant::now();
                     self.sweep(now);
                     self.send(&datagram, now);
+                    self.pool.put(datagram.payload);
                     for _ in 1..PACKET_BUDGET {
                         match receiver.try_recv() {
                             Ok(datagram) if !self.stopped.load(Ordering::Acquire) => {
                                 self.send(&datagram, Instant::now());
+                                self.pool.put(datagram.payload);
                             }
-                            Ok(_) | Err(mpsc::TryRecvError::Disconnected) => {
+                            Ok(datagram) => {
+                                self.pool.put(datagram.payload);
+                                self.shutdown_readers();
+                                return;
+                            }
+                            Err(mpsc::TryRecvError::Disconnected) => {
                                 self.shutdown_readers();
                                 return;
                             }
@@ -671,7 +734,11 @@ impl UdpPump {
                         }
                     }
                 }
-                Ok(_) | Err(RecvTimeoutError::Disconnected) => break,
+                Ok(datagram) => {
+                    self.pool.put(datagram.payload);
+                    break;
+                }
+                Err(RecvTimeoutError::Disconnected) => break,
                 Err(RecvTimeoutError::Timeout) => {
                     self.sweep(Instant::now());
                 }
@@ -684,6 +751,7 @@ impl UdpPump {
         let generation = self.policy.generation();
         if generation != self.last_generation {
             self.last_generation = generation;
+            self.flow_cache.clear();
             self.udp
                 .retain(|key, _| key.egress.generation == generation);
         }
@@ -692,10 +760,16 @@ impl UdpPump {
             self.udp.receive(now, |_, mapping| {
                 mapping.received.swap(false, Ordering::AcqRel)
             });
+            self.flow_cache.retain(|_, cached| {
+                cached.generation == generation
+                    && !cached.closed.load(Ordering::Acquire)
+                    && !cached.counters.is_closed()
+            });
         }
     }
 
     fn shutdown_readers(&mut self) {
+        self.flow_cache.clear();
         let mut handles = Vec::new();
         for mut mapping in self.udp.drain() {
             mapping.closed.store(true, Ordering::Release);
@@ -711,11 +785,28 @@ impl UdpPump {
     fn send(&mut self, datagram: &Datagram, now: Instant) {
         let flow = datagram.flow;
         let payload = &datagram.payload;
+        let remote = target(flow.destination);
+        let generation = self.policy.generation();
+        if let Some(cached) = self.flow_cache.get_mut(&flow) {
+            let valid = cached.generation == generation
+                && !cached.closed.load(Ordering::Acquire)
+                && !cached.counters.is_closed()
+                && (now.saturating_duration_since(cached.last_touch) < Duration::from_secs(1) || {
+                    cached.last_touch = now;
+                    self.udp.touch(&cached.mapping_key, now)
+                });
+            if valid {
+                if cached.path.send_to(payload, &remote).is_ok() {
+                    cached.counters.add_up(payload.len() as u64);
+                }
+                return;
+            }
+            self.flow_cache.remove(&flow);
+        }
         let domain = sniff_quic_datagram(payload).and_then(|sniffed| sniffed.domain);
         let Some(selected) = self.policy.select(&flow, ConnectionNetwork::Udp, domain) else {
             return;
         };
-        let remote = target(flow.destination);
         let key = MappingKey {
             source: flow.source,
             egress: UdpEgress {
@@ -723,6 +814,7 @@ impl UdpPump {
                 route: selected.meta.route.clone(),
             },
         };
+        let cache_key = key.clone();
         let reader_key = key.clone();
         let device = Arc::clone(&self.device);
         let policy = Arc::clone(&self.policy);
@@ -775,8 +867,30 @@ impl UdpPump {
         let Some(registration) = registration else {
             return;
         };
-        if mapping.path.send_to(payload, &remote).is_ok() {
+        let path = Arc::clone(&mapping.path);
+        let closed = Arc::clone(&mapping.closed);
+        if path.send_to(payload, &remote).is_ok() {
             registration.add_up(payload.len() as u64);
+        }
+        if self.flow_cache.len() >= UDP_FLOW_CACHE_LIMIT {
+            self.flow_cache.retain(|_, cached| {
+                cached.generation == selected.generation
+                    && !cached.closed.load(Ordering::Acquire)
+                    && !cached.counters.is_closed()
+            });
+        }
+        if self.flow_cache.len() < UDP_FLOW_CACHE_LIMIT {
+            self.flow_cache.insert(
+                flow,
+                CachedUdpFlow {
+                    generation: selected.generation,
+                    path,
+                    counters: registration,
+                    closed,
+                    mapping_key: cache_key,
+                    last_touch: now,
+                },
+            );
         }
     }
 }
@@ -1041,6 +1155,8 @@ mod tests {
             policy: test_policy,
             table: ConnectionTable::new(),
             udp: FullConeNat::new(8, UDP_IDLE),
+            flow_cache: HashMap::new(),
+            pool: Arc::new(BufferPool::default()),
             stopped: Arc::clone(&stopped),
             last_generation: generation,
             last_sweep: Instant::now(),
@@ -1071,6 +1187,90 @@ mod tests {
         let entries = pump.table.active();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].process.as_deref(), Some("example.exe"));
+        stopped.store(true, Ordering::Release);
+        pump.shutdown_readers();
+    }
+
+    #[test]
+    fn repeated_udp_datagrams_reuse_cached_policy_until_policy_changes() {
+        use std::sync::atomic::AtomicUsize;
+
+        let upstream = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        upstream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let target = upstream.local_addr().unwrap();
+        let client: SocketAddr = "192.0.2.1:49152".parse().unwrap();
+        let lookups = Arc::new(AtomicUsize::new(0));
+        let lookups_for_policy = Arc::clone(&lookups);
+        let rules = RuleEngine::compile(&RulePlan {
+            rules: RuleSet::new(RuleSetId::new("test"), "Test", RuleTarget::Direct),
+            temporary_count: 0,
+            allow_lan: false,
+            lan_segment: Vec::new(),
+            lan_servers: Vec::new(),
+            private_networks: false,
+            exits: Vec::new(),
+            lists: Vec::new(),
+        })
+        .unwrap();
+        let base_policy = policy(false);
+        let test_policy = Arc::new(TunnelPolicy::new(
+            rules,
+            outbounds(),
+            Arc::clone(&base_policy.dns),
+            Arc::new(move |_: &TcpFlow, _: ConnectionNetwork| {
+                lookups_for_policy.fetch_add(1, Ordering::Relaxed);
+                Some("game.exe".into())
+            }),
+        ));
+        let stopped = Arc::new(AtomicBool::new(false));
+        let mut pump = UdpPump {
+            device: Arc::new(MockTun::default()),
+            policy: Arc::clone(&test_policy),
+            table: ConnectionTable::new(),
+            udp: FullConeNat::new(8, UDP_IDLE),
+            flow_cache: HashMap::new(),
+            pool: Arc::new(BufferPool::default()),
+            stopped: Arc::clone(&stopped),
+            last_generation: test_policy.generation(),
+            last_sweep: Instant::now(),
+            mtu: 1500,
+        };
+        let datagram = Datagram {
+            flow: TcpFlow {
+                source: client,
+                destination: target,
+            },
+            payload: b"tick".to_vec(),
+        };
+        let now = Instant::now();
+        for _ in 0..5 {
+            pump.send(&datagram, now);
+        }
+        assert_eq!(
+            lookups.load(Ordering::Relaxed),
+            1,
+            "policy lookup should run once per cached UDP flow"
+        );
+        let new_rules = RuleEngine::compile(&RulePlan {
+            rules: RuleSet::new(RuleSetId::new("test"), "Test", RuleTarget::Direct),
+            temporary_count: 0,
+            allow_lan: false,
+            lan_segment: Vec::new(),
+            lan_servers: Vec::new(),
+            private_networks: false,
+            exits: Vec::new(),
+            lists: Vec::new(),
+        })
+        .unwrap();
+        test_policy.replace_rules(new_rules);
+        pump.send(&datagram, now);
+        assert_eq!(
+            lookups.load(Ordering::Relaxed),
+            2,
+            "policy generation bump must invalidate cached UDP flow"
+        );
         stopped.store(true, Ordering::Release);
         pump.shutdown_readers();
     }
@@ -1112,11 +1312,14 @@ mod tests {
         let (sender, receiver) = mpsc::sync_channel(UDP_QUEUE);
         let table = ConnectionTable::new();
         let generation = policy.generation();
+        let udp_pool = Arc::new(BufferPool::default());
         let mut udp = UdpPump {
             device: device.clone(),
             policy: Arc::clone(&policy),
             table: table.clone(),
             udp: FullConeNat::new(8, UDP_IDLE),
+            flow_cache: HashMap::new(),
+            pool: Arc::clone(&udp_pool),
             stopped: Arc::clone(&stopped),
             last_generation: generation,
             last_sweep: Instant::now(),
@@ -1134,6 +1337,7 @@ mod tests {
             }])
             .unwrap(),
             udp: sender,
+            udp_pool,
             dns: Arc::new(DnsQueue::new(DNS_QUEUE_CAPACITY)),
             clients: Arc::new(Clients::default()),
             stopped: Arc::clone(&stopped),

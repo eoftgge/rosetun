@@ -100,6 +100,15 @@ impl<E: Eq + Hash, V> FullConeNat<E, V> {
         self.entries.retain(|key, mapping| keep(key, &mapping.path));
     }
 
+    pub fn touch(&mut self, key: &MappingKey<E>, now: Instant) -> bool {
+        if let Some(mapping) = self.entries.get_mut(key) {
+            mapping.active_at = now;
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn drain(&mut self) -> impl Iterator<Item = V> + '_ {
         self.entries.drain().map(|(_, mapping)| mapping.path)
     }
