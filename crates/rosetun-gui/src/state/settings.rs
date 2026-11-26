@@ -661,8 +661,6 @@ impl State {
                     all(windows, target_arch = "x86_64")
                 )) && self.can_edit_settings()
                     && self.config.settings.tun.backend != backend
-                    && (backend == rosetun_config::TunBackend::SingTun
-                        || self.config.settings.kill_switch)
                 {
                     return self.start_settings(Job::Setting(SettingChange::TunBackend(backend)));
                 }

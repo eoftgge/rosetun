@@ -8765,10 +8765,17 @@ fn unavailable_native_tun_is_refused_before_engine_or_firewall_changes() {
     let (helper, controls) = ordered_helper();
     let mut request = connect_request();
     request.settings.tun.backend = rosetun_config::TunBackend::NativeMixed;
+    request.settings.tun.auto_route = false;
     let error = helper.connect(&request).unwrap_err();
     assert_eq!(error.code, ErrorCode::ProtectionUnavailable);
     assert_eq!(controls.spawns.load(Ordering::SeqCst), 0);
     assert!(controls.events.lock().unwrap().is_empty());
+}
+
+#[test]
+fn native_tun_without_kill_switch_uses_dns_lock_scope_for_listener_permits() {
+    let scope = protection::protection_scope(StartMode::Fresh, false, true, false, false, false);
+    assert_eq!(scope, Some(rosetun_routing::ProtectionScope::DnsOnly));
 }
 
 #[test]

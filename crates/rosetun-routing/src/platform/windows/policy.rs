@@ -1560,4 +1560,36 @@ pub(super) mod tests {
         );
         assert_eq!(disabled, enabled);
     }
+
+    #[test]
+    fn dns_only_with_proxy_application_allows_native_listener_authorization_without_blocking_all_traffic()
+     {
+        let helper = Path::new(r"C:\Program Files\Rosetun\rosetun-helper-privileged.exe");
+        let plan = RoutingPlan {
+            proxy_application: Some(helper.to_path_buf()),
+            scope: ProtectionScope::DnsOnly,
+            allow_lan: false,
+            lan: Default::default(),
+            lockdown: false,
+            shared_proxy: None,
+        };
+        let policy = BootstrapPolicy::from_plan(&plan, &[]);
+        assert!(policy.rules.iter().any(|rule| {
+            rule.action == Action::Allow
+                && rule.conditions.starts_with(&super::engine_permit(helper))
+        }));
+        assert!(
+            !policy
+                .rules
+                .iter()
+                .any(|rule| rule.action == Action::Block && rule.conditions.is_empty()),
+            "DnsOnly must not install catch-all traffic blocks"
+        );
+        let listeners =
+            super::native_listeners(7, helper, &[("192.0.2.2".parse().unwrap(), 51000)]);
+        assert_eq!(listeners.len(), 1);
+        assert_eq!(listeners[0].layer, Layer::RecvAccept);
+        assert_eq!(listeners[0].action, Action::Allow);
+        assert!(listeners[0].hard);
+    }
 }

@@ -279,7 +279,7 @@ impl Session {
             settings.kill_switch,
             true,
             state.enabled,
-            true,
+            !native_requested,
             shared_proxy.is_some(),
         );
         let plan = RoutingPlan {

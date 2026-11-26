@@ -1733,10 +1733,10 @@ fn validate_request(request: &ConnectRequest) -> Result<(), HelperError> {
                 "native TUN is unavailable on this platform",
             ));
         }
-        if !request.settings.kill_switch || !request.settings.tun.auto_route {
+        if !request.settings.tun.auto_route {
             return Err(HelperError::new(
                 ErrorCode::ProtectionUnavailable,
-                "native TUN requires the kill switch and automatic routes",
+                "native TUN requires automatic routes",
             ));
         }
     }

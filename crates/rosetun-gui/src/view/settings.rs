@@ -363,16 +363,9 @@ fn connection_mode(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
                         (TunBackend::SingTun, tr!("tun-backend-sing")),
                         (TunBackend::NativeMixed, tr!("tun-backend-native")),
                     ];
-                    let supported =
-                        state.config.settings.kill_switch || backend == TunBackend::NativeMixed;
-                    if let Some(chosen) = widgets::segmented(
-                        ui,
-                        "tun_backend",
-                        backend,
-                        &options,
-                        false,
-                        editable && supported,
-                    ) {
+                    if let Some(chosen) =
+                        widgets::segmented(ui, "tun_backend", backend, &options, false, editable)
+                    {
                         actions.push(Action::SetTunBackend(chosen));
                     }
                 },
