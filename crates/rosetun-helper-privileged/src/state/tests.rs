@@ -8779,6 +8779,32 @@ fn native_tun_without_kill_switch_uses_dns_lock_scope_for_listener_permits() {
 }
 
 #[test]
+fn proxy_auto_falls_back_to_singbox_for_optional_xray_nodes_when_xray_is_missing() {
+    use super::dns::test_support::{Behavior, Server};
+
+    let dns = Server::new(Behavior::Noerror);
+    let (helper, controls) = ordered_helper();
+    helper.session().unwrap().test_local_dns = Some(dns.address());
+    let mut request = local_proxy_request(false);
+    request.settings.xray = rosetun_config::XrayUse::Auto;
+    helper
+        .connect(&request)
+        .expect("Trojan in auto falls back to sing-box when Xray is unavailable");
+    assert_eq!(controls.spawns.load(Ordering::Acquire), 1);
+    helper.disconnect().unwrap();
+
+    let mut reality = reality_request();
+    reality.settings.connection_mode = rosetun_config::ConnectionMode::SystemProxy;
+    reality.settings.local_proxy.port = free_local_port();
+    reality.settings.kill_switch = false;
+    reality.settings.auto_reconnect = false;
+    let error = helper
+        .connect(&reality)
+        .expect_err("VLESS+REALITY still requires Xray");
+    assert_eq!(error.code, ErrorCode::XrayStartFailed);
+}
+
+#[test]
 fn a_taken_proxy_port_fails_before_the_engine_and_protection() {
     let holder = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let (helper, controls) = ordered_helper();

@@ -618,7 +618,7 @@ impl Session {
         let rules = request.effective_rule_set();
         let extra = ExtraNodes::new(&request.extra_nodes, endpoints, &rules);
         let extra = extra.slots();
-        let xray_nodes = std::iter::once((PROXY_TAG.to_owned(), &main))
+        let mut xray_nodes = std::iter::once((PROXY_TAG.to_owned(), &main))
             .chain(
                 extra
                     .iter()
@@ -626,17 +626,47 @@ impl Session {
             )
             .filter(|(_, node)| uses_xray(node, settings))
             .collect::<Vec<_>>();
+        let xray_error = |error: rosetun_engine::errors::EngineError| {
+            HelperError::new(ErrorCode::XrayStartFailed, error.to_string())
+        };
+        let mut located_xray = if xray_nodes.is_empty() || previous.xray.is_some() {
+            None
+        } else {
+            let located = self
+                .xray
+                .as_ref()
+                .ok_or_else(|| {
+                    HelperError::new(ErrorCode::XrayStartFailed, "Xray helper is unavailable")
+                })
+                .and_then(|runner| runner.locate_outbound_worker().map_err(xray_error));
+            match located {
+                Ok(binary) => Some(binary),
+                Err(error) => {
+                    if xray_nodes
+                        .iter()
+                        .any(|(_, node)| xray_worker_required(node, settings))
+                    {
+                        return Err(error);
+                    }
+                    // Optional native-dataplane Xray preference in `auto` mode
+                    // (Shadowsocks, Trojan, VMess): fall back to sing-box when
+                    // no Xray binary is installed.
+                    xray_nodes.clear();
+                    None
+                }
+            }
+        };
         let xray_tags = xray_nodes
             .iter()
             .map(|(tag, _)| tag.clone())
             .collect::<Vec<_>>();
-        let xray_error = |error: rosetun_engine::errors::EngineError| {
-            HelperError::new(ErrorCode::XrayStartFailed, error.to_string())
-        };
         let xray = Worker::prepare(
             previous.xray.as_ref(),
             &xray_tags,
             || {
+                if let Some(binary) = located_xray.take() {
+                    return Ok(binary);
+                }
                 self.xray
                     .as_ref()
                     .ok_or_else(|| {
@@ -660,7 +690,8 @@ impl Session {
             },
         )?;
         let xray_sockets = xray.candidate(&previous.xray).map(|worker| &worker.sockets);
-        let singbox_main = (!uses_xray(&main, settings)).then_some(&main);
+        let xray_main = xray_nodes.iter().any(|(tag, _)| tag == PROXY_TAG);
+        let singbox_main = (!xray_main).then_some(&main);
         let sb_extra = extra
             .iter()
             .filter_map(|entry| {
@@ -856,6 +887,17 @@ fn delay_entry(
         entry.address.set_port(0);
     }
     Ok(entry)
+}
+
+fn xray_worker_required(node: &rosetun_config::Node, settings: &Settings) -> bool {
+    settings.xray == rosetun_config::XrayUse::Always
+        || node.requires_xray()
+        || settings.tls_fragment.applies_to(node)
+        || matches!(
+            node.stream.transport,
+            rosetun_config::Transport::Xhttp { .. }
+        )
+        || matches!(&node.outbound, rosetun_config::Outbound::Vless(_))
 }
 
 fn rule_error(error: rosetun_dataplane::rules::RulesError) -> HelperError {
