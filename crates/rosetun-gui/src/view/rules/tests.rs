@@ -966,7 +966,7 @@ fn exit_button_shows_the_exit_name_without_truncation() {
 }
 
 #[test]
-fn target_button_keeps_dot_on_the_left_and_centres_label_between_dot_and_chevron() {
+fn target_button_aligns_dot_and_label_on_the_left_and_centres_label_vertically() {
     let ctx = egui::Context::default();
     theme::apply(&ctx);
     let current = TargetChoice::plain(RuleTarget::Direct);
@@ -975,7 +975,7 @@ fn target_button_keeps_dot_on_the_left_and_centres_label_between_dot_and_chevron
         egui::CentralPanel::default().show(ctx, |ui| {
             button_rect = ui
                 .scope(|ui| {
-                    target_button(ui, "centred_target", &current, &[], true);
+                    target_button(ui, "aligned_target", &current, &[], true);
                 })
                 .response
                 .rect;
@@ -1002,13 +1002,10 @@ fn target_button_keeps_dot_on_the_left_and_centres_label_between_dot_and_chevron
         (dot_x - (button_rect.left() + TARGET_DOT_X)).abs() < 1.0,
         "expected dot anchored on the left: dot_x={dot_x}"
     );
-    let area_left = button_rect.left() + TARGET_TEXT_X;
-    let area_right = button_rect.right() - TARGET_CHEVRON_SPACE;
-    let left_gap = text_rect.left() - area_left;
-    let right_gap = area_right - text_rect.right();
     assert!(
-        (left_gap - right_gap).abs() < 1.0,
-        "expected label centred between dot and chevron: left_gap={left_gap}, right_gap={right_gap}"
+        (text_rect.left() - (button_rect.left() + TARGET_TEXT_X)).abs() < 1.0,
+        "expected label aligned next to the dot: text_left={}",
+        text_rect.left()
     );
     assert!(
         (text_rect.center().y - (button_rect.center().y - TARGET_TEXT_OPTICAL_Y)).abs() < 1.0,
