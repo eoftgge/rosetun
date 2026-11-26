@@ -417,11 +417,8 @@ impl TunnelRuntime {
                         let mut reply_packet = Vec::with_capacity(mtu);
                         while let Some(query) = queue.pop(&stopped) {
                             if let Ok(reply) = dns.exchange(&query.payload) {
-                                let header_overhead = if query.flow.source.is_ipv4() {
-                                    28
-                                } else {
-                                    48
-                                };
+                                let header_overhead =
+                                    if query.flow.source.is_ipv4() { 28 } else { 48 };
                                 let max_payload = mtu.saturating_sub(header_overhead);
                                 let reply = crate::dns::truncate_udp_reply(
                                     &query.payload,

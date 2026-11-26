@@ -832,8 +832,8 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                                                 || status.tun_backend
                                                     == Some(rosetun_config::TunBackend::NativeMixed)
                                         });
-                                        let fragmented = visible_status
-                                            .is_some_and(|status| status.fragmented);
+                                        let fragmented =
+                                            visible_status.is_some_and(|status| status.fragmented);
                                         let label = match (direct, fragmented) {
                                             (true, true) => tr!("fragment-engine-direct"),
                                             (true, false) => tr!("xray-engine-direct"),

@@ -401,9 +401,13 @@ mod tests {
         .unwrap();
         let now = Instant::now();
         let syn = tcp_test_packet(client, destination, 0x02);
-        let first_peer = Packet::parse(&nat.redirect(&Packet::parse(&syn).unwrap(), now).unwrap().unwrap())
-            .unwrap()
-            .source();
+        let first_peer = Packet::parse(
+            &nat.redirect(&Packet::parse(&syn).unwrap(), now)
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap()
+        .source();
         assert_eq!(
             nat.accept(first_peer),
             Some(TcpFlow {
@@ -412,10 +416,13 @@ mod tests {
             })
         );
         nat.close(first_peer, now);
-        let second_peer =
-            Packet::parse(&nat.redirect(&Packet::parse(&syn).unwrap(), now).unwrap().unwrap())
+        let second_peer = Packet::parse(
+            &nat.redirect(&Packet::parse(&syn).unwrap(), now)
                 .unwrap()
-                .source();
+                .unwrap(),
+        )
+        .unwrap()
+        .source();
         assert_ne!(second_peer, first_peer);
         assert_eq!(
             nat.accept(second_peer),

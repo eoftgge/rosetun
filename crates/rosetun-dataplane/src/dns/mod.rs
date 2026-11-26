@@ -51,11 +51,7 @@ pub use self::server::DnsServer;
 /// Enforces the client's UDP payload limit (RFC 1035 / EDNS0) and `max_payload`
 /// (e.g. tunnel MTU minus IP+UDP headers), returning a `TC=1` truncated reply
 /// when `response` exceeds either bound.
-pub(crate) fn truncate_udp_reply(
-    query: &[u8],
-    response: Vec<u8>,
-    max_payload: usize,
-) -> Vec<u8> {
+pub(crate) fn truncate_udp_reply(query: &[u8], response: Vec<u8>, max_payload: usize) -> Vec<u8> {
     let limit = wire::udp_limit(query).min(max_payload);
     if response.len() > limit {
         wire::truncated_response(&response)
