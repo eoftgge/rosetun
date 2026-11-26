@@ -100,6 +100,10 @@ impl<E: Eq + Hash, V> FullConeNat<E, V> {
         self.entries.retain(|key, mapping| keep(key, &mapping.path));
     }
 
+    pub fn drain(&mut self) -> impl Iterator<Item = V> + '_ {
+        self.entries.drain().map(|(_, mapping)| mapping.path)
+    }
+
     fn expire(&mut self, now: Instant) {
         if self.sweep_at.is_some_and(|next| now < next) && self.entries.len() < self.capacity {
             return;

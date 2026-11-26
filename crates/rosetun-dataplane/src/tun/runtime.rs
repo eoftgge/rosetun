@@ -35,10 +35,11 @@ use crate::sniff::{SniffLimits, sniff_quic_datagram};
 const PUMP_INTERVAL: Duration = Duration::from_millis(5);
 const FLOW_TIMEOUT: Duration = Duration::from_secs(5);
 const UDP_IDLE: Duration = Duration::from_secs(60);
+const UDP_READ_TIMEOUT: Duration = Duration::from_millis(50);
+const UDP_SWEEP_INTERVAL: Duration = Duration::from_millis(100);
 const UDP_MAPPINGS: usize = 512;
 const UDP_PEERS: usize = 32;
 const UDP_QUEUE: usize = 512;
-const UDP_RECV_BUDGET: usize = 32;
 const MAX_CLIENTS: usize = 512;
 const DNS_WORKERS: usize = 4;
 const DNS_QUEUE_CAPACITY: usize = 128;
@@ -187,8 +188,30 @@ struct UdpEgress {
 }
 
 struct UdpMapping {
-    path: UdpPath,
-    peers: HashMap<SocketAddr, Registration>,
+    path: Arc<UdpPath>,
+    peers: Arc<Mutex<HashMap<SocketAddr, Registration>>>,
+    received: Arc<AtomicBool>,
+    closed: Arc<AtomicBool>,
+    reader: Option<JoinHandle<()>>,
+}
+
+impl Drop for UdpMapping {
+    fn drop(&mut self) {
+        self.closed.store(true, Ordering::Release);
+    }
+}
+
+struct UdpReader {
+    key: MappingKey<UdpEgress>,
+    path: Arc<UdpPath>,
+    peers: Arc<Mutex<HashMap<SocketAddr, Registration>>>,
+    received: Arc<AtomicBool>,
+    closed: Arc<AtomicBool>,
+    device: Arc<dyn PacketDevice>,
+    policy: Arc<TunnelPolicy>,
+    table: ConnectionTable,
+    stopped: Arc<AtomicBool>,
+    mtu: usize,
 }
 
 struct Datagram {
@@ -264,9 +287,9 @@ struct UdpPump {
     policy: Arc<TunnelPolicy>,
     table: ConnectionTable,
     udp: FullConeNat<UdpEgress, UdpMapping>,
-    response: Vec<u8>,
-    scratch: Vec<u8>,
-    reply_packet: Vec<u8>,
+    stopped: Arc<AtomicBool>,
+    last_generation: u64,
+    last_sweep: Instant,
     mtu: usize,
 }
 
@@ -386,20 +409,21 @@ impl TunnelRuntime {
     ) -> io::Result<SyncSender<Datagram>> {
         let (sender, receiver) = mpsc::sync_channel(UDP_QUEUE);
         let stopped = Arc::clone(&self.stopped);
+        let generation = policy.generation();
         let mut pump = UdpPump {
             device: Arc::clone(&self.device),
             policy: Arc::clone(policy),
             table: self.table.clone(),
             udp: FullConeNat::new(UDP_MAPPINGS, UDP_IDLE),
-            response: vec![0; usize::from(u16::MAX)],
-            scratch: Vec::new(),
-            reply_packet: Vec::with_capacity(mtu),
+            stopped,
+            last_generation: generation,
+            last_sweep: Instant::now(),
             mtu,
         };
         self.udp_thread = Some(
             thread::Builder::new()
                 .name("rosetun-tun-udp".into())
-                .spawn(move || pump.run(&receiver, &stopped))?,
+                .spawn(move || pump.run(&receiver))?,
         );
         Ok(sender)
     }
@@ -627,35 +651,60 @@ impl Pump {
 }
 
 impl UdpPump {
-    fn run(&mut self, receiver: &Receiver<Datagram>, stopped: &AtomicBool) {
-        while !stopped.load(Ordering::Acquire) {
-            let now = Instant::now();
-            let generation = self.policy.generation();
-            self.udp
-                .retain(|key, _| key.egress.generation == generation);
-            let mut active = self.receive_udp(now);
-            let mut sent = 0;
-            while sent < PACKET_BUDGET {
-                match receiver.try_recv() {
-                    Ok(datagram) if !stopped.load(Ordering::Acquire) => {
-                        self.send(&datagram, Instant::now());
-                        sent += 1;
-                        active = true;
+    fn run(&mut self, receiver: &Receiver<Datagram>) {
+        while !self.stopped.load(Ordering::Acquire) {
+            match receiver.recv_timeout(UDP_SWEEP_INTERVAL) {
+                Ok(datagram) if !self.stopped.load(Ordering::Acquire) => {
+                    let now = Instant::now();
+                    self.sweep(now);
+                    self.send(&datagram, now);
+                    for _ in 1..PACKET_BUDGET {
+                        match receiver.try_recv() {
+                            Ok(datagram) if !self.stopped.load(Ordering::Acquire) => {
+                                self.send(&datagram, Instant::now());
+                            }
+                            Ok(_) | Err(mpsc::TryRecvError::Disconnected) => {
+                                self.shutdown_readers();
+                                return;
+                            }
+                            Err(mpsc::TryRecvError::Empty) => break,
+                        }
                     }
-                    Ok(_) | Err(mpsc::TryRecvError::Disconnected) => return,
-                    Err(mpsc::TryRecvError::Empty) => break,
-                }
-            }
-            if active {
-                continue;
-            }
-            match receiver.recv_timeout(PUMP_INTERVAL) {
-                Ok(datagram) if !stopped.load(Ordering::Acquire) => {
-                    self.send(&datagram, Instant::now());
                 }
                 Ok(_) | Err(RecvTimeoutError::Disconnected) => break,
-                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Timeout) => {
+                    self.sweep(Instant::now());
+                }
             }
+        }
+        self.shutdown_readers();
+    }
+
+    fn sweep(&mut self, now: Instant) {
+        let generation = self.policy.generation();
+        if generation != self.last_generation {
+            self.last_generation = generation;
+            self.udp
+                .retain(|key, _| key.egress.generation == generation);
+        }
+        if now.saturating_duration_since(self.last_sweep) >= Duration::from_secs(1) {
+            self.last_sweep = now;
+            self.udp.receive(now, |_, mapping| {
+                mapping.received.swap(false, Ordering::AcqRel)
+            });
+        }
+    }
+
+    fn shutdown_readers(&mut self) {
+        let mut handles = Vec::new();
+        for mut mapping in self.udp.drain() {
+            mapping.closed.store(true, Ordering::Release);
+            if let Some(handle) = mapping.reader.take() {
+                handles.push(handle);
+            }
+        }
+        for handle in handles {
+            let _ = handle.join();
         }
     }
 
@@ -674,106 +723,149 @@ impl UdpPump {
                 route: selected.meta.route.clone(),
             },
         };
+        let reader_key = key.clone();
+        let device = Arc::clone(&self.device);
+        let policy = Arc::clone(&self.policy);
+        let table = self.table.clone();
+        let stopped = Arc::clone(&self.stopped);
+        let mtu = self.mtu;
         let Ok(mapping) = self.udp.path(key, now, || -> io::Result<UdpMapping> {
             let path = selected.dialer.udp_for(&remote, FLOW_TIMEOUT)?;
-            path.set_nonblocking(true)?;
+            path.set_nonblocking(false)?;
+            path.set_read_timeout(Some(UDP_READ_TIMEOUT))?;
+            let path = Arc::new(path);
+            let peers = Arc::new(Mutex::new(HashMap::new()));
+            let received = Arc::new(AtomicBool::new(false));
+            let closed = Arc::new(AtomicBool::new(false));
+            let reader_context = UdpReader {
+                key: reader_key,
+                path: Arc::clone(&path),
+                peers: Arc::clone(&peers),
+                received: Arc::clone(&received),
+                closed: Arc::clone(&closed),
+                device,
+                policy,
+                table,
+                stopped,
+                mtu,
+            };
+            let reader = thread::Builder::new()
+                .name("rosetun-tun-udp-in".into())
+                .spawn(move || run_udp_reader(reader_context))?;
             Ok(UdpMapping {
                 path,
-                peers: HashMap::new(),
+                peers,
+                received,
+                closed,
+                reader: Some(reader),
             })
         }) else {
             return;
         };
-        if mapping
-            .peers
-            .get(&flow.destination)
-            .is_some_and(Registration::is_closed)
-        {
-            mapping.peers.remove(&flow.destination);
-        }
-        let Some(registration) =
-            udp_registration(mapping, flow.destination, &self.table, selected.meta)
-        else {
+        let registration = {
+            let mut peers = mapping.peers.lock().unwrap_or_else(PoisonError::into_inner);
+            if peers
+                .get(&flow.destination)
+                .is_some_and(Registration::is_closed)
+            {
+                peers.remove(&flow.destination);
+            }
+            udp_registration(&mut peers, flow.destination, &self.table, selected.meta)
+        };
+        let Some(registration) = registration else {
             return;
         };
         if mapping.path.send_to(payload, &remote).is_ok() {
             registration.add_up(payload.len() as u64);
         }
     }
+}
 
-    fn receive_udp(&mut self, now: Instant) -> bool {
-        let mut any_received = false;
-        self.udp.receive(now, |key, mapping| {
-            let mut mapping_active = false;
-            for _ in 0..UDP_RECV_BUDGET {
-                let Ok((length, Some(remote))) = mapping
-                    .path
-                    .recv_from_into(&mut self.response, &mut self.scratch)
-                else {
-                    break;
+fn run_udp_reader(reader: UdpReader) {
+    let mut response = vec![0; reader.mtu + 1];
+    let mut scratch = Vec::new();
+    let mut reply_packet = Vec::with_capacity(reader.mtu);
+    while !reader.stopped.load(Ordering::Acquire) && !reader.closed.load(Ordering::Acquire) {
+        let (length, remote) = match reader.path.recv_from_into(&mut response, &mut scratch) {
+            Ok((length, Some(remote))) => (length, remote),
+            Ok((_, None)) => continue,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::WouldBlock
+                        | io::ErrorKind::TimedOut
+                        | io::ErrorKind::Interrupted
+                        | io::ErrorKind::ConnectionReset
+                ) || error.raw_os_error() == Some(10040) =>
+            {
+                continue;
+            }
+            Err(_) => break,
+        };
+        if length > reader.mtu
+            || remote.port() == 53
+            || remote.is_ipv4() != reader.key.source.is_ipv4()
+        {
+            continue;
+        }
+        let registration = {
+            let mut peers = reader.peers.lock().unwrap_or_else(PoisonError::into_inner);
+            match peers.get(&remote) {
+                Some(registration) if registration.is_closed() => {
+                    peers.remove(&remote);
+                    continue;
+                }
+                Some(registration) => Some(registration.counters()),
+                None => None,
+            }
+        };
+        let registration = match registration {
+            Some(counters) => counters,
+            None => {
+                let flow = TcpFlow {
+                    source: reader.key.source,
+                    destination: remote,
                 };
-                if length > self.mtu
-                    || remote.port() == 53
-                    || remote.is_ipv4() != key.source.is_ipv4()
+                let Some(selected) = reader.policy.select(&flow, ConnectionNetwork::Udp, None)
+                else {
+                    continue;
+                };
+                if selected.generation != reader.key.egress.generation
+                    || selected.meta.route != reader.key.egress.route
                 {
                     continue;
                 }
-                let registration = match mapping.peers.get(&remote) {
-                    Some(registration) if registration.is_closed() => {
-                        mapping.peers.remove(&remote);
-                        continue;
-                    }
-                    Some(registration) => registration.counters(),
-                    None => {
-                        let flow = TcpFlow {
-                            source: key.source,
-                            destination: remote,
-                        };
-                        let Some(selected) =
-                            self.policy.select(&flow, ConnectionNetwork::Udp, None)
-                        else {
-                            continue;
-                        };
-                        if selected.generation != key.egress.generation
-                            || selected.meta.route != key.egress.route
-                        {
-                            continue;
-                        }
-                        let Some(registration) =
-                            udp_registration(mapping, remote, &self.table, selected.meta)
-                        else {
-                            continue;
-                        };
-                        registration
-                    }
+                let mut peers = reader.peers.lock().unwrap_or_else(PoisonError::into_inner);
+                let Some(counters) =
+                    udp_registration(&mut peers, remote, &reader.table, selected.meta)
+                else {
+                    continue;
                 };
-                if write_reply_into(
-                    self.device.as_ref(),
-                    remote,
-                    key.source,
-                    &self.response[..length],
-                    self.mtu,
-                    &mut self.reply_packet,
-                ) {
-                    registration.add_down(length as u64);
-                    mapping_active = true;
-                    any_received = true;
-                }
+                counters
             }
-            mapping_active
-        });
-        any_received
+        };
+        if write_reply_into(
+            reader.device.as_ref(),
+            remote,
+            reader.key.source,
+            &response[..length],
+            reader.mtu,
+            &mut reply_packet,
+        ) {
+            registration.add_down(length as u64);
+            reader.received.store(true, Ordering::Release);
+        }
     }
 }
 
 fn udp_registration(
-    mapping: &mut UdpMapping,
+    peers: &mut HashMap<SocketAddr, Registration>,
     peer: SocketAddr,
     table: &ConnectionTable,
     meta: ConnectionMeta,
 ) -> Option<crate::conntable::Counters> {
-    let at_capacity = mapping.peers.len() >= UDP_PEERS;
-    let registration = match mapping.peers.entry(peer) {
+    let at_capacity = peers.len() >= UDP_PEERS;
+    let registration = match peers.entry(peer) {
         Entry::Occupied(entry) => entry.into_mut(),
         Entry::Vacant(entry) if !at_capacity => entry.insert(table.register(meta).ok()?),
         Entry::Vacant(_) => return None,
@@ -941,14 +1033,17 @@ mod tests {
         let target = upstream.local_addr().unwrap();
         let client: SocketAddr = "192.0.2.1:49151".parse().unwrap();
         let tun = Arc::new(MockTun::default());
+        let stopped = Arc::new(AtomicBool::new(false));
+        let test_policy = policy(true);
+        let generation = test_policy.generation();
         let mut pump = UdpPump {
             device: tun.clone(),
-            policy: policy(true),
+            policy: test_policy,
             table: ConnectionTable::new(),
             udp: FullConeNat::new(8, UDP_IDLE),
-            response: vec![0; 1500],
-            scratch: Vec::new(),
-            reply_packet: Vec::with_capacity(1500),
+            stopped: Arc::clone(&stopped),
+            last_generation: generation,
+            last_sweep: Instant::now(),
             mtu: 1500,
         };
         let datagram = Datagram {
@@ -964,13 +1059,9 @@ mod tests {
         assert_eq!(&buffer[..length], b"data");
         upstream.send_to(b"reply", mapped_peer).unwrap();
         let deadline = Instant::now() + Duration::from_secs(2);
-        loop {
-            pump.receive_udp(Instant::now());
-            if !tun.0.lock().unwrap().is_empty() {
-                break;
-            }
+        while tun.0.lock().unwrap().is_empty() {
             assert!(Instant::now() < deadline);
-            thread::sleep(Duration::from_millis(5));
+            thread::sleep(Duration::from_millis(1));
         }
         let frames = tun.0.lock().unwrap();
         let response = Packet::parse(&frames[0]).unwrap();
@@ -980,6 +1071,8 @@ mod tests {
         let entries = pump.table.active();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].process.as_deref(), Some("example.exe"));
+        stopped.store(true, Ordering::Release);
+        pump.shutdown_readers();
     }
 
     #[test]
@@ -1018,14 +1111,15 @@ mod tests {
         let stopped = Arc::new(AtomicBool::new(false));
         let (sender, receiver) = mpsc::sync_channel(UDP_QUEUE);
         let table = ConnectionTable::new();
+        let generation = policy.generation();
         let mut udp = UdpPump {
             device: device.clone(),
             policy: Arc::clone(&policy),
             table: table.clone(),
             udp: FullConeNat::new(8, UDP_IDLE),
-            response: vec![0; 1500],
-            scratch: Vec::new(),
-            reply_packet: Vec::with_capacity(1500),
+            stopped: Arc::clone(&stopped),
+            last_generation: generation,
+            last_sweep: Instant::now(),
             mtu: 1500,
         };
         let mut pump = Pump {
@@ -1046,8 +1140,7 @@ mod tests {
             mtu: 1500,
             counters: PumpCounters::default(),
         };
-        let stopped_for_worker = Arc::clone(&stopped);
-        let worker = thread::spawn(move || udp.run(&receiver, &stopped_for_worker));
+        let worker = thread::spawn(move || udp.run(&receiver));
         let mut datagram = udp_reply(client, destination, b"first datagram", 1500).unwrap();
         pump.dispatch(&mut datagram, Instant::now());
         opening.recv_timeout(Duration::from_secs(2)).unwrap();
