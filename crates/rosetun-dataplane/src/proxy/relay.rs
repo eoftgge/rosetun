@@ -7,12 +7,13 @@ use std::time::{Duration, Instant};
 
 use crate::conntable::Registration;
 
-const BUFFER_BYTES: usize = 16 * 1024;
+const BUFFER_BYTES: usize = 32 * 1024;
 // Windows can keep an in-flight receive blocked after shutdown on a cloned socket.
 const CANCELLATION_POLL: Duration = Duration::from_millis(250);
 
 #[derive(Clone, Copy)]
 enum SocketIo {
+    #[cfg(not(windows))]
     Timeouts,
     #[cfg(windows)]
     Readiness,
@@ -57,6 +58,7 @@ impl Drop for DownstreamStats {
 impl SocketIo {
     fn configure(self, stream: &TcpStream) -> io::Result<()> {
         match self {
+            #[cfg(not(windows))]
             Self::Timeouts => {
                 stream.set_read_timeout(Some(CANCELLATION_POLL))?;
                 stream.set_write_timeout(Some(CANCELLATION_POLL))
@@ -68,6 +70,7 @@ impl SocketIo {
 
     fn retry(self, error: &io::Error, _stream: &TcpStream, _receiving: bool) -> bool {
         match self {
+            #[cfg(not(windows))]
             Self::Timeouts => matches!(
                 error.kind(),
                 io::ErrorKind::Interrupted | io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
@@ -93,6 +96,7 @@ impl SocketIo {
 /// outbound first (bytes the sniffer or the HTTP parser already consumed).
 /// Closing the connection through the table shuts both sockets down, which
 /// ends the copy.
+#[cfg(not(windows))]
 pub(crate) fn relay(
     client: &TcpStream,
     upstream: &TcpStream,

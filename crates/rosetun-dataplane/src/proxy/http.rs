@@ -34,16 +34,8 @@ pub(crate) fn serve(router: &Router, mut stream: TcpStream) -> io::Result<()> {
                 };
                 Router::write_all(client, bytes)
             };
-            let mut preface = extra;
             // Bytes behind the request line of a CONNECT belong to the tunnel.
-            router.tcp_flow(
-                stream,
-                &target,
-                None,
-                None,
-                &preface.split_off(0),
-                &mut reply,
-            )
+            router.tcp_flow(stream, &target, None, None, &extra, &mut reply)
         }
         Request::Forward {
             target,

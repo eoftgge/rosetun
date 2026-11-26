@@ -391,6 +391,11 @@ fn tcp_accept_loop(
 
 fn handle_tcp_client(mut stream: TcpStream, service: &DnsService, shutdown: &AtomicBool) {
     let _ = stream.set_nodelay(true);
+    #[cfg(windows)]
+    if stream.set_nonblocking(true).is_err() {
+        return;
+    }
+    #[cfg(not(windows))]
     if stream.set_read_timeout(Some(SHUTDOWN_POLL)).is_err()
         || stream.set_write_timeout(Some(TCP_IO_TIMEOUT)).is_err()
     {
@@ -420,15 +425,15 @@ fn handle_tcp_client(mut stream: TcpStream, service: &DnsService, shutdown: &Ato
             let Ok(fb_len) = u16::try_from(fallback.len()) else {
                 break;
             };
-            if stream.write_all(&fb_len.to_be_bytes()).is_err()
-                || stream.write_all(&fallback).is_err()
+            if !write_all_interruptible(&mut stream, &fb_len.to_be_bytes(), TCP_IO_TIMEOUT, shutdown)
+                || !write_all_interruptible(&mut stream, &fallback, TCP_IO_TIMEOUT, shutdown)
             {
                 break;
             }
             continue;
         };
-        if stream.write_all(&reply_len.to_be_bytes()).is_err()
-            || stream.write_all(&response).is_err()
+        if !write_all_interruptible(&mut stream, &reply_len.to_be_bytes(), TCP_IO_TIMEOUT, shutdown)
+            || !write_all_interruptible(&mut stream, &response, TCP_IO_TIMEOUT, shutdown)
         {
             break;
         }
@@ -446,21 +451,76 @@ fn read_exact_interruptible(
     let deadline = Instant::now() + timeout;
     let mut read = 0;
     while read < buf.len() {
-        if shutdown.load(Ordering::Acquire) || Instant::now() >= deadline {
+        if shutdown.load(Ordering::Acquire) {
+            return false;
+        }
+        let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+            return false;
+        };
+        if remaining.is_zero() {
             return false;
         }
         match stream.read(&mut buf[read..]) {
             Ok(0) => return false,
             Ok(n) => read += n,
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
+            #[cfg(windows)]
+            Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+                let wait = SHUTDOWN_POLL.min(remaining);
+                if crate::socket_ready::readable(stream, wait).is_err() {
+                    return false;
+                }
+            }
+            #[cfg(not(windows))]
             Err(err)
                 if matches!(
                     err.kind(),
-                    io::ErrorKind::WouldBlock
-                        | io::ErrorKind::TimedOut
-                        | io::ErrorKind::Interrupted
+                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
                 ) => {}
             Err(_) => return false,
         }
     }
     true
+}
+
+fn write_all_interruptible(
+    stream: &mut TcpStream,
+    data: &[u8],
+    timeout: Duration,
+    shutdown: &AtomicBool,
+) -> bool {
+    #[cfg(not(windows))]
+    {
+        let _ = (timeout, shutdown);
+        stream.write_all(data).is_ok()
+    }
+    #[cfg(windows)]
+    {
+        let deadline = Instant::now() + timeout;
+        let mut written = 0;
+        while written < data.len() {
+            if shutdown.load(Ordering::Acquire) {
+                return false;
+            }
+            let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+                return false;
+            };
+            if remaining.is_zero() {
+                return false;
+            }
+            match stream.write(&data[written..]) {
+                Ok(0) => return false,
+                Ok(n) => written += n,
+                Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+                    let wait = SHUTDOWN_POLL.min(remaining);
+                    if crate::socket_ready::writable(stream, wait).is_err() {
+                        return false;
+                    }
+                }
+                Err(_) => return false,
+            }
+        }
+        true
+    }
 }

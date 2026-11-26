@@ -9,7 +9,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use rosetun_config::ConnectionNetwork;
-use windows_sys::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, NO_ERROR};
+use windows_sys::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, GetLastError, NO_ERROR};
 use windows_sys::Win32::NetworkManagement::IpHelper::{
     GetExtendedTcpTable, GetExtendedUdpTable, TCP_TABLE_OWNER_PID_ALL, UDP_TABLE_OWNER_PID,
 };
@@ -23,13 +23,16 @@ use super::{ProcessLookup, TcpFlow};
 const MAX_TABLE_BYTES: u32 = 4 * 1024 * 1024;
 const CACHE_SIZE: usize = 512;
 const IMAGE_TTL: Duration = Duration::from_secs(1);
+const UDP_OWNER_TTL: Duration = Duration::from_millis(250);
 
 type OwnerTable = unsafe extern "system" fn(*mut c_void, *mut u32, i32, u32, i32, u32) -> u32;
 type Images = HashMap<u32, (Instant, Option<String>)>;
+type UdpOwners = HashMap<SocketAddr, (Instant, Option<u32>)>;
 
 #[derive(Default)]
 pub struct WindowsProcessLookup {
     images: Mutex<Images>,
+    udp_owners: Mutex<UdpOwners>,
 }
 
 impl fmt::Debug for WindowsProcessLookup {
@@ -41,8 +44,11 @@ impl fmt::Debug for WindowsProcessLookup {
 
 impl ProcessLookup for WindowsProcessLookup {
     fn image(&self, flow: &TcpFlow, network: ConnectionNetwork) -> Option<String> {
-        let pid = owner(flow, network)?;
         let now = Instant::now();
+        let pid = match network {
+            ConnectionNetwork::Tcp => owner(flow, network)?,
+            ConnectionNetwork::Udp => self.udp_owner_cached(flow, now)?,
+        };
         if let Some((at, path)) = self.images.lock().ok()?.get(&pid)
             && now.saturating_duration_since(*at) < IMAGE_TTL
         {
@@ -55,6 +61,24 @@ impl ProcessLookup for WindowsProcessLookup {
             images.insert(pid, (now, image.clone()));
         }
         image
+    }
+}
+
+impl WindowsProcessLookup {
+    fn udp_owner_cached(&self, flow: &TcpFlow, now: Instant) -> Option<u32> {
+        if let Some((at, pid)) = self.udp_owners.lock().ok()?.get(&flow.source)
+            && now.saturating_duration_since(*at) < UDP_OWNER_TTL
+        {
+            return *pid;
+        }
+        let pid = owner(flow, ConnectionNetwork::Udp);
+        if let Ok(mut cache) = self.udp_owners.lock() {
+            cache.retain(|_, (at, _)| now.saturating_duration_since(*at) < UDP_OWNER_TTL);
+            if cache.len() < CACHE_SIZE {
+                cache.insert(flow.source, (now, pid));
+            }
+        }
+        pid
     }
 }
 
@@ -183,6 +207,20 @@ fn process_image(pid: u32) -> Option<String> {
     }
     // SAFETY: raw is a non-null owned process handle and is closed by OwnedHandle.
     let handle = unsafe { OwnedHandle::from_raw_handle(raw) };
+    let mut stack = [0u16; 512];
+    let mut length = stack.len() as u32;
+    // SAFETY: The borrowed handle and UTF-16 output buffer stay valid throughout
+    // this synchronous call. QueryFullProcessImageNameW writes at most length units.
+    let success = unsafe {
+        QueryFullProcessImageNameW(handle.as_raw_handle(), 0, stack.as_mut_ptr(), &mut length)
+    };
+    if success != 0 {
+        return String::from_utf16(stack.get(..length as usize)?).ok();
+    }
+    // SAFETY: GetLastError reads the calling thread's last Win32 error code.
+    if unsafe { GetLastError() } != ERROR_INSUFFICIENT_BUFFER {
+        return None;
+    }
     let mut path = vec![0u16; 32768];
     let mut length = path.len() as u32;
     // SAFETY: The borrowed handle and UTF-16 output buffer stay valid throughout

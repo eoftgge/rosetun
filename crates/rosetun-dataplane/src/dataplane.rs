@@ -24,7 +24,11 @@ use crate::proxy::{
     RouterConfig, ServerError, Sniffing, TcpSniff, Verdict,
 };
 use crate::rules::{Flow, ListContent, ListInput, Route, RuleEngine, RulePlan, RulesError};
-use crate::sniff::{SniffLimits, sniff_quic_datagram, sniff_stream};
+#[cfg(not(windows))]
+use crate::sniff::sniff_stream as tcp_sniff_stream;
+#[cfg(windows)]
+use crate::sniff::sniff_stream_ready as tcp_sniff_stream;
+use crate::sniff::{SniffLimits, sniff_quic_datagram};
 
 use crate::tun::{
     DeviceSettings, PacketDevice, PhysicalEgress, ProcessLookup, TunnelPolicy, TunnelRuntime,
@@ -216,7 +220,7 @@ struct DefaultSniffer {
 
 impl Sniffing for DefaultSniffer {
     fn sniff_tcp(&self, stream: &mut TcpStream) -> io::Result<TcpSniff> {
-        let result = sniff_stream(stream, &self.limits)?;
+        let result = tcp_sniff_stream(stream, &self.limits)?;
         Ok(TcpSniff {
             domain: result.sniffed.and_then(|sniffed| sniffed.domain),
             buffered: result.buffered,
@@ -452,10 +456,14 @@ impl Dataplane {
     /// Compiles and swaps the rule engine in place without restarting listeners.
     pub fn update_rules(&self, plan: &RulePlan) -> Result<(), DataplaneError> {
         let engine = RuleEngine::compile(plan)?;
-        self.router.set_policy(Arc::new(RulePolicy {
-            engine,
-            resolver: Arc::clone(&self.dns) as Arc<dyn Resolve>,
-        }));
+        if let Some(native) = &self.native {
+            native.policy.replace_rules(engine);
+        } else {
+            self.router.set_policy(Arc::new(RulePolicy {
+                engine,
+                resolver: Arc::clone(&self.dns) as Arc<dyn Resolve>,
+            }));
+        }
         Ok(())
     }
 
@@ -466,12 +474,12 @@ impl Dataplane {
             UpstreamProxy::to_dialer,
         );
         self.dns.set_dialer(doh_dialer);
-        let outbounds = Arc::new(build_outbounds(
-            &endpoints,
-            Arc::clone(&self.direct_resolver),
-            None,
-        ));
-        self.router.set_outbounds(outbounds);
+        let binding = self.native.as_ref().map(|native| native.egress);
+        let outbounds = build_outbounds(&endpoints, Arc::clone(&self.direct_resolver), binding);
+        if let Some(native) = &self.native {
+            native.policy.replace_outbounds(outbounds.clone());
+        }
+        self.router.set_outbounds(Arc::new(outbounds));
     }
 
     /// Updates a running session while preserving the bound sockets and connection table.
@@ -482,13 +490,15 @@ impl Dataplane {
         dns: Option<&DnsSettings>,
         delay: &DelayInbound,
     ) -> Result<(), DataplaneError> {
+        let doh_dialer: Arc<dyn Dialer> = endpoints.proxy.as_ref().map_or_else(
+            || Arc::new(DirectDialer::new(Arc::new(SystemResolver))) as Arc<dyn Dialer>,
+            UpstreamProxy::to_dialer,
+        );
         if let Some(settings) = dns {
-            let dialer = endpoints.proxy.as_ref().map_or_else(
-                || Arc::new(DirectDialer::new(Arc::new(SystemResolver))) as Arc<dyn Dialer>,
-                UpstreamProxy::to_dialer,
-            );
             self.dns
-                .replace(DnsService::new(settings, dialer, self.dns_options)?);
+                .replace(DnsService::new(settings, doh_dialer, self.dns_options)?);
+        } else {
+            self.dns.set_dialer(doh_dialer);
         }
         let exit_tags = endpoints
             .exits

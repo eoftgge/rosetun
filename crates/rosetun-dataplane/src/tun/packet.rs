@@ -113,6 +113,14 @@ impl<'a> Packet<'a> {
         self.transport
     }
 
+    pub(crate) fn len(&self) -> usize {
+        self.bytes.len()
+    }
+
+    pub(crate) fn header_offset(&self) -> usize {
+        self.offset
+    }
+
     pub fn udp_payload(&self) -> Option<&'a [u8]> {
         (self.transport == Transport::Udp).then(|| &self.bytes[self.offset + UDP_HEADER..])
     }
@@ -127,21 +135,49 @@ impl<'a> Packet<'a> {
         source: SocketAddr,
         destination: SocketAddr,
     ) -> Result<Vec<u8>, PacketError> {
-        if source.is_ipv4() != self.source.is_ipv4()
-            || destination.is_ipv4() != self.destination.is_ipv4()
-        {
-            return Err(PacketError::AddressFamily);
-        }
         let mut result = self.bytes.to_vec();
-        set_endpoints(
+        rewrite_endpoints_in_place(
             &mut result,
             self.offset,
             self.transport,
+            self.source,
+            self.destination,
+            source,
+            destination,
+        )?;
+        Ok(result)
+    }
+}
+
+/// Rewrites IP/transport endpoints in place using RFC 1624 incremental checksum
+/// updates for TCP (O(1) instead of scanning the whole payload).
+pub(crate) fn rewrite_endpoints_in_place(
+    packet: &mut [u8],
+    offset: usize,
+    transport: Transport,
+    old_source: SocketAddr,
+    old_destination: SocketAddr,
+    source: SocketAddr,
+    destination: SocketAddr,
+) -> Result<(), PacketError> {
+    if source.is_ipv4() != old_source.is_ipv4()
+        || destination.is_ipv4() != old_destination.is_ipv4()
+    {
+        return Err(PacketError::AddressFamily);
+    }
+    if transport == Transport::Tcp {
+        update_tcp_endpoints_incremental(
+            packet,
+            offset,
+            old_source,
+            old_destination,
             source,
             destination,
         );
-        Ok(result)
+    } else {
+        set_endpoints(packet, offset, transport, source, destination);
     }
+    Ok(())
 }
 
 type IpHeader = (IpAddr, IpAddr, usize, usize, u8);
@@ -214,6 +250,20 @@ pub fn udp_reply(
     payload: &[u8],
     mtu: usize,
 ) -> Result<Vec<u8>, PacketError> {
+    let mut packet = Vec::new();
+    udp_reply_into(source, destination, payload, mtu, &mut packet)?;
+    Ok(packet)
+}
+
+/// Encodes a complete UDP response into a reusable buffer without allocating
+/// once `out` has sufficient capacity.
+pub(crate) fn udp_reply_into(
+    source: SocketAddr,
+    destination: SocketAddr,
+    payload: &[u8],
+    mtu: usize,
+    out: &mut Vec<u8>,
+) -> Result<(), PacketError> {
     if source.is_ipv4() != destination.is_ipv4() {
         return Err(PacketError::AddressFamily);
     }
@@ -226,23 +276,69 @@ pub fn udp_reply(
     if length > mtu || length > usize::from(u16::MAX) {
         return Err(PacketError::Mtu);
     }
-    let mut packet = vec![0; length];
+    out.clear();
+    out.resize(length, 0);
     if source.is_ipv4() {
-        packet[0] = 0x45;
-        packet[2..4].copy_from_slice(&(length as u16).to_be_bytes());
-        packet[6] = 0x40;
-        packet[8] = 64;
-        packet[9] = Transport::Udp.number();
+        out[0] = 0x45;
+        out[2..4].copy_from_slice(&(length as u16).to_be_bytes());
+        out[6] = 0x40;
+        out[8] = 64;
+        out[9] = Transport::Udp.number();
     } else {
-        packet[0] = 0x60;
-        packet[4..6].copy_from_slice(&((length - offset) as u16).to_be_bytes());
-        packet[6] = Transport::Udp.number();
-        packet[7] = 64;
+        out[0] = 0x60;
+        out[4..6].copy_from_slice(&((length - offset) as u16).to_be_bytes());
+        out[6] = Transport::Udp.number();
+        out[7] = 64;
     }
-    packet[offset + 4..offset + 6].copy_from_slice(&((length - offset) as u16).to_be_bytes());
-    packet[offset + UDP_HEADER..].copy_from_slice(payload);
-    set_endpoints(&mut packet, offset, Transport::Udp, source, destination);
-    Ok(packet)
+    out[offset + 4..offset + 6].copy_from_slice(&((length - offset) as u16).to_be_bytes());
+    out[offset + UDP_HEADER..].copy_from_slice(payload);
+    set_endpoints(out, offset, Transport::Udp, source, destination);
+    Ok(())
+}
+
+fn update_tcp_endpoints_incremental(
+    packet: &mut [u8],
+    offset: usize,
+    old_source: SocketAddr,
+    old_destination: SocketAddr,
+    source: SocketAddr,
+    destination: SocketAddr,
+) {
+    let old_ip = ip_word_sum(old_source.ip()) + ip_word_sum(old_destination.ip());
+    let new_ip = ip_word_sum(source.ip()) + ip_word_sum(destination.ip());
+    match (source.ip(), destination.ip()) {
+        (IpAddr::V4(src), IpAddr::V4(dst)) => {
+            packet[12..16].copy_from_slice(&src.octets());
+            packet[16..20].copy_from_slice(&dst.octets());
+            let old_hc = read_u16(packet, 10);
+            let new_hc = incremental_checksum(old_hc, fold(old_ip), fold(new_ip));
+            packet[10..12].copy_from_slice(&new_hc.to_be_bytes());
+        }
+        (IpAddr::V6(src), IpAddr::V6(dst)) => {
+            packet[8..24].copy_from_slice(&src.octets());
+            packet[24..40].copy_from_slice(&dst.octets());
+        }
+        _ => unreachable!("packet addresses have a common family"),
+    }
+    let segment = &mut packet[offset..];
+    segment[..2].copy_from_slice(&source.port().to_be_bytes());
+    segment[2..4].copy_from_slice(&destination.port().to_be_bytes());
+    let old_tcp = fold(old_ip + u32::from(old_source.port()) + u32::from(old_destination.port()));
+    let new_tcp = fold(new_ip + u32::from(source.port()) + u32::from(destination.port()));
+    let old_hc = read_u16(segment, 16);
+    let new_hc = incremental_checksum(old_hc, old_tcp, new_tcp);
+    segment[16..18].copy_from_slice(&new_hc.to_be_bytes());
+}
+
+fn ip_word_sum(ip: IpAddr) -> u32 {
+    match ip {
+        IpAddr::V4(ip) => word_sum(&ip.octets()),
+        IpAddr::V6(ip) => word_sum(&ip.octets()),
+    }
+}
+
+fn incremental_checksum(old_hc: u16, old_words: u16, new_words: u16) -> u16 {
+    checksum(u32::from(!old_hc) + u32::from(!old_words) + u32::from(new_words))
 }
 
 fn set_endpoints(
@@ -304,11 +400,15 @@ fn word_sum(bytes: &[u8]) -> u32 {
     words + remainder.first().map_or(0, |byte| u32::from(*byte) << 8)
 }
 
-fn checksum(mut sum: u32) -> u16 {
+fn fold(mut sum: u32) -> u16 {
     while sum >> 16 != 0 {
         sum = (sum & 0xffff) + (sum >> 16);
     }
-    !(sum as u16)
+    sum as u16
+}
+
+fn checksum(sum: u32) -> u16 {
+    !fold(sum)
 }
 
 #[cfg(test)]
@@ -359,5 +459,43 @@ mod tests {
             udp_reply(source, destination, &[0; 1233], 1280),
             Err(PacketError::Mtu)
         );
+    }
+
+    #[test]
+    fn incremental_tcp_rewrite_matches_full_checksum_recomputation() {
+        for (old_src, old_dst, new_src, new_dst) in [
+            (
+                "192.0.2.1:25000",
+                "198.51.100.1:443",
+                "192.0.2.2:49152",
+                "192.0.2.1:45000",
+            ),
+            (
+                "[2001:db8::1]:25000",
+                "[2001:db8:1::1]:443",
+                "[2001:db8::2]:49152",
+                "[2001:db8::1]:45000",
+            ),
+        ] {
+            let old_src = old_src.parse().unwrap();
+            let old_dst = old_dst.parse().unwrap();
+            let new_src = new_src.parse().unwrap();
+            let new_dst = new_dst.parse().unwrap();
+            let original = tcp_test_packet(old_src, old_dst, 0x18);
+            let parsed = Packet::parse(&original).unwrap();
+            let mut full = original.clone();
+            set_endpoints(
+                &mut full,
+                parsed.header_offset(),
+                Transport::Tcp,
+                new_src,
+                new_dst,
+            );
+            let incremental = parsed.rewrite(new_src, new_dst).unwrap();
+            assert_eq!(incremental, full);
+            let reparsed = Packet::parse(&incremental).unwrap();
+            assert_eq!(reparsed.source(), new_src);
+            assert_eq!(reparsed.destination(), new_dst);
+        }
     }
 }

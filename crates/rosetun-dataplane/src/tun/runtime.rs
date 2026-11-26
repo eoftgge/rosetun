@@ -12,9 +12,10 @@ use std::time::{Duration, Instant};
 use rosetun_config::ConnectionNetwork;
 use rosetun_engine::{EngineRoute, TrafficProbe};
 
+use super::packet::udp_reply_into;
 use super::{
     DeviceSettings, FullConeNat, MappingKey, MixedTcp, Packet, PacketDevice, PacketError, TcpFlow,
-    TcpRedirect, TcpStack, Transport, udp_reply,
+    TcpRedirect, TcpStack, Transport,
 };
 use crate::conntable::{ConnectionMeta, ConnectionTable, Registration};
 use crate::dns::DnsService;
@@ -36,7 +37,8 @@ const FLOW_TIMEOUT: Duration = Duration::from_secs(5);
 const UDP_IDLE: Duration = Duration::from_secs(60);
 const UDP_MAPPINGS: usize = 512;
 const UDP_PEERS: usize = 32;
-const UDP_QUEUE: usize = 64;
+const UDP_QUEUE: usize = 512;
+const UDP_RECV_BUDGET: usize = 32;
 const MAX_CLIENTS: usize = 512;
 const DNS_WORKERS: usize = 4;
 const DNS_QUEUE: usize = 32;
@@ -102,6 +104,18 @@ impl TunnelPolicy {
             rules: Arc::new(rules),
             outbounds: Arc::new(outbounds),
         };
+    }
+
+    pub fn replace_rules(&self, rules: RuleEngine) {
+        let mut policy = self.policy.write().unwrap_or_else(PoisonError::into_inner);
+        policy.generation = policy.generation.wrapping_add(1);
+        policy.rules = Arc::new(rules);
+    }
+
+    pub fn replace_outbounds(&self, outbounds: Outbounds) {
+        let mut policy = self.policy.write().unwrap_or_else(PoisonError::into_inner);
+        policy.generation = policy.generation.wrapping_add(1);
+        policy.outbounds = Arc::new(outbounds);
     }
 
     fn generation(&self) -> u64 {
@@ -204,6 +218,8 @@ struct UdpPump {
     table: ConnectionTable,
     udp: FullConeNat<UdpEgress, UdpMapping>,
     response: Vec<u8>,
+    scratch: Vec<u8>,
+    reply_packet: Vec<u8>,
     mtu: usize,
 }
 
@@ -328,6 +344,8 @@ impl TunnelRuntime {
             table: self.table.clone(),
             udp: FullConeNat::new(UDP_MAPPINGS, UDP_IDLE),
             response: vec![0; usize::from(u16::MAX)],
+            scratch: Vec::new(),
+            reply_packet: Vec::with_capacity(mtu),
             mtu,
         };
         self.udp_thread = Some(
@@ -353,17 +371,26 @@ impl TunnelRuntime {
                 thread::Builder::new()
                     .name("rosetun-tun-dns".into())
                     .spawn(move || {
+                        let mut reply_packet = Vec::with_capacity(mtu);
                         while let Ok(query) = rx.recv() {
                             if stopped.load(Ordering::Acquire) {
                                 break;
                             }
                             if let Ok(reply) = dns.exchange(&query.payload) {
-                                write_reply(
+                                let header_overhead = if query.flow.source.is_ipv4() { 28 } else { 48 };
+                                let max_payload = mtu.saturating_sub(header_overhead);
+                                let reply = crate::dns::truncate_udp_reply(
+                                    &query.payload,
+                                    reply,
+                                    max_payload,
+                                );
+                                write_reply_into(
                                     device.as_ref(),
                                     query.flow.destination,
                                     query.flow.source,
                                     &reply,
                                     mtu,
+                                    &mut reply_packet,
                                 );
                             }
                         }
@@ -441,14 +468,10 @@ impl Pump {
                 match self.device.receive(&mut frame, wait) {
                     Ok(size) => {
                         self.counters.frames += 1;
-                        if let Some(contents) = frame.get(..size)
-                            && size <= self.mtu
+                        if size <= self.mtu
+                            && let Some(contents) = frame.get_mut(..size)
                         {
-                            match Packet::parse(contents) {
-                                Ok(packet) => self.dispatch(&packet, now),
-                                Err(PacketError::Checksum) => self.counters.bad_checksum += 1,
-                                Err(_) => {}
-                            }
+                            self.dispatch(contents, now);
                         }
                     }
                     Err(error)
@@ -503,11 +526,32 @@ impl Pump {
         }
     }
 
-    fn dispatch(&mut self, packet: &Packet<'_>, now: Instant) {
-        if packet.transport() == Transport::Tcp {
+    fn dispatch(&mut self, frame: &mut [u8], now: Instant) {
+        let parsed = match Packet::parse(frame) {
+            Ok(packet) => packet,
+            Err(PacketError::Checksum) => {
+                self.counters.bad_checksum += 1;
+                return;
+            }
+            Err(_) => return,
+        };
+        if parsed.transport() == Transport::Tcp {
             self.counters.tcp += 1;
-            if let Ok(Some(redirected)) = self.tcp.redirect(packet, now) {
-                if self.device.send(&redirected).is_ok() {
+            let offset = parsed.header_offset();
+            let length = parsed.len();
+            let flow = TcpFlow {
+                source: parsed.source(),
+                destination: parsed.destination(),
+            };
+            let starts_connection = parsed.tcp_starts_connection();
+            if let Ok(true) = self.tcp.redirect_in_place(
+                &mut frame[..length],
+                offset,
+                flow,
+                starts_connection,
+                now,
+            ) {
+                if self.device.send(&frame[..length]).is_ok() {
                     self.counters.written += 1;
                 } else {
                     self.counters.write_errors += 1;
@@ -515,15 +559,15 @@ impl Pump {
             }
             return;
         }
-        if !self.local_ips.contains(&packet.source().ip()) {
+        if !self.local_ips.contains(&parsed.source().ip()) {
             return;
         }
-        let Some(payload) = packet.udp_payload() else {
+        let Some(payload) = parsed.udp_payload() else {
             return;
         };
         let flow = TcpFlow {
-            source: packet.source(),
-            destination: packet.destination(),
+            source: parsed.source(),
+            destination: parsed.destination(),
         };
         if flow.destination.port() == 53 {
             let query = Datagram {
@@ -559,7 +603,22 @@ impl UdpPump {
             let generation = self.policy.generation();
             self.udp
                 .retain(|key, _| key.egress.generation == generation);
-            self.receive_udp(now);
+            let mut active = self.receive_udp(now);
+            let mut sent = 0;
+            while sent < PACKET_BUDGET {
+                match receiver.try_recv() {
+                    Ok(datagram) if !stopped.load(Ordering::Acquire) => {
+                        self.send(&datagram, Instant::now());
+                        sent += 1;
+                        active = true;
+                    }
+                    Ok(_) | Err(mpsc::TryRecvError::Disconnected) => return,
+                    Err(mpsc::TryRecvError::Empty) => break,
+                }
+            }
+            if active {
+                continue;
+            }
             match receiver.recv_timeout(PUMP_INTERVAL) {
                 Ok(datagram) if !stopped.load(Ordering::Acquire) => {
                     self.send(&datagram, Instant::now());
@@ -612,53 +671,68 @@ impl UdpPump {
         }
     }
 
-    fn receive_udp(&mut self, now: Instant) {
+    fn receive_udp(&mut self, now: Instant) -> bool {
+        let mut any_received = false;
         self.udp.receive(now, |key, mapping| {
-            let Ok((length, Some(remote))) = mapping.path.recv_from(&mut self.response) else {
-                return false;
-            };
-            if length > self.mtu || remote.port() == 53 || remote.is_ipv4() != key.source.is_ipv4()
-            {
-                return false;
-            }
-            let registration = match mapping.peers.get(&remote) {
-                Some(registration) if registration.is_closed() => return false,
-                Some(registration) => registration.counters(),
-                None => {
-                    let flow = TcpFlow {
-                        source: key.source,
-                        destination: remote,
-                    };
-                    let Some(selected) = self.policy.select(&flow, ConnectionNetwork::Udp, None)
-                    else {
-                        return false;
-                    };
-                    if selected.generation != key.egress.generation
-                        || selected.meta.route != key.egress.route
-                    {
-                        return false;
-                    }
-                    let Some(registration) =
-                        udp_registration(mapping, remote, &self.table, selected.meta)
-                    else {
-                        return false;
-                    };
-                    registration
+            let mut mapping_active = false;
+            for _ in 0..UDP_RECV_BUDGET {
+                let Ok((length, Some(remote))) = mapping
+                    .path
+                    .recv_from_into(&mut self.response, &mut self.scratch)
+                else {
+                    break;
+                };
+                if length > self.mtu
+                    || remote.port() == 53
+                    || remote.is_ipv4() != key.source.is_ipv4()
+                {
+                    continue;
                 }
-            };
-            if write_reply(
-                self.device.as_ref(),
-                remote,
-                key.source,
-                &self.response[..length],
-                self.mtu,
-            ) {
-                registration.add_down(length as u64);
-                true
-            } else {
-                false
+                let registration = match mapping.peers.get(&remote) {
+                    Some(registration) if registration.is_closed() => {
+                        mapping.peers.remove(&remote);
+                        continue;
+                    }
+                    Some(registration) => registration.counters(),
+                    None => {
+                        let flow = TcpFlow {
+                            source: key.source,
+                            destination: remote,
+                        };
+                        let Some(selected) =
+                            self.policy.select(&flow, ConnectionNetwork::Udp, None)
+                        else {
+                            continue;
+                        };
+                        if selected.generation != key.egress.generation
+                            || selected.meta.route != key.egress.route
+                        {
+                            continue;
+                        }
+                        let Some(registration) =
+                            udp_registration(mapping, remote, &self.table, selected.meta)
+                        else {
+                            continue;
+                        };
+                        registration
+                    }
+                };
+                if write_reply_into(
+                    self.device.as_ref(),
+                    remote,
+                    key.source,
+                    &self.response[..length],
+                    self.mtu,
+                    &mut self.reply_packet,
+                ) {
+                    registration.add_down(length as u64);
+                    mapping_active = true;
+                    any_received = true;
+                }
             }
+            mapping_active
         });
+        any_received
     }
 }
 
@@ -685,6 +759,7 @@ fn tunnel_tcp(
     stopped: &AtomicBool,
 ) -> io::Result<()> {
     stream.set_nonblocking(false)?;
+    stream.set_nodelay(true).ok();
     stream.set_read_timeout(Some(FLOW_TIMEOUT))?;
     stream.set_write_timeout(Some(FLOW_TIMEOUT))?;
     if flow.destination.port() == 53 {
@@ -727,14 +802,15 @@ fn target(address: SocketAddr) -> Target {
     }
 }
 
-fn write_reply(
+fn write_reply_into(
     device: &dyn PacketDevice,
     source: SocketAddr,
     destination: SocketAddr,
     payload: &[u8],
     mtu: usize,
+    out: &mut Vec<u8>,
 ) -> bool {
-    udp_reply(source, destination, payload, mtu).is_ok_and(|packet| device.send(&packet).is_ok())
+    udp_reply_into(source, destination, payload, mtu, out).is_ok() && device.send(out).is_ok()
 }
 
 #[cfg(test)]
@@ -751,6 +827,7 @@ mod tests {
     use crate::dns::{DnsOptions, testcerts};
     use crate::net::DirectDialer;
     use crate::rules::RulePlan;
+    use crate::tun::udp_reply;
 
     #[derive(Default)]
     struct MockTun(Mutex<Vec<Vec<u8>>>);
@@ -840,6 +917,8 @@ mod tests {
             table: ConnectionTable::new(),
             udp: FullConeNat::new(8, UDP_IDLE),
             response: vec![0; 1500],
+            scratch: Vec::new(),
+            reply_packet: Vec::with_capacity(1500),
             mtu: 1500,
         };
         let datagram = Datagram {
@@ -915,6 +994,8 @@ mod tests {
             table: table.clone(),
             udp: FullConeNat::new(8, UDP_IDLE),
             response: vec![0; 1500],
+            scratch: Vec::new(),
+            reply_packet: Vec::with_capacity(1500),
             mtu: 1500,
         };
         let mut pump = Pump {
@@ -938,11 +1019,11 @@ mod tests {
         };
         let stopped_for_worker = Arc::clone(&stopped);
         let worker = thread::spawn(move || udp.run(&receiver, &stopped_for_worker));
-        let datagram = udp_reply(client, destination, b"first datagram", 1500).unwrap();
-        pump.dispatch(&Packet::parse(&datagram).unwrap(), Instant::now());
+        let mut datagram = udp_reply(client, destination, b"first datagram", 1500).unwrap();
+        pump.dispatch(&mut datagram, Instant::now());
         opening.recv_timeout(Duration::from_secs(2)).unwrap();
-        let syn = crate::tun::packet::tcp_test_packet(client, destination, 0x02);
-        pump.dispatch(&Packet::parse(&syn).unwrap(), Instant::now());
+        let mut syn = crate::tun::packet::tcp_test_packet(client, destination, 0x02);
+        pump.dispatch(&mut syn, Instant::now());
         let written = device.0.lock().unwrap().len();
         stopped.store(true, Ordering::Release);
         release.send(()).unwrap();

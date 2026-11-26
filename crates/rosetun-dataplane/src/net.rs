@@ -271,12 +271,27 @@ impl UdpPath {
     /// address when the path knows it (relayed paths report the origin the
     /// relay names, domain origins as `None`).
     pub fn recv_from(&self, buffer: &mut [u8]) -> io::Result<(usize, Option<SocketAddr>)> {
+        let mut scratch = Vec::new();
+        self.recv_from_into(buffer, &mut scratch)
+    }
+
+    /// Like [`Self::recv_from`], reusing `scratch` for the SOCKS5 UDP header
+    /// envelope on relayed paths so polling does not allocate on every call.
+    pub(crate) fn recv_from_into(
+        &self,
+        buffer: &mut [u8],
+        scratch: &mut Vec<u8>,
+    ) -> io::Result<(usize, Option<SocketAddr>)> {
         match self.relay {
             Some(relay) => {
                 let socket = self.socket_for_family(relay.is_ipv4())?;
-                let mut frame = vec![0u8; buffer.len() + 262];
+                let needed = buffer.len() + 262;
+                if scratch.len() < needed {
+                    scratch.resize(needed, 0);
+                }
+                let frame = &mut scratch[..needed];
                 loop {
-                    let (length, from) = socket.recv_from(&mut frame)?;
+                    let (length, from) = socket.recv_from(frame)?;
                     if from != relay {
                         continue;
                     }

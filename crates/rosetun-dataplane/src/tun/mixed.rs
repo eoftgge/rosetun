@@ -3,7 +3,7 @@ use std::fmt;
 use std::net::{IpAddr, SocketAddr};
 use std::time::{Duration, Instant};
 
-use super::packet::{Packet, PacketError, Transport};
+use super::packet::{Packet, PacketError, Transport, rewrite_endpoints_in_place};
 
 const FIRST_PORT: u16 = 49152;
 const FLOW_LIMIT: usize = 4096;
@@ -80,6 +80,7 @@ pub struct MixedTcp {
     v6: Option<TcpRedirect>,
     flows: HashMap<TcpFlow, Mapping>,
     by_peer: HashMap<SocketAddr, TcpFlow>,
+    cooldown: HashMap<SocketAddr, Instant>,
     next_port: u16,
     reap_at: Option<Instant>,
 }
@@ -101,6 +102,7 @@ impl MixedTcp {
             v6: None,
             flows: HashMap::new(),
             by_peer: HashMap::new(),
+            cooldown: HashMap::new(),
             next_port: FIRST_PORT,
             reap_at: None,
         };
@@ -141,21 +143,121 @@ impl MixedTcp {
             }
             live
         });
+        self.cooldown
+            .retain(|_, at| now.saturating_duration_since(*at) < PORT_REUSE_DELAY);
+    }
+
+    fn evict_closed_flows(&mut self) {
+        self.flows.retain(|_, mapping| {
+            if let State::Closed(at) = mapping.state {
+                self.by_peer.remove(&mapping.peer);
+                self.cooldown.insert(mapping.peer, at);
+                false
+            } else {
+                true
+            }
+        });
     }
 
     fn allocate_peer(&mut self, ip: IpAddr) -> Result<SocketAddr, RedirectError> {
         if self.flows.len() >= FLOW_LIMIT {
-            return Err(RedirectError::Capacity);
+            self.evict_closed_flows();
+            if self.flows.len() >= FLOW_LIMIT {
+                return Err(RedirectError::Capacity);
+            }
         }
         for _ in FIRST_PORT..=u16::MAX {
             let port = self.next_port;
             self.next_port = port.checked_add(1).unwrap_or(FIRST_PORT);
             let candidate = SocketAddr::new(ip, port);
-            if !self.by_peer.contains_key(&candidate) {
+            if !self.by_peer.contains_key(&candidate) && !self.cooldown.contains_key(&candidate) {
                 return Ok(candidate);
             }
         }
         Err(RedirectError::Capacity)
+    }
+
+    fn plan_redirect(
+        &mut self,
+        flow: TcpFlow,
+        starts_connection: bool,
+        now: Instant,
+    ) -> Result<Option<(SocketAddr, SocketAddr)>, RedirectError> {
+        self.reap(now);
+        let redirect = if flow.source.is_ipv4() {
+            self.v4
+        } else {
+            self.v6
+        }
+        .ok_or(RedirectError::Family)?;
+        if flow.source == redirect.listener {
+            // Only this listener can send a segment on the reverse mapping.
+            return Ok(self
+                .by_peer
+                .get(&flow.destination)
+                .map(|original| (original.destination, original.source)));
+        }
+        if flow.source.ip() != redirect.listener.ip()
+            || flow.destination.ip() == redirect.peer
+            || flow.destination.ip() == redirect.listener.ip()
+            || !unicast(flow.destination.ip())
+        {
+            return Ok(None);
+        }
+        if let Some(mapped) = self.flows.get(&flow) {
+            if let State::Closed(closed_at) = mapped.state {
+                if starts_connection {
+                    let old_peer = mapped.peer;
+                    self.flows.remove(&flow);
+                    self.by_peer.remove(&old_peer);
+                    self.cooldown.insert(old_peer, closed_at);
+                } else {
+                    return Ok(Some((mapped.peer, redirect.listener)));
+                }
+            } else {
+                return Ok(Some((mapped.peer, redirect.listener)));
+            }
+        }
+        if !starts_connection {
+            return Ok(None);
+        }
+        let peer = self.allocate_peer(redirect.peer)?;
+        self.by_peer.insert(peer, flow);
+        self.flows.insert(
+            flow,
+            Mapping {
+                peer,
+                opened: now,
+                state: State::Pending,
+            },
+        );
+        Ok(Some((peer, redirect.listener)))
+    }
+
+    /// Translates a parsed TCP packet in place without allocating a new buffer.
+    pub(crate) fn redirect_in_place(
+        &mut self,
+        frame: &mut [u8],
+        offset: usize,
+        flow: TcpFlow,
+        starts_connection: bool,
+        now: Instant,
+    ) -> Result<bool, RedirectError> {
+        let Some((new_source, new_destination)) =
+            self.plan_redirect(flow, starts_connection, now)?
+        else {
+            return Ok(false);
+        };
+        rewrite_endpoints_in_place(
+            frame,
+            offset,
+            Transport::Tcp,
+            flow.source,
+            flow.destination,
+            new_source,
+            new_destination,
+        )?;
+        Ok(true)
     }
 }
 
@@ -168,54 +270,16 @@ impl TcpStack for MixedTcp {
         if packet.transport() != Transport::Tcp {
             return Ok(None);
         }
-        self.reap(now);
         let flow = TcpFlow {
             source: packet.source(),
             destination: packet.destination(),
         };
-        let redirect = if flow.source.is_ipv4() {
-            self.v4
-        } else {
-            self.v6
-        }
-        .ok_or(RedirectError::Family)?;
-        if flow.source == redirect.listener {
-            // Only this listener can send a segment on the reverse mapping.
-            let reply = self
-                .by_peer
-                .get(&flow.destination)
-                .map(|original| packet.rewrite(original.destination, original.source))
-                .transpose()?;
-            return Ok(reply);
-        }
-        if flow.source.ip() != redirect.listener.ip()
-            || flow.destination.ip() == redirect.peer
-            || flow.destination.ip() == redirect.listener.ip()
-            || !unicast(flow.destination.ip())
-        {
+        let Some((new_source, new_destination)) =
+            self.plan_redirect(flow, packet.tcp_starts_connection(), now)?
+        else {
             return Ok(None);
-        }
-        if let Some(mapped) = self.flows.get(&flow) {
-            if matches!(mapped.state, State::Closed(_)) && packet.tcp_starts_connection() {
-                return Ok(None);
-            }
-            return Ok(Some(packet.rewrite(mapped.peer, redirect.listener)?));
-        }
-        if !packet.tcp_starts_connection() {
-            return Ok(None);
-        }
-        let peer = self.allocate_peer(redirect.peer)?;
-        let frame = packet.rewrite(peer, redirect.listener)?;
-        self.by_peer.insert(peer, flow);
-        self.flows.insert(
-            flow,
-            Mapping {
-                peer,
-                opened: now,
-                state: State::Pending,
-            },
-        );
-        Ok(Some(frame))
+        };
+        Ok(Some(packet.rewrite(new_source, new_destination)?))
     }
 
     fn accept(&mut self, peer: SocketAddr) -> Option<TcpFlow> {
@@ -323,5 +387,42 @@ mod tests {
         let first = redirect_to("198.51.100.1:443");
         assert_eq!(redirect_to("198.51.100.1:443"), first);
         assert_ne!(redirect_to("198.51.100.2:443"), first);
+    }
+
+    #[test]
+    fn a_new_syn_after_close_allocates_a_fresh_peer_port_without_reusing_the_closed_one() {
+        let client = "192.0.2.1:25000".parse().unwrap();
+        let destination = "198.51.100.1:443".parse().unwrap();
+        let listener = "192.0.2.1:45000".parse().unwrap();
+        let mut nat = MixedTcp::new([TcpRedirect {
+            listener,
+            peer: "192.0.2.2".parse().unwrap(),
+        }])
+        .unwrap();
+        let now = Instant::now();
+        let syn = tcp_test_packet(client, destination, 0x02);
+        let first_peer = Packet::parse(&nat.redirect(&Packet::parse(&syn).unwrap(), now).unwrap().unwrap())
+            .unwrap()
+            .source();
+        assert_eq!(
+            nat.accept(first_peer),
+            Some(TcpFlow {
+                source: client,
+                destination
+            })
+        );
+        nat.close(first_peer, now);
+        let second_peer =
+            Packet::parse(&nat.redirect(&Packet::parse(&syn).unwrap(), now).unwrap().unwrap())
+                .unwrap()
+                .source();
+        assert_ne!(second_peer, first_peer);
+        assert_eq!(
+            nat.accept(second_peer),
+            Some(TcpFlow {
+                source: client,
+                destination
+            })
+        );
     }
 }

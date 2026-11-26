@@ -242,15 +242,24 @@ impl LinuxRoutes {
     }
 
     pub fn close(&mut self) -> io::Result<()> {
-        while let Some(rule) = self.rules.last() {
-            self.change(rule, "del")?;
-            self.rules.pop();
+        let mut retained = Vec::new();
+        let mut first_error = None;
+        while let Some(rule) = self.rules.pop() {
+            if let Err(error) = self.change(&rule, "del") {
+                retained.push(rule);
+                first_error.get_or_insert(error);
+            }
         }
-        if let Some(capture) = self.capture.as_mut() {
-            capture.close()?;
+        self.rules.extend(retained.into_iter().rev());
+        if let Some(capture) = self.capture.as_mut()
+            && let Err(error) = capture.close()
+        {
+            first_error.get_or_insert(error);
         }
-        self.capture = None;
-        Ok(())
+        if first_error.is_none() {
+            self.capture = None;
+        }
+        first_error.map_or(Ok(()), Err)
     }
 }
 
