@@ -53,11 +53,17 @@ pub(crate) fn reveal<R>(
     let height_id = id.with("reveal_height");
     // The clip has to be set before the content is laid out, so the height
     // comes from the last frame; the first one shows only a sliver.
-    let full = ui
-        .data(|data| data.get_temp::<f32>(height_id))
-        .unwrap_or(10.0);
+    let cached = ui.data(|data| data.get_temp::<f32>(height_id));
     let top = ui.available_rect_before_wrap().top();
-    let shown = motion::reveal_height(full, progress, ui.clip_rect().bottom() - top);
+    let visible_room = ui.clip_rect().bottom() - top;
+    // Grow slightly past the viewport bottom so a card's bottom border clears
+    // the visible edge before `progress == 1.0` expands any off-screen tail.
+    let room = if visible_room > 0.0 {
+        visible_room + 64.0
+    } else {
+        visible_room
+    };
+    let shown = motion::reveal_height(cached.unwrap_or(10.0), progress, room);
     let mut child = ui.new_child(
         egui::UiBuilder::new()
             .id_salt(height_id)
@@ -71,9 +77,11 @@ pub(crate) fn reveal<R>(
     }
     let inner = add(&mut child);
     let mut rect = child.min_rect();
-    ui.data_mut(|data| data.insert_temp(height_id, rect.height()));
+    let full = rect.height();
+    ui.data_mut(|data| data.insert_temp(height_id, full));
     if progress < 1.0 {
-        rect.max.y = rect.max.y.min(rect.top() + shown);
+        let actual_shown = motion::reveal_height(full, progress, room);
+        rect.max.y = rect.max.y.min(rect.top() + actual_shown);
     }
     ui.advance_cursor_after_rect(rect);
     Some(inner)
