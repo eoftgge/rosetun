@@ -120,7 +120,11 @@ mod platform {
     use std::fmt;
     use std::io;
     use std::net::IpAddr;
+    #[cfg(windows)]
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::Duration;
+    #[cfg(windows)]
+    use std::time::Instant;
 
     use tun_rs::{DeviceBuilder, InterruptEvent, SyncDevice};
 
@@ -134,7 +138,29 @@ mod platform {
         device: SyncDevice,
         cancellation: InterruptEvent,
         #[cfg(windows)]
+        send_stats: Option<WintunSendStats>,
+        #[cfg(windows)]
         _wintun: PinnedWintun,
+    }
+
+    #[cfg(windows)]
+    #[derive(Default)]
+    struct WintunSendStats {
+        attempts: AtomicU64,
+        ring_full: AtomicU64,
+        max_write_us: AtomicU64,
+    }
+
+    #[cfg(windows)]
+    impl Drop for WintunSendStats {
+        fn drop(&mut self) {
+            tracing::debug!(
+                attempts = *self.attempts.get_mut(),
+                ring_full = *self.ring_full.get_mut(),
+                max_write_us = *self.max_write_us.get_mut(),
+                "native Wintun send counters"
+            );
+        }
     }
 
     impl fmt::Debug for NativeDevice {
@@ -150,11 +176,13 @@ mod platform {
                 .name(&settings.name)
                 .mtu_v6(settings.mtu)
                 .reuse_dev(false)
+                .ring_capacity(8 * 1024 * 1024)
                 .wintun_file(wintun.loader_path()?);
             let cancellation = InterruptEvent::new()?;
             Ok(Self {
                 device: builder.build_sync()?,
                 cancellation,
+                send_stats: tracing::enabled!(tracing::Level::DEBUG).then(WintunSendStats::default),
                 _wintun: wintun,
             })
         }
@@ -188,15 +216,45 @@ mod platform {
         pub fn index(&self) -> io::Result<u32> {
             self.device.if_index()
         }
+
+        #[cfg(windows)]
+        fn send_packet(&self, packet: &[u8]) -> io::Result<usize> {
+            let start = self.send_stats.as_ref().map(|_| Instant::now());
+            // A full ring must leave the reader free to process other flows.
+            let result = self.device.try_send(packet);
+            if let (Some(stats), Some(start)) = (&self.send_stats, start) {
+                stats.attempts.fetch_add(1, Ordering::Relaxed);
+                if result
+                    .as_ref()
+                    .is_err_and(|error| error.kind() == io::ErrorKind::WouldBlock)
+                {
+                    stats.ring_full.fetch_add(1, Ordering::Relaxed);
+                }
+                let elapsed = u64::try_from(start.elapsed().as_micros()).unwrap_or(u64::MAX);
+                stats.max_write_us.fetch_max(elapsed, Ordering::Relaxed);
+            }
+            result
+        }
     }
 
     impl PacketDevice for NativeDevice {
         fn receive(&self, packet: &mut [u8], wait: Duration) -> io::Result<usize> {
+            #[cfg(windows)]
+            {
+                // A read notification can cover several packets already in the ring.
+                match self.device.try_recv(packet) {
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock && !wait.is_zero() => {}
+                    result => return result,
+                }
+            }
             self.device
                 .recv_intr_timeout(packet, &self.cancellation, Some(wait))
         }
 
         fn send(&self, packet: &[u8]) -> io::Result<()> {
+            #[cfg(windows)]
+            let sent = self.send_packet(packet)?;
+            #[cfg(not(windows))]
             let sent = self.device.send_intr(packet, &self.cancellation)?;
             if sent != packet.len() {
                 return Err(io::Error::new(

@@ -3,7 +3,7 @@
 use std::io::{self, Read, Write};
 use std::net::{Shutdown, TcpStream};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::conntable::Registration;
 
@@ -16,6 +16,42 @@ enum SocketIo {
     Timeouts,
     #[cfg(windows)]
     Readiness,
+}
+
+struct DownstreamStats {
+    started: Instant,
+    first_read_us: Option<u64>,
+    read_bytes: u64,
+    forwarded_bytes: u64,
+    max_write_us: u64,
+}
+
+impl DownstreamStats {
+    fn start(io: SocketIo) -> Option<Self> {
+        match io {
+            #[cfg(windows)]
+            SocketIo::Readiness if tracing::enabled!(tracing::Level::DEBUG) => Some(Self {
+                started: Instant::now(),
+                first_read_us: None,
+                read_bytes: 0,
+                forwarded_bytes: 0,
+                max_write_us: 0,
+            }),
+            _ => None,
+        }
+    }
+}
+
+impl Drop for DownstreamStats {
+    fn drop(&mut self) {
+        tracing::debug!(
+            first_read_us = ?self.first_read_us,
+            read_bytes = self.read_bytes,
+            forwarded_bytes = self.forwarded_bytes,
+            max_write_us = self.max_write_us,
+            "native TCP downstream counters"
+        );
+    }
 }
 
 impl SocketIo {
@@ -103,15 +139,22 @@ fn relay_inner(
         let down = thread::Builder::new()
             .name("dataplane-relay".to_owned())
             .spawn_scoped(scope, || {
-                pump(upstream, client, &stopped, io, |bytes| {
-                    counters.add_down(bytes);
-                });
+                pump(
+                    upstream,
+                    client,
+                    &stopped,
+                    io,
+                    DownstreamStats::start(io),
+                    |bytes| {
+                        counters.add_down(bytes);
+                    },
+                );
             });
         if down.is_err() {
             shutdown_both(client, upstream);
             return;
         }
-        pump(client, upstream, &stopped, io, |bytes| {
+        pump(client, upstream, &stopped, io, None, |bytes| {
             counters.add_up(bytes);
         });
     });
@@ -122,6 +165,7 @@ fn pump(
     to: &TcpStream,
     stopped: &impl Fn() -> bool,
     io: SocketIo,
+    mut stats: Option<DownstreamStats>,
     count: impl Fn(u64),
 ) {
     let mut buffer = vec![0u8; BUFFER_BYTES];
@@ -130,7 +174,20 @@ fn pump(
         match reader.read(&mut buffer) {
             Ok(0) => break,
             Ok(read) => {
-                if !write_cancellable(to, &buffer[..read], stopped, io) {
+                let start = stats.as_ref().map(|_| Instant::now());
+                let forwarded = write_cancellable(to, &buffer[..read], stopped, io);
+                if let (Some(stats), Some(start)) = (&mut stats, start) {
+                    let elapsed = u64::try_from(start.elapsed().as_micros()).unwrap_or(u64::MAX);
+                    stats.first_read_us.get_or_insert_with(|| {
+                        u64::try_from((start - stats.started).as_micros()).unwrap_or(u64::MAX)
+                    });
+                    stats.read_bytes += read as u64;
+                    stats.max_write_us = stats.max_write_us.max(elapsed);
+                    if forwarded {
+                        stats.forwarded_bytes += read as u64;
+                    }
+                }
+                if !forwarded {
                     shutdown_both(from, to);
                     return;
                 }
