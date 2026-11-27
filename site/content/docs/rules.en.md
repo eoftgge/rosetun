@@ -8,7 +8,8 @@ group = "Setup"
 
 - **Routing rules** for programs, websites, IP addresses, subnets, lists and **rule groups**, with the **Templates** catalog and actions **Through VPN**, **Direct** and **Block**.
 - **Exits:** a rule can send its traffic through another country or a specific server while the rest goes through the server on the main screen. Picking a country or a server in the rule creates an exit on the **Exits** tab, where you can change its server and turn on a fallback to any server of the same country. If an exit's server disappears, its rules block traffic; they never go direct.
-- **Lists:** GeoIP and GeoSite (Xray `.dat` files) and sing-box rule sets (`.srs`) and your own text lists, from a file or a link. A list from a link is downloaded again only when it has changed (`ETag` / `Last-Modified`).
+- **Lists:** GeoIP and GeoSite (Xray `.dat` files), sing-box rule sets (`.srs`), a built-in one-click base list catalog (`v2fly` and `Runetfreedom` Geosite/GeoIP with download confirmation) and your own text lists from a file or a link. A list from a link is downloaded again only when it has changed (`ETag` / `Last-Modified`); auto-updates can be toggled globally and per list in **List settings**.
+- **Subscription routing import:** when a provider sends a `routing` HTTP header or `happ://routing/...` link, Rosetun offers to import those rules into a separate rule set.
 - **Undo:** Ctrl+Z steps back through your changes on the Rules tab, **Revert** returns to the rules applied to the connection, and Del removes the selected rule without asking.
 - **Temporary rules:** add a rule only until disconnect; it applies at once, appears beside the active rule set on the connection screen and is never saved.
 - **Connections** on the Traffic tab: while connected, what your programs connect to right now, grouped by program, with the route each connection took and why (which rule, list or the default). Create a rule or close a connection from there. The list is kept only in memory for the account that connected and is cleared on disconnect; it is never written to disk or to the log.
@@ -31,9 +32,9 @@ CLI: `rosetun rules test <address|program>` prints the same line and exits with 
 
 ## Programs on Linux {#programs-on-linux}
 
-**Rules by program on Linux** have a price. To find a connection's program, sing-box reads the processes of every account, so a session with an enabled rule by program gives its engine `CAP_SYS_PTRACE` and `CAP_DAC_READ_SEARCH`: nearly root for anything that takes the engine over. Without such a rule the engine has neither. Where the service cannot give them (outside its systemd unit, say), a connection with such a rule is refused with the reason.
+On Linux, socket-to-program lookup runs inside the privileged service (`rosetun-helper-privileged`) via netlink `SOCK_DIAG` and `/proc`. Outbound Xray and sing-box workers are not granted `CAP_SYS_PTRACE` or `CAP_DAC_READ_SEARCH`.
 
-A known sing-box error on Linux sometimes attributes a connection to the wrong program ([SagerNet/sing-box#4501](https://github.com/SagerNet/sing-box/issues/4501), open; Windows is not affected). So a **Direct** rule for a program can now and then let another program's connection past the tunnel, also with the kill switch on, because the kill switch lets the engine out. A connection whose program is not found matches no rule by program and goes by the rules after them. If this matters, use rules by site and IP instead, and keep **Through VPN** as the default with no **Direct** rule by program.
+If a short-lived connection exits before its process can be read, it matches no rule by program and falls through to the rules after them (by site, IP or the default). Program name and path matching on Linux is case-sensitive.
 
 ## Two-hop exits {#two-hop}
 

@@ -1050,7 +1050,7 @@ Usage:
   rosetun config
   rosetun xray <auto|off|always>
   rosetun lan <on|off>
-  rosetun lockdown <on|off>    (experimental)
+  rosetun lockdown <on|off>
   rosetun lockdown on --lan <on|off|private>
   rosetun reset-firewall
   rosetun open-network
@@ -1061,7 +1061,7 @@ Usage:
 Subscription and node commands are local and do not require the helper.
 connections lists the tunnel's connections for the account that connected it;
 close ends one of them by its ID (the 8 characters shown, or the full ID).
-Lockdown (experimental) blocks all traffic outside the tunnel, also when
+Lockdown blocks all traffic outside the tunnel, also when
 disconnected and after a reboot. {LOCKDOWN_HELP}
 open-network lifts the hold that keeps the network closed after an update
 (Windows) or after the service failed (Linux).

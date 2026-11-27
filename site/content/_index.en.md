@@ -13,7 +13,7 @@ all_releases = 'All releases'
 verify_download = 'Verify download'
 features_eyebrow = 'MADE FOR YOUR ROUTINE'
 features_title = 'One connection. More choice.'
-note = 'Rosetun protects against accidental leaks, not malware running under your account. Without Lockdown, a service crash removes the block on Windows; on Linux the kill switch stays. Lockdown is experimental: third-party firewalls, antivirus software, hibernation and sleep on real hardware are untested. <a href="docs/privacy/">Network requests and protection model</a>'
+note = 'Rosetun protects against accidental leaks, not malware running under your account. Without Lockdown, a service crash removes the block on Windows; on Linux the kill switch stays. Third-party firewalls, antivirus software, hibernation and sleep on real hardware are untested. <a href="docs/privacy/">Network requests and protection model</a>'
 screens_title = 'A look at the interface'
 screens_lead = 'Explore the key features of Rosetun in one interface.'
 lightbox_label = 'Screenshot preview'
@@ -21,7 +21,7 @@ lightbox_close = 'Close preview'
 
 [[extra.features]]
 title = 'Connection protection'
-text = 'The kill switch blocks traffic when the tunnel drops and keeps the network closed through an update. Without it, a DNS lock keeps system DNS inside the tunnel. The window and rosetun status show what is in place and what is missing. Experimental Lockdown keeps traffic blocked without a connection and after a restart.'
+text = 'The kill switch blocks traffic when the tunnel drops and keeps the network closed through an update. Without it, a DNS lock keeps system DNS inside the tunnel. The window and rosetun status show what is in place and what is missing. Lockdown keeps traffic blocked without a connection and after a restart.'
 
 [[extra.features]]
 title = 'Your rules'

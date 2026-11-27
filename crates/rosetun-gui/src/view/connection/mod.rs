@@ -23,7 +23,6 @@ use hero::hero_card;
 
 #[derive(Debug, Clone, Copy)]
 enum LockdownText {
-    Experimental,
     VirtualMachines,
     WayOut,
 }
@@ -554,16 +553,6 @@ pub(crate) fn lockdown_dialog(ctx: &egui::Context, state: &State, actions: &mut 
         },
         |ui| {
             ui.add_space(theme::space::M);
-            if enabling {
-                ui.add(
-                    egui::Label::new(
-                        RichText::new(lockdown_text(LockdownText::Experimental))
-                            .color(theme::palette().text_muted),
-                    )
-                    .wrap(),
-                );
-                ui.add_space(theme::space::S);
-            }
             ui.add(egui::Label::new(body).wrap());
             if enabling {
                 ui.add_space(theme::space::S);
@@ -612,13 +601,12 @@ fn conflict_names(state: &State, names: &[String]) -> String {
     visible.join(", ")
 }
 
-/// The confirmation's platform-specific lines: how far it is tested, what
-/// loses the network, and the way out, which on Unix is `sudo`.
+/// The confirmation's platform-specific lines: what loses the network,
+/// and the way out, which on Unix is `sudo`.
 fn lockdown_text(text: LockdownText) -> String {
     #[cfg(windows)]
     {
         match text {
-            LockdownText::Experimental => tr!("lockdown-experimental"),
             LockdownText::VirtualMachines => tr!("lockdown-virtual-machines"),
             LockdownText::WayOut => tr!("lockdown-way-out"),
         }
@@ -626,7 +614,6 @@ fn lockdown_text(text: LockdownText) -> String {
     #[cfg(target_os = "linux")]
     {
         match text {
-            LockdownText::Experimental => tr!("lockdown-experimental-linux"),
             LockdownText::VirtualMachines => tr!("lockdown-virtual-machines-linux"),
             LockdownText::WayOut => tr!("lockdown-way-out-linux"),
         }

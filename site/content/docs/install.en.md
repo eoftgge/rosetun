@@ -24,7 +24,7 @@ You can choose an installation folder, but not inside a user profile or where st
 
 **Update:** run the new installer over the old version. With the kill switch on, the network stays closed through the update, and the app starts and connects again. If it cannot connect, the connection screen offers **Connect** and **Open network**; `rosetun open-network` does the same. Lockdown stays on.
 
-From 0.7 on Windows, the new-version notice offers **Download**: the app downloads the installer and checks it, then the button becomes **Install and restart**. The install asks for administrator rights. **Open on GitHub** and **Skip this version** are there too. On Linux and macOS, updating stays manual.
+On Windows (`.exe`), Debian/Ubuntu Linux (`.deb`) and macOS (`.pkg`), the new-version notice offers **Download**: the app downloads the installer and verifies its `minisign` signature and SHA-256 hash, then the button becomes **Install and restart**. The install asks for administrator rights (UAC, `pkexec` or `osascript`). **Open on GitHub** and **Skip this version** are there too. For Arch Linux and archive builds, updating stays manual.
 
 {% if not r?.deb_url %}
 
@@ -76,7 +76,7 @@ The package installs the release binaries with their matching sing-box and Xray 
 
 ### System DNS in TUN mode {#arch-dns}
 
-Enable `systemd-resolved` so sing-box can register the tunnel's DNS server with the system.
+Enable `systemd-resolved` so the Rosetun service can register the tunnel's DNS server with the system.
 
 ```sh
 sudo systemctl enable --now systemd-resolved.service
