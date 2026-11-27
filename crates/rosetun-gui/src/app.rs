@@ -369,7 +369,6 @@ impl App {
 
     #[cfg(target_os = "macos")]
     fn leave_window(&self, ctx: &egui::Context, how: Leave) {
-        self.workers.restore_system_proxy();
         send_leaving(ctx, how, || {});
     }
 

@@ -13,7 +13,7 @@
 
 use std::ffi::{CStr, c_void};
 use std::io;
-use std::net::{IpAddr, Ipv6Addr};
+use std::net::IpAddr;
 use std::ptr;
 
 const STORE_NAME: &str = "io.github.eoftgge.rosetun";
@@ -230,38 +230,6 @@ fn build_dns_dictionary(servers: &[IpAddr]) -> io::Result<CfRef> {
     ])
 }
 
-/// Computes the tunnel DNS servers to register in `SCDynamicStore`: always the
-/// tunnel IPv4 DNS address, plus the tunnel IPv6 DNS address (`tun_ipv6 + 1`)
-/// when IPv6 is configured on the TUN.
-pub(super) fn tunnel_dns_servers(ipv4_dns: IpAddr, tun_ipv6: Option<&str>) -> Vec<IpAddr> {
-    let mut servers = vec![ipv4_dns];
-    if let Some(ipv6_dns) = tun_ipv6.and_then(next_ipv6_in_prefix) {
-        servers.push(IpAddr::V6(ipv6_dns));
-    }
-    servers
-}
-
-fn next_ipv6_in_prefix(cidr: &str) -> Option<Ipv6Addr> {
-    let (addr, prefix) = cidr.split_once('/')?;
-    let address: Ipv6Addr = addr.parse().ok()?;
-    let prefix_len: u8 = prefix.parse().ok()?;
-    if prefix_len >= 128 {
-        return None;
-    }
-    let host = u128::from(address);
-    let mask = if prefix_len == 0 {
-        0
-    } else {
-        u128::MAX << (128 - u32::from(prefix_len))
-    };
-    let network = host & mask;
-    let next = host.checked_add(1)?;
-    if next & mask != network {
-        return None;
-    }
-    Some(Ipv6Addr::from(next))
-}
-
 /// Live per-session macOS DNS registration. Dropping it removes the dynamic
 /// store key and closes the session handle so `configd` immediately restores
 /// the primary interface's DNS.
@@ -345,31 +313,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tunnel_dns_servers_appends_next_ipv6_when_configured() {
-        let v4 = IpAddr::V4(Ipv4Addr::new(172, 19, 0, 2));
-        assert_eq!(tunnel_dns_servers(v4, None), vec![v4]);
-        assert_eq!(
-            tunnel_dns_servers(v4, Some("fdfe:dcba:9876::1/126")),
-            vec![v4, "fdfe:dcba:9876::2".parse().unwrap()]
-        );
-        assert_eq!(
-            tunnel_dns_servers(v4, Some("fdfe:dcba:9876::1/128")),
-            vec![v4]
-        );
-        assert_eq!(
-            tunnel_dns_servers(v4, Some("fdfe:dcba:9876::3/126")),
-            vec![v4]
-        );
-    }
-
-    #[test]
     fn opens_session_dynamic_store_and_builds_dns_dictionary() {
         let store = open_session_store().expect("open SCDynamicStore session");
         assert!(!store.as_ptr().is_null());
-        let servers = tunnel_dns_servers(
+        let servers = [
             IpAddr::V4(Ipv4Addr::new(172, 19, 0, 2)),
-            Some("fdfe:dcba:9876::1/126"),
-        );
+            "fdfe:dcba:9876::2".parse().unwrap(),
+        ];
         let dict = build_dns_dictionary(&servers).expect("build DNS dictionary");
         assert!(!dict.as_ptr().is_null());
     }
