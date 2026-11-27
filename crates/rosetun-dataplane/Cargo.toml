@@ -28,7 +28,7 @@ tun-rs = { version = "=2.8.18", default-features = false, features = ["interrupt
 [target.'cfg(windows)'.dependencies]
 windows-sys.workspace = true
 
-[target.'cfg(target_os = "linux")'.dependencies]
+[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
 libc.workspace = true
 
 [dev-dependencies]
